@@ -105,21 +105,11 @@ class SimulationServiceImplTest {
         public void execute(Runnable task) {
             task.run();
         }
-
-        @Override
-        public void execute(Runnable task, long startTimeout) {
-            task.run();
-        }
     }
 
     private static class RejectingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
         @Override
         public void execute(Runnable task) {
-            throw new TaskRejectedException("rejected");
-        }
-
-        @Override
-        public void execute(Runnable task, long startTimeout) {
             throw new TaskRejectedException("rejected");
         }
     }
@@ -129,11 +119,6 @@ class SimulationServiceImplTest {
 
         @Override
         public void execute(Runnable task) {
-            capturedTask = task;
-        }
-
-        @Override
-        public void execute(Runnable task, long startTimeout) {
             capturedTask = task;
         }
 
@@ -195,17 +180,15 @@ class SimulationServiceImplTest {
         lenient().when(smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(anyList(), anyMap()))
                 .thenReturn(Map.of());
         lenient().when(smvGenerator.generateWithResolvedDeviceModel(
-                        anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
-                        anyBoolean(), any(), any(), anyMap()))
+                        anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any(), anyMap()))
                 .thenAnswer(invocation -> smvGenerator.generateWithEnvironment(
                         invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
                         invocation.getArgument(3), invocation.getArgument(4), invocation.getArgument(5),
-                        invocation.getArgument(6), invocation.getArgument(7), invocation.getArgument(8),
-                        invocation.getArgument(9)));
+                        invocation.getArgument(6), invocation.getArgument(7), invocation.getArgument(8)));
 
         doSimulate = SimulationServiceImpl.class.getDeclaredMethod(
                 "doSimulate", Long.class, List.class, List.class,
-                int.class, boolean.class, int.class, boolean.class, SimulationRequestDto.class,
+                int.class, boolean.class, SimulationRequestDto.class,
                 Map.class, ModelRunSnapshotDto.class, SmvGenerator.TempModelContext.class);
         doSimulate.setAccessible(true);
     }
@@ -322,8 +305,11 @@ class SimulationServiceImplTest {
         request.setDevices(devices);
         request.setRules(rules);
         request.setSteps(steps);
-        request.setAttack(attack);
-        request.setAttackBudget(attackBudget);
+        request.setAttackScenario(AttackScenarioDto.builder()
+                .mode(attack ? AttackScenarioDto.Mode.ANY_UP_TO_BUDGET : AttackScenarioDto.Mode.NONE)
+                .budget(attackBudget)
+                .points(List.of())
+                .build());
         request.setEnablePrivacy(enablePrivacy);
         return request;
     }
@@ -334,13 +320,13 @@ class SimulationServiceImplTest {
     void doSimulate_executorFails_returnsErrorResult() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.error("NuSMV exited with code 1."));
 
         SimulationResultDto result = (SimulationResultDto) doSimulate.invoke(
-                service, 1L, singleDevice(), List.of(), 10, false, 0, false,
+                service, 1L, singleDevice(), List.of(), 10, false,
                 simulationRequest(singleDevice(), List.of(), 10, false, 0, false),
                 Map.of(), runSnapshot(),
                 SmvGenerator.TempModelContext.sync());
@@ -356,13 +342,13 @@ class SimulationServiceImplTest {
     void doSimulate_executorBusy_throwsServiceUnavailable() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.busy("NuSMV simulation is busy, please retry later"));
 
         InvocationTargetException ex = assertThrows(InvocationTargetException.class, () ->
-                doSimulate.invoke(service, 1L, singleDevice(), List.of(), 10, false, 0, false,
+                doSimulate.invoke(service, 1L, singleDevice(), List.of(), 10, false,
                         simulationRequest(singleDevice(), List.of(), 10, false, 0, false),
                         Map.of(), runSnapshot(),
                         SmvGenerator.TempModelContext.sync()));
@@ -373,11 +359,11 @@ class SimulationServiceImplTest {
 
     @Test
     void doSimulate_smvGenerationError_propagatesSmvGenerationException() throws Exception {
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenThrow(SmvGenerationException.ambiguousDeviceReference("Sensor", List.of("sensor_1", "sensor_2")));
 
         InvocationTargetException ex = assertThrows(InvocationTargetException.class, () ->
-                doSimulate.invoke(service, 1L, singleDevice(), List.of(), 10, false, 0, false,
+                doSimulate.invoke(service, 1L, singleDevice(), List.of(), 10, false,
                         simulationRequest(singleDevice(), List.of(), 10, false, 0, false),
                         Map.of(), runSnapshot(),
                         SmvGenerator.TempModelContext.sync()));
@@ -391,7 +377,7 @@ class SimulationServiceImplTest {
     void doSimulate_emptyStates_returnsZeroSteps() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("-> State: 1.1 <-\n", "raw"));
@@ -399,7 +385,7 @@ class SimulationServiceImplTest {
                 .thenReturn(List.of());
 
         SimulationResultDto result = (SimulationResultDto) doSimulate.invoke(
-                service, 1L, singleDevice(), List.of(), 10, false, 0, false,
+                service, 1L, singleDevice(), List.of(), 10, false,
                 simulationRequest(singleDevice(), List.of(), 10, false, 0, false),
                 Map.of(), runSnapshot(),
                 SmvGenerator.TempModelContext.sync());
@@ -414,7 +400,7 @@ class SimulationServiceImplTest {
     void doSimulate_success_stepsEqualsStatesMinusOne() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -427,7 +413,7 @@ class SimulationServiceImplTest {
                 .thenReturn(states);
 
         SimulationResultDto result = (SimulationResultDto) doSimulate.invoke(
-                service, 1L, singleDevice(), List.of(), 10, false, 0, false,
+                service, 1L, singleDevice(), List.of(), 10, false,
                 simulationRequest(singleDevice(), List.of(), 10, false, 0, false),
                 Map.of(), runSnapshot(),
                 SmvGenerator.TempModelContext.sync());
@@ -449,7 +435,7 @@ class SimulationServiceImplTest {
     void simulateAsync_success_writesResultJson() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -483,7 +469,7 @@ class SimulationServiceImplTest {
     void simulateAsync_cancelledBetweenTraceSaveAndCompletion_rollsBackTraceTransaction() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -515,7 +501,7 @@ class SimulationServiceImplTest {
 
         service.simulateAsync(1L, 10L, simRequest(singleDevice(), List.of(), 10, false, 0, false));
 
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -532,7 +518,7 @@ class SimulationServiceImplTest {
                 eq(SimulationTaskPo.TaskStatus.PENDING), anyString(),
                 any(LocalDateTime.class), any(LocalDateTime.class));
         // Verify early return: generation should never be reached.
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -551,7 +537,8 @@ class SimulationServiceImplTest {
 
         AsyncTaskQuotaExceededException error = assertThrows(
                 AsyncTaskQuotaExceededException.class,
-                () -> service.createTask(1L, 10, false, 0, false, 0, 0, 0, runSnapshot()));
+                () -> service.createTask(
+                        1L, 10, AttackScenarioDto.none(), false, 0, 0, 0, runSnapshot()));
 
         assertEquals("SIMULATION_STORED_TASK_LIMIT_REACHED", error.getReasonCode());
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
@@ -565,7 +552,7 @@ class SimulationServiceImplTest {
 
         assertTrue(ex.getMessage().contains("Steps must be between 1 and 100"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -576,7 +563,7 @@ class SimulationServiceImplTest {
 
         assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -588,7 +575,7 @@ class SimulationServiceImplTest {
         assertTrue(ex.getMessage().contains(
                 "Simulation requires explicit attack points; budget-based exhaustive selection is verification-only"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -600,7 +587,7 @@ class SimulationServiceImplTest {
         assertTrue(ex.getMessage().contains(
                 "Simulation requires explicit attack points; budget-based exhaustive selection is verification-only"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -612,7 +599,7 @@ class SimulationServiceImplTest {
         assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
         verify(smvGenerator, never()).generate(
-                any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+                any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -627,7 +614,7 @@ class SimulationServiceImplTest {
 
         assertTrue(ex.getMessage().contains("Template name is required"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -646,7 +633,7 @@ class SimulationServiceImplTest {
 
         assertTrue(ex.getMessage().contains("Condition item cannot be null"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -668,7 +655,7 @@ class SimulationServiceImplTest {
 
         assertEquals("Command cannot be null", ex.getErrors().get("rules[0].command"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -694,7 +681,21 @@ class SimulationServiceImplTest {
         assertEquals("Command device name is required", ex.getErrors().get("rules[0].command.deviceName"));
         assertEquals("Command action is required", ex.getErrors().get("rules[0].command.action"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_nonPositivePersistedRuleId_rejectsBeforeCreatingTask() throws Exception {
+        RuleDto invalidRule = makeRule();
+        invalidRule.setId(0L);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(invalidRule), 10, false, 0, false)));
+
+        assertEquals("Rule id must be positive when provided", ex.getErrors().get("rules[0].id"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -713,7 +714,7 @@ class SimulationServiceImplTest {
 
         assertTrue(ex.getMessage().contains("Conditions cannot be empty"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -739,7 +740,7 @@ class SimulationServiceImplTest {
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -762,7 +763,7 @@ class SimulationServiceImplTest {
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
-        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -831,7 +832,7 @@ class SimulationServiceImplTest {
 
         when(smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(anyList(), anyMap()))
                 .thenReturn(resolvedSubmissionModel);
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -858,7 +859,7 @@ class SimulationServiceImplTest {
         capturingExecutor.capturedTask().run();
 
         verify(smvGenerator).generateWithResolvedDeviceModel(eq(1L), anyList(), anyList(), anyList(), eq(List.of()),
-                eq(false), eq(0), eq(false), eq(SmvGenerator.GeneratePurpose.SIMULATION),
+                eq(AttackScenarioDto.none()), eq(false), eq(SmvGenerator.GeneratePurpose.SIMULATION),
                 argThat(ctx -> "task".equals(ctx.scope()) && Objects.equals(15L, ctx.id())),
                 same(resolvedSubmissionModel));
 
@@ -868,7 +869,7 @@ class SimulationServiceImplTest {
                 eq(List.of()),
                 argThat(sentRules -> sentRules.size() == 1
                         && "testdevice".equals(sentRules.get(0).getConditions().get(0).getDeviceName())),
-                eq(List.of()), eq(false), eq(0), eq(false), eq(SmvGenerator.GeneratePurpose.SIMULATION),
+                eq(List.of()), eq(AttackScenarioDto.none()), eq(false), eq(SmvGenerator.GeneratePurpose.SIMULATION),
                 argThat(ctx -> "task".equals(ctx.scope()) && Objects.equals(15L, ctx.id())));
         JsonNode requestJson = readRequestJson(fakeFile);
         assertEquals(10, requestJson.path("steps").asInt());
@@ -895,8 +896,7 @@ class SimulationServiceImplTest {
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generateWithResolvedDeviceModel(
-                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
-                anyBoolean(), any(), any(), anyMap());
+                anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any(), anyMap());
     }
 
     @Test
@@ -1033,7 +1033,7 @@ class SimulationServiceImplTest {
     void simulate_executorFailure_throwsStructuredFailureInsteadOfEmptySuccess() throws Exception {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         File fakeFile = createTempModelFile();
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(new SmvGenerator.GenerateResult(fakeFile, Map.of()));
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.error("NuSMV exited with code 1."));
@@ -1053,7 +1053,7 @@ class SimulationServiceImplTest {
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(
                 fakeFile, Map.of(), List.of("Generation warning [rule-disabled]: invalid rule"),
                 1, 0, List.of());
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -1072,7 +1072,7 @@ class SimulationServiceImplTest {
     @Test
     void simulate_smvGenerationError_rethrowsSmvGenerationException() throws Exception {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenThrow(SmvGenerationException.ambiguousDeviceReference("Light", List.of("light_1", "light_2")));
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
@@ -1102,7 +1102,7 @@ class SimulationServiceImplTest {
         RuleDto rule = makeRule();
         List<RuleDto> rules = new ArrayList<>(List.of(rule));
         SimulationRequestDto request = simRequest(devices, rules, 5, false, 0, false);
-        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(), any(), anyBoolean(), any(), any()))
                 .thenAnswer(invocation -> {
                     request.setSteps(99);
                     devices.get(0).setVarName("mutateddevice");
@@ -1132,7 +1132,7 @@ class SimulationServiceImplTest {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         File fakeFile = createTempModelFile();
         when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(),
-                anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+                any(), anyBoolean(), any(), any()))
                 .thenReturn(new SmvGenerator.GenerateResult(fakeFile, Map.of()));
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -1153,9 +1153,33 @@ class SimulationServiceImplTest {
     }
 
     @Test
+    void simulateAndSave_ownershipFenceFailureIsNotReportedAsAUsableResult() throws Exception {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
+        File fakeFile = createTempModelFile();
+        when(smvGenerator.generateWithEnvironment(any(), any(), anyList(), any(), any(),
+                any(), anyBoolean(), any(), any()))
+                .thenReturn(new SmvGenerator.GenerateResult(fakeFile, Map.of()));
+        when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
+                .thenReturn(SimulationOutput.success("trace", "raw"));
+        when(smvTraceParser.parseCounterexampleStates(any(), any(), anyList()))
+                .thenReturn(List.of(new TraceStateDto(), new TraceStateDto()));
+        ServiceUnavailableException ownershipLost =
+                new ServiceUnavailableException("formal operation ownership changed");
+        doThrow(ownershipLost).when(formalOperationAdmission).registerCurrentLeaseCommitFence();
+
+        ServiceUnavailableException error = assertThrows(ServiceUnavailableException.class,
+                () -> service.simulateAndSave(
+                        1L, simRequest(singleDevice(), List.of(), 5, false, 0, false)));
+
+        assertSame(ownershipLost, error);
+        verify(simulationTraceRepository, never()).save(any(SimulationTracePo.class));
+    }
+
+    @Test
     void simulateAndSave_invalidRequest_throwsValidationException() {
         SimulationRequestDto request = new SimulationRequestDto();
         request.setDevices(null);
+        request.setAttackScenario(AttackScenarioDto.none());
 
         ValidationException ex = assertThrows(ValidationException.class,
                 () -> service.simulateAndSave(1L, request));
@@ -1210,8 +1234,7 @@ class SimulationServiceImplTest {
 
         assertEquals("SIMULATION_STORED_TASK_LIMIT_REACHED", error.getReasonCode());
         verify(smvGenerator, never()).generateWithEnvironment(
-                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
-                anyBoolean(), any(), any());
+                anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any());
     }
 
     @Test
@@ -1412,8 +1435,11 @@ class SimulationServiceImplTest {
         r.setDevices(devices);
         r.setRules(rules);
         r.setSteps(steps);
-        r.setAttack(isAttack);
-        r.setAttackBudget(attackBudget);
+        r.setAttackScenario(AttackScenarioDto.builder()
+                .mode(isAttack ? AttackScenarioDto.Mode.ANY_UP_TO_BUDGET : AttackScenarioDto.Mode.NONE)
+                .budget(attackBudget)
+                .points(List.of())
+                .build());
         r.setEnablePrivacy(enablePrivacy);
         return r;
     }

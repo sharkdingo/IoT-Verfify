@@ -110,6 +110,7 @@ class GetTraceToolTest {
                         .stateIndex(1)
                         .devices(List.of(device))
                         .triggeredRules(List.of(TraceTriggeredRuleDto.builder()
+                                .ruleIndex(0)
                                 .ruleId("42")
                                 .ruleLabel("Start recording on motion")
                                 .build()))
@@ -135,6 +136,7 @@ class GetTraceToolTest {
         assertEquals("Start recording on motion", json.path("states").get(0).path("triggeredRules").get(0)
                 .path("ruleLabel").asText());
         assertEquals(false, json.path("states").get(0).path("triggeredRules").get(0).has("ruleId"));
+        assertEquals(false, json.path("states").get(0).path("triggeredRules").get(0).has("ruleIndex"));
         assertEquals(true, json.path("message").asText().contains("incomplete"));
     }
 }

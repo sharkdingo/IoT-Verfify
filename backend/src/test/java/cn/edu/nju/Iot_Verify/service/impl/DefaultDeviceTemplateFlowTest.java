@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
@@ -67,9 +68,7 @@ class DefaultDeviceTemplateFlowTest {
                             environment,
                             List.of(),
                             List.of(),
-                            false,
-                            0,
-                            true,
+                            AttackScenarioDto.none(), true,
                             SmvGenerator.GeneratePurpose.VERIFICATION);
                     String smv = Files.readString(generated.smvFile().toPath());
 
@@ -176,9 +175,7 @@ class DefaultDeviceTemplateFlowTest {
                 environment,
                 rules,
                 List.of(),
-                false,
-                0,
-                true,
+                AttackScenarioDto.none(), true,
                 SmvGenerator.GeneratePurpose.VERIFICATION);
         return Files.readString(generated.smvFile().toPath());
     }

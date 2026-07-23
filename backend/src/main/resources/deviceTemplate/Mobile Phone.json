@@ -65,7 +65,6 @@
 				"Relation": "=",
 				"Value": "taking photo"
 			},
-			"Assignments": [],
 			"Description": ""
 		},
 		{
@@ -77,7 +76,6 @@
 				"Relation": "=",
 				"Value": "uploading to cloud"
 			},
-			"Assignments": [],
 			"Description": ""
 		}
 	],
@@ -87,7 +85,6 @@
 			"StartState": "on",
 			"EndState": "taking photo",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -96,7 +93,6 @@
 			"StartState": "on",
 			"EndState": "uploading to cloud",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"AcceptsContent": true,
 			"Description": ""

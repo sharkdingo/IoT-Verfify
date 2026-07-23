@@ -186,6 +186,7 @@ class SimulationTraceToolsTest {
                         .stateIndex(0)
                         .devices(List.of(device))
                         .triggeredRules(List.of(cn.edu.nju.Iot_Verify.dto.trace.TraceTriggeredRuleDto.builder()
+                                .ruleIndex(0)
                                 .ruleId("7")
                                 .ruleLabel("Turn on hall light")
                                 .build()))

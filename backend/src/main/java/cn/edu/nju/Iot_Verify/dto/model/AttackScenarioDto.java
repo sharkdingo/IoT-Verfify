@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.dto.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -26,8 +27,8 @@ public class AttackScenarioDto {
         ANY_UP_TO_BUDGET
     }
 
-    @Builder.Default
-    private Mode mode = Mode.NONE;
+    @NotNull(message = "Attack scenario mode is required")
+    private Mode mode;
 
     private Integer budget;
 

@@ -26,6 +26,7 @@ import type {
 } from '@/types/verify'
 import { isModelSemanticsConsistent } from './modelSemantics'
 import type { RunPersistence, RunPersistenceStatus } from '@/types/runPersistence'
+import { validateTraceStatePayload } from './traceStateResponse'
 
 export const RUN_RESPONSE_INCOMPLETE_CODE = 'RUN_RESPONSE_INCOMPLETE'
 
@@ -98,23 +99,6 @@ const requireIntegerInRange = (
     throw new RunResponseContractError(context, `${field} must be an integer between ${min} and ${max}`)
   }
   return result
-}
-
-const validateOptionalModelTokenSource = (
-  value: Record<string, any>,
-  context: string
-) => {
-  if (value.modelTokenSource !== undefined
-    && !['BUNDLED', 'CUSTOM', 'UNKNOWN'].includes(value.modelTokenSource)) {
-    throw new RunResponseContractError(context, 'modelTokenSource is invalid')
-  }
-}
-
-const validateTraceVariable = (value: unknown, context: string) => {
-  const variable = requireRecord(value, context)
-  requireString(variable, 'name', context, false)
-  requireString(variable, 'value', context)
-  validateOptionalModelTokenSource(variable, context)
 }
 
 const requireOptionalTimestamp = (value: Record<string, any>, field: string, context: string) => {
@@ -209,39 +193,11 @@ const validateGenerationIssues = (
 }
 
 const validateStateList = (states: unknown, context: string): TraceState[] => {
-  if (!Array.isArray(states) || states.length === 0) {
-    throw new RunResponseContractError(context, 'states must contain at least the initial model state')
-  }
-  states.forEach((state, stateIndex) => {
-    const row = requireRecord(state, context, `states[${stateIndex}]`)
-    const persistedStateIndex = requireInteger(row, 'stateIndex', context)
-    if (persistedStateIndex !== stateIndex + 1) {
-      throw new RunResponseContractError(
-        context,
-        `states[${stateIndex}].stateIndex must equal ${stateIndex + 1}`
-      )
+  validateTraceStatePayload(states, {
+    firstStateIndex: 1,
+    fail: detail => {
+      throw new RunResponseContractError(context, detail)
     }
-    const devices = requireArray(row, 'devices', context)
-    requireArray(row, 'triggeredRules', context)
-    requireArray(row, 'compromisedAutomationLinks', context)
-    devices.forEach((device, deviceIndex) => {
-      const deviceRow = requireRecord(device, context, `states[${stateIndex}].devices[${deviceIndex}]`)
-      requireString(deviceRow, 'deviceId', context, false)
-      requireString(deviceRow, 'deviceLabel', context, false)
-      requireString(deviceRow, 'templateName', context, false)
-      validateOptionalModelTokenSource(deviceRow, context)
-      requireArray(deviceRow, 'variables', context).forEach((variable, variableIndex) =>
-        validateTraceVariable(variable, `${context} device variable[${variableIndex}]`))
-    })
-    for (const optionalArray of ['trustPrivacies', 'envVariables', 'globalVariables']) {
-      if (row[optionalArray] !== undefined && !Array.isArray(row[optionalArray])) {
-        throw new RunResponseContractError(context, `${optionalArray} must be an array when present`)
-      }
-    }
-    ;['envVariables', 'globalVariables'].forEach(field => {
-      ;(row[field] || []).forEach((variable: unknown, variableIndex: number) =>
-        validateTraceVariable(variable, `${context} ${field}[${variableIndex}]`))
-    })
   })
   return states as TraceState[]
 }

@@ -6,15 +6,18 @@ import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableChangeDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeConfigDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeUpdateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceUpdateResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.BoardReplacementStaleException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
+import cn.edu.nju.Iot_Verify.exception.DeviceRuntimeConflictException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.BoardEnvironmentVariablePo;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
@@ -860,6 +863,49 @@ class BoardStorageServiceImplBatchTest {
     }
 
     @Test
+    void addNodes_canonicalizesRuntimeValuesBeforePersistence() {
+        DeviceNodeMapper realMapper = new DeviceNodeMapper();
+        BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
+                nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                null, new DeviceTemplateMapper(), null, userRepository);
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Switch")
+                .modes(List.of("Power"))
+                .initState("off")
+                .workingStates(List.of(workingState("off"), workingState("on")))
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("mode").isInside(true).values(List.of("eco", "turbo"))
+                        .trust("trusted").privacy("public").build()))
+                .apis(List.of())
+                .build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L).name("Switch").manifestJson(JsonUtils.toJson(manifest)).build();
+        DeviceNodeDto draft = boardNode("switch_1", " switch ", "Hall switch");
+        draft.setState(" off ");
+        draft.setCurrentStateTrust("TRUSTED");
+        draft.setCurrentStatePrivacy(" PUBLIC ");
+        draft.setVariables(List.of(new VariableStateDto(" mode ", " eco ", "TRUSTED")));
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of());
+        when(nodeRepo.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        DeviceNodeDto saved = serviceWithRealMapper.addNodes(1L, List.of(draft), List.of())
+                .getAffectedDevices().get(0);
+
+        assertEquals("Switch", saved.getTemplateName());
+        assertEquals("off", saved.getState());
+        assertEquals("trusted", saved.getCurrentStateTrust());
+        assertEquals("public", saved.getCurrentStatePrivacy());
+        assertEquals("mode", saved.getVariables().get(0).getName());
+        assertEquals("eco", saved.getVariables().get(0).getValue());
+        assertEquals("trusted", saved.getVariables().get(0).getTrust());
+    }
+
+    @Test
     void saveBoardBatch_rejectsLayoutOutsidePortableSceneRangeBeforeMutation() {
         DeviceNodeDto node = boardNode("device-1", null, "Device");
         node.setWidth(DeviceLayoutDto.MAX_WIDTH + 1);
@@ -913,9 +959,16 @@ class BoardStorageServiceImplBatchTest {
         when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
         when(specRepo.findByUserId(1L)).thenReturn(List.of());
 
+        DeviceRuntimeConfigDto expected = new DeviceRuntimeConfigDto();
+        expected.setState("off");
+        expected.setCurrentStateTrust("trusted");
+        expected.setCurrentStatePrivacy("public");
+        DeviceRuntimeConfigDto desired = new DeviceRuntimeConfigDto();
+        desired.setState("on");
+        desired.setCurrentStateTrust("trusted");
+        desired.setCurrentStatePrivacy("public");
         DeviceUpdateResultDto result = serviceWithRealMapper.updateNodeRuntime(
-                1L, "switch_1", new DeviceRuntimeUpdateDto(
-                        "on", "trusted", "public", null, null));
+                1L, "switch_1", new DeviceRuntimeUpdateDto(expected, desired));
 
         assertEquals("runtime", result.getMutationType());
         assertEquals("updated", result.getOperation());
@@ -927,6 +980,110 @@ class BoardStorageServiceImplBatchTest {
         assertEquals(20.0, result.getCurrentDevice().getPosition().getY());
         assertEquals(176, result.getCurrentDevice().getWidth());
         assertEquals(128, result.getCurrentDevice().getHeight());
+
+        // A later write is visible after the user-row lock; the old baseline must no longer apply.
+        assertThrows(DeviceRuntimeConflictException.class, () ->
+                serviceWithRealMapper.updateNodeRuntime(
+                        1L, "switch_1", new DeviceRuntimeUpdateDto(expected, desired)));
+    }
+
+    @Test
+    void updateNodeRuntimeCanonicalizesWhitespaceAroundDeclaredLocalVariableNames() {
+        DeviceNodeMapper realMapper = new DeviceNodeMapper();
+        BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
+                nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                null, new DeviceTemplateMapper(), null, userRepository);
+        DeviceNodePo stored = DeviceNodePo.builder()
+                .id("switch_1").userId(1L).templateName("Switch").label("Hall switch")
+                .posX(10.0).posY(20.0).state("off").width(176).height(128)
+                .variablesJson(JsonUtils.toJson(List.of(new VariableStateDto(
+                        "mode", "eco", null))))
+                .build();
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Switch").modes(List.of("Power")).initState("off")
+                .workingStates(List.of(workingState("off"), workingState("on")))
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("mode").isInside(true).values(List.of("eco", "turbo"))
+                        .trust("trusted").privacy("public").build()))
+                .apis(List.of()).build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L).name("Switch").manifestJson(JsonUtils.toJson(manifest)).build();
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(stored));
+        when(nodeRepo.findById(new cn.edu.nju.Iot_Verify.po.DeviceNodeId("switch_1", 1L)))
+                .thenReturn(Optional.of(stored));
+        when(nodeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of());
+
+        DeviceRuntimeConfigDto expected = new DeviceRuntimeConfigDto();
+        expected.setState("off");
+        expected.setVariables(List.of(new VariableStateDto(
+                " mode ", "eco", null)));
+        DeviceRuntimeConfigDto desired = new DeviceRuntimeConfigDto();
+        desired.setState("off");
+        desired.setVariables(List.of(new VariableStateDto(
+                " mode ", " turbo ", "TRUSTED")));
+
+        DeviceUpdateResultDto result = serviceWithRealMapper.updateNodeRuntime(
+                1L, "switch_1", new DeviceRuntimeUpdateDto(expected, desired));
+
+        assertEquals("updated", result.getOperation());
+        assertEquals("mode", result.getCurrentDevice().getVariables().get(0).getName());
+        assertEquals("turbo", result.getCurrentDevice().getVariables().get(0).getValue());
+        assertEquals("trusted", result.getCurrentDevice().getVariables().get(0).getTrust());
+    }
+
+    @Test
+    void updateNodeRuntime_rewritesNonCanonicalStoredValuesEvenWhenDesiredRuntimeIsEquivalent() {
+        DeviceNodeMapper realMapper = new DeviceNodeMapper();
+        BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
+                nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                null, new DeviceTemplateMapper(), null, userRepository);
+        DeviceNodePo stored = DeviceNodePo.builder()
+                .id("switch_1").userId(1L).templateName("Switch").label("Hall switch")
+                .posX(10.0).posY(20.0).state(" off ").width(176).height(128)
+                .currentStateTrust("TRUSTED")
+                .variablesJson(JsonUtils.toJson(List.of(new VariableStateDto(
+                        " mode ", " eco ", "TRUSTED"))))
+                .build();
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Switch").modes(List.of("Power")).initState("off")
+                .workingStates(List.of(workingState("off"), workingState("on")))
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("mode").isInside(true).values(List.of("eco", "turbo"))
+                        .trust("trusted").privacy("public").build()))
+                .apis(List.of()).build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L).name("Switch").manifestJson(JsonUtils.toJson(manifest)).build();
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(stored));
+        when(nodeRepo.findById(new cn.edu.nju.Iot_Verify.po.DeviceNodeId("switch_1", 1L)))
+                .thenReturn(Optional.of(stored));
+        when(nodeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of());
+
+        DeviceRuntimeConfigDto canonical = new DeviceRuntimeConfigDto();
+        canonical.setState("off");
+        canonical.setCurrentStateTrust("trusted");
+        canonical.setVariables(List.of(new VariableStateDto("mode", "eco", "trusted")));
+
+        DeviceUpdateResultDto result = serviceWithRealMapper.updateNodeRuntime(
+                1L, "switch_1", new DeviceRuntimeUpdateDto(canonical, canonical));
+
+        assertEquals("updated", result.getOperation());
+        assertTrue(result.getChangedFields().contains("state"));
+        assertTrue(result.getChangedFields().contains("currentStateTrust"));
+        assertTrue(result.getChangedFields().contains("variables"));
+        assertEquals("off", result.getCurrentDevice().getState());
+        assertEquals("trusted", result.getCurrentDevice().getCurrentStateTrust());
+        assertEquals("mode", result.getCurrentDevice().getVariables().get(0).getName());
+        verify(nodeRepo).save(stored);
     }
 
     @Test

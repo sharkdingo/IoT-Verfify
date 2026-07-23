@@ -14,14 +14,15 @@ const unwrap = async <T>(response: Awaited<ReturnType<APIRequestContext['get']>>
   return body.data as T
 }
 
-const openWorkspace = async (page: Page, auth: AuthUser) => {
-  await page.addInitScript(({ token, user }) => {
+const openWorkspace = async (page: Page, auth: AuthUser, theme: 'light' | 'dark' = 'light') => {
+  await page.addInitScript(({ token, user, themeMode }) => {
     window.localStorage.setItem('iot_verify_token', token)
     window.localStorage.setItem('iot_verify_user', JSON.stringify(user))
-    window.localStorage.setItem('iot_verify_theme', 'light')
+    window.localStorage.setItem('iot_verify_theme', themeMode)
     window.localStorage.setItem('locale', 'zh-CN')
   }, {
     token: auth.token,
+    themeMode: theme,
     user: {
       userId: auth.userId,
       phone: auth.phone,
@@ -108,4 +109,37 @@ test('keeps the pending reply status inside a compact assistant bubble', async (
 
   releaseResponse()
   await expect(pending).toBeHidden()
+})
+
+test('renders assistant code blocks on a readable dark surface', async ({ page, request }) => {
+  const auth = await createAuthenticatedUser(request)
+  const session = await unwrap<{ id: string }>(
+    await request.post(`${apiBaseURL}/api/chat/sessions`, {
+      headers: { Authorization: `Bearer ${auth.token}` }
+    })
+  )
+  const markdown = '```json\n{"status":"ok"}\n```'
+  await page.route('**/api/chat/completions', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream; charset=UTF-8',
+      body: `data: ${JSON.stringify({ content: markdown })}\n\n`
+    })
+  })
+  await openWorkspace(page, auth, 'dark')
+
+  await page.getByTestId('open-ai-assistant').click()
+  await page.getByTestId('chat-sidebar-toggle').click()
+  await page.getByTestId(`chat-session-${session.id}`).click()
+  await page.getByTestId('chat-input').fill('show status')
+  await page.getByTestId('chat-send').click()
+
+  const codeBlock = page.locator('.code-block-container')
+  await expect(codeBlock).toBeVisible()
+  await expect(codeBlock).toContainText('{"status":"ok"}')
+  expect(await codeBlock.evaluate(element => getComputedStyle(element).backgroundColor))
+    .toBe('rgb(13, 17, 23)')
+  expect(await codeBlock.locator('.code-header').evaluate(element =>
+    getComputedStyle(element).backgroundColor))
+    .toBe('rgb(22, 27, 34)')
 })

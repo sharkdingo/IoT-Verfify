@@ -54,7 +54,8 @@ class CounterexampleInitialStateConstraintsTest {
                 .devices(List.of(device))
                 .triggeredRules(List.of())
                 .compromisedAutomationLinks(List.of(
-                        TraceTriggeredRuleDto.builder().ruleId("22").ruleLabel("second").build()))
+                        TraceTriggeredRuleDto.builder().ruleIndex(1)
+                                .ruleId("22").ruleLabel("second").build()))
                 .envVariables(List.of(variable("temperature", "18")))
                 .build();
         List<RuleDto> rules = List.of(

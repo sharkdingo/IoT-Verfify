@@ -31,7 +31,6 @@
 				"Relation": "=",
 				"Value": "posting"
 			},
-			"Assignments": [],
 			"Description": ""
 		}
 	],
@@ -41,7 +40,6 @@
 			"StartState": "idle",
 			"EndState": "posting",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"AcceptsContent": true,
 			"Description": ""

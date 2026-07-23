@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-23. Source:
+Verified against code on 2026-07-24. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -38,9 +38,9 @@ errors; model/template semantic mismatches discovered after parsing return `422`
 | :--- | :--- | :--- | :--- | :--- |
 | `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | 1–100 device instances; each device accepts at most 100 variable and 100 privacy overrides |
 | `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | At most 200 Board-level environment pool overrides. Names must be unique. A missing item or a `null` value/trust/privacy field uses the referenced template default; an explicit blank or invalid field is rejected before defaults are merged |
-| `rules` | `RuleDto[]` | no | `[]` | At most 100 automation rules. A persisted positive `id` is optional correlation identity for user-facing triggered-rule/link snapshots; it does not change model behavior |
+| `rules` | `RuleDto[]` | no | `[]` | At most 100 automation rules. Every non-null `id` must be positive and unique within the request; unsaved rules may share the omitted/null value. A persisted id is correlation identity for user-facing triggered-rule/link snapshots and does not change model behavior |
 | `specs` | `SpecificationDto[]` | yes (`@NotEmpty`) | — | 1–100 specifications to check |
-| `attackScenario` | `AttackScenarioDto` | no | `{ mode: "NONE", budget: 0, points: [] }` | Per-run attack selection, independent from persistent trust labels. Verification accepts `NONE`, `EXACT_POINTS`, or `ANY_UP_TO_BUDGET`. Exact mode requires `1..50` explicit points and no budget. Exhaustive mode requires budget `1..50`, no explicit points, and a budget no greater than the current behavior-changing attack surface. |
+| `attackScenario` | `AttackScenarioDto` | yes | — | Explicit per-run attack selection, independent from persistent trust labels. `mode` is required. Verification accepts `NONE`, `EXACT_POINTS`, or `ANY_UP_TO_BUDGET`. Exact mode requires `1..50` explicit points and no budget. Exhaustive mode requires budget `1..50`, no explicit points, and a budget no greater than the current behavior-changing attack surface. |
 | `enablePrivacy` | `boolean` | no | `false` | Adds privacy-label variables and enlarges state space. Any privacy condition in a submitted specification makes the effective value `true`, even if the caller omitted or set this field to `false`; responses return the effective value |
 
 > Note: there is **no** `saveTrace` field. Traces are saved automatically when a
@@ -76,12 +76,10 @@ displayLabel? }`. `deviceId`/`ruleId` remain the stable identities; `displayLabe
 display-only name captured from the submitted device or rule so history does not depend
 on the mutable current Board.
 
-For compatibility, the REST DTO can still read legacy top-level `isAttack` and
-`attackBudget` fields as `NONE` or `ANY_UP_TO_BUDGET`. Verification continues to accept
-that exhaustive legacy meaning. Simulation accepts a legacy non-attack request, but an
-attack-enabled legacy simulation is rejected because simulation now requires explicit
-points. New and legacy fields cannot be combined, and responses/request snapshots
-serialize the structured `attackScenario`.
+Requests use only the structured `attackScenario`. Obsolete top-level `isAttack` and
+`attackBudget` request fields are unknown fields and return HTTP `400`; callers must state
+`NONE`, `EXACT_POINTS`, or verification-only `ANY_UP_TO_BUDGET` explicitly. Run responses
+still expose derived `isAttack` and `attackBudget` summary fields for convenient display.
 
 **Response**: `VerificationResultDto`
 
@@ -113,11 +111,16 @@ was saved. Counterexamples and the completed run are written in one transaction,
 confirmed saved run cannot contain only part of its counterexamples. Requests rejected
 before a result exists do not create a history row.
 
-The distributed formal-operation lease is checked again in the transaction's
-`beforeCommit` phase. If ownership expires while a synchronous verification or saved
-simulation is waiting on a database lock, the transaction rolls back instead of
-publishing evidence after its admission lease was lost. The completed in-memory result
-remains usable and reports a failed or outcome-unknown history persistence status.
+Every distributed formal-operation admission also claims a monotonically increasing
+database fencing epoch for that user before expensive work starts. In the final
+transaction's `beforeCommit` phase, the server locks the user's epoch row through physical
+commit, requires the claimed epoch to remain current, and rechecks the Redis lease. A newer
+claim either supersedes an old transaction before it reaches the fence or waits for the
+old physical commit before starting its work. Expiry or supersession therefore rolls back
+history persistence instead of publishing stale or duplicate evidence, and the request
+fails with service-unavailable semantics. Ordinary persistence failures that do not prove
+ownership loss may still preserve the completed in-memory result with an explicit failed
+or outcome-unknown history-persistence status.
 
 `RunPersistenceDto` is `{ status, runId?, reasonCode? }`. `status` is `SAVED`,
 `NOT_REQUESTED`, `FAILED`, or `OUTCOME_UNKNOWN`. `NOT_REQUESTED` is used by preview-only
@@ -135,7 +138,8 @@ attack budget or historical trace; recomputing the denominator from the current 
 misdescribe an older run after devices or rules change.
 
 To estimate the minimum number of compromise points needed for a violation, callers
-must run complete verification repeatedly with different `attackBudget` upper bounds.
+must run complete verification repeatedly with different `attackScenario.budget` upper bounds
+under `ANY_UP_TO_BUDGET`.
 The API does not present the selected upper bound or a counterexample's runtime count as
 the minimum attack intensity.
 
@@ -185,7 +189,7 @@ cannot change the model behind the accepted task. REST
 calls first run full DTO Bean Validation (HTTP 400 for malformed request shapes);
 service and AI-tool callers run the NuSMV runtime validation needed for execution
 (`devices`/`specs` present, null list items rejected, device identity, specification id
-and template id, specification conditions, `attackBudget`, etc.). After structural
+and template id, specification conditions, `attackScenario`, etc.). After structural
 validation, the backend loads the current user's device templates and rejects
 template-semantic mismatches before NuSMV generation: non-signal APIs cannot be used
 as rule/spec conditions, command actions must exist on the target template, and
@@ -269,10 +273,10 @@ the run-history endpoint so their counterexamples are removed atomically.
 | `modelSemantics` / `modelSnapshot` | DTOs | Structured model meaning and submitted scope |
 | `outcome` / `modelComplete` | enum / `Boolean` | Verification conclusion and completeness qualifier |
 | `violatedSpecCount` | `Integer` | Reliably false emitted specifications |
-| `counterexampleCount` | `Integer` | Persisted traces whose lightweight semantic metadata is available for open/replay; damaged placeholders are excluded and the count may be lower than `violatedSpecCount` or `counterexamples.length` |
+| `counterexampleCount` | `Integer` | Persisted traces whose complete state evidence and semantic metadata validate for open/replay; damaged placeholders are excluded and the count may be lower than `violatedSpecCount` or `counterexamples.length` |
 | `disabledRuleCount` / `skippedSpecCount` | `Integer` | Model omissions |
 | `generationIssues` | `ModelGenerationIssueDto[]` | Itemized omission explanations |
-| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count, and timestamp; damaged rows remain as `dataAvailable=false` placeholders, while full states are loaded only when replay/fix is opened |
+| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count, and timestamp; the backend validates full saved states before producing the summary but does not serialize them here; damaged rows remain as `dataAvailable=false` placeholders |
 | `dataAvailable` | `Boolean` | `true` when persisted semantic fields decoded successfully; `false` keeps a damaged row visible without treating it as usable |
 | `unavailableReasonCode` | `String` | Present for an unavailable row; currently `PERSISTED_SEMANTIC_DATA_INVALID` |
 
@@ -291,9 +295,13 @@ counterexamples are evidence/actions nested under that result, not independent r
 One malformed run or trace summary does not fail the whole history list. The backend
 returns an unavailable placeholder with its stable id/timestamp where possible. Clients
 may offer deletion, but must disable open, replay, and repair actions for that item.
-Trace summaries read a persisted scalar state count and do not fetch or parse the full
-`statesJson` payload. Detail reads still parse every state and require the scalar count
-to match, so the list remains bounded without weakening replay integrity.
+Trace summaries internally parse the bounded saved `statesJson`, require a non-empty
+contiguous one-based state sequence, and require the scalar count to match before setting
+`dataAvailable=true`. They also read the server-internal frozen request, require its rule
+count to match `modelSnapshot.ruleCount`, and bind every triggered-rule or compromised-link
+entry to the exact frozen rule at `ruleIndex`, including its optional id and label. The
+summary response remains lightweight because neither validated states nor the internal
+request are serialized until replay/fix detail is opened.
 
 ### `GET /api/verify/tasks/{id}` — task status
 
@@ -327,8 +335,10 @@ tasks carry the same conclusion and per-spec fields as synchronous verification:
 `disabledRuleCount`, `skippedSpecCount`, and `generationIssues`.
 Failed async tasks may still carry `checkLogs` for the steps reached before failure.
 Task fields are status-dependent: active tasks do not publish `outcome` or
-`modelComplete`; terminal tasks have `completedAt` and `progress=100`; `FAILED` has a
-non-blank `errorMessage`; and `COMPLETED` has the complete conclusion fields above.
+`modelComplete`; terminal tasks have `completedAt` and `progress=100`; timestamps cannot
+precede creation or start; processing duration cannot be negative or exist without both
+boundary timestamps; `FAILED` has a non-blank `errorMessage`; and `COMPLETED` has a start
+time, processing duration, non-negative result counts, and the complete conclusion fields above.
 The frontend validates these invariants before it renders an inbox row or reconstructs
 a result. A malformed HTTP 200 is an uninterpretable task response, not a poll timeout
 or evidence that the run completed.
@@ -620,7 +630,7 @@ instead of being accepted as incomplete display bindings.
 - Device references are resolved from canonical ids only. Labels and template names are
   display metadata, not fallback identity. See
   [../architecture/device-identity.md](../architecture/device-identity.md) and
-  [../architecture/nusmv-model.md](../architecture/nusmv-model.md#template-resolution-important).
+  [identifier handling](../architecture/nusmv-model.md#identifier-handling).
 
 See [../architecture/spec-templates.md](../architecture/spec-templates.md) for the
 template ↔ CTL/LTL semantics and how each `targetType` maps to an SMV expression.
@@ -636,7 +646,7 @@ recorded as skipped generation warnings rather than being silently accepted.
 
 | Field | Type | Notes |
 | :--- | :--- | :--- |
-| `id` / `verificationTaskId` | `Long` | Trace identity and owning completed verification-run identity; only pre-refactor orphan traces may lack the latter. Ownership is enforced server-side and `userId` is not serialized |
+| `id` / `verificationTaskId` | `Long` | Persisted trace identity and owning completed verification-run identity. Both are required on history/detail reads; an immediate result whose history persistence failed may contain an unpersisted trace without them. Ownership is enforced server-side and `userId` is not serialized |
 | `violatedSpecId` | `String` | |
 | `violatedSpec` | `SpecificationDto` | Structured verification-time specification snapshot used for user-facing labels and conditions |
 | `checkedExpression` | `String` | Exact generated CTL/LTL expression checked by NuSMV; distinct from `violatedSpec.formula`, which is only a preview/cache |
@@ -647,7 +657,7 @@ recorded as skipped generation warnings rather than being silently accepted.
 | `isAttack` | `Boolean` | Attack mode persisted with this trace |
 | `attackBudget` | `Integer` | Persisted derived run size: exhaustive upper bound, exact selected-point count, or `0` |
 | `enablePrivacy` | `Boolean` | Privacy-modeling flag persisted with this trace |
-| `modelSemantics` | `ModelSemanticsDto` | Persisted structured policy, exact selected points/display labels, effects, and effective attack-surface counts. Legacy rows without the JSON snapshot are reconstructed from dedicated counts/flags when possible, never from raw request collection lengths |
+| `modelSemantics` | `ModelSemanticsDto` | Required persisted structured policy, exact selected points/display labels, effects, and effective attack-surface counts. A missing or malformed snapshot makes the trace unavailable |
 | `modelSnapshot` | `ModelRunSnapshotDto` | Frozen verification-time item/template counts; this does not assert equality with the current Board |
 | `createdAt` | `LocalDateTime` | |
 
@@ -656,10 +666,11 @@ recorded as skipped generation warnings rather than being silently accepted.
 > but they are `@JsonIgnore` — **not serialized to clients**. The raw fields restore
 > server-side fix context. Automatic fix replays the exact saved manifests rather than
 > whichever template versions happen to be current. New verification traces store the manifests
-> in a versioned internal envelope together with each canonical device id's frozen
-> `BUNDLED | CUSTOM | UNKNOWN` model-token provenance. Older plain-manifest snapshots remain
-> readable, but their provenance is deliberately `UNKNOWN`; the server never infers a bundled
-> source from a template or token name. `TraceMapper` instead returns structured `violatedSpec` and
+> in a versioned internal envelope together with one explicit `BUNDLED` or `CUSTOM`
+> model-token source for each canonical request device id. Unversioned, missing, unknown,
+> or request-mismatched snapshot entries are persisted-data integrity failures; the server
+> never infers a source from a template or token name.
+> `TraceMapper` instead returns structured `violatedSpec` and
 > `isAttack` / `attackBudget` / `enablePrivacy` / `modelSemantics`, so clients do not parse persistence JSON.
 > A non-attack request and historical snapshot use `attackBudget=0`. A positive budget
 > with `isAttack=false` is rejected before model generation rather than normalized away.
@@ -683,13 +694,19 @@ environment pool. The internal attack counter is exposed as the user-facing
 `compromisedPointCount`; its generated NuSMV name is not serialized. A user environment
 variable cannot overwrite this separate namespace.
 
-`TraceTriggeredRuleDto` is `{ ruleId, ruleLabel }`; internal generated probe indexes are
-resolved by the parser and are not serialized. A triggered rule is a selected model
-branch whose command-delivery guards passed and whose command produced the transition
+`TraceTriggeredRuleDto` is `{ ruleIndex, ruleId, ruleLabel }`. `ruleIndex` is the required,
+zero-based position in the immutable rule list submitted for that run; it binds internal
+probe evidence to exactly one frozen rule even when ids are absent or duplicated. It is
+historical evidence, not an index into the current Board after any edit. `ruleId` remains
+the preferred current-canvas correlation key when present. A triggered rule is a selected
+model branch whose command-delivery guards passed and whose command produced the transition
 into this state; it is not merely a condition that looked true in the frontend.
 `compromisedAutomationLinks` uses the
 same stable rule snapshot shape, so users see the affected automation rather than an
-internal link index.
+internal link index. Persisted verification and simulation detail/summary reads reject an
+index outside the frozen request's rule list or an id/label that does not exactly match the
+rule at that position; such evidence is unavailable rather than guessed from current Board
+state.
 
 `TraceDeviceDto`: `{ deviceId, deviceLabel, templateName, modelTokenSource, state, mode, compromised,
 variables: TraceVariableDto[], trustPrivacy[], privacies[] }`. `deviceId` is the
@@ -702,12 +719,24 @@ the internal `is_attack` variable is not mixed into `variables[]`.
 from the exact template captured for the run. An environment variable has one source
 only when every active template declaring it has that same source; mixed declarations
 become `UNKNOWN`, and global parser values are always `UNKNOWN`. Clients may localize
-exact known tokens only for `BUNDLED`; `CUSTOM`, `UNKNOWN`, and legacy records with an
-absent field must remain verbatim.
+exact known tokens only for `BUNDLED`; `CUSTOM` and `UNKNOWN` must remain verbatim. The field is required on every device, device-local
+variable, environment variable, and global variable entry; a missing or null source makes
+the persisted trace invalid rather than implicitly selecting `UNKNOWN`.
 `TraceTrustPrivacyDto`: `{ name, propertyScope ('state'|'variable'|'content'),
 mode?, trust? (Boolean), privacy? ('private'|'public') }`. For a state property, `name`
 is the literal state and `mode` is its literal mode. Generated `Mode_state`, `trust_*`,
 and `privacy_*` identifiers are parser-only details and are never serialized.
+Verification, simulation, and fuzz replay clients validate these nested objects before
+rendering them, including string/Boolean shapes, legal trust/privacy values, and the frozen
+token-source enum. Device identity and provenance must remain stable across states; every
+local variable uses its device source, each environment variable keeps one source across the
+trace, and global values are always `UNKNOWN`. Because these are complete snapshots, device
+ids and local/environment/global variable names keep the same membership in every state.
+Those identities are unique within their containing state/device, as are trust/privacy
+property identities within each evidence list. `trustPrivacy[]` carries trust evidence, `privacies[]` carries
+privacy evidence, and state-scoped entries require a non-blank mode. Malformed nested evidence
+is an incomplete response, not playable history. A stateless device may legitimately serialize
+empty `state` and `mode` strings.
 
 ---
 
@@ -726,9 +755,9 @@ with that option silently disabled.
 | :--- | :--- | :--- | :--- | :--- |
 | `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | 1–100 devices; per-device override limits match verification |
 | `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | At most 200; same unique-name, omitted/null-default, and explicit-blank rejection contract as verification |
-| `rules` | `RuleDto[]` | no | `[]` | At most 100, with at most 50 conditions per rule |
+| `rules` | `RuleDto[]` | no | `[]` | At most 100, with at most 50 conditions per rule. The same positive, request-unique non-null id contract as verification applies |
 | `steps` | `int` (1–100) | no | `10` | Number of simulation steps |
-| `attackScenario` | `AttackScenarioDto` | no | `NONE` | Simulation accepts only `NONE` or `EXACT_POINTS`. It never chooses compromised devices or links randomly, and rejects budget-based exhaustive selection. |
+| `attackScenario` | `AttackScenarioDto` | yes | — | Explicit per-run attack selection; `mode` is required. Simulation accepts only `NONE` or `EXACT_POINTS`. It never chooses compromised devices or links randomly, and rejects budget-based exhaustive selection. |
 | `enablePrivacy` | `boolean` | no | `false` | |
 
 **Response**: `SimulationResultDto` — `{ isAttack, attackBudget, enablePrivacy,
@@ -747,9 +776,10 @@ prediction of physical-home behavior.
 The frontend validates synchronous, saved, and asynchronously loaded simulation
 responses before opening the timeline. `modelComplete`, omission counts and itemized
 issues, run-context `modelSemantics`, non-empty states, and `steps = states.length - 1`
-are required. Persisted summaries also require explicit attack/privacy context. Missing
-fields therefore cannot be interpreted as a complete model or a playable successful
-trajectory.
+are required. Nested devices, variables, rule snapshots, security labels, and token sources
+must also satisfy the trace contract above. Persisted summaries require explicit
+attack/privacy context. Missing or malformed fields therefore cannot be interpreted as a
+complete model or a playable successful trajectory.
 
 Synchronous simulation uses the same request snapshot and runtime validation as async
 simulation. Validation failures are returned as errors (REST 400 for DTO Bean Validation
@@ -831,7 +861,10 @@ atomically while the task remains active.
 
 Completed async simulations store the full states, execution logs, request JSON, and
 raw NuSMV output in the referenced `SimulationTraceDto`; the task DTO stays a polling
-summary.
+summary. Persisted task rows are validated before exposure: request/actual step counts,
+lifecycle timestamps and progress, failure details, and the completed-task trace link
+must agree with the task status. A contradictory row is reported as a data-integrity
+failure rather than normalized into an apparently valid polling response.
 
 ### Persisted simulations
 
@@ -858,15 +891,19 @@ NuSMV run, not a later serialization of the caller's mutable request object. Exa
 fields instead. Effective device/link attack-point counts are persisted in dedicated
 columns, so reopening a trace does not recount raw devices and change the budget meaning.
 
-The save endpoint returns the generated trajectory even if history persistence fails.
+The save endpoint returns the generated trajectory after an ordinary history-persistence
+failure, but an operation-ownership or fencing failure rejects the request because the
+trajectory may have been superseded.
 `historyPersistence.status=SAVED` supplies its id. `OUTCOME_UNKNOWN` omits the id and
 requires a history refresh before the UI says whether the trace was saved; the states
 remain valid for immediate animation. A known `FAILED` status means no row was created.
 History list conversion isolates malformed rows as `dataAvailable=false`; it never
 silently replaces malformed semantic JSON with empty states/logs/default context.
-Simulation summaries validate `stateCount = steps + 1` from scalar metadata without
-loading `statesJson`; opening a detail then verifies that the decoded state array has
-that exact count and the contiguous one-based indexes documented above.
+Simulation summaries parse the bounded saved `statesJson`, require the decoded array to
+have contiguous one-based indexes, and validate `stateCount = states.length = steps + 1`
+before setting `dataAvailable=true`. They also cross-check rule events against the exact
+server-internal `requestJson.rules` snapshot and its model rule count. The summary response
+omits both validated arrays; opening detail returns only the public trajectory fields.
 Both synchronous saved-simulation and verification requests check the configured stored-run
 quota before NuSMV starts. A full history returns HTTP 429 with the same stable async-task
 quota details; a concurrent fill detected only during persistence reports a known
@@ -921,10 +958,11 @@ Clients must show `summary`, `warnings`, and `sourceGenerationIssues`; they must
 the endpoint name or a non-empty list into a claim that the root cause was proven.
 
 `TraceStateDto.triggeredRules[]` and `compromisedAutomationLinks[]` contain readable
-`{ ruleId, ruleLabel }` snapshots. `ruleId` is present only when the submitted model rule
-carried a persisted id; clients use it to correlate a saved run with the current canvas
-without exposing rule-list indexes. `ruleLabel` remains available when the current rule
-was later removed.
+`{ ruleIndex, ruleId, ruleLabel }` snapshots. `ruleIndex` is required, non-negative, and
+unique within each list for one state; it binds the event to the run's frozen request and
+must not be applied to the current Board. `ruleId` is present only when the submitted model
+rule carried a persisted id and is the current-canvas correlation key. `ruleLabel` remains
+available when the current rule was later removed.
 
 ### `POST /api/verify/traces/{id}/fix` — fix suggestions
 
@@ -1025,7 +1063,7 @@ privacy labels are not rule-condition targets.
 trace/fix context. Clients should copy it from a returned `ParameterTarget`, not generate it.
 For all three row types, `modelTokenSource` is `BUNDLED`, `CUSTOM`, or `UNKNOWN` and
 governs the row's model-facing attribute/value tokens. Clients may localize exact known
-tokens only for `BUNDLED`. `CUSTOM` and `UNKNOWN`, including legacy trace rows, must remain
+tokens only for `BUNDLED`. `CUSTOM` and `UNKNOWN` must remain
 verbatim. The English `description` is a technical fallback, not the primary localized
 parameter-target label; clients should construct that label from the structured attribute,
 relation, and original value.
@@ -1075,10 +1113,9 @@ still matches the verification context.
 - **Frozen-template replay and drift guard.** Verification traces persist the exact
   referenced manifests internally. `/fix` builds its NuSMV model from that frozen set. Before
   apply, the server compares the current manifests'
-  persisted JSON projection with the saved set and requires the same referenced-template
-  keys. This avoids false drift from deserialization-only compatibility fields such as an
-  omitted versus empty legacy API `Assignments` list, while a real modeled-field or
-  template-set difference is **rejected with `400`** and requires re-verification. If the
+  canonical persisted JSON projection with the saved set and requires the same
+  referenced-template keys. Any modeled-field or template-set difference is **rejected with
+  `400`** and requires re-verification. If the
   current repository cannot be read, equality is unknown rather than false: `/fix`
   returns an explicit warning and apply blocks with retryable `503`. It never reports an
   unavailable comparison as proven drift or silently omits the degradation.
@@ -1103,8 +1140,9 @@ still matches the verification context.
   The specialized, proven-pre-write `503` mapping is defined in the
   [API error mapping](overview.md#error-and-status-codes). Clients treat any unclassified `503` as
   an uncertain mutation response and reconcile the current rule snapshot before retrying.
-  Verification flags (`isAttack`/`attackBudget`/`enablePrivacy`) are per-request and not persisted for
-  re-proving, so re-run verification after changing them.
+  The structured `attackScenario` and `enablePrivacy` settings belong to the frozen request
+  snapshot; `isAttack` and `attackBudget` are derived response fields. Apply re-proves the
+  candidate under that frozen context. Start a new verification to evaluate different settings.
 
 The server then applies the token-verified suggestion to a deep copy of the persisted rules. The
 unchanged complete snapshot means the earlier NuSMV evidence still describes the model being
@@ -1116,7 +1154,7 @@ changed; apply does not repeat the expensive strategy search.
 | :--- | :--- | :--- |
 | `applied` | `boolean` | `true` on success |
 | `strategy` | `String` | The applied strategy |
-| `verificationRechecked` | `boolean` | `false` for the public signed-suggestion flow because apply does not repeat the search; retained for internal compatibility paths that do recompute |
+| `verificationRechecked` | `boolean` | Always `false`: signed-suggestion apply verifies snapshot drift but does not repeat the strategy search |
 | `verificationEvidenceReused` | `boolean` | `true` for the public signed-suggestion flow: existing verification evidence was reused only after all rule/template/spec/device/environment drift checks passed atomically |
 | `appliedSuggestion` | `FixSuggestionDto` | Server-trusted suggestion actually applied; user-facing descriptions are included while internal rule/condition positions remain hidden |
 | `previousRuleCount` / `currentRuleCount` | `int` | Rule-set size before/after the atomic write; particularly important for the destructive `remove` strategy |

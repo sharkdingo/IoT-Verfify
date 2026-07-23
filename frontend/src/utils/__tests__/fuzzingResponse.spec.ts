@@ -25,6 +25,7 @@ const snapshot = {
   specificationCount: 1,
   environmentVariableCount: 1,
   deviceTemplateCount: 2,
+  modelFingerprint: 'a'.repeat(64),
   templatesFrozen: true as const
 }
 
@@ -231,6 +232,10 @@ describe('fuzzing response contracts', () => {
     })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
     expect(() => validateFuzzingRun({
       ...run,
+      modelSnapshot: { ...snapshot, modelFingerprint: undefined }
+    })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+    expect(() => validateFuzzingRun({
+      ...run,
       iterations: run.maxIterations + 1
     })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
     expect(() => validateFuzzingRun({
@@ -394,6 +399,12 @@ describe('fuzzing response contracts', () => {
       dataAvailable: false,
       unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
     }])).toMatchObject([{ id: 4, dataAvailable: false }])
+    expect(() => validateFuzzingRunSummaryList([{
+      id: 4,
+      findings: [{ id: 2 }],
+      dataAvailable: false,
+      unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+    }])).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
     expect(() => validateFuzzingRunSummaryList([run])).toThrowError(
       expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE })
     )
@@ -446,8 +457,7 @@ describe('fuzzing response contracts', () => {
         firstViolationStep: 0,
         stateCount: 1,
         seed: 42,
-        createdAt: '2026-07-14T10:00:01',
-        dataAvailable: true
+        createdAt: '2026-07-14T10:00:01'
       }]
     }])
 
@@ -468,8 +478,7 @@ describe('fuzzing response contracts', () => {
       firstViolationStep: 0,
       stateCount: 1,
       seed: 42,
-      createdAt: '2026-07-14T10:00:01',
-      dataAvailable: true
+      createdAt: '2026-07-14T10:00:01'
     }
     const availableRun = {
       ...summaryRun,
@@ -480,6 +489,10 @@ describe('fuzzing response contracts', () => {
     }
 
     expect(validateFuzzingRunSummaryList([availableRun])).toHaveLength(1)
+    expect(() => validateFuzzingRunSummaryList([{
+      ...availableRun,
+      findings: [{ ...summaryFinding, dataAvailable: true }]
+    }])).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
     expect(() => validateFuzzingRunSummaryList([{
       ...availableRun,
       findings: [{ ...summaryFinding, seed: 43 }]
@@ -604,6 +617,182 @@ describe('fuzzing response contracts', () => {
     })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
   })
 
+  it('rejects malformed nested trace fields and forged token provenance before replay', () => {
+    const detailedState = {
+      stateIndex: 0,
+      devices: [{
+        deviceId: 'device_1',
+        deviceLabel: 'Hall sensor',
+        templateName: 'Motion Detector',
+        modelTokenSource: 'BUNDLED',
+        state: 'idle',
+        compromised: false,
+        variables: [{
+          name: 'workingState',
+          value: 'idle',
+          trust: 'trusted',
+          modelTokenSource: 'BUNDLED'
+        }],
+        trustPrivacy: [{
+          name: 'idle',
+          propertyScope: 'state',
+          mode: 'MotionMode',
+          trust: true
+        }],
+        privacies: [{
+          name: 'recording',
+          propertyScope: 'content',
+          privacy: 'private'
+        }]
+      }],
+      triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Record motion' }],
+      compromisedAutomationLinks: [],
+      trustPrivacies: [{
+        name: 'idle',
+        propertyScope: 'state',
+        mode: 'MotionMode',
+        trust: true,
+        privacy: null
+      }],
+      envVariables: [{
+        name: 'temperature',
+        value: '21',
+        trust: 'untrusted',
+        modelTokenSource: 'UNKNOWN'
+      }],
+      globalVariables: [{
+        name: 'compromisedPointCount',
+        value: '0',
+        trust: null,
+        modelTokenSource: 'UNKNOWN'
+      }]
+    }
+    const finding = {
+      id: 2,
+      fuzzTaskId: 1,
+      violatedSpecId: 'spec-1',
+      violatedSpec: { id: 'spec-1' },
+      firstViolationStep: 0,
+      states: [detailedState],
+      seed: 42,
+      inputEvents: [],
+      createdAt: '2026-07-14T10:00:01'
+    }
+
+    expect(validateFuzzingFinding(finding).states).toHaveLength(1)
+    const malformedStates = [
+      {
+        ...detailedState,
+        devices: [{ ...detailedState.devices[0], modelTokenSource: null }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          variables: [{ name: 'workingState', value: 'idle' }]
+        }]
+      },
+      {
+        ...detailedState,
+        envVariables: [{ name: 'temperature', value: '21', trust: 'untrusted' }]
+      },
+      {
+        ...detailedState,
+        devices: [{ ...detailedState.devices[0], modelTokenSource: 'FORGED' }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          variables: [{
+            name: 'workingState',
+            value: 'idle',
+            modelTokenSource: 'CUSTOM'
+          }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          variables: [{ name: 'workingState', value: 1 }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          trustPrivacy: [{ name: 'idle', propertyScope: 'generated_state', trust: true }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          privacies: [{ name: 'recording', propertyScope: 'content', privacy: 'secret' }]
+        }]
+      },
+      {
+        ...detailedState,
+        trustPrivacies: [
+          detailedState.trustPrivacies[0],
+          { ...detailedState.trustPrivacies[0], trust: false }
+        ]
+      },
+      {
+        ...detailedState,
+        envVariables: [{ name: 'temperature', value: '21', trust: true }]
+      },
+      {
+        ...detailedState,
+        globalVariables: [{
+          name: 'compromisedPointCount',
+          value: '0',
+          modelTokenSource: 'BUNDLED'
+        }]
+      }
+    ]
+
+    malformedStates.forEach(malformedState => {
+      expect(() => validateFuzzingFinding({ ...finding, states: [malformedState] }))
+        .toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+    })
+
+    expect(() => validateFuzzingFinding({
+      ...finding,
+      states: [detailedState, {
+        ...detailedState,
+        stateIndex: 1,
+        devices: [{
+          ...detailedState.devices[0],
+          modelTokenSource: 'CUSTOM',
+          variables: detailedState.devices[0].variables.map(variable => ({
+            ...variable,
+            modelTokenSource: 'CUSTOM'
+          }))
+        }]
+      }]
+    })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+
+    expect(() => validateFuzzingFinding({
+      ...finding,
+      states: [detailedState, {
+        ...detailedState,
+        stateIndex: 1,
+        devices: []
+      }]
+    })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+
+    expect(() => validateFuzzingFinding({
+      ...finding,
+      states: [detailedState, {
+        ...detailedState,
+        stateIndex: 1,
+        envVariables: []
+      }]
+    })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+  })
+
   it('requires violation and input-event steps to stay within the replayed prefix', () => {
     const finding = {
       id: 2,
@@ -618,14 +807,22 @@ describe('fuzzing response contracts', () => {
         kind: 'DEVICE_VARIABLE',
         targetId: 'device-1',
         property: 'temperature',
-        value: '20'
+        value: '20',
+        source: 'MODEL_CHOICE'
       }],
       createdAt: '2026-07-14T10:00:01'
     }
-    expect(validateFuzzingFinding(finding)).toMatchObject({
-      firstViolationStep: 1,
-      inputEvents: [{ source: 'MODEL_CHOICE' }]
-    })
+    expect(validateFuzzingFinding(finding)).toMatchObject({ firstViolationStep: 1 })
+    expect(() => validateFuzzingFinding({
+      ...finding,
+      inputEvents: [{
+        step: 1,
+        kind: 'DEVICE_VARIABLE',
+        targetId: 'device-1',
+        property: 'temperature',
+        value: '20'
+      }]
+    })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
     expect(() => validateFuzzingFinding({ ...finding, firstViolationStep: 2 })).toThrowError(
       expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE })
     )
@@ -680,7 +877,8 @@ describe('fuzzing response contracts', () => {
         kind: 'DEVICE_VARIABLE',
         targetId: 'device-1',
         property: 'temperature',
-        value: '24'
+        value: '24',
+        source: 'MODEL_CHOICE'
       }],
       createdAt: '2026-07-14T10:00:01'
     }

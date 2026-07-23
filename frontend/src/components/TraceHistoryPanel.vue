@@ -217,7 +217,6 @@ const traceSpecTitle = (trace: TraceSummary) => {
 }
 
 const fuzzFindingTitle = (finding: FuzzingFindingSummary) => {
-  if (finding.dataAvailable === false) return t('app.historyItemUnavailable')
   const summary = finding.violatedSpec ? formatTraceSpec(finding.violatedSpec, t) : ''
   return summary || finding.specificationLabel || finding.violatedSpecId || t('app.unknownSpecification')
 }
@@ -237,17 +236,7 @@ const fuzzingModeDescription = (mode: FuzzingExplorationMode) => t(
 const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary) => {
   const current = props.currentBoardScope
   if (!current) return false
-  if (run.modelSnapshot.modelFingerprint && current.modelFingerprint) {
-    return run.modelSnapshot.modelFingerprint !== current.modelFingerprint
-  }
-  if (run.modelSnapshot.modelFingerprint && !current.modelFingerprint) {
-    return true
-  }
-  return run.modelSnapshot.deviceCount !== current.deviceCount
-    || run.modelSnapshot.ruleCount !== current.ruleCount
-    || run.modelSnapshot.specificationCount !== current.specificationCount
-    || run.modelSnapshot.environmentVariableCount !== current.environmentVariableCount
-    || run.modelSnapshot.deviceTemplateCount !== current.deviceTemplateCount
+  return run.modelSnapshot.modelFingerprint !== current.modelFingerprint
 }
 
 const resultErrorEntries = computed(() => {
@@ -861,7 +850,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                         type="button"
                         :data-testid="`view-fuzzing-finding-${finding.id}`"
                         class="min-h-11 rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                        :disabled="actionLocked || finding.dataAvailable === false"
+                        :disabled="actionLocked"
                         @click="emit('view-fuzzing-finding', finding.id, item.run.id)"
                       >
                         {{ t('app.replay') }}
@@ -870,7 +859,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                         type="button"
                         :data-testid="`verify-fuzzing-finding-${finding.id}`"
                         class="min-h-11 rounded bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-200 disabled:opacity-50"
-                        :disabled="actionLocked || finding.dataAvailable === false"
+                        :disabled="actionLocked"
                         @click="emit('verify-fuzzing-finding', finding)"
                       >
                         {{ t('app.verifyFormally') }}

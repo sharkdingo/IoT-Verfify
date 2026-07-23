@@ -111,20 +111,12 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private UserPo resolveLoginUser(String identifier, String password) {
-        java.util.Optional<UserPo> byPhone = userService.findByPhone(identifier);
-        java.util.Optional<UserPo> byUsername = userService.findByUsername(identifier);
-        boolean phoneMatches = byPhone.isPresent()
-                && passwordEncoder.matches(password, byPhone.get().getPassword());
-        boolean distinctUsernameCandidate = byUsername.isPresent()
-                && (byPhone.isEmpty() || !java.util.Objects.equals(
-                        byUsername.get().getId(), byPhone.get().getId()));
-        boolean usernameMatches = distinctUsernameCandidate
-                && passwordEncoder.matches(password, byUsername.get().getPassword());
-
-        // Legacy data may contain one account whose phone equals another account's username.
-        // Authentication is safe only when the supplied password identifies exactly one of them.
-        if (phoneMatches != usernameMatches) {
-            return phoneMatches ? byPhone.orElseThrow() : byUsername.orElseThrow();
+        java.util.Optional<UserPo> candidate = UsernameNormalizer.isPhoneNumber(identifier)
+                ? userService.findByPhone(identifier)
+                : userService.findByUsername(identifier);
+        if (candidate.isPresent()
+                && passwordEncoder.matches(password, candidate.get().getPassword())) {
+            return candidate.get();
         }
         throw UnauthorizedException.invalidCredentials();
     }

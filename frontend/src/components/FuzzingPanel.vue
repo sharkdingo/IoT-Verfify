@@ -22,6 +22,7 @@ import {
 } from '@/utils/fuzzingConfig'
 import { fuzzingLimitationKey } from '@/utils/fuzzingPresentation'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
+import { normalizeNuSmvDeviceName } from '@/utils/modelRequest'
 
 export type FuzzingPanelForm = {
   explorationMode: FuzzingExplorationMode
@@ -76,9 +77,13 @@ const formatBundledModelToken = (value: unknown) => formatBuiltInModelToken(
   value,
   key => te(key) ? t(key) : key
 )
-const bundledDeviceIdSet = computed(() => new Set(props.bundledDeviceIds))
+const bundledDeviceIdSet = computed(() => new Set(
+  props.bundledDeviceIds.map(normalizeNuSmvDeviceName)
+))
 const bundledEnvironmentNameSet = computed(() => new Set(props.bundledEnvironmentNames))
-const isBundledDevice = (targetId: string) => bundledDeviceIdSet.value.has(targetId)
+const isBundledDevice = (targetId: string) => bundledDeviceIdSet.value.has(
+  normalizeNuSmvDeviceName(targetId)
+)
 const formatDeviceStateProperty = (targetId: string, property: unknown) =>
   property === 'workingState' || isBundledDevice(targetId)
     ? formatBundledModelToken(property)

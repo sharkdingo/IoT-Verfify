@@ -17,7 +17,12 @@ public class DeviceTemplateMapper {
         DeviceTemplateDto dto = new DeviceTemplateDto();
         dto.setId(po.getId());
         dto.setName(po.getName());
-        dto.setDefaultTemplate(po.getDefaultTemplate() == null || Boolean.TRUE.equals(po.getDefaultTemplate()));
+        if (po.getDefaultTemplate() == null) {
+            throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
+                    "device template", po.getId(), "defaultTemplate",
+                    "template provenance must be explicitly bundled or custom");
+        }
+        dto.setDefaultTemplate(po.getDefaultTemplate());
 
         DeviceManifest manifest = JsonUtils.readPersistedJsonRequired(
                 "device template", po.getId(), "manifestJson", po.getManifestJson(),

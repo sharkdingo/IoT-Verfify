@@ -34,7 +34,7 @@ public class DeviceTemplatePo {
     private String manifestJson;
 
     @Builder.Default
-    @Column(name = "default_template")
+    @Column(name = "default_template", nullable = false)
     private Boolean defaultTemplate = false;
 
     @Column(name = "updated_at")

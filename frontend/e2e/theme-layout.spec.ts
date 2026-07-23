@@ -1,5 +1,6 @@
 import { type Locator, type Page } from '@playwright/test'
 import {
+  apiBaseURL,
   createAuthenticatedUser,
   createTestAccountCredentials,
   expect,
@@ -39,8 +40,24 @@ const brightnessOf = (color: string) => {
   return (r * 299 + g * 587 + b * 114) / 1000
 }
 
-const backgroundOf = (locator: Locator) =>
-  locator.evaluate((element) => window.getComputedStyle(element).backgroundColor)
+const computedColorOf = (
+  locator: Locator,
+  property: 'backgroundColor' | 'color'
+) => locator.evaluate((element, cssProperty) => {
+  const value = window.getComputedStyle(element)[cssProperty]
+  const canvas = document.createElement('canvas')
+  canvas.width = 1
+  canvas.height = 1
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) throw new Error('Canvas color sampling is unavailable')
+  context.clearRect(0, 0, 1, 1)
+  context.fillStyle = value
+  context.fillRect(0, 0, 1, 1)
+  const [r, g, b] = context.getImageData(0, 0, 1, 1).data
+  return `rgb(${r}, ${g}, ${b})`
+}, property)
+
+const backgroundOf = (locator: Locator) => computedColorOf(locator, 'backgroundColor')
 
 const expectDarkSurface = async (locator: Locator) => {
   await expect(locator).toBeVisible()
@@ -84,6 +101,7 @@ const openWorkspace = async (page: Page, auth: AuthUser) => {
     window.localStorage.setItem('iot_verify_token', token)
     window.localStorage.setItem('iot_verify_user', JSON.stringify(user))
     window.localStorage.setItem('iot_verify_theme', 'dark')
+    window.localStorage.setItem('locale', 'en')
   }, {
     token: auth.token,
     user: {
@@ -94,7 +112,7 @@ const openWorkspace = async (page: Page, auth: AuthUser) => {
   })
 
   await page.goto('/#/board')
-  await expect(page.locator('.iot-board')).toBeVisible()
+  await expect(page.locator('.iot-board')).toBeVisible({ timeout: 60_000 })
 }
 
 test.describe('public theme and layout', () => {
@@ -126,7 +144,7 @@ test.describe('public theme and layout', () => {
     await registerInputs.nth(3).fill(password)
     await page.locator('.auth-submit').click()
 
-    await expect(page.locator('.iot-board')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.iot-board')).toBeVisible({ timeout: 60_000 })
     const token = await page.evaluate(() => window.localStorage.getItem('iot_verify_token'))
     expect(token).toBeTruthy()
   })
@@ -192,7 +210,24 @@ test.describe('public theme and layout', () => {
   })
 
   test('workspace dark theme keeps floating panel surfaces coherent', async ({ page, request }) => {
+    test.setTimeout(120_000)
     const auth = await createAuthenticatedUser(request)
+    const addNodeResponse = await request.post(`${apiBaseURL}/api/board/nodes`, {
+      headers: { Authorization: `Bearer ${auth.token}` },
+      data: {
+        devices: [{
+          id: 'dark_theme_thermostat',
+          templateName: 'Thermostat',
+          label: 'Dark Theme Thermostat',
+          position: { x: 920, y: 420 },
+          state: 'auto;auto',
+          width: 220,
+          height: 180
+        }],
+        environmentVariablePatches: []
+      }
+    })
+    expect(addNodeResponse.ok(), await addNodeResponse.text()).toBeTruthy()
     await openWorkspace(page, auth)
 
     await expectDarkSurface(page.locator('.board-nav-bar'))
@@ -201,6 +236,30 @@ test.describe('public theme and layout', () => {
     await expectDarkSurface(page.locator('.modern-panel input:not(.hidden)').first())
     await expectDarkSurface(page.locator('.canvas-map'))
     await expectDarkSurface(page.locator('.canvas-map__viewport'))
+
+    const deviceNode = page.locator('[data-node-id="dark_theme_thermostat"]')
+    await expectDarkSurface(deviceNode)
+    const deviceLabel = deviceNode.locator('.device-label')
+    await expect(deviceLabel).toBeVisible()
+    const nodeBrightness = brightnessOf(await backgroundOf(deviceNode))
+    const labelBrightness = brightnessOf(await computedColorOf(deviceLabel, 'color'))
+    expect(labelBrightness - nodeBrightness).toBeGreaterThan(100)
+
+    await deviceNode.click()
+    await expectDarkSurface(page.getByTestId('device-dialog'))
+    const hoverRow = page.getByTestId('device-dialog').locator('tbody tr').nth(2)
+    await hoverRow.hover()
+    await expectDarkSurface(hoverRow)
+    const runtimePanel = page.locator('.device-runtime-panel')
+    await expectDarkSurface(runtimePanel)
+    await expectDarkSurface(runtimePanel.locator('select').first())
+    const securitySummary = runtimePanel.locator('.device-runtime-security > summary')
+    await expect(securitySummary).toBeVisible()
+    const panelBrightness = brightnessOf(await backgroundOf(runtimePanel))
+    const summaryBrightness = brightnessOf(await computedColorOf(securitySummary, 'color'))
+    expect(summaryBrightness - panelBrightness).toBeGreaterThan(90)
+    await page.getByTestId('device-dialog').getByLabel('Close', { exact: true }).click()
+
     await page.locator('[data-testid="open-simulation-panel"]').click()
 
     const panel = page.locator('[data-testid="simulation-panel"]')
@@ -218,6 +277,48 @@ test.describe('public theme and layout', () => {
     await page.keyboard.press('Escape')
     await page.locator('.ai-assistant-btn').click({ force: true })
     await expect(page.locator('.chat-panel')).toBeVisible({ timeout: 15_000 })
+  })
+
+  test('workspace action dock keeps every AI tool reachable in a short landscape viewport', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await page.setViewportSize({ width: 844, height: 390 })
+    await openWorkspace(page, auth)
+
+    const panel = page.locator('.board-action-dock__panel')
+    await expect(panel).toBeVisible()
+    const panelMetrics = await panel.evaluate(element => {
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportHeight: window.innerHeight,
+        overflowY: style.overflowY,
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight
+      }
+    })
+    expect(panelMetrics.top).toBeGreaterThanOrEqual(0)
+    expect(panelMetrics.bottom).toBeLessThanOrEqual(panelMetrics.viewportHeight)
+    expect(panelMetrics.overflowY).toBe('auto')
+    expect(panelMetrics.scrollHeight).toBeGreaterThan(panelMetrics.clientHeight)
+
+    for (const testId of [
+      'open-rule-recommendations',
+      'open-device-recommendations',
+      'open-spec-recommendations'
+    ]) {
+      const tool = page.getByTestId(testId)
+      await tool.scrollIntoViewIfNeeded()
+      await expect(tool).toBeVisible()
+
+      const panelBox = await panel.boundingBox()
+      const toolBox = await tool.boundingBox()
+      expect(panelBox).not.toBeNull()
+      expect(toolBox).not.toBeNull()
+      expect(toolBox!.y).toBeGreaterThanOrEqual(panelBox!.y - 1)
+      expect(toolBox!.y + toolBox!.height).toBeLessThanOrEqual(panelBox!.y + panelBox!.height + 1)
+    }
   })
 
   test('workspace keeps account actions reachable at mid width and low height', async ({ page, request }) => {

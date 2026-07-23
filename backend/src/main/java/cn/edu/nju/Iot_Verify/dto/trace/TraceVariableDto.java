@@ -23,6 +23,6 @@ public class TraceVariableDto {
      */
     private String trust;
 
-    /** Frozen source for environment identifiers/values; absent legacy values are UNKNOWN. */
+    /** Required frozen source for environment identifiers and values. */
     private ModelTokenSource modelTokenSource;
 }

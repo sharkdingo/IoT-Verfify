@@ -53,21 +53,21 @@ export function deriveTraceContext(
 export interface PlaybackDevice {
   deviceId: string
   deviceLabel?: string
-  state?: string
-  mode?: string
+  state?: string | null
+  mode?: string | null
   compromised?: boolean
-  variables?: Array<{ name: string; value: string; trust?: string }>
-  trustPrivacy?: Array<{ name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string; trust?: boolean | null; privacy?: string }>
-  privacies?: Array<{ name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string; trust?: boolean | null; privacy?: string }>
+  variables?: Array<{ name: string; value: string; trust?: string | null }>
+  trustPrivacy?: Array<{ name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string | null; trust?: boolean | null; privacy?: string | null }>
+  privacies?: Array<{ name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string | null; trust?: boolean | null; privacy?: string | null }>
 }
 
 type PlaybackComparableDevice = {
   state?: string | null
   mode?: string | null
   compromised?: boolean | null
-  variables?: Array<{ name: string; value?: unknown; trust?: string }>
-  trustPrivacy?: Array<{ name: string; propertyScope?: 'state' | 'variable' | 'content'; mode?: string; trust?: boolean | null; privacy?: string }>
-  privacies?: Array<{ name: string; propertyScope?: 'state' | 'variable' | 'content'; mode?: string; trust?: boolean | null; privacy?: string }>
+  variables?: Array<{ name: string; value?: unknown; trust?: string | null }>
+  trustPrivacy?: Array<{ name: string; propertyScope?: 'state' | 'variable' | 'content'; mode?: string | null; trust?: boolean | null; privacy?: string | null }>
+  privacies?: Array<{ name: string; propertyScope?: 'state' | 'variable' | 'content'; mode?: string | null; trust?: boolean | null; privacy?: string | null }>
 }
 
 export type PlaybackChangeKind = 'state' | 'mode' | 'variable' | 'security' | 'compromised'
@@ -126,7 +126,7 @@ const splitPlaybackParts = (value: string | null | undefined): string[] =>
     .filter(Boolean)
 
 const isActiveStateProperty = (
-  entry: { name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string },
+  entry: { name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string | null },
   device: PlaybackDevice
 ): boolean => {
   if (entry.propertyScope !== 'state') return true
@@ -139,7 +139,7 @@ const isActiveStateProperty = (
   return states.some(state => state.toLowerCase() === entry.name.toLowerCase())
 }
 
-const securityPropertyLabel = (entry: { name: string; propertyScope: string; mode?: string }): string =>
+const securityPropertyLabel = (entry: { name: string; propertyScope: string; mode?: string | null }): string =>
   entry.propertyScope === 'state' && entry.mode ? `${entry.mode}: ${entry.name}` : entry.name
 
 /**

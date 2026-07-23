@@ -71,8 +71,6 @@ class RemoveRulesFixStrategyTest {
                 .deviceSmvMap(Map.of())
                 .violatedSpecIndex(0)
                 .userId(1L)
-                .isAttack(false)
-                .attackBudget(0)
                 .attackScenario(attackScenario)
                 .enablePrivacy(false)
                 .maxAttempts(maxAttempts)
@@ -82,7 +80,7 @@ class RemoveRulesFixStrategyTest {
     private void mockGenerateReturns(SmvGenerator.GenerateResult genResult) throws IOException {
         when(smvGenerator.generateWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(),
+                any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(genResult);

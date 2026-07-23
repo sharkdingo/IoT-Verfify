@@ -154,15 +154,9 @@ public final class FixStrategyUtils {
             ctx.addDiagnostic("A candidate was rejected because it would remove an explicitly selected automation-link attack point or device attack point and change the original attack scenario.");
             return null;
         }
-        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
-            return smvGenerator.generateWithResolvedDeviceModel(
-                    ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
-                    scenario, ctx.isEnablePrivacy(), purpose, tempContext(ctx), ctx.getDeviceSmvMap());
-        }
         return smvGenerator.generateWithResolvedDeviceModel(
                 ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
-                scenario.isEnabled(), scenario.effectiveBudget(), ctx.isEnablePrivacy(), purpose,
-                tempContext(ctx), ctx.getDeviceSmvMap());
+                scenario, ctx.isEnablePrivacy(), purpose, tempContext(ctx), ctx.getDeviceSmvMap());
     }
 
     public static SmvGenerator.GenerateResult generateParameterizedResolved(
@@ -182,15 +176,9 @@ public final class FixStrategyUtils {
         config.setInitialStateConstraints(CounterexampleInitialStateConstraints.build(
                 ctx.getCounterexampleInitialState(), rules, ctx.getDeviceSmvMap(),
                 scenario, ctx.isEnablePrivacy()));
-        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
-            return smvGenerator.generateParameterizedWithResolvedDeviceModel(
-                    ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
-                    scenario, ctx.isEnablePrivacy(), config, tempContext(ctx), ctx.getDeviceSmvMap());
-        }
         return smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
-                scenario.isEnabled(), scenario.effectiveBudget(), ctx.isEnablePrivacy(), config,
-                tempContext(ctx), ctx.getDeviceSmvMap());
+                scenario, ctx.isEnablePrivacy(), config, tempContext(ctx), ctx.getDeviceSmvMap());
     }
 
     static boolean preservesExactAttackSelection(

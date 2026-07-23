@@ -17,6 +17,11 @@ Stack: Java 17, Spring Boot 3.5.7, Spring Data JPA + MySQL, Redis (JWT blacklist
 fail-open), Spring Security + JWT, NuSMV 2.6–2.7 (**not** nuXmv), OpenAI Java SDK
 (`com.openai:openai-java`, any OpenAI-compatible endpoint).
 
+This project is in active development and has no released compatibility contract.
+Unless the user explicitly requests a migration path, reject obsolete persisted shapes
+and remove superseded APIs instead of adding fallback readers, deprecated aliases,
+dual-write formats, or silent coercion for old development data.
+
 ## Commands
 
 ```bash
@@ -179,8 +184,8 @@ rows also back verification run history for both synchronous and asynchronous ch
 that live ownership and clear it, user cancellation clears it independently, and maintenance
 recovers only expired active rows. Their lifecycle transitions use the database clock;
 `chat_message` stores a per-turn correlation id plus the exact user-visible assistant execution
-trace, elapsed time, and terminal status on the final assistant row, while older rows remain
-reconstructable from tool blocks; `ai_session_state` durably stores expiring task continuation, scenario draft,
+trace, elapsed time, and terminal status on the final assistant row; absent or malformed trace
+evidence is not reconstructed from internal tool blocks. `ai_session_state` durably stores expiring task continuation, scenario draft,
 and protected-action confirmation state shared by backend instances;
 `chat_session` stores the expiring cross-instance execution lease and stop flags so only one
 assistant request can mutate a session at a time;

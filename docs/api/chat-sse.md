@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-23. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-24. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -41,26 +41,46 @@ hasMore: boolean }`. `limit` defaults to 50 and accepts `1..100`; `beforeId` is 
 message-id cursor returned by the preceding page. The service scans at most 2,000 raw rows
 per request while hiding internal tool messages, so a tool-heavy turn cannot turn one history
 read into an unbounded allocation.
-`ChatMessageResponseDto`: `{ id: Long, sessionId: String, role: String, content:
-String, turnId?: String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer,
+`ChatMessageResponseDto`: `{ id: Long, sessionId: String, role: "user" | "assistant", content:
+String, turnId: String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer,
 executionStatus?: "COMPLETED" | "AWAITING_CONFIRMATION" | "PARTIAL" | "STOPPED" |
 "DISCONNECTED" | "FAILED" }`.
+The frontend accepts only the paginated object above; obsolete bare message arrays and
+internal `tool` rows are rejected. It treats this as an untrusted boundary: `role`,
+`sessionId`, `content`, numeric ids/counters,
+history cursors, execution-status values, and every nested progress stage/outcome must have
+the documented shape. A malformed page is rejected and remains unavailable rather than being
+rendered as a completed or verified turn.
 Every started user turn that reaches message persistence attempts to save a visible
 terminal assistant record, including provider failure and client-disconnect paths. A
-terminal-write failure does not create a misleading disconnect row; the client retains
-its local response when authoritative history has no terminal row with the same `turnId`.
+terminal write, including execution-trace serialization, is attempted at most once. If it
+fails, the server sends a terminal `[ERROR]` frame instead of completing the SSE stream as a
+successful response; it does not retry the write as a misleading disconnect row. The client
+retains its local response when authoritative history has no terminal row with the same `turnId`.
 When saved, the row stores
 the exact bounded execution record, elapsed time, and explicit terminal status; `PARTIAL`
-means tool work began before a later failure, an execution guard, or an uncertain result.
-`COMPLETED` means the visible response stream and terminal persistence completed; it does
-not prove that a requested platform objective completed. When planning executes no tool,
-the server prefixes the visible response with an authoritative notice that no current
-Board data was read and no platform operation was confirmed, even if model prose claims
-otherwise. `AWAITING_CONFIRMATION` means a no-write preview is waiting for the user's decision.
+means no platform tool ran, or tool work began before a later failure, an execution guard,
+or an uncertain result. The UI distinguishes a non-empty trace with no tool execution or
+result activity as "No platform tools ran" rather than implying that an operation partially
+completed. A trace containing only tool-start activity remains `PARTIAL`, because its outcome
+may be unknown; an absent trace is never used to infer that no tool ran.
+`COMPLETED` means at least one platform tool ran and the visible response stream and terminal
+persistence completed; it does not prove that every requested platform objective completed.
+History restores only a non-empty, structurally valid trace stored on that terminal row. It
+never rebuilds a trace from hidden historical tool-call/result rows. If a row says
+`COMPLETED` but its stored trace is missing, malformed, guarded, or lacks a usable tool result,
+the response omits that status rather than presenting unproven success. The frontend history
+validator independently rejects a `COMPLETED` message without the same persisted usable-tool
+evidence, and the component renders such directly supplied data as unconfirmed rather than
+completed.
+When the model returns a conversational response without executing a platform tool, the
+server prefixes it with an authoritative notice that no current Board data was read and no
+platform operation was confirmed, even if model prose claims otherwise.
+`AWAITING_CONFIRMATION` means a no-write preview is waiting for the user's decision.
 `STOPPED` means the user explicitly requested the response to stop, while `DISCONNECTED`
-means transport loss ended it. Neither status implies rollback. Older rows without this metadata
-are reconstructed from persisted internal tool-call/result blocks. Raw tool JSON, internal
-identifiers, provider exceptions, and private model reasoning remain hidden.
+means transport loss ended it. Neither status implies rollback. A missing terminal status
+remains unconfirmed rather than being inferred from tool records or prose. Raw tool JSON,
+internal identifiers, provider exceptions, and private model reasoning remain hidden.
 
 Only one stream request may be active for a session across all backend instances.
 A concurrent request or deletion returns `409` with
@@ -70,7 +90,7 @@ cannot admit a second request. The active request id, expiry, and stop flags are
 the locked `chat_session` row. Activity checks and stop requests therefore remain
 authoritative without load-balancer affinity. A scheduled heartbeat renews the short-lived
 lease while the owning worker is registered; timing keys and defaults are owned by the
-[configuration reference](../getting-started/configuration.md#ai-assistant). Renewal uses a
+[configuration reference](../getting-started/configuration.md#llm-ai). Renewal uses a
 short transaction that locks the matching session row and recomputes the effective current
 time after any lock wait from both the database clock and monotonic elapsed time. It extends
 only the same still-unexpired execution id, so a delayed or stale worker cannot revive an
@@ -145,8 +165,16 @@ through the streaming LLM path so tool-backed answers also arrive as incremental
 chunks.
 If planning chooses no tool, the streamed and persisted answer begins with a deterministic
 server notice that the turn did not confirm current Board data or a completed platform
-operation. The backend does not infer platform intent from keywords; ordinary conversation
-may still finish as `COMPLETED`, whose meaning is response completion only.
+operation. For every turn, the backend buffers each complete sentence before exposing it.
+Explicit tool-result or current-platform completion/mutation claims are replaced with the
+exact successful `TOOL_RESULT` progress details recorded by the server, or with a deterministic
+warning when no such result exists. The unsupported segment and all later provider prose are
+neither streamed nor persisted; earlier safe segments remain visible. A suppressed claim
+downgrades an otherwise `COMPLETED` turn to `PARTIAL`. This deliberately narrow check does not
+classify API documentation, historical descriptions, or sample/draft content as a platform
+operation.
+Ordinary conversation finishes as `PARTIAL`, while its answer content remains available to the
+user and is labelled as a zero-tool response rather than a partially completed operation.
 
 Planning is objective-oriented rather than a rigid domain workflow. A delegated task may
 combine targeted deletion, creation, environment, rule, specification, simulation, and
@@ -222,9 +250,9 @@ failed executions.
 History reconstruction also validates that every persisted assistant tool-call id has
 exactly one matching tool-result id before sending that block back to a provider.
 Incomplete, duplicate, malformed, or isolated internal tool blocks are omitted from the
-model context, while surrounding user-visible conversation remains available. This lets
-sessions created before the same-round skip rule recover without repeating a provider
-protocol error. During the active request, blank or reused correlation ids returned by a
+model context, while surrounding user-visible conversation remains available. This keeps
+corrupt internal protocol records from being represented as executed work. During the active
+request, blank or reused correlation ids returned by a
 compatible provider are replaced with unique internal ids before persistence or tool
 execution, and the same repaired ids are used for assistant calls and their results.
 Pending destructive confirmation data is not recovered from that bounded history. On an
@@ -274,7 +302,7 @@ retrying. With `mutationMayHaveCommitted=false`, no mutation refresh is sent.
 | :--- | :--- | :--- |
 | `sessionId` | `String` | Required; ≤64 characters |
 | `content` | `String` | Required; ≤10000 characters |
-| `turnId` | `String` | Optional for compatibility; ≤64 characters. Current clients send a unique value used to associate the user message and terminal assistant record. The server generates one when omitted. |
+| `turnId` | `String` | Required non-blank value, ≤64 characters. The client generates a unique value used to associate the user message and terminal assistant record; omission is rejected with HTTP `400`. |
 | `confirmation` | `ChatConfirmationCommandDto` | Optional explicit protected-action decision: `{ action: "CONFIRM" | "CANCEL", kind: "DESTRUCTIVE" | "DEFAULT_TEMPLATE_RESET" | "SCENE_REPLACEMENT" }`. It is accepted only when that kind is currently pending for the session. |
 
 If the chat thread pool is saturated the request is rejected with `503`
@@ -285,6 +313,9 @@ After the user message has been saved, the same error path also persists a visib
 `FAILED` or `PARTIAL` terminal assistant row. A detected disconnect persists
 `DISCONNECTED`; the client reloads authoritative history after the backend reports the
 session idle, so that record remains visible even when its SSE frame could not arrive.
+If the terminal row itself cannot be saved, the `[ERROR]` frame explicitly says history is
+incomplete and asks the client to reconcile current history and Board state; no second
+terminal insert is attempted.
 
 ### Stream frames
 
@@ -297,7 +328,7 @@ Each SSE `data:` frame carries a JSON-serialized `StreamResponseDto`:
 | Field | Type | Meaning |
 | :--- | :--- | :--- |
 | `content` | `String` | A chunk of assistant text (streamed incrementally) |
-| `command` | `CommandDto` | Optional front-end command: `{ type, payload }` where `type` is e.g. `REFRESH_DATA` / `SHOW_TOAST` / `NAVIGATE` and `payload` is a `Map<String, Object>` (e.g. `{"target":"device_list"}`) |
+| `command` | `CommandDto` | Optional front-end refresh command: `{ type: "REFRESH_DATA", payload: { target } }`, where `target` is `device_list`, `environment_list`, `rule_list`, `spec_list`, `template_list`, `run_history`, or `board_state` |
 | `progress` | `ProgressDto` | Optional live status `{ stage, toolName?, round?, outcome?, successfulSteps?, failedSteps?, unconfirmedSteps?, detail? }`; `detail` is a bounded task-resumption summary, model-authored reasoning summary, or operation-aware tool-result summary |
 
 Progress stages and outcomes:
@@ -309,15 +340,15 @@ Progress stages and outcomes:
 | `PLANNING` | The model is choosing the next tool step for `round` | — |
 | `REASONING` | Before tool execution, `detail` carries the model's bounded, sanitized user-visible summary of the current goal, observed facts, next action, and remaining work | — |
 | `TOOL_EXECUTION` | `toolName` has started | — |
-| `TOOL_RESULT` | The tool returned and cumulative counters were updated | `USABLE`, `PARTIAL`, `FAILED`, `RESULT_UNAVAILABLE`, or `CONFIRMATION_REQUIRED` |
-| `EXECUTION_GUARD` | Duplicate no-progress execution or the emergency runaway ceiling stopped further calls | `NO_PROGRESS` or `EMERGENCY_LIMIT` |
+| `TOOL_RESULT` | The tool returned and cumulative counters were updated | **Required:** `USABLE`, `PARTIAL`, `FAILED`, `RESULT_UNAVAILABLE`, or `CONFIRMATION_REQUIRED` |
+| `EXECUTION_GUARD` | Duplicate no-progress execution or the emergency runaway ceiling stopped further calls | **Required:** `NO_PROGRESS` or `EMERGENCY_LIMIT` |
 | `WRITING_RESPONSE` | Tool work ended and the visible final answer is streaming | — |
 
 Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
 
 - Text chunks arrive as `StreamResponseDto` objects with a `content` field.
-- Front-end commands (canvas refresh, toast, navigation) arrive as separate frames
-  carrying `command`. Refresh commands are collected from usable mutating tools and from
+- Front-end refresh commands arrive as separate frames carrying `command`. They are collected
+  from usable mutating tools and from
   result-unavailable tools that explicitly say a mutation may already have committed,
   then sent before the final streamed assistant text. If a later planning or reply step
   throws, pending refresh commands are sent before the SSE error when the connection is
@@ -325,6 +356,11 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
 - A `recommend_scenario` result whose deterministic `objectiveStatus` is `PARTIAL` remains
   reviewable, but the final assistant row is `PARTIAL` and carries a server notice that
   missing core scene parts were not completed.
+- Tool results are accepted only as non-empty JSON objects. Control fields such as
+  `requiresUserConfirmation`, `resultAvailable`, `resultStatus`, `objectiveStatus`,
+  `mutationMayHaveCommitted`, `errorCode`, and `status` must use their documented scalar
+  types and values. An empty object or malformed control field is a failed tool result, not
+  usable evidence.
 - Progress frames arrive before and between potentially slow model/tool calls. They let the UI
   show a full-width ReAct-style record of sanitized reasoning summaries, localized actions,
   observations, confirmation points, cumulative outcomes, and elapsed time. `REASONING` is an
@@ -335,9 +371,9 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   and `analysis` fields are deliberately ignored.
   Live frames are not stored as separate rows. After completion, the exact emitted event list
   and elapsed time are serialized on the final assistant message, so reloads preserve task
-  resumption, confirmation, and execution-guard boundaries. Legacy assistant rows fall back to
-  reconstruction from internal tool-call/result rows; that fallback omits same-round calls
-  explicitly recorded as skipped and never executed.
+  resumption, confirmation, and execution-guard boundaries. Missing or malformed persisted
+  execution evidence is exposed as unavailable; history loading does not reconstruct a
+  different user-visible trace from internal tool rows.
 - Every planning round receives the complete registered tool catalog. The model can use
   conversation context and tool schemas to select zero or more tools across domains;
   pending-message semantics are classified by the configured model, while the actual
@@ -349,8 +385,13 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   creation/cancellation, sync verification, and saved-trace deletion refresh run history.
 - Errors are emitted as a `content` frame prefixed with `[ERROR] ` and then the stream
   completes.
-- The client also tolerates a literal `[DONE]` sentinel (ignored) and non-JSON text
-  lines (treated as raw content).
+- The frontend validates structured `command` and `progress` objects before invoking any
+  UI callback. Unknown stages, outcomes, negative counters, or malformed payloads terminate
+  the stream as an invalid frame; they are never treated as ordinary assistant text.
+- The client accepts only a JSON object with at least one valid `content`, `command`, or
+  `progress` field. Empty objects, arrays, raw text, unknown fields, invalid field types,
+  and stage/outcome mismatches terminate the stream as `INVALID_FRAME`; they are never
+  treated as assistant content or normal completion.
 
 ### Consuming the stream (frontend)
 

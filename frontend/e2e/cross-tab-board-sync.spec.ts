@@ -65,6 +65,136 @@ test('a successful Board mutation actively refreshes another visible tab', async
   }
 })
 
+test('a deletion preview is single-flight and closes when another tab deletes the device', async ({ browser, request }) => {
+  const auth = await createAuthenticatedUser(request, { usernamePrefix: 'tabdelete' })
+  const context = await browser.newContext()
+  const writer = await context.newPage()
+  await openWorkspace(writer, auth)
+  const label = `Cross tab delete ${Date.now()}`
+  await createDevice(writer, label)
+  const observer = await context.newPage()
+  await openWorkspace(observer, auth)
+
+  let previewRequestCount = 0
+  let releaseObserverPreview!: () => void
+  const observerPreviewRelease = new Promise<void>(resolve => { releaseObserverPreview = resolve })
+  await observer.route('**/api/board/nodes/*/deletion-preview', async route => {
+    await observerPreviewRelease
+    await route.continue()
+  })
+  observer.on('request', request => {
+    if (request.method() === 'GET'
+      && new URL(request.url()).pathname.endsWith('/deletion-preview')) {
+      previewRequestCount += 1
+    }
+  })
+
+  try {
+    await observer.locator('.device-node').filter({ hasText: label }).click()
+    const observerDetails = observer.getByTestId('device-dialog')
+    await expect(observerDetails).toBeVisible()
+    await observerDetails.getByTestId('device-delete').evaluate((button: HTMLButtonElement) => {
+      button.click()
+      button.click()
+    })
+    const observerConfirmation = observer.getByRole('dialog', { name: 'Delete device' })
+    await expect(observerConfirmation).toBeVisible()
+    await expect(observerConfirmation).toContainText(label)
+    await expect(observerConfirmation).toContainText('Loading the current deletion impact from the server')
+    await expect(observerConfirmation.getByRole('button', {
+      name: 'Delete Device',
+      exact: true
+    })).toBeDisabled()
+    await expect(observerDetails).toHaveCount(0)
+    expect(previewRequestCount).toBe(1)
+    releaseObserverPreview()
+    await expect(observerConfirmation.getByRole('button', {
+      name: 'Delete Device',
+      exact: true
+    })).toBeEnabled()
+
+    await writer.locator('.device-node').filter({ hasText: label }).click()
+    const writerDetails = writer.getByTestId('device-dialog')
+    await expect(writerDetails).toBeVisible()
+    await writerDetails.getByTestId('device-delete').click()
+    const writerConfirmation = writer.getByRole('dialog', { name: 'Delete device' })
+    await expect(writerConfirmation).toBeVisible()
+    await expect(writerConfirmation).toContainText(label)
+
+    const writerDeleteButton = writerConfirmation.getByRole('button', {
+      name: 'Delete Device',
+      exact: true
+    })
+    let deleteRequestCount = 0
+    writer.on('request', request => {
+      if (request.method() === 'POST'
+        && new URL(request.url()).pathname.endsWith('/delete')) {
+        deleteRequestCount += 1
+      }
+    })
+    await expect(writerDeleteButton).toBeEnabled()
+    await writerDeleteButton.evaluate((button: HTMLButtonElement) => {
+      button.click()
+      button.click()
+    })
+    await expect.poll(() => deleteRequestCount).toBe(1)
+
+    await expect(observerConfirmation).toHaveCount(0, { timeout: 30_000 })
+    await expect(observerDetails).toHaveCount(0)
+    await expect(observer.locator('.device-node').filter({ hasText: label })).toHaveCount(0)
+    const removalWarning = observer.getByText(
+      'This device was deleted elsewhere. Related panels were closed.',
+      { exact: true }
+    )
+    await expect(removalWarning).toBeVisible()
+    await expect(removalWarning).toHaveCount(1)
+    await expect(observer.getByTestId('control-tab-devices')).toBeFocused()
+  } finally {
+    releaseObserverPreview()
+    await context.close()
+  }
+})
+
+test('a deletion confirmation closes when another tab changes the target device', async ({ browser, request }) => {
+  const auth = await createAuthenticatedUser(request, { usernamePrefix: 'tabdeletestale' })
+  const context = await browser.newContext()
+  const writer = await context.newPage()
+  await openWorkspace(writer, auth)
+  const label = `Cross tab stale ${Date.now()}`
+  await createDevice(writer, label)
+  const observer = await context.newPage()
+  await openWorkspace(observer, auth)
+
+  try {
+    await observer.locator('.device-node').filter({ hasText: label }).click()
+    const observerDetails = observer.getByTestId('device-dialog')
+    await expect(observerDetails).toBeVisible()
+    await observerDetails.getByTestId('device-delete').click()
+    const observerConfirmation = observer.getByRole('dialog', { name: 'Delete device' })
+    await expect(observerConfirmation).toBeVisible()
+    await expect(observerConfirmation.getByRole('button', {
+      name: 'Delete Device',
+      exact: true
+    })).toBeEnabled()
+
+    await writer.locator('.device-node').filter({ hasText: label }).click()
+    const writerDetails = writer.getByTestId('device-dialog')
+    await expect(writerDetails).toBeVisible()
+    await writerDetails.getByTestId('device-rename').click()
+    const renameDialog = writer.getByRole('dialog', { name: 'Rename device' })
+    const renamedLabel = `${label} renamed`
+    await renameDialog.getByPlaceholder('Enter device name').fill(renamedLabel)
+    await renameDialog.getByRole('button', { name: 'Confirm' }).click()
+
+    await expect(observerConfirmation).toHaveCount(0, { timeout: 30_000 })
+    await expect(observer.getByTestId('device-dialog')).toBeVisible()
+    await expect(observer.locator('.device-node').filter({ hasText: renamedLabel }))
+      .toBeVisible({ timeout: 15_000 })
+  } finally {
+    await context.close()
+  }
+})
+
 test('a delayed initial snapshot cannot suppress a newer cross-tab invalidation', async ({ browser, request }) => {
   const auth = await createAuthenticatedUser(request, { usernamePrefix: 'tabsyncrace' })
   const context = await browser.newContext()

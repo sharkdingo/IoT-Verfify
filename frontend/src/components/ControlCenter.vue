@@ -974,6 +974,7 @@ const generateConditionId = () => {
 
 // Open condition dialog for adding/editing
 const openConditionDialog = (side: SpecSide, index: number = -1) => {
+  if (creatingSpecification.value) return
   if (index < 0 && getConditionsForSide(side).length >= REQUEST_LIMITS.specificationConditions) {
     ElMessage.warning(t('app.itemLimitReached', {
       resource: t('app.specificationConditions'),
@@ -1620,16 +1621,24 @@ const createSpecification = async () => {
   if (!ensureWritable()) return
   if (creatingSpecification.value || !validateSpecification()) return
 
+  const cloneConditions = (conditions: SpecCondition[]) =>
+    conditions.map(condition => ({ ...condition }))
+  const submittedForm = {
+    templateId: specForm.templateId,
+    templateType: specForm.templateType,
+    devices: specForm.selectedDevices.map(device => ({
+      ...device,
+      selectedApis: [...device.selectedApis]
+    })),
+    formula: specForm.formula,
+    aConditions: cloneConditions(specForm.aConditions),
+    ifConditions: cloneConditions(specForm.ifConditions),
+    thenConditions: cloneConditions(specForm.thenConditions)
+  }
   creatingSpecification.value = true
   const saved = await new Promise<boolean>(resolve => {
     emit('add-spec', {
-      templateId: specForm.templateId,
-      templateType: specForm.templateType,
-      devices: specForm.selectedDevices,
-      formula: specForm.formula,
-      aConditions: specForm.aConditions,
-      ifConditions: specForm.ifConditions,
-      thenConditions: specForm.thenConditions,
+      ...submittedForm,
       complete: resolve
     })
   })
@@ -3029,7 +3038,12 @@ const exportTemplate = (template: any) => {
 
         <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
           <!-- Specification Creation -->
-          <div class="space-y-3">
+          <fieldset
+            data-testid="spec-editor-fieldset"
+            :disabled="creatingSpecification"
+            :aria-busy="creatingSpecification"
+            class="m-0 min-w-0 space-y-3 border-0 p-0"
+          >
             <!-- Step 1: Select Template -->
             <div>
               <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-2">{{ t('app.selectTemplate') }}</label>
@@ -3298,7 +3312,7 @@ const exportTemplate = (template: any) => {
               </svg>
               {{ creatingSpecification ? t('app.saving') : t('app.createSpecification') }}
             </button>
-          </div>
+          </fieldset>
         </div>
       </details>
 

@@ -49,7 +49,6 @@
 				"Relation": "=",
 				"Value": "sending"
 			},
-			"Assignments": [],
 			"Description": ""
 		}
 	],
@@ -59,7 +58,6 @@
 			"StartState": "idle",
 			"EndState": "sending",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"AcceptsContent": true,
 			"Description": ""

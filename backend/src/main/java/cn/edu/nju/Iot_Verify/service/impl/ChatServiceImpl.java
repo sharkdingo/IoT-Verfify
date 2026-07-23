@@ -60,13 +60,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.EnumSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -79,6 +77,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -91,6 +91,109 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private static final Object[] SESSION_LOCKS = createSessionLocks();
     private static final Set<String> CONTINUATION_SENSITIVE_FIELDS = Set.of(
             "impactToken", "confirmationToken", "domainImpactToken");
+    private static final Set<String> TOOL_RESULT_CONTROL_FIELDS = Set.of(
+            "error", "errorCode", "status", "requiresUserConfirmation",
+            "resultAvailable", "resultStatus", "mutationMayHaveCommitted", "objectiveStatus");
+    private static final Set<String> PERSISTED_PROGRESS_FIELDS = Set.of(
+            "stage", "toolName", "round", "outcome", "successfulSteps",
+            "failedSteps", "unconfirmedSteps", "detail");
+    private static final Set<String> PERSISTED_PROGRESS_STAGES = Set.of(
+            "CONTEXT_READY", "TASK_RESUMED", "PLANNING", "REASONING",
+            "TOOL_EXECUTION", "TOOL_RESULT", "EXECUTION_GUARD", "WRITING_RESPONSE");
+    private static final Pattern UNSUPPORTED_TOOL_EVIDENCE_CLAIM = Pattern.compile(
+            "(?is)(?:\\b(?:the\\s+)?(?:tool|function|api)(?:\\s+(?:call|execution))?\\s+"
+                    + "(?:result|response|output)\\s+"
+                    + "(?:shows|indicates|confirms|returned|reports|succeeded|completed)\\b"
+                    + "|\\baccording\\s+to\\s+(?:the\\s+)?(?:tool|function|api)"
+                    + "(?:\\s+(?:call|execution))?\\s+(?:result|response|output)\\b"
+                    + "|\\b(?:the\\s+)?(?:tool|function|api)(?:\\s+(?:call|execution))?\\s+"
+                    + "(?:returned|reported)\\b"
+                    + "|(?:工具|函数|接口)(?:调用|执行)?(?:结果|响应|输出)"
+                    + "(?:显示|表明|证明|返回|确认|成功|完成)"
+                    + "|(?:工具|函数|接口)(?:调用|执行)?(?:已返回|返回了|已报告))");
+    private static final Pattern UNSUPPORTED_PLATFORM_MUTATION_CLAIM = Pattern.compile(
+            "(?is)(?:\\b(?:I|we)(?:'ve|\\s+have)?\\s+(?:already\\s+|successfully\\s+)*"
+                    + "(?:added|created|deleted|removed|renamed|updated|modified|changed|applied|ran|started|"
+                    + "stopped|cancelled|canceled|verified|simulated|saved|reset|replaced|imported|completed|"
+                    + "finished)\\b[^.!?。！？]{0,160}?\\b(?:devices?|rules?|specs?|specifications?|board|scene|"
+                    + "simulation|verification|traces?|templates?|environment\\s+variables?|model)\\b"
+                    + "|\\b(?:added|created|deleted|removed|renamed|updated|modified|changed|applied|ran|started|"
+                    + "stopped|cancelled|canceled|verified|simulated|saved|reset|replaced|imported|completed|"
+                    + "finished)\\s+(?:all|every|the|your|current|these|those|our)\\s+"
+                    + "(?:devices?|rules?|specs?|specifications?|board|scene|simulation|verification|traces?|"
+                    + "templates?|environment\\s+variables?|model)\\b"
+                    + "|\\b(?:all|every|the|your|current|these|those|our)\\s+"
+                    + "(?:devices?|rules?|specs?|specifications?|board|scene|traces?|templates?|"
+                    + "environment\\s+variables?|model)\\s+(?:successfully\\s+)?"
+                    + "(?:added|created|deleted|removed|renamed|updated|modified|changed|applied|saved|reset|"
+                    + "replaced|imported)\\b"
+                    + "|\\b(?:the|all|every|your|current|these|those|our)?\\s*"
+                    + "(?:devices?|rules?|specs?|specifications?|board|scene|simulation|verification|traces?|"
+                    + "templates?|environment\\s+variables?|model)\\b[^.!?。！？]{0,80}"
+                    + "\\b(?:was|were|has\\s+been|have\\s+been|is\\s+now|are\\s+now)\\s+"
+                    + "(?:successfully\\s+)?"
+                    + "(?:added|created|deleted|removed|renamed|updated|modified|changed|applied|saved|reset|"
+                    + "replaced|imported)\\b"
+                    + "|\\b(?:the|your|current|our)?\\s*(?:simulation|verification)\\b[^.!?。！？]{0,80}"
+                    + "\\b(?:was|has\\s+been|is\\s+now)\\s+(?:successfully\\s+)?"
+                    + "(?:started|stopped|cancelled|canceled|verified|simulated|completed|finished)\\b"
+                    + "|\\b(?:the|all|every|your|current|these|those|our)?\\s*"
+                    + "(?:simulation|verification|model)\\b[^.!?。！？]{0,40}\\b"
+                    + "(?:is|was|has\\s+been)\\s+(?:now\\s+)?(?:complete|completed|successful|finished)\\b"
+                    + "|(?:(?:我|本助手|我们)(?:已经|已)?(?:成功)?|(?:已经|已)(?:成功)?)"
+                    + "(?:添加|创建|删除|移除|重命名|更新|修改|应用|运行|启动|停止|取消|验证|模拟|保存|重置|"
+                    + "替换|导入|完成)(?:了)?[^.!?。！？]{0,160}?"
+                    + "(?:设备|规则|规约|画布|场景|仿真|模拟|验证|轨迹|模板|环境变量)"
+                    + "|(?:全部|所有|你的|您的|当前|这些|该)?"
+                    + "(?:设备|规则|规约|画布|场景|仿真|模拟|验证|轨迹|模板|环境变量)"
+                    + "[^.!?。！？]{0,80}(?:已经|已)(?:成功)?(?:被)?"
+                    + "(?:添加|创建|删除|移除|重命名|更新|修改|应用|保存|重置|替换|导入)"
+                    + "|(?:(?:我|本助手|我们)(?:已经|已)?(?:成功)?)"
+                    + "(?:更新|修改|重置|替换)(?:了)?(?:当前|你的|您的)?模型"
+                    + "|(?:当前|你的|您的)模型[^.!?。！？]{0,40}(?:已经|已)(?:成功)?(?:被)?"
+                    + "(?:更新|修改|重置|替换)"
+                    + "|(?:当前|该)?(?:仿真|模拟|验证)[^.!?。！？]{0,80}(?:已经|已)(?:成功)?(?:被)?"
+                    + "(?:运行|启动|停止|取消|验证|模拟|完成))");
+    private static final Pattern NON_OPERATIONAL_PLATFORM_CONTENT = Pattern.compile(
+            "(?is)(?:\\b(?:created|drafted|wrote|generated|proposed)\\b[^.!?。！？]{0,48}"
+                    + "\\b(?:sample|example|illustrative|hypothetical|draft)\\s+"
+                    + "(?:device|rule|spec|specification|scene|model|configuration)\\b"
+                    + "|(?:创建|生成|编写|起草|提供)(?:了)?[^.!?。！？]{0,48}"
+                    + "(?:示例|样例|假设|草案|参考)(?:设备|规则|规约|场景|模型|配置)"
+                    + "|(?:已)?(?:删除|移除|重命名|更新|修改|取消)的"
+                    + "(?:设备|规则|规约|画布|场景|轨迹|模板|环境变量|模型))");
+    private static final Pattern UNSUPPORTED_PLATFORM_READ_CLAIM = Pattern.compile(
+            "(?is)(?:\\b(?:your(?:\\s+current)?|the\\s+current|current)\\s+"
+                    + "(?:board|scene)\\s+(?:currently\\s+)?(?:contains?|has|includes?|shows?)\\b"
+                    + "|\\b(?:I|we)(?:'ve|\\s+have)?\\s+"
+                    + "(?:checked|inspected|read|reviewed|examined|looked\\s+at)\\s+"
+                    + "(?:your(?:\\s+current)?|the(?:\\s+current)?|current)\\s+"
+                    + "(?:board|scene|devices?|rules?|specs?|specifications?|model)\\b"
+                    + "|\\bthere\\s+(?:is|are)\\s+[^.!?。！？]{0,80}"
+                    + "\\b(?:devices?|rules?|specs?|specifications?)\\b[^.!?。！？]{0,40}"
+                    + "\\b(?:on|in)\\s+(?:your(?:\\s+current)?|the\\s+current|current)\\s+"
+                    + "(?:board|scene)\\b"
+                    + "|(?:当前|你的|您的)(?:画布|场景)(?:中)?(?:有|包含|共有|显示)"
+                    + "|(?:我|我们|本助手)(?:已经|已)?(?:查看|检查|读取|核对)(?:了)?"
+                    + "(?:当前|你的|您的)(?:画布|场景|设备|规则|规约|模型))");
+    private static final Pattern NON_ASSERTIVE_CLAIM_CONTEXT = Pattern.compile(
+            "(?is)(?:\\b(?:whether|hypothetically)\\b|\\bif\\s+(?:the|your|this|that)\\b"
+                    + "|(?:是否|假设|如果))");
+    private static final Pattern HISTORICAL_CLAIM_CONTEXT = Pattern.compile(
+            "(?is)(?:\\b(?:previously|historically)\\b"
+                    + "|\\b(?:during|in|from)\\s+(?:the\\s+)?"
+                    + "(?:previous|prior|earlier|last|historical)\\b"
+                    + "|(?:在|于)?(?:上次|先前|此前|之前|过去)(?:迁移|运行|记录|会话)?(?:中|期间)?)");
+    private static final Pattern CURRENT_CLAIM_CONTEXT = Pattern.compile(
+            "(?is)(?:\\b(?:current|now|this\\s+turn)\\b"
+                    + "|\\byour(?:\\s+current)?\\s+(?:board|scene)\\b"
+                    + "|(?:当前|本轮|现在|你的画布|您的画布))");
+    private static final Pattern CLAIM_CLAUSE_BOUNDARY = Pattern.compile(
+            "(?is)[,;:\\n]|\\b(?:but|however|yet|then|and)\\b|(?:但是|不过|然而|然后|并且|而且|但)");
+    private static final Set<String> TOOL_RESULT_OUTCOMES = Set.of(
+            "USABLE", "PARTIAL", "FAILED", "RESULT_UNAVAILABLE", "CONFIRMATION_REQUIRED");
+    private static final Set<String> EXECUTION_GUARD_OUTCOMES = Set.of(
+            "NO_PROGRESS", "EMERGENCY_LIMIT");
 
     private final ChatSessionRepository sessionRepo;
     private final ChatMessageRepository messageRepo;
@@ -199,7 +302,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         int fromIndex = Math.max(0, visibleMessages.size() - pageSize);
         List<ChatMessagePo> selected = visibleMessages.subList(fromIndex, visibleMessages.size());
         List<ChatMessageResponseDto> response = chatMapper.toChatMessageDtoList(selected);
-        attachPersistedExecutionTraces(allMessages, selected, response);
+        attachPersistedExecutionTraces(selected, response);
         Long nextBeforeId = null;
         if (hasMore) {
             if (!selected.isEmpty()) {
@@ -237,9 +340,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     public String beginStreamRequest(Long userId, String sessionId) {
         synchronized (sessionLock(sessionId)) {
             AtomicReference<ActiveStreamRequest> claimed = new AtomicReference<>();
+            AtomicLong confirmationStartedNanos = new AtomicLong(Long.MIN_VALUE);
             transactionTemplate.executeWithoutResult(status -> {
                 ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
                         .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+                confirmationStartedNanos.set(System.nanoTime());
                 LocalDateTime now = databaseNow();
                 if (hasActiveExecutionLease(session, now)) {
                     throw new ChatSessionBusyException(sessionId);
@@ -258,16 +363,30 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 session.setExecutionStopRequested(false);
                 session.setExecutionUserStopRequested(false);
                 sessionRepo.saveAndFlush(session);
-                claimed.set(new ActiveStreamRequest(userId, requestId));
+                claimed.set(new ActiveStreamRequest(
+                        userId, requestId, confirmationStartedNanos.get()));
             });
             ActiveStreamRequest request = claimed.get();
             if (request == null) {
                 throw new IllegalStateException("Could not claim the chat execution lease.");
             }
+            if (!leaseRoundTripCompletedBeforeTtl(
+                    confirmationStartedNanos.get(), executionLeaseTtl())) {
+                releaseExecutionLease(userId, sessionId, request.requestId());
+                throw new ServiceUnavailableException(
+                        "Chat execution lease expired before the request was accepted; retry");
+            }
             ActiveStreamRequest existing = activeStreamRequests.putIfAbsent(sessionId, request);
             if (existing != null) {
                 releaseExecutionLease(userId, sessionId, request.requestId());
                 throw new ChatSessionBusyException(sessionId);
+            }
+            if (!leaseRoundTripCompletedBeforeTtl(
+                    confirmationStartedNanos.get(), executionLeaseTtl())) {
+                activeStreamRequests.remove(sessionId, request);
+                releaseExecutionLease(userId, sessionId, request.requestId());
+                throw new ServiceUnavailableException(
+                        "Chat execution lease expired before the request was accepted; retry");
             }
             return request.requestId();
         }
@@ -413,13 +532,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
         activeStreamRequests.forEach((sessionId, request) -> {
             try {
-                int renewed = renewActiveExecutionLease(sessionId, request);
-                if (renewed == 0 && activeStreamRequests.remove(sessionId, request)) {
+                ExecutionLeaseRenewal renewal = renewActiveExecutionLease(sessionId, request);
+                if (!renewal.renewed() && activeStreamRequests.remove(sessionId, request)) {
                     stopActiveRequest(sessionId, request, false);
                     log.warn("Stopped local chat execution after losing its lease: sessionId={}, executionId={}",
                             sessionId, request.requestId());
-                } else if (renewed > 0) {
-                    request.leaseConfirmation().confirm();
+                } else if (renewal.renewed()) {
+                    request.leaseConfirmation().confirmAt(renewal.confirmationStartedNanos());
                     sessionRepo.findByIdAndUserId(sessionId, request.userId())
                             .filter(session -> Boolean.TRUE.equals(session.getExecutionStopRequested()))
                             .ifPresent(session -> stopActiveRequest(
@@ -447,9 +566,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
     }
 
-    private int renewActiveExecutionLease(String sessionId, ActiveStreamRequest request) {
+    private ExecutionLeaseRenewal renewActiveExecutionLease(
+            String sessionId, ActiveStreamRequest request) {
         long checkedAtNanos = System.nanoTime();
         LocalDateTime checkedAt = databaseNow();
+        AtomicLong confirmationStartedNanos = new AtomicLong(Long.MIN_VALUE);
         Integer renewed = transactionTemplate.execute(status -> {
             ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, request.userId())
                     .orElse(null);
@@ -465,11 +586,24 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     || !session.getActiveExecutionExpiresAt().isAfter(effectiveNow)) {
                 return 0;
             }
+            confirmationStartedNanos.set(System.nanoTime());
             session.setActiveExecutionExpiresAt(effectiveNow.plus(executionLeaseTtl()));
             sessionRepo.saveAndFlush(session);
             return 1;
         });
-        return renewed != null ? renewed : 0;
+        if (renewed == null || renewed == 0) return ExecutionLeaseRenewal.notRenewed();
+        return leaseRoundTripCompletedBeforeTtl(
+                confirmationStartedNanos.get(), executionLeaseTtl())
+                ? new ExecutionLeaseRenewal(true, confirmationStartedNanos.get())
+                : ExecutionLeaseRenewal.notRenewed();
+    }
+
+    private boolean leaseRoundTripCompletedBeforeTtl(long startedNanos, Duration ttl) {
+        if (startedNanos == Long.MIN_VALUE || ttl == null || ttl.isZero() || ttl.isNegative()) {
+            return false;
+        }
+        long elapsedNanos = System.nanoTime() - startedNanos;
+        return elapsedNanos >= 0 && elapsedNanos < ttl.toNanos();
     }
 
     private void stopChatExecutionsWithExpiredConfirmation(RuntimeException cause) {
@@ -517,9 +651,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                   String content,
                                   ChatConfirmationCommandDto confirmation,
                                   SseEmitter emitter) {
-        String effectiveTurnId = turnId == null || turnId.isBlank()
-                ? UUID.randomUUID().toString()
-                : turnId.trim();
+        if (turnId == null || turnId.isBlank()) {
+            throw new BadRequestException("Turn id is required");
+        }
+        String effectiveTurnId = turnId.trim();
         ActiveStreamRequest activeRequest = activeStreamRequests.get(sessionId);
         if (activeRequest == null
                 || !Objects.equals(activeRequest.userId(), userId)
@@ -571,7 +706,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         ToolLoopResult loopResult = ToolLoopResult.empty();
         boolean userMessagePersisted = false;
-        boolean terminalRecordPersisted = false;
+        TerminalPersistenceState terminalPersistence = TerminalPersistenceState.NOT_ATTEMPTED;
         AtomicBoolean serverCompletion = new AtomicBoolean(false);
         emitter.onCompletion(() -> {
             if (!serverCompletion.get()) {
@@ -714,8 +849,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 isDisconnect.set(true);
                 return;
             }
-            streamAssistantReply(
-                    withVisibleReplyPrompt(messages, loopResult), finalAnswer, emitter, isDisconnect, shouldStop);
+            List<LlmMessage> visibleReplyMessages = withVisibleReplyPrompt(messages, loopResult);
+            boolean replySuppressed = streamGuardedAssistantReply(
+                    visibleReplyMessages, finalAnswer, emitter, isDisconnect, shouldStop,
+                    preferChinese, executionTrace);
             boolean finalResponseProduced = finalAnswer.length() > replyStart;
 
             if (!finalResponseProduced && !isDisconnect.get()) {
@@ -729,7 +866,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 return;
             }
 
-            terminalRecordPersisted = persistAssistantTerminal(
+            terminalPersistence = persistAssistantTerminal(
                     userId,
                     sessionId,
                     executionId,
@@ -737,8 +874,15 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     finalAnswer.toString(),
                     executionTrace,
                     elapsedSeconds(executionStartedNanos),
-                    terminalStatus(loopResult));
+                    terminalStatus(loopResult, replySuppressed))
+                    ? TerminalPersistenceState.PERSISTED
+                    : TerminalPersistenceState.FAILED;
             serverCompletion.set(true);
+            if (terminalPersistence == TerminalPersistenceState.FAILED) {
+                sendSseErrorMessage(
+                        emitter, terminalPersistenceFailureMessage(preferChinese), isDisconnect);
+                return;
+            }
             completeEmitter(emitter, isDisconnect);
         } catch (Exception e) {
             if (isDisconnect.get() || isClientDisconnect(e)) {
@@ -763,7 +907,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     ? ChatExecutionStatus.PARTIAL
                     : ChatExecutionStatus.FAILED;
             if (userMessagePersisted) {
-                terminalRecordPersisted = persistAssistantTerminal(
+                terminalPersistence = persistAssistantTerminal(
                         userId,
                         sessionId,
                         executionId,
@@ -771,12 +915,19 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                         errorMessage,
                         executionTrace,
                         elapsedSeconds(executionStartedNanos),
-                        status);
+                        status)
+                        ? TerminalPersistenceState.PERSISTED
+                        : TerminalPersistenceState.FAILED;
+                if (terminalPersistence == TerminalPersistenceState.FAILED) {
+                    errorMessage += terminalPersistenceFailureSuffix(preferChinese);
+                }
             }
             serverCompletion.set(true);
-            sendSseErrorMessage(emitter, errorMessage);
+            sendSseErrorMessage(emitter, errorMessage, isDisconnect);
         } finally {
-            if (userMessagePersisted && !terminalRecordPersisted && isDisconnect.get()) {
+            if (userMessagePersisted
+                    && terminalPersistence == TerminalPersistenceState.NOT_ATTEMPTED
+                    && isDisconnect.get()) {
                 ChatExecutionStatus interruptedStatus = isUserStop.get()
                         ? ChatExecutionStatus.STOPPED
                         : ChatExecutionStatus.DISCONNECTED;
@@ -875,7 +1026,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 isDisconnect.set(true);
                 return true;
             }
-            activeRequest.leaseConfirmation().confirm();
             if (Boolean.TRUE.equals(session.getExecutionStopRequested())) {
                 if (Boolean.TRUE.equals(session.getExecutionUserStopRequested())) {
                     isUserStop.set(true);
@@ -1466,7 +1616,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     }
                     toolResult = aiToolManager.execute(functionName, argsJson);
                     stoppedAfterTool = forceStopCheck.getAsBoolean();
-                    executionOutcome = classifyToolExecution(toolResult);
+                    executionOutcome = classifyToolExecution(functionName, toolResult);
                     if ("recommend_scenario".equals(functionName)) {
                         partialObjectiveResult = executionOutcome == ToolExecutionOutcome.PARTIAL;
                     }
@@ -1639,55 +1789,205 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
     }
 
-    private void streamAssistantReply(List<LlmMessage> messages,
-                                      StringBuilder finalAnswer,
-                                      SseEmitter emitter,
-                                      AtomicBoolean isDisconnect,
-                                      BooleanSupplier shouldStop) {
+    private boolean streamGuardedAssistantReply(List<LlmMessage> messages,
+                                                StringBuilder finalAnswer,
+                                                SseEmitter emitter,
+                                                AtomicBoolean isDisconnect,
+                                                BooleanSupplier shouldStop,
+                                                boolean preferChinese,
+                                                List<StreamResponseDto.ProgressDto> executionTrace) {
+        StringBuilder pending = new StringBuilder();
+        AtomicBoolean suppressed = new AtomicBoolean(false);
+        BooleanSupplier replyShouldStop = () -> shouldStop.getAsBoolean()
+                || isDisconnect.get() || suppressed.get();
         llmChatService.streamReply(messages, delta -> {
-            if (shouldStop.getAsBoolean()) {
-                return;
+            if (replyShouldStop.getAsBoolean() || delta == null || delta.isEmpty()) return;
+            pending.append(delta);
+            int boundary;
+            while (!suppressed.get() && (boundary = firstReplySegmentBoundary(pending)) >= 0) {
+                String segment = pending.substring(0, boundary + 1);
+                pending.delete(0, boundary + 1);
+                sendGuardedReplySegment(segment, finalAnswer, emitter, isDisconnect, suppressed,
+                        preferChinese, executionTrace);
             }
-            if (delta == null || delta.isEmpty()) {
-                return;
-            }
-            boolean success = sendSseChunk(emitter, delta);
-            if (success) {
-                finalAnswer.append(delta);
-            } else {
-                log.info("SSE connection interrupted, stopping AI response");
-                isDisconnect.set(true);
-            }
-        }, shouldStop);
+        }, replyShouldStop);
+        if (!replyShouldStop.getAsBoolean() && !pending.isEmpty()) {
+            sendGuardedReplySegment(pending.toString(), finalAnswer, emitter, isDisconnect, suppressed,
+                    preferChinese, executionTrace);
+        }
+        return suppressed.get();
     }
 
-    private ToolExecutionOutcome classifyToolExecution(String toolResult) {
+    private int firstReplySegmentBoundary(CharSequence text) {
+        for (int index = 0; index < text.length(); index++) {
+            if (".!?。！？".indexOf(text.charAt(index)) >= 0) return index;
+        }
+        return -1;
+    }
+
+    private void sendGuardedReplySegment(String segment,
+                                         StringBuilder finalAnswer,
+                                         SseEmitter emitter,
+                                         AtomicBoolean isDisconnect,
+                                         AtomicBoolean suppressed,
+                                         boolean preferChinese,
+                                         List<StreamResponseDto.ProgressDto> executionTrace) {
+        String visible = containsUnsupportedPlatformClaim(segment)
+                ? authoritativeClaimReplacement(preferChinese, executionTrace)
+                : segment;
+        if (sendSseChunk(emitter, visible)) {
+            finalAnswer.append(visible);
+            if (!visible.equals(segment)) suppressed.set(true);
+        } else {
+            log.info("SSE connection interrupted, stopping AI response");
+            isDisconnect.set(true);
+        }
+    }
+
+    static boolean containsUnsupportedPlatformClaim(String reply) {
+        if (reply == null || reply.isBlank()) return false;
+        if (hasUnsupportedClaim(reply, UNSUPPORTED_TOOL_EVIDENCE_CLAIM, false)) return true;
+        if (hasUnsupportedClaim(reply, UNSUPPORTED_PLATFORM_READ_CLAIM, false)) return true;
+        return hasUnsupportedClaim(reply, UNSUPPORTED_PLATFORM_MUTATION_CLAIM, true);
+    }
+
+    private static boolean hasUnsupportedClaim(
+            String reply, Pattern pattern, boolean allowNonOperationalContent) {
+        Matcher matcher = pattern.matcher(reply);
+        while (matcher.find()) {
+            String claimClause = claimClause(reply, matcher.start(), matcher.end());
+            String trimmedClause = claimClause.trim();
+            if (trimmedClause.endsWith("?") || trimmedClause.endsWith("？")
+                    || NON_ASSERTIVE_CLAIM_CONTEXT.matcher(claimClause).find()
+                    || (HISTORICAL_CLAIM_CONTEXT.matcher(claimClause).find()
+                        && !CURRENT_CLAIM_CONTEXT.matcher(claimClause).find())) continue;
+            if (allowNonOperationalContent
+                    && NON_OPERATIONAL_PLATFORM_CONTENT.matcher(matcher.group()).find()) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private static String claimClause(String reply, int claimStart, int claimEnd) {
+        int clauseStart = 0;
+        int clauseEnd = reply.length();
+        Matcher boundary = CLAIM_CLAUSE_BOUNDARY.matcher(reply);
+        while (boundary.find()) {
+            if (boundary.end() <= claimStart) {
+                clauseStart = boundary.end();
+            } else if (boundary.start() >= claimEnd) {
+                clauseEnd = boundary.start();
+                break;
+            }
+        }
+        return reply.substring(clauseStart, clauseEnd);
+    }
+
+    private String authoritativeClaimReplacement(
+            boolean preferChinese, List<StreamResponseDto.ProgressDto> executionTrace) {
+        List<String> authoritativeDetails = executionTrace == null ? List.of() : executionTrace.stream()
+                .filter(progress -> progress != null
+                        && "TOOL_RESULT".equals(progress.getStage())
+                        && "USABLE".equals(progress.getOutcome())
+                        && progress.getDetail() != null
+                        && !progress.getDetail().isBlank())
+                .map(StreamResponseDto.ProgressDto::getDetail)
+                .distinct()
+                .limit(4)
+                .toList();
+        if (!authoritativeDetails.isEmpty()) {
+            return preferChinese
+                    ? "系统已用权威工具记录替换一段未经证据支持的模型说法："
+                        + String.join("；", authoritativeDetails)
+                    : "The system replaced an unsupported model claim with the authoritative tool record: "
+                        + String.join("; ", authoritativeDetails);
+        }
+        return preferChinese
+                ? "系统已隐藏一段声称读取或修改当前画布的未验证回复。"
+                    + "本轮没有支持该说法的完整权威工具结果；请重试，并在看到明确的成功记录前不要假定数据已经改变。"
+                : "The system hid an unverified reply that claimed to read or change the current Board. "
+                    + "This turn has no complete authoritative tool result supporting that claim; retry, and "
+                    + "do not assume data changed until an explicit successful record is shown.";
+    }
+
+    private ToolExecutionOutcome classifyToolExecution(String functionName, String toolResult) {
         if (toolResult == null || toolResult.isBlank()) {
             return ToolExecutionOutcome.FAILED;
         }
         try {
             JsonNode root = objectMapper.readTree(toolResult);
-            if (!root.isObject()) {
+            if (!root.isObject() || root.isEmpty() || !hasValidToolResultControlFields(root)) {
                 return ToolExecutionOutcome.FAILED;
             }
             if (root.path("requiresUserConfirmation").asBoolean(false)) {
-                return ToolExecutionOutcome.FAILED;
-            }
-            String error = root.path("error").asText("");
-            if (error != null && !error.isBlank()) {
                 return ToolExecutionOutcome.FAILED;
             }
             if ((root.has("resultAvailable") && !root.path("resultAvailable").asBoolean(true))
                     || "RESULT_UNAVAILABLE".equals(root.path("resultStatus").asText())) {
                 return ToolExecutionOutcome.RESULT_UNAVAILABLE;
             }
+            String error = root.path("error").asText("");
+            String errorCode = root.path("errorCode").asText("");
+            if (!error.isBlank() || !errorCode.isBlank()
+                    || (root.has("status") && root.path("status").intValue() >= 400)) {
+                return ToolExecutionOutcome.FAILED;
+            }
+            if (!hasValidKnownToolPayload(functionName, root)) {
+                return ToolExecutionOutcome.FAILED;
+            }
             if ("PARTIAL".equals(root.path("objectiveStatus").asText())) {
                 return ToolExecutionOutcome.PARTIAL;
             }
-            return ToolExecutionOutcome.USABLE;
+            boolean hasSemanticPayload = root.properties().stream()
+                    .anyMatch(entry -> !TOOL_RESULT_CONTROL_FIELDS.contains(entry.getKey()));
+            return hasSemanticPayload ? ToolExecutionOutcome.USABLE : ToolExecutionOutcome.FAILED;
         } catch (Exception ignore) {
             return ToolExecutionOutcome.FAILED;
         }
+    }
+
+    private boolean hasValidKnownToolPayload(String functionName, JsonNode root) {
+        if (!"board_overview".equals(functionName)) return true;
+        return hasArray(root, "devices")
+                && hasArray(root, "rules")
+                && hasArray(root, "specs")
+                && hasArray(root, "edges")
+                && hasArray(root, "environmentVariables");
+    }
+
+    private boolean hasArray(JsonNode root, String field) {
+        return root != null && root.has(field) && root.get(field).isArray();
+    }
+
+    private boolean hasValidToolResultControlFields(JsonNode root) {
+        if (!isOptionalToolResultText(root, "error")
+                || !isOptionalToolResultText(root, "errorCode")
+                || !isOptionalToolResultBoolean(root, "requiresUserConfirmation")
+                || !isOptionalToolResultBoolean(root, "resultAvailable")
+                || !isOptionalToolResultBoolean(root, "mutationMayHaveCommitted")) {
+            return false;
+        }
+        if (root.has("status") && (!root.get("status").isIntegralNumber()
+                || !root.get("status").canConvertToInt()
+                || root.get("status").intValue() < 100
+                || root.get("status").intValue() > 599)) {
+            return false;
+        }
+        if (root.has("resultStatus") && (!root.get("resultStatus").isTextual()
+                || !"RESULT_UNAVAILABLE".equals(root.get("resultStatus").textValue()))) {
+            return false;
+        }
+        return !root.has("objectiveStatus")
+                || (root.get("objectiveStatus").isTextual()
+                    && Set.of("COMPLETE", "PARTIAL").contains(root.get("objectiveStatus").textValue()));
+    }
+
+    private boolean isOptionalToolResultText(JsonNode root, String field) {
+        return !root.has(field) || root.get(field).isTextual();
+    }
+
+    private boolean isOptionalToolResultBoolean(JsonNode root, String field) {
+        return !root.has(field) || root.get(field).isBoolean();
     }
 
     private boolean mutationMayHaveCommitted(String toolResult) {
@@ -1696,7 +1996,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
         try {
             JsonNode root = objectMapper.readTree(toolResult);
-            return root.isObject() && root.path("mutationMayHaveCommitted").asBoolean(false);
+            JsonNode value = root != null && root.isObject()
+                    ? root.get("mutationMayHaveCommitted") : null;
+            return value != null && value.isBoolean() && value.booleanValue();
         } catch (Exception ignore) {
             return false;
         }
@@ -1801,6 +2103,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
 
             if ("board_overview".equals(functionName)) {
+                if (!hasValidKnownToolPayload(functionName, root)) return null;
                 return preferChinese
                         ? String.format("已读取画布：%d 个设备、%d 条规则、%d 条规约、%d 个共享环境变量。",
                         arraySize(root, "devices"), arraySize(root, "rules"),
@@ -2151,11 +2454,17 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         po.setTurnId(turnId);
         po.setExecutionElapsedSeconds(elapsedSeconds);
         po.setExecutionStatus(executionStatus);
+        if (executionStatus == ChatExecutionStatus.COMPLETED
+                && !hasCompletedToolEvidence(executionTrace)) {
+            throw new IllegalStateException(
+                    "A completed chat terminal record requires persisted successful tool evidence");
+        }
         if (executionTrace != null && !executionTrace.isEmpty()) {
             try {
                 po.setExecutionTraceJson(objectMapper.writeValueAsString(executionTrace));
             } catch (Exception e) {
-                log.warn("Could not serialize execution trace for chat session {}: {}", sid, e.toString());
+                throw new IllegalStateException(
+                        "Could not serialize the chat execution trace for terminal persistence", e);
             }
         }
         messageRepo.saveAndFlush(po);
@@ -2186,7 +2495,21 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 Math.max(0L, (System.nanoTime() - executionStartedNanos) / 1_000_000_000L));
     }
 
-    private ChatExecutionStatus terminalStatus(ToolLoopResult result) {
+    private String terminalPersistenceFailureMessage(boolean preferChinese) {
+        return preferChinese
+                ? "最终回复未能写入会话历史，本轮记录不完整。请先刷新会话历史和当前画布状态，再决定是否重试。"
+                : "The final response could not be saved to conversation history, so this turn is incomplete. "
+                    + "Refresh the conversation history and current Board state before deciding whether to retry.";
+    }
+
+    private String terminalPersistenceFailureSuffix(boolean preferChinese) {
+        return preferChinese
+                ? " 最终错误记录也未能写入会话历史；请刷新会话历史和当前画布状态后再重试。"
+                : " The terminal error record also could not be saved to conversation history; "
+                    + "refresh the conversation history and current Board state before retrying.";
+    }
+
+    private ChatExecutionStatus terminalStatus(ToolLoopResult result, boolean replySuppressed) {
         if (result == null) return ChatExecutionStatus.FAILED;
         if (result.confirmationPending()) return ChatExecutionStatus.AWAITING_CONFIRMATION;
         if (result.resultUnavailableToolCalls() > 0) return ChatExecutionStatus.PARTIAL;
@@ -2207,7 +2530,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         if (result.stopReason() == ToolLoopStopReason.PARTIAL_RESULT) {
             return ChatExecutionStatus.PARTIAL;
         }
-        return ChatExecutionStatus.COMPLETED;
+        ChatExecutionStatus status = result.hadToolCalls()
+                ? ChatExecutionStatus.COMPLETED
+                : ChatExecutionStatus.PARTIAL;
+        return replySuppressed && status == ChatExecutionStatus.COMPLETED
+                ? ChatExecutionStatus.PARTIAL : status;
     }
 
     private String interruptedAuditNotice(ToolLoopResult result, boolean preferChinese, boolean userStopped) {
@@ -2314,12 +2641,19 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             LeaseConfirmation leaseConfirmation,
             LlmRequestControl requestControl) {
 
-        private ActiveStreamRequest(Long userId, String requestId) {
+        private ActiveStreamRequest(
+                Long userId, String requestId, long confirmationStartedNanos) {
             this(userId, requestId, new AtomicBoolean(false), new AtomicBoolean(false),
                     new AtomicReference<>(),
                     new AtomicLong(System.nanoTime() + EXECUTION_CONTROL_POLL_NANOS),
-                    new LeaseConfirmation(),
+                    new LeaseConfirmation(confirmationStartedNanos),
                     new LlmRequestControl());
+        }
+    }
+
+    private record ExecutionLeaseRenewal(boolean renewed, long confirmationStartedNanos) {
+        private static ExecutionLeaseRenewal notRenewed() {
+            return new ExecutionLeaseRenewal(false, Long.MIN_VALUE);
         }
     }
 
@@ -2460,151 +2794,117 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return visible;
     }
 
-    private void attachPersistedExecutionTraces(List<ChatMessagePo> allMessages,
-                                                List<ChatMessagePo> visibleMessages,
-                                                List<ChatMessageResponseDto> response) {
-        if (allMessages == null || visibleMessages == null || response == null
+    private void attachPersistedExecutionTraces(List<ChatMessagePo> visibleMessages,
+                                                 List<ChatMessageResponseDto> response) {
+        if (visibleMessages == null || response == null
                 || visibleMessages.size() != response.size()) {
             return;
         }
 
-        List<StreamResponseDto.ProgressDto> trace = new ArrayList<>();
-        Map<String, PersistedTraceCall> callsById = new LinkedHashMap<>();
-        int visibleIndex = 0;
-        int round = 0;
-        int successful = 0;
-        int failed = 0;
-        int unconfirmed = 0;
-        boolean hadTools = false;
-        boolean preferChinese = false;
-        LocalDateTime requestStartedAt = null;
-
-        for (ChatMessagePo message : allMessages) {
-            if (message == null) continue;
-            boolean visible = visibleIndex < visibleMessages.size()
-                    && message == visibleMessages.get(visibleIndex);
-
-            if (visible && "user".equalsIgnoreCase(message.getRole())) {
-                trace.clear();
-                callsById.clear();
-                round = 0;
-                successful = 0;
-                failed = 0;
-                unconfirmed = 0;
-                hadTools = false;
-                preferChinese = prefersChinese(message.getContent());
-                requestStartedAt = message.getCreatedAt();
-                visibleIndex++;
-                continue;
-            }
-
-            if (isAssistantToolCallMessage(message)) {
-                try {
-                    LlmMessage toolCallMessage = messageCodec.toMessage(message);
-                    if (!hadTools) {
-                        trace.add(progress("CONTEXT_READY", null, null, null,
-                                null, null, null, null));
-                    }
-                    hadTools = true;
-                    round++;
-                    trace.add(progress("PLANNING", null, round, null,
-                            successful, failed, unconfirmed, null));
-                    for (LlmToolCall call : toolCallMessage.toolCalls()) {
-                        callsById.put(call.id(), new PersistedTraceCall(call.name(), round));
-                    }
-                } catch (Exception e) {
-                    log.warn("Could not reconstruct persisted tool calls for execution trace: {}", e.toString());
-                }
-                continue;
-            }
-
-            if (isToolMessage(message)) {
-                try {
-                    LlmMessage toolMessage = messageCodec.toMessage(message);
-                    JsonNode root = objectMapper.readTree(toolMessage.content());
-                    if (root.isObject() && root.path("skipped").asBoolean(false)) {
-                        continue;
-                    }
-                    PersistedTraceCall call = callsById.remove(toolMessage.toolCallId());
-                    if (call == null) continue;
-                    trace.add(progress("TOOL_EXECUTION", call.toolName(), call.round(), null,
-                            successful, failed, unconfirmed, null));
-
-                    boolean confirmationRequired = requiresUserConfirmation(toolMessage.content());
-                    ToolExecutionOutcome executionOutcome = classifyToolExecution(toolMessage.content());
-                    String outcome;
-                    if (confirmationRequired) {
-                        unconfirmed++;
-                        outcome = "CONFIRMATION_REQUIRED";
-                    } else if (executionOutcome == ToolExecutionOutcome.USABLE
-                            || executionOutcome == ToolExecutionOutcome.PARTIAL) {
-                        successful++;
-                        outcome = executionOutcome.name();
-                    } else if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
-                        unconfirmed++;
-                        outcome = "RESULT_UNAVAILABLE";
-                    } else {
-                        failed++;
-                        outcome = "FAILED";
-                    }
-                    trace.add(progress("TOOL_RESULT", call.toolName(), call.round(), outcome,
-                            successful, failed, unconfirmed,
-                            toolProgressDetail(call.toolName(), toolMessage.content(), preferChinese)));
-                } catch (Exception e) {
-                    log.warn("Could not reconstruct persisted tool result for execution trace: {}", e.toString());
-                }
-                continue;
-            }
-
-            if (!visible) {
-                continue;
-            }
-
+        for (int visibleIndex = 0; visibleIndex < visibleMessages.size(); visibleIndex++) {
+            ChatMessagePo message = visibleMessages.get(visibleIndex);
             ChatMessageResponseDto dto = response.get(visibleIndex);
             if ("assistant".equalsIgnoreCase(message.getRole()) && dto != null) {
-                boolean restoredPersistedTrace = false;
-                if (message.getExecutionTraceJson() != null && !message.getExecutionTraceJson().isBlank()) {
-                    try {
-                        List<StreamResponseDto.ProgressDto> persistedTrace = objectMapper.readValue(
-                                message.getExecutionTraceJson(),
-                                new TypeReference<List<StreamResponseDto.ProgressDto>>() { });
-                        dto.setExecutionTrace(List.copyOf(persistedTrace));
-                        dto.setExecutionElapsedSeconds(message.getExecutionElapsedSeconds());
-                        restoredPersistedTrace = true;
-                    } catch (Exception e) {
-                        log.warn("Could not read persisted execution trace for message {}: {}",
-                                message.getId(), e.toString());
-                    }
+                List<StreamResponseDto.ProgressDto> persistedTrace = readPersistedExecutionTrace(message);
+                if (persistedTrace != null) {
+                    dto.setExecutionTrace(persistedTrace);
+                    dto.setExecutionElapsedSeconds(message.getExecutionElapsedSeconds());
                 }
-                if (!restoredPersistedTrace && hadTools) {
-                    trace.add(progress("WRITING_RESPONSE", null, null, null,
-                            successful, failed, unconfirmed, null));
-                    dto.setExecutionTrace(List.copyOf(trace));
-                    if (requestStartedAt != null && message.getCreatedAt() != null) {
-                        long elapsed = Math.max(0L, ChronoUnit.SECONDS.between(requestStartedAt, message.getCreatedAt()));
-                        dto.setExecutionElapsedSeconds((int) Math.min(Integer.MAX_VALUE, elapsed));
-                    }
-                }
-                if (restoredPersistedTrace || hadTools) {
-                    trace.clear();
-                    callsById.clear();
-                    hadTools = false;
+                if (message.getExecutionStatus() == ChatExecutionStatus.COMPLETED
+                        && !hasCompletedToolEvidence(persistedTrace)) {
+                    dto.setExecutionStatus(null);
+                    log.warn("Cleared unproven COMPLETED status for chat message {} because its persisted "
+                            + "execution trace is missing, malformed, or has no successful tool result",
+                            message.getId());
                 }
             }
-            visibleIndex++;
         }
     }
 
-    private StreamResponseDto.ProgressDto progress(String stage,
-                                                   String toolName,
-                                                   Integer round,
-                                                   String outcome,
-                                                   Integer successful,
-                                                   Integer failed,
-                                                   Integer unconfirmed,
-                                                   String detail) {
-        return new StreamResponseDto.ProgressDto(
-                stage, toolName, round, outcome, successful, failed, unconfirmed, detail);
+    private List<StreamResponseDto.ProgressDto> readPersistedExecutionTrace(ChatMessagePo message) {
+        String traceJson = message.getExecutionTraceJson();
+        if (traceJson == null || traceJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(traceJson);
+            if (!root.isArray() || root.isEmpty()) {
+                throw new IllegalStateException("execution trace shape is invalid");
+            }
+            for (JsonNode progress : root) {
+                if (!isValidPersistedProgress(progress)) {
+                    throw new IllegalStateException("execution trace shape is invalid");
+                }
+            }
+            List<StreamResponseDto.ProgressDto> trace = objectMapper.convertValue(
+                    root, new TypeReference<List<StreamResponseDto.ProgressDto>>() { });
+            return List.copyOf(trace);
+        } catch (Exception e) {
+            log.warn("Could not read persisted execution trace for message {}: {}",
+                    message.getId(), e.toString());
+            return null;
+        }
+    }
+
+    private boolean isValidPersistedProgress(JsonNode progress) {
+        if (progress == null || !progress.isObject()
+                || progress.properties().stream()
+                    .anyMatch(entry -> !PERSISTED_PROGRESS_FIELDS.contains(entry.getKey()))) {
+            return false;
+        }
+        JsonNode stage = progress.get("stage");
+        if (stage == null || !stage.isTextual() || !PERSISTED_PROGRESS_STAGES.contains(stage.textValue())
+                || !isOptionalProgressText(progress, "toolName")
+                || !isOptionalProgressText(progress, "detail")
+                || !isOptionalProgressCounter(progress, "round")
+                || !isOptionalProgressCounter(progress, "successfulSteps")
+                || !isOptionalProgressCounter(progress, "failedSteps")
+                || !isOptionalProgressCounter(progress, "unconfirmedSteps")) {
+            return false;
+        }
+        JsonNode outcome = progress.get("outcome");
+        if ("TOOL_RESULT".equals(stage.textValue())) {
+            return outcome != null && outcome.isTextual()
+                    && TOOL_RESULT_OUTCOMES.contains(outcome.textValue());
+        }
+        if ("EXECUTION_GUARD".equals(stage.textValue())) {
+            return outcome != null && outcome.isTextual()
+                    && EXECUTION_GUARD_OUTCOMES.contains(outcome.textValue());
+        }
+        return outcome == null || outcome.isNull();
+    }
+
+    private boolean isOptionalProgressText(JsonNode progress, String field) {
+        JsonNode value = progress.get(field);
+        return value == null || value.isNull() || value.isTextual();
+    }
+
+    private boolean isOptionalProgressCounter(JsonNode progress, String field) {
+        JsonNode value = progress.get(field);
+        return value == null || value.isNull()
+                || (value.isIntegralNumber() && value.canConvertToInt() && value.intValue() >= 0);
+    }
+
+    private boolean hasCompletedToolEvidence(List<StreamResponseDto.ProgressDto> trace) {
+        if (trace == null || trace.isEmpty()) {
+            return false;
+        }
+        boolean hasUsableResult = false;
+        for (StreamResponseDto.ProgressDto progress : trace) {
+            if (progress == null) {
+                return false;
+            }
+            if ("EXECUTION_GUARD".equals(progress.getStage())) {
+                return false;
+            }
+            if ("TOOL_RESULT".equals(progress.getStage())) {
+                if (!"USABLE".equals(progress.getOutcome())) {
+                    return false;
+                }
+                hasUsableResult = true;
+            }
+        }
+        return hasUsableResult;
     }
 
     private boolean isAssistantToolPlaceholderAdjacentToTool(List<ChatMessagePo> messages, int index) {
@@ -2622,9 +2922,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         ChatMessagePo prev = index > 0 ? messages.get(index - 1) : null;
         ChatMessagePo next = index + 1 < messages.size() ? messages.get(index + 1) : null;
         return isToolMessage(prev) || isToolMessage(next);
-    }
-
-    private record PersistedTraceCall(String toolName, int round) {
     }
 
     private int messageLength(ChatMessagePo msg) {
@@ -2652,9 +2949,17 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return true;
     }
 
-    private void sendSseErrorMessage(SseEmitter emitter, String msg) {
+    private void sendSseErrorMessage(
+            SseEmitter emitter, String msg, AtomicBoolean isDisconnect) {
         if (sendSseChunk(emitter, "[ERROR] " + msg)) {
-            completeEmitter(emitter, new AtomicBoolean(false));
+            completeEmitter(emitter, isDisconnect);
+            return;
+        }
+        isDisconnect.set(true);
+        try {
+            emitter.completeWithError(new IllegalStateException(msg));
+        } catch (IllegalStateException e) {
+            log.debug("SSE emitter was already unusable while reporting a terminal error: {}", e.getMessage());
         }
     }
 
@@ -2664,7 +2969,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
         try {
             JsonNode root = objectMapper.readTree(toolResult);
-            return root.isObject() && root.path("requiresUserConfirmation").asBoolean(false);
+            JsonNode value = root != null && root.isObject()
+                    ? root.get("requiresUserConfirmation") : null;
+            return value != null && value.isBoolean() && value.booleanValue();
         } catch (Exception ignore) {
             return false;
         }
@@ -2729,6 +3036,12 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         PARTIAL,
         FAILED,
         RESULT_UNAVAILABLE
+    }
+
+    private enum TerminalPersistenceState {
+        NOT_ATTEMPTED,
+        PERSISTED,
+        FAILED
     }
 
     private enum ToolLoopStopReason {

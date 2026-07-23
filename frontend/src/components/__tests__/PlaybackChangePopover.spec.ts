@@ -69,7 +69,7 @@ describe('PlaybackChangePopover', () => {
         totalStates: 8,
         position: { x: 0, y: 0 },
         environmentChanges: [{ name: 'illuminance', previousValue: '20', currentValue: '21' }],
-        triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Motion starts recording' }],
+        triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Motion starts recording' }],
         compromisedAutomationLinks: [],
         animatedEdgeCount: 1,
         compromisedEdgeCount: 0,
@@ -202,7 +202,7 @@ describe('PlaybackChangePopover', () => {
           details: [{ kind: 'state', previousValue: 'off', currentValue: 'on' }]
         }],
         environmentChanges: [],
-        triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Motion activates alarm' }],
+        triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Motion activates alarm' }],
         compromisedAutomationLinks: [],
         animatedEdgeCount: 1,
         compromisedEdgeCount: 0

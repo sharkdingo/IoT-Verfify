@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -146,7 +147,7 @@ class NusmvEnvironmentPoolTest {
                 rawMap);
         List<DeviceVerificationDto> expanded = NusmvEnvironmentPool.expandDevices(rawDevices, merged, rawMap);
         SmvGenerator.GenerateResult generated = generator.generateWithEnvironment(
-                USER_ID, expanded, merged, List.of(), List.of(), false, 0, true,
+                USER_ID, expanded, merged, List.of(), List.of(), AttackScenarioDto.none(), true,
                 SmvGenerator.GeneratePurpose.VERIFICATION);
 
         String smv = Files.readString(generated.smvFile().toPath());
@@ -191,7 +192,7 @@ class NusmvEnvironmentPoolTest {
         List<DeviceVerificationDto> expanded = NusmvEnvironmentPool.expandDevices(rawDevices, merged, rawMap);
         assertNull(expanded.get(0).getVariables());
         SmvGenerator.GenerateResult generated = generator.generateWithEnvironment(
-                USER_ID, expanded, merged, List.of(), List.of(), false, 0, true,
+                USER_ID, expanded, merged, List.of(), List.of(), AttackScenarioDto.none(), true,
                 SmvGenerator.GeneratePurpose.VERIFICATION);
 
         String smv = Files.readString(generated.smvFile().toPath());
@@ -235,7 +236,7 @@ class NusmvEnvironmentPoolTest {
                 generator.generateWithEnvironment(
                         USER_ID, devices,
                         List.of(new BoardEnvironmentVariableDto("temperature", "28", "trusted", "public")),
-                        List.of(), List.of(), false, 0, true,
+                        List.of(), List.of(), AttackScenarioDto.none(), true,
                         SmvGenerator.GeneratePurpose.VERIFICATION));
 
         assertTrue(exception.getMessage().contains("unknown or non-writable"), exception.getMessage());

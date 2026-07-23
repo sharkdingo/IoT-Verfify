@@ -73,7 +73,7 @@ export interface VerificationResult {
 
 export interface Trace {
   id: number;
-  verificationTaskId?: number;   // owning completed verification-run id; absent only for legacy orphan traces
+  verificationTaskId?: number;   // absent only on a result whose history persistence failed
   violatedSpecId: string;
   violatedSpec?: Specification;
   checkedExpression: string;
@@ -123,6 +123,7 @@ export interface TraceState {
 }
 
 export interface TraceTriggeredRule {
+  ruleIndex: number;
   ruleId?: string | null;
   ruleLabel?: string | null;
 }
@@ -131,7 +132,7 @@ export interface TraceDevice {
   deviceId: string;
   deviceLabel: string;
   templateName: string;
-  modelTokenSource?: ModelTokenSource;
+  modelTokenSource: ModelTokenSource;
   state?: string;
   mode?: string;                       // 新增：状态机名称
   compromised?: boolean;
@@ -143,16 +144,16 @@ export interface TraceDevice {
 export interface TraceVariable {
   name: string;
   value: string;
-  trust?: string;    // 改为可选
-  modelTokenSource?: ModelTokenSource;
+  trust?: string | null;    // 改为可选
+  modelTokenSource: ModelTokenSource;
 }
 
 export interface TraceTrustPrivacy {
   name: string;
   propertyScope: 'state' | 'variable' | 'content';
-  mode?: string;
+  mode?: string | null;
   trust?: boolean | null;   // 后端 Boolean 包装类型，支持 true/false/null
-  privacy?: string;
+  privacy?: string | null;
 }
 
 export interface VerificationTask {

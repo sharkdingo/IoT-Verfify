@@ -214,13 +214,6 @@ public class DeviceTemplateDto {
             @JsonProperty("Trigger")
             private Trigger trigger;
 
-            /**
-             * Deserialization-only migration guard. Non-empty API assignments are
-             * rejected because API commands have state-transition semantics only.
-             */
-            @Deprecated
-            @JsonProperty(value = "Assignments", access = JsonProperty.Access.WRITE_ONLY)
-            private List<Assignment> assignments;
         }
 
         @Data

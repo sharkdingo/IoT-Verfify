@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
@@ -16,6 +17,7 @@ import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableChangeDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariablePatchResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeConfigDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeUpdateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceUpdateResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DefaultTemplateAffectedDeviceDto;
@@ -38,6 +40,7 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.BoardReplacementStaleException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
+import cn.edu.nju.Iot_Verify.exception.DeviceRuntimeConflictException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
@@ -162,7 +165,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
                 requireTotalCapacity("devices", safeList(nodes).size(), RequestLimits.MAX_DEVICES);
-                List<DeviceNodeDto> canonicalNodes = canonicalizeNodeTemplateNames(userId, nodes);
+                List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, nodes);
                 validateBoardReferences(userId, canonicalNodes, getRulesInternal(userId), getSpecsInternal(userId));
                 return saveNodesInternal(userId, canonicalNodes);
             });
@@ -186,7 +189,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<BoardEnvironmentVariableDto> previousEnvironment = getEnvironmentVariablesInternal(userId);
                 List<DeviceNodeDto> next = new ArrayList<>(current);
                 next.addAll(nodes);
-                List<DeviceNodeDto> canonicalNodes = canonicalizeNodeTemplateNames(userId, next);
+                List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, next);
                 List<RuleDto> currentRules = getRulesInternal(userId);
                 List<SpecificationDto> currentSpecs = getSpecsInternal(userId);
                 validateBoardReferences(userId, canonicalNodes, currentRules, currentSpecs);
@@ -252,29 +255,40 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
                 String targetId = trimToNull(nodeId);
-                if (targetId == null || runtime == null) {
-                    throw new BadRequestException("Device id and runtime configuration are required");
+                if (targetId == null || runtime == null
+                        || runtime.getExpected() == null || runtime.getDesired() == null) {
+                    throw new BadRequestException(
+                            "Device id, expected runtime, and desired runtime are required");
                 }
                 List<DeviceNodeDto> current = new ArrayList<>(getNodesInternal(userId));
                 int index = indexOfNode(current, targetId);
                 if (index < 0) {
                     throw new ResourceNotFoundException("Device", targetId);
                 }
-                DeviceNodeDto previous = copyDeviceNode(current.get(index));
-                DeviceNodeDto next = copyDeviceNode(previous);
-                next.setState(trimToNull(runtime.getState()));
-                next.setCurrentStateTrust(trimToNull(runtime.getCurrentStateTrust()));
-                next.setCurrentStatePrivacy(trimToNull(runtime.getCurrentStatePrivacy()));
-                next.setVariables(copyVariables(runtime.getVariables()));
-                next.setPrivacies(copyPrivacies(runtime.getPrivacies()));
-                current.set(index, next);
+                DeviceNodeDto persistedPrevious = copyDeviceNode(current.get(index));
+                DeviceNodeDto previous = copyDeviceNode(persistedPrevious);
+                DeviceManifest manifest = manifestForTemplateName(
+                        previous.getTemplateName(), loadTemplateManifestMap(userId));
+                canonicalizeRuntime(previous, manifest);
 
-                List<DeviceNodeDto> canonicalNodes = canonicalizeNodeTemplateNames(userId, current);
+                DeviceNodeDto expected = copyDeviceNode(previous);
+                applyRuntime(expected, runtime.getExpected(), manifest);
+                if (!sameRuntime(previous, expected)) {
+                    throw new DeviceRuntimeConflictException(previous);
+                }
+
+                DeviceNodeDto next = copyDeviceNode(previous);
+                applyRuntime(next, runtime.getDesired(), manifest);
+                List<DeviceNodeDto> validationNodes = current.stream()
+                        .map(this::copyDeviceNode)
+                        .collect(Collectors.toCollection(ArrayList::new));
+                validationNodes.set(index, next);
+                List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, validationNodes);
                 validateBoardReferences(
                         userId, canonicalNodes, getRulesInternal(userId), getSpecsInternal(userId));
                 DeviceNodeDto canonicalNext = requireNode(canonicalNodes, targetId);
                 return persistTargetedNodeUpdate(
-                        userId, current, index, previous, canonicalNext, "runtime");
+                        userId, current, index, persistedPrevious, canonicalNext, "runtime");
             });
         }
     }
@@ -318,7 +332,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<RuleDto> currentRules = getRulesInternal(userId);
                 List<SpecificationDto> currentSpecs = new ArrayList<>(getSpecsInternal(userId));
                 int updatedSpecCount = updateSpecificationDeviceLabels(currentSpecs, targetId, label);
-                List<DeviceNodeDto> canonicalNodes = canonicalizeNodeTemplateNames(userId, currentNodes);
+                List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, currentNodes);
                 validateBoardReferences(userId, canonicalNodes, currentRules, currentSpecs);
 
                 List<DeviceNodeDto> savedNodes = saveNodesInternal(userId, canonicalNodes);
@@ -421,7 +435,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .filter(spec -> !specificationReferencesNode(spec, targetId))
                         .toList();
 
-                List<DeviceNodeDto> canonicalNodes = canonicalizeNodeTemplateNames(userId, currentNodes);
+                List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, currentNodes);
                 validateBoardReferences(userId, canonicalNodes, nextRules, nextSpecs);
                 List<BoardEnvironmentVariableDto> projectedEnvironment =
                         projectEnvironmentVariablesForNodes(userId, canonicalNodes);
@@ -613,6 +627,64 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .toList();
     }
 
+    private void applyRuntime(DeviceNodeDto target,
+                              DeviceRuntimeConfigDto runtime,
+                              DeviceManifest manifest) {
+        target.setState(trimToNull(runtime.getState()));
+        target.setCurrentStateTrust(normalizeSecurityLabel(runtime.getCurrentStateTrust()));
+        target.setCurrentStatePrivacy(normalizeSecurityLabel(runtime.getCurrentStatePrivacy()));
+        target.setVariables(canonicalizeVariables(runtime.getVariables(), manifest));
+        target.setPrivacies(canonicalizePrivacies(runtime.getPrivacies(), manifest));
+    }
+
+    private void canonicalizeRuntime(DeviceNodeDto node, DeviceManifest manifest) {
+        node.setState(trimToNull(node.getState()));
+        node.setCurrentStateTrust(normalizeSecurityLabel(node.getCurrentStateTrust()));
+        node.setCurrentStatePrivacy(normalizeSecurityLabel(node.getCurrentStatePrivacy()));
+        node.setVariables(canonicalizeVariables(node.getVariables(), manifest));
+        node.setPrivacies(canonicalizePrivacies(node.getPrivacies(), manifest));
+    }
+
+    private boolean sameRuntime(DeviceNodeDto first, DeviceNodeDto second) {
+        return changedDeviceUpdateFields(first, second, "runtime").isEmpty();
+    }
+
+    private List<VariableStateDto> canonicalizeVariables(
+            List<VariableStateDto> values, DeviceManifest manifest) {
+        if (values == null) return null;
+        return values.stream()
+                .map(value -> {
+                    if (value == null) return null;
+                    String rawName = trimToNull(value.getName());
+                    DeviceManifest.InternalVariable definition = internalVariable(manifest, rawName);
+                    String name = definition != null ? definition.getName() : rawName;
+                    return new VariableStateDto(
+                            name,
+                            trimToNull(value.getValue()),
+                            normalizeSecurityLabel(value.getTrust()));
+                })
+                .toList();
+    }
+
+    private List<PrivacyStateDto> canonicalizePrivacies(
+            List<PrivacyStateDto> values, DeviceManifest manifest) {
+        if (values == null) return null;
+        return values.stream()
+                .map(value -> {
+                    if (value == null) return null;
+                    String rawName = trimToNull(value.getName());
+                    DeviceManifest.InternalVariable definition = internalVariable(manifest, rawName);
+                    String name = definition != null ? definition.getName() : rawName;
+                    return new PrivacyStateDto(name, normalizeSecurityLabel(value.getPrivacy()));
+                })
+                .toList();
+    }
+
+    private String normalizeSecurityLabel(String value) {
+        String normalized = trimToNull(value);
+        return normalized == null ? null : normalized.toLowerCase(Locale.ROOT);
+    }
+
     private List<PrivacyStateDto> copyPrivacies(List<PrivacyStateDto> values) {
         if (values == null) return null;
         return values.stream()
@@ -749,7 +821,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         nodeFactory.apply(List.copyOf(current)), "node factory result must not be null");
                 List<DeviceNodeDto> nextNodes = new ArrayList<>(current);
                 nextNodes.add(createdDraft);
-                List<DeviceNodeDto> canonicalNodes = canonicalizeNodeTemplateNames(userId, nextNodes);
+                List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, nextNodes);
                 List<RuleDto> currentRules = getRulesInternal(userId);
                 List<SpecificationDto> currentSpecs = getSpecsInternal(userId);
                 validateBoardReferences(userId, canonicalNodes, currentRules, currentSpecs);
@@ -1119,7 +1191,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<DeviceTemplateDto> createdTemplates = batch.getTemplateSnapshots() != null
                         ? resolveSceneTemplateSnapshots(userId, batch.getTemplateSnapshots(), batch.getNodes())
                         : List.of();
-                List<DeviceNodeDto> nextNodes = canonicalizeNodeTemplateNames(userId, batch.getNodes());
+                List<DeviceNodeDto> nextNodes = canonicalizeNodes(userId, batch.getNodes());
                 List<RuleDto> nextRules = batch.getRules();
                 List<SpecificationDto> nextSpecs = batch.getSpecs();
                 validateNoIdenticalRules(nextRules, nextNodes);
@@ -2015,23 +2087,45 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
     }
 
-    private List<DeviceNodeDto> canonicalizeNodeTemplateNames(Long userId, List<DeviceNodeDto> nodes) {
-        if (nodes == null || nodes.isEmpty() || deviceTemplateRepo == null) {
+    private List<DeviceNodeDto> canonicalizeNodes(Long userId, List<DeviceNodeDto> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
             return nodes;
         }
-        Map<String, String> canonicalTemplateNames = templateAliasToCanonicalName(userId);
-        if (canonicalTemplateNames.isEmpty()) {
-            return nodes;
-        }
-        for (DeviceNodeDto node : nodes) {
-            if (node == null || !hasText(node.getTemplateName())) {
+
+        Map<String, String> canonicalTemplateNames = new LinkedHashMap<>();
+        Map<String, DeviceManifest> templateManifests = new HashMap<>();
+        List<DeviceTemplatePo> templates = deviceTemplateRepo == null
+                ? List.of()
+                : safeList(deviceTemplateRepo.findByUserId(userId));
+        for (DeviceTemplatePo template : templates) {
+            if (template == null || !hasText(template.getName())) {
                 continue;
             }
-            String raw = node.getTemplateName().trim();
-            String canonical = canonicalTemplateNames.get(raw.toLowerCase(Locale.ROOT));
-            if (canonical != null) {
-                node.setTemplateName(canonical);
+            String canonicalName = template.getName().trim();
+            putTemplateAlias(canonicalTemplateNames, canonicalName, canonicalName);
+            DeviceTemplateDto dto = deviceTemplateMapper.toDto(template);
+            if (dto == null || dto.getManifest() == null) {
+                continue;
             }
+            DeviceManifest manifest = dto.getManifest();
+            putTemplateAlias(canonicalTemplateNames, manifest.getName(), canonicalName);
+            templateManifests.put(canonicalName.toLowerCase(Locale.ROOT), manifest);
+            if (hasText(manifest.getName())) {
+                templateManifests.put(manifest.getName().trim().toLowerCase(Locale.ROOT), manifest);
+            }
+        }
+
+        for (DeviceNodeDto node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            if (hasText(node.getTemplateName())) {
+                String raw = node.getTemplateName().trim();
+                node.setTemplateName(canonicalTemplateNames.getOrDefault(
+                        raw.toLowerCase(Locale.ROOT), raw));
+            }
+            canonicalizeRuntime(
+                    node, manifestForTemplateName(node.getTemplateName(), templateManifests));
         }
         return nodes;
     }
@@ -2186,29 +2280,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         "Unknown device template: " + templateName);
             }
         }
-    }
-
-    private Map<String, String> templateAliasToCanonicalName(Long userId) {
-        if (deviceTemplateRepo == null) {
-            return Collections.emptyMap();
-        }
-        List<DeviceTemplatePo> templates = deviceTemplateRepo.findByUserId(userId);
-        if (templates == null || templates.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Map<String, String> result = new LinkedHashMap<>();
-        for (DeviceTemplatePo template : templates) {
-            if (template == null || !hasText(template.getName())) {
-                continue;
-            }
-            String canonical = template.getName().trim();
-            putTemplateAlias(result, canonical, canonical);
-            DeviceTemplateDto dto = deviceTemplateMapper.toDto(template);
-            if (dto != null && dto.getManifest() != null) {
-                putTemplateAlias(result, dto.getManifest().getName(), canonical);
-            }
-        }
-        return result;
     }
 
     private void putTemplateAlias(Map<String, String> aliases, String rawName, String canonical) {
@@ -4199,13 +4270,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 throw new BadRequestException("Template '" + templateName
                         + "': APIs require at least one Mode because API commands are modeled as state changes.");
             }
-            for (DeviceManifest.API api : manifest.getApis()) {
-                if (api != null && api.getAssignments() != null && !api.getAssignments().isEmpty()) {
-                    throw new BadRequestException("Template '" + templateName + "': API '" + api.getName()
-                            + "' contains Assignments, but API variable assignments are not represented by the "
-                            + "formal model. Use EndState or a triggered Transition instead.");
-                }
-            }
         }
         validateTemplateDynamics(templateName, manifest);
 
@@ -4675,8 +4739,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     List.of(probe),
                     List.of(),
                     List.of(),
-                    false,
-                    0,
+                    AttackScenarioDto.none(),
                     false,
                     SmvGenerator.GeneratePurpose.VERIFICATION
             );

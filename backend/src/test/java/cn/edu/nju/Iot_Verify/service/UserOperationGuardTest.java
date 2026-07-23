@@ -14,10 +14,14 @@ import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.Duration;
 import java.lang.reflect.Field;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
@@ -115,6 +119,82 @@ class UserOperationGuardTest {
         assertFalse(lease.isActive());
         assertThrows(ServiceUnavailableException.class, lease::requireActive);
         lease.close();
+    }
+
+    @Test
+    void acquisitionConfirmationIsAnchoredBeforeTheRedisRoundTrip() throws Exception {
+        AtomicLong responseStartedNanos = new AtomicLong();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenAnswer(invocation -> {
+                    responseStartedNanos.set(System.nanoTime());
+                    LockSupport.parkNanos(Duration.ofMillis(5).toNanos());
+                    return true;
+                });
+        UserOperationGuard guard = new UserOperationGuard(redisTemplate);
+
+        UserOperationGuard.Lease lease = guard.acquire(
+                7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofMinutes(1));
+
+        assertTrue(readLastConfirmedNanos(lease) <= responseStartedNanos.get());
+        lease.close();
+    }
+
+    @Test
+    void acquisitionResponseAfterItsTtlFailsClosedWithoutLeakingTheLocalSlot() {
+        AtomicInteger attempts = new AtomicInteger();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenAnswer(invocation -> {
+                    if (attempts.getAndIncrement() == 0) {
+                        delayAtLeast(Duration.ofMillis(5));
+                    }
+                    return true;
+                });
+        UserOperationGuard guard = new UserOperationGuard(redisTemplate);
+
+        assertThrows(ServiceUnavailableException.class, () -> guard.acquire(
+                7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofMillis(1)));
+
+        UserOperationGuard.Lease next = assertDoesNotThrow(() -> guard.acquire(
+                7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofMinutes(1)));
+        next.close();
+        verify(valueOperations, times(2))
+                .setIfAbsent(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void renewalConfirmationDoesNotExtendTheLeaseByResponseDelay() throws Exception {
+        AtomicLong responseStartedNanos = new AtomicLong();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any()))
+                .thenAnswer(invocation -> {
+                    responseStartedNanos.set(System.nanoTime());
+                    LockSupport.parkNanos(Duration.ofMillis(5).toNanos());
+                    return 1L;
+                });
+        UserOperationGuard guard = new UserOperationGuard(redisTemplate);
+        UserOperationGuard.Lease lease = guard.acquire(
+                7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofMinutes(1));
+
+        guard.renewActiveLeases();
+
+        assertTrue(readLastConfirmedNanos(lease) <= responseStartedNanos.get());
+        lease.close();
+    }
+
+    private long readLastConfirmedNanos(UserOperationGuard.Lease lease) throws Exception {
+        Field lastConfirmed = lease.getClass().getDeclaredField("lastConfirmedNanos");
+        lastConfirmed.setAccessible(true);
+        return lastConfirmed.getLong(lease);
+    }
+
+    private void delayAtLeast(Duration duration) {
+        long deadline = System.nanoTime() + duration.toNanos();
+        while (System.nanoTime() < deadline) {
+            LockSupport.parkNanos(deadline - System.nanoTime());
+        }
     }
 
     @Test

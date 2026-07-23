@@ -21,6 +21,7 @@ const snapshot = {
   specificationCount: 1,
   environmentVariableCount: 1,
   deviceTemplateCount: 2,
+  modelFingerprint: 'a'.repeat(64),
   templatesFrozen: true
 }
 

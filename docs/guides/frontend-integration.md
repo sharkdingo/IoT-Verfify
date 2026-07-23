@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-23. Source: `frontend/src/api/`,
+Verified against code on 2026-07-24. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/components/ChatView.vue`,
 `frontend/src/views/Board.vue`, `frontend/src/App.vue`, and `frontend/src/router/index.ts`.
 
@@ -632,8 +632,8 @@ page bounds remain owned by [the exploration API](../api/fuzzing.md#run-results)
 The Board also reads the current exploration model fingerprint. Fingerprinted history
 must have a matching current fingerprint before it is treated as unchanged, so a
 temporary fingerprint-read failure is shown as unconfirmed rather than silently falling
-back to equal counts. Legacy runs without a fingerprint fall back to the public model
-counts and must not be presented as an exact semantic match.
+back to equal counts. Exploration rows without a valid fingerprint are rejected as damaged
+development data rather than rendered with a weaker comparison.
 Device, rule, specification, environment, and template snapshot replacement invalidates
 the cached fingerprint immediately. In-flight fingerprint responses are revision-guarded,
 so an older response cannot mark a newly edited Board as matching historical work.

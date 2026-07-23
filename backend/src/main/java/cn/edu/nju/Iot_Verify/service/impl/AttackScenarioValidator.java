@@ -33,7 +33,7 @@ final class AttackScenarioValidator {
     static void validateAgainstSurface(AttackScenarioDto scenario,
                                        AttackSurface surface,
                                        List<RuleDto> rules) {
-        AttackScenarioDto safeScenario = scenario != null ? scenario : AttackScenarioDto.none();
+        AttackScenarioDto safeScenario = requireScenario(scenario);
         AttackSurface safeSurface = surface != null ? surface : new AttackSurface(Set.of(), 0, 0);
 
         if (safeScenario.getMode() == AttackScenarioDto.Mode.NONE) {
@@ -62,7 +62,7 @@ final class AttackScenarioValidator {
 
     private static AttackScenarioDto canonicalize(AttackScenarioDto scenario,
                                                    boolean allowExhaustiveSelection) {
-        AttackScenarioDto safeScenario = scenario != null ? scenario : AttackScenarioDto.none();
+        AttackScenarioDto safeScenario = requireScenario(scenario);
         AttackScenarioDto.Mode mode = safeScenario.getMode();
         if (mode == null) {
             throw new ValidationException("attackScenario.mode", "Attack scenario mode is required");
@@ -155,6 +155,13 @@ final class AttackScenarioValidator {
         }
         canonicalPoints.sort(Comparator.comparing(AttackPointDto::identityKey));
         return AttackScenarioDto.exactPoints(canonicalPoints);
+    }
+
+    private static AttackScenarioDto requireScenario(AttackScenarioDto scenario) {
+        if (scenario == null) {
+            throw new ValidationException("attackScenario", "Attack scenario is required");
+        }
+        return scenario;
     }
 
     private static String trimToNull(String value) {

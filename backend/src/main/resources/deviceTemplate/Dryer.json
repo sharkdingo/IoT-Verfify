@@ -87,7 +87,6 @@
 			"StartState": "",
 			"EndState": "regular;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -96,7 +95,6 @@
 			"StartState": "",
 			"EndState": "lowHeat;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -105,7 +103,6 @@
 			"StartState": "",
 			"EndState": "highHeat;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -114,7 +111,6 @@
 			"StartState": "",
 			"EndState": ";pause",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -123,7 +119,6 @@
 			"StartState": "",
 			"EndState": ";run",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -132,7 +127,6 @@
 			"StartState": "",
 			"EndState": ";stop",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

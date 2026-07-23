@@ -43,7 +43,6 @@
 			"StartState": "",
 			"EndState": "both",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -52,7 +51,6 @@
 			"StartState": "",
 			"EndState": "off",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -61,7 +59,6 @@
 			"StartState": "",
 			"EndState": "siren",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -70,7 +67,6 @@
 			"StartState": "",
 			"EndState": "strobe",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

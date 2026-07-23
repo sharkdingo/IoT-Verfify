@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -48,6 +49,7 @@ final class FuzzModel {
     private final List<DeviceModel> devices;
     private final Map<String, DeviceModel> devicesById;
     private final Map<String, ValueDomain> environmentDomains;
+    private final Map<String, ModelTokenSource> environmentTokenSources;
     private final List<RuleDto> rules;
     private final Map<String, List<RuleDto>> rulesByTarget;
     private final ModelState initialState;
@@ -57,6 +59,7 @@ final class FuzzModel {
             List<DeviceModel> devices,
             Map<String, DeviceModel> devicesById,
             Map<String, ValueDomain> environmentDomains,
+            Map<String, ModelTokenSource> environmentTokenSources,
             List<RuleDto> rules,
             Map<String, List<RuleDto>> rulesByTarget,
             ModelState initialState,
@@ -64,6 +67,7 @@ final class FuzzModel {
         this.devices = devices;
         this.devicesById = devicesById;
         this.environmentDomains = environmentDomains;
+        this.environmentTokenSources = environmentTokenSources;
         this.rules = rules;
         this.rulesByTarget = rulesByTarget;
         this.initialState = initialState;
@@ -85,6 +89,7 @@ final class FuzzModel {
         List<DeviceModel> deviceModels = new ArrayList<>();
         Map<String, DeviceModel> devicesById = new LinkedHashMap<>();
         Map<String, ValueDomain> environmentDomains = new LinkedHashMap<>();
+        Map<String, ModelTokenSource> environmentTokenSources = new LinkedHashMap<>();
         // NuSMV CASE branches use the captured Board order for first-match writes.
         for (DeviceVerificationDto device : snapshot.devices()) {
             if (device == null || !hasText(device.getVarName())) {
@@ -101,6 +106,7 @@ final class FuzzModel {
             DeviceModel parsed = DeviceModel.from(device, manifest, environmentDomains);
             deviceModels.add(parsed);
             devicesById.put(id, parsed);
+            mergeEnvironmentTokenSources(environmentTokenSources, parsed);
         }
 
         LinkedHashMap<String, String> initialEnvironment = new LinkedHashMap<>();
@@ -141,6 +147,7 @@ final class FuzzModel {
                 List.copyOf(deviceModels),
                 Collections.unmodifiableMap(devicesById),
                 Collections.unmodifiableMap(environmentDomains),
+                Collections.unmodifiableMap(environmentTokenSources),
                 List.copyOf(rules),
                 rulesByTarget,
                 new ModelState(initialDevices, initialEnvironment, List.of()),
@@ -1088,7 +1095,8 @@ final class FuzzModel {
                             FuzzInputEventKind.DEVICE_VARIABLE,
                             device.id,
                             name,
-                            value));
+                            value,
+                            FuzzInputEventSource.MODEL_CHOICE));
                 }
             }
         }
@@ -1158,7 +1166,8 @@ final class FuzzModel {
                         FuzzInputEventKind.ENVIRONMENT_VALUE,
                         "environment",
                         name,
-                        value));
+                        value,
+                        FuzzInputEventSource.MODEL_CHOICE));
             }
         }
 
@@ -1409,12 +1418,16 @@ final class FuzzModel {
             traceDevice.setDeviceId(device.id);
             traceDevice.setDeviceLabel(device.label);
             traceDevice.setTemplateName(device.templateName);
+            traceDevice.setModelTokenSource(device.modelTokenSource);
             traceDevice.setState(String.join(";", deviceState.modes));
             traceDevice.setMode(String.join(";", device.modes));
             traceDevice.setCompromised(false);
             List<TraceVariableDto> variables = new ArrayList<>();
             for (Map.Entry<String, String> entry : deviceState.locals.entrySet()) {
-                variables.add(traceVariable(entry.getKey(), entry.getValue(), device.localDomains.get(entry.getKey()).trust));
+                variables.add(traceVariable(
+                        entry.getKey(), entry.getValue(),
+                        device.localDomains.get(entry.getKey()).trust,
+                        device.modelTokenSource));
             }
             traceDevice.setVariables(variables);
             traceDevice.setTrustPrivacy(List.of());
@@ -1424,13 +1437,23 @@ final class FuzzModel {
 
         List<TraceVariableDto> environment = new ArrayList<>();
         state.environment.forEach((name, value) ->
-                environment.add(traceVariable(name, value, environmentDomains.get(name).trust)));
-        List<TraceTriggeredRuleDto> triggeredRules = state.triggeredRules.stream()
-                .map(rule -> TraceTriggeredRuleDto.builder()
-                        .ruleId(rule.getId() == null ? null : rule.getId().toString())
-                        .ruleLabel(rule.getRuleString())
-                        .build())
-                .toList();
+                environment.add(traceVariable(
+                        name, value, environmentDomains.get(name).trust,
+                        environmentTokenSources.getOrDefault(name, ModelTokenSource.UNKNOWN))));
+        Set<RuleDto> triggeredRuleSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        triggeredRuleSet.addAll(state.triggeredRules);
+        List<TraceTriggeredRuleDto> triggeredRules = new ArrayList<>();
+        for (int ruleIndex = 0; ruleIndex < rules.size(); ruleIndex++) {
+            RuleDto rule = rules.get(ruleIndex);
+            if (!triggeredRuleSet.contains(rule)) continue;
+            String label = rule.getRuleString();
+            if (label != null && label.isBlank()) label = null;
+            triggeredRules.add(TraceTriggeredRuleDto.builder()
+                    .ruleIndex(ruleIndex)
+                    .ruleId(rule.getId() == null ? null : rule.getId().toString())
+                    .ruleLabel(label)
+                    .build());
+        }
         return TraceStateDto.builder()
                 .stateIndex(index)
                 .devices(traceDevices)
@@ -1442,12 +1465,27 @@ final class FuzzModel {
                 .build();
     }
 
-    private static TraceVariableDto traceVariable(String name, String value, String trust) {
+    private static TraceVariableDto traceVariable(
+            String name, String value, String trust, ModelTokenSource modelTokenSource) {
         TraceVariableDto variable = new TraceVariableDto();
         variable.setName(name);
         variable.setValue(value);
         variable.setTrust(trust);
+        variable.setModelTokenSource(modelTokenSource);
         return variable;
+    }
+
+    private static void mergeEnvironmentTokenSources(
+            Map<String, ModelTokenSource> environmentTokenSources,
+            DeviceModel device) {
+        Set<String> declarations = new LinkedHashSet<>(device.readableEnvironment);
+        declarations.addAll(device.impactedEnvironment);
+        for (String name : declarations) {
+            ModelTokenSource current = environmentTokenSources.get(name);
+            ModelTokenSource source = device.modelTokenSource;
+            environmentTokenSources.put(name, current == null || current == source
+                    ? source : ModelTokenSource.UNKNOWN);
+        }
     }
 
     private static void validateRules(
@@ -1881,6 +1919,7 @@ final class FuzzModel {
         private final String id;
         private final String label;
         private final String templateName;
+        private final ModelTokenSource modelTokenSource;
         private final List<String> modes;
         private final List<List<String>> legalModeValues;
         private final List<DeviceManifest.WorkingState> workingStates;
@@ -1897,6 +1936,7 @@ final class FuzzModel {
                 String id,
                 String label,
                 String templateName,
+                ModelTokenSource modelTokenSource,
                 List<String> modes,
                 List<List<String>> legalModeValues,
                 List<DeviceManifest.WorkingState> workingStates,
@@ -1911,6 +1951,7 @@ final class FuzzModel {
             this.id = id;
             this.label = label;
             this.templateName = templateName;
+            this.modelTokenSource = modelTokenSource;
             this.modes = modes;
             this.legalModeValues = legalModeValues;
             this.workingStates = workingStates;
@@ -1971,10 +2012,6 @@ final class FuzzModel {
                 }
                 validatePartialState(api.getStartState(), modes.size(), legalValues, true, "API start state", id);
                 validatePartialState(api.getEndState(), modes.size(), legalValues, false, "API end state", id);
-                if (api.getAssignments() != null && !api.getAssignments().isEmpty()) {
-                    throw error("API '" + api.getName() + "' on device '" + id
-                            + "' cannot contain variable assignments.");
-                }
                 if (!hasPossibleApiStateChange(api, legalValues)) {
                     throw error("API '" + api.getName() + "' on device '" + id
                             + "' has no representable state change.");
@@ -2117,6 +2154,8 @@ final class FuzzModel {
                     id,
                     hasText(device.getDeviceLabel()) ? device.getDeviceLabel() : id,
                     device.getTemplateName(),
+                    device.getModelTokenSource() != null
+                            ? device.getModelTokenSource() : ModelTokenSource.UNKNOWN,
                     List.copyOf(modes),
                     legalValues,
                     workingStates,

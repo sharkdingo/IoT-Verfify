@@ -4,7 +4,7 @@ Field-level contract for `/api/auth`. The `Result<T>` envelope, the `Bearer` sch
 and error codes are defined once in [overview.md](overview.md); this doc covers the
 request/response bodies only.
 
-Verified against code on 2026-07-23. Source: `controller/AuthController.java`,
+Verified against code on 2026-07-24. Source: `controller/AuthController.java`,
 `service/impl/AuthServiceImpl.java`, and `dto/auth/`.
 
 ---
@@ -88,10 +88,8 @@ TOKEN=$(curl -sX POST http://localhost:8080/api/auth/login \
 Note the field is `data.token` — the payload lives under the `Result<T>` envelope's
 `data`.
 
-Phone-shaped usernames are forbidden so new phone and username namespaces cannot overlap.
-For legacy data that already contains such a collision, login checks the supplied password
-against the matching phone and username candidates and authenticates only the uniquely
-matching account. It never chooses an account solely from lookup order.
+Phone-shaped usernames are forbidden, so phone and username identifiers occupy disjoint
+namespaces. Login classifies the normalized identifier once and queries only that namespace.
 
 ---
 

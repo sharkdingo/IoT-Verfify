@@ -78,7 +78,7 @@ withDefaults(defineProps<{
   color: #b45309;
 }
 
-:global(.dark) .iot-info-tooltip-trigger {
+:global(:root[data-theme='dark'] .iot-info-tooltip-trigger) {
   background: color-mix(in srgb, currentColor 14%, #0f172a);
 }
 

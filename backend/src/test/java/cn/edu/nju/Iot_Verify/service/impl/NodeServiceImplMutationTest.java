@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.DeviceLabelConflictException;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -256,7 +257,7 @@ class NodeServiceImplMutationTest {
     }
 
     @Test
-    void addNode_whenStatefulTemplateHasBlankInitState_shouldWarnAboutFallback() {
+    void addNode_whenStatefulTemplateHasBlankInitState_shouldFailClosed() {
         String invalidJson = "{\"Name\":\"Custom\",\"Modes\":[\"Mode\"],\"InitState\":\"\","
                 + "\"WorkingStates\":[{\"Name\":\"Working\"}]}";
         DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
@@ -264,17 +265,15 @@ class NodeServiceImplMutationTest {
 
         when(deviceTemplateService.checkTemplateExists(1L, "Custom")).thenReturn(true);
         when(deviceTemplateService.findTemplateByName(1L, "Custom")).thenReturn(Optional.of(templatePo));
-        applyNodeCreateWithExisting();
 
-        DeviceCreationResultDto result = nodeService.addNode(
-                1L, "Custom", "custom_1", null, null, null, null, null);
-
-        assertEquals("systemFallback", result.getInitialStateSource());
-        assertTrue(result.getWarnings().get(0).contains("no usable initial state"));
+        assertThrows(PersistedDataIntegrityException.class, () -> nodeService.addNode(
+                1L, "Custom", "custom_1", null, null, null, null, null));
+        assertTrue(savedNodes.isEmpty());
+        verifyNoInteractions(boardStorageService);
     }
 
     @Test
-    void addNode_whenLegacyTemplateHasOnlyPartialStateDefinition_shouldWarnAboutFallback() {
+    void addNode_whenTemplateHasOnlyPartialStateDefinition_shouldFailClosed() {
         String invalidJson = "{\"Name\":\"Custom\",\"Modes\":[],\"InitState\":\"on\","
                 + "\"WorkingStates\":[]}";
         DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
@@ -282,13 +281,11 @@ class NodeServiceImplMutationTest {
 
         when(deviceTemplateService.checkTemplateExists(1L, "Custom")).thenReturn(true);
         when(deviceTemplateService.findTemplateByName(1L, "Custom")).thenReturn(Optional.of(templatePo));
-        applyNodeCreateWithExisting();
 
-        DeviceCreationResultDto result = nodeService.addNode(
-                1L, "Custom", "custom_1", null, null, null, null, null);
-
-        assertEquals("systemFallback", result.getInitialStateSource());
-        assertFalse(result.getWarnings().isEmpty());
+        assertThrows(PersistedDataIntegrityException.class, () -> nodeService.addNode(
+                1L, "Custom", "custom_1", null, null, null, null, null));
+        assertTrue(savedNodes.isEmpty());
+        verifyNoInteractions(boardStorageService);
     }
 
     @Test

@@ -2,16 +2,17 @@ package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
+import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
-import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
-import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.projection.SimulationTraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.ModelGenerationDiagnostics;
+import cn.edu.nju.Iot_Verify.util.PersistedModelContextIntegrity;
 import cn.edu.nju.Iot_Verify.util.TraceStateIntegrity;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.stereotype.Component;
@@ -37,8 +38,14 @@ public class SimulationTraceMapper {
         List<ModelGenerationIssueDto> generationIssues = JsonUtils.readPersisted(
                 "simulation trace", po.getId(), "generationIssuesJson",
                 () -> readGenerationIssues(po.getGenerationIssuesJson()));
-        List<TraceStateDto> states = readRequiredStates(po);
+        List<TraceStateDto> states = readRequiredStates(
+                po.getId(), po.getStatesJson(), po.getStateCount(),
+                po.getSteps(), po.getRequestedSteps());
         int disabledRuleCount = ModelGenerationDiagnostics.disabledRuleCount(generationIssues, logs);
+        PersistedModelContextIntegrity.ValidatedContext context = modelContext(po);
+        List<RuleDto> frozenRules = readFrozenRules(
+                po.getId(), po.getRequestJson(), context.modelSnapshot().getRuleCount());
+        states = validateRuleEvidence(po.getId(), states, frozenRules);
         SimulationTraceDto dto = SimulationTraceDto.builder()
                 .id(po.getId())
                 .userId(po.getUserId())
@@ -52,26 +59,29 @@ public class SimulationTraceMapper {
                 .nusmvOutput(po.getNusmvOutput())
                 .requestJson(po.getRequestJson())
                 .templateSnapshotsJson(po.getTemplateSnapshotsJson())
-                .modelSnapshot(JsonUtils.readPersistedRequired("simulation trace", po.getId(),
-                        "modelSnapshotJson", () -> readModelSnapshot(po.getModelSnapshotJson())))
+                .modelSnapshot(context.modelSnapshot())
                 .createdAt(po.getCreatedAt())
                 .historyPersistence(RunPersistenceDto.saved(po.getId()))
                 .build();
-        applyPersistedContext(dto, po);
+        applyPersistedContext(dto, context);
         return dto;
     }
 
     public SimulationTraceSummaryDto toSummaryProjectionDto(SimulationTraceSummaryProjection projection) {
         if (projection == null) return null;
 
-        requireStateMetadata(projection.getId(), projection.getStateCount(),
-                projection.getSteps(), projection.getRequestedSteps());
+        List<TraceStateDto> states = readRequiredStates(projection.getId(), projection.getStatesJson(),
+                projection.getStateCount(), projection.getSteps(), projection.getRequestedSteps());
         List<ModelGenerationIssueDto> generationIssues = JsonUtils.readPersisted(
                 "simulation trace", projection.getId(), "generationIssuesJson",
                 () -> readGenerationIssues(projection.getGenerationIssuesJson()));
         int disabledRuleCount = ModelGenerationDiagnostics.disabledRuleCount(
                 generationIssues, JsonUtils.readPersisted("simulation trace", projection.getId(), "logsJson",
                         () -> JsonUtils.fromJsonToStringList(projection.getLogsJson())));
+        PersistedModelContextIntegrity.ValidatedContext context = modelContext(projection);
+        List<RuleDto> frozenRules = readFrozenRules(
+                projection.getId(), projection.getRequestJson(), context.modelSnapshot().getRuleCount());
+        validateRuleEvidence(projection.getId(), states, frozenRules);
         SimulationTraceSummaryDto dto = SimulationTraceSummaryDto.builder()
                 .id(projection.getId())
                 .requestedSteps(projection.getRequestedSteps())
@@ -79,17 +89,13 @@ public class SimulationTraceMapper {
                 .modelComplete(disabledRuleCount == 0)
                 .disabledRuleCount(disabledRuleCount)
                 .generationIssues(generationIssues)
-                .modelSnapshot(JsonUtils.readPersistedRequired("simulation trace", projection.getId(),
-                        "modelSnapshotJson", () -> readModelSnapshot(projection.getModelSnapshotJson())))
+                .modelSnapshot(context.modelSnapshot())
                 .createdAt(projection.getCreatedAt())
                 .dataAvailable(true)
                 .build();
-        requirePersistedContext(projection.getId(), projection.getIsAttack(),
-                projection.getAttackBudget(), projection.getEnablePrivacy());
-        dto.setAttack(projection.getIsAttack());
-        dto.setAttackBudget(Boolean.TRUE.equals(projection.getIsAttack())
-                ? projection.getAttackBudget() : 0);
-        dto.setEnablePrivacy(projection.getEnablePrivacy());
+        dto.setAttack(context.isAttack());
+        dto.setAttackBudget(context.attackBudget());
+        dto.setEnablePrivacy(context.enablePrivacy());
         return dto;
     }
 
@@ -99,7 +105,7 @@ public class SimulationTraceMapper {
         return projections.stream().map(projection -> {
             try {
                 return toSummaryProjectionDto(projection);
-            } catch (RuntimeException e) {
+            } catch (PersistedDataIntegrityException e) {
                 log.error("Simulation history item {} is unavailable because persisted data is invalid",
                         projection != null ? projection.getId() : null, e);
                 return SimulationTraceSummaryDto.builder()
@@ -116,23 +122,20 @@ public class SimulationTraceMapper {
         return JsonUtils.fromJsonList(json, ModelGenerationIssueDto.class);
     }
 
-    private ModelRunSnapshotDto readModelSnapshot(String json) {
-        return JsonUtils.fromJson(json, ModelRunSnapshotDto.class);
-    }
-
-    private List<TraceStateDto> readRequiredStates(SimulationTracePo po) {
+    private List<TraceStateDto> readRequiredStates(
+            Long id, String statesJson, Integer stateCount, int steps, int requestedSteps) {
         List<TraceStateDto> states = JsonUtils.readPersistedRequired(
-                "simulation trace", po.getId(), "statesJson",
+                "simulation trace", id, "statesJson",
                 () -> TraceStateIntegrity.requireValidStates(JsonUtils.fromJson(
-                        po.getStatesJson(), new TypeReference<List<TraceStateDto>>() {})));
+                        statesJson, new TypeReference<List<TraceStateDto>>() {})));
         if (states.isEmpty()) {
             throw new PersistedDataIntegrityException(
-                    "simulation trace", po.getId(), "statesJson", "state list is empty");
+                    "simulation trace", id, "statesJson", "state list is empty");
         }
-        requireStateMetadata(po.getId(), po.getStateCount(), po.getSteps(), po.getRequestedSteps());
-        if (states.size() != po.getStateCount()) {
+        requireStateMetadata(id, stateCount, steps, requestedSteps);
+        if (states.size() != stateCount) {
             throw new PersistedDataIntegrityException(
-                    "simulation trace", po.getId(), "stateCount",
+                    "simulation trace", id, "stateCount",
                     "state count does not match statesJson");
         }
         return states;
@@ -154,41 +157,49 @@ public class SimulationTraceMapper {
         }
     }
 
-    private void applyPersistedContext(SimulationTraceDto dto, SimulationTracePo po) {
-        requirePersistedContext(po.getId(), po.getIsAttack(), po.getAttackBudget(), po.getEnablePrivacy());
-        dto.setAttack(po.getIsAttack());
-        dto.setAttackBudget(Boolean.TRUE.equals(po.getIsAttack()) ? po.getAttackBudget() : 0);
-        dto.setEnablePrivacy(po.getEnablePrivacy());
-        if (po.getModelSemanticsJson() != null && !po.getModelSemanticsJson().isBlank()) {
-            dto.setModelSemantics(JsonUtils.readPersistedRequired(
-                    "simulation trace", po.getId(), "modelSemanticsJson",
-                    () -> JsonUtils.fromJson(po.getModelSemanticsJson(), ModelSemanticsDto.class)));
-        } else if (po.getModeledDeviceAttackPointCount() != null
-                && po.getModeledAutomationLinkAttackPointCount() != null
-                && po.getModeledFalsifiableReadingDeviceCount() != null) {
-            dto.setModelSemantics(ModelSemanticsDto.forRun(
-                    Boolean.TRUE.equals(po.getIsAttack()), Boolean.TRUE.equals(po.getEnablePrivacy()),
-                    po.getModeledDeviceAttackPointCount(),
-                    po.getModeledAutomationLinkAttackPointCount(),
-                    po.getModeledFalsifiableReadingDeviceCount()));
-        }
+    private List<RuleDto> readFrozenRules(Long id, String requestJson, int expectedRuleCount) {
+        SimulationRequestDto request = JsonUtils.readPersistedJsonRequired(
+                "simulation trace", id, "requestJson", requestJson,
+                () -> JsonUtils.fromJson(requestJson, SimulationRequestDto.class));
+        return JsonUtils.readPersisted(
+                "simulation trace", id, "requestJson",
+                () -> TraceStateIntegrity.requireFrozenRules(request.getRules(), expectedRuleCount));
     }
 
-    private void requirePersistedContext(Long id, Boolean isAttack, Integer attackBudget,
-                                         Boolean enablePrivacy) {
-        if (isAttack == null) {
-            throw missingContextField(id, "isAttack");
-        }
-        if (attackBudget == null) {
-            throw missingContextField(id, "attackBudget");
-        }
-        if (enablePrivacy == null) {
-            throw missingContextField(id, "enablePrivacy");
-        }
+    private List<TraceStateDto> validateRuleEvidence(
+            Long id, List<TraceStateDto> states, List<RuleDto> frozenRules) {
+        return JsonUtils.readPersisted(
+                "simulation trace", id, "statesJson", () -> {
+                    TraceStateIntegrity.requireRuleEvidenceMatchesFrozenRules(states, frozenRules);
+                    return states;
+                });
     }
 
-    private PersistedDataIntegrityException missingContextField(Long id, String field) {
-        return new PersistedDataIntegrityException(
-                "simulation trace", id, field, "required run context is missing");
+    private void applyPersistedContext(
+            SimulationTraceDto dto, PersistedModelContextIntegrity.ValidatedContext context) {
+        dto.setAttack(context.isAttack());
+        dto.setAttackBudget(context.attackBudget());
+        dto.setEnablePrivacy(context.enablePrivacy());
+        dto.setModelSemantics(context.modelSemantics());
+    }
+
+    private PersistedModelContextIntegrity.ValidatedContext modelContext(SimulationTracePo po) {
+        return PersistedModelContextIntegrity.readSimulation(
+                "simulation trace", po.getId(), po.getIsAttack(), po.getAttackBudget(),
+                po.getEnablePrivacy(), po.getModeledDeviceAttackPointCount(),
+                po.getModeledFalsifiableReadingDeviceCount(),
+                po.getModeledAutomationLinkAttackPointCount(), po.getModelSemanticsJson(),
+                po.getModelSnapshotJson());
+    }
+
+    private PersistedModelContextIntegrity.ValidatedContext modelContext(
+            SimulationTraceSummaryProjection projection) {
+        return PersistedModelContextIntegrity.readSimulation(
+                "simulation trace", projection.getId(), projection.getIsAttack(),
+                projection.getAttackBudget(), projection.getEnablePrivacy(),
+                projection.getModeledDeviceAttackPointCount(),
+                projection.getModeledFalsifiableReadingDeviceCount(),
+                projection.getModeledAutomationLinkAttackPointCount(),
+                projection.getModelSemanticsJson(), projection.getModelSnapshotJson());
     }
 }

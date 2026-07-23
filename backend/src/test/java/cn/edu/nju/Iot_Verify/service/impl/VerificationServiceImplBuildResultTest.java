@@ -108,21 +108,11 @@ class VerificationServiceImplBuildResultTest {
         public void execute(Runnable task) {
             task.run();
         }
-
-        @Override
-        public void execute(Runnable task, long startTimeout) {
-            task.run();
-        }
     }
 
     private static class RejectingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
         @Override
         public void execute(Runnable task) {
-            throw new TaskRejectedException("rejected");
-        }
-
-        @Override
-        public void execute(Runnable task, long startTimeout) {
             throw new TaskRejectedException("rejected");
         }
     }
@@ -132,11 +122,6 @@ class VerificationServiceImplBuildResultTest {
 
         @Override
         public void execute(Runnable task) {
-            capturedTask = task;
-        }
-
-        @Override
-        public void execute(Runnable task, long startTimeout) {
             capturedTask = task;
         }
 
@@ -188,13 +173,11 @@ class VerificationServiceImplBuildResultTest {
         lenient().when(smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(anyList(), anyMap()))
                 .thenReturn(Map.of());
         lenient().when(smvGenerator.generateWithResolvedDeviceModel(
-                        anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
-                        anyBoolean(), any(), any(), anyMap()))
+                        anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any(), anyMap()))
                 .thenAnswer(invocation -> smvGenerator.generateWithEnvironment(
                         invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
                         invocation.getArgument(3), invocation.getArgument(4), invocation.getArgument(5),
-                        invocation.getArgument(6), invocation.getArgument(7), invocation.getArgument(8),
-                        invocation.getArgument(9)));
+                        invocation.getArgument(6), invocation.getArgument(7), invocation.getArgument(8)));
 
         buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
                 "buildVerificationResult",
@@ -591,7 +574,7 @@ class VerificationServiceImplBuildResultTest {
     void verify_nusmvBusy_throwsServiceUnavailable() throws Exception {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         File smv = createTempModelFile();
-        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any()))
                 .thenReturn(generateResult(smv, List.of(makeEffectiveSpec("s1"))));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.busy("NuSMV execution is busy, please retry later"));
@@ -611,7 +594,7 @@ class VerificationServiceImplBuildResultTest {
     @Test
     void verify_smvGenerationError_rethrowsSmvGenerationException() throws Exception {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
-        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any()))
                 .thenThrow(SmvGenerationException.ambiguousDeviceReference("Sensor", List.of("sensor_1", "sensor_2")));
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
@@ -637,7 +620,7 @@ class VerificationServiceImplBuildResultTest {
 
         AsyncTaskQuotaExceededException error = assertThrows(
                 AsyncTaskQuotaExceededException.class,
-                () -> service.createTask(1L, false, 0, false, 0, 0, 0, null));
+                () -> service.createTask(1L, AttackScenarioDto.none(), false, 0, 0, 0, null));
 
         assertEquals("VERIFICATION_ACTIVE_TASK_LIMIT_REACHED", error.getReasonCode());
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
@@ -665,7 +648,7 @@ class VerificationServiceImplBuildResultTest {
         verify(taskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -676,7 +659,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -689,7 +672,7 @@ class VerificationServiceImplBuildResultTest {
         assertTrue(ex.getMessage().contains(
                 "Attack budget cannot exceed the behavior-changing device and automation-link points (1)"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -700,7 +683,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("Attack budget must be between 1 and 50 for exhaustive verification"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -713,7 +696,7 @@ class VerificationServiceImplBuildResultTest {
         assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
         verify(smvGenerator, never()).generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -723,7 +706,7 @@ class VerificationServiceImplBuildResultTest {
                         1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, -1, false)));
 
         assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -747,7 +730,7 @@ class VerificationServiceImplBuildResultTest {
         verify(taskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -762,7 +745,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("Device varName is required"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -776,7 +759,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertEquals("Command cannot be null", ex.getErrors().get("rules[0].command"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -794,7 +777,25 @@ class VerificationServiceImplBuildResultTest {
         assertEquals("Command device name is required", ex.getErrors().get("rules[0].command.deviceName"));
         assertEquals("Command action is required", ex.getErrors().get("rules[0].command.action"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_duplicatePersistedRuleIds_rejectsBeforeCreatingTask() throws Exception {
+        RuleDto firstRule = makeRule();
+        firstRule.setId(41L);
+        RuleDto duplicateRule = makeRule();
+        duplicateRule.setId(41L);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(firstRule, duplicateRule),
+                                List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertEquals("Rule id must be unique within one model request", ex.getErrors().get("rules[1].id"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -808,7 +809,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("Template ID must be one of"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -822,7 +823,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("A-condition item cannot be null"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -844,7 +845,7 @@ class VerificationServiceImplBuildResultTest {
         assertNotNull(capturingExecutor.capturedTask());
         verify(taskRepository).save(any(VerificationTaskPo.class));
         verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -915,7 +916,7 @@ class VerificationServiceImplBuildResultTest {
 
         when(smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(anyList(), anyMap()))
                 .thenReturn(resolvedSubmissionModel);
-        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any()))
                 .thenReturn(generateResult(smv, List.of(spec)));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
@@ -942,7 +943,7 @@ class VerificationServiceImplBuildResultTest {
         capturingExecutor.capturedTask().run();
 
         verify(smvGenerator).generateWithResolvedDeviceModel(eq(1L), anyList(), anyList(), anyList(), anyList(),
-                eq(false), eq(0), eq(false), eq(SmvGenerator.GeneratePurpose.VERIFICATION),
+                eq(AttackScenarioDto.none()), eq(false), eq(SmvGenerator.GeneratePurpose.VERIFICATION),
                 argThat(ctx -> "task".equals(ctx.scope()) && Objects.equals(14L, ctx.id())),
                 same(resolvedSubmissionModel));
 
@@ -955,7 +956,7 @@ class VerificationServiceImplBuildResultTest {
                 argThat(sentSpecs -> sentSpecs.size() == 1
                         && "s1".equals(sentSpecs.get(0).getId())
                         && "on".equals(sentSpecs.get(0).getAConditions().get(0).getValue())),
-                eq(false), eq(0), eq(false), eq(SmvGenerator.GeneratePurpose.VERIFICATION),
+                eq(AttackScenarioDto.none()), eq(false), eq(SmvGenerator.GeneratePurpose.VERIFICATION),
                 argThat(ctx -> "task".equals(ctx.scope()) && Objects.equals(14L, ctx.id())));
         JsonNode requestJson = readRequestJson(smv);
         assertEquals(0, requestJson.path("attackBudget").asInt());
@@ -984,8 +985,7 @@ class VerificationServiceImplBuildResultTest {
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generateWithResolvedDeviceModel(
-                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
-                anyBoolean(), any(), any(), anyMap());
+                anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any(), anyMap());
     }
 
     @Test
@@ -1025,7 +1025,7 @@ class VerificationServiceImplBuildResultTest {
     @Test
     void verifyAsync_success_writesResultJson() throws Exception {
         File smv = createTempModelFile();
-        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any()))
                 .thenReturn(generateResult(smv, List.of(makeEffectiveSpec("s1"))));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
@@ -1060,7 +1060,7 @@ class VerificationServiceImplBuildResultTest {
         spec.getAConditions().get(0).setValue("private");
 
         when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+                any(), anyBoolean(), any(), any()))
                 .thenReturn(generateResult(smv, List.of(spec)));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
@@ -1072,7 +1072,7 @@ class VerificationServiceImplBuildResultTest {
         assertEquals(0, result.getAttackBudget());
         assertTrue(result.isEnablePrivacy());
         verify(smvGenerator).generateWithEnvironment(eq(1L), anyList(), anyList(), anyList(), anyList(),
-                eq(false), eq(0), eq(true), eq(SmvGenerator.GeneratePurpose.VERIFICATION), any());
+                eq(AttackScenarioDto.none()), eq(true), eq(SmvGenerator.GeneratePurpose.VERIFICATION), any());
         assertTrue(readRequestJson(smv).path("enablePrivacy").asBoolean());
     }
 
@@ -1082,7 +1082,7 @@ class VerificationServiceImplBuildResultTest {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         SpecificationDto spec = makeEffectiveSpec("history-spec");
         when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+                any(), anyBoolean(), any(), any()))
                 .thenReturn(generateResult(smv, List.of(spec)));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
@@ -1112,7 +1112,7 @@ class VerificationServiceImplBuildResultTest {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         SpecificationDto spec = makeEffectiveSpec("history-save-failure-spec");
         when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+                any(), anyBoolean(), any(), any()))
                 .thenReturn(generateResult(smv, List.of(spec)));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
@@ -1130,6 +1130,28 @@ class VerificationServiceImplBuildResultTest {
         assertNull(result.getHistoryPersistence().getRunId());
         assertTrue(result.getCheckLogs().stream()
                 .anyMatch(log -> log.contains("[history-save-unknown]")));
+    }
+
+    @Test
+    void synchronousVerification_ownershipFenceFailureIsNotReportedAsAFormalResult() throws Exception {
+        File smv = createTempModelFile();
+        when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
+        SpecificationDto spec = makeEffectiveSpec("ownership-fence-spec");
+        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(),
+                any(), anyBoolean(), any(), any()))
+                .thenReturn(generateResult(smv, List.of(spec)));
+        when(nusmvExecutor.execute(any(File.class)))
+                .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
+        ServiceUnavailableException ownershipLost =
+                new ServiceUnavailableException("formal operation ownership changed");
+        doThrow(ownershipLost).when(formalOperationAdmission).registerCurrentLeaseCommitFence();
+
+        ServiceUnavailableException error = assertThrows(ServiceUnavailableException.class,
+                () -> service.verify(
+                        1L, makeRequest(singleDevice(), List.of(), List.of(spec), false, 0, false)));
+
+        assertSame(ownershipLost, error);
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
     }
 
     @Test
@@ -1176,6 +1198,21 @@ class VerificationServiceImplBuildResultTest {
     }
 
     @Test
+    void runHistory_doesNotMislabelProgrammingErrorsAsPersistedDataDamage() {
+        VerificationRunSummaryProjection run = mock(VerificationRunSummaryProjection.class);
+        when(run.getId()).thenReturn(23L);
+        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
+                .thenReturn(List.of(run));
+        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+                1L, List.of(23L))).thenReturn(List.of());
+        when(verificationTaskMapper.toRunSummaryDto(run, 0))
+                .thenThrow(new IllegalStateException("mapper bug"));
+
+        assertThrows(IllegalStateException.class, () -> service.getRuns(1L));
+    }
+
+    @Test
     void runHistory_keepsCorruptTracePlaceholderWithoutCountingItAsReplayable() {
         VerificationRunSummaryProjection run = mock(VerificationRunSummaryProjection.class);
         TraceSummaryProjection corruptTrace = mock(TraceSummaryProjection.class);
@@ -1209,16 +1246,23 @@ class VerificationServiceImplBuildResultTest {
                 .checkLogsJson("[]")
                 .build();
         TraceSummaryProjection availableTrace = mock(TraceSummaryProjection.class);
+        TraceSummaryProjection unknownTrace = mock(TraceSummaryProjection.class);
         TraceSummaryProjection corruptTrace = mock(TraceSummaryProjection.class);
         TraceSummaryDto availableSummary = TraceSummaryDto.builder()
                 .id(51L)
                 .verificationTaskId(32L)
                 .dataAvailable(true)
                 .build();
+        TraceSummaryDto unknownSummary = TraceSummaryDto.builder()
+                .id(53L)
+                .verificationTaskId(32L)
+                .dataAvailable(null)
+                .build();
         when(taskRepository.findByIdAndUserId(32L, 1L)).thenReturn(Optional.of(run));
         when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
-                1L, List.of(32L))).thenReturn(List.of(availableTrace, corruptTrace));
+                1L, List.of(32L))).thenReturn(List.of(availableTrace, unknownTrace, corruptTrace));
         when(traceMapper.toSummaryDto(availableTrace)).thenReturn(availableSummary);
+        when(traceMapper.toSummaryDto(unknownTrace)).thenReturn(unknownSummary);
         when(traceMapper.toSummaryDto(corruptTrace)).thenThrow(new PersistedDataIntegrityException(
                 "verification trace", 52L, "stateCount", "trace has no states"));
         VerificationRunDto expected = VerificationRunDto.builder().id(32L).counterexampleCount(1).build();
@@ -1259,14 +1303,13 @@ class VerificationServiceImplBuildResultTest {
 
         assertEquals("VERIFICATION_STORED_TASK_LIMIT_REACHED", error.getReasonCode());
         verify(smvGenerator, never()).generateWithEnvironment(
-                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
-                anyBoolean(), any(), any());
+                anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any());
     }
 
     @Test
     void verifyAsync_failedSpecWithoutTrace_countsViolatedSpecFromSpecResults() throws Exception {
         File smv = createTempModelFile();
-        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
+        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), any(), anyBoolean(), any(), any()))
                 .thenReturn(generateResult(smv, List.of(makeEffectiveSpec("s1"))));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", false, null))));
@@ -1296,7 +1339,7 @@ class VerificationServiceImplBuildResultTest {
         service.verifyAsync(
                 1L, 8L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false));
 
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -1316,7 +1359,7 @@ class VerificationServiceImplBuildResultTest {
         // Verify early return: findById for task loading should NOT be called after abort.
         // (updateTaskProgress may call findById(11L) before the atomic check, so we only
         // assert generate() was never reached.)
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -1599,8 +1642,11 @@ class VerificationServiceImplBuildResultTest {
         r.setDevices(devices);
         r.setRules(rules);
         r.setSpecs(specs);
-        r.setAttack(isAttack);
-        r.setAttackBudget(attackBudget);
+        r.setAttackScenario(AttackScenarioDto.builder()
+                .mode(isAttack ? AttackScenarioDto.Mode.ANY_UP_TO_BUDGET : AttackScenarioDto.Mode.NONE)
+                .budget(attackBudget)
+                .points(List.of())
+                .build());
         r.setEnablePrivacy(enablePrivacy);
         return r;
     }

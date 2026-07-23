@@ -19,6 +19,7 @@ public class ChatRequestDto {
     @ToString.Exclude
     private String content;
 
+    @NotBlank(message = "Turn ID is required")
     @Size(max = 64, message = "Turn ID must not exceed 64 characters")
     private String turnId;
 

@@ -32,7 +32,7 @@ export interface ChatPendingConfirmation {
 export interface ChatMessage {
     id?: number
     sessionId?: string
-    role: 'user' | 'assistant' | 'tool'
+    role: 'user' | 'assistant'
     content: string
     turnId?: string
     createdAt?: string
@@ -48,20 +48,45 @@ export interface ChatHistoryPage {
     hasMore: boolean
 }
 
+export type StreamRefreshTarget =
+    | 'device_list'
+    | 'environment_list'
+    | 'rule_list'
+    | 'spec_list'
+    | 'template_list'
+    | 'run_history'
+    | 'board_state'
+
 export interface StreamCommand {
-    type: string;
-    payload?: Record<string, any>;
+    type: 'REFRESH_DATA'
+    payload: { target: StreamRefreshTarget }
 }
 
-export interface StreamProgress {
-    stage: 'CONTEXT_READY' | 'TASK_RESUMED' | 'PLANNING' | 'REASONING' | 'TOOL_EXECUTION' | 'TOOL_RESULT' | 'EXECUTION_GUARD' | 'WRITING_RESPONSE'
+type StreamProgressBase = {
     toolName?: string | null
     round?: number | null
-    outcome?: 'USABLE' | 'FAILED' | 'RESULT_UNAVAILABLE' | 'CONFIRMATION_REQUIRED' | 'NO_PROGRESS' | 'EMERGENCY_LIMIT' | null
     successfulSteps?: number | null
     failedSteps?: number | null
     unconfirmedSteps?: number | null
     detail?: string | null
 }
+
+type ToolResultOutcome =
+    | 'USABLE'
+    | 'PARTIAL'
+    | 'FAILED'
+    | 'RESULT_UNAVAILABLE'
+    | 'CONFIRMATION_REQUIRED'
+
+type ExecutionGuardOutcome = 'NO_PROGRESS' | 'EMERGENCY_LIMIT'
+
+export type StreamProgress = StreamProgressBase & (
+    | {
+        stage: 'CONTEXT_READY' | 'TASK_RESUMED' | 'PLANNING' | 'REASONING' | 'TOOL_EXECUTION' | 'WRITING_RESPONSE'
+        outcome?: null
+      }
+    | { stage: 'TOOL_RESULT'; outcome: ToolResultOutcome }
+    | { stage: 'EXECUTION_GUARD'; outcome: ExecutionGuardOutcome }
+)
 
 export type ChatLogoutPreparation = 'ready' | 'outcome-unknown' | 'reconciliation-failed'

@@ -9,7 +9,7 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-23. Source:
+Verified against code on 2026-07-24. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
 `configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
 `configure/ChatExecutionConfig`, `configure/NusmvConfig`, `configure/OperationAdmissionConfig`,
@@ -42,10 +42,10 @@ transaction instead of issuing implicit queries during HTTP serialization.
 
 The configured zone is installed as the JVM default before persistence infrastructure is
 initialized. REST fields backed by Java `LocalDateTime` are emitted as ISO-8601 values with
-the zone's matching UTC offset (for example `2026-07-22T12:30:00+08:00`). Requests remain
-compatible with legacy ISO local date-times that have no offset. If a request supplies an
-offset, that offset must be valid for the configured zone at the supplied local time; a
-mismatched offset is rejected with `400` instead of silently changing the represented time.
+the zone's matching UTC offset (for example `2026-07-22T12:30:00+08:00`). Requests must
+include an offset, and that offset must be valid for the configured zone at the supplied local
+time; a missing or mismatched offset is rejected with `400` instead of silently changing the
+represented time.
 At daylight-saving overlaps the earlier valid offset is used for serialization. A
 nonexistent gap wall time is preserved with the offset immediately before the transition,
 so a serialized response can be submitted unchanged.

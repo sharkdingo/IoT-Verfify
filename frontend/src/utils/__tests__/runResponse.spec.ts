@@ -40,6 +40,7 @@ const state = (stateIndex: number) => ({
     deviceId: 'device_1',
     deviceLabel: 'Hall sensor',
     templateName: 'Motion Detector',
+    modelTokenSource: 'BUNDLED',
     state: 'idle',
     variables: []
   }],
@@ -228,6 +229,215 @@ describe('verification and simulation response contracts', () => {
     })).toThrow(expect.objectContaining({
       code: RUN_RESPONSE_INCOMPLETE_CODE
     }))
+  })
+
+  it('validates nested trace variables, security labels, and frozen token sources', () => {
+    const detailedState = {
+      stateIndex: 1,
+      devices: [{
+        deviceId: 'device_1',
+        deviceLabel: 'Hall sensor',
+        templateName: 'Motion Detector',
+        modelTokenSource: 'BUNDLED',
+        state: 'idle',
+        compromised: false,
+        variables: [{
+          name: 'workingState',
+          value: 'idle',
+          trust: 'trusted',
+          modelTokenSource: 'BUNDLED'
+        }],
+        trustPrivacy: [{
+          name: 'idle',
+          propertyScope: 'state',
+          mode: 'MotionMode',
+          trust: true,
+          privacy: null
+        }],
+        privacies: [{
+          name: 'recording',
+          propertyScope: 'content',
+          privacy: 'private'
+        }]
+      }],
+      triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Record motion' }],
+      compromisedAutomationLinks: [],
+      trustPrivacies: [],
+      envVariables: [{
+        name: 'temperature',
+        value: '21',
+        trust: 'untrusted',
+        modelTokenSource: 'UNKNOWN'
+      }],
+      globalVariables: [{
+        name: 'compromisedPointCount',
+        value: '0',
+        trust: null,
+        modelTokenSource: 'UNKNOWN'
+      }]
+    }
+
+    expect(validateSimulationResult({
+      ...validSimulation(),
+      states: [detailedState, { ...detailedState, stateIndex: 2 }]
+    }).states[0]).toMatchObject({ stateIndex: 1 })
+
+    const malformedStates = [
+      {
+        ...detailedState,
+        devices: [{ ...detailedState.devices[0], modelTokenSource: null }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          variables: [{ name: 'workingState', value: 'idle' }]
+        }]
+      },
+      {
+        ...detailedState,
+        envVariables: [{ name: 'temperature', value: '21', trust: 'untrusted' }]
+      },
+      {
+        ...detailedState,
+        devices: [{ ...detailedState.devices[0], modelTokenSource: 'FORGED' }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          variables: [{
+            name: 'workingState',
+            value: 'idle',
+            modelTokenSource: 'CUSTOM'
+          }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          variables: [{ name: 'workingState', value: 1 }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          trustPrivacy: [{ name: 'idle', propertyScope: 'generated_state', trust: true }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          trustPrivacy: [{
+            name: 'idle',
+            propertyScope: 'state',
+            mode: 'MotionMode',
+            privacy: 'private'
+          }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          privacies: [{
+            name: 'recording',
+            propertyScope: 'content',
+            trust: true
+          }]
+        }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          trustPrivacy: [
+            detailedState.devices[0].trustPrivacy[0],
+            { ...detailedState.devices[0].trustPrivacy[0], trust: false }
+          ]
+        }]
+      },
+      {
+        ...detailedState,
+        envVariables: [{ name: 'temperature', value: '21', trust: true }]
+      },
+      {
+        ...detailedState,
+        globalVariables: [{
+          name: 'compromisedPointCount',
+          value: '0',
+          modelTokenSource: 'BUNDLED'
+        }]
+      },
+      {
+        ...detailedState,
+        triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Missing frozen index' }]
+      },
+      {
+        ...detailedState,
+        triggeredRules: [
+          detailedState.triggeredRules[0],
+          { ...detailedState.triggeredRules[0] }
+        ]
+      }
+    ]
+
+    malformedStates.forEach(malformedState => {
+      expect(() => validateSimulationResult({
+        ...validSimulation(),
+        states: [malformedState, state(2)]
+      })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+    })
+
+    const sourceDriftState = {
+      ...detailedState,
+      stateIndex: 2,
+      devices: [{
+        ...detailedState.devices[0],
+        modelTokenSource: 'CUSTOM',
+        variables: detailedState.devices[0].variables.map(variable => ({
+          ...variable,
+          modelTokenSource: 'CUSTOM'
+        }))
+      }]
+    }
+    expect(() => validateSimulationResult({
+      ...validSimulation(),
+      states: [detailedState, sourceDriftState]
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+
+    expect(() => validateSimulationResult({
+      ...validSimulation(),
+      states: [detailedState, {
+        ...detailedState,
+        stateIndex: 2,
+        envVariables: detailedState.envVariables.map(variable => ({
+          ...variable,
+          modelTokenSource: 'CUSTOM'
+        }))
+      }]
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+
+    expect(() => validateSimulationResult({
+      ...validSimulation(),
+      states: [detailedState, {
+        ...detailedState,
+        stateIndex: 2,
+        devices: []
+      }]
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+
+    expect(() => validateSimulationResult({
+      ...validSimulation(),
+      states: [detailedState, {
+        ...detailedState,
+        stateIndex: 2,
+        devices: [{ ...detailedState.devices[0], variables: [] }]
+      }]
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
   })
 
   it('does not treat missing simulation completeness as a complete model', () => {

@@ -4,12 +4,14 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AttackScenarioRequestContractTest {
 
@@ -31,23 +33,26 @@ class AttackScenarioRequestContractTest {
     }
 
     @Test
-    void legacyVerificationFieldsRemainReadableAsExhaustiveSelection() throws Exception {
-        VerificationRequestDto request = objectMapper.readValue(
-                "{\"isAttack\":true,\"attackBudget\":3}", VerificationRequestDto.class);
-
-        assertEquals(AttackScenarioDto.Mode.ANY_UP_TO_BUDGET,
-                request.resolvedAttackScenario().getMode());
-        assertEquals(3, request.resolvedAttackScenario().effectiveBudget());
+    void obsoleteTopLevelAttackFieldsAreRejected() {
+        assertThrows(UnrecognizedPropertyException.class, () -> objectMapper.readValue(
+                "{\"isAttack\":true,\"attackBudget\":3}", VerificationRequestDto.class));
     }
 
     @Test
-    void directLegacySettersPreserveBudgetRegardlessOfCallOrder() {
+    void simulationUsesOnlyTheStructuredAttackScenario() {
         SimulationRequestDto request = new SimulationRequestDto();
-        request.setAttackBudget(4);
-        request.setAttack(true);
+        request.setAttackScenario(AttackScenarioDto.anyUpToBudget(4));
 
         assertEquals(AttackScenarioDto.Mode.ANY_UP_TO_BUDGET,
                 request.resolvedAttackScenario().getMode());
         assertEquals(4, request.getAttackBudget());
+    }
+
+    @Test
+    void missingStructuredScenarioIsNotSilentlyReplacedWithNone() {
+        assertThrows(NullPointerException.class,
+                () -> new VerificationRequestDto().resolvedAttackScenario());
+        assertThrows(NullPointerException.class,
+                () -> new SimulationRequestDto().resolvedAttackScenario());
     }
 }

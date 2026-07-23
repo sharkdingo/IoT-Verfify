@@ -24,7 +24,7 @@ public class TracePo {
     @Column(nullable = false)
     private Long userId;
 
-    @Column(name = "verification_task_id")
+    @Column(name = "verification_task_id", nullable = false)
     private Long verificationTaskId;
 
     @Column(name = "violated_spec_id", nullable = false, length = 100)

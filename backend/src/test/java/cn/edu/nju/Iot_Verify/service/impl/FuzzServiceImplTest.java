@@ -9,6 +9,8 @@ import cn.edu.nju.Iot_Verify.component.fuzz.FuzzInputEvent;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzInputEventKind;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzInputEventSource;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzLimitationContract;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelInputSnapshotCodec;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelFingerprint;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzPaperDomainPreviewer;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzProgressListener;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzSpecEligibility;
@@ -27,6 +29,7 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzWorkloadPreviewRequestDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -55,6 +58,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.FuzzMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -143,6 +147,7 @@ class FuzzServiceImplTest {
                 boardDataConverter,
                 fuzzEngine,
                 fuzzPaperDomainPreviewer,
+                new FuzzModelFingerprint(new ObjectMapper().findAndRegisterModules()),
                 fuzzMapper,
                 fuzzTaskExecutor,
                 admissionConfig,
@@ -1053,6 +1058,21 @@ class FuzzServiceImplTest {
     }
 
     @Test
+    void getRuns_doesNotMislabelProgrammingErrorsAsPersistedDataDamage() {
+        FuzzTaskSummaryProjection run = mock(FuzzTaskSummaryProjection.class);
+        when(run.getId()).thenReturn(52L);
+        when(taskRepository.findSummaryByUserIdAndStatusOrderByCreatedAtDescIdDesc(
+                7L, FuzzTaskPo.TaskStatus.COMPLETED, PageRequest.of(0, 25)))
+                .thenReturn(List.of(run));
+        when(findingRepository.findSummariesByUserIdAndFuzzTaskIdIn(
+                7L, List.of(52L))).thenReturn(List.of());
+        when(fuzzMapper.toRunSummaryDtoFromTaskProjection(run, List.of()))
+                .thenThrow(new IllegalStateException("mapper bug"));
+
+        assertThrows(IllegalStateException.class, () -> service.getRuns(7L, 0, 25));
+    }
+
+    @Test
     void getTasksUsesBoundedUserScopedQueryAndStillExcludesCompletedRuns() {
         FuzzTaskSummaryProjection failed = mock(FuzzTaskSummaryProjection.class);
         FuzzTaskSummaryDto mapped = FuzzTaskSummaryDto.builder()
@@ -1179,7 +1199,8 @@ class FuzzServiceImplTest {
                 0,
                 List.of(state),
                 List.of(new FuzzInputEvent(
-                        1, FuzzInputEventKind.DEVICE_VARIABLE, "device-1", "temperature", "21"))));
+                        1, FuzzInputEventKind.DEVICE_VARIABLE, "device-1", "temperature", "21",
+                        FuzzInputEventSource.MODEL_CHOICE))));
         assertThrows(IllegalStateException.class,
                 () -> service.validateEngineResult(invalidEventStep, 1, 10, 10));
     }
@@ -1317,7 +1338,8 @@ class FuzzServiceImplTest {
                 0,
                 List.of(state),
                 List.of(new FuzzInputEvent(
-                        0, FuzzInputEventKind.DEVICE_VARIABLE, " ", "temperature", "21"))));
+                        0, FuzzInputEventKind.DEVICE_VARIABLE, " ", "temperature", "21",
+                        FuzzInputEventSource.MODEL_CHOICE))));
 
         assertThrows(IllegalStateException.class,
                 () -> service.validateEngineResult(incompleteEvent, 1, 10, 10));
@@ -1364,6 +1386,57 @@ class FuzzServiceImplTest {
         request.setExplorationMode(FuzzExplorationMode.PAPER_COMPATIBLE);
 
         assertSubmittedMode(request, FuzzExplorationMode.PAPER_COMPATIBLE);
+    }
+
+    @Test
+    void frozenSnapshotUsesStrictVersionedEnvelopeWithCompleteProvenance()
+            throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("switch_1");
+        device.setTemplateName("Switch");
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        ModelInputSnapshot snapshot = new ModelInputSnapshot(
+                List.of(), List.of(device), List.of(), List.of(), List.of(), Map.of());
+
+        String snapshotJson = FuzzModelInputSnapshotCodec.encode(snapshot);
+        ObjectNode snapshotRoot = (ObjectNode) new ObjectMapper().readTree(snapshotJson);
+        ModelInputSnapshot restored = FuzzModelInputSnapshotCodec.decode(snapshotJson);
+
+        assertEquals(1, snapshotRoot.path("schemaVersion").asInt());
+        assertTrue(snapshotRoot.path("snapshot").has("devices"));
+        assertFalse(snapshotRoot.path("snapshot").path("devices").get(0).has("modelTokenSource"));
+        assertEquals("BUNDLED", snapshotRoot.path("modelTokenSourcesByDeviceId")
+                .path("switch_1").asText());
+        assertEquals(ModelTokenSource.BUNDLED,
+                restored.devices().get(0).getModelTokenSource());
+
+        assertThrows(IllegalStateException.class,
+                () -> FuzzModelInputSnapshotCodec.decode(JsonUtils.toJson(snapshot)));
+
+        String unsupportedSchemaJson = snapshotJson.replace(
+                "\"schemaVersion\":1", "\"schemaVersion\":2");
+        assertThrows(IllegalStateException.class,
+                () -> FuzzModelInputSnapshotCodec.decode(unsupportedSchemaJson));
+
+        ObjectNode missingSourceRoot = snapshotRoot.deepCopy();
+        missingSourceRoot.putObject("modelTokenSourcesByDeviceId");
+        assertThrows(IllegalStateException.class,
+                () -> FuzzModelInputSnapshotCodec.decode(missingSourceRoot.toString()));
+
+        ObjectNode unexpectedFieldRoot = snapshotRoot.deepCopy();
+        unexpectedFieldRoot.put("unexpected", true);
+        assertThrows(IllegalStateException.class,
+                () -> FuzzModelInputSnapshotCodec.decode(unexpectedFieldRoot.toString()));
+
+        ObjectNode missingSnapshotFieldRoot = snapshotRoot.deepCopy();
+        ((ObjectNode) missingSnapshotFieldRoot.path("snapshot")).remove("rules");
+        assertThrows(IllegalStateException.class,
+                () -> FuzzModelInputSnapshotCodec.decode(missingSnapshotFieldRoot.toString()));
+
+        ObjectNode wrongSnapshotTypeRoot = snapshotRoot.deepCopy();
+        ((ObjectNode) wrongSnapshotTypeRoot.path("snapshot")).put("devices", "not-an-array");
+        assertThrows(IllegalStateException.class,
+                () -> FuzzModelInputSnapshotCodec.decode(wrongSnapshotTypeRoot.toString()));
     }
 
     @Test
@@ -1486,6 +1559,18 @@ class FuzzServiceImplTest {
         secondRule.setId(2L);
         ModelInputSnapshot orderedRules = snapshot(List.of(specification), List.of(firstRule, secondRule));
         ModelInputSnapshot reorderedRules = snapshot(List.of(specification), List.of(secondRule, firstRule));
+        DeviceManifest alphaManifest = DeviceManifest.builder().name("Alpha").build();
+        DeviceManifest betaManifest = DeviceManifest.builder().name("Beta").build();
+        Map<String, DeviceManifest> alphaFirst = new LinkedHashMap<>();
+        alphaFirst.put("Alpha", alphaManifest);
+        alphaFirst.put("Beta", betaManifest);
+        Map<String, DeviceManifest> betaFirst = new LinkedHashMap<>();
+        betaFirst.put("Beta", betaManifest);
+        betaFirst.put("Alpha", alphaManifest);
+        ModelInputSnapshot orderedTemplates = new ModelInputSnapshot(
+                List.of(), List.of(), List.of(), List.of(), List.of(specification), alphaFirst);
+        ModelInputSnapshot reorderedTemplates = new ModelInputSnapshot(
+                List.of(), List.of(), List.of(), List.of(), List.of(specification), betaFirst);
 
         assertEquals(service.modelFingerprint(baseline), service.modelFingerprint(moved));
         assertEquals(service.modelFingerprint(baseline), service.modelFingerprint(displayOnlySpecChange));
@@ -1493,6 +1578,7 @@ class FuzzServiceImplTest {
         assertNotEquals(service.modelFingerprint(deviceOrder), service.modelFingerprint(reversedDeviceOrder));
         assertNotEquals(service.modelFingerprint(baseline), service.modelFingerprint(semanticChange));
         assertNotEquals(service.modelFingerprint(orderedRules), service.modelFingerprint(reorderedRules));
+        assertEquals(service.modelFingerprint(orderedTemplates), service.modelFingerprint(reorderedTemplates));
         assertNotEquals(
                 service.paperDomainFingerprint(baseline, 1),
                 service.paperDomainFingerprint(baseline, 50));
@@ -1502,7 +1588,24 @@ class FuzzServiceImplTest {
     private void assertSubmittedMode(
             FuzzRequestDto request, FuzzExplorationMode expectedMode) {
         SpecificationDto specification = specification("spec-1");
-        ModelInputSnapshot snapshot = snapshot(List.of(specification));
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("bundled_1");
+        device.setTemplateName("Bundled");
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .name("Bundled")
+                .modes(List.of())
+                .internalVariables(List.of())
+                .environmentDomains(List.of())
+                .impactedVariables(List.of())
+                .workingStates(List.of())
+                .transitions(List.of())
+                .apis(List.of())
+                .contents(List.of())
+                .build();
+        ModelInputSnapshot snapshot = new ModelInputSnapshot(
+                List.of(), List.of(device), List.of(), List.of(),
+                List.of(specification), Map.of("Bundled", manifest));
         if (expectedMode == FuzzExplorationMode.PAPER_COMPATIBLE) {
             request.setPaperDomainFingerprint(service.paperDomainFingerprint(snapshot, request.getPathLength()));
         }
@@ -1578,13 +1681,18 @@ class FuzzServiceImplTest {
         verify(fuzzTaskExecutor).execute(workerCaptor.capture());
 
         assertEquals(41L, taskId);
-        assertEquals(JsonUtils.toJson(snapshot), savedTask.get().getModelInputSnapshotJson());
+        assertEquals(
+                JsonUtils.toJson(snapshot),
+                JsonUtils.toJson(FuzzModelInputSnapshotCodec.decode(
+                        savedTask.get().getModelInputSnapshotJson())));
         assertEquals(expectedMode, savedTask.get().getExplorationMode());
         verify(boardDataConverter).getModelInputSnapshot(7L);
 
         workerCaptor.getValue().run();
 
         assertEquals(JsonUtils.toJson(snapshot), JsonUtils.toJson(workerInput.get().snapshot()));
+        assertEquals(ModelTokenSource.BUNDLED,
+                workerInput.get().snapshot().devices().get(0).getModelTokenSource());
         assertEquals(expectedMode, workerInput.get().config().explorationMode());
         assertEquals(1, savedFindings.get().size());
         List<FuzzInputEventDto> persistedEvents = JsonUtils.fromJson(

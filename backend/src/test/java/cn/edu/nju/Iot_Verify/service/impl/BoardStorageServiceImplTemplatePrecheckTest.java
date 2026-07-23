@@ -533,7 +533,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
         assertEquals(400, ex.getCode());
         verify(smvGenerator, never()).generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class));
         verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
     }
@@ -549,7 +549,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
             return po;
         });
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenThrow(SmvGenerationException.smvGenerationError("invalid transition"));
 
@@ -558,7 +558,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
         assertEquals(400, ex.getCode());
         verify(smvGenerator).generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class));
     }
 
@@ -573,7 +573,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
             return po;
         });
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenThrow(new java.io.IOException("disk io failed"));
 
@@ -594,7 +594,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
             return po;
         });
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenThrow(SmvGenerationException.templateLoadError("Demo", new RuntimeException("db down")));
 
@@ -615,7 +615,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
             return po;
         });
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenThrow(SmvGenerationException.multipleDevicesFailed("__template_probe_device__(template=Demo)"));
 
@@ -637,7 +637,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         });
         File precheckFile = File.createTempFile("template-precheck-", ".smv");
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenReturn(new SmvGenerator.GenerateResult(precheckFile, Map.of()));
 
@@ -660,7 +660,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         });
         File precheckFile = File.createTempFile("template-precheck-", ".smv");
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenReturn(new SmvGenerator.GenerateResult(precheckFile, Map.of()));
 
@@ -883,7 +883,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         });
         File precheckFile = File.createTempFile("template-precheck-", ".smv");
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenReturn(new SmvGenerator.GenerateResult(precheckFile, Map.of()));
 
@@ -918,7 +918,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         });
         File precheckFile = File.createTempFile("template-precheck-", ".smv");
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenReturn(new SmvGenerator.GenerateResult(precheckFile, Map.of()));
 
@@ -1066,7 +1066,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         });
         File precheckFile = File.createTempFile("template-precheck-", ".smv");
         when(smvGenerator.generate(
-                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                anyLong(), anyList(), anyList(), anyList(), any(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
                 .thenReturn(new SmvGenerator.GenerateResult(precheckFile, Map.of()));
 

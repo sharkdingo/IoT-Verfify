@@ -133,7 +133,6 @@
 			"StartState": "",
 			"EndState": "auto",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -142,7 +141,6 @@
 			"StartState": "",
 			"EndState": "cool",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -151,7 +149,6 @@
 			"StartState": "",
 			"EndState": "dry",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -160,7 +157,6 @@
 			"StartState": "",
 			"EndState": "coolClean",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -169,7 +165,6 @@
 			"StartState": "",
 			"EndState": "dryClean",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -178,7 +173,6 @@
 			"StartState": "",
 			"EndState": "fanOnly",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -187,7 +181,6 @@
 			"StartState": "",
 			"EndState": "heat",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -196,7 +189,6 @@
 			"StartState": "",
 			"EndState": "heatClean",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -205,7 +197,6 @@
 			"StartState": "",
 			"EndState": "off",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

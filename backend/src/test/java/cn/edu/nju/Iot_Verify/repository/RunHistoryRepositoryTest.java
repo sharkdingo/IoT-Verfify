@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.po.TracePo;
@@ -8,6 +10,7 @@ import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.projection.SimulationTraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
+import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -27,6 +30,17 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.ANY)
 class RunHistoryRepositoryTest {
+
+    private static final String NO_ATTACK_SEMANTICS_JSON = JsonUtils.toJson(
+            ModelSemanticsDto.forRun(AttackScenarioDto.none(), false, 1, 0, 0));
+    private static final String VERIFICATION_SNAPSHOT_JSON =
+            "{\"capturedAt\":\"2026-07-24T09:30:00\",\"deviceCount\":1,\"ruleCount\":0,"
+                    + "\"specificationCount\":1,\"environmentVariableCount\":0,"
+                    + "\"deviceTemplateCount\":1,\"templatesFrozen\":true}";
+    private static final String SIMULATION_SNAPSHOT_JSON =
+            "{\"capturedAt\":\"2026-07-24T09:30:00\",\"deviceCount\":1,\"ruleCount\":0,"
+                    + "\"specificationCount\":0,\"environmentVariableCount\":0,"
+                    + "\"deviceTemplateCount\":1,\"templatesFrozen\":true}";
 
     @Autowired private SimulationTraceRepository simulationTraceRepository;
     @Autowired private SimulationTaskRepository simulationTaskRepository;
@@ -55,6 +69,9 @@ class RunHistoryRepositoryTest {
         assertEquals(List.of(standalone.getId(), taskOwned.getId()),
                 summaries.stream().map(SimulationTraceSummaryProjection::getId).toList());
         assertEquals(2, summaries.get(0).getStateCount());
+        assertNotNull(summaries.get(0).getRequestJson());
+        assertEquals(NO_ATTACK_SEMANTICS_JSON, summaries.get(0).getModelSemanticsJson());
+        assertEquals(1, summaries.get(0).getModeledDeviceAttackPointCount());
     }
 
     @Test
@@ -67,8 +84,15 @@ class RunHistoryRepositoryTest {
                         .createdAt(now)
                         .startedAt(now)
                         .completedAt(now.plusSeconds(1))
+                        .isAttack(false)
+                        .attackBudget(0)
+                        .modeledDeviceAttackPointCount(1)
+                        .modeledFalsifiableReadingDeviceCount(0)
+                        .modeledAutomationLinkAttackPointCount(0)
+                        .enablePrivacy(false)
                         .outcome(VerificationOutcome.VIOLATED)
-                        .modelSnapshotJson("{}")
+                        .modelSemanticsJson(NO_ATTACK_SEMANTICS_JSON)
+                        .modelSnapshotJson(VERIFICATION_SNAPSHOT_JSON)
                         .generationIssuesJson("[]")
                         .build());
         TracePo trace = traceRepository.saveAndFlush(TracePo.builder()
@@ -78,6 +102,15 @@ class RunHistoryRepositoryTest {
                 .violatedSpecJson("{}")
                 .statesJson("[{}]")
                 .stateCount(1)
+                .requestJson("{\"rules\":[]}")
+                .isAttack(false)
+                .attackBudget(0)
+                .enablePrivacy(false)
+                .modeledDeviceAttackPointCount(1)
+                .modeledFalsifiableReadingDeviceCount(0)
+                .modeledAutomationLinkAttackPointCount(0)
+                .modelSemanticsJson(NO_ATTACK_SEMANTICS_JSON)
+                .modelSnapshotJson(VERIFICATION_SNAPSHOT_JSON)
                 .createdAt(now.plusSeconds(1))
                 .build());
 
@@ -92,6 +125,9 @@ class RunHistoryRepositoryTest {
                 runs.stream().map(VerificationRunSummaryProjection::getId).toList());
         assertEquals(List.of(trace.getId()), traces.stream().map(TraceSummaryProjection::getId).toList());
         assertEquals(1, traces.get(0).getStateCount());
+        assertEquals(NO_ATTACK_SEMANTICS_JSON, traces.get(0).getModelSemanticsJson());
+        assertEquals(VERIFICATION_SNAPSHOT_JSON, traces.get(0).getModelSnapshotJson());
+        assertNotNull(traces.get(0).getRequestJson());
     }
 
     private SimulationTracePo simulationTrace(Long userId, LocalDateTime createdAt) {
@@ -103,7 +139,15 @@ class RunHistoryRepositoryTest {
                 .stateCount(2)
                 .logsJson("[]")
                 .generationIssuesJson("[]")
-                .modelSnapshotJson("{}")
+                .requestJson("{\"rules\":[]}")
+                .isAttack(false)
+                .attackBudget(0)
+                .enablePrivacy(false)
+                .modeledDeviceAttackPointCount(1)
+                .modeledFalsifiableReadingDeviceCount(0)
+                .modeledAutomationLinkAttackPointCount(0)
+                .modelSemanticsJson(NO_ATTACK_SEMANTICS_JSON)
+                .modelSnapshotJson(SIMULATION_SNAPSHOT_JSON)
                 .createdAt(createdAt)
                 .build();
     }

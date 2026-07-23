@@ -5,7 +5,7 @@ counterexample, and optional fix attempt. Field-level contracts live in
 [../api/verification.md](../api/verification.md); model construction lives in
 [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-23. Primary sources:
+Verified against code on 2026-07-24. Primary sources:
 `VerificationController`, `SimulationController`, `VerificationServiceImpl`,
 `SimulationServiceImpl`, `SmvGenerator`, `NusmvExecutor`, and `SmvTraceParser`.
 
@@ -141,10 +141,13 @@ Progress updates use the same worker-id and lease predicate. Terminal transactio
 the task row lock before sampling the microsecond database time and before writing linked
 counterexamples or simulation traces, so a worker waiting behind cancellation/recovery cannot
 publish stale evidence and a sub-second task cannot have `completedAt` before `createdAt`.
-Synchronous verification and saved simulation use the distributed admission lease rather
-than a task-row lease. Their final persistence transaction registers a commit callback
-that revalidates that lease; losing ownership while waiting for a lock rolls the write
-back instead of publishing stale history.
+Synchronous verification and saved simulation use a distributed admission lease plus a
+per-user database fencing epoch rather than a task-row lease. Admission advances the epoch
+in its own short transaction before solver work. Their final persistence transaction locks
+that epoch row in `beforeCommit`, requires the epoch and Redis lease to remain current, and
+holds the row lock through physical commit. A newer owner therefore either supersedes the
+old transaction before its fence or waits until the old commit completes before starting;
+stale history cannot pass through a lease-check-to-commit pause.
 
 Run history separates execution lifecycle from completed evidence. Task-list endpoints
 exclude `COMPLETED`; completed verification rows are exposed through `/api/verify/runs`,
@@ -152,6 +155,10 @@ while saved simulation trajectories are exposed through `/api/simulate/traces`.
 Counterexamples remain children of one verification run. Deleting that run deletes its
 counterexamples atomically. `violatedSpecCount` records false properties;
 `counterexampleCount` records only replayable parsed traces and may be smaller.
+History summaries validate each saved state array and its scalar count before including a
+trace in that replayable count. Verification and simulation summaries additionally bind
+every rule event to the exact indexed rule in the server-internal frozen request, while
+omitting both state arrays and request snapshots from the summary payload.
 
 Simulation has no specifications and therefore no safety conclusion. `states` is one
 possible trajectory through the generated model. `requestedSteps` is the requested
@@ -173,12 +180,14 @@ complete user-facing snapshots. A representative API state is:
   "stateIndex": 2,
   "triggeredRules": [
     {
+      "ruleIndex": 0,
       "ruleId": "42",
       "ruleLabel": "When hallway motion is detected, turn on the light"
     }
   ],
   "compromisedAutomationLinks": [
     {
+      "ruleIndex": 0,
       "ruleId": "42",
       "ruleLabel": "When hallway motion is detected, turn on the light"
     }
@@ -218,12 +227,15 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
   persisted detail reads fail closed on a missing, duplicate, zero, or gap.
 - Each device and environment variable carries frozen `BUNDLED`, `CUSTOM`, or `UNKNOWN`
   token provenance. Mixed environment providers and parser-global values are `UNKNOWN`;
-  legacy absent provenance is interpreted as unknown rather than inferred by name.
-- Internal rule probes are converted to `{ ruleId, ruleLabel }`. Probe names and list
-  indexes are not serialized.
+  absent provenance makes the persisted trajectory invalid.
+- Internal rule probes are converted to `{ ruleIndex, ruleId, ruleLabel }`. The generated
+  probe name stays internal, while its zero-based frozen rule position is retained so
+  duplicate or absent rule ids cannot make another rule appear executed. The position is
+  never interpreted against a changed current Board. Persisted verification and simulation
+  reads require the index to be in range and the optional id/label to match the frozen rule;
+  inconsistent evidence fails closed before replay.
 - Internal automation-link attack choices are converted to
-  `compromisedAutomationLinks[]` using the same stable rule snapshots. Generated link
-  indexes are not serialized.
+  `compromisedAutomationLinks[]` using the same frozen rule identity.
 - Internal `device.is_attack` is converted to `device.compromised`; it is not mixed into
   `variables[]`.
 - The internal device-plus-link counter is exposed as

@@ -38,7 +38,6 @@
 				"Relation": "=",
 				"Value": "taking photo"
 			},
-			"Assignments": [],
 			"Description": ""
 		}
 	],
@@ -48,7 +47,6 @@
 			"StartState": "off",
 			"EndState": "on",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -57,7 +55,6 @@
 			"StartState": "on",
 			"EndState": "off",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -66,7 +63,6 @@
 			"StartState": "on",
 			"EndState": "taking photo",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

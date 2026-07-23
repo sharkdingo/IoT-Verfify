@@ -13,6 +13,27 @@ public interface TraceSummaryProjection {
 
     String getViolatedSpecJson();
 
+    Boolean getIsAttack();
+
+    Integer getAttackBudget();
+
+    Boolean getEnablePrivacy();
+
+    Integer getModeledDeviceAttackPointCount();
+
+    Integer getModeledFalsifiableReadingDeviceCount();
+
+    Integer getModeledAutomationLinkAttackPointCount();
+
+    String getModelSemanticsJson();
+
+    String getModelSnapshotJson();
+
+    /** Internal frozen request used only to validate rule evidence; never serialized in the summary. */
+    String getRequestJson();
+
+    String getStatesJson();
+
     Integer getStateCount();
 
     LocalDateTime getCreatedAt();

@@ -98,10 +98,6 @@ const handleSystemCommand = async (cmd: StreamCommand): Promise<boolean> => {
     }
   }
 
-  if (cmd.type === 'NAVIGATE') {
-    // router.push(...)
-    return false;
-  }
   return false;
 };
 

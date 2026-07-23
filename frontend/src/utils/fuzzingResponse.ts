@@ -16,6 +16,7 @@ import {
   isValidFuzzPaperDomainFingerprint
 } from '@/types/fuzzing'
 import type { AsyncTaskStatus, TaskProgressStage } from '@/types/task'
+import { validateTraceStatePayload } from './traceStateResponse'
 
 export const FUZZ_RESPONSE_INCOMPLETE_CODE = 'FUZZ_RESPONSE_INCOMPLETE'
 export const FUZZ_ACTIVE_TASK_LIMIT_REACHED_CODE = 'FUZZ_ACTIVE_TASK_LIMIT_REACHED'
@@ -252,45 +253,17 @@ const validateSnapshot = (value: unknown, context: string) => {
   if (snapshot.templatesFrozen !== true) {
     throw new FuzzResponseContractError(context, 'modelSnapshot.templatesFrozen must be true')
   }
-  if (snapshot.modelFingerprint !== undefined
-    && snapshot.modelFingerprint !== null
-    && (typeof snapshot.modelFingerprint !== 'string'
-      || !/^[0-9a-f]{64}$/.test(snapshot.modelFingerprint))) {
+  if (typeof snapshot.modelFingerprint !== 'string'
+    || !/^[0-9a-f]{64}$/.test(snapshot.modelFingerprint)) {
     throw new FuzzResponseContractError(context, 'modelSnapshot.modelFingerprint must be a SHA-256 value')
   }
 }
 
 const validateTraceStateList = (value: unknown, context: string) => {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new FuzzResponseContractError(context, 'states must be a non-empty array')
-  }
-  value.forEach((item: unknown, index: number) => {
-    const state = record(item, `${context} states[${index}]`)
-    const stateIndex = integer(state.stateIndex, 'stateIndex', context)
-    if (stateIndex !== index) {
-      throw new FuzzResponseContractError(context, 'stateIndex values must be contiguous from zero')
-    }
-    if (!Array.isArray(state.devices)
-      || !Array.isArray(state.triggeredRules)
-      || !Array.isArray(state.compromisedAutomationLinks)) {
-      throw new FuzzResponseContractError(
-        context,
-        'each state must include devices, triggeredRules, and compromisedAutomationLinks arrays'
-      )
-    }
-    state.devices.forEach((deviceValue: unknown, deviceIndex: number) => {
-      const device = record(deviceValue, `${context} states[${index}].devices[${deviceIndex}]`)
-      text(device.deviceId, 'deviceId', context)
-      text(device.deviceLabel, 'deviceLabel', context)
-      text(device.templateName, 'templateName', context)
-      if (!Array.isArray(device.variables)) {
-        throw new FuzzResponseContractError(context, 'device variables must be an array')
-      }
-    })
-    for (const optionalArray of ['trustPrivacies', 'envVariables', 'globalVariables']) {
-      if (state[optionalArray] !== undefined && !Array.isArray(state[optionalArray])) {
-        throw new FuzzResponseContractError(context, `${optionalArray} must be an array when present`)
-      }
+  validateTraceStatePayload(value, {
+    firstStateIndex: 0,
+    fail: detail => {
+      throw new FuzzResponseContractError(context, detail)
     }
   })
 }
@@ -383,6 +356,9 @@ const validateRun = (
     if (run.findingCount !== undefined) integer(run.findingCount, 'findingCount', context)
     if (!Array.isArray(run.findings)) {
       throw new FuzzResponseContractError(context, 'findings must be an array')
+    }
+    if (run.findings.length !== 0) {
+      throw new FuzzResponseContractError(context, 'unavailable runs cannot expose findings')
     }
     text(run.unavailableReasonCode, 'unavailableReasonCode', context)
     return run as FuzzingRunSummary
@@ -483,8 +459,11 @@ const validateRun = (
           'finding trace must end at the first violation'
         )
       }
-      if (typeof finding.dataAvailable !== 'boolean') {
-        throw new FuzzResponseContractError(context, 'finding dataAvailable must be boolean')
+      if ('dataAvailable' in finding) {
+        throw new FuzzResponseContractError(
+          context,
+          'finding summaries must not claim availability before evidence is loaded'
+        )
       }
     })
   }
@@ -590,7 +569,7 @@ export const validateFuzzingFinding = (value: unknown): FuzzingFinding => {
     if (!INPUT_EVENT_KINDS.has(kind)) {
       throw new FuzzResponseContractError(context, 'input event kind is invalid')
     }
-    const source = candidate.source ?? 'MODEL_CHOICE'
+    const source = candidate.source
     if (typeof source !== 'string' || !INPUT_EVENT_SOURCES.has(source)) {
       throw new FuzzResponseContractError(context, 'input event source is invalid')
     }
@@ -606,7 +585,6 @@ export const validateFuzzingFinding = (value: unknown): FuzzingFinding => {
     }
     previousStep = step
     previousSourceOrder = sourceOrder
-    candidate.source = source
     text(candidate.targetId, 'targetId', context)
     text(candidate.property, 'property', context)
     text(candidate.value, 'value', context)

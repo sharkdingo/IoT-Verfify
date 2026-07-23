@@ -1,6 +1,5 @@
 package cn.edu.nju.Iot_Verify.service;
 
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -10,28 +9,54 @@ import java.util.function.Supplier;
 
 /** Single admission boundary for synchronous verification, simulation, and fix work. */
 @Component
-@RequiredArgsConstructor
 public class FormalOperationAdmission {
 
     private final UserOperationGuard userOperationGuard;
-    private final ThreadLocal<UserOperationGuard.Lease> currentLease = new ThreadLocal<>();
+    private final FormalOperationFence formalOperationFence;
+    private final ThreadLocal<CurrentAdmission> currentAdmission = new ThreadLocal<>();
+
+    public FormalOperationAdmission(
+            UserOperationGuard userOperationGuard, FormalOperationFence formalOperationFence) {
+        this.userOperationGuard = Objects.requireNonNull(userOperationGuard, "userOperationGuard");
+        this.formalOperationFence = Objects.requireNonNull(formalOperationFence, "formalOperationFence");
+    }
 
     public <T> T execute(Long userId, Supplier<T> operation) {
         Objects.requireNonNull(operation, "operation must not be null");
-        try (var lease = userOperationGuard.acquire(
-                userId, UserOperationGuard.Kind.FORMAL, 1, userOperationGuard.renewableLeaseTtl())) {
-            UserOperationGuard.Lease previousLease = currentLease.get();
-            currentLease.set(lease);
+        var lease = userOperationGuard.acquire(
+                userId, UserOperationGuard.Kind.FORMAL, 1, userOperationGuard.renewableLeaseTtl());
+        boolean closeImmediately = true;
+        try {
+            long fenceEpoch = formalOperationFence.claim(userId);
+            CurrentAdmission previousAdmission = currentAdmission.get();
+            currentAdmission.set(new CurrentAdmission(userId, fenceEpoch, lease));
             try {
                 lease.requireActive();
                 T result = operation.get();
                 lease.requireActive();
                 return result;
             } finally {
-                if (previousLease == null) {
-                    currentLease.remove();
+                if (previousAdmission == null) {
+                    currentAdmission.remove();
                 } else {
-                    currentLease.set(previousLease);
+                    currentAdmission.set(previousAdmission);
+                }
+            }
+        } finally {
+            try {
+                if (TransactionSynchronizationManager.isActualTransactionActive()
+                        && TransactionSynchronizationManager.isSynchronizationActive()) {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            lease.close();
+                        }
+                    });
+                    closeImmediately = false;
+                }
+            } finally {
+                if (closeImmediately) {
+                    lease.close();
                 }
             }
         }
@@ -39,8 +64,8 @@ public class FormalOperationAdmission {
 
     /** Fails the current transaction before commit if its owning formal-operation lease is lost. */
     public void registerCurrentLeaseCommitFence() {
-        UserOperationGuard.Lease lease = currentLease.get();
-        if (lease == null) {
+        CurrentAdmission admission = currentAdmission.get();
+        if (admission == null) {
             return;
         }
         if (!TransactionSynchronizationManager.isActualTransactionActive()
@@ -48,12 +73,18 @@ public class FormalOperationAdmission {
             throw new IllegalStateException(
                     "A formal-operation commit fence requires an active Spring transaction");
         }
-        lease.requireActive();
+        admission.lease().requireActive();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void beforeCommit(boolean readOnly) {
-                lease.requireActive();
+                formalOperationFence.lockAndRequireCurrent(
+                        admission.userId(), admission.fenceEpoch());
+                admission.lease().requireActive();
             }
         });
+    }
+
+    private record CurrentAdmission(
+            Long userId, long fenceEpoch, UserOperationGuard.Lease lease) {
     }
 }

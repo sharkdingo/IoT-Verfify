@@ -10,7 +10,7 @@ repaired rules back to the board (see [Applying a suggestion](#applying-a-sugges
 API contract (`fault-rules`, `fix`, `fix/apply`) → [../api/verification.md](../api/verification.md).
 Spec formulas → [spec-templates.md](spec-templates.md).
 
-Verified against code on 2026-07-21. Source: `component/nusmv/fixer/` — `RuleFixer`,
+Verified against code on 2026-07-24. Source: `component/nusmv/fixer/` — `RuleFixer`,
 `localize/FaultLocalizer`, `strategy/{ParameterAdjustStrategy, ConditionAdjustStrategy,
 RemoveRulesFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFingerprint`,
 `parameterize/{ParameterExtractor, CounterexampleInitialStateConstraints}`;
@@ -23,10 +23,14 @@ RemoveRulesFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFi
 
 1. **Fault localization** (`FaultLocalizer.localize`): identify which rules were
    triggered in the counterexample trace (a fast pass, no NuSMV invocation). This also
-   backs `GET /api/verify/traces/{id}/fault-rules`. Localization uses the same
-   canonical rule semantics as SMV generation: user-authored IF conditions are read from
-   the current trace state `Si`, while the command effect is checked on the transition
-   to `Si+1`.
+   backs `GET /api/verify/traces/{id}/fault-rules`. The persisted
+   `TraceStateDto.triggeredRules` probe is the sole execution authority; localization does
+   not re-evaluate current rule conditions or infer firings from coincidental state changes.
+   Its required frozen `ruleIndex` selects one exact run-request rule, so duplicate or absent
+   database ids and repeated labels cannot broaden the match. The frozen target API is
+   resolved only to describe the recorded transition and detect simultaneous commands that
+   write different target values to at least one shared device mode. Commands that update
+   disjoint modes are independent and are not labeled as conflicts.
 2. **Strategy attempts**: run the requested strategies in order. The default order is
    `parameter → condition → remove`: the first two implement Salus §5.1/§5.2, while
    `remove` is an IoT-Verify destructive fallback. A caller may override the list and order via
@@ -49,7 +53,8 @@ automation-link choice. Exact selections therefore stay fixed; for an exhaustive
 `ANY_UP_TO_BUDGET` run, discovery reproduces the concrete attacker branch that produced
 this counterexample while forward verification deliberately removes those candidate-only
 `INIT` constraints and checks the original exhaustive budget. Automation links are
-correlated by persisted rule id rather than generated list position.
+correlated by their required frozen `ruleIndex`, the exact zero-based position in the
+submitted rule snapshot; mutable or non-unique rule ids are presentation metadata only.
 Any candidate that removes or duplicates an explicitly selected automation-link rule is
 ineligible because it would change that fixed attacker choice rather than repair the model
 under the original scenario.
@@ -315,8 +320,12 @@ still describes the model being changed:
   verify again before asking the system to certify a repair.
 
 - **Frozen-template replay and drift** — the trace stores the exact parsed manifests used
-  by verification. `/fix` rebuilds from that saved set, never from whichever versions are
-  current. Apply first compares current manifests with the saved
+  by verification and one explicit `BUNDLED` or `CUSTOM` model-token source for every
+  captured device. `/fix` rebuilds from that saved set, never from whichever versions are
+  current. The versioned snapshot's manifest keys and device-source keys must exactly match
+  the saved verification request; a missing, unknown, or mismatched source is persisted-data
+  corruption (`500`) and stops the operation rather than being downgraded to `UNKNOWN`.
+  Apply first compares current manifests with the saved
   set: a confirmed difference blocks with `400`; an unavailable repository comparison
   is reported as unknown and blocks with retryable `503`. `/fix` remains usable against
   the frozen model but adds an explicit warning for either confirmed drift or an

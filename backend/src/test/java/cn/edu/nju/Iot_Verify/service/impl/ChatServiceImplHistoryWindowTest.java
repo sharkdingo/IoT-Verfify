@@ -42,6 +42,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -318,7 +319,7 @@ class ChatServiceImplHistoryWindowTest {
     }
 
     @Test
-    void getHistory_shouldAttachConcretePersistedExecutionTraceToAssistantReply() {
+    void getHistory_shouldNotSynthesizeExecutionEvidenceFromHiddenToolMessages() {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("trace-history");
         session.setUserId(1L);
@@ -359,11 +360,8 @@ class ChatServiceImplHistoryWindowTest {
         List<ChatMessageResponseDto> history = service.getHistory(1L, "trace-history");
 
         assertEquals(2, history.size());
-        assertEquals(12, assistantDto.getExecutionElapsedSeconds());
-        assertEquals(List.of("CONTEXT_READY", "PLANNING", "TOOL_EXECUTION", "TOOL_RESULT", "WRITING_RESPONSE"),
-                assistantDto.getExecutionTrace().stream().map(progress -> progress.getStage()).toList());
-        assertEquals("已读取画布：2 个设备、1 条规则、1 条规约、1 个共享环境变量。",
-                assistantDto.getExecutionTrace().get(3).getDetail());
+        assertNull(assistantDto.getExecutionElapsedSeconds());
+        assertNull(assistantDto.getExecutionTrace());
     }
 
     @Test

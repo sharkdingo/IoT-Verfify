@@ -15,6 +15,56 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-24
+
+#### Changed
+- Removed the development-only login collision reader. Registration keeps phone-shaped
+  usernames invalid, and login now classifies an identifier once and queries only the
+  phone or username namespace instead of probing both for obsolete conflicting rows.
+- Made current development persistence contracts strict at every history boundary. Fuzz
+  input envelopes now require all six frozen-snapshot fields with their canonical JSON
+  types, and full run reads recompute the same normalized semantic fingerprint used at
+  write time instead of trusting a well-formed digest plus matching item counts.
+- Made verification, simulation, and counterexample-search task mapping enforce the
+  service's actual lifecycle state machine: identity, progress, timestamp ordering,
+  processing duration, terminal metadata, failure diagnostics, saved-trace ownership,
+  and result fields must agree with the persisted status.
+
+#### Fixed
+- Kept every Device Details action at least 44 pixels high (and the icon-only close
+  action 44 pixels wide) for touch use, and restored the dedicated Door and Garage Door
+  icons that were previously shadowed by the generic sensor-name classifier.
+- Rejected non-positive or duplicate non-null rule ids at the shared verification and
+  simulation request boundary. Unsaved rules may still omit ids, while persisted ids now
+  provide an unambiguous current-canvas correlation key for triggered-rule trace evidence.
+- Bound triggered-rule and compromised-link trace evidence to the exact zero-based rule
+  position in each immutable run request. Fault localization and automatic-fix replay no
+  longer broaden one execution probe to every rule sharing a nullable/duplicate id or label,
+  and verification, simulation, and counterexample-search history now rejects missing,
+  duplicate, out-of-range, or forged rule snapshots before returning full replay evidence.
+  Lightweight fuzz finding summaries no longer claim `dataAvailable` before their LONGTEXT
+  evidence and frozen run are loaded and validated. Finding replay now loads both the full
+  selected finding and its owning full run instead of reusing a history summary; unavailable
+  run summaries carrying findings are rejected. Canvas playback associates validated
+  historical evidence with current
+  edges only when the persisted rule id identifies one current rule; ambiguous or id-less
+  evidence is left unhighlighted instead of guessing from a current list position.
+- Made fault-localization conflicts follow the generated multi-mode transition semantics:
+  two commands conflict only when they write different values to an overlapping mode;
+  simultaneous writes to disjoint modes are reported as independent executions.
+- Closed the synchronous formal-operation lease-to-commit window with a monotonically
+  increasing database fencing epoch. Each admitted operation claims an epoch before
+  expensive work; final history persistence locks that user's epoch row through physical
+  commit and rejects a superseded epoch as well as an expired Redis lease. Ownership loss
+  remains a service-unavailable failure instead of being downgraded to a usable result
+  whose history status is merely unknown.
+- Made verification and simulation history summaries validate the complete persisted
+  state array, contiguous state indexes, and scalar count before advertising replayable
+  evidence. Damaged state JSON now produces an unavailable placeholder and cannot inflate
+  `counterexampleCount`.
+- Made internal verification/simulation request cloning reject device-count, null-element,
+  or token-provenance drift instead of silently returning or substituting `UNKNOWN`.
+
 ### 2026-07-23
 
 #### Changed
@@ -22,30 +72,105 @@ history into a technical spec. The spec content itself now lives under
   frontend contributor manuals: generated changes must have a named requirement or defect,
   one authoritative implementation path, boundary and failure-state coverage, synchronized
   contracts and documentation, and a maintainer-readable full-diff review before delivery.
+- Codified the active-development compatibility policy in the canonical `AGENTS.md` and the
+  root, backend, and frontend `CLAUDE.md` files: change all in-repository callers and tests
+  together, reject obsolete or malformed development state, and do not add speculative
+  old-format readers, dual writes, aliases, rolling-deployment bridges, or silent fallbacks.
+- Removed the obsolete top-level verification/simulation request fields `isAttack` and
+  `attackBudget`; model requests now use only the structured `attackScenario`, while the
+  derived summary fields remain available in run responses.
+- Made the structured attack contract explicit throughout NuSMV generation and automatic
+  fix orchestration. Generator, main-module, specification, and fixer entry points no
+  longer accept a separate attack boolean and budget; callers supply `AttackScenarioDto`.
+  Request DTOs require a non-null scenario and explicit mode, while malformed or absent
+  scenarios now fail instead of silently becoming `NONE`.
+- Removed implicit `MODEL_CHOICE` provenance for fuzz input events. Current producers and
+  persisted findings must carry an explicit event source; missing evidence now fails closed.
+- Made the semantic model fingerprint mandatory for every counterexample-search task and
+  run, removing the old count-only history comparison for rows with missing fingerprints.
+- Removed persisted-trace compatibility readers that invented empty event arrays, unknown
+  token provenance, model semantics from scalar columns, or template provenance from an
+  unversioned manifest map. Persisted verification and simulation evidence now fails closed
+  when any of those current fields or its verification-run owner is missing.
+- Made automatic-fix replay require a complete current versioned template snapshot: manifest
+  and device-source keys must exactly match the saved verification request, and every device
+  source must be explicitly `BUNDLED` or `CUSTOM`. Corrupt persisted context now stops with a
+  data-integrity failure instead of assigning `UNKNOWN` provenance.
+- Made chat `turnId` a required request field. The frontend transport always supplies one,
+  and the backend no longer invents correlation identity for an obsolete request shape.
+- Removed legacy local timestamp parsing and the NuSMV trace parser's implicit `device.state`
+  interpretation. API `LocalDateTime` requests now require a configured-zone offset, and a
+  trace field named `state` is handled only through the current device declaration.
+- Removed the API-level `Assignments` template field and invalid state-machine fallback.
+  APIs now express only state transitions, while partial stateful templates fail closed and
+  stateless templates retain their explicit non-semantic canvas placeholder.
+- Made automatic-fix fault localization depend only on frozen per-transition rule-execution
+  probes. It no longer reconstructs firings heuristically from current rule conditions or
+  coincidental device-state changes, and unexpected device-map failures now propagate instead
+  of being mislabeled as an unknown device.
 
 #### Fixed
+- Rejected device-type rows whose bundled/custom provenance is missing instead of
+  treating a null `defaultTemplate` value as bundled and localizing custom model tokens.
+- Rejected contradictory persisted simulation tasks before API mapping, including missing
+  lifecycle fields, invalid step counts, failed tasks without an error, completed tasks
+  without a saved trace, and non-completed tasks that claim one.
+- Locked the specification editor while a create request is unresolved and submitted a
+  detached draft snapshot, so a fast next edit cannot mutate the in-flight request or be
+  erased by the previous request's success reset.
+- Rejected verification and simulation model-context JSON whose required integer or
+  boolean fields are missing or encoded as coercible strings/decimals. Persisted enum and
+  selected-attack-point scalars must also retain their canonical JSON types instead of
+  being silently reinterpreted by Jackson.
 - Made Board renames compare-and-set against the name shown when the dialog opened. A stale
   edit or a different device claiming the requested case-insensitive name now returns
   `409 Conflict` before any write; the client refreshes the full semantic snapshot, preserves
   the user's draft for explicit resubmission, recognizes an already-achieved rename, and
   validates the returned old name, new name, and affected-specification count before showing
-  success.
+  success. Open rename dialogs now rebind to external snapshots without discarding a dirty
+  draft or its original compare-and-set baseline, adopt an external rename when untouched,
+  and close when the device was deleted, including after an in-flight request settles.
 - Made Board device nodes theme-aware and responsive to their rendered size, kept the
   canvas camera stable when opening ordinary device details, distinguished stateless
   devices from manifest-defined states, and added pointer- and keyboard-safe move/resize
   behavior. Server snapshots now preserve every pending or active node layout instead of
   rolling back a second drag, pointer cancellation cannot leave canvas/minimap panning
-  stuck, pointer resize handles disappear when a low-zoom node cannot fit them while keyboard
-  resize remains available, and the dark-theme device context menu stays inside the viewport
+  stuck, pointer resize handles collapse to one corner before disappearing when a low-zoom
+  node cannot retain a 44-pixel central drag target while keyboard resize remains available,
+  and the dark-theme device context menu stays inside the viewport
   with complete keyboard focus, navigation, and restoration behavior. Runtime and
   private-data badges remain readable in dark mode; hidden, inert, collapsed, or detached
   controls cannot capture modal focus; and device dialogs return focus to the originating
   node or a stable scene control even after failed or completed deletion paths.
-- Preserved dirty device-runtime drafts across foreground and cross-tab snapshots, normalized
-  equivalent nullable/omitted runtime values, and prevented late save/delete responses from
+- Preserved dirty device-runtime drafts across foreground and cross-tab snapshots with a
+  field-level three-way merge: disjoint local/server edits combine automatically, while
+  divergent edits to the same field block Save until the user chooses the latest value or
+  keeps the local value. Normalized equivalent nullable/omitted runtime values and prevented late save/delete responses from
   reopening a closed dialog or accepting repeated destructive submissions. Stale device
   dialogs and context menus now reconcile to the authoritative node or close when it was
-  deleted.
+  deleted. A save-start edit revision also preserves input made while a runtime save is in
+  flight, including the ambiguous case where the user deliberately returns to the old value;
+  the authoritative baseline advances even while that draft is preserved, preventing a later
+  refresh from overwriting it. Replacing a same-id device with a different runtime schema
+  resets the edit session instead of mixing old fields into the new template. Correctly
+  scoped dark-theme selectors now keep the complete device-details surface, runtime editor,
+  controls, labels, Markdown code blocks, and information-tooltip triggers readable instead
+  of leaving teleported or scoped component surfaces in their light palette.
+  Device deletion previews are now single-flight, visibly identify their target, close stale
+  details, menus, and confirmations after a cross-tab deletion, report that external removal
+  once, restore keyboard focus to the visible Devices tab, and reconcile an already-deleted
+  response without showing a contradictory failure. Every entry path now opens a cancellable
+  loading confirmation, suspends the underlying details surface without discarding its draft,
+  rejects malformed nested preview/delete responses, and serializes preview reads behind
+  pending Board writes. Changes to the target or its actual rule/specification/environment
+  impact close the stale confirmation while unrelated Board edits do not; repeated final
+  confirmation still emits only one delete request.
+  Runtime saves now send both the edit baseline and desired complete value; the backend
+  compares the baseline under the per-user database write lock and returns an explicit
+  `DEVICE_RUNTIME_STALE` conflict before writing when another tab changed the device. Runtime
+  template names, runtime values, variable/privacy names, and security labels are now
+  canonicalized at every complete device-write boundary. A runtime no-op also repairs a
+  non-canonical stored representation instead of reporting an unchanged value that remains dirty.
 - Localized bundled model tokens at the display boundary without changing canonical model
   values, completed compact and short-viewport drawer behavior, improved floating-panel
   focus and Escape handling, and added dark-theme surfaces for device, verification,
@@ -59,23 +184,40 @@ history into a technical spec. The spec content itself now lives under
   Chinese/English localization regression, while custom `workingState` values remain visibly
   distinct from bundled provenance.
 - Made fault-localization and automatic-fix token localization provenance-safe: new traces
-  freeze bundled/custom source per device, legacy traces fall back to unknown and preserve
+  freeze bundled/custom source per device, entries without provenance stay unknown and preserve
   raw text, shared environment values require unanimous source provenance, and parameter,
   condition, action, and end-state labels no longer translate custom tokens that happen to
-  collide with bundled names.
+  collide with bundled names. Counterexample-search tasks now persist frozen model input and
+  server-only provenance atomically in one strict, versioned envelope. Unsupported,
+  incomplete, or unversioned development data and findings with missing or conflicting
+  source fields are rejected instead of inferred from the current template catalog. Findings
+  emit the source on device, local-variable, and shared-environment finding states. Canvas
+  playback now derives state-machine presence, device
+  state, variable labels/values, and security badges only from that frozen trace evidence;
+  changing the current template cannot relabel historical nodes. Fuzz domain previews also
+  normalize Board and model device ids before applying bundled-token localization, including
+  generated UUID ids whose hyphens become NuSMV underscores. Verification, simulation, and
+  counterexample-search replay now share nested trace validation for device/variable values,
+  triggered-rule snapshots, trust/privacy labels, and token provenance, so malformed evidence
+  is rejected before rendering or localization. The shared validator accepts legitimate
+  stateless empty state/mode values but rejects duplicate identities, trust/privacy evidence
+  in the wrong list, incomplete device or variable membership, local/global provenance
+  mismatches, missing/null provenance, and device or environment provenance that changes
+  between saved states.
 - Stopped chat, verification, simulation, and counterexample-search workers after a full
   lease TTL without database confirmation; enforced stored-run quotas for synchronous
   verification and saved simulation; and bounded verification and simulation history
-  summaries by their configured stored-run quotas with bounded scalar-metadata validation. Formal
-  and simulation playback now rejects non-contiguous or non-one-based persisted states,
-  history summaries use scalar state counts instead of loading full trace JSON, and
-  known-damaged trace placeholders no longer inflate the replayable counterexample count in
-  verification run summaries or details. Task lease renewal now locks each row before
+  summaries by their configured stored-run quotas with bounded result sets. Formal
+  and simulation playback now rejects non-contiguous or non-one-based persisted states, and
+  trace placeholders that are damaged or do not explicitly confirm availability no longer
+  inflate the replayable counterexample count in verification run summaries or details. Task lease renewal now locks each row before
   sampling the database clock, so lock wait cannot revive or locally confirm an expired lease, and
   synchronous result transactions recheck distributed admission immediately before commit.
   Long AI tool transactions no longer block chat lease heartbeats, ordinary AI writes recheck
   ownership immediately before commit, and a heartbeat delayed behind a row lock cannot
-  revive a lease that expired while it waited.
+  revive a lease that expired while it waited. Redis admission acquisition and renewal now
+  measure confirmation from before each round trip, so a delayed response cannot extend the
+  local validity window beyond the distributed TTL.
 - Bounded process-local authentication rate-limit state with a fail-closed active-window
   ceiling. Capacity exhaustion now has its own `CAPACITY` scope, reports the earliest tracked
   expiry instead of a misleading full-window delay, and shows localized busy feedback instead
@@ -90,13 +232,32 @@ history into a technical spec. The spec content itself now lives under
   longer implies that it satisfies the user's natural-language requirement or forms a
   closed automation loop.
 - Made zero-tool assistant replies explicitly state that no platform tool ran and no current
-  Board state was read or changed, even when a model hallucinates completion. Stream
-  `COMPLETED` now describes response delivery and persistence only, while structurally valid
-  but semantically incomplete scenario recommendations persist and report `PARTIAL` instead
-  of being presented as fully successful. The standalone scenario-recommendation REST
+  Board state was read or changed. Provider prose on every turn is sentence-buffered before
+  display; explicit claims of tool evidence or current-platform completion/mutation are replaced
+  with exact successful server tool records, or a deterministic warning when none exists,
+  instead of being streamed or persisted. All later provider prose is suppressed and an
+  otherwise completed turn is downgraded to `PARTIAL`. API documentation, historical
+  descriptions, and ordinary sample content are not treated as platform mutations.
+  Zero-tool replies
+  now persist as the existing `PARTIAL` status and display as "No platform tools ran" only
+  when a non-empty trace has no tool execution or result activity; a missing trace or a tool
+  that started without a result remains explicitly partial. `COMPLETED` is reserved for turns
+  that actually invoked at least one platform tool, without implying that every user objective
+  completed. Structurally valid but
+  semantically incomplete scenario recommendations
+  persist and report `PARTIAL` instead of being presented as fully successful. The
+  standalone scenario-recommendation REST
   contract now carries the same objective status and issues, and both backend and frontend
   recompute them from the returned canonical scene instead of trusting inconsistent model
-  claims.
+  claims. Chat history and live progress are structurally validated at the frontend boundary;
+  malformed roles, content, cursors, counters, stages, outcomes, or execution traces are
+  rejected instead of reaching rendering and being mistaken for a verified terminal state.
+  Terminal assistant persistence is now single-attempt and fail-visible: trace serialization
+  failures or database write failures emit an explicit SSE error instead of normal completion
+  or a second misleading disconnect row. Chat history restores only explicit, structurally
+  valid persisted traces; a `COMPLETED` row with missing, damaged, guarded, or non-usable trace
+  evidence has its status cleared. Empty or malformed AI-tool result objects fail closed rather
+  than increasing the successful-step count.
 - Kept Board account actions reachable at tablet widths, made the permanent-account
   deletion dialog scroll within short viewports, and stopped Tab or other navigation keys
   from satisfying its deliberate-edit guard. Long canvas labels now expose their full text
@@ -408,9 +569,9 @@ history into a technical spec. The spec content itself now lives under
   API triggers, and behavior-derived descriptions for otherwise blank manifests,
   states, variables, transitions, APIs, and content. Each description now identifies
   whether it was declared by the template or derived from modeled facts.
-- Made chat execution records durable across reloads. New assistant rows persist the exact
+- Made chat execution records durable across reloads. Assistant rows persist the exact
   emitted activity trace and elapsed time, including task resumption and execution-guard
-  stops; legacy rows still reconstruct from tool-call/result blocks. Visible summaries are
+  stops; missing execution evidence remains unavailable. Visible summaries are
   operation-aware and omit raw internal identifiers and provider exception text.
 - Added ReAct-style user-visible reasoning summaries before tool actions. The summaries
   explain the current goal, observed facts, next action, and remaining work, are sanitized

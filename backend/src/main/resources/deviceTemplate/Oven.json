@@ -130,7 +130,6 @@
 			"StartState": "",
 			"EndState": "heating;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -139,7 +138,6 @@
 			"StartState": "",
 			"EndState": "grill;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -148,7 +146,6 @@
 			"StartState": "",
 			"EndState": "warming;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -157,7 +154,6 @@
 			"StartState": "",
 			"EndState": "defrosting;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -166,7 +162,6 @@
 			"StartState": "",
 			"EndState": ";ready",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -175,7 +170,6 @@
 			"StartState": "",
 			"EndState": ";running",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -184,7 +178,6 @@
 			"StartState": "",
 			"EndState": ";paused",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

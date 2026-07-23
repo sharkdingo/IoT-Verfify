@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -103,7 +104,7 @@ class SmvGeneratorFixesTest {
     @DisplayName("Builder input: main module builder null devices throws categorized exception")
     void mainBuilder_nullDevices_throwsCategorizedException() {
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> mainBuilder.build(1L, null, List.of(), Map.of(), false, 0, false));
+                () -> mainBuilder.build(1L, null, List.of(), Map.of(), AttackScenarioDto.none(), false));
         assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
         assertTrue(ex.getMessage().contains("SmvMainModuleBuilder"));
         assertTrue(ex.getMessage().contains("devices"));
@@ -137,7 +138,7 @@ class SmvGeneratorFixesTest {
                         List.of(device("a_temperature", "Sensor")),
                         List.of(),
                         Map.of("a_temperature", smv),
-                        false, 0, false));
+                        AttackScenarioDto.none(), false));
 
         assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
         assertTrue(ex.getMessage().contains("main namespace"));
@@ -160,7 +161,7 @@ class SmvGeneratorFixesTest {
                         List.of(device(internalCounter, "Meter")),
                         List.of(),
                         Map.of(internalCounter, smv),
-                        true, 3, false));
+                        AttackScenarioDto.anyUpToBudget(3), false));
 
         assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
         assertTrue(ex.getMessage().contains(internalCounter));
@@ -185,7 +186,7 @@ class SmvGeneratorFixesTest {
                         null,
                         List.of(),
                         Map.of("lambda_r0_c0", smv),
-                        false, 0, false,
+                        AttackScenarioDto.none(), false,
                         config,
                         SmvGenerationContext.noop()));
 
@@ -217,9 +218,7 @@ class SmvGeneratorFixesTest {
                 List.of(device("light_1", "Light")),
                 List.of(),
                 Map.of("light_1", smv),
-                false,
-                0,
-                false,
+                AttackScenarioDto.none(), false,
                 config);
 
         assertTrue(model.contains("\nINIT light_1.Power = on;"), model);
@@ -266,7 +265,7 @@ class SmvGeneratorFixesTest {
 
         String model = mainBuilder.build(1L,
                 List.of(device("button_1", "Button"), device("light_1", "Light")),
-                List.of(first, second), deviceMap, false, 0, false);
+                List.of(first, second), deviceMap, AttackScenarioDto.none(), false);
 
         assertTrue(model.contains("iot_verify_rule_fired_0: boolean;"));
         assertTrue(model.contains("init(iot_verify_rule_fired_0) := FALSE;"));
@@ -561,7 +560,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("clock_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
         // P4 核心断言：条件应为 a_time=23，而非 clock_1.time=23
         assertTrue(result.contains("a_time=23"), "Should use a_time, got:\n" + result);
@@ -595,7 +594,7 @@ class SmvGeneratorFixesTest {
         DeviceVerificationDto dto = device("heater_1", "Heater");
         dto.setState("off");
         String result = mainBuilder.build(
-                1L, List.of(dto), List.of(), Map.of("heater_1", smv), false, 0, false);
+                1L, List.of(dto), List.of(), Map.of("heater_1", smv), AttackScenarioDto.none(), false);
 
         assertTrue(result.contains("heater_1.Mode=off & a_temperature>=30: on;"), result);
         assertFalse(result.contains("heater_1.temperature>=30"), result);
@@ -632,7 +631,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("lock_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
         // P5 核心断言：trust_Mode_home 必须有 next() 且包含自保持
         assertTrue(result.contains("next(lock_1.trust_Mode_home)"),
@@ -833,7 +832,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ts_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.anyUpToBudget(0), false);
 
         assertTrue(result.contains("FROZENVAR"), "Should declare FROZENVAR section");
         assertTrue(result.contains("iot_verify_compromised_point_count: 0..1"),
@@ -854,7 +853,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ts_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 3, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.anyUpToBudget(3), false);
 
         assertTrue(result.contains("INVAR iot_verify_compromised_point_count <= 3"),
                 "The request budget should constrain the internal attacked-node counter");
@@ -883,7 +882,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ts_1", smv);
 
-        String result = specBuilder.build(List.of(spec), true, 3, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
 
         assertFalse(result.contains("attackBudget<="), "Spec should not inject attackBudget constraint");
     }
@@ -909,7 +908,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ts_1", smv);
 
-        String result = specBuilder.build(List.of(spec), true, 3, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
 
         assertFalse(result.contains("attackBudget<="), "Safety spec should not inject attackBudget constraint");
         assertFalse(result.contains(".is_attack=FALSE"),
@@ -946,7 +945,7 @@ class SmvGeneratorFixesTest {
         dto.setTemplateName("Light");
         dto.setState("off");
 
-        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 10, false);
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.anyUpToBudget(10), false);
 
         assertFalse(smv.contains("light_1.is_attack=TRUE: light_1.Mode;"),
                 "Attack modeling must not freeze the whole actuator state machine, got:\n" + smv);
@@ -969,7 +968,7 @@ class SmvGeneratorFixesTest {
         dto.setTemplateName("Sensor");
         dto.setState("on");
 
-        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 10, false);
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.anyUpToBudget(10), false);
 
         assertTrue(smv.contains("ts_1.is_attack=TRUE: 0..100;"),
                 "An attacked sensor reading should be nondeterministic within its declared domain, got:\n" + smv);
@@ -1013,7 +1012,7 @@ class SmvGeneratorFixesTest {
                         .build())
                 .build();
         String smv = mainBuilder.build(
-                1L, List.of(dto), List.of(rule), Map.of("thermostat_1", thermostat), true, 1, false);
+                1L, List.of(dto), List.of(rule), Map.of("thermostat_1", thermostat), AttackScenarioDto.anyUpToBudget(1), false);
 
         assertTrue(smv.contains("thermostat_1.is_attack=TRUE: 0..100;"),
                 "A compromised composite device may tamper with its declared external reading");
@@ -1062,7 +1061,7 @@ class SmvGeneratorFixesTest {
 
         String main = mainBuilder.build(
                 1L, List.of(device("phone_1", "Phone")), List.of(),
-                Map.of("phone_1", phone), true, 1, false);
+                Map.of("phone_1", phone), AttackScenarioDto.anyUpToBudget(1), false);
         assertTrue(main.contains("phone_1.is_attack=TRUE: 0..10;"));
     }
 
@@ -1087,7 +1086,7 @@ class SmvGeneratorFixesTest {
 
         String main = mainBuilder.build(
                 1L, List.of(device("washer_1", "Washer")), List.of(),
-                Map.of("washer_1", washer), true, 1, false);
+                Map.of("washer_1", washer), AttackScenarioDto.anyUpToBudget(1), false);
         assertFalse(main.contains("washer_1.is_attack=TRUE: 0..100"));
         assertFalse(main.contains("washer_1.is_attack"),
                 "An inert device must not consume or expose a compromise choice");
@@ -1165,7 +1164,7 @@ class SmvGeneratorFixesTest {
         rule.setConditions(List.of(cond));
         rule.setCommand(cmd);
 
-        String smv = mainBuilder.build(1L, List.of(lockDto, sensorDto), List.of(rule), map, true, 10, false);
+        String smv = mainBuilder.build(1L, List.of(lockDto, sensorDto), List.of(rule), map, AttackScenarioDto.anyUpToBudget(10), false);
 
         String transitionBlock = "next(lock_1.Mode)";
         int blockStart = smv.indexOf(transitionBlock);
@@ -1211,7 +1210,7 @@ class SmvGeneratorFixesTest {
         dto.setTemplateName("HVAC");
         dto.setState("auto;high");
 
-        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 5, false);
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.anyUpToBudget(5), false);
 
         assertFalse(smv.contains("hvac_1.is_attack=TRUE: hvac_1.Mode;"),
                 "Attack modeling must not freeze Mode, got:\n" + smv);
@@ -1283,7 +1282,7 @@ class SmvGeneratorFixesTest {
         rule.setConditions(List.of(cond));
         rule.setCommand(cmd);
 
-        String smv = mainBuilder.build(1L, List.of(sensorDto, lightDto), List.of(rule), map, false, 0, false);
+        String smv = mainBuilder.build(1L, List.of(sensorDto, lightDto), List.of(rule), map, AttackScenarioDto.none(), false);
 
         assertTrue(smv.contains("sensor_1.temperature>30") && smv.contains("light_1.Mode=off: on;"),
                 "Rule-generated transition (temperature>30 -> turnOn) must be present, got:\n" + smv);
@@ -1368,46 +1367,49 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P10: SmvGenerator rejects attackBudget above the public contract")
-    void generatorRejectsAttackBudgetAboveUpperBound() throws Exception {
+    @DisplayName("P10: SmvGenerator rejects an attack scenario with an oversized budget")
+    void generatorRejectsAttackScenarioBudgetAboveUpperBound() throws Exception {
         SmvGenerator generator = buildGeneratorForClampTests();
         DeviceVerificationDto dto = buildClampTestDevice();
 
         SmvGenerationException error = assertThrows(SmvGenerationException.class, () -> generator.generate(
-                1L, List.of(dto), List.of(), List.of(), true, 999, false));
+                1L, List.of(dto), List.of(), List.of(), AttackScenarioDto.anyUpToBudget(999), false));
 
         assertEquals(SmvGenerationException.ErrorCategories.INVALID_BUILDER_INPUT, error.getErrorCategory());
-        assertTrue(error.getMessage().contains("attackBudget"));
-        assertTrue(error.getMessage().contains("between 0 and 50"));
+        assertTrue(error.getMessage().contains("ANY_UP_TO_BUDGET requires a 1..50 budget"));
     }
 
     @Test
-    @DisplayName("P10: SmvGenerator rejects attackBudget below the public contract")
-    void generatorRejectsAttackBudgetBelowLowerBound() throws Exception {
+    @DisplayName("P10: SmvGenerator rejects an attack scenario with a negative budget")
+    void generatorRejectsAttackScenarioBudgetBelowLowerBound() throws Exception {
         SmvGenerator generator = buildGeneratorForClampTests();
         DeviceVerificationDto dto = buildClampTestDevice();
 
         SmvGenerationException error = assertThrows(SmvGenerationException.class, () -> generator.generate(
-                1L, List.of(dto), List.of(), List.of(), true, -7, false));
+                1L, List.of(dto), List.of(), List.of(), AttackScenarioDto.anyUpToBudget(-7), false));
 
         assertEquals(SmvGenerationException.ErrorCategories.INVALID_BUILDER_INPUT, error.getErrorCategory());
-        assertTrue(error.getMessage().contains("attackBudget"));
-        assertTrue(error.getMessage().contains("between 0 and 50"));
+        assertTrue(error.getMessage().contains("ANY_UP_TO_BUDGET requires a 1..50 budget"));
     }
 
     @Test
-    @DisplayName("P10: SmvGenerator requires attack mode and budget to agree")
-    void generatorRejectsContradictoryAttackOptions() throws Exception {
+    @DisplayName("P10: SmvGenerator rejects malformed structured attack scenarios")
+    void generatorRejectsMalformedAttackScenarios() throws Exception {
         SmvGenerator generator = buildGeneratorForClampTests();
         DeviceVerificationDto dto = buildClampTestDevice();
 
         SmvGenerationException zeroEnabled = assertThrows(SmvGenerationException.class, () -> generator.generate(
-                1L, List.of(dto), List.of(), List.of(), true, 0, false));
+                1L, List.of(dto), List.of(), List.of(), AttackScenarioDto.anyUpToBudget(0), false));
+        AttackScenarioDto malformedNone = AttackScenarioDto.builder()
+                .mode(AttackScenarioDto.Mode.NONE)
+                .budget(1)
+                .points(List.of())
+                .build();
         SmvGenerationException positiveDisabled = assertThrows(SmvGenerationException.class, () -> generator.generate(
-                1L, List.of(dto), List.of(), List.of(), false, 1, false));
+                1L, List.of(dto), List.of(), List.of(), malformedNone, false));
 
-        assertTrue(zeroEnabled.getMessage().contains("when attack modeling is enabled"));
-        assertTrue(positiveDisabled.getMessage().contains("must be 0 when attack modeling is disabled"));
+        assertTrue(zeroEnabled.getMessage().contains("ANY_UP_TO_BUDGET requires a 1..50 budget"));
+        assertTrue(positiveDisabled.getMessage().contains("NONE must not contain a budget"));
     }
 
     // ======================== P11: rule fail-closed + env init conflict ========================
@@ -1798,7 +1800,7 @@ class SmvGeneratorFixesTest {
         rule.setConditions(List.of(condition));
         rule.setCommand(command);
 
-        String smv = mainBuilder.build(1L, List.of(fanDto, lockDto), List.of(rule), map, false, 0, false);
+        String smv = mainBuilder.build(1L, List.of(fanDto, lockDto), List.of(rule), map, AttackScenarioDto.none(), false);
 
         assertTrue(smv.contains("fan_1.fanAuto_a=TRUE & lock_1.Mode=locked: unlocked;"),
                 "State transition should use the current rule condition/event, got:\n" + smv);
@@ -1880,7 +1882,7 @@ class SmvGeneratorFixesTest {
         rule.setConditions(List.of(condition));
         rule.setCommand(command);
 
-        String smv = mainBuilder.build(1L, List.of(fanDto), List.of(rule), map, false, 0, false);
+        String smv = mainBuilder.build(1L, List.of(fanDto), List.of(rule), map, AttackScenarioDto.none(), false);
         assertTrue(smv.contains("fan_1.Mode=off"), "Rule guard should use current state on self-reference");
         assertFalse(smv.contains("next(fan_1.Mode)=off"),
                 "Self-referencing target transition must not read next(fan_1.Mode) recursively");
@@ -1953,7 +1955,7 @@ class SmvGeneratorFixesTest {
         rule.setCommand(command);
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> mainBuilder.build(1L, List.of(sensorDto, lightDto1, lightDto2), List.of(rule), map, false, 0, false));
+                () -> mainBuilder.build(1L, List.of(sensorDto, lightDto1, lightDto2), List.of(rule), map, AttackScenarioDto.none(), false));
         assertEquals("DEVICE_NOT_FOUND", ex.getErrorCategory());
     }
 
@@ -2040,7 +2042,7 @@ class SmvGeneratorFixesTest {
         dto.setTemplateName("Heater");
         dto.setState("off");
 
-        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
         assertTrue(smv.contains("heater_1.temperature>=30"), "Trigger relation should be normalized to >=, got:\n" + smv);
         assertFalse(smv.contains("heater_1.temperatureGTE30"), "Raw relation keyword should not appear in output");
     }
@@ -2071,7 +2073,7 @@ class SmvGeneratorFixesTest {
         dto.setState("on");
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false));
+                () -> mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false));
         assertEquals("TEMPLATE_INVALID", ex.getErrorCategory());
         assertTrue(ex.getMessage().contains("powerOn"));
     }
@@ -2114,7 +2116,7 @@ class SmvGeneratorFixesTest {
         map.put("clock_1", d1);
         map.put("clock_2", d2);
 
-        String smvText = mainBuilder.build(1L, List.of(dto1, dto2), List.of(), map, false, 0, false);
+        String smvText = mainBuilder.build(1L, List.of(dto1, dto2), List.of(), map, AttackScenarioDto.none(), false);
         assertTrue(smvText.contains("a_time: 0..23;"), "Environment variable must still be declared globally");
         assertFalse(smvText.contains("init(a_time)"),
                 "Only the top-level environment pool may initialize shared environment variables");
@@ -2147,7 +2149,7 @@ class SmvGeneratorFixesTest {
 
         String smvText = mainBuilder.build(1L, List.of(dto),
                 List.of(new BoardEnvironmentVariableDto("time", "10", "trusted", "public")),
-                List.of(), map, false, 0, false, SmvGenerationContext.noop());
+                List.of(), map, AttackScenarioDto.none(), false, SmvGenerationContext.noop());
         assertTrue(smvText.contains("a_time: 0..23;"), "Environment variable must be declared globally");
         assertTrue(smvText.contains("init(a_time) := 10;"),
                 "Explicit environment pool value must initialize a_time");
@@ -2198,9 +2200,7 @@ class SmvGeneratorFixesTest {
                         "temperature", "20", "trusted", "private")),
                 List.of(),
                 List.of(),
-                false,
-                0,
-                true);
+                AttackScenarioDto.none(), true);
         String smv = Files.readString(generated.smvFile().toPath());
 
         assertTrue(smv.contains("init(trust_temperature) := trusted;"),
@@ -2256,7 +2256,7 @@ class SmvGeneratorFixesTest {
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class, () -> mainBuilder.build(1L, List.of(dto),
                 List.of(new BoardEnvironmentVariableDto("mystery", "abc", "trusted", "public")),
-                List.of(), map, false, 0, false, SmvGenerationContext.noop()));
+                List.of(), map, AttackScenarioDto.none(), false, SmvGenerationContext.noop()));
         assertEquals("TEMPLATE_INVALID", ex.getErrorCategory());
         assertTrue(ex.getMessage().contains("mystery"));
     }
@@ -2293,7 +2293,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
         assertTrue(result.contains("(thermostat_1.Mode=auto & thermostat_1.FanMode=on)"),
                 "State tuple should compile to conjunction, got:\n" + result);
     }
@@ -2329,7 +2329,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
         assertTrue(result.contains("((thermostat_1.Mode=auto & thermostat_1.FanMode=on) | "
                         + "(thermostat_1.Mode=manual & thermostat_1.FanMode=off))"),
                 "State tuple IN should preserve semicolon-separated tuple segments, got:\n" + result);
@@ -2366,7 +2366,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
         assertTrue(result.contains("home_mode.Mode=sleep"),
                 "Mode condition should compile to explicit mode comparison, got:\n" + result);
     }
@@ -2402,7 +2402,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
         assertTrue(result.contains("home_mode.Mode=sleep"),
                 "Safety spec should keep the mode comparison, got:\n" + result);
         assertTrue(result.contains("home_mode.trust_Mode_sleep=untrusted"),
@@ -2443,7 +2443,7 @@ class SmvGeneratorFixesTest {
         spec.setAConditions(List.of(a));
 
         SmvGenerationContext context = SmvGenerationContext.collecting();
-        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        String result = specBuilder.build(List.of(spec), map, false, context);
         SmvGenerationContext.WarningSnapshot snapshot = context.warningsSnapshot();
 
         assertFalse(result.contains("CTLSPEC FALSE"));
@@ -2489,7 +2489,7 @@ class SmvGeneratorFixesTest {
         spec.setThenConditions(List.of());
 
         SmvGenerationContext context = SmvGenerationContext.collecting();
-        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        String result = specBuilder.build(List.of(spec), map, false, context);
         assertFalse(result.contains("CTLSPEC FALSE"),
                 "An invalid specification must not become an artificial violation, got:\n" + result);
         assertTrue(result.contains("ambiguous across modes"),
@@ -2531,7 +2531,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
         assertTrue(result.contains("a_temperature>30"),
                 "Environment variable should be referenced as a_temperature, got:\n" + result);
         assertFalse(result.contains("sensor_1.temperature>30"),
@@ -2569,7 +2569,7 @@ class SmvGeneratorFixesTest {
         spec.setThenConditions(List.of());
 
         SmvGenerationContext context = SmvGenerationContext.collecting();
-        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        String result = specBuilder.build(List.of(spec), map, false, context);
         assertFalse(result.contains("CTLSPEC FALSE"),
                 "An invalid trust key must not become an artificial violation, got:\n" + result);
         assertTrue(result.contains("property variable 'not_exists' not found"),
@@ -2609,8 +2609,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0,
-                Map.of("light_1", smv), false);
+        String result = specBuilder.build(List.of(spec), Map.of("light_1", smv), false);
 
         assertTrue(result.contains("light_1.Mode=off & light_1.trust_Mode_off=untrusted"), result);
         assertTrue(result.contains("light_1.Mode=on & light_1.trust_Mode_on=untrusted"), result);
@@ -2648,7 +2647,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
         assertTrue(result.contains("a_temperature>30"),
                 "Relation with spaces should normalize to >, got:\n" + result);
     }
@@ -2685,7 +2684,7 @@ class SmvGeneratorFixesTest {
         spec.setThenConditions(List.of());
 
         SmvGenerationContext context = SmvGenerationContext.collecting();
-        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        String result = specBuilder.build(List.of(spec), map, false, context);
         assertFalse(result.contains("CTLSPEC FALSE"),
                 "An unsupported relation must not become an artificial violation, got:\n" + result);
         assertTrue(result.contains("unsupported relation"),
@@ -2727,7 +2726,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        String result = specBuilder.build(List.of(spec), map, false);
         assertTrue(result.contains("a_temperature>30"),
                 "Safety spec should keep env expression on a_temperature, got:\n" + result);
         assertTrue(result.contains("sensor_1.trust_temperature=untrusted"),
@@ -2779,7 +2778,7 @@ class SmvGeneratorFixesTest {
         dto.setTemplateName("TestDev");
         dto.setState("on;fast");
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
         // The all-empty state should NOT produce a guardless ": 5;" line
         assertFalse(result.matches("(?s).*\\t\\t:\\s*5;.*"),
@@ -2830,7 +2829,7 @@ class SmvGeneratorFixesTest {
         dto.setTemplateName("TestDev2");
         dto.setState("on;fast");
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
         // The all-empty state should NOT produce a guardless ": error;" line
         assertFalse(result.matches("(?s).*\\t\\t:\\s*error;.*"),
@@ -2947,7 +2946,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ac_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 50, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.anyUpToBudget(50), false);
 
         assertTrue(result.contains("a_temperature: 15..35;"),
                 "Attack mode must preserve the environment domain declared by the template, got:\n" + result);
@@ -2995,7 +2994,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("dev_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
         // Upper boundary branch: a_temperature>=35: {clamp(a_temperature - 30), a_temperature}
         // Without clamp, 35-30=5 which is below lower bound 15
@@ -3054,7 +3053,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ac_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
         // WITH-rate =upper boundary: candidates are clamped
         assertTrue(result.contains("a_temperature=35-(ac_1.temperature_rate): {"
@@ -3119,7 +3118,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("dev_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
         // Upper boundary: dev_1.power>=10: {clamp(dev_1.power - 8), dev_1.power}
         // Without clamp, 10-8=2 is fine, but this verifies the clamp wrapper is present
@@ -3169,7 +3168,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("dev_1", smv);
 
-        String result = mainBuilder.build(1L, List.of(device), List.of(), map, false, 0, false);
+        String result = mainBuilder.build(1L, List.of(device), List.of(), map, AttackScenarioDto.none(), false);
 
         assertFalse(result.contains("next(dev_1.waterTemperature_rate)"),
                 "Local-only dynamics should not create environment-impact rate variables, got:\n" + result);
@@ -3218,7 +3217,7 @@ class SmvGeneratorFixesTest {
 
         // Should NOT throw NPE, should produce next(dev_1.temperature_rate) transition
         String result = assertDoesNotThrow(() ->
-                mainBuilder.build(1L, List.of(device), List.of(), map, false, 0, false));
+                mainBuilder.build(1L, List.of(device), List.of(), map, AttackScenarioDto.none(), false));
 
         assertTrue(result.contains("next(dev_1.temperature_rate)"),
                 "Expected _rate transition for ImpactedVariable 'temperature', got:\n" + result);
@@ -3298,7 +3297,7 @@ class SmvGeneratorFixesTest {
 
         validator.validate(Map.of("presence_1", smv));
         String result = mainBuilder.build(
-                1L, List.of(dto), List.of(), Map.of("presence_1", smv), false, 0, false);
+                1L, List.of(dto), List.of(), Map.of("presence_1", smv), AttackScenarioDto.none(), false);
 
         assertTrue(result.contains("presence_1.Power=off: FALSE;"), result);
         assertTrue(result.contains("presence_1.Power=on: TRUE;"), result);
@@ -3325,7 +3324,7 @@ class SmvGeneratorFixesTest {
 
         validator.validate(Map.of("device_1", smv));
         String result = mainBuilder.build(
-                1L, List.of(dto), List.of(), Map.of("device_1", smv), false, 0, false);
+                1L, List.of(dto), List.of(), Map.of("device_1", smv), AttackScenarioDto.none(), false);
 
         assertTrue(result.contains("TRUE: device_1.phase;"), result);
         assertFalse(result.contains("TRUE: {idle, running};"), result);

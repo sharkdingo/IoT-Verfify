@@ -42,12 +42,15 @@ class SmvTraceParserTest {
                 counterexample, Map.of(), List.of(first, second));
 
         assertTrue(states.get(0).getTriggeredRules().isEmpty());
+        assertEquals(0, states.get(1).getTriggeredRules().get(0).getRuleIndex());
         assertEquals("41", states.get(1).getTriggeredRules().get(0).getRuleId());
         assertEquals("Turn on the hallway light", states.get(1).getTriggeredRules().get(0).getRuleLabel());
         assertEquals("42", states.get(2).getTriggeredRules().get(0).getRuleId());
+        assertEquals(1, states.get(2).getTriggeredRules().get(0).getRuleIndex());
         assertEquals("42", states.get(3).getTriggeredRules().get(0).getRuleId(),
                 "NuSMV omits unchanged values, so probe state must carry forward");
         assertEquals("41", states.get(0).getCompromisedAutomationLinks().get(0).getRuleId());
+        assertEquals(0, states.get(0).getCompromisedAutomationLinks().get(0).getRuleIndex());
         assertEquals("Turn on the hallway light",
                 states.get(3).getCompromisedAutomationLinks().get(0).getRuleLabel(),
                 "Frozen automation-link choices must carry forward without exposing generated indexes");
@@ -260,7 +263,8 @@ class SmvTraceParserTest {
                 internalVariable("trust_score"),
                 internalVariable("privacy_level"),
                 internalVariable("flow_rate"),
-                internalVariable("tap_a")
+                internalVariable("tap_a"),
+                internalVariable("state")
         ));
 
         Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
@@ -272,6 +276,7 @@ class SmvTraceParserTest {
                   meter_1.privacy_level = private
                   meter_1.flow_rate = 5
                   meter_1.tap_a = TRUE
+                  meter_1.state = calibrating
                   meter_1.generated_rate = 1
                   meter_1.generated_a = TRUE
                   meter_1.trust_missing = untrusted
@@ -285,6 +290,8 @@ class SmvTraceParserTest {
         assertEquals("private", findVariable(device, "privacy_level").getValue());
         assertEquals("5", findVariable(device, "flow_rate").getValue());
         assertEquals("TRUE", findVariable(device, "tap_a").getValue());
+        assertEquals("calibrating", findVariable(device, "state").getValue());
+        assertNull(device.getState(), "Only declared mode variables determine device working state");
         assertNull(findVariable(device, "generated_rate"));
         assertNull(findVariable(device, "generated_a"));
         assertNull(findTrust(device, "score"));

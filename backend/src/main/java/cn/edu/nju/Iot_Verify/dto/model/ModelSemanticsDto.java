@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Objects;
 
 /** Machine-readable assumptions that define what one verification/simulation run modeled. */
 @Data
@@ -69,21 +70,13 @@ public class ModelSemanticsDto {
     private List<EnvironmentEvolutionEffect> environmentEvolutionEffects;
     private LocalVariableFallbackPolicy localVariableFallbackPolicy;
 
-    public static ModelSemanticsDto forRun(boolean isAttack,
-                                           boolean enablePrivacy,
-                                           int deviceCount,
-                                           int automationLinkCount,
-                                           int falsifiableReadingDeviceCount) {
-        return forRun(isAttack ? AttackScenarioDto.anyUpToBudget(1) : AttackScenarioDto.none(),
-                enablePrivacy, deviceCount, automationLinkCount, falsifiableReadingDeviceCount);
-    }
-
     public static ModelSemanticsDto forRun(AttackScenarioDto attackScenario,
                                            boolean enablePrivacy,
                                            AttackSurface attackSurface) {
         AttackSurface safeSurface = attackSurface != null
                 ? attackSurface : new AttackSurface(java.util.Set.of(), 0, 0);
-        AttackScenarioDto safeScenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        AttackScenarioDto safeScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         boolean falsifiableEffect = safeScenario.getMode() == AttackScenarioDto.Mode.ANY_UP_TO_BUDGET
                 ? safeSurface.hasFalsifiableReadingEffect()
                 : safeScenario.selectedDeviceIds().stream()
@@ -103,7 +96,8 @@ public class ModelSemanticsDto {
                                            int deviceCount,
                                            int automationLinkCount,
                                            int falsifiableReadingDeviceCount) {
-        AttackScenarioDto safeScenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        AttackScenarioDto safeScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         boolean falsifiableEffect = safeScenario.getMode() == AttackScenarioDto.Mode.ANY_UP_TO_BUDGET
                 ? falsifiableReadingDeviceCount > 0
                 : !safeScenario.selectedDeviceIds().isEmpty() && falsifiableReadingDeviceCount > 0;

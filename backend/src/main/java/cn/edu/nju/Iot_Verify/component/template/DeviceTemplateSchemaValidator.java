@@ -111,11 +111,10 @@ public class DeviceTemplateSchemaValidator {
         for (JsonNode api : apis) {
             String apiName = api.path("Name").asText("<unnamed>");
             JsonNode assignments = api.path("Assignments");
-            if (assignments.isArray() && !assignments.isEmpty()) {
+            if (!assignments.isMissingNode()) {
                 throw new BadRequestException("Template '" + templateName + "': API '" + apiName
-                        + "' contains Assignments, but API variable assignments are not represented by the "
-                        + "formal model and would be ignored. Express the API effect through EndState, or use "
-                        + "a triggered Transition for variable assignments.");
+                        + "' contains the unsupported Assignments field. Express the API effect through "
+                        + "EndState, or use a triggered Transition for variable assignments.");
             }
             String endState = api.path("EndState").asText("");
             if (!endState.isEmpty() && endState.replace(";", "").isBlank()) {

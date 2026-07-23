@@ -197,7 +197,6 @@
 			"StartState": "",
 			"EndState": "auto;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -206,7 +205,6 @@
 			"StartState": "",
 			"EndState": "circulate;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -215,7 +213,6 @@
 			"StartState": "",
 			"EndState": "on;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -224,7 +221,6 @@
 			"StartState": "",
 			"EndState": ";auto",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -233,7 +229,6 @@
 			"StartState": "",
 			"EndState": ";cool",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -242,7 +237,6 @@
 			"StartState": "",
 			"EndState": ";emergency heat",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -251,7 +245,6 @@
 			"StartState": "",
 			"EndState": ";heat",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -260,7 +253,6 @@
 			"StartState": "",
 			"EndState": ";off",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

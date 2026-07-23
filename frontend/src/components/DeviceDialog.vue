@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {ref, watch, computed} from 'vue'
+import {ref, watch, computed, nextTick} from 'vue'
 import {useI18n} from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
@@ -40,6 +40,8 @@ const props = defineProps<{
   rules?: DeviceEdge[]
   specs?: Specification[]
   runtimeSaving?: boolean
+  deleteLoading?: boolean
+  suspended?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -64,7 +66,7 @@ const close = () => {
 const onDelete = () => emit('delete')
 const onRename = () => emit('rename')
 
-const isDialogOpen = computed(() => innerVisible.value)
+const isDialogOpen = computed(() => innerVisible.value && props.suspended !== true)
 const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, close)
 
 /* ---------- 核心展示数据提取 ---------- */
@@ -142,8 +144,45 @@ const currentTemplate = computed<DeviceTemplate | null>(() => {
   }
 })
 
+const runtimeSchemaIdentity = computed(() => {
+  const template = currentTemplate.value
+  if (!template) return ''
+  const templateManifest = template.manifest
+  return JSON.stringify({
+    templateName: template.name,
+    manifestName: templateManifest.Name,
+    modes: templateManifest.Modes || [],
+    initState: templateManifest.InitState || '',
+    states: (templateManifest.WorkingStates || []).map(state => ({
+      name: state.Name,
+      trust: state.Trust,
+      privacy: state.Privacy
+    })),
+    localVariables: getTemplateLocalVariables(template).map(variable => ({
+      name: variable.Name,
+      values: variable.Values || [],
+      lowerBound: variable.LowerBound,
+      upperBound: variable.UpperBound,
+      trust: variable.Trust,
+      privacy: variable.Privacy,
+      falsifiableWhenCompromised: variable.FalsifiableWhenCompromised === true
+    }))
+  })
+})
+
 const runtimeDraft = ref(createDeviceRuntimeDraft())
-const runtimeDraftBaseline = ref('')
+const runtimeDraftBaseline = ref(createDeviceRuntimeDraft())
+const runtimeDraftConflictFields = ref<string[]>([])
+let runtimeSaveDraft: DeviceRuntimeDraft | null = null
+
+const cloneRuntimeDraft = (draft: DeviceRuntimeDraft): DeviceRuntimeDraft => ({
+  state: draft.state,
+  currentStateTrust: draft.currentStateTrust,
+  currentStatePrivacy: draft.currentStatePrivacy,
+  variables: { ...draft.variables },
+  variableTrusts: { ...draft.variableTrusts },
+  privacies: { ...draft.privacies }
+})
 
 const runtimeWorkingStates = computed(() =>
   getTemplateWorkingStates(currentTemplate.value)
@@ -181,15 +220,6 @@ const variableInputPlaceholder = (variable: InternalVariable) => {
   return t('app.enterValuePlaceholder')
 }
 
-const runtimeDraftFingerprint = (draft: DeviceRuntimeDraft) => JSON.stringify({
-  state: draft.state,
-  currentStateTrust: draft.currentStateTrust,
-  currentStatePrivacy: draft.currentStatePrivacy,
-  variables: Object.entries(draft.variables).sort(([left], [right]) => left.localeCompare(right)),
-  variableTrusts: Object.entries(draft.variableTrusts).sort(([left], [right]) => left.localeCompare(right)),
-  privacies: Object.entries(draft.privacies).sort(([left], [right]) => left.localeCompare(right))
-})
-
 const createRuntimeDraftFromNode = () => {
   const template = currentTemplate.value
   const draft = createDeviceRuntimeDraft()
@@ -219,32 +249,109 @@ const createRuntimeDraftFromNode = () => {
 }
 
 const replaceRuntimeDraft = (draft: DeviceRuntimeDraft) => {
-  runtimeDraft.value = draft
-  runtimeDraftBaseline.value = runtimeDraftFingerprint(draft)
+  runtimeDraft.value = cloneRuntimeDraft(draft)
+  runtimeDraftBaseline.value = cloneRuntimeDraft(draft)
+  runtimeDraftConflictFields.value = []
 }
 
 const syncRuntimeDraftFromNode = () => {
+  runtimeSaveDraft = null
   replaceRuntimeDraft(createRuntimeDraftFromNode())
 }
 
 const reconcileRuntimeDraftFromNode = () => {
   const incomingDraft = createRuntimeDraftFromNode()
-  const incomingFingerprint = runtimeDraftFingerprint(incomingDraft)
-  const currentFingerprint = runtimeDraftFingerprint(runtimeDraft.value)
+  const baselineDraft = runtimeDraftBaseline.value
+  const currentDraft = runtimeDraft.value
+  const existingConflicts = new Set(runtimeDraftConflictFields.value)
+  const nextConflicts = new Set<string>()
 
-  // Keep in-progress edits when a foreground/cross-tab refresh replaces the board snapshot.
-  // A matching snapshot is the save acknowledgement and can safely become the new baseline.
-  if (currentFingerprint === runtimeDraftBaseline.value || currentFingerprint === incomingFingerprint) {
-    replaceRuntimeDraft(incomingDraft)
+  const mergeValue = (
+    path: string,
+    baselineValue = '',
+    currentValue = '',
+    incomingValue = '',
+    savedValue?: string
+  ) => {
+    if (existingConflicts.has(path)) {
+      if (currentValue === incomingValue) return incomingValue
+      nextConflicts.add(path)
+      return currentValue
+    }
+    // A matching save snapshot acknowledges the submitted value. Any difference in the
+    // current draft was typed after Save and remains a local edit, not an external conflict.
+    if (runtimeSaveDraft && incomingValue === savedValue && currentValue !== incomingValue) {
+      return currentValue
+    }
+    if (currentValue === baselineValue) return incomingValue
+    if (incomingValue === baselineValue || currentValue === incomingValue) return currentValue
+    nextConflicts.add(path)
+    return currentValue
   }
+
+  const mergedDraft = createDeviceRuntimeDraft()
+  for (const field of ['state', 'currentStateTrust', 'currentStatePrivacy'] as const) {
+    mergedDraft[field] = mergeValue(
+      field,
+      baselineDraft[field],
+      currentDraft[field],
+      incomingDraft[field],
+      runtimeSaveDraft?.[field]
+    )
+  }
+  for (const field of ['variables', 'variableTrusts', 'privacies'] as const) {
+    const names = new Set([
+      ...Object.keys(baselineDraft[field]),
+      ...Object.keys(currentDraft[field]),
+      ...Object.keys(incomingDraft[field])
+    ])
+    for (const name of names) {
+      mergedDraft[field][name] = mergeValue(
+        `${field}.${name}`,
+        baselineDraft[field][name],
+        currentDraft[field][name],
+        incomingDraft[field][name],
+        runtimeSaveDraft?.[field][name]
+      )
+    }
+  }
+
+  runtimeDraft.value = mergedDraft
+  runtimeDraftBaseline.value = cloneRuntimeDraft(incomingDraft)
+  runtimeDraftConflictFields.value = [...nextConflicts].sort()
+}
+
+const adoptLatestRuntimeDraft = () => {
+  const incomingDraft = createRuntimeDraftFromNode()
+  const resolvedDraft = cloneRuntimeDraft(runtimeDraft.value)
+  for (const path of runtimeDraftConflictFields.value) {
+    if (path === 'state' || path === 'currentStateTrust' || path === 'currentStatePrivacy') {
+      resolvedDraft[path] = incomingDraft[path]
+      continue
+    }
+    const separator = path.indexOf('.')
+    if (separator < 1) continue
+    const field = path.slice(0, separator) as 'variables' | 'variableTrusts' | 'privacies'
+    const name = path.slice(separator + 1)
+    if (!name || !(field in resolvedDraft)) continue
+    resolvedDraft[field][name] = incomingDraft[field][name] ?? ''
+  }
+  runtimeDraft.value = resolvedDraft
+  runtimeDraftBaseline.value = cloneRuntimeDraft(incomingDraft)
+  runtimeDraftConflictFields.value = []
+}
+
+const keepLocalRuntimeDraft = () => {
+  runtimeDraftBaseline.value = cloneRuntimeDraft(createRuntimeDraftFromNode())
+  runtimeDraftConflictFields.value = []
 }
 
 watch(
-  () => [props.visible, props.nodeId] as const,
-  ([visible, nodeId], previous) => {
+  () => [props.visible, props.nodeId, runtimeSchemaIdentity.value] as const,
+  ([visible, nodeId, schemaIdentity], previous) => {
     if (!visible) return
-    const [wasVisible, previousNodeId] = previous || []
-    if (!wasVisible || nodeId !== previousNodeId) {
+    const [wasVisible, previousNodeId, previousSchemaIdentity] = previous || []
+    if (!wasVisible || nodeId !== previousNodeId || schemaIdentity !== previousSchemaIdentity) {
       syncRuntimeDraftFromNode()
     }
   },
@@ -258,10 +365,22 @@ watch(
   }
 )
 
+watch(
+  () => props.runtimeSaving,
+  saving => {
+    if (!saving) runtimeSaveDraft = null
+  },
+  { flush: 'post' }
+)
+
 const saveRuntime = () => {
   const template = currentTemplate.value
   const node = currentNode.value
   if (!template || !node || !props.nodeId) return
+  if (runtimeDraftConflictFields.value.length > 0) {
+    ElMessage.warning(t('app.deviceRuntimeConflictUnresolved'))
+    return
+  }
 
   const runtime = buildDeviceRuntimeConfig(template, runtimeDraft.value, {
     includeEmptyCollections: true,
@@ -273,7 +392,13 @@ const saveRuntime = () => {
     return
   }
 
+  runtimeSaveDraft = cloneRuntimeDraft(runtimeDraft.value)
   emit('save-runtime', props.nodeId, runtime)
+  void nextTick(() => {
+    // The parent can reject the request before entering its saving state (for example when
+    // playback locks mutations). Do not leave that non-request fencing later refreshes.
+    if (!props.runtimeSaving) runtimeSaveDraft = null
+  })
 }
 
 // 1. 基础信息数据
@@ -414,7 +539,7 @@ const getDeviceIcon = (deviceName: string) => {
   const name = deviceName.toLowerCase()
   
   // 传感器类
-  if (name.includes('sensor') || name.includes('temperature') || name.includes('humidity') || name.includes('gas') || name.includes('smoke') || name.includes('motion') || name.includes('soil') || name.includes('illuminance') || name.includes('door')) {
+  if (name.includes('sensor') || name.includes('temperature') || name.includes('humidity') || name.includes('gas') || name.includes('smoke') || name.includes('motion') || name.includes('soil') || name.includes('illuminance')) {
     return 'sensors'
   }
   
@@ -590,7 +715,7 @@ const deviceSpecs = computed(() => {
             .map(c => c.deviceLabel || c.deviceId)
             .filter(Boolean)
         ))
-        deviceInfo = deviceLabels.length > 0 ? deviceLabels.join(', ') : 'Global'
+        deviceInfo = deviceLabels.length > 0 ? deviceLabels.join(', ') : t('app.global')
       }
 
       const formula = buildSpecFormula(spec, {
@@ -601,11 +726,9 @@ const deviceSpecs = computed(() => {
       return {
         id: spec.id,
         type: specType,
-        typeColor: 'red', // 强制使用红色
         formula,
         formulaKind: getSpecFormulaKind(spec, formula),
-        devices: deviceInfo,
-        status: 'Active'
+        devices: deviceInfo
       }
     })
 })
@@ -616,7 +739,7 @@ const deviceSpecs = computed(() => {
   <teleport to="body">
     <transition name="modal-fade" appear>
       <div
-        v-if="innerVisible"
+        v-if="isDialogOpen"
         class="device-dialog-overlay"
         @keydown="handleModalKeydown"
       >
@@ -644,7 +767,7 @@ const deviceSpecs = computed(() => {
                   </div>
                 </div>
               </div>
-              <button type="button" @click="close" class="shrink-0 rounded-lg p-2 text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600" :aria-label="t('app.close')">
+              <button type="button" data-testid="device-dialog-close" @click="close" class="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600" :aria-label="t('app.close')">
                 <span class="material-icons-round text-xl" aria-hidden="true">close</span>
               </button>
             </div>
@@ -767,8 +890,8 @@ const deviceSpecs = computed(() => {
                     type="button"
                     data-testid="device-runtime-save"
                     @click="saveRuntime"
-                    :disabled="runtimeSaving"
-                    class="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-purple-300"
+                    :disabled="runtimeSaving || runtimeDraftConflictFields.length > 0"
+                    class="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-purple-300"
                   >
                     <span v-if="runtimeSaving" class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
                     <span v-else class="material-symbols-outlined text-sm" aria-hidden="true">save</span>
@@ -776,7 +899,34 @@ const deviceSpecs = computed(() => {
                   </button>
                 </div>
 
-                <div class="space-y-3 rounded-xl border border-purple-100 bg-purple-50/40 p-4">
+                <div
+                  v-if="runtimeDraftConflictFields.length > 0"
+                  data-testid="device-runtime-conflict"
+                  class="device-runtime-conflict mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-950"
+                  role="alert"
+                >
+                  <p>{{ t('app.deviceRuntimeConflict', { count: runtimeDraftConflictFields.length }) }}</p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      data-testid="device-runtime-adopt-latest"
+                      class="min-h-11 rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-100"
+                      @click="adoptLatestRuntimeDraft"
+                    >
+                      {{ t('app.deviceRuntimeUseLatest') }}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="device-runtime-keep-local"
+                      class="min-h-11 rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
+                      @click="keepLocalRuntimeDraft"
+                    >
+                      {{ t('app.deviceRuntimeKeepMine') }}
+                    </button>
+                  </div>
+                </div>
+
+                <div class="device-runtime-panel space-y-3 rounded-xl border border-purple-100 bg-purple-50/40 p-4">
                   <div v-if="runtimeHasModes" class="grid grid-cols-1 gap-3">
                     <label class="min-w-0">
                       <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.initialState') }}</span>
@@ -837,7 +987,7 @@ const deviceSpecs = computed(() => {
                     </div>
                   </div>
 
-                  <details class="border-t border-purple-100 pt-3" data-testid="device-runtime-advanced-security">
+                  <details class="device-runtime-security border-t border-purple-100 pt-3" data-testid="device-runtime-advanced-security">
                     <summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-bold text-purple-700">
                       <span class="inline-flex items-center gap-2">
                         <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
@@ -1131,17 +1281,25 @@ const deviceSpecs = computed(() => {
                 type="button"
                 data-testid="device-rename"
                 @click="onRename"
-                class="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-semibold text-blue-800 transition-all hover:bg-blue-100 sm:w-auto"
+                class="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-semibold text-blue-800 transition-all hover:bg-blue-100 sm:w-auto"
               >
                 <span class="material-icons-round text-lg text-blue-600" aria-hidden="true">edit</span>
                 {{ t('app.rename') }}
               </button>
-                <button type="button" @click="close" class="w-full rounded-lg border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-200 hover:text-slate-900 sm:w-auto">
+                <button type="button" data-testid="device-dialog-footer-close" @click="close" class="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-200 hover:text-slate-900 sm:w-auto">
                   {{ t('app.close') }}
                 </button>
-              <button type="button" @click="onDelete" class="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-100 px-5 py-2.5 text-sm font-semibold text-rose-900 transition-all hover:bg-rose-200 sm:w-auto">
-                <span class="material-icons-round text-lg text-rose-600" aria-hidden="true">delete_outline</span>
-                {{ t('app.deleteDevice') }}
+              <button
+                type="button"
+                data-testid="device-delete"
+                @click="onDelete"
+                :disabled="deleteLoading"
+                :aria-busy="deleteLoading"
+                class="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-100 px-5 py-2.5 text-sm font-semibold text-rose-900 transition-all hover:bg-rose-200 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
+              >
+                <span v-if="deleteLoading" class="h-4 w-4 animate-spin rounded-full border-2 border-rose-400/40 border-t-rose-700" aria-hidden="true"></span>
+                <span v-else class="material-icons-round text-lg text-rose-600" aria-hidden="true">delete_outline</span>
+                {{ deleteLoading ? t('app.loading') : t('app.deleteDevice') }}
               </button>
             </div>
           </div>
@@ -1171,49 +1329,89 @@ const deviceSpecs = computed(() => {
   }
 }
 
-:global(.dark) .device-dialog-surface {
+:global(:root[data-theme='dark'] .device-dialog-surface) {
   background: var(--surface-panel);
   color: var(--text);
 }
 
-:global(.dark) .device-dialog-surface :deep(.bg-white),
-:global(.dark) .device-dialog-surface :deep(.bg-slate-50),
-:global(.dark) .device-dialog-surface :deep(.bg-slate-50\/50),
-:global(.dark) .device-dialog-surface :deep(.bg-slate-100) {
+:global(:root[data-theme='dark'] .device-dialog-surface .bg-white),
+:global(:root[data-theme='dark'] .device-dialog-surface .bg-slate-50),
+:global(:root[data-theme='dark'] .device-dialog-surface .bg-slate-50\/50),
+:global(:root[data-theme='dark'] .device-dialog-surface .bg-slate-100) {
   background-color: var(--surface-elevated) !important;
 }
 
-:global(.dark) .device-dialog-surface :deep([class*="from-white"]),
-:global(.dark) .device-dialog-surface :deep([class*="from-slate-50"]) {
+:global(:root[data-theme='dark'] .device-dialog-surface [class*="from-white"]),
+:global(:root[data-theme='dark'] .device-dialog-surface [class*="from-slate-50"]) {
   background-image: none !important;
   background-color: var(--surface-elevated) !important;
 }
 
-:global(.dark) .device-dialog-surface :deep(.text-slate-900),
-:global(.dark) .device-dialog-surface :deep(.text-slate-800),
-:global(.dark) .device-dialog-surface :deep(.text-slate-700) {
+:global(:root[data-theme='dark'] .device-dialog-surface [class*="hover:bg-slate-"]:hover) {
+  background-color: var(--surface-muted) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface [class*="hover:bg-blue-"]:hover) {
+  background-color: color-mix(in srgb, #3b82f6 18%, var(--surface-elevated)) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface [class*="hover:bg-emerald-"]:hover),
+:global(:root[data-theme='dark'] .device-dialog-surface .group:hover [class*="group-hover:bg-emerald-"]) {
+  background-color: color-mix(in srgb, #10b981 18%, var(--surface-elevated)) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface [class*="hover:bg-rose-"]:hover) {
+  background-color: color-mix(in srgb, #f43f5e 18%, var(--surface-elevated)) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .text-slate-900),
+:global(:root[data-theme='dark'] .device-dialog-surface .text-slate-800),
+:global(:root[data-theme='dark'] .device-dialog-surface .text-slate-700) {
   color: var(--text) !important;
 }
 
-:global(.dark) .device-dialog-surface :deep(.text-slate-600),
-:global(.dark) .device-dialog-surface :deep(.text-slate-500),
-:global(.dark) .device-dialog-surface :deep(.text-slate-400) {
+:global(:root[data-theme='dark'] .device-dialog-surface .text-slate-600),
+:global(:root[data-theme='dark'] .device-dialog-surface .text-slate-500),
+:global(:root[data-theme='dark'] .device-dialog-surface .text-slate-400) {
   color: var(--text-muted) !important;
 }
 
-:global(.dark) .device-dialog-surface :deep(.border-slate-100),
-:global(.dark) .device-dialog-surface :deep(.border-slate-200),
-:global(.dark) .device-dialog-surface :deep(.divide-slate-100) {
+:global(:root[data-theme='dark'] .device-dialog-surface .border-slate-100),
+:global(:root[data-theme='dark'] .device-dialog-surface .border-slate-200),
+:global(:root[data-theme='dark'] .device-dialog-surface .divide-slate-100) {
   border-color: var(--border) !important;
 }
 
-:global(.dark) .device-dialog-surface :deep(input),
-:global(.dark) .device-dialog-surface :deep(select),
-:global(.dark) .device-dialog-surface :deep(textarea) {
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-panel) {
+  border-color: color-mix(in srgb, #8b5cf6 42%, var(--border)) !important;
+  background-color: color-mix(in srgb, #8b5cf6 10%, var(--surface-elevated)) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-security) {
+  border-color: color-mix(in srgb, #8b5cf6 34%, var(--border)) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-security > summary) {
+  color: color-mix(in srgb, #a78bfa 72%, var(--text)) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface input),
+:global(:root[data-theme='dark'] .device-dialog-surface select),
+:global(:root[data-theme='dark'] .device-dialog-surface textarea) {
   border-color: var(--border) !important;
   background: var(--surface-control) !important;
   color: var(--text) !important;
   color-scheme: dark;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-conflict) {
+  border-color: color-mix(in srgb, #f59e0b 55%, var(--border)) !important;
+  background-color: color-mix(in srgb, #f59e0b 14%, var(--surface-elevated)) !important;
+  color: var(--text) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-conflict button) {
+  border-color: color-mix(in srgb, #f59e0b 58%, var(--border)) !important;
 }
 
 /* Modal Transitions */
@@ -1261,7 +1459,7 @@ const deviceSpecs = computed(() => {
   border-radius: 10px;
 }
 
-.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+:global(:root[data-theme='dark'] .device-dialog-surface .custom-scrollbar::-webkit-scrollbar-thumb) {
   background: #475569;
 }
 </style>

@@ -10,6 +10,8 @@ import cn.edu.nju.Iot_Verify.component.fuzz.FuzzInputEvent;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzInputEventSource;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzLimitationContract;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzMetadataPolicy;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelFingerprint;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelInputSnapshotCodec;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzPaperDomainPreviewer;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzSpecEligibility;
 import cn.edu.nju.Iot_Verify.configure.FuzzAdmissionConfig;
@@ -39,6 +41,7 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.FuzzTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.FuzzTaskStorageQuotaExceededException;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
@@ -55,13 +58,7 @@ import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.FuzzMapper;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.MapperFeature;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.ObjectWriter;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -77,12 +74,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -102,7 +95,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
-import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -140,8 +132,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     private final int maxActiveTasksPerUser;
     private final int maxStoredTasksPerUser;
     private final Semaphore globalTaskCapacity;
-    private final ObjectWriter fingerprintWriter;
-    private final ObjectMapper fingerprintMapper;
+    private final FuzzModelFingerprint modelFingerprint;
     private final String workerId = UUID.randomUUID().toString();
     private final ScheduledExecutorService leaseMaintenanceExecutor =
             Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -158,6 +149,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                            BoardDataConverter boardDataConverter,
                            FuzzEngine fuzzEngine,
                            FuzzPaperDomainPreviewer fuzzPaperDomainPreviewer,
+                           FuzzModelFingerprint modelFingerprint,
                            FuzzMapper fuzzMapper,
                            @Qualifier("fuzzTaskExecutor") ThreadPoolTaskExecutor fuzzTaskExecutor,
                            FuzzAdmissionConfig fuzzAdmissionConfig,
@@ -171,6 +163,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         this.boardDataConverter = boardDataConverter;
         this.fuzzEngine = fuzzEngine;
         this.fuzzPaperDomainPreviewer = fuzzPaperDomainPreviewer;
+        this.modelFingerprint = Objects.requireNonNull(modelFingerprint, "modelFingerprint");
         this.fuzzMapper = fuzzMapper;
         this.fuzzTaskExecutor = fuzzTaskExecutor;
         this.transactionTemplate = transactionTemplate;
@@ -178,10 +171,6 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         this.maxStoredTasksPerUser = fuzzAdmissionConfig.getMaxStoredTasksPerUser();
         this.globalTaskCapacity = new Semaphore(
                 configuredTaskCapacity(threadPoolConfig.getFuzzTask()), true);
-        this.fingerprintMapper = objectMapper.copy()
-                .configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true)
-                .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
-        this.fingerprintWriter = fingerprintMapper.writer();
     }
 
     private int configuredTaskCapacity(ThreadPoolConfig.Pool pool) {
@@ -215,17 +204,17 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         }
         for (LocalFuzzExecution execution : executions) {
             try {
-                boolean renewed = TaskLeaseRenewal.renew(
+                TaskLeaseRenewal.RenewalResult renewal = TaskLeaseRenewal.renewWithConfirmation(
                         transactionTemplate,
                         () -> taskRepository.findByIdForUpdate(execution.taskId),
                         this::databaseNow,
                         taskRepository::saveAndFlush,
                         workerId,
                         TASK_LEASE_DURATION);
-                if (!renewed) {
+                if (!renewal.renewed()) {
                     execution.requestStop();
                 } else {
-                    execution.leaseConfirmation.confirm();
+                    execution.leaseConfirmation.confirmAt(renewal.confirmationStartedNanos());
                 }
             } catch (RuntimeException e) {
                 if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
@@ -402,7 +391,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                         "paperDomainFingerprint",
                         "Board changed after the random-state input preview; refresh the preview and retry");
             }
-            String modelInputSnapshotJson = serializeFrozenSnapshot(snapshot, "request");
+            String frozenSnapshotJson = serializeFrozenSnapshot(snapshot, "request");
             LocalDateTime createdAt = databaseNow();
             FuzzTaskPo task = FuzzTaskPo.builder()
                     .userId(userId)
@@ -416,7 +405,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     .populationSize(request.populationSize())
                     .seed(request.seed())
                     .explorationMode(request.explorationMode())
-                    .modelInputSnapshotJson(modelInputSnapshotJson)
+                    .modelInputSnapshotJson(frozenSnapshotJson)
                     .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
                     .findingCount(0)
                     .workerId(workerId)
@@ -474,6 +463,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
             if (isTaskCancelled(taskId)) return;
 
+            long startConfirmationNanos = TaskLeaseRenewal.monotonicNow();
             LocalDateTime currentTime = databaseNow();
             LocalDateTime startedAt = currentTime;
             LocalDateTime leaseExpiresAt = currentTime.plus(TASK_LEASE_DURATION);
@@ -490,8 +480,14 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 log.info("Fuzz task {} is no longer pending; skipping execution", taskId);
                 return;
             }
+            if (!TaskLeaseRenewal.completedBeforeTtl(startConfirmationNanos, TASK_LEASE_DURATION)) {
+                log.warn("Fuzz task {} lease expired before its start was committed", taskId);
+                return;
+            }
             LocalFuzzExecution localExecution = localExecutions.get(taskId);
-            if (localExecution != null) localExecution.leaseConfirmation.confirm();
+            if (localExecution != null) {
+                localExecution.leaseConfirmation.confirmAt(startConfirmationNanos);
+            }
             task = taskRepository.findById(taskId).orElse(null);
             if (task == null) {
                 log.error("Fuzz task {} disappeared after it started", taskId);
@@ -499,11 +495,8 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             }
 
             NormalizedRequest request = executionRequest(task);
-            ModelInputSnapshot frozenSnapshot = JsonUtils.fromJson(
-                    task.getModelInputSnapshotJson(), ModelInputSnapshot.class);
-            if (frozenSnapshot == null) {
-                throw new IllegalStateException("Frozen Board snapshot is missing");
-            }
+            ModelInputSnapshot frozenSnapshot = FuzzModelInputSnapshotCodec.decode(
+                    task.getModelInputSnapshotJson());
             FuzzEngineInput engineInput = new FuzzEngineInput(frozenSnapshot, new FuzzEngineConfig(
                     request.targetSpecIds(), request.maxIterations(), request.pathLength(),
                     request.populationSize(), request.seed(), request.explorationMode()));
@@ -1009,55 +1002,11 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     }
 
     String modelFingerprint(ModelInputSnapshot snapshot) {
-        return fingerprint(snapshot, null);
+        return modelFingerprint.modelFingerprint(snapshot);
     }
 
     String paperDomainFingerprint(ModelInputSnapshot snapshot, int pathLength) {
-        if (pathLength < 1 || pathLength > 50) {
-            throw new IllegalArgumentException("pathLength must be between 1 and 50");
-        }
-        return fingerprint(snapshot, pathLength);
-    }
-
-    private String fingerprint(ModelInputSnapshot snapshot, Integer pathLength) {
-        try {
-            Map<String, Object> semanticModel = new LinkedHashMap<>();
-            semanticModel.put("devices", snapshot.devices());
-            semanticModel.put("environmentVariables", sortedForFingerprint(
-                    snapshot.environmentVariables(), variable -> variable.getName()));
-            semanticModel.put("rules", snapshot.rules());
-            semanticModel.put("specifications", snapshot.specifications());
-            semanticModel.put("templateManifests", snapshot.templateManifests());
-            if (pathLength != null) semanticModel.put("pathLength", pathLength);
-            JsonNode canonicalModel = fingerprintMapper.valueToTree(semanticModel);
-            removePresentationFields(canonicalModel);
-            byte[] canonical = fingerprintWriter.writeValueAsBytes(canonicalModel);
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical);
-            return HexFormat.of().formatHex(digest);
-        } catch (JsonProcessingException | NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("Cannot fingerprint the frozen Board snapshot", exception);
-        }
-    }
-
-    private static <T> List<T> sortedForFingerprint(
-            List<T> values, Function<T, String> identity) {
-        return values.stream()
-                .sorted(Comparator.comparing(value -> value == null
-                        ? ""
-                        : Objects.toString(identity.apply(value), "")))
-                .toList();
-    }
-
-    private void removePresentationFields(JsonNode node) {
-        if (node == null) return;
-        if (node instanceof ObjectNode object) {
-            object.remove(List.of(
-                    "deviceLabel", "templateLabel", "formula", "ruleString", "createdAt",
-                    "Description", "Icon", "description", "icon"));
-            object.elements().forEachRemaining(this::removePresentationFields);
-        } else if (node.isArray()) {
-            node.elements().forEachRemaining(this::removePresentationFields);
-        }
+        return modelFingerprint.paperDomainFingerprint(snapshot, pathLength);
     }
 
     private int requireRange(Integer value, int minimum, int maximum, String field, String message) {
@@ -1423,7 +1372,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             FuzzTaskSummaryProjection run, List<FuzzFindingSummaryProjection> findings) {
         try {
             return fuzzMapper.toRunSummaryDtoFromTaskProjection(run, findings);
-        } catch (RuntimeException e) {
+        } catch (PersistedDataIntegrityException e) {
             log.error("Fuzz history item {} is unavailable because persisted data is invalid",
                     run != null ? run.getId() : null, e);
             return FuzzRunSummaryDto.builder()
@@ -1557,12 +1506,12 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     }
 
     private String serializeFrozenSnapshot(ModelInputSnapshot snapshot, String errorField) {
-        String json = JsonUtils.toJson(snapshot);
-        if (utf8Length(json) > MAX_MODEL_INPUT_SNAPSHOT_BYTES) {
+        String snapshotJson = FuzzModelInputSnapshotCodec.encode(snapshot);
+        if (utf8Length(snapshotJson) > MAX_MODEL_INPUT_SNAPSHOT_BYTES) {
             throw new ValidationException(
                     errorField, "Frozen Board snapshot exceeds the 8 MiB persistence limit");
         }
-        return json;
+        return snapshotJson;
     }
 
     private NormalizedRequest executionRequest(FuzzTaskPo task) {

@@ -6,7 +6,7 @@ scenario into NuSMV. Request and response field tables live in
 [spec-templates.md](spec-templates.md); identity rules live in
 [device-identity.md](device-identity.md).
 
-Verified against code on 2026-07-22. Primary sources:
+Verified against code on 2026-07-24. Primary sources:
 `SmvGenerator`, `DeviceSmvDataFactory`, `SmvModelValidator`,
 `SmvDeviceModuleBuilder`, `SmvMainModuleBuilder`, `SmvSpecificationBuilder`, and
 `SmvTraceParser`, `NusmvExecutor`, and `NusmvTempArtifactCleaner`.
@@ -142,7 +142,9 @@ nondeterministic initialization may apply according to the model contract.
 
 Generated identifiers such as `a_temperature`, `trust_temperature`, and module names
 are internal NuSMV details. API traces convert shared variables back to their literal
-board names and place runtime-only globals in `globalVariables`.
+board names and place runtime-only globals in `globalVariables`. Device state and mode in
+traces are derived from the template's declared mode variables; a trace attribute named
+`state` is not an implicit legacy alias and is otherwise handled as an ordinary variable.
 
 ## MEDIC-aligned security dimensions
 
@@ -196,8 +198,9 @@ nondeterministic and the invariant uses `<=`, so budget `N` represents every mod
 selection from zero through `N` compromised points. In `EXACT_POINTS`, selected flags
 initialize to `TRUE`, all other modeled flags initialize to `FALSE`, and no budget
 invariant changes that fixed selection. Automation-link exact selection uses the
-persisted submitted `ruleId`, so automatic-fix reverification reuses the same link even
-if generated list positions change.
+required frozen `ruleIndex`, the exact position in the submitted rule snapshot.
+Automatic-fix candidate discovery rejects a candidate that removes or duplicates that
+selected rule rather than silently rebinding the compromised link.
 One verification call does not search for or report the smallest budget that can cause
 a violation. Users comparing minimum compromise resistance must rerun verification with
 different upper bounds and compare the first violating complete result.
@@ -417,11 +420,12 @@ generation-time condition failure disables that rule with guard `FALSE`, increme
 treated as a working rule.
 
 Internal `iot_verify_rule_fired_<index>` probes record which generated rule guards were
-true in a trace. The parser returns stable rule ids and user-facing rule snapshots; the
-probe names and indexes are not user concepts. Fault localization consumes this execution
-evidence when present, so a lower-priority rule that merely looked applicable is not
-reported as if it actually executed; reconstruction is only a fallback for traces without
-probe metadata.
+true in a trace. The parser persists the zero-based probe index as the required frozen
+`ruleIndex`, together with optional rule-id and user-facing label snapshots. Fault
+localization binds execution evidence only by that exact submitted-rule position, so
+duplicate or absent rule ids cannot make another rule appear to have executed. Missing,
+duplicate, negative, or out-of-range indexes are malformed evidence and fail closed;
+execution is never reconstructed heuristically from conditions or state changes.
 
 ## Specification semantics
 

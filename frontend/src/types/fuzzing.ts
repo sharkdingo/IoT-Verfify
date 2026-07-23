@@ -91,6 +91,10 @@ export interface FuzzWorkloadPreview {
 
 export type FuzzingOutcome = 'FOUND_VIOLATION' | 'BUDGET_EXHAUSTED' | 'INCONCLUSIVE'
 
+export interface FuzzingModelRunSnapshot extends ModelRunSnapshot {
+  modelFingerprint: string
+}
+
 export interface FuzzingEligibilityIssue {
   specId: string
   specificationLabel?: string
@@ -147,8 +151,6 @@ export type FuzzingFindingSummary = Pick<
   violatedSpec?: Specification
   specificationLabel?: string
   stateCount: number
-  dataAvailable: boolean
-  unavailableReasonCode?: string
 }
 
 export interface FuzzingTask {
@@ -164,7 +166,7 @@ export interface FuzzingTask {
   errorMessage?: string
   runId?: number
   outcome?: FuzzingOutcome
-  modelSnapshot: ModelRunSnapshot
+  modelSnapshot: FuzzingModelRunSnapshot
   maxIterations: number
   pathLength: number
   populationSize: number
@@ -182,7 +184,7 @@ export interface AvailableFuzzingRunSummary {
   iterations: number
   generatedPaths: number
   elapsedMs: number
-  modelSnapshot: ModelRunSnapshot
+  modelSnapshot: FuzzingModelRunSnapshot
   eligibility: FuzzingEligibility
   limitations: string[]
   createdAt: string

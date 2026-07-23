@@ -65,10 +65,6 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
 </template>
 
 <style scoped>
-/* 使用 CSS 变量或针对 .dark-mode 的层级选择器来实现主题切换
-  这里我们假设你的外层容器会在 html 或 body 上添加 .dark 类
-*/
-
 .code-block-container {
   margin: 16px 0;
   border-radius: 8px;
@@ -133,30 +129,26 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
   color: #333;
 }
 
-/* ============== 🌙 深色模式适配 ============== */
-
-/* 1. 修正选择器：使用 .dark-mode 而不是 .dark */
-:global(.dark-mode) .code-block-container {
+:global(:root[data-theme='dark'] .code-block-container) {
   border-color: #333;
-  /* 使用更深的背景色，增加对比度 */
   background: #0d1117;
 }
 
-:global(.dark-mode) .code-header {
-  background: #161b22; /* 稍微亮一点的头部 */
+:global(:root[data-theme='dark'] .code-block-container .code-header) {
+  background: #161b22;
   border-bottom-color: #333;
   color: #8b949e;
 }
 
-:global(.dark-mode) .lang-label {
+:global(:root[data-theme='dark'] .code-block-container .lang-label) {
   color: #c9d1d9;
 }
 
-:global(.dark-mode) .copy-btn {
+:global(:root[data-theme='dark'] .code-block-container .copy-btn) {
   color: #8b949e;
 }
 
-:global(.dark-mode) .copy-btn:hover {
+:global(:root[data-theme='dark'] .code-block-container .copy-btn:hover) {
   color: #c9d1d9;
 }
 

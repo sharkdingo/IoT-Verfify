@@ -142,10 +142,6 @@ public class SmvModelValidator {
                     throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
                             + " EndState changes no mode; at least one concrete state effect is required");
                 }
-                if (api.getAssignments() != null && !api.getAssignments().isEmpty()) {
-                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
-                            + " contains unsupported variable Assignments; use EndState or a triggered Transition");
-                }
                 if (api.getTrigger() != null) {
                     throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
                             + " contains an unsupported Trigger; API commands use StartState/EndState, while "

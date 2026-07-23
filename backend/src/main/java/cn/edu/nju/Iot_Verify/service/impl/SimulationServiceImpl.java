@@ -185,17 +185,17 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         }
         for (LocalSimulationExecution execution : executions) {
             try {
-                boolean renewed = TaskLeaseRenewal.renew(
+                TaskLeaseRenewal.RenewalResult renewal = TaskLeaseRenewal.renewWithConfirmation(
                         transactionTemplate,
                         () -> simulationTaskRepository.findByIdForUpdate(execution.taskId),
                         this::databaseNow,
                         simulationTaskRepository::saveAndFlush,
                         workerId,
                         TASK_LEASE_DURATION);
-                if (!renewed) {
+                if (!renewal.renewed()) {
                     execution.requestStop();
                 } else {
-                    execution.leaseConfirmation.confirm();
+                    execution.leaseConfirmation.confirmAt(renewal.confirmationStartedNanos());
                 }
             } catch (RuntimeException e) {
                 if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
@@ -271,8 +271,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         Future<SimulationResultDto> future;
         try {
             future = syncSimulationExecutor.submit(() ->
-                    doSimulate(userId, input.devices(), input.rules(), input.steps(), input.attack(),
-                            input.attackBudget(), input.enablePrivacy(), input.request(), input.deviceSmvMap(),
+                    doSimulate(userId, input.devices(), input.rules(), input.steps(),
+                            input.enablePrivacy(), input.request(), input.deviceSmvMap(),
                             input.modelSnapshot(), tempModelContext));
         } catch (RejectedExecutionException e) {
             log.warn("Simulation request rejected: executor is saturated ({})", syncSimulationExecutorSnapshot());
@@ -317,12 +317,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         if (request == null) {
             throw new ValidationException("request", "Simulation request cannot be null");
         }
-        if (request.getAttackScenario() != null && request.hasLegacyAttackFields()) {
-            throw new ValidationException("attackScenario",
-                    "Use attackScenario only; it cannot be combined with legacy isAttack/attackBudget fields");
-        }
         AttackScenarioDto attackScenario = AttackScenarioValidator.canonicalizeForSimulation(
-                request.resolvedAttackScenario());
+                request.getAttackScenario());
         SimulationRequestDto snapshot = snapshotRequest(request, attackScenario);
         List<DeviceVerificationDto> devices = copyRequiredList(
                 snapshot.getDevices(), "devices", "Devices list cannot be empty");
@@ -333,8 +329,6 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         if (steps < 1 || steps > 100) {
             throw new ValidationException("steps", "Steps must be between 1 and 100");
         }
-        int effectiveAttackBudget = attackScenario.effectiveBudget();
-
         snapshot.setDevices(devices);
         snapshot.setRules(rules);
         snapshot.setEnvironmentVariables(environmentVariables);
@@ -353,7 +347,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         AttackSurface attackSurface = modelInput.attackSurface();
         AttackScenarioValidator.validateAgainstSurface(attackScenario, attackSurface, rules);
 
-        return new SimulationInput(modelInput.devices(), rules, steps, snapshot.isAttack(), effectiveAttackBudget,
+        return new SimulationInput(modelInput.devices(), rules, steps,
                 snapshot.isEnablePrivacy(), attackSurface.deviceCount(), attackSurface.automationLinkCount(),
                 attackSurface.falsifiableReadingDeviceCount(), attackScenario, snapshot, modelInput.deviceSmvMap(),
                 modelInput.templateManifests(), modelInput.modelSnapshot(), attackSurface);
@@ -453,23 +447,27 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     // the package-private async path below; it is no longer part of the public interface.
     @Transactional
     Long createTask(Long userId, int requestedSteps,
-                    boolean isAttack, int attackBudget, boolean enablePrivacy,
+                    AttackScenarioDto attackScenario, boolean enablePrivacy,
                     int devicePointCount, int linkPointCount,
                     int falsifiableReadingDeviceCount,
                     ModelRunSnapshotDto modelSnapshot) {
-        return createTask(userId, requestedSteps, isAttack, attackBudget, enablePrivacy,
+        AttackScenarioDto requiredScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
+        return createTask(userId, requestedSteps, requiredScenario, enablePrivacy,
                 devicePointCount, linkPointCount, falsifiableReadingDeviceCount, modelSnapshot,
                 JsonUtils.toJson(ModelSemanticsDto.forRun(
-                        isAttack, enablePrivacy, devicePointCount, linkPointCount,
+                        requiredScenario, enablePrivacy, devicePointCount, linkPointCount,
                         falsifiableReadingDeviceCount)));
     }
 
     private Long createTask(Long userId, int requestedSteps,
-                            boolean isAttack, int attackBudget, boolean enablePrivacy,
+                            AttackScenarioDto attackScenario, boolean enablePrivacy,
                             int devicePointCount, int linkPointCount,
                             int falsifiableReadingDeviceCount,
                             ModelRunSnapshotDto modelSnapshot,
                             String modelSemanticsJson) {
+        AttackScenarioDto requiredScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         return transactionTemplate.execute(status -> {
             requireActiveUserForPersistence(userId);
             requireChatExecutionLease();
@@ -491,8 +489,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     .userId(userId)
                     .status(SimulationTaskPo.TaskStatus.PENDING)
                     .requestedSteps(requestedSteps)
-                    .isAttack(isAttack)
-                    .attackBudget(attackBudget)
+                    .isAttack(requiredScenario.isEnabled())
+                    .attackBudget(requiredScenario.effectiveBudget())
                     .modeledDeviceAttackPointCount(devicePointCount)
                     .modeledFalsifiableReadingDeviceCount(falsifiableReadingDeviceCount)
                     .modeledAutomationLinkAttackPointCount(linkPointCount)
@@ -531,7 +529,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             throw e;
         }
         try {
-            persistTaskModelContext(requiredTaskId, input.attack(), input.attackBudget(), input.enablePrivacy(),
+            persistTaskModelContext(requiredTaskId, input.attackScenario(), input.enablePrivacy(),
                     input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
                     input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
                     JsonUtils.toJson(ModelSemanticsDto.forRun(
@@ -558,7 +556,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     private Long submitSimulationInput(Long userId, SimulationInput input) {
         Long taskId = createTask(userId, input.steps(),
-                input.attack(), input.attackBudget(), input.enablePrivacy(),
+                input.attackScenario(), input.enablePrivacy(),
                 input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
                 input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
                 JsonUtils.toJson(ModelSemanticsDto.forRun(
@@ -605,16 +603,17 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     private void persistTaskModelContext(Long taskId,
-                                         boolean isAttack,
-                                         int attackBudget,
+                                         AttackScenarioDto attackScenario,
                                          boolean enablePrivacy,
                                          int devicePointCount,
                                          int linkPointCount,
                                          int falsifiableReadingDeviceCount,
                                          ModelRunSnapshotDto modelSnapshot,
                                          String modelSemanticsJson) {
+        AttackScenarioDto requiredScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         simulationTaskRepository.updateModelContext(
-                taskId, isAttack, isAttack ? attackBudget : 0, enablePrivacy,
+                taskId, requiredScenario.isEnabled(), requiredScenario.effectiveBudget(), enablePrivacy,
                 devicePointCount, falsifiableReadingDeviceCount, linkPointCount,
                 JsonUtils.toJson(modelSnapshot), modelSemanticsJson);
     }
@@ -643,6 +642,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             // Atomically transition PENDING → RUNNING to close the cancel-vs-start race window.
             // A plain findById + save was vulnerable to TOCTOU: a concurrent cancel could set
             // CANCELLED between the read and the save, and the save would overwrite it back to RUNNING.
+            long startConfirmationNanos = TaskLeaseRenewal.monotonicNow();
             LocalDateTime currentTime = databaseNow();
             LocalDateTime startedAt = currentTime;
             String startCheckLogs = serializeCheckLogs(List.of("Task started"));
@@ -658,8 +658,14 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 log.info("Simulation task {} is no longer PENDING (cancelled or already started), aborting", taskId);
                 return;
             }
+            if (!TaskLeaseRenewal.completedBeforeTtl(startConfirmationNanos, TASK_LEASE_DURATION)) {
+                log.warn("Simulation task {} lease expired before its start was committed", taskId);
+                return;
+            }
             LocalSimulationExecution localExecution = localExecutions.get(taskId);
-            if (localExecution != null) localExecution.leaseConfirmation.confirm();
+            if (localExecution != null) {
+                localExecution.leaseConfirmation.confirmAt(startConfirmationNanos);
+            }
 
             // Load entity for subsequent use (failTask/completeTask only need id and startedAt).
             task = simulationTaskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
@@ -670,7 +676,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
             updateTaskProgress(taskId, 20, TaskProgressStage.RUNNING_SIMULATION);
             SimulationResultDto result = doSimulate(userId, input.devices(), input.rules(), input.steps(),
-                    input.attack(), input.attackBudget(), input.enablePrivacy(), input.request(),
+                    input.enablePrivacy(), input.request(),
                     input.deviceSmvMap(), input.modelSnapshot(), SmvGenerator.TempModelContext.task(taskId));
 
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
@@ -715,8 +721,6 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private record SimulationInput(List<DeviceVerificationDto> devices,
                                    List<RuleDto> rules,
                                    int steps,
-                                   boolean attack,
-                                   int attackBudget,
                                    boolean enablePrivacy,
                                    int modeledDeviceAttackPointCount,
                                    int modeledAutomationLinkAttackPointCount,
@@ -726,7 +730,19 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                    Map<String, DeviceSmvData> deviceSmvMap,
                                    Map<String, DeviceManifest> templateManifests,
                                    ModelRunSnapshotDto modelSnapshot,
-                                   AttackSurface attackSurface) {}
+                                   AttackSurface attackSurface) {
+        private SimulationInput {
+            Objects.requireNonNull(attackScenario, "attackScenario is required");
+        }
+
+        boolean attack() {
+            return attackScenario.isEnabled();
+        }
+
+        int attackBudget() {
+            return attackScenario.effectiveBudget();
+        }
+    }
 
     private record ModelBoundaryInput(List<DeviceVerificationDto> devices,
                                        List<BoardEnvironmentVariableDto> environmentVariables,
@@ -820,6 +836,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         } catch (AsyncTaskQuotaExceededException e) {
             log.info("Simulation completed but run history is full for user {}", userId);
             return unsavedSimulationTrace(result, RunPersistenceDto.failed(e.getReasonCode()));
+        } catch (ServiceUnavailableException e) {
+            throw e;
         } catch (RuntimeException e) {
             log.error("Simulation completed but its history persistence outcome is unknown for user {}", userId, e);
             return unsavedSimulationTrace(result, RunPersistenceDto.outcomeUnknown(
@@ -885,8 +903,6 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                            List<DeviceVerificationDto> devices,
                                            List<RuleDto> rules,
                                            int steps,
-                                           boolean isAttack,
-                                           int attackBudget,
                                            boolean enablePrivacy,
                                            SimulationRequestDto request,
                                            Map<String, DeviceSmvData> resolvedDeviceSmvMap,
@@ -1001,8 +1017,10 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             throw new InternalServerException("Simulation failed: " + e.getMessage());
         } finally {
             if (finalResult != null) {
+                AttackScenarioDto attackScenario = request.resolvedAttackScenario();
+                boolean isAttack = attackScenario.isEnabled();
                 finalResult.setIsAttack(isAttack);
-                finalResult.setAttackBudget(isAttack ? attackBudget : 0);
+                finalResult.setAttackBudget(attackScenario.effectiveBudget());
                 finalResult.setEnablePrivacy(enablePrivacy);
                 finalResult.setModelSemantics(ModelSemanticsDto.forRun(
                         request.resolvedAttackScenario(), enablePrivacy, attackSurface));
@@ -1189,22 +1207,6 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         }
     }
 
-    private String buildRequestSnapshot(List<DeviceVerificationDto> devices,
-                                        List<RuleDto> rules,
-                                        int steps,
-                                        boolean isAttack,
-                                        int attackBudget,
-                                        boolean enablePrivacy) {
-        SimulationRequestDto request = new SimulationRequestDto();
-        request.setDevices(devices);
-        request.setRules(rules != null ? rules : List.of());
-        request.setSteps(steps);
-        request.setAttack(isAttack);
-        request.setAttackBudget(attackBudget);
-        request.setEnablePrivacy(enablePrivacy);
-        return JsonUtils.toJson(request);
-    }
-
     private String buildRequestSnapshot(SimulationRequestDto request) {
         return JsonUtils.toJson(request);
     }
@@ -1298,16 +1300,11 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             SmvGenerator.GeneratePurpose purpose,
             SmvGenerator.TempModelContext tempModelContext,
             Map<String, DeviceSmvData> resolvedDeviceSmvMap) throws IOException {
-        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
-        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
-            return smvGenerator.generateWithResolvedDeviceModel(
-                    userId, devices, environmentVariables, rules, specs, scenario,
-                    enablePrivacy, purpose, tempModelContext, resolvedDeviceSmvMap);
-        }
+        AttackScenarioDto scenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         return smvGenerator.generateWithResolvedDeviceModel(
-                userId, devices, environmentVariables, rules, specs,
-                scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
-                purpose, tempModelContext, resolvedDeviceSmvMap);
+                userId, devices, environmentVariables, rules, specs, scenario,
+                enablePrivacy, purpose, tempModelContext, resolvedDeviceSmvMap);
     }
 
     private void cleanupTempFile(File file) {

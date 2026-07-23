@@ -5,7 +5,7 @@ response envelope, the authentication scheme, and the error/status codes. This i
 **single source of truth** for these three things — every other API document links
 here instead of restating them.
 
-Verified against code on 2026-07-22. Source: `dto/Result.java`,
+Verified against code on 2026-07-24. Source: `dto/Result.java`,
 `exception/GlobalExceptionHandler.java`, `configure/JacksonConfig.java`,
 `configure/ApplicationTimeConfig.java`,
 `component/model/ModelRequestParser.java`, `security/`.
@@ -45,10 +45,9 @@ When a domain doc says "**Response**: `SomeDto`", it means that DTO appears unde
 
 Java `LocalDateTime` response fields are serialized as ISO-8601 date-times with the offset
 for the configured application zone, for example `2026-07-22T12:30:00+08:00`. Clients must
-parse the supplied offset and must not append `Z`. Request fields accept the legacy local
-form without an offset; when an offset is present, it must be a valid offset for the
-configured zone at that local time or deserialization returns `400`. The owning zone and
-default are documented in the
+parse the supplied offset and must not append `Z`. Request fields must use the same offset
+form, and that offset must be valid for the configured zone at the supplied local time or
+deserialization returns `400`. The owning zone and default are documented in the
 [configuration reference](../getting-started/configuration.md#application-time).
 
 ---
@@ -99,7 +98,7 @@ exceptions and their statuses:
 | 404 | `ResourceNotFoundException` | Resource does not exist |
 | 405 | `HttpRequestMethodNotSupportedException` | The path exists but does not support the requested HTTP method |
 | 406 | `HttpMediaTypeNotAcceptableException` | No acceptable representation can be produced; the response body is intentionally empty |
-| 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
+| 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DeviceRuntimeConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
 | 413 | `RequestBodySizeFilter` | JSON request body exceeds the configured byte limit and is rejected before DTO binding |
 | 415 | `HttpMediaTypeNotSupportedException` | The request content type is unsupported |
 | 422 | `ValidationException` | Semantic validation failure |
@@ -145,9 +144,10 @@ a stack trace.
 **Specialized conflict data (409)**: an active chat session returns
 `{ reasonCode: "CHAT_SESSION_BUSY", sessionId }`. A stale or blocked device-template
 deletion returns `{ reasonCode, currentPreview }`, where `reasonCode` is
-`TEMPLATE_DELETION_PREVIEW_STALE` or `TEMPLATE_DELETION_BLOCKED`. Clients use the
-structured data to refresh the exact pending decision instead of parsing the English
-message.
+`TEMPLATE_DELETION_PREVIEW_STALE` or `TEMPLATE_DELETION_BLOCKED`. A stale device-runtime
+compare-and-set returns `{ reasonCode: "DEVICE_RUNTIME_STALE", currentDevice }` and makes
+no write. Clients use structured data to refresh the exact pending decision instead of
+parsing the English message.
 
 **Persisted semantic integrity (500)**: JSON columns that define a model, run, trace,
 template, or structured chat-tool message are decoded fail-closed. Missing, blank,

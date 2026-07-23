@@ -633,13 +633,13 @@ describe('FuzzingPanel', () => {
       initializationPolicy: 'RANDOM_LEGAL_PER_SEED',
       paperSemanticsCodes: ['PAPER_RANDOM_INITIAL_STATE_ENABLED'],
       deviceDomains: [{
-        targetId: 'door-1',
+        targetId: 'door_550e8400_e29b_41d4_a716_446655440000',
         label: '前门',
         property: 'workingState',
         legalValues: ['off', 'locked']
       }],
       localVariableDomains: [{
-        targetId: 'door-1',
+        targetId: 'door_550e8400_e29b_41d4_a716_446655440000',
         label: '前门',
         property: 'customMetric',
         legalValues: ['ecoBoost']
@@ -671,7 +671,7 @@ describe('FuzzingPanel', () => {
         taskId: null,
         cancelling: false,
         paperDomainPreview,
-        bundledDeviceIds: ['door-1'],
+        bundledDeviceIds: ['door-550e8400-e29b-41d4-a716-446655440000'],
         bundledEnvironmentNames: ['temperature']
       },
       global: { plugins: [appI18n] }
@@ -760,6 +760,7 @@ describe('FuzzingPanel', () => {
           createdAt: '2026-07-15T10:00:00',
           modelSnapshot: {
             capturedAt: '2026-07-15T10:00:00',
+            modelFingerprint: 'd'.repeat(64),
             deviceCount: 4,
             ruleCount: 3,
             specificationCount: 2,

@@ -23,7 +23,7 @@ public class ModelRunSnapshotDto {
     private int environmentVariableCount;
     private int deviceTemplateCount;
 
-    /** Canonical SHA-256 of the frozen semantic model; absent on legacy/non-fuzz snapshots. */
+    /** Canonical SHA-256 of the frozen semantic model; required for fuzz snapshots only. */
     private String modelFingerprint;
 
     /** True when model generation reused the captured manifests instead of reading mutable templates again. */

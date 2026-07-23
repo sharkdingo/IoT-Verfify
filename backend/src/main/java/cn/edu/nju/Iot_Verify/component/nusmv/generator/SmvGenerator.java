@@ -136,25 +136,26 @@ public class SmvGenerator {
      */
     public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
                                    List<RuleDto> rules, List<SpecificationDto> specs,
-                                   boolean isAttack, int attackBudget, boolean enablePrivacy) throws IOException {
-        return generate(userId, devices, rules, specs, isAttack, attackBudget, enablePrivacy, GeneratePurpose.VERIFICATION);
+                                   AttackScenarioDto attackScenario, boolean enablePrivacy) throws IOException {
+        return generate(userId, devices, rules, specs, attackScenario, enablePrivacy,
+                GeneratePurpose.VERIFICATION);
     }
 
     public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
                                    List<RuleDto> rules, List<SpecificationDto> specs,
-                                   boolean isAttack, int attackBudget, boolean enablePrivacy,
+                                   AttackScenarioDto attackScenario, boolean enablePrivacy,
                                    GeneratePurpose purpose) throws IOException {
         return generateWithEnvironment(userId, devices, null, rules, specs,
-                isAttack, attackBudget, enablePrivacy, purpose, TempModelContext.direct());
+                attackScenario, enablePrivacy, purpose, TempModelContext.direct());
     }
 
     public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
                                    List<RuleDto> rules, List<SpecificationDto> specs,
-                                   boolean isAttack, int attackBudget, boolean enablePrivacy,
+                                   AttackScenarioDto attackScenario, boolean enablePrivacy,
                                    GeneratePurpose purpose,
                                    TempModelContext tempModelContext) throws IOException {
         return generateWithEnvironment(userId, devices, null, rules, specs,
-                isAttack, attackBudget, enablePrivacy, purpose, tempModelContext);
+                attackScenario, enablePrivacy, purpose, tempModelContext);
     }
 
     public GenerateResult generateWithEnvironment(Long userId,
@@ -162,11 +163,10 @@ public class SmvGenerator {
                                                   List<BoardEnvironmentVariableDto> environmentVariables,
                                                   List<RuleDto> rules,
                                                   List<SpecificationDto> specs,
-                                                  boolean isAttack,
-                                                  int attackBudget,
+                                                  AttackScenarioDto attackScenario,
                                                   boolean enablePrivacy) throws IOException {
         return generateWithEnvironment(userId, devices, environmentVariables, rules, specs,
-                isAttack, attackBudget, enablePrivacy, GeneratePurpose.VERIFICATION);
+                attackScenario, enablePrivacy, GeneratePurpose.VERIFICATION);
     }
 
     public GenerateResult generateWithEnvironment(Long userId,
@@ -174,26 +174,11 @@ public class SmvGenerator {
                                                   List<BoardEnvironmentVariableDto> environmentVariables,
                                                   List<RuleDto> rules,
                                                   List<SpecificationDto> specs,
-                                                  boolean isAttack,
-                                                  int attackBudget,
+                                                  AttackScenarioDto attackScenario,
                                                   boolean enablePrivacy,
                                                   GeneratePurpose purpose) throws IOException {
         return generateWithEnvironment(userId, devices, environmentVariables, rules, specs,
-                isAttack, attackBudget, enablePrivacy, purpose, TempModelContext.direct());
-    }
-
-    public GenerateResult generateWithEnvironment(Long userId,
-                                                  List<DeviceVerificationDto> devices,
-                                                  List<BoardEnvironmentVariableDto> environmentVariables,
-                                                  List<RuleDto> rules,
-                                                  List<SpecificationDto> specs,
-                                                  boolean isAttack,
-                                                  int attackBudget,
-                                                  boolean enablePrivacy,
-                                                  GeneratePurpose purpose,
-                                                  TempModelContext tempModelContext) throws IOException {
-        return generateWithEnvironment(userId, devices, environmentVariables, rules, specs,
-                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, purpose, tempModelContext);
+                attackScenario, enablePrivacy, purpose, TempModelContext.direct());
     }
 
     public GenerateResult generateWithEnvironment(Long userId,
@@ -224,23 +209,6 @@ public class SmvGenerator {
      * Generate from manifests resolved at request acceptance. This is the async-safe path: no mutable
      * template repository read occurs between validation and model generation.
      */
-    public GenerateResult generateWithResolvedDeviceModel(Long userId,
-                                                           List<DeviceVerificationDto> devices,
-                                                           List<BoardEnvironmentVariableDto> environmentVariables,
-                                                           List<RuleDto> rules,
-                                                           List<SpecificationDto> specs,
-                                                           boolean isAttack,
-                                                           int attackBudget,
-                                                           boolean enablePrivacy,
-                                                           GeneratePurpose purpose,
-                                                           TempModelContext tempModelContext,
-                                                           Map<String, DeviceSmvData> resolvedDeviceSmvMap)
-            throws IOException {
-        return generateWithResolvedDeviceModel(userId, devices, environmentVariables, rules, specs,
-                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, purpose, tempModelContext,
-                resolvedDeviceSmvMap);
-    }
-
     public GenerateResult generateWithResolvedDeviceModel(Long userId,
                                                            List<DeviceVerificationDto> devices,
                                                            List<BoardEnvironmentVariableDto> environmentVariables,
@@ -328,19 +296,19 @@ public class SmvGenerator {
      */
     public GenerateResult generateParameterized(Long userId, List<DeviceVerificationDto> devices,
                                                  List<RuleDto> rules, List<SpecificationDto> specs,
-                                                 boolean isAttack, int attackBudget, boolean enablePrivacy,
+                                                 AttackScenarioDto attackScenario, boolean enablePrivacy,
                                                  ParameterizationConfig config) throws IOException {
         return generateParameterizedWithEnvironment(userId, devices, null, rules, specs,
-                isAttack, attackBudget, enablePrivacy, config, TempModelContext.direct());
+                attackScenario, enablePrivacy, config, TempModelContext.direct());
     }
 
     public GenerateResult generateParameterized(Long userId, List<DeviceVerificationDto> devices,
                                                  List<RuleDto> rules, List<SpecificationDto> specs,
-                                                 boolean isAttack, int attackBudget, boolean enablePrivacy,
+                                                 AttackScenarioDto attackScenario, boolean enablePrivacy,
                                                  ParameterizationConfig config,
                                                  TempModelContext tempModelContext) throws IOException {
         return generateParameterizedWithEnvironment(userId, devices, null, rules, specs,
-                isAttack, attackBudget, enablePrivacy, config, tempModelContext);
+                attackScenario, enablePrivacy, config, tempModelContext);
     }
 
     public GenerateResult generateParameterizedWithEnvironment(Long userId,
@@ -348,26 +316,11 @@ public class SmvGenerator {
                                                                List<BoardEnvironmentVariableDto> environmentVariables,
                                                                List<RuleDto> rules,
                                                                List<SpecificationDto> specs,
-                                                               boolean isAttack,
-                                                               int attackBudget,
+                                                               AttackScenarioDto attackScenario,
                                                                boolean enablePrivacy,
                                                                ParameterizationConfig config) throws IOException {
         return generateParameterizedWithEnvironment(userId, devices, environmentVariables, rules, specs,
-                isAttack, attackBudget, enablePrivacy, config, TempModelContext.direct());
-    }
-
-    public GenerateResult generateParameterizedWithEnvironment(Long userId,
-                                                               List<DeviceVerificationDto> devices,
-                                                               List<BoardEnvironmentVariableDto> environmentVariables,
-                                                               List<RuleDto> rules,
-                                                               List<SpecificationDto> specs,
-                                                               boolean isAttack,
-                                                               int attackBudget,
-                                                               boolean enablePrivacy,
-                                                               ParameterizationConfig config,
-                                                               TempModelContext tempModelContext) throws IOException {
-        return generateParameterizedWithEnvironment(userId, devices, environmentVariables, rules, specs,
-                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, config, tempModelContext);
+                attackScenario, enablePrivacy, config, TempModelContext.direct());
     }
 
     public GenerateResult generateParameterizedWithEnvironment(Long userId,
@@ -410,23 +363,6 @@ public class SmvGenerator {
             List<BoardEnvironmentVariableDto> environmentVariables,
             List<RuleDto> rules,
             List<SpecificationDto> specs,
-            boolean isAttack,
-            int attackBudget,
-            boolean enablePrivacy,
-            ParameterizationConfig config,
-            TempModelContext tempModelContext,
-            Map<String, DeviceSmvData> resolvedDeviceSmvMap) throws IOException {
-        return generateParameterizedWithResolvedDeviceModel(userId, devices, environmentVariables, rules, specs,
-                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, config, tempModelContext,
-                resolvedDeviceSmvMap);
-    }
-
-    public GenerateResult generateParameterizedWithResolvedDeviceModel(
-            Long userId,
-            List<DeviceVerificationDto> devices,
-            List<BoardEnvironmentVariableDto> environmentVariables,
-            List<RuleDto> rules,
-            List<SpecificationDto> specs,
             AttackScenarioDto attackScenario,
             boolean enablePrivacy,
             ParameterizationConfig config,
@@ -457,13 +393,12 @@ public class SmvGenerator {
 
     // ==================== 内部方法 ====================
 
-    private AttackScenarioDto legacyAttackScenario(boolean isAttack, int attackBudget) {
-        validateAttackBudget(isAttack, attackBudget);
-        return isAttack ? AttackScenarioDto.anyUpToBudget(attackBudget) : AttackScenarioDto.none();
-    }
-
     private AttackScenarioDto validateAttackScenario(AttackScenarioDto attackScenario) {
-        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        if (attackScenario == null) {
+            throw SmvGenerationException.invalidBuilderInput(
+                    "SmvGenerator", "attackScenario", "must not be null");
+        }
+        AttackScenarioDto scenario = attackScenario;
         if (scenario.getMode() == null) {
             throw SmvGenerationException.invalidBuilderInput(
                     "SmvGenerator", "attackScenario.mode", "must not be null");
@@ -506,23 +441,6 @@ public class SmvGenerator {
             }
         }
         return scenario;
-    }
-
-    private void validateAttackBudget(boolean isAttack, int attackBudget) {
-        if (attackBudget < 0 || attackBudget > 50) {
-            throw SmvGenerationException.invalidBuilderInput(
-                    "SmvGenerator", "attackBudget", "must be between 0 and 50");
-        }
-        if (isAttack && attackBudget < 1) {
-            throw SmvGenerationException.invalidBuilderInput(
-                    "SmvGenerator", "attackBudget",
-                    "must be between 1 and 50 when attack modeling is enabled");
-        }
-        if (!isAttack && attackBudget != 0) {
-            throw SmvGenerationException.invalidBuilderInput(
-                    "SmvGenerator", "attackBudget",
-                    "must be 0 when attack modeling is disabled");
-        }
     }
 
     private Map<String, DeviceSmvData> requireCompleteResolvedDeviceMap(
@@ -615,13 +533,10 @@ public class SmvGenerator {
                                            ParameterizationConfig config,
                                            SmvGenerationContext context) {
 
-        AttackScenarioDto safeAttackScenario = attackScenario != null
-                ? attackScenario : AttackScenarioDto.none();
-        boolean isAttack = safeAttackScenario.isEnabled();
-        int attackBudget = safeAttackScenario.effectiveBudget();
-
+        AttackScenarioDto safeAttackScenario = validateAttackScenario(attackScenario);
         log.debug("Building SMV content: {} devices, {} rules, {} specs, attack={}, attackBudget={}, privacy={}",
-            devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0, isAttack, attackBudget, enablePrivacy);
+            devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0,
+            safeAttackScenario.isEnabled(), safeAttackScenario.effectiveBudget(), enablePrivacy);
 
         // 前置校验：P1/P2/P3/P5 — 在生成 SMV 文本前检测模板数据不合法项
         modelValidator.validate(deviceSmvMap);
@@ -655,9 +570,9 @@ public class SmvGenerator {
         if (config != null) {
             // Only emit the negated spec (¬ρ)
             content.append(specBuilder.buildNegated(specs, config.getNegatedSpecIndex(),
-                    isAttack, attackBudget, deviceSmvMap, enablePrivacy, context));
+                    deviceSmvMap, enablePrivacy, context));
         } else {
-            content.append(specBuilder.build(specs, isAttack, attackBudget, deviceSmvMap, enablePrivacy, context));
+            content.append(specBuilder.build(specs, deviceSmvMap, enablePrivacy, context));
         }
 
         return content.toString();

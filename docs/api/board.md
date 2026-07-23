@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-23. Source:
+Verified against code on 2026-07-24. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -96,9 +96,8 @@ flags so later narrow/wide viewport restoration still works.
 Targeted device creation returns `initialStateSource`. Its values are `requested` for an
 explicit runtime state, `templateDefault` for a state-machine `InitState`,
 `statelessPlaceholder` for the non-semantic `Working` canvas placeholder on a no-mode
-template, and `systemFallback` only for invalid legacy stateful data with no usable initial
-state. Only the last case produces a warning; a valid stateless device is not presented as
-an initialization failure.
+template. A template with a partial state-machine definition or no valid `InitState` is
+rejected as corrupt persisted data; creation never invents a semantic runtime state.
 
 `DeviceBatchCreateRequestDto` is `{ devices, environmentVariablePatches }`; `devices`
 must contain 1–100 items, must keep the resulting Board at no more than 100 devices, and
@@ -138,15 +137,49 @@ label while holding the Board write lock; a second dialog opened before another 
 therefore receives `409 Conflict` instead of silently overwriting the newer label. The same
 locked check rejects a case-insensitive collision with any other current device as `409`,
 including when another browser tab claimed the requested name after the dialog opened.
+While the dialog is open, Board snapshots rebind it to the current node without replacing
+a dirty name or its original compare-and-set baseline. An untouched field adopts an
+external rename, and an externally deleted device closes the dialog after any in-flight
+request settles instead of leaving stale controls on screen.
 
-`DeviceRuntimeUpdateDto` is the complete device-local runtime representation:
-`{ state, currentStateTrust, currentStatePrivacy, variables, privacies }`. It is a `PUT`,
-not a field patch. Omitting/nulling optional source/sensitivity overrides means use the
-selected template state's labels; omitting/nulling `variables` or `privacies` means no
-explicit local overrides. Each collection accepts at most 100 items. Stateful devices
-still require a legal `state`; no-mode
-devices use no modeled state and may be stored with the canvas-only `Working` placeholder.
-Shared environment values are not part of this subresource.
+`DeviceRuntimeUpdateDto` is a compare-and-set replacement command:
+`{ expected: DeviceRuntimeConfigDto, desired: DeviceRuntimeConfigDto }`, where each nested
+runtime value has the complete shape
+`{ state, currentStateTrust, currentStatePrivacy, variables, privacies }`. The server reads
+the current device after acquiring the per-user database write lock, canonicalizes its
+runtime values, and compares them with `expected`. A mismatch returns the specialized
+device-runtime `409 Conflict`; no field is written. Its structured response is owned by the
+[API error mapping](overview.md#error-and-status-codes).
+
+When `expected` still matches, `desired` replaces the complete device-local runtime
+subresource. Omitting/nulling optional source/sensitivity overrides means use the selected
+template state's labels; omitting/nulling `variables` or `privacies` means no explicit local
+overrides. Values are trimmed, security labels are lower-cased, and local-variable/privacy
+names are stored using the exact manifest declaration. Each collection accepts at most 100
+non-null items. `state` accepts at most 50 characters, while `currentStateTrust` and
+`currentStatePrivacy` accept at most 20 each; shape violations return `400`. Stateful
+devices still require a legal `state`; no-mode devices use no modeled state and may be
+stored with the canvas-only `Working` placeholder. Shared environment values are not part
+of this subresource.
+
+The same runtime canonicalization runs before every complete device write, including
+targeted creation and full-scene replacement. A runtime compare-and-set also compares the
+canonical current value but rewrites a non-canonical stored representation even when the
+requested semantic value is unchanged; successful reads and writes therefore converge on
+one representation instead of preserving whitespace or label-case drift.
+
+The device-details form performs a field-level three-way merge between its last accepted
+server baseline, the local draft, and each incoming Board snapshot. An untouched local field
+adopts the incoming value; a locally edited field is preserved when the server-side field did
+not change; and disjoint local/server edits merge automatically. If the same scalar, variable,
+or privacy entry changed differently on both sides, the dialog lists the conflict and blocks
+Save until the user explicitly keeps the local value or uses the latest server value. It also
+records a monotonic edit revision when Save begins, so edits made while the request is in
+flight remain local even when the user deliberately returns a field to its pre-save value;
+the matching response still advances the authoritative baseline. A same-id snapshot whose
+template/runtime schema changes starts a new edit session, because retaining fields from the
+old manifest would create an invalid mixed draft. Closing the dialog remains authoritative;
+a late response updates the Board snapshot but does not reopen the details surface.
 
 Both update commands return `DeviceUpdateResultDto`: `{ operation: updated|unchanged,
 mutationType: layout|runtime, changedFields, previousDevice, currentDevice, currentNodes,
@@ -178,6 +211,26 @@ used for the commit, not inferred from frontend template caches. A shared Enviro
 Pool value is removed only when no remaining canvas device template requires it; deleting
 one of several devices that depend on the same value keeps the value and its current
 trust/privacy labels unchanged.
+
+The UI permits only one deletion-preview request at a time and immediately opens a named,
+cancellable confirmation in an explicit loading state. An underlying device-details dialog
+is suspended rather than destroyed, so cancelling the preview restores any unsaved runtime
+draft without exposing two active modal dialogs. Confirmation is disabled until the complete
+response passes nested device/rule/specification/environment validation and supplies a usable
+token. The preview joins the client Board-mutation queue, then reconciles its authoritative
+pre-delete collections before showing consequences.
+
+While confirmation is open, the client watches only inputs that can change the deletion
+impact: the target snapshot, referencing rules/specifications, affected Environment Pool
+values and their active template providers. A relevant change closes the old confirmation;
+an unrelated Board edit does not. Removing the target closes both details and confirmation.
+If the preview itself returns `404`, the client reloads the complete semantic scene; an
+already-absent target is reported as an externally completed outcome rather than as a second
+contradictory failure. A final delete command is single-submit even under repeated click or
+Enter input. When a foreground or cross-tab snapshot removes a device referenced by an open
+details, rename, context-menu, preview, or confirmation surface, all stale surfaces close,
+one localized external-deletion warning is shown, and keyboard focus moves to the visible
+Devices tab instead of remaining on a detached element.
 
 Rule/spec create/delete returns `CollectionMutationResultDto<T>`:
 `{ operation, affectedItem, currentItems, currentCount }`. This is deliberately richer
@@ -723,8 +776,8 @@ auto-fix parameterization identifiers active in that model.
   transition pulse; user-consumable event pulses belong to state-changing APIs.
 - `API`: `Name`, `Description`, `Signal`, optional `AcceptsContent`, `StartState`, `EndState`,
   `Trigger: null`. Despite the manifest field name, these are device commands/actions,
-  not HTTP or network endpoint definitions. APIs change modeled state only: non-empty
-  `Assignments` is rejected, as are stateless APIs and APIs with no possible state effect.
+  not HTTP or network endpoint definitions. APIs change modeled state only; `Assignments`
+  is not an API field. Stateless APIs and APIs with no possible state effect are rejected.
   API triggers are not a supported generator semantic; conditional autonomous behavior
   belongs in `Transitions`. `StartState` is required; an explicit empty string or `_`
   pattern means “callable from any state”, while a concrete value is the command

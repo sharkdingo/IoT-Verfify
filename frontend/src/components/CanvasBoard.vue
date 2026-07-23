@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { CanvasPan } from '../types/canvas'
+import type { ModelTokenSource } from '../types/modelToken'
 
 import {
   updateEdgesForNode,
@@ -22,7 +23,8 @@ import {
   toTraceDeviceId,
   traceDeviceMatchesId,
   traceVariableMatchesName,
-  type TraceDeviceLike
+  type TraceDeviceLike,
+  type TraceVariableLike
 } from '../utils/traceEdgePlayback'
 import {
   formatPlaybackSecurityLabel,
@@ -103,11 +105,7 @@ const syncReducedMotionPreference = () => {
 }
 
 const shouldRenderEdgeFlow = (edge: DeviceEdge) =>
-  !prefersReducedMotion.value && shouldAnimateEdgeFlow(edge, props.highlightedTrace)
-
-const getVariableNodeBorderColor = (node: DeviceNode): string => getNodeBorderColor(node.id)
-
-const getVariableNodeBgColor = (node: DeviceNode): string => getNodeSurfaceColor(node.id)
+  !prefersReducedMotion.value && shouldAnimateEdgeFlow(edge, props.edges, props.highlightedTrace)
 
 // Get arrow marker ID based on source device color
 const getArrowMarker = (edge: DeviceEdge): string => {
@@ -149,39 +147,6 @@ const handleImageError = (event: Event) => {
   img.src = svgDataUri(fallbackDeviceSvg)
 }
 
-const getVariableNodeParts = (node: DeviceNode): { parentId: string; variableName: string } | null => {
-  if (!isVariableNode(node)) return null
-  const parent = props.nodes
-    .filter(candidate => !isVariableNode(candidate) && node.id.startsWith(`${candidate.id}_`))
-    .sort((a, b) => b.id.length - a.id.length)[0]
-  if (!parent) return null
-  return {
-    parentId: parent.id,
-    variableName: node.id.slice(parent.id.length + 1)
-  }
-}
-
-// 获取节点的前一个状态（用于动画判断）
-const getPreviousState = (node: DeviceNode): string | null => {
-  if (!props.highlightedTrace?.states) return null
-  if (props.highlightedTrace.selectedStateIndex === undefined || props.highlightedTrace.selectedStateIndex <= 0) return null
-
-  const currentIndex = props.highlightedTrace.selectedStateIndex
-  // 查找前一个状态
-  for (let i = currentIndex - 1; i >= 0; i--) {
-    const state = props.highlightedTrace.states[i]
-    if (!state?.devices) continue
-
-    const device = state.devices.find(d => traceDeviceMatchesId(d, node.id))
-
-    if (device) {
-      const prev = device.state || null
-      return prev
-    }
-  }
-  return null
-}
-
 // Check the user-facing compromise state returned by the trace API.
 const isDeviceAttacked = (nodeId: string): boolean => {
   if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) {
@@ -214,15 +179,23 @@ const getNodeState = (node: DeviceNode): string => {
   return props.getNodeEffectiveState(node)
 }
 
-const getNodeDisplayState = (node: DeviceNode): string =>
-  props.hasNodeStateMachine(node)
-    ? formatNodeModelToken(node, getNodeState(node))
-    : t('app.noStateMachine')
+const hasDisplayStateMachine = (node: DeviceNode): boolean => {
+  if (!isTraceActive.value) return props.hasNodeStateMachine(node)
+  const traceDevice = getLatestTraceDeviceForNode(node.id)
+  if (!traceDevice) return true
+  return Boolean(traceDevice.mode?.trim() || traceDevice.state?.trim())
+}
+
+const getNodeDisplayState = (node: DeviceNode): string => {
+  if (!hasDisplayStateMachine(node)) return t('app.noStateMachine')
+  const state = getNodeState(node)
+  if (!isTraceActive.value) return formatNodeModelToken(node, state)
+  const traceDevice = getLatestTraceDeviceForNode(node.id)
+  return traceDevice ? formatPlaybackModelToken(traceDevice.modelTokenSource, state) : state
+}
 
 const getStateDisplayClass = (node: DeviceNode): string =>
-  props.hasNodeStateMachine(node) ? 'state-defined' : 'state-stateless'
-
-const isVariableNode = (_node: DeviceNode): boolean => false
+  hasDisplayStateMachine(node) ? 'state-defined' : 'state-stateless'
 
 // 获取节点当前状态对应的图标
 const getCurrentNodeIcon = (node: DeviceNode): string => {
@@ -236,6 +209,15 @@ const getCurrentNodeIcon = (node: DeviceNode): string => {
 
 const getNodeVisualStateKey = (node: DeviceNode): string =>
   `${toTraceDeviceId(node.id)}:${getNodeState(node)}`
+
+type PlaybackTraceVariable = TraceVariableLike & {
+  modelTokenSource?: ModelTokenSource | null
+}
+
+type PlaybackTraceDevice = Omit<TraceDeviceLike, 'variables'> & {
+  modelTokenSource?: ModelTokenSource | null
+  variables?: PlaybackTraceVariable[]
+}
 
 const props = defineProps<{
   /** 所有设备节点（Board.vue 的 nodes.value） */
@@ -254,15 +236,17 @@ const props = defineProps<{
   getNodeEffectiveState: (node: DeviceNode) => string
   /** Localize canonical bundled-template identifiers without changing stored values. */
   formatNodeModelToken?: (node: DeviceNode, value: unknown) => string
+  /** Format an immutable playback token strictly from its frozen source. */
+  formatPlaybackModelToken?: (source: ModelTokenSource | null | undefined, value: unknown) => string
   /** 高亮显示的反例路径 */
   highlightedTrace?: {
     states: Array<{
       stateIndex?: number
-      devices: TraceDeviceLike[]
-      envVariables?: Array<{ name: string; value: string; trust?: string }>
+      devices: PlaybackTraceDevice[]
+      envVariables?: PlaybackTraceVariable[]
       rules?: number[]
-      triggeredRules?: Array<{ ruleId?: string | null; ruleLabel?: string | null }>
-      compromisedAutomationLinks?: Array<{ ruleId?: string | null; ruleLabel?: string | null }>
+      triggeredRules?: Array<{ ruleIndex: number; ruleId?: string | null; ruleLabel?: string | null }>
+      compromisedAutomationLinks?: Array<{ ruleIndex: number; ruleId?: string | null; ruleLabel?: string | null }>
     }>
     selectedStateIndex?: number
   } | null
@@ -274,6 +258,13 @@ const props = defineProps<{
 
 function formatNodeModelToken(node: DeviceNode, value: unknown): string {
   return props.formatNodeModelToken?.(node, value) ?? String(value ?? '')
+}
+
+function formatPlaybackModelToken(
+  source: ModelTokenSource | null | undefined,
+  value: unknown
+): string {
+  return props.formatPlaybackModelToken?.(source, value) ?? String(value ?? '')
 }
 
 const GRID_SIZE_PX = 32
@@ -303,17 +294,24 @@ const getLatestTraceVariableForNode = (nodeId: string, variableName: string) => 
     nodeId,
     variableName,
     props.highlightedTrace.selectedStateIndex || 0
-  )
+  ) as PlaybackTraceVariable | null
 }
 
-const getPreviousTraceVariableValueForNode = (nodeId: string, variableName: string): string | null => {
+const getPreviousTraceVariableForNode = (
+  nodeId: string,
+  variableName: string
+): PlaybackTraceVariable | null => {
   if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) return null
   if (props.highlightedTrace.selectedStateIndex <= 0) return null
-  const variable = findTraceVariableAtOrBefore(props.highlightedTrace, nodeId, variableName, props.highlightedTrace.selectedStateIndex - 1)
-  return variable ? normalizeTraceComparable(variable.value) : null
+  return findTraceVariableAtOrBefore(
+    props.highlightedTrace,
+    nodeId,
+    variableName,
+    props.highlightedTrace.selectedStateIndex - 1
+  ) as PlaybackTraceVariable | null
 }
 
-const getLatestTraceDeviceForNodeAtOrBefore = (nodeId: string, endIndex: number): TraceDeviceLike | null => {
+const getLatestTraceDeviceForNodeAtOrBefore = (nodeId: string, endIndex: number): PlaybackTraceDevice | null => {
   if (!props.highlightedTrace?.states) return null
   const boundedIndex = Math.min(Math.max(endIndex, 0), props.highlightedTrace.states.length - 1)
   for (let i = boundedIndex; i >= 0; i--) {
@@ -325,10 +323,10 @@ const getLatestTraceDeviceForNodeAtOrBefore = (nodeId: string, endIndex: number)
   return null
 }
 
-const getLatestTraceDeviceForNode = (nodeId: string): TraceDeviceLike | null =>
+const getLatestTraceDeviceForNode = (nodeId: string): PlaybackTraceDevice | null =>
   getLatestTraceDeviceForNodeAtOrBefore(nodeId, props.highlightedTrace?.selectedStateIndex || 0)
 
-const getPreviousTraceDeviceForNode = (nodeId: string): TraceDeviceLike | null => {
+const getPreviousTraceDeviceForNode = (nodeId: string): PlaybackTraceDevice | null => {
   const selectedIndex = props.highlightedTrace?.selectedStateIndex
   if (selectedIndex === undefined || selectedIndex <= 0) return null
   return getLatestTraceDeviceForNodeAtOrBefore(nodeId, selectedIndex - 1)
@@ -336,7 +334,7 @@ const getPreviousTraceDeviceForNode = (nodeId: string): TraceDeviceLike | null =
 
 const getEdgePlaybackClass = (edge: DeviceEdge) => {
   const traceActive = isEdgeActiveInTrace(edge, props.edges, props.highlightedTrace)
-  const linkCompromised = isEdgeCompromisedInTrace(edge, props.highlightedTrace)
+  const linkCompromised = isEdgeCompromisedInTrace(edge, props.edges, props.highlightedTrace)
   const ruleFocused = Boolean(props.focusedRuleId && edge.ruleId === props.focusedRuleId)
   return {
     'edge-line--active': traceActive,
@@ -405,43 +403,6 @@ const isNodeRepresentedInTrace = (node: DeviceNode): boolean =>
 // Whether the selected state (or a prior sparse state) has authoritative data for the node.
 const isNodeInTrace = (node: DeviceNode): boolean => {
   return isTraceActive.value && getLatestTraceDeviceForNode(node.id) !== null
-}
-
-// Trace fallback for non-authoritative variable rows.
-const getTraceVariableValue = (node: DeviceNode): { value: string; state: string } | null => {
-  if (!isTraceActive.value || !props.highlightedTrace?.states) return null
-  
-  const variableParts = getVariableNodeParts(node)
-  if (!variableParts) return null
-
-  const parentDeviceId = variableParts.parentId
-  const variableName = variableParts.variableName
-  
-  // 从当前选中状态向前查找，找到设备最近的变量值和状态
-  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
-  for (let i = currentIndex; i >= 0; i--) {
-    const state = props.highlightedTrace.states[i]
-    if (!state?.devices) continue
-    
-    const deviceState = state.devices.find(d => traceDeviceMatchesId(d, parentDeviceId))
-    
-    if (deviceState) {
-      // 查找对应的变量值（大小写不敏感匹配）
-      const variable = deviceState.variables?.find(v => traceVariableMatchesName(v, variableName))
-      
-      if (variable) {
-        return {
-          value: variable.value === null || variable.value === undefined || variable.value === ''
-            ? 'Unknown'
-            : String(variable.value),
-          state: deviceState.state || 'Working'
-        }
-      }
-      // 如果当前状态没有该变量，继续向前查找（使用上一个时间点的值）
-    }
-  }
-  
-  return null
 }
 
 const emit = defineEmits<{
@@ -564,7 +525,7 @@ const onNodePointerUp = (e: PointerEvent) => {
   if (moved) {
     if (movedEnough) {
       emit('node-moved-or-resized', moved.id)
-    } else if (!isVariableNode(moved)) {
+    } else {
       emit('node-open', moved)
     }
   }
@@ -747,9 +708,13 @@ const getNodeVisualTierClass = (node: DeviceNode) =>
   `device-node--${getNodeVisualTier(node)}`
 
 const POINTER_RESIZE_TARGET_SIZE_PX = 44
+const POINTER_RESIZE_ALL_HANDLES_SIZE_PX = POINTER_RESIZE_TARGET_SIZE_PX * 2
 const canPointerResizeNode = (node: DeviceNode) =>
   node.width * props.zoom > POINTER_RESIZE_TARGET_SIZE_PX
   && node.height * props.zoom > POINTER_RESIZE_TARGET_SIZE_PX
+const canShowAllPointerResizeHandles = (node: DeviceNode) =>
+  node.width * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
+  && node.height * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
 
 const getNodeRuntimeBadges = (node: DeviceNode) => {
   const traceDevice = isTraceActive.value ? getLatestTraceDeviceForNode(node.id) : null
@@ -758,7 +723,8 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
     .map(variable => ({
       name: variable.name,
       value: normalizeTraceComparable(variable.value),
-      trust: variable.trust
+      trust: variable.trust,
+      modelTokenSource: variable.modelTokenSource
     }))
   const candidates = isTraceActive.value ? traceOnlyVariables : configuredVariables
 
@@ -775,8 +741,11 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
       const traceValue = isTraceActive.value
         ? (traceVariable ? normalizeTraceComparable(traceVariable.value) : null)
         : null
-      const previousTraceValue = isTraceActive.value
-        ? getPreviousTraceVariableValueForNode(node.id, variable.name)
+      const previousTraceVariable = isTraceActive.value
+        ? getPreviousTraceVariableForNode(node.id, variable.name)
+        : null
+      const previousTraceValue = previousTraceVariable
+        ? normalizeTraceComparable(previousTraceVariable.value)
         : null
       const value = traceValue ?? String(variable.value)
       const trust = traceVariable?.trust || variable.trust
@@ -786,10 +755,14 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
       const changed = traceValue !== null &&
         previousTraceValue !== null &&
         previousTraceValue !== traceValue
-      const displayLabel = formatNodeModelToken(node, variable.name)
-      const displayValue = formatNodeModelToken(node, value)
+      const displayLabel = isTraceActive.value
+        ? formatPlaybackModelToken(traceVariable?.modelTokenSource, traceVariable?.name ?? variable.name)
+        : formatNodeModelToken(node, variable.name)
+      const displayValue = isTraceActive.value
+        ? formatPlaybackModelToken(traceVariable?.modelTokenSource, value)
+        : formatNodeModelToken(node, value)
       const displayPreviousValue = changed && previousTraceValue !== null
-        ? formatNodeModelToken(node, previousTraceValue)
+        ? formatPlaybackModelToken(previousTraceVariable?.modelTokenSource, previousTraceValue)
         : null
       return {
         label: displayLabel,
@@ -807,9 +780,17 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
     const traceDevice = getLatestTraceDeviceForNode(node.id)
     if (!traceDevice) return []
     const facts = playbackDeviceSecurityFacts(traceDevice as Parameters<typeof playbackDeviceSecurityFacts>[0])
-    const formatSecurityLabels = (labels: string[]) => labels
-      .map(label => formatPlaybackSecurityLabel(label, value => formatNodeModelToken(node, value)))
-      .join(', ')
+    const formatSecurityLabel = (label: string) => {
+      if (/^([^:]+):\s*(.+)$/.test(label)) {
+        return formatPlaybackSecurityLabel(
+          label,
+          value => formatPlaybackModelToken(traceDevice.modelTokenSource, value)
+        )
+      }
+      const variable = traceDevice.variables?.find(candidate => traceVariableMatchesName(candidate, label))
+      return formatPlaybackModelToken(variable?.modelTokenSource ?? traceDevice.modelTokenSource, label)
+    }
+    const formatSecurityLabels = (labels: string[]) => labels.map(formatSecurityLabel).join(', ')
     const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
     if (facts.untrustedLabels.length > 0) {
       badges.push({
@@ -867,10 +848,11 @@ const isNodeTraceChanged = (node: DeviceNode) => {
 
 const getNodeStateTitle = (node: DeviceNode) => {
   const current = getNodeDisplayState(node)
-  if (!props.hasNodeStateMachine(node)) return current
-  const previous = getPreviousState(node)
+  if (!hasDisplayStateMachine(node)) return current
+  const previousDevice = isTraceActive.value ? getPreviousTraceDeviceForNode(node.id) : null
+  const previous = previousDevice?.state?.trim() || null
   if (previous && previous !== getNodeState(node)) {
-    return `${formatNodeModelToken(node, previous)} -> ${current}`
+    return `${formatPlaybackModelToken(previousDevice?.modelTokenSource, previous)} -> ${current}`
   }
   return current
 }
@@ -933,7 +915,7 @@ const getEdgeLabelPoint = (edge: DeviceEdge) => {
 const onNodeContextInternal = (node: DeviceNode, e: MouseEvent) => {
   e.preventDefault()
   e.stopPropagation()
-  if (props.interactionLocked || isVariableNode(node)) return
+  if (props.interactionLocked) return
   emit('node-context', node, { x: e.clientX, y: e.clientY })
 }
 
@@ -979,7 +961,6 @@ const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
   if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault()
     if (props.interactionLocked) return
-    if (isVariableNode(node)) return
     emit('node-delete', node.id)
     return
   }
@@ -1367,56 +1348,22 @@ onMounted(() => {
           :aria-label="getNodeAriaLabel(node)"
           aria-describedby="canvas-node-keyboard-instructions"
           :title="getNodeTitle(node)"
-          :class="[getNodeVisualTierClass(node), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
+          :class="[getNodeVisualTierClass(node), { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
           :style="{
           left: node.position.x + 'px',
           top: node.position.y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
           '--node-accent-color': getNodeAccentColor(node.id),
-          backgroundColor: isVariableNode(node) ? getVariableNodeBgColor(node) : getNodeSurfaceColor(node.id),
-          borderColor: isDeviceAttacked(node.id) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)),
-          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)) } : {})
+          backgroundColor: getNodeSurfaceColor(node.id),
+          borderColor: isDeviceAttacked(node.id) ? '#EF4444' : getNodeBorderColor(node.id),
+          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? '#EF4444' : getNodeBorderColor(node.id) } : {})
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
           @contextmenu.stop.prevent="onNodeContextInternal(node, $event)"
           @keydown="onNodeKeydown($event, node)"
       >
-        <!-- Non-authoritative variable row fallback: icon-only circle -->
-        <div v-if="isVariableNode(node)" class="variable-node-wrapper">
-          <div class="variable-node-content">
-            <img
-                class="variable-img"
-                :src="getCurrentNodeIcon(node)"
-                :alt="node.label"
-                draggable="false"
-                @error="handleImageError($event)"
-                :class="{ 'variable-changed': isTraceActive && getTraceVariableValue(node) }"
-            />
-          </div>
-          <!-- 自定义悬浮提示 - 反例路径时一直显示 -->
-          <div 
-            class="variable-tooltip" 
-            :class="{ 'variable-tooltip-active': isTraceActive }"
-          >
-            <div class="variable-tooltip-icon">
-              <img
-                  :src="getCurrentNodeIcon(node)"
-                  :alt="node.label"
-                  @error="handleImageError($event)"
-              />
-            </div>
-            <div class="variable-tooltip-info">
-              <span class="variable-tooltip-label">{{ node.label }}</span>
-              <span v-if="isTraceActive && getTraceVariableValue(node)" class="variable-tooltip-value">
-                {{ t('app.variableValue') }}: {{ formatNodeModelToken(node, getTraceVariableValue(node)?.value) }}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 普通设备节点：图标+名字+状态 -->
-        <div v-else class="device-node-content">
+        <div class="device-node-content">
           <!-- Attack indicator arrow -->
           <div 
             v-if="isDeviceAttacked(node.id)"
@@ -1479,19 +1426,19 @@ onMounted(() => {
 
         <!-- 四角缩放手柄 -->
         <div
-            v-if="!interactionLocked && canPointerResizeNode(node)"
+            v-if="!interactionLocked && canShowAllPointerResizeHandles(node)"
             class="resize-handle tl"
             aria-hidden="true"
             @pointerdown.stop="onPointerDownResize($event, node, 'tl')"
         ></div>
         <div
-            v-if="!interactionLocked && canPointerResizeNode(node)"
+            v-if="!interactionLocked && canShowAllPointerResizeHandles(node)"
             class="resize-handle tr"
             aria-hidden="true"
             @pointerdown.stop="onPointerDownResize($event, node, 'tr')"
         ></div>
         <div
-            v-if="!interactionLocked && canPointerResizeNode(node)"
+            v-if="!interactionLocked && canShowAllPointerResizeHandles(node)"
             class="resize-handle bl"
             aria-hidden="true"
             @pointerdown.stop="onPointerDownResize($event, node, 'bl')"

@@ -103,13 +103,9 @@ public class ApplicationTimeConfig {
                             "Timestamp offset does not match the configured application time zone");
                 }
                 return localDateTime;
-            } catch (DateTimeParseException ignored) {
-                try {
-                    return LocalDateTime.parse(value, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-                } catch (DateTimeParseException invalidLocalDateTime) {
-                    return (LocalDateTime) context.handleWeirdStringValue(
-                            LocalDateTime.class, value, "Expected an ISO-8601 local or offset date-time");
-                }
+            } catch (DateTimeParseException invalidOffsetDateTime) {
+                return (LocalDateTime) context.handleWeirdStringValue(
+                        LocalDateTime.class, value, "Expected an ISO-8601 offset date-time");
             }
         }
     }

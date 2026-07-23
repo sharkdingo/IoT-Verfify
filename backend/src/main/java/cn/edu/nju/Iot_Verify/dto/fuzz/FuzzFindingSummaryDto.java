@@ -24,5 +24,4 @@ public class FuzzFindingSummaryDto {
     private Long seed;
     private LocalDateTime createdAt;
     private int stateCount;
-    private boolean dataAvailable;
 }

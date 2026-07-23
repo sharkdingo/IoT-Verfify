@@ -62,6 +62,7 @@ test.describe('live AI full-stack audit', () => {
       timeout: 240_000,
       data: {
         sessionId,
+        turnId: randomUUID(),
         content: 'Inspect my current board and report its device, rule, and specification counts. Do not change anything.'
       }
     })
@@ -72,14 +73,31 @@ test.describe('live AI full-stack audit', () => {
     expect(streamText).toContain('PLANNING')
     expect(streamText).toContain('TOOL_EXECUTION')
     expect(streamText).toContain('WRITING_RESPONSE')
-    expect(streamText).toContain('Devices')
-    expect(streamText).toContain('Specifications')
     const streamFrames = streamText
       .split(/\r?\n/)
       .filter(line => line.startsWith('data:{'))
       .map(line => JSON.parse(line.slice('data:'.length)))
     expect(streamFrames.filter(frame =>
       frame.progress?.stage === 'PLANNING' && frame.progress?.round === 1)).toHaveLength(1)
+    const boardResults = streamFrames.filter(frame =>
+      frame.progress?.stage === 'TOOL_RESULT' &&
+      frame.progress?.toolName === 'board_overview')
+    expect(boardResults).toHaveLength(1)
+    expect(boardResults[0].progress).toMatchObject({
+      outcome: 'USABLE',
+      detail: 'Read the board: 0 devices, 0 rules, 0 specifications, and 0 shared environment variables.'
+    })
+    expect(streamFrames.filter(frame =>
+      frame.progress?.stage === 'TOOL_EXECUTION' &&
+      frame.progress?.toolName !== 'board_overview')).toHaveLength(0)
+    const assistantReply = streamFrames
+      .map(frame => typeof frame.content === 'string' ? frame.content : '')
+      .join('')
+      .trim()
+    expect(assistantReply).not.toBe('')
+    if (assistantReply.includes('authoritative tool record')) {
+      expect(assistantReply).toContain(boardResults[0].progress.detail)
+    }
 
     const historyResponse = await request.get(
       `${apiBaseURL}/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,

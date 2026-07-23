@@ -88,6 +88,7 @@ const snapshot = {
   specificationCount: 1,
   environmentVariableCount: 0,
   deviceTemplateCount: 1,
+  modelFingerprint: 'a'.repeat(64),
   templatesFrozen: true as const
 }
 
@@ -152,8 +153,7 @@ const run: AvailableFuzzingRunSummary & { targetSpecIds: string[] } = {
     firstViolationStep: 3,
     seed: 42,
     createdAt: '2026-07-14T10:00:01',
-    stateCount: 4,
-    dataAvailable: true
+    stateCount: 4
   }]
 }
 

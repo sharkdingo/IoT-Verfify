@@ -34,21 +34,17 @@ public class SmvSpecificationBuilder {
      *
      * @param specs              full spec list
      * @param negatedSpecIndex   index of the spec to negate (¬ρ)
-     * @param isAttack           attack mode
-     * @param attackBudget          attack budget
      * @param deviceSmvMap       device SMV data
      * @param enablePrivacy      privacy flag
      * @return SMV specification section containing only the negated spec
      */
     public String buildNegated(List<SpecificationDto> specs, int negatedSpecIndex,
-                               boolean isAttack, int attackBudget,
                                Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
-        return buildNegated(specs, negatedSpecIndex, isAttack, attackBudget,
+        return buildNegated(specs, negatedSpecIndex,
                 deviceSmvMap, enablePrivacy, SmvGenerationContext.noop());
     }
 
     public String buildNegated(List<SpecificationDto> specs, int negatedSpecIndex,
-                               boolean isAttack, int attackBudget,
                                Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy,
                                SmvGenerationContext context) {
         if (specs == null || specs.isEmpty() || negatedSpecIndex < 0 || negatedSpecIndex >= specs.size()) {
@@ -68,7 +64,7 @@ public class SmvSpecificationBuilder {
         content.append("\n-- Negated specification (index ").append(negatedSpecIndex).append(")");
 
         try {
-            String negatedSpec = generateNegatedSpec(spec, isAttack, attackBudget, deviceSmvMap);
+            String negatedSpec = generateNegatedSpec(spec, deviceSmvMap);
             content.append("\n\t").append(negatedSpec);
             recordEmittedSpec(context, spec, negatedSpec);
         } catch (InvalidConditionException e) {
@@ -94,18 +90,16 @@ public class SmvSpecificationBuilder {
      *   <li>Template 7 (safety):       AG !(body)      → CTLSPEC EF(body)  (body includes trust/attack expressions)</li>
      * </ul>
      */
-    String generateNegatedSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
-                                       Map<String, DeviceSmvData> deviceSmvMap) {
+    String generateNegatedSpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
         validateTemplateShape(spec);
         String templateId = spec.getTemplateId();
         if (PERSISTENCE_TEMPLATE_ID.equals(templateId)) {
             return generateNegatedLtlSpec(spec, deviceSmvMap);
         }
-        return generateNegatedCtlSpec(spec, isAttack, attackBudget, deviceSmvMap);
+        return generateNegatedCtlSpec(spec, deviceSmvMap);
     }
 
-    private String generateNegatedCtlSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
-                                          Map<String, DeviceSmvData> deviceSmvMap) {
+    private String generateNegatedCtlSpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
         String templateId = spec.getTemplateId();
         String aPart = buildConditionGroup(spec.getAConditions(), deviceSmvMap);
         String ifPart = buildConditionGroup(spec.getIfConditions(), deviceSmvMap);
@@ -123,7 +117,7 @@ public class SmvSpecificationBuilder {
             case "5": // response: AG(IF→AF(THEN)) → EF(IF & EG(!THEN))
                 return "CTLSPEC EF((" + ifPart + ") & EG(!(" + thenPart + ")))";
             case "7": // safety: AG !(body) → EF(body), where body includes trust/attack expressions
-                return "CTLSPEC EF(" + buildSafetyBody(spec, deviceSmvMap, isAttack, attackBudget) + ")";
+                return "CTLSPEC EF(" + buildSafetyBody(spec, deviceSmvMap) + ")";
             default:
                 // Symmetric with generateCtlSpec: fail closed instead of guessing AG(A).
                 throw new InvalidConditionException("unsupported templateId '" + templateId
@@ -138,12 +132,12 @@ public class SmvSpecificationBuilder {
         return "LTLSPEC F((" + ifPart + ") & G F(!(" + thenPart + ")))";
     }
 
-    public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int attackBudget,
+    public String build(java.util.List<SpecificationDto> specs,
                        Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
-        return build(specs, isAttack, attackBudget, deviceSmvMap, enablePrivacy, SmvGenerationContext.noop());
+        return build(specs, deviceSmvMap, enablePrivacy, SmvGenerationContext.noop());
     }
 
-    public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int attackBudget,
+    public String build(java.util.List<SpecificationDto> specs,
                        Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy,
                        SmvGenerationContext context) {
         StringBuilder content = new StringBuilder();
@@ -177,7 +171,7 @@ public class SmvSpecificationBuilder {
             }
 
             try {
-                String specString = generateSpecString(spec, isAttack, attackBudget, deviceSmvMap);
+                String specString = generateSpecString(spec, deviceSmvMap);
                 content.append("\n\t").append(specString);
                 recordEmittedSpec(context, spec, specString);
                 generatedSpecs++;
@@ -274,26 +268,23 @@ public class SmvSpecificationBuilder {
     /**
      * Generate one specification string (deviceSmvMap is required to resolve trust/privacy variables).
      */
-    public String generateSpecString(SpecificationDto spec, boolean isAttack, int attackBudget,
-                                     Map<String, DeviceSmvData> deviceSmvMap) {
+    public String generateSpecString(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
         validateTemplateShape(spec);
         String templateId = spec.getTemplateId();
         if (PERSISTENCE_TEMPLATE_ID.equals(templateId)) {
-            return generateLtlSpec(spec, isAttack, attackBudget, deviceSmvMap);
+            return generateLtlSpec(spec, deviceSmvMap);
         }
-        return generateCtlSpec(spec, isAttack, attackBudget, deviceSmvMap);
+        return generateCtlSpec(spec, deviceSmvMap);
     }
 
-    private String generateLtlSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
-                                  Map<String, DeviceSmvData> deviceSmvMap) {
+    private String generateLtlSpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
         String ifPart = buildConditionGroup(spec.getIfConditions(), deviceSmvMap);
         String thenPart = buildConditionGroup(spec.getThenConditions(), deviceSmvMap);
 
         return "LTLSPEC G((" + ifPart + ") -> F G(" + thenPart + "))";
     }
 
-    private String generateCtlSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
-                                  Map<String, DeviceSmvData> deviceSmvMap) {
+    private String generateCtlSpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
         String templateId = spec.getTemplateId();
         String aPart = buildConditionGroup(spec.getAConditions(), deviceSmvMap);
         String ifPart = buildConditionGroup(spec.getIfConditions(), deviceSmvMap);
@@ -311,7 +302,7 @@ public class SmvSpecificationBuilder {
             case "5": // response
                 return "CTLSPEC AG((" + ifPart + ") -> AF(" + thenPart + "))";
             case "7": // safety: untrusted -> !A
-                return buildSafetySpec(spec, deviceSmvMap, isAttack, attackBudget);
+                return buildSafetySpec(spec, deviceSmvMap);
             default:
                 throw new InvalidConditionException("unsupported templateId '" + templateId
                         + "'; allowed values are 1, 2, 3, 4, 5, 6, 7");
@@ -777,14 +768,12 @@ public class SmvSpecificationBuilder {
         return null;
     }
 
-    private String buildSafetySpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap,
-                                   boolean isAttack, int attackBudget) {
-        String body = buildSafetyBody(spec, deviceSmvMap, isAttack, attackBudget);
+    private String buildSafetySpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
+        String body = buildSafetyBody(spec, deviceSmvMap);
         return "CTLSPEC AG !(" + body + ")";
     }
 
-    private String buildSafetyBody(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap,
-                                   boolean isAttack, int attackBudget) {
+    private String buildSafetyBody(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
         List<String> conditionParts = new ArrayList<>();
         List<String> untrustedSourceParts = new ArrayList<>();
         if (spec.getAConditions() != null) {
@@ -802,9 +791,6 @@ public class SmvSpecificationBuilder {
                 untrustedSourceParts.add(untrustedSourceExpr);
             }
         }
-
-        // Attack budget is constrained globally by the main-module invariant. Do not
-        // exclude attacked target devices here: those paths are part of the requested check.
 
         if (untrustedSourceParts.isEmpty()) {
             return conditionParts.isEmpty() ? "TRUE" : String.join(CONDITION_SEPARATOR, conditionParts);

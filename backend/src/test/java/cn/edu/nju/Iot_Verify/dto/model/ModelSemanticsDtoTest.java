@@ -14,7 +14,8 @@ class ModelSemanticsDtoTest {
 
     @Test
     void attackRunDescribesUpperBoundSelectionAndDeclaredEffects() {
-        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(true, true, 3, 4, 2);
+        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(
+                AttackScenarioDto.anyUpToBudget(1), true, 3, 4, 2);
 
         assertEquals(ModelSemanticsDto.AttackPointUnit.BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK,
                 semantics.getAttackPointUnit());
@@ -49,7 +50,8 @@ class ModelSemanticsDtoTest {
 
     @Test
     void nonAttackRunDoesNotClaimAttackEffects() {
-        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(false, false, 2, 1, 1);
+        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(
+                AttackScenarioDto.none(), false, 2, 1, 1);
 
         assertEquals(ModelSemanticsDto.AttackSelectionPolicy.NOT_MODELED,
                 semantics.getAttackSelectionPolicy());
@@ -61,7 +63,8 @@ class ModelSemanticsDtoTest {
 
     @Test
     void attackRunDoesNotClaimReadingTamperingWhenSceneHasNoFalsifiableReading() {
-        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(true, false, 1, 1, 0);
+        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(
+                AttackScenarioDto.anyUpToBudget(1), false, 1, 1, 0);
 
         assertEquals(List.of(
                 ModelSemanticsDto.AttackEffect.COMMAND_TO_COMPROMISED_TARGET_IS_DROPPED,
@@ -71,7 +74,8 @@ class ModelSemanticsDtoTest {
 
     @Test
     void attackRunDoesNotClaimCommandLossWhenSceneOnlyHasFalsifiableReading() {
-        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(true, false, 1, 0, 1);
+        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(
+                AttackScenarioDto.anyUpToBudget(1), false, 1, 0, 1);
 
         assertEquals(List.of(
                 ModelSemanticsDto.AttackEffect

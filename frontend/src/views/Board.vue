@@ -160,6 +160,31 @@ export const resolveCurrentBoardNode = <T extends { id: string }>(
   nodes: readonly T[],
   nodeId: string | null | undefined
 ): T | null => nodeId ? nodes.find(node => node.id === nodeId) || null : null
+
+export type RenameDialogSnapshot<T extends { id: string; label: string }> = {
+  node: T
+  newName: string
+  originalLabel: string
+}
+
+export const reconcileRenameDialogSnapshot = <T extends { id: string; label: string }>(
+  nodes: readonly T[],
+  draft: RenameDialogSnapshot<T>
+): RenameDialogSnapshot<T> | null => {
+  const currentNode = resolveCurrentBoardNode(nodes, draft.node.id)
+  if (!currentNode) return null
+  const hasUnsavedName = draft.newName !== draft.originalLabel
+  return {
+    node: currentNode,
+    newName: hasUnsavedName ? draft.newName : currentNode.label,
+    originalLabel: hasUnsavedName ? draft.originalLabel : currentNode.label
+  }
+}
+
+export const hasFrozenBundledTokenSource = (
+  value: { modelTokenSource?: string | null }
+): boolean => value.modelTokenSource === 'BUNDLED'
+
 </script>
 
 <script setup lang="ts">
@@ -265,6 +290,7 @@ import {
   type PlaybackDeviceChange,
   type PlaybackEnvironmentChange
 } from '@/utils/traceView'
+import { isEdgeActiveInTrace, isEdgeCompromisedInTrace } from '@/utils/traceEdgePlayback'
 import {
   buildSimulationRequestPayload,
   buildModelRunSignature,
@@ -1021,13 +1047,11 @@ const isImportingScene = ref(false)
 const isClearingScene = ref(false)
 const isSceneReplacementInProgress = computed(() => isImportingScene.value || isClearingScene.value)
 
-const isInternalVariableNode = (_node?: DeviceNode | null): boolean => false
-
 const deepClone = <T,>(value: T): T =>
   JSON.parse(JSON.stringify(value))
 
 const getVisibleDeviceNodes = (source: DeviceNode[] = nodes.value): DeviceNode[] =>
-  source.filter(node => !isInternalVariableNode(node))
+  [...source]
 
 const cloneVisibleDeviceNodes = (): DeviceNode[] =>
   deepClone(getVisibleDeviceNodes())
@@ -1486,16 +1510,27 @@ let boardMutationQueue: Promise<void> = Promise.resolve()
 let nodeLayoutMutationVersion = 0
 const pendingNodeLayouts = new Map<string, { version: number; layout: DeviceLayout }>()
 const activeNodeLayoutInteractions = new Set<string>()
+let externallyRefreshedRemovedNodeIds: ReadonlySet<string> | null = null
 
-const replaceNodesFromServer = (source: DeviceNode[]) => {
+const replaceNodesFromServer = (
+  source: DeviceNode[],
+  options: { externalRefresh?: boolean } = {}
+) => {
   const incomingNodes = getVisibleDeviceNodes(source)
-  nodes.value = reconcileBoardNodeSnapshot(
-    nodes.value,
-    incomingNodes,
-    pendingNodeLayouts,
-    activeNodeLayoutInteractions
-  )
   const incomingIds = new Set(incomingNodes.map(node => node.id))
+  externallyRefreshedRemovedNodeIds = options.externalRefresh
+    ? new Set(nodes.value.filter(node => !incomingIds.has(node.id)).map(node => node.id))
+    : null
+  try {
+    nodes.value = reconcileBoardNodeSnapshot(
+      nodes.value,
+      incomingNodes,
+      pendingNodeLayouts,
+      activeNodeLayoutInteractions
+    )
+  } finally {
+    externallyRefreshedRemovedNodeIds = null
+  }
   for (const nodeId of pendingNodeLayouts.keys()) {
     if (!incomingIds.has(nodeId)) pendingNodeLayouts.delete(nodeId)
   }
@@ -1552,6 +1587,14 @@ const deviceRuntimeMatches = (
   })
 }
 
+const deviceRuntimeSnapshot = (node: DeviceNode): DeviceRuntimeConfig => ({
+  state: node.state,
+  ...(node.currentStateTrust != null ? { currentStateTrust: node.currentStateTrust } : {}),
+  ...(node.currentStatePrivacy != null ? { currentStatePrivacy: node.currentStatePrivacy } : {}),
+  variables: deepClone(node.variables || []),
+  privacies: deepClone(node.privacies || [])
+})
+
 // --- UI State ---
 const dialogVisible = ref(false)
 let deviceDialogReturnFocusNodeId: string | null = null
@@ -1579,6 +1622,10 @@ const renameDialogData = reactive({
 
 const deleteConfirmDialogVisible = ref(false)
 const deleteConfirmSubmitting = ref(false)
+const deletePreviewLoading = ref(false)
+const deleteConfirmReviewSnapshotKey = ref<string | null>(null)
+let deletePreviewRequestEpoch = 0
+let deletePreviewNodeId: string | null = null
 const deleteConfirmDialogData = reactive({
   node: null as DeviceNode | null,
   hasRelations: false,
@@ -1591,6 +1638,77 @@ const deleteConfirmDialogData = reactive({
   environmentChanges: [] as EnvironmentVariableChange[],
   impactToken: ''
 })
+
+const canonicalDeletionSnapshotValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalDeletionSnapshotValue)
+  if (value && typeof value === 'object') {
+    const source = value as Record<string, unknown>
+    return Object.fromEntries(Object.keys(source)
+      .sort()
+      .map(key => [key, canonicalDeletionSnapshotValue(source[key])]))
+  }
+  return value
+}
+
+const currentDeletionReviewSnapshotKey = () => {
+  const targetId = deleteConfirmDialogData.node?.id
+  const targetNode = resolveCurrentBoardNode(nodes.value, targetId)
+  const impactedEnvironmentNames = new Set(
+    deleteConfirmDialogData.environmentChanges.map(change => change.name)
+  )
+  const isEnvironmentProviderTemplate = (template: DeviceTemplate) =>
+    getTemplateEnvironmentVariables(template)
+      .some(variable => impactedEnvironmentNames.has(variable.Name))
+  const environmentProviderNodes = nodes.value
+    .filter(node => node.id !== targetId && deviceTemplates.value.some(template =>
+      isEnvironmentProviderTemplate(template) && templateMatchesName(template, node.templateName)))
+    .map(node => ({ id: node.id, templateName: node.templateName }))
+    .sort((left, right) => left.id.localeCompare(right.id))
+  const relevantTemplates = deviceTemplates.value.filter(template =>
+    templateMatchesName(template, targetNode?.templateName)
+    || environmentProviderNodes.some(node => templateMatchesName(template, node.templateName))
+  )
+  const relatedRules = targetId
+    ? rules.value.filter(rule => rule.toId === targetId
+      || rule.contentDevice === targetId
+      || rule.sources.some(source => source.fromId === targetId))
+    : []
+  const relatedSpecifications = targetId
+    ? specifications.value.filter(specification => isSpecRelatedToNode(specification, targetId))
+    : []
+
+  return JSON.stringify(canonicalDeletionSnapshotValue({
+    targetNode,
+    relatedRules,
+    relatedSpecifications,
+    environmentChanges: deleteConfirmDialogData.environmentChanges,
+    environmentVariables: environmentVariables.value
+      .filter(variable => impactedEnvironmentNames.has(variable.name))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+    environmentProviderNodes,
+    relevantTemplates: [...relevantTemplates]
+      .sort((left, right) => `${left.name}:${left.id ?? ''}`.localeCompare(`${right.name}:${right.id ?? ''}`))
+  }))
+}
+
+const invalidateDeletePreview = () => {
+  deletePreviewRequestEpoch += 1
+  deletePreviewNodeId = null
+  deletePreviewLoading.value = false
+}
+
+const clearDeleteConfirmDialog = () => {
+  invalidateDeletePreview()
+  deleteConfirmReviewSnapshotKey.value = null
+  deleteConfirmDialogVisible.value = false
+  deleteConfirmDialogData.node = null
+  deleteConfirmDialogData.hasRelations = false
+  deleteConfirmDialogData.relationCount = { rules: 0, specs: 0 }
+  deleteConfirmDialogData.relatedRules = []
+  deleteConfirmDialogData.relatedSpecs = []
+  deleteConfirmDialogData.environmentChanges = []
+  deleteConfirmDialogData.impactToken = ''
+}
 
 /* =================================================================================
  * 4. Helper Functions (Styles & Calculation)
@@ -1671,17 +1789,17 @@ const getBundledEnvironmentNames = (devices: readonly ModelTokenDevice[]): strin
   }))
 }
 
-const formatPlaybackDeviceModelToken = (device: ModelTokenDevice, value: unknown): string => {
-  const fallbackSource = activePlaybackKind.value === 'fuzzing'
-    && isBundledDeviceTemplate(findTemplateByAnyName(device.templateName))
-    ? 'BUNDLED'
-    : 'UNKNOWN'
-  return formatModelTokenBySource(
-    device.modelTokenSource || fallbackSource,
+const formatPlaybackModelToken = (
+  source: ModelTokenSource | null | undefined,
+  value: unknown
+): string => formatModelTokenBySource(
+    source || 'UNKNOWN',
     value,
     key => te(key) ? t(key) : key
   )
-}
+
+const formatPlaybackDeviceModelToken = (device: ModelTokenDevice, value: unknown): string =>
+  formatPlaybackModelToken(device.modelTokenSource, value)
 
 const bundledBoardDeviceIds = computed(() => nodes.value
   .filter(node => isBundledDeviceTemplate(resolveTemplateForNode(node)))
@@ -2413,6 +2531,7 @@ const clearDeviceDialogMeta = () => {
 const handleDeviceDialogVisibility = (visible: boolean) => {
   dialogVisible.value = visible
   if (!visible) {
+    if (deletePreviewNodeId === dialogMeta.nodeId) invalidateDeletePreview()
     const nodeId = deviceDialogReturnFocusNodeId
     void nextTick(() => getDeviceNodeElement(nodeId)?.focus({ preventScroll: true }))
   }
@@ -2439,9 +2558,6 @@ const contextMenuItems = () => Array.from(
 )
 
 const onNodeContext = (node: DeviceNode, position: { x: number; y: number }) => {
-  if (isInternalVariableNode(node)) {
-    return
-  }
   contextMenuReturnFocus = getDeviceNodeElement(node.id)
   contextMenu.value = {
     visible: true,
@@ -2503,6 +2619,10 @@ const handleContextMenuKeydown = (event: KeyboardEvent) => {
 }
 
 const openRenameDialog = (node: DeviceNode) => {
+  if (deleteConfirmSubmitting.value) return
+  if (deleteConfirmDialogVisible.value || deletePreviewLoading.value) {
+    clearDeleteConfirmDialog()
+  }
   renameDialogReturnFocusNodeId = node.id
   renameDialogData.node = node
   renameDialogData.newName = node.label
@@ -2618,12 +2738,16 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
   }
 
   const runtimeRequest: DeviceRuntimeConfig = deepClone(runtime)
+  const expectedRuntime = deviceRuntimeSnapshot(node)
 
   deviceRuntimeSaving.value = true
   try {
     await enqueueBoardMutation(async () => {
       try {
-        const mutation = await boardApi.updateNodeRuntime(nodeId, runtimeRequest)
+        const mutation = await boardApi.updateNodeRuntime(nodeId, {
+          expected: expectedRuntime,
+          desired: runtimeRequest
+        })
         replaceNodesFromServer(mutation.currentNodes)
         syncRuleDerivedEdges()
         ElMessage.success(mutation.operation === 'updated'
@@ -2634,6 +2758,21 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
         }
       } catch (error: any) {
         console.error('保存设备实例配置失败', error)
+        if (error?.response?.data?.data?.reasonCode === 'DEVICE_RUNTIME_STALE') {
+          const refreshed = await refreshDevices()
+          if (refreshed) {
+            const persisted = nodes.value.find(candidate => candidate.id === nodeId)
+            ElMessage.warning(deviceRuntimeMatches(persisted, runtimeRequest, template)
+              ? t('app.deviceRuntimeOutcomeRefreshed')
+              : t('app.deviceRuntimeStaleRefreshed'))
+            if (dialogVisible.value && dialogMeta.nodeId === nodeId) {
+              onDeviceListClick(nodeId, { focus: false })
+            }
+          } else {
+            ElMessage.warning(t('app.deviceRuntimeStaleRefreshFailed'))
+          }
+          return
+        }
         if (!isDefinitiveMutationRejection(error)) {
           const nodesRefreshed = await refreshDevices()
           const persisted = nodes.value.find(candidate => candidate.id === nodeId)
@@ -2660,14 +2799,52 @@ const viewDeviceDetails = () => {
   onDeviceListClick(nodeId, { focus: false })
 }
 
+function cancelRename() {
+  if (renameDialogSubmitting.value) return
+  renameDialogVisible.value = false
+  renameDialogData.node = null
+  renameDialogData.newName = ''
+  renameDialogData.originalLabel = ''
+}
+
+const reconcileRenameDialogWithBoard = () => {
+  if (!renameDialogVisible.value || !renameDialogData.node || renameDialogSubmitting.value) return
+  const reconciled = reconcileRenameDialogSnapshot(nodes.value, {
+    node: renameDialogData.node,
+    newName: renameDialogData.newName,
+    originalLabel: renameDialogData.originalLabel
+  })
+  if (!reconciled) {
+    cancelRename()
+    return
+  }
+  renameDialogData.node = reconciled.node
+  renameDialogData.newName = reconciled.newName
+  renameDialogData.originalLabel = reconciled.originalLabel
+}
+
+const focusVisibleBoardControl = () => {
+  const controls = [
+    document.querySelector<HTMLElement>('[data-testid="control-tab-devices"]'),
+    document.querySelector<HTMLElement>('[data-testid="scene-import"]'),
+    document.querySelector<HTMLElement>('.board-nav-bar button:not([disabled])')
+  ]
+  const target = controls.find(control => control
+    && !control.hasAttribute('disabled')
+    && control.getClientRects().length > 0)
+  target?.focus({ preventScroll: true })
+}
+
 watch(
-  [nodes, edges, specifications, deviceTemplates],
+  [nodes, edges, rules, specifications, environmentVariables, deviceTemplates],
   () => {
+    const staleSurfaceNodeIds = new Set<string>()
     if (dialogVisible.value) {
       const currentDialogNode = resolveCurrentBoardNode(nodes.value, dialogMeta.nodeId)
       if (currentDialogNode) {
         bindDeviceDialogNode(currentDialogNode)
       } else {
+        staleSurfaceNodeIds.add(dialogMeta.nodeId)
         dialogVisible.value = false
         clearDeviceDialogMeta()
       }
@@ -2678,18 +2855,53 @@ watch(
       if (currentContextNode) {
         contextMenu.value.node = currentContextNode
       } else {
+        if (contextMenu.value.node?.id) staleSurfaceNodeIds.add(contextMenu.value.node.id)
         closeContextMenu(false)
       }
     }
 
-    if (renameDialogVisible.value && renameDialogData.node) {
-      const currentRenameNode = resolveCurrentBoardNode(nodes.value, renameDialogData.node.id)
-      if (currentRenameNode) {
-        renameDialogData.node = currentRenameNode
-      } else if (!renameDialogSubmitting.value) {
-        cancelRename()
+    if (deletePreviewNodeId && !resolveCurrentBoardNode(nodes.value, deletePreviewNodeId)) {
+      staleSurfaceNodeIds.add(deletePreviewNodeId)
+      clearDeleteConfirmDialog()
+    }
+
+    if (deleteConfirmDialogVisible.value && deleteConfirmDialogData.node) {
+      const currentDeleteNode = resolveCurrentBoardNode(nodes.value, deleteConfirmDialogData.node.id)
+      if (currentDeleteNode) {
+        deleteConfirmDialogData.node = currentDeleteNode
+      } else {
+        staleSurfaceNodeIds.add(deleteConfirmDialogData.node.id)
+        clearDeleteConfirmDialog()
       }
     }
+
+    if (renameDialogVisible.value && renameDialogData.node
+      && !resolveCurrentBoardNode(nodes.value, renameDialogData.node.id)) {
+      staleSurfaceNodeIds.add(renameDialogData.node.id)
+    }
+    reconcileRenameDialogWithBoard()
+
+    const removedDeviceId = [...staleSurfaceNodeIds]
+      .find(nodeId => externallyRefreshedRemovedNodeIds?.has(nodeId))
+    if (removedDeviceId) {
+      ElMessage.warning(t('app.deviceRemovedExternally'))
+      void nextTick(focusVisibleBoardControl)
+    }
+  },
+  { flush: 'sync' }
+)
+
+watch(
+  () => deleteConfirmDialogVisible.value
+    && deleteConfirmReviewSnapshotKey.value
+    && !deleteConfirmSubmitting.value
+    ? currentDeletionReviewSnapshotKey()
+    : null,
+  currentSnapshotKey => {
+    const reviewedSnapshotKey = deleteConfirmReviewSnapshotKey.value
+    if (!currentSnapshotKey || !reviewedSnapshotKey || currentSnapshotKey === reviewedSnapshotKey) return
+    clearDeleteConfirmDialog()
+    ElMessage.warning(t('app.deviceDeletionPreviewChanged'))
   },
   { flush: 'sync' }
 )
@@ -2723,6 +2935,13 @@ const forceDeleteNode = async (
         await Promise.all([refreshDevices(), refreshEnvironmentVariables(), refreshRules(), refreshSpecifications()])
         ElMessage.warning(message)
         return { responseConfirmed: false, stalePreview: true }
+      } else if (error?.response?.status === 404) {
+        const refreshed = await refreshSceneForReconciliation()
+        if (refreshed && !nodes.value.some(node => node.id === nodeId)) {
+          ElMessage.warning(t('app.deviceDeleteOutcomeRefreshed'))
+          return { responseConfirmed: false }
+        }
+        ElMessage.error(message)
       } else if (!isDefinitiveMutationRejection(error)) {
         const refreshed = await refreshSceneForReconciliation()
         if (!refreshed) {
@@ -2742,12 +2961,43 @@ const forceDeleteNode = async (
 }
 
 const deleteCurrentNodeWithConfirm = async (nodeId: string) => {
-  if (deleteConfirmSubmitting.value) return
+  if (deletePreviewLoading.value || deleteConfirmSubmitting.value || deleteConfirmDialogVisible.value) return
   if (!ensurePlaybackClosedForMutation()) return
   if (!ensureBoardDataReady(['nodes', 'environment', 'rules', 'specs'])) return
+  const currentNode = resolveCurrentBoardNode(nodes.value, nodeId)
+  if (!currentNode) return
+
   deleteDialogReturnFocusNodeId = nodeId
+  const requestEpoch = ++deletePreviewRequestEpoch
+  deletePreviewNodeId = nodeId
+  deletePreviewLoading.value = true
+  deleteConfirmReviewSnapshotKey.value = null
+  deleteConfirmDialogData.node = currentNode
+  deleteConfirmDialogData.hasRelations = false
+  deleteConfirmDialogData.relationCount = { rules: 0, specs: 0 }
+  deleteConfirmDialogData.relatedRules = []
+  deleteConfirmDialogData.relatedSpecs = []
+  deleteConfirmDialogData.environmentChanges = []
+  deleteConfirmDialogData.impactToken = ''
+  deleteConfirmDialogVisible.value = true
   try {
-    const preview = await boardApi.previewNodeDeletion(nodeId)
+    const preview = await enqueueBoardMutation(async () => {
+      const response = await boardApi.previewNodeDeletion(nodeId)
+      if (requestEpoch !== deletePreviewRequestEpoch
+        || deletePreviewNodeId !== nodeId
+        || !resolveCurrentBoardNode(nodes.value, nodeId)) return null
+
+      replaceNodesFromServer(response.currentNodes)
+      environmentVariables.value = response.environmentVariables
+      rules.value = response.currentRules
+      specifications.value = response.currentSpecifications
+      syncRuleDerivedEdges()
+      return response
+    })
+    if (!preview) return
+    if (requestEpoch !== deletePreviewRequestEpoch
+      || deletePreviewNodeId !== nodeId
+      || !resolveCurrentBoardNode(nodes.value, nodeId)) return
     const impactToken = preview.impactToken?.trim()
     if (!impactToken) throw new Error(t('app.deviceDeletionPreviewFailed'))
     const relatedRules = preview.removedRules
@@ -2767,9 +3017,25 @@ const deleteCurrentNodeWithConfirm = async (nodeId: string) => {
       getSpecResultDisplayTitle(spec, index))
     deleteConfirmDialogData.environmentChanges = environmentChanges
     deleteConfirmDialogData.impactToken = impactToken
-    deleteConfirmDialogVisible.value = true
+    deleteConfirmReviewSnapshotKey.value = currentDeletionReviewSnapshotKey()
   } catch (error: any) {
+    if (requestEpoch !== deletePreviewRequestEpoch || deletePreviewNodeId !== nodeId) return
+    if (error?.response?.status === 404) {
+      const refreshed = await enqueueBoardMutation(refreshSceneForReconciliation).catch(() => false)
+      if (refreshed && !resolveCurrentBoardNode(nodes.value, nodeId)) {
+        clearDeleteConfirmDialog()
+        ElMessage.warning(t('app.deviceDeleteOutcomeRefreshed'))
+        return
+      }
+      if (requestEpoch !== deletePreviewRequestEpoch || deletePreviewNodeId !== nodeId) return
+    }
+    clearDeleteConfirmDialog()
     ElMessage.error(localizedErrorMessage(error, t('app.deviceDeletionPreviewFailed'), locale.value))
+  } finally {
+    if (requestEpoch === deletePreviewRequestEpoch && deletePreviewNodeId === nodeId) {
+      deletePreviewLoading.value = false
+      deletePreviewNodeId = null
+    }
   }
 }
 
@@ -2798,15 +3064,8 @@ const confirmRename = async () => {
     renameDialogData.originalLabel = ''
   } finally {
     renameDialogSubmitting.value = false
+    reconcileRenameDialogWithBoard()
   }
-}
-
-const cancelRename = () => {
-  if (renameDialogSubmitting.value) return
-  renameDialogVisible.value = false
-  renameDialogData.node = null
-  renameDialogData.newName = ''
-  renameDialogData.originalLabel = ''
 }
 
 const isRenameDialogOpen = computed(() => renameDialogVisible.value)
@@ -2822,7 +3081,9 @@ const {
 const confirmDelete = async () => {
   if (deleteConfirmSubmitting.value) return
   if (!ensurePlaybackClosedForMutation()) return
-  if (!deleteConfirmDialogData.node) return
+  if (deletePreviewLoading.value
+    || !deleteConfirmDialogData.node
+    || !deleteConfirmDialogData.impactToken.trim()) return
 
   const deletion = {
     nodeId: deleteConfirmDialogData.node.id,
@@ -2832,6 +3093,7 @@ const confirmDelete = async () => {
     specCount: deleteConfirmDialogData.relationCount.specs,
     environmentChangeCount: deleteConfirmDialogData.environmentChanges.length
   }
+  invalidateDeletePreview()
   deleteConfirmSubmitting.value = true
   let reopenDeletionPreview = false
   try {
@@ -2841,10 +3103,7 @@ const confirmDelete = async () => {
     )
     if (!outcome) return
     if (outcome.stalePreview) {
-      deleteConfirmDialogVisible.value = false
-      deleteConfirmDialogData.node = null
-      deleteConfirmDialogData.impactToken = ''
-      deleteConfirmDialogData.environmentChanges = []
+      clearDeleteConfirmDialog()
       reopenDeletionPreview = true
       return
     }
@@ -2860,10 +3119,7 @@ const confirmDelete = async () => {
     if (dialogVisible.value) {
       dialogVisible.value = false
     }
-    deleteConfirmDialogVisible.value = false
-    deleteConfirmDialogData.node = null
-    deleteConfirmDialogData.impactToken = ''
-    deleteConfirmDialogData.environmentChanges = []
+    clearDeleteConfirmDialog()
   } catch (error) {
     console.error('删除设备失败:', error)
     ElMessage.error(t('app.deleteDeviceFailedRetry'))
@@ -2875,10 +3131,7 @@ const confirmDelete = async () => {
 
 const cancelDelete = () => {
   if (deleteConfirmSubmitting.value) return
-  deleteConfirmDialogVisible.value = false
-  deleteConfirmDialogData.node = null
-  deleteConfirmDialogData.impactToken = ''
-  deleteConfirmDialogData.environmentChanges = []
+  clearDeleteConfirmDialog()
 }
 
 const isDeleteConfirmDialogOpen = computed(() => deleteConfirmDialogVisible.value)
@@ -3385,7 +3638,7 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
     const snapshot = await boardApi.getSnapshot()
     if (!isCurrentBoardAuthScope(authScopeEpoch)) return false
     deviceTemplates.value = snapshot.deviceTemplates
-    replaceNodesFromServer(snapshot.nodes)
+    replaceNodesFromServer(snapshot.nodes, { externalRefresh: true })
     environmentVariables.value = snapshot.environmentVariables
     rules.value = snapshot.rules
     specifications.value = snapshot.specifications
@@ -8007,17 +8260,7 @@ const currentFuzzingBoardScope = computed(() => ({
 const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary | FuzzingRun): boolean => {
   const snapshot = run.modelSnapshot
   const current = currentFuzzingBoardScope.value
-  if (snapshot.modelFingerprint && current.modelFingerprint) {
-    return snapshot.modelFingerprint !== current.modelFingerprint
-  }
-  if (snapshot.modelFingerprint && !current.modelFingerprint) {
-    return true
-  }
-  return snapshot.deviceCount !== current.deviceCount
-    || snapshot.ruleCount !== current.ruleCount
-    || snapshot.specificationCount !== current.specificationCount
-    || snapshot.environmentVariableCount !== current.environmentVariableCount
-    || snapshot.deviceTemplateCount !== current.deviceTemplateCount
+  return snapshot.modelFingerprint !== current.modelFingerprint
 }
 
 const fuzzingResultBoardDrifted = computed(() => {
@@ -9106,8 +9349,7 @@ const summarizeFuzzingRun = (run: FuzzingRun): AvailableFuzzingRunSummary => ({
     firstViolationStep: finding.firstViolationStep,
     seed: finding.seed,
     createdAt: finding.createdAt,
-    stateCount: finding.states.length,
-    dataAvailable: true
+    stateCount: finding.states.length
   }))
 })
 
@@ -9644,12 +9886,10 @@ const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) =>
 
   const requestToken = historyDetailRequests.beginReplace()
   try {
-    const existingRun = runId
-      ? fuzzingRuns.value.find(run => run.id === runId)
-      : fuzzingResult.value
+    if (!runId) throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
     const [finding, resolvedRun] = await Promise.all([
       fuzzingApi.getFinding(findingId),
-      existingRun ? Promise.resolve(existingRun) : (runId ? fuzzingApi.getRun(runId) : Promise.resolve(null))
+      fuzzingApi.getRun(runId)
     ])
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     if (!finding.states.length) {
@@ -10188,17 +10428,12 @@ const activePlaybackEnvironmentVariables = computed(() =>
   activePlaybackStates.value[activePlaybackStateIndex.value]?.envVariables || [])
 
 const bundledPlaybackDeviceIds = computed(() => activePlaybackDevices.value
-  .filter(device => activePlaybackKind.value === 'fuzzing'
-    ? isBundledDeviceTemplate(findTemplateByAnyName(device.templateName))
-    : device.modelTokenSource === 'BUNDLED')
+  .filter(hasFrozenBundledTokenSource)
   .map(device => device.deviceId))
 
-const bundledPlaybackEnvironmentNames = computed(() => activePlaybackKind.value === 'fuzzing'
-  ? getBundledEnvironmentNames(activePlaybackDevices.value)
-  : activePlaybackEnvironmentVariables.value
-    .filter(variable => variable.modelTokenSource === 'BUNDLED')
-    .map(variable => variable.name)
-)
+const bundledPlaybackEnvironmentNames = computed(() => activePlaybackEnvironmentVariables.value
+  .filter(hasFrozenBundledTokenSource)
+  .map(variable => variable.name))
 
 const formatPlaybackEnvironmentModelToken = (name: string, value: unknown): string =>
   bundledPlaybackEnvironmentNames.value.includes(name)
@@ -10257,29 +10492,13 @@ const firstFuzzingViolationStateNumber = computed(() =>
 const activePlaybackCompromisedLinks = computed<TraceTriggeredRule[]>(() =>
   activePlaybackStates.value[activePlaybackStateIndex.value]?.compromisedAutomationLinks || [])
 
-const activePlaybackTriggeredRuleIds = computed(() => new Set(
-  activePlaybackTriggeredRules.value
-    .map(rule => rule.ruleId == null ? '' : String(rule.ruleId))
-    .filter(Boolean)
-))
-
-const activePlaybackCompromisedRuleIds = computed(() => new Set(
-  activePlaybackCompromisedLinks.value
-    .map(rule => rule.ruleId == null ? '' : String(rule.ruleId))
-    .filter(Boolean)
-))
-
 const activePlaybackAnimatedEdgeCount = computed(() => allEdges.value.filter(edge => {
-  const ruleId = edge.ruleId == null ? '' : String(edge.ruleId)
-  return ruleId
-    && activePlaybackTriggeredRuleIds.value.has(ruleId)
-    && !activePlaybackCompromisedRuleIds.value.has(ruleId)
+  return isEdgeActiveInTrace(edge, allEdges.value, highlightedTrace.value)
+    && !isEdgeCompromisedInTrace(edge, allEdges.value, highlightedTrace.value)
 }).length)
 
-const activePlaybackCompromisedEdgeCount = computed(() => allEdges.value.filter(edge => {
-  const ruleId = edge.ruleId == null ? '' : String(edge.ruleId)
-  return ruleId && activePlaybackCompromisedRuleIds.value.has(ruleId)
-}).length)
+const activePlaybackCompromisedEdgeCount = computed(() => allEdges.value.filter(edge =>
+  isEdgeCompromisedInTrace(edge, allEdges.value, highlightedTrace.value)).length)
 
 const activePlaybackChangeKey = computed(() => {
   if (!activePlaybackKind.value || activePlaybackStates.value.length === 0) return null
@@ -12380,6 +12599,7 @@ const counterexampleTraceHelpText = computed(() => {
           :has-node-state-machine="hasNodeStateMachine"
           :get-node-effective-state="getNodeEffectiveState"
           :format-node-model-token="formatNodeModelToken"
+          :format-playback-model-token="formatPlaybackModelToken"
           :highlighted-trace="highlightedTrace"
           :focused-node-id="focusedNodeId"
           :focused-rule-id="focusedRuleId"
@@ -14919,6 +15139,8 @@ const counterexampleTraceHelpText = computed(() => {
         :rules="dialogMeta.rules"
         :specs="dialogMeta.specs"
         :runtime-saving="deviceRuntimeSaving"
+        :delete-loading="deletePreviewLoading && deletePreviewNodeId === dialogMeta.nodeId"
+        :suspended="deleteConfirmDialogVisible"
         @update:visible="handleDeviceDialogVisibility"
         @rename="handleDialogRename"
         @delete="handleDialogDelete"
@@ -15050,6 +15272,8 @@ const counterexampleTraceHelpText = computed(() => {
           role="dialog"
           aria-modal="true"
           aria-labelledby="delete-device-dialog-title"
+          aria-describedby="delete-device-dialog-description"
+          :aria-busy="deletePreviewLoading || deleteConfirmSubmitting"
           tabindex="-1"
           @click.stop
         >
@@ -15060,8 +15284,24 @@ const counterexampleTraceHelpText = computed(() => {
               </div>
               <div class="ml-3">
                 <h3 id="delete-device-dialog-title" class="text-lg font-semibold text-slate-800 dark:text-slate-100">{{ t('app.deleteDeviceTitle') }}</h3>
-                <p class="text-sm text-slate-600 dark:text-slate-400">{{ t('app.actionCannotBeUndone') }}</p>
+                <p
+                  id="delete-device-dialog-description"
+                  class="break-words text-sm text-slate-600 dark:text-slate-400"
+                  :title="deleteConfirmDialogData.node?.label || ''"
+                >
+                  {{ t('app.deleteDeviceConfirmMessage', { name: deleteConfirmDialogData.node?.label || '' }) }}
+                </p>
               </div>
+            </div>
+
+            <div
+              v-if="deletePreviewLoading"
+              class="mb-4 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/70 dark:bg-blue-950/40 dark:text-blue-200"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700 dark:border-blue-700 dark:border-t-blue-200" aria-hidden="true"></span>
+              {{ t('app.deviceDeletionPreviewLoading') }}
             </div>
 
             <div v-if="deleteConfirmDialogData.hasRelations" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4 dark:border-yellow-900/60 dark:bg-yellow-950/30">
@@ -15115,7 +15355,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button
               type="button"
               @click="confirmDelete"
-              :disabled="deleteConfirmSubmitting || !deleteConfirmDialogData.impactToken"
+              :disabled="deletePreviewLoading || deleteConfirmSubmitting || !deleteConfirmDialogData.impactToken"
               :aria-busy="deleteConfirmSubmitting"
               class="inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-600 dark:hover:bg-red-500"
             >

@@ -32,8 +32,10 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.FixApplyPreflightUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -47,7 +49,7 @@ import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -177,33 +179,6 @@ public class FixServiceImpl implements FixService {
         return result;
     }
 
-    public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
-                                      Map<String, PreferredRange> preferredRanges) {
-        return formalOperationAdmission.execute(userId,
-                () -> applyFixInternal(userId, traceId, strategy, null, preferredRanges, false));
-    }
-
-    /**
-     * Kept for service-level tamper-detection tests. REST callers do not send a concrete suggestion:
-     * the public API applies the server-recomputed proposal for the selected strategy.
-     */
-    @Deprecated
-    public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy, FixSuggestionDto suggestion,
-                                      Map<String, PreferredRange> preferredRanges) {
-        if (suggestion == null) {
-            throw new BadRequestException("suggestion must not be null");
-        }
-        if (strategy == null || strategy.isBlank()) {
-            throw new BadRequestException("strategy must not be blank");
-        }
-        if (suggestion.getStrategy() != null && !strategy.equals(suggestion.getStrategy())) {
-            throw new BadRequestException("strategy '" + strategy
-                    + "' does not match suggestion.strategy '" + suggestion.getStrategy() + "'");
-        }
-        return formalOperationAdmission.execute(userId,
-                () -> applyFixInternal(userId, traceId, strategy, suggestion, preferredRanges, false));
-    }
-
     @Override
     @Transactional
     public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
@@ -220,14 +195,12 @@ public class FixServiceImpl implements FixService {
         if (!trusted.isVerified()) {
             throw new BadRequestException("Only a verified fix suggestion can be applied.");
         }
-        return applyFixInternal(
-                userId, traceId, validatedStrategy, trusted, preferredRanges, true);
+        return applyFixInternal(userId, traceId, validatedStrategy, trusted, preferredRanges);
     }
 
     private FixApplyResultDto applyFixInternal(Long userId, Long traceId, String strategy,
-                                               FixSuggestionDto clientSuggestion,
-                                               Map<String, PreferredRange> preferredRanges,
-                                               boolean useSignedSuggestion) {
+                                               FixSuggestionDto trusted,
+                                               Map<String, PreferredRange> preferredRanges) {
         String validatedStrategy = validateApplyStrategy(strategy);
         validatePreferredRanges(preferredRanges);
         // Load the trace's verification-time snapshot (normalized rules) for index/fingerprint alignment.
@@ -242,22 +215,6 @@ public class FixServiceImpl implements FixService {
                 ctx.request, ctx.templateManifests, ctx.modelTokenSourcesByDeviceId);
         Map<String, DeviceSmvData> deviceSmvMap = modelInput.deviceSmvMap();
 
-        FixSuggestionDto trusted = clientSuggestion;
-        if (!useSignedSuggestion) {
-            // Compatibility path for internal callers. REST apply uses the signed exact suggestion.
-            trusted = recomputeVerifiedSuggestion(
-                    userId, ctx, validatedStrategy, modelInput, preferredRanges);
-            if (trusted == null) {
-                throw new BadRequestException("Could not reproduce a verified '" + validatedStrategy
-                        + "' fix for this trace (the board or templates may have changed). "
-                        + "Please re-run the fix and try again.");
-            }
-            if (clientSuggestion != null
-                    && !suggestionsEquivalent(validatedStrategy, clientSuggestion, trusted, deviceSmvMap)) {
-                throw new BadRequestException("The submitted fix no longer matches the current verified '"
-                        + validatedStrategy + "' suggestion. Please re-run the fix and apply the updated suggestion.");
-            }
-        }
         FixSuggestionDto suggestionToApply = trusted;
 
         // Read current rules → drift check → apply → save, all inside ONE per-user lock + transaction.
@@ -295,103 +252,14 @@ public class FixServiceImpl implements FixService {
         return FixApplyResultDto.builder()
                 .applied(true)
                 .strategy(validatedStrategy)
-                .verificationRechecked(!useSignedSuggestion)
-                .verificationEvidenceReused(useSignedSuggestion)
+                .verificationRechecked(false)
+                .verificationEvidenceReused(true)
                 .appliedSuggestion(suggestionToApply)
                 .previousRuleCount(before[0])
                 .currentRuleCount(saved.size())
-                .message(buildApplyMessage(validatedStrategy, suggestionToApply, before[0], saved.size(),
-                        useSignedSuggestion))
+                .message(buildApplyMessage(validatedStrategy, suggestionToApply, before[0], saved.size()))
                 .rules(saved)
                 .build();
-    }
-
-    /**
-     * Recompute the fix for a single strategy against the trace's own verification context and return
-     * the verified suggestion for that strategy, or {@code null} if none was produced/verified.
-     */
-    private FixSuggestionDto recomputeVerifiedSuggestion(Long userId, VerificationContext ctx,
-                                                         String strategy,
-                                                         ModelBoundaryInput modelInput,
-                                                         Map<String, PreferredRange> preferredRanges) {
-        VerificationRequestDto req = ctx.request;
-        Map<String, DeviceSmvData> deviceSmvMap = modelInput.deviceSmvMap();
-        FixResultDto recomputed = runFixer(
-                ctx.trace.getId(),
-                ctx.trace.getViolatedSpecId(),
-                ctx.trace.getStates(),
-                req.getRules(),
-                modelInput.devices(),
-                modelInput.environmentVariables(),
-                req.getSpecs(),
-                deviceSmvMap,
-                userId,
-                req.resolvedAttackScenario(),
-                req.isEnablePrivacy(),
-                List.of(strategy),
-                fixConfig.getMaxAttempts(),
-                preferredRanges
-        );
-        if (recomputed == null || recomputed.getSuggestions() == null) {
-            return null;
-        }
-        return recomputed.getSuggestions().stream()
-                .filter(s -> s != null && strategy.equals(s.getStrategy()) && s.isVerified())
-                .findFirst()
-                .orElse(null);
-    }
-
-    /**
-     * WYSIWYG check: the client suggestion the user acted on must be equivalent to the freshly
-     * recomputed, verified server suggestion. Compared by the operations they encode (not object
-     * identity), per strategy.
-     */
-    private boolean suggestionsEquivalent(String strategy, FixSuggestionDto client, FixSuggestionDto server,
-                                          Map<String, DeviceSmvData> deviceSmvMap) {
-        if (client == null || server == null) return false;
-        switch (strategy) {
-            case "parameter":
-                return Objects.equals(
-                        parameterFingerprint(client.getParameterAdjustments()),
-                        parameterFingerprint(server.getParameterAdjustments()));
-            case "condition":
-                return Objects.equals(
-                        conditionAdjFingerprint(client.getConditionAdjustments()),
-                        conditionAdjFingerprint(server.getConditionAdjustments()));
-            case "remove":
-                return Objects.equals(
-                        sortedInts(client.getRemovedRuleIndices()),
-                        sortedInts(server.getRemovedRuleIndices()));
-            default:
-                return false;
-        }
-    }
-
-    private String parameterFingerprint(List<cn.edu.nju.Iot_Verify.dto.fix.ParameterAdjustment> adjs) {
-        if (adjs == null) return "";
-        return adjs.stream()
-                .map(a -> a.getRuleIndex() + ":" + a.getConditionIndex() + ":"
-                        + a.getAttribute() + ":" + a.getRelation() + ":" + a.getNewValue())
-                .sorted()
-                .reduce("", (x, y) -> x + "|" + y);
-    }
-
-    private String conditionAdjFingerprint(List<cn.edu.nju.Iot_Verify.dto.fix.ConditionAdjustment> adjs) {
-        if (adjs == null) return "";
-        return adjs.stream()
-                .filter(a -> !"keep".equals(a.getAction()))
-                .map(a -> a.getRuleIndex() + ":" + a.getConditionIndex() + ":" + a.getAction() + ":"
-                        + a.getTargetType() + ":" + a.getAttribute() + ":" + a.getDeviceName()
-                        + ":" + a.getRelation() + ":" + a.getValue())
-                .sorted()
-                .reduce("", (x, y) -> x + "|" + y);
-    }
-
-    private List<Integer> sortedInts(List<Integer> in) {
-        if (in == null) return List.of();
-        List<Integer> copy = new ArrayList<>(in);
-        copy.sort(java.util.Comparator.naturalOrder());
-        return copy;
     }
 
     /**
@@ -647,10 +515,8 @@ public class FixServiceImpl implements FixService {
     }
 
     private String buildApplyMessage(String strategy, FixSuggestionDto suggestion,
-                                     int before, int after, boolean verificationEvidenceReused) {
-        String evidence = verificationEvidenceReused
-                ? " using the signed verification evidence after drift checks."
-                : " after the server recomputed and verified the suggestion.";
+                                     int before, int after) {
+        String evidence = " using the signed verification evidence after drift checks.";
         switch (strategy) {
             case "parameter":
                 int pCount = suggestion.getParameterAdjustments() == null ? 0
@@ -787,12 +653,7 @@ public class FixServiceImpl implements FixService {
         result.setWarnings(warnings);
     }
 
-    /**
-     * Compare the persisted manifest projection rather than Java object identity. Trace snapshots are
-     * serialized and deserialized before this check, so write-only compatibility fields (for example
-     * an empty legacy API Assignments list) may be absent even when the current parsed manifest still
-     * carries an empty collection. Those representations are semantically identical to the model.
-     */
+    /** Compare the persisted manifest projection rather than Java object identity. */
     private TemplateSnapshotComparison compareTemplateSnapshots(
             Map<String, DeviceManifest> verificationTemplateSnapshots,
             Map<String, DeviceManifest> currentTemplateSnapshots) {
@@ -986,70 +847,89 @@ public class FixServiceImpl implements FixService {
             List<String> strategies,
             int maxAttempts,
             Map<String, PreferredRange> preferredRanges) {
-        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
-        FixResultDto result;
-        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
-            result = ruleFixer.fix(
-                    traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
-                    deviceSmvMap, userId, scenario, enablePrivacy, strategies, maxAttempts, preferredRanges);
-        } else {
-            result = ruleFixer.fix(
-                    traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
-                    deviceSmvMap, userId, scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
-                    strategies, maxAttempts, preferredRanges);
-        }
+        AttackScenarioDto scenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
+        FixResultDto result = ruleFixer.fix(
+                traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
+                deviceSmvMap, userId, scenario, enablePrivacy, strategies, maxAttempts, preferredRanges);
         attachModelTokenSources(result, rules, deviceSmvMap);
         return result;
     }
 
-    private FrozenTemplateSnapshots readFrozenTemplateSnapshots(String json) {
-        Map<String, Object> shape = JsonUtils.fromJson(
-                json, new TypeReference<Map<String, Object>>() {});
-        boolean isBundle = shape != null
-                && shape.get("schemaVersion") instanceof Number
-                && shape.get("manifests") instanceof Map<?, ?>;
-        if (!isBundle) {
-            Map<String, DeviceManifest> legacyManifests = JsonUtils.fromJson(
-                    json, new TypeReference<Map<String, DeviceManifest>>() {});
-            return new FrozenTemplateSnapshots(
-                    legacyManifests != null ? legacyManifests : Map.of(), Map.of());
+    private FrozenTemplateSnapshots readFrozenTemplateSnapshots(
+            TracePo trace, List<DeviceVerificationDto> devices) {
+        String json = trace.getTemplateSnapshotsJson();
+        JsonNode shape = JsonUtils.readPersistedJsonRequired(
+                "verification trace", trace.getId(), "templateSnapshotsJson", json,
+                () -> JsonUtils.fromJson(json, JsonNode.class));
+        if (!shape.isObject()
+                || !shape.path("schemaVersion").isInt()
+                || shape.path("schemaVersion").intValue() != TemplateSnapshotBundleDto.CURRENT_SCHEMA_VERSION
+                || !shape.path("manifests").isObject()
+                || !shape.path("modelTokenSourcesByDeviceId").isObject()) {
+            throw invalidTraceContext(trace, "templateSnapshotsJson",
+                    "snapshot must use the current versioned manifest and token-source format");
+        }
+        TemplateSnapshotBundleDto bundle = JsonUtils.readPersistedRequired(
+                "verification trace", trace.getId(), "templateSnapshotsJson",
+                () -> JsonUtils.fromJson(json, TemplateSnapshotBundleDto.class));
+        if (bundle.getSchemaVersion() != TemplateSnapshotBundleDto.CURRENT_SCHEMA_VERSION
+                || bundle.getManifests() == null || bundle.getModelTokenSourcesByDeviceId() == null) {
+            throw invalidTraceContext(trace, "templateSnapshotsJson",
+                    "snapshot does not contain the current complete format");
         }
 
-        TemplateSnapshotBundleDto bundle = JsonUtils.fromJson(json, TemplateSnapshotBundleDto.class);
-        if (bundle == null || bundle.getSchemaVersion() != TemplateSnapshotBundleDto.CURRENT_SCHEMA_VERSION) {
-            throw new BadRequestException(
-                    "This trace uses an unsupported device-template snapshot format. "
-                    + "Please re-run verification before requesting or applying an automatic fix.");
+        Set<String> deviceIds = new LinkedHashSet<>();
+        Set<String> templateNames = new LinkedHashSet<>();
+        for (DeviceVerificationDto device : devices) {
+            if (device == null || !isCanonicalNonBlank(device.getVarName())
+                    || !isCanonicalNonBlank(device.getTemplateName())) {
+                throw invalidTraceContext(trace, "requestJson",
+                        "every device must have a canonical varName and templateName");
+            }
+            if (!deviceIds.add(device.getVarName())) {
+                throw invalidTraceContext(trace, "requestJson",
+                        "device varName values must be unique");
+            }
+            templateNames.add(device.getTemplateName());
         }
-        Map<String, ModelTokenSource> sources = new LinkedHashMap<>();
-        if (bundle.getModelTokenSourcesByDeviceId() != null) {
-            bundle.getModelTokenSourcesByDeviceId().forEach((deviceId, source) -> {
-                String normalizedDeviceId = trimToNull(deviceId);
-                if (normalizedDeviceId != null) {
-                    sources.put(normalizedDeviceId,
-                            source != null ? source : ModelTokenSource.UNKNOWN);
-                }
-            });
+
+        if (!bundle.getManifests().keySet().equals(templateNames)
+                || bundle.getManifests().entrySet().stream()
+                        .anyMatch(entry -> !isCanonicalNonBlank(entry.getKey()) || entry.getValue() == null)) {
+            throw invalidTraceContext(trace, "templateSnapshotsJson",
+                    "manifest keys must exactly match the verification request's template names");
+        }
+        Set<String> persistedSourceKeys = new LinkedHashSet<>();
+        shape.path("modelTokenSourcesByDeviceId").fieldNames().forEachRemaining(persistedSourceKeys::add);
+        if (!persistedSourceKeys.equals(deviceIds)
+                || !bundle.getModelTokenSourcesByDeviceId().keySet().equals(deviceIds)) {
+            throw invalidTraceContext(trace, "templateSnapshotsJson",
+                    "token-source keys must exactly match the verification request's device varNames");
+        }
+        for (String deviceId : deviceIds) {
+            JsonNode persistedSource = shape.path("modelTokenSourcesByDeviceId").get(deviceId);
+            ModelTokenSource source = bundle.getModelTokenSourcesByDeviceId().get(deviceId);
+            if (!isCanonicalNonBlank(deviceId) || !persistedSource.isTextual()
+                    || !isResolvedModelTokenSource(source)
+                    || !source.name().equals(persistedSource.textValue())) {
+                throw invalidTraceContext(trace, "templateSnapshotsJson",
+                        "every device must carry an explicit BUNDLED or CUSTOM token source");
+            }
         }
         return new FrozenTemplateSnapshots(
-                bundle.getManifests() != null ? bundle.getManifests() : Map.of(), sources);
+                Map.copyOf(bundle.getManifests()), Map.copyOf(bundle.getModelTokenSourcesByDeviceId()));
     }
 
     private void applyFrozenModelTokenSources(
             List<DeviceVerificationDto> devices,
             Map<String, ModelTokenSource> modelTokenSourcesByDeviceId) {
-        Map<String, ModelTokenSource> sources = modelTokenSourcesByDeviceId != null
-                ? modelTokenSourcesByDeviceId : Map.of();
         for (DeviceVerificationDto device : devices) {
-            if (device == null) {
-                continue;
+            ModelTokenSource source = modelTokenSourcesByDeviceId.get(device.getVarName());
+            if (!isResolvedModelTokenSource(source)) {
+                throw new IllegalStateException("Validated frozen template context lost a device token source");
             }
-            String deviceId = trimToNull(device.getVarName());
-            ModelTokenSource source = deviceId != null ? sources.get(deviceId) : null;
-            if (source == null && deviceId != null) {
-                source = sources.get(DeviceNameNormalizer.normalize(deviceId));
-            }
-            device.setModelTokenSource(source != null ? source : ModelTokenSource.UNKNOWN);
+            device.setModelTokenSource(source);
         }
     }
 
@@ -1059,24 +939,20 @@ public class FixServiceImpl implements FixService {
         TraceDto trace = traceMapper.toDto(po);
 
         String requestJson = po.getRequestJson();
-        if (requestJson == null || requestJson.isBlank()) {
-            throw new BadRequestException(
-                    "This trace was created before the fix feature was available. "
-                    + "No verification context saved. Please re-run verification to enable fix.");
-        }
-
-        VerificationRequestDto request = JsonUtils.fromJson(requestJson, VerificationRequestDto.class);
+        VerificationRequestDto request = JsonUtils.readPersistedJsonRequired(
+                "verification trace", po.getId(), "requestJson", requestJson,
+                () -> JsonUtils.fromJson(requestJson, VerificationRequestDto.class));
         if (request == null || request.getDevices() == null || request.getDevices().isEmpty()) {
-            throw new BadRequestException("Invalid verification context in trace requestJson.");
+            throw invalidTraceContext(po, "requestJson", "verification request has no devices");
+        }
+        try {
+            request.setAttackScenario(AttackScenarioValidator.canonicalizeForVerification(
+                    request.getAttackScenario()));
+        } catch (ValidationException e) {
+            throw invalidTraceContext(po, "requestJson", e.getMessage());
         }
 
-        FrozenTemplateSnapshots templateSnapshots = readFrozenTemplateSnapshots(
-                po.getTemplateSnapshotsJson());
-        if (templateSnapshots.manifests().isEmpty()) {
-            throw new BadRequestException(
-                    "This trace does not contain the exact device-template snapshot used for verification. "
-                    + "Please re-run verification before requesting or applying an automatic fix.");
-        }
+        FrozenTemplateSnapshots templateSnapshots = readFrozenTemplateSnapshots(po, request.getDevices());
 
         log.debug("Loaded verification context for trace {}", traceId);
 
@@ -1085,6 +961,19 @@ public class FixServiceImpl implements FixService {
                 request,
                 Map.copyOf(templateSnapshots.manifests()),
                 Map.copyOf(templateSnapshots.modelTokenSourcesByDeviceId()));
+    }
+
+    private boolean isCanonicalNonBlank(String value) {
+        return value != null && !value.isBlank() && value.equals(value.trim());
+    }
+
+    private boolean isResolvedModelTokenSource(ModelTokenSource source) {
+        return source == ModelTokenSource.BUNDLED || source == ModelTokenSource.CUSTOM;
+    }
+
+    private PersistedDataIntegrityException invalidTraceContext(
+            TracePo trace, String field, String detail) {
+        return new PersistedDataIntegrityException("verification trace", trace.getId(), field, detail);
     }
 
     private ModelBoundaryInput modelBoundaryInput(VerificationRequestDto request,

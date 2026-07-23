@@ -5,9 +5,11 @@ import {
   createLatestBoardRequestGuard,
   createScopedBoardInvalidationBinding,
   focusCollapsedNarrowPanelToggle,
+  hasFrozenBundledTokenSource,
   isAccountDeletionOutcomeUncertain,
   loadBoardResultWithRetry,
   reconcileBoardNodeSnapshot,
+  reconcileRenameDialogSnapshot,
   resolveCurrentBoardNode,
   shouldRedirectNarrowPanelFocus
 } from './Board.vue'
@@ -53,6 +55,45 @@ describe('Board node snapshot reconciliation', () => {
     expect(resolveCurrentBoardNode([replacement], stale.id)).toBe(replacement)
     expect(resolveCurrentBoardNode([], stale.id)).toBeNull()
     expect(resolveCurrentBoardNode([replacement], null)).toBeNull()
+  })
+})
+
+describe('Board rename-dialog snapshot reconciliation', () => {
+  it('preserves an unsaved name and its CAS baseline while rebinding the current node', () => {
+    const stale = { id: 'a', label: 'Original' }
+    const current = { id: 'a', label: 'Renamed elsewhere' }
+
+    expect(reconcileRenameDialogSnapshot([current], {
+      node: stale,
+      newName: 'My draft',
+      originalLabel: 'Original'
+    })).toEqual({
+      node: current,
+      newName: 'My draft',
+      originalLabel: 'Original'
+    })
+  })
+
+  it('adopts the current label for an untouched draft and invalidates a removed device', () => {
+    const stale = { id: 'a', label: 'Original' }
+    const current = { id: 'a', label: 'Renamed elsewhere' }
+    const draft = { node: stale, newName: 'Original', originalLabel: 'Original' }
+
+    expect(reconcileRenameDialogSnapshot([current], draft)).toEqual({
+      node: current,
+      newName: 'Renamed elsewhere',
+      originalLabel: 'Renamed elsewhere'
+    })
+    expect(reconcileRenameDialogSnapshot([], draft)).toBeNull()
+  })
+})
+
+describe('Board playback token provenance', () => {
+  it('uses only frozen bundled provenance and never a current-template guess', () => {
+    expect(hasFrozenBundledTokenSource({ modelTokenSource: 'BUNDLED' })).toBe(true)
+    expect(hasFrozenBundledTokenSource({ modelTokenSource: 'CUSTOM' })).toBe(false)
+    expect(hasFrozenBundledTokenSource({ modelTokenSource: 'UNKNOWN' })).toBe(false)
+    expect(hasFrozenBundledTokenSource({})).toBe(false)
   })
 })
 

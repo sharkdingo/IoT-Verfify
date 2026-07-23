@@ -4,7 +4,7 @@ Architecture and semantic boundary for the HAFuzz-inspired bounded search module
 API fields and endpoints are owned by [../api/fuzzing.md](../api/fuzzing.md); formal
 model semantics remain owned by [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-20. Source: `component/fuzz/`,
+Verified against code on 2026-07-24. Source: `component/fuzz/`,
 `service/impl/FuzzServiceImpl.java`, `po/FuzzTaskPo.java`, and
 `po/FuzzFindingPo.java`.
 
@@ -160,12 +160,26 @@ ordered facts remain visible so the later seed override is not mistaken for the 
 initial value. At later positions, the scheduled Event is recorded before any model
 choice produced while forming that same state.
 
+The worker also freezes display-token provenance independently of those causal Event
+sources. One strict, versioned model-input envelope atomically stores the complete
+`ModelInputSnapshot` and the server-resolved source for every canonical device. Generated
+finding states apply that frozen source to device state and local variables; shared
+environment values receive a known source only when all declaring captured templates agree.
+The envelope is accepted only when its current schema contains exactly the six frozen
+snapshot fields (`nodes`, `devices`, `environmentVariables`, `rules`, `specifications`,
+and `templateManifests`) with their canonical array/object types and its complete device-id
+set matches the frozen snapshot. Missing or conflicting finding sources are rejected, so
+history never changes meaning when the current template catalog is reset or replaced.
+
 The full input snapshot is internal. Public history stores the smaller model-scope
 summary, its canonical semantic fingerprint, run configuration, statistics,
 eligibility, limitations, and independent finding evidence. The Board can read the
 current fingerprint without creating a task and uses it to detect same-count semantic
-drift before replay-to-verification handoff; older rows without a fingerprint retain a
-weaker count-based compatibility path.
+drift before replay-to-verification handoff. Missing or malformed stored fingerprints fail
+closed and make the affected development row unavailable. Full run mapping also recomputes
+the fingerprint from the decoded frozen input using the writer's same normalization and
+requires equality, so content corruption cannot pass merely because collection counts are
+unchanged.
 
 The frontend keeps the proof handoff explicit: a finding can focus the user's attention
 on one historical target, but the verification request still contains the complete
@@ -293,8 +307,9 @@ before dispatch; a missing mode in persisted task/run data is treated as corrupt
 fails closed rather than being relabeled as `BOARD_SNAPSHOT`.
 `fuzz_finding` owns candidate evidence and references the task ID logically. Run-list
 queries project only summary columns: finding specifications, states, and input events are
-omitted and replaced by a bounded label plus counts; complete evidence is loaded and checked
-on run/finding detail. Both projections and complete evidence must report no more states than
+omitted and replaced by a bounded label plus counts. A finding summary does not claim
+`dataAvailable`; complete evidence is loaded and checked on run/finding detail before replay.
+Both projections and complete evidence must report no more states than
 the owning run's `pathLength`, and engine output is checked against that budget before any
 finding is serialized. Eligibility labels and diagnostics are normalized to bounded single-line
 text, and the combined persisted run metadata is capped at 256 KiB before completion is

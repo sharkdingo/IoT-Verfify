@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckRes
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -61,8 +62,7 @@ class ConditionAdjustStrategyTest {
                 .deviceSmvMap(Map.of())
                 .violatedSpecIndex(0)
                 .userId(1L)
-                .isAttack(false)
-                .attackBudget(0)
+                .attackScenario(AttackScenarioDto.none())
                 .enablePrivacy(false)
                 .maxAttempts(20)
                 .build();
@@ -123,7 +123,7 @@ class ConditionAdjustStrategyTest {
 
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(), anyBoolean(), any(ParameterizationConfig.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
@@ -156,7 +156,7 @@ class ConditionAdjustStrategyTest {
         // Parameterized model generation
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(), anyBoolean(), any(ParameterizationConfig.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
@@ -173,7 +173,7 @@ class ConditionAdjustStrategyTest {
         SmvGenerator.GenerateResult verifyGenResult = createGenResult();
         when(smvGenerator.generateWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(verifyGenResult);
 
@@ -218,7 +218,7 @@ class ConditionAdjustStrategyTest {
 
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(), anyBoolean(), any(ParameterizationConfig.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
@@ -240,8 +240,7 @@ class ConditionAdjustStrategyTest {
                 .deviceSmvMap(Map.of())
                 .violatedSpecIndex(0)
                 .userId(1L)
-                .isAttack(false)
-                .attackBudget(0)
+                .attackScenario(AttackScenarioDto.none())
                 .enablePrivacy(false)
                 .maxAttempts(2)
                 .build();
@@ -253,7 +252,7 @@ class ConditionAdjustStrategyTest {
         // Forward verification must never run for the empty-rule candidate.
         verify(smvGenerator, never()).generateWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
                 any(SmvGenerator.TempModelContext.class), anyMap());
     }
 
@@ -272,7 +271,7 @@ class ConditionAdjustStrategyTest {
 
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(), anyBoolean(), any(ParameterizationConfig.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
@@ -295,8 +294,7 @@ class ConditionAdjustStrategyTest {
                 .deviceSmvMap(Map.of())
                 .violatedSpecIndex(0)
                 .userId(1L)
-                .isAttack(false)
-                .attackBudget(0)
+                .attackScenario(AttackScenarioDto.none())
                 .enablePrivacy(false)
                 .maxAttempts(2)
                 .build();
@@ -321,7 +319,7 @@ class ConditionAdjustStrategyTest {
 
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(), anyBoolean(), any(ParameterizationConfig.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
@@ -339,8 +337,7 @@ class ConditionAdjustStrategyTest {
                 .deviceSmvMap(Map.of())
                 .violatedSpecIndex(0)
                 .userId(1L)
-                .isAttack(false)
-                .attackBudget(0)
+                .attackScenario(AttackScenarioDto.none())
                 .enablePrivacy(false)
                 .maxAttempts(3)
                 .build();
@@ -367,7 +364,7 @@ class ConditionAdjustStrategyTest {
 
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(), anyBoolean(), any(ParameterizationConfig.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
         NusmvResult failed = mock(NusmvResult.class);
@@ -383,7 +380,7 @@ class ConditionAdjustStrategyTest {
         FixContext context = FixContext.builder()
                 .faultRules(List.of(fault)).allRules(List.of(rule)).devices(List.of())
                 .specs(List.of(spec)).deviceSmvMap(Map.of()).violatedSpecIndex(0)
-                .userId(1L).maxAttempts(2).build();
+                .userId(1L).attackScenario(AttackScenarioDto.none()).maxAttempts(2).build();
 
         assertNull(strategy.tryFix(context));
         assertNull(context.strategySolverFailure("condition"));
@@ -410,7 +407,7 @@ class ConditionAdjustStrategyTest {
                 ArgumentCaptor.forClass(ParameterizationConfig.class);
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(),
+                any(), anyBoolean(), configCaptor.capture(),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
@@ -433,8 +430,7 @@ class ConditionAdjustStrategyTest {
                 .deviceSmvMap(Map.of())
                 .violatedSpecIndex(0)
                 .userId(1L)
-                .isAttack(false)
-                .attackBudget(0)
+                .attackScenario(AttackScenarioDto.none())
                 .enablePrivacy(false)
                 .maxAttempts(3)
                 .build();
@@ -476,12 +472,12 @@ class ConditionAdjustStrategyTest {
                 ArgumentCaptor.forClass(ParameterizationConfig.class);
         when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(),
+                any(), anyBoolean(), configCaptor.capture(),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
         when(smvGenerator.generateWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
                 any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
@@ -526,7 +522,7 @@ class ConditionAdjustStrategyTest {
         FixContext context = FixContext.builder()
                 .faultRules(List.of(fault)).allRules(List.of(rule)).devices(List.of())
                 .specs(List.of(spec)).deviceSmvMap(Map.of()).violatedSpecIndex(0)
-                .userId(1L).maxAttempts(6).build();
+                .userId(1L).attackScenario(AttackScenarioDto.none()).maxAttempts(6).build();
 
         assertNull(strategy.tryFix(context));
 

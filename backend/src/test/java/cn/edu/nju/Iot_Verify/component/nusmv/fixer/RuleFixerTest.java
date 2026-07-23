@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.ParameterTarget;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import org.junit.jupiter.api.Test;
@@ -67,7 +68,7 @@ class RuleFixerTest {
         RuleDto rule = RuleDto.builder().build();
 
         fixer.fix(1L, "spec_0", List.of(), List.of(rule), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, null, 20, null);
+                Map.of(), 1L, AttackScenarioDto.none(), false, null, 20, null);
 
         // All three strategies should have tryFix called
         verify(paramStrategy).tryFix(any(FixContext.class));
@@ -93,7 +94,7 @@ class RuleFixerTest {
 
         assertThrows(IllegalArgumentException.class, () ->
                 fixer.fix(1L, "spec_0", List.of(), List.of(rule), List.of(), List.of(spec),
-                        Map.of(), 1L, false, 0, false, List.of(), 20, null));
+                        Map.of(), 1L, AttackScenarioDto.none(), false, List.of(), 20, null));
 
         verify(paramStrategy, never()).tryFix(any(FixContext.class));
         verify(condStrategy, never()).tryFix(any(FixContext.class));
@@ -117,7 +118,7 @@ class RuleFixerTest {
         RuleDto rule = RuleDto.builder().build();
 
         fixer.fix(1L, "spec_0", List.of(), List.of(rule), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, List.of("remove"), 20, null);
+                Map.of(), 1L, AttackScenarioDto.none(), false, List.of("remove"), 20, null);
 
         verify(paramStrategy, never()).tryFix(any());
         verify(condStrategy, never()).tryFix(any());
@@ -135,7 +136,7 @@ class RuleFixerTest {
         spec.setId("real-spec-id");
         FixResultDto result = fixer.fix(1L, "0", List.of(),
                 List.of(RuleDto.builder().build()), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, List.of("parameter"), 20, null);
+                Map.of(), 1L, AttackScenarioDto.none(), false, List.of("parameter"), 20, null);
 
         verify(paramStrategy, never()).tryFix(any());
         assertEquals("SKIPPED_NO_SPEC", result.getStrategyAttempts().get(0).getStatus());
@@ -161,7 +162,7 @@ class RuleFixerTest {
 
         FixResultDto result = fixer.fix(1L, "spec_0", List.of(),
                 List.of(RuleDto.builder().build()), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, List.of("parameter"), 20, null);
+                Map.of(), 1L, AttackScenarioDto.none(), false, List.of("parameter"), 20, null);
 
         assertEquals("FAILED_MODEL_GENERATION", result.getStrategyAttempts().get(0).getStatus());
         assertEquals("The counterexample initial state is incomplete.",
@@ -186,7 +187,7 @@ class RuleFixerTest {
 
         FixResultDto result = fixer.fix(1L, "spec_0", List.of(),
                 List.of(RuleDto.builder().build()), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, List.of("parameter"), 7, null);
+                Map.of(), 1L, AttackScenarioDto.none(), false, List.of("parameter"), 7, null);
 
         assertEquals("FAILED_SOLVER_EXECUTION", result.getStrategyAttempts().get(0).getStatus());
         assertEquals(3, result.getStrategyAttempts().get(0).getAttemptsUsed());
@@ -210,7 +211,7 @@ class RuleFixerTest {
 
         FixResultDto result = fixer.fix(1L, "UNKNOWN_SPEC", List.of(),
                 List.of(RuleDto.builder().build()), List.of(), List.of(),
-                Map.of(), 1L, false, 0, false, List.of("remove"), 2, null);
+                Map.of(), 1L, AttackScenarioDto.none(), false, List.of("remove"), 2, null);
 
         assertEquals("SEARCH_BUDGET_EXHAUSTED", result.getStrategyAttempts().get(0).getStatus());
         assertEquals(2, result.getStrategyAttempts().get(0).getAttemptsUsed());
@@ -243,7 +244,7 @@ class RuleFixerTest {
 
         FixResultDto result = fixer.fix(1L, "spec_0", List.of(),
                 List.of(RuleDto.builder().build()), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, List.of("parameter"), 20,
+                Map.of(), 1L, AttackScenarioDto.none(), false, List.of("parameter"), 20,
                 Map.of(targetId, new PreferredRange(20, 40)));
 
         assertTrue(result.getUnusedPreferredRangeSelections().isEmpty());
@@ -283,7 +284,7 @@ class RuleFixerTest {
         RuleDto rule = RuleDto.builder().build();
 
         FixResultDto result = fixer.fix(1L, "spec_0", List.of(), List.of(rule), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, null, 20, null);
+                Map.of(), 1L, AttackScenarioDto.none(), false, null, 20, null);
 
         // After paramStrategy sleeps past deadline, remaining strategies should be skipped
         verify(paramStrategy).tryFix(any(FixContext.class));

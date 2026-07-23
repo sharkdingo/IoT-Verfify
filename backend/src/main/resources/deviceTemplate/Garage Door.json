@@ -50,7 +50,6 @@
 			"StartState": "",
 			"EndState": "closed",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -59,7 +58,6 @@
 			"StartState": "",
 			"EndState": "open",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

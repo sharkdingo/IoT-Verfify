@@ -328,6 +328,7 @@ const progressEventDetail = (progress: StreamProgress) => {
   if (progress.stage === 'TOOL_RESULT') {
     if (progress.detail) return progress.detail;
     if (progress.outcome === 'FAILED') return t('app.chat.progressToolFailedDetail', { round });
+    if (progress.outcome === 'PARTIAL') return t('app.chat.progressToolPartialDetail', { round });
     if (progress.outcome === 'RESULT_UNAVAILABLE') return t('app.chat.progressToolUnconfirmedDetail', { round });
     if (progress.outcome === 'CONFIRMATION_REQUIRED') return t('app.chat.progressToolNeedsConfirmationDetail', { round });
     return t('app.chat.progressToolSucceededDetail', { round });
@@ -343,6 +344,7 @@ const progressEventStatus = (progress: StreamProgress) => {
   if (progress.stage === 'TOOL_EXECUTION') return t('app.chat.progressStatusStarted');
   if (progress.stage === 'TOOL_RESULT') {
     if (progress.outcome === 'FAILED') return t('app.chat.progressStatusFailed');
+    if (progress.outcome === 'PARTIAL') return t('app.chat.progressStatusPartial');
     if (progress.outcome === 'RESULT_UNAVAILABLE') return t('app.chat.progressStatusUnconfirmed');
     if (progress.outcome === 'CONFIRMATION_REQUIRED') return t('app.chat.progressStatusConfirmation');
     return t('app.chat.progressStatusSucceeded');
@@ -368,12 +370,27 @@ const executionTraceTotals = (trace: StreamProgress[]) => {
 };
 const traceHasToolResults = (trace: StreamProgress[]) =>
     trace.some(progress => progress.stage === 'TOOL_RESULT');
+const traceHasToolActivity = (trace: StreamProgress[]) =>
+    trace.some(progress => progress.stage === 'TOOL_EXECUTION' || progress.stage === 'TOOL_RESULT');
+const traceHasCompletedToolEvidence = (trace: StreamProgress[]) => {
+  let hasUsableResult = false;
+  for (const progress of trace) {
+    if (progress.stage === 'EXECUTION_GUARD') return false;
+    if (progress.stage === 'TOOL_RESULT') {
+      if (progress.outcome !== 'USABLE') return false;
+      hasUsableResult = true;
+    }
+  }
+  return hasUsableResult;
+};
 const executionTraceStatus = (
     trace: StreamProgress[],
     active: boolean,
-    status?: ChatMessage['executionStatus']
+    status?: ChatMessage['executionStatus'],
+    settling = false
 ) => {
   if (active) return t('app.chat.executionTraceRunning');
+  if (settling) return t('app.chat.executionTraceSettling');
   if (status === 'AWAITING_CONFIRMATION') {
     return executionTraceTotals(trace).successful > 0
         ? t('app.chat.executionTracePartialAwaitingConfirmation')
@@ -387,8 +404,15 @@ const executionTraceStatus = (
       ? t('app.chat.executionTraceStoppedNoProgress')
       : t('app.chat.executionTraceStoppedLimit');
   }
-  if (status === 'PARTIAL') return t('app.chat.executionTracePartial');
+  if (status === 'PARTIAL') {
+    return trace.length > 0 && !traceHasToolActivity(trace)
+      ? t('app.chat.executionTraceNoTool')
+      : t('app.chat.executionTracePartial');
+  }
   if (status === 'FAILED') return t('app.chat.executionTraceFailed');
+  if (status !== 'COMPLETED' || !traceHasCompletedToolEvidence(trace)) {
+    return t('app.chat.executionTraceUnverified');
+  }
   const lastResult = [...trace].reverse().find(progress => progress.stage === 'TOOL_RESULT');
   return lastResult?.outcome === 'CONFIRMATION_REQUIRED'
       ? t('app.chat.executionTraceWaiting')
@@ -397,6 +421,7 @@ const executionTraceStatus = (
 const progressEventClass = (progress: StreamProgress, active: boolean) => ({
   'is-success': progress.stage === 'TOOL_RESULT' && progress.outcome === 'USABLE',
   'is-warning': progress.stage === 'EXECUTION_GUARD'
+      || progress.outcome === 'PARTIAL'
       || progress.outcome === 'RESULT_UNAVAILABLE'
       || progress.outcome === 'CONFIRMATION_REQUIRED',
   'is-error': progress.stage === 'TOOL_RESULT' && progress.outcome === 'FAILED',
@@ -429,6 +454,11 @@ const appendStreamProgress = (progress: StreamProgress) => {
 };
 const isActiveAssistantMessage = (index: number) =>
     isStreaming.value && index === messages.value.length - 1;
+const isSettlingAssistantMessage = (index: number) =>
+    isSettlingStream.value
+    && Boolean(activeStreamSessionId.value)
+    && activeStreamSessionId.value === currentSessionId.value
+    && index === messages.value.length - 1;
 const messageExecutionTrace = (message: ChatMessage, index: number) =>
     isActiveAssistantMessage(index) ? streamProgressEvents.value : (message.executionTrace ?? []);
 const messageExecutionElapsed = (message: ChatMessage, index: number) =>
@@ -652,11 +682,6 @@ const convertLatexDelimiters = (text: string) => {
     if (roundBracket !== undefined) return `$${roundBracket}$`;
     return match;
   });
-};
-
-const shouldShowMessage = (msg: ChatMessage) => {
-  if (msg.role === 'tool') return false;
-  return true;
 };
 
 const getRawContentWithoutThinking = (content: string) => {
@@ -1911,7 +1936,7 @@ const scrollToBottom = (force = false) => {
             </div>
 
             <template v-for="(msg, index) in messages" :key="index">
-              <div v-if="shouldShowMessage(msg)" :class="['msg-row', msg.role === 'user' ? 'user-row' : 'ai-row']">
+              <div :class="['msg-row', msg.role === 'user' ? 'user-row' : 'ai-row']">
                 <div class="avatar-container">
                   <UserOutlined v-if="msg.role === 'user'"/>
                   <RobotOutlined v-else/>
@@ -1972,7 +1997,8 @@ const scrollToBottom = (force = false) => {
                             {{ executionTraceStatus(
                               messageExecutionTrace(msg, index),
                               isActiveAssistantMessage(index),
-                              msg.executionStatus
+                              msg.executionStatus,
+                              isSettlingAssistantMessage(index)
                             ) }}
                           </span>
                           <span>{{ t('app.chat.progressElapsed', { seconds: messageExecutionElapsed(msg, index) }) }}</span>
@@ -2190,7 +2216,7 @@ const scrollToBottom = (force = false) => {
   --chat-safe-right: 1rem;
 }
 
-:global(:root[data-theme='dark']) .global-chat-wrapper {
+:global(:root[data-theme='dark'] .global-chat-wrapper) {
   --chat-shadow: 0 28px 80px rgba(2, 6, 23, 0.54);
   --chat-user-bg: color-mix(in srgb, #8b5cf6 20%, var(--surface-control, #1e293b));
   --chat-ai-bg: color-mix(in srgb, var(--surface-elevated, #111827) 92%, transparent);

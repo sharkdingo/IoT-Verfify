@@ -82,8 +82,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules,
       specifications,
-      isAttack: true,
-      attackBudget: 2,
+      attackScenario: { mode: 'ANY_UP_TO_BUDGET', budget: 2, points: [] },
       enablePrivacy: true
     })
 
@@ -92,8 +91,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules,
       steps: 8,
-      isAttack: true,
-      attackBudget: 2,
+      attackScenario: { mode: 'ANY_UP_TO_BUDGET', budget: 2, points: [] },
       enablePrivacy: true
     })
 
@@ -123,8 +121,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules: [{ ...rules[0], id: 'rule_1712345678' }] as any[],
       specifications,
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -137,8 +134,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules,
       specifications,
-      isAttack: false,
-      attackBudget: 9,
+      attackScenario: { mode: 'NONE', budget: 9, points: [] },
       enablePrivacy: false
     })
 
@@ -147,8 +143,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules,
       steps: 8,
-      isAttack: false,
-      attackBudget: 9,
+      attackScenario: { mode: 'NONE', budget: 9, points: [] },
       enablePrivacy: false
     })
 
@@ -171,8 +166,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules: [],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -205,8 +199,7 @@ describe('modelRequest', () => {
       ] as any[],
       rules: [],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -237,8 +230,7 @@ describe('modelRequest', () => {
       ] as any[],
       rules: [],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -269,8 +261,7 @@ describe('modelRequest', () => {
       ] as any[],
       rules: [],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -305,8 +296,7 @@ describe('modelRequest', () => {
       ] as any[],
       rules: [],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -342,8 +332,7 @@ describe('modelRequest', () => {
       ] as any[],
       rules: [],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -380,8 +369,7 @@ describe('modelRequest', () => {
       ] as any[],
       rules: [],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -403,8 +391,7 @@ describe('modelRequest', () => {
         { name: 'temperature', value: '28', trust: 'trusted', privacy: 'public' },
         { name: 'presence', value: '"home"', trust: 'untrusted', privacy: 'private' }
       ],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -416,8 +403,7 @@ describe('modelRequest', () => {
         { name: 'temperature', value: '28', trust: 'trusted', privacy: 'public' }
       ],
       steps: 5,
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: true
     })
 
@@ -439,8 +425,7 @@ describe('modelRequest', () => {
       environmentVariables: [
         { name: '   ', value: '28', trust: 'trusted', privacy: 'public' }
       ],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })).toThrow('Environment variable 1 requires a name')
   })
@@ -457,8 +442,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules: [contentRule],
       specifications,
-      isAttack: true,
-      attackBudget: 2,
+      attackScenario: { mode: 'ANY_UP_TO_BUDGET', budget: 2, points: [] },
       enablePrivacy: true
     })
 
@@ -476,8 +460,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules: [],
       specifications,
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -519,8 +502,7 @@ describe('modelRequest', () => {
           ]
         }
       ] as any[],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -552,8 +534,7 @@ describe('modelRequest', () => {
           ]
         }
       ] as any[],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -574,8 +555,7 @@ describe('modelRequest', () => {
         }
       ] as any[],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })).toThrow('Rule state condition requires relation and value')
   })
@@ -593,8 +573,7 @@ describe('modelRequest', () => {
         }
       ] as any[],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -621,8 +600,7 @@ describe('modelRequest', () => {
         }
       ] as any[],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -645,8 +623,7 @@ describe('modelRequest', () => {
         }
       ] as any[],
       specifications: [],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -682,8 +659,7 @@ describe('modelRequest', () => {
         ifConditions: [],
         thenConditions: []
       }],
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
 
@@ -702,8 +678,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules,
       specifications,
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
     const baseline = buildModelRunSignature(request, deviceTemplates)
@@ -724,8 +699,7 @@ describe('modelRequest', () => {
       deviceTemplates,
       rules,
       specifications,
-      isAttack: false,
-      attackBudget: 0,
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
       enablePrivacy: false
     })
     const reorderedRequest = {

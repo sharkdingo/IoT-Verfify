@@ -13,7 +13,6 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -33,6 +32,8 @@ public final class CounterexampleInitialStateConstraints {
                                      Map<String, DeviceSmvData> deviceSmvMap,
                                      AttackScenarioDto attackScenario,
                                      boolean enablePrivacy) {
+        AttackScenarioDto requiredScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         if (initialState == null) {
             return List.of();
         }
@@ -58,7 +59,7 @@ public final class CounterexampleInitialStateConstraints {
         AttackSurface attackSurface = AttackSurface.analyze(rules, deviceSmvMap);
         for (DeviceSmvData smv : deviceSmvMap.values()) {
             if (smv == null || smv.getVarName() == null) continue;
-            boolean requireCompromise = attackScenario != null && attackScenario.isEnabled()
+            boolean requireCompromise = requiredScenario.isEnabled()
                     && attackSurface.includesDevice(smv.getVarName());
             boolean requiresSnapshot = hasItems(smv.getModes()) || hasItems(smv.getVariables())
                     || (enablePrivacy && hasItems(smv.getContents())) || requireCompromise;
@@ -71,7 +72,7 @@ public final class CounterexampleInitialStateConstraints {
             }
         }
         appendEnvironmentConstraints(constraints, initialState.getEnvVariables(), deviceSmvMap);
-        if (attackScenario != null && attackScenario.isEnabled()) {
+        if (requiredScenario.isEnabled()) {
             appendAutomationLinkConstraints(
                     constraints, initialState.getCompromisedAutomationLinks(), rules);
         }
@@ -284,31 +285,19 @@ public final class CounterexampleInitialStateConstraints {
         List<RuleDto> safeRules = rules == null ? List.of() : rules;
         Set<Integer> compromisedIndices = new LinkedHashSet<>();
         for (TraceTriggeredRuleDto link : compromisedLinks) {
-            List<Integer> matches = matchingRuleIndices(link, safeRules);
-            if (matches.size() != 1) {
-                throw invalid("a compromised automation link cannot be mapped to exactly one rule");
+            Integer ruleIndex = link == null ? null : link.getRuleIndex();
+            if (ruleIndex == null || ruleIndex < 0 || ruleIndex >= safeRules.size()
+                    || safeRules.get(ruleIndex) == null) {
+                throw invalid("a compromised automation link has an invalid frozen rule index");
             }
-            compromisedIndices.add(matches.get(0));
+            if (!compromisedIndices.add(ruleIndex)) {
+                throw invalid("a compromised automation link appears more than once");
+            }
         }
         for (int i = 0; i < safeRules.size(); i++) {
             constraints.add(SmvConstants.AUTOMATION_LINK_ATTACK_PREFIX + i + " = "
                     + booleanLiteral(compromisedIndices.contains(i)));
         }
-    }
-
-    private static List<Integer> matchingRuleIndices(TraceTriggeredRuleDto link, List<RuleDto> rules) {
-        if (link == null) return List.of();
-        List<Integer> matches = new ArrayList<>();
-        for (int i = 0; i < rules.size(); i++) {
-            RuleDto rule = rules.get(i);
-            if (rule == null) continue;
-            boolean idMatch = link.getRuleId() != null && rule.getId() != null
-                    && link.getRuleId().equals(String.valueOf(rule.getId()));
-            boolean labelFallback = link.getRuleId() == null && link.getRuleLabel() != null
-                    && Objects.equals(link.getRuleLabel(), rule.getRuleString());
-            if (idMatch || labelFallback) matches.add(i);
-        }
-        return matches;
     }
 
     private static String validatedVariableValue(String raw,

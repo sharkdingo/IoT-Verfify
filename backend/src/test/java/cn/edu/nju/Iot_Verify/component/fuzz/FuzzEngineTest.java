@@ -17,6 +17,8 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -45,6 +47,37 @@ class FuzzEngineTest {
     private static final double EPSILON = 1.0e-9;
 
     private final FuzzEngine engine = new FuzzEngine();
+
+    @Test
+    void tracesFreezeDeviceLocalAndSharedEnvironmentTokenSources() {
+        FuzzModel bundledModel = FuzzModel.from(provenanceSnapshot(false));
+        var bundledState = bundledModel.simulate(new long[0], 1).traceStates().get(0);
+        var bundledDevice = bundledState.getDevices().get(0);
+
+        assertEquals(ModelTokenSource.BUNDLED, bundledDevice.getModelTokenSource());
+        assertEquals(ModelTokenSource.BUNDLED,
+                bundledDevice.getVariables().stream()
+                        .filter(variable -> "profile".equals(variable.getName()))
+                        .findFirst().orElseThrow().getModelTokenSource());
+        assertEquals(ModelTokenSource.BUNDLED,
+                bundledState.getEnvVariables().stream()
+                        .filter(variable -> "weather".equals(variable.getName()))
+                        .findFirst().orElseThrow().getModelTokenSource());
+
+        FuzzModel mixedModel = FuzzModel.from(provenanceSnapshot(true));
+        var mixedState = mixedModel.simulate(new long[0], 1).traceStates().get(0);
+        var customDevice = mixedState.getDevices().stream()
+                .filter(device -> "custom_1".equals(device.getDeviceId()))
+                .findFirst().orElseThrow();
+
+        assertEquals(ModelTokenSource.CUSTOM, customDevice.getModelTokenSource());
+        assertEquals(ModelTokenSource.CUSTOM,
+                customDevice.getVariables().get(0).getModelTokenSource());
+        assertEquals(ModelTokenSource.UNKNOWN,
+                mixedState.getEnvVariables().stream()
+                        .filter(variable -> "weather".equals(variable.getName()))
+                        .findFirst().orElseThrow().getModelTokenSource());
+    }
 
     @Test
     void paperModeIsDeterministicAndUsesItsOwnSearchKernel() {
@@ -1494,6 +1527,70 @@ class FuzzEngineTest {
                 .getValue();
     }
 
+    private static BoardDataConverter.ModelInputSnapshot provenanceSnapshot(boolean includeCustom) {
+        DeviceVerificationDto bundled = provenanceDevice(
+                "bundled_1", "Bundled", ModelTokenSource.BUNDLED);
+        List<DeviceVerificationDto> devices = new ArrayList<>();
+        devices.add(bundled);
+        Map<String, DeviceManifest> manifests = new LinkedHashMap<>();
+        manifests.put("Bundled", provenanceManifest("Bundled"));
+        if (includeCustom) {
+            devices.add(provenanceDevice("custom_1", "Custom", ModelTokenSource.CUSTOM));
+            manifests.put("Custom", provenanceManifest("Custom"));
+        }
+        return new BoardDataConverter.ModelInputSnapshot(
+                List.of(),
+                devices,
+                List.of(new BoardEnvironmentVariableDto(
+                        "weather", "calm", "trusted", "public")),
+                List.of(),
+                List.of(),
+                manifests);
+    }
+
+    private static DeviceVerificationDto provenanceDevice(
+            String id, String templateName, ModelTokenSource source) {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName(id);
+        device.setDeviceLabel(id);
+        device.setTemplateName(templateName);
+        device.setModelTokenSource(source);
+        device.setVariables(List.of(new VariableStateDto(
+                "profile", "home", "trusted")));
+        device.setPrivacies(List.of());
+        return device;
+    }
+
+    private static DeviceManifest provenanceManifest(String name) {
+        DeviceManifest.InternalVariable profile = DeviceManifest.InternalVariable.builder()
+                .name("profile")
+                .isInside(true)
+                .falsifiableWhenCompromised(false)
+                .trust("trusted")
+                .privacy("private")
+                .values(List.of("home", "away"))
+                .build();
+        DeviceManifest.InternalVariable weather = DeviceManifest.InternalVariable.builder()
+                .name("weather")
+                .isInside(false)
+                .falsifiableWhenCompromised(false)
+                .trust("trusted")
+                .privacy("public")
+                .values(List.of("calm", "rain"))
+                .build();
+        return DeviceManifest.builder()
+                .name(name)
+                .modes(List.of())
+                .internalVariables(List.of(profile, weather))
+                .environmentDomains(List.of())
+                .impactedVariables(List.of())
+                .workingStates(List.of())
+                .transitions(List.of())
+                .apis(List.of())
+                .contents(List.of())
+                .build();
+    }
+
     private static String sharedWeatherFormalCase(
             BoardDataConverter.ModelInputSnapshot snapshot) {
         DeviceSmvDataFactory factory = new DeviceSmvDataFactory(
@@ -1509,8 +1606,7 @@ class FuzzEngineTest {
                 snapshot.environmentVariables(),
                 snapshot.rules(),
                 deviceSmvMap,
-                false,
-                0,
+                AttackScenarioDto.none(),
                 true,
                 SmvGenerationContext.noop());
         int start = model.indexOf("next(a_weather)");

@@ -65,6 +65,13 @@ boldly adjust code, docs, type definitions, tests, and examples. Keep every chan
 evidence-based, scoped, and verifiable. The primary goal is the user's need and mental
 model.
 
+There is no released compatibility contract yet. Unless the user explicitly requires a
+migration path, do not add backward-compatibility readers, dual-write formats, rolling-
+deployment bridges, deprecated aliases, or silent fallbacks for old development data.
+Change all in-repo callers and tests together, version persisted formats when useful, and
+reject obsolete or malformed state explicitly. Compatibility code must answer a current,
+documented requirement rather than a hypothetical future one.
+
 ## No AI slop
 
 AI assistance does not lower the engineering bar. In this repository, "AI slop" means

@@ -175,7 +175,7 @@ scopes, or initial runtime values; that is a different model, not a checker fail
 Run synchronous simulation with:
 
 - steps: `6`
-- attack modeling: off (`attackBudget = 0`)
+- attack modeling: off (`attackScenario.mode = NONE`)
 - privacy propagation: on
 
 Expected: a saved, animatable trajectory containing the stages `Hall Camera = taking

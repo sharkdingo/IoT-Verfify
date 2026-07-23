@@ -186,27 +186,6 @@ public abstract class AbstractAiTool implements AiTool {
         return value.booleanValue();
     }
 
-    /**
-     * Parses the shared attack-model switch/budget contract without accepting a budget
-     * that would later be silently discarded because attack modeling is disabled.
-     */
-    protected final int attackBudgetArg(JsonNode args,
-                                        boolean attackEnabled) throws ArgValidationException {
-        if (attackEnabled) {
-            return intArgInRange(args, "attackBudget", 1, 1, 50);
-        }
-        JsonNode value = args == null ? null : args.get("attackBudget");
-        if (value == null || value.isNull()) return 0;
-        int disabledBudget = intArgInRange(args, "attackBudget", 0, 0, 50);
-        if (disabledBudget != 0) {
-            throw new ArgValidationException(errorJson(
-                    "attackBudget must be omitted, null, or 0 when isAttack is false. "
-                            + "Set isAttack=true to use a positive attack budget.",
-                    "VALIDATION_ERROR", 400));
-        }
-        return 0;
-    }
-
     /** Parses the shared per-run attack scenario used by verification and simulation tools. */
     protected final AttackScenarioDto attackScenarioArg(JsonNode args,
                                                         boolean allowExhaustive)

@@ -409,6 +409,12 @@ const fillSpecCondition = async (
   await expect(page.getByTestId('spec-condition-dialog')).toBeHidden({ timeout: 10_000 })
 }
 
+const selectSpecTemplate = async (page: Page, templateId: string) => {
+  const select = page.getByTestId('spec-template-select')
+  await expect(select).toBeEnabled({ timeout: 10_000 })
+  await select.selectOption(templateId)
+}
+
 const addNeverSpec = async (
   page: Page,
   request: APIRequestContext,
@@ -417,7 +423,7 @@ const addNeverSpec = async (
   expectedSpecCount: number
 ) => {
   await openControlSection(page, 'specs')
-  await page.getByTestId('spec-template-select').selectOption('3')
+  await selectSpecTemplate(page, '3')
   await page.getByTestId('spec-add-condition-a').click()
   await fillSpecCondition(page, condition.deviceId, condition.type, condition.key, condition.relation, condition.value, condition.propertyScope)
   await page.getByTestId('spec-create').click()
@@ -432,7 +438,7 @@ const addAlwaysSpec = async (
   expectedSpecCount: number
 ) => {
   await openControlSection(page, 'specs')
-  await page.getByTestId('spec-template-select').selectOption('1')
+  await selectSpecTemplate(page, '1')
   await page.getByTestId('spec-add-condition-a').click()
   await fillSpecCondition(page, condition.deviceId, condition.type, condition.key, condition.relation, condition.value, condition.propertyScope)
   await page.getByTestId('spec-create').click()
@@ -448,7 +454,7 @@ const addResponseSpec = async (
   expectedSpecCount: number
 ) => {
   await openControlSection(page, 'specs')
-  await page.getByTestId('spec-template-select').selectOption('5')
+  await selectSpecTemplate(page, '5')
   await page.getByTestId('spec-add-condition-if').click()
   await fillSpecCondition(page, ifCondition.deviceId, ifCondition.type, ifCondition.key, ifCondition.relation, ifCondition.value)
   await page.getByTestId('spec-add-condition-then').click()

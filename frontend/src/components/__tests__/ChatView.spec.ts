@@ -514,6 +514,129 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
+  it('distinguishes no-tool replies and refuses unproven completed history', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue([
+      { role: 'user', content: '解释一下 LTL' },
+      {
+        role: 'assistant',
+        content: 'LTL 是线性时序逻辑。',
+        executionStatus: 'PARTIAL',
+        executionElapsedSeconds: 2,
+        executionTrace: [
+          { stage: 'CONTEXT_READY' },
+          { stage: 'PLANNING', round: 1 },
+          { stage: 'WRITING_RESPONSE' }
+        ]
+      },
+      { role: 'user', content: '尝试检查画布' },
+      {
+        role: 'assistant',
+        content: '工具启动后结果未确认。',
+        executionStatus: 'PARTIAL',
+        executionTrace: [{ stage: 'TOOL_EXECUTION', toolName: 'board_overview' }]
+      },
+      { role: 'user', content: '读取旧的部分结果' },
+      {
+        role: 'assistant',
+        content: '旧记录没有执行轨迹。',
+        executionStatus: 'PARTIAL'
+      },
+      { role: 'user', content: '检查画布' },
+      {
+        role: 'assistant',
+        content: '缺少工具证据的损坏完成记录。',
+        executionStatus: 'COMPLETED',
+        executionElapsedSeconds: 3
+      },
+      { role: 'user', content: '读取当前完成记录' },
+      {
+        role: 'assistant',
+        content: '已有可验证的完成记录。',
+        executionStatus: 'COMPLETED',
+        executionElapsedSeconds: 3,
+        executionTrace: [{ stage: 'TOOL_RESULT', outcome: 'USABLE' }]
+      }
+    ])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    const statuses = wrapper.findAll('.chat-execution-state')
+    expect(statuses).toHaveLength(5)
+    expect(statuses[0].text()).toContain('未执行平台工具')
+    expect(statuses[0].text()).not.toContain('已完成')
+    expect(statuses[1].text()).toContain('部分完成')
+    expect(statuses[1].text()).not.toContain('未执行平台工具')
+    expect(statuses[2].text()).toContain('部分完成')
+    expect(statuses[2].text()).not.toContain('未执行平台工具')
+    expect(statuses[3].text()).toContain('终态未确认')
+    expect(statuses[3].text()).not.toContain('已完成')
+    expect(statuses[4].text()).toContain('已完成')
+
+    wrapper.unmount()
+  })
+
+  it('labels a reviewable incomplete tool result as partial rather than successful', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue([
+      { role: 'user', content: '生成完整场景' },
+      {
+        role: 'assistant',
+        content: '返回了一个仍缺少规则的草案。',
+        executionStatus: 'PARTIAL',
+        executionTrace: [{
+          stage: 'TOOL_RESULT',
+          round: 1,
+          toolName: 'recommend_scenario',
+          outcome: 'PARTIAL',
+          successfulSteps: 1,
+          failedSteps: 0,
+          unconfirmedSteps: 0
+        }]
+      }
+    ])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.chat-execution-outcome').text()).toBe('部分结果')
+    expect(wrapper.get('[data-testid="chat-execution-trace"]').text())
+      .toContain('可审阅但不完整')
+    expect(wrapper.get('.chat-execution-outcome').text()).not.toBe('成功')
+
+    wrapper.unmount()
+  })
+
+  it('never renders an unknown terminal status as completed', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue([
+      { role: 'user', content: '检查未来状态' },
+      {
+        role: 'assistant',
+        content: '该状态来自更新后的服务端。',
+        executionStatus: 'FUTURE_STATUS'
+      }
+    ])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="chat-terminal-status"]').text()).toContain('终态未确认')
+    expect(wrapper.get('[data-testid="chat-terminal-status"]').text()).not.toContain('已完成')
+
+    wrapper.unmount()
+  })
+
   it('shows user stop and confirmation-pending outcomes as distinct states', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
     chatApi.getSessionHistory.mockResolvedValue([
@@ -810,6 +933,8 @@ describe('ChatView', () => {
     expect(trace.text()).toContain('整理最终答复')
     expect(wrapper.text()).toContain('1 成功')
     expect(wrapper.text()).toContain('设备已创建。')
+    expect(wrapper.get('.chat-execution-state').text()).toContain('终态未确认')
+    expect(wrapper.get('.chat-execution-state').text()).not.toContain('已完成')
     const completedDetails = wrapper.get('details.chat-execution-trace')
     expect(completedDetails.attributes('open')).toBeUndefined()
 

@@ -91,6 +91,7 @@ test('opening canvas node details preserves the viewport while inspector focus r
   const node = page.locator('[data-node-id="temp_sensor_1"]')
   await expect(node).toBeVisible({ timeout: 30_000 })
   await expect(node).toHaveClass(/device-node--compact/)
+  await expect(node.locator('.resize-handle')).toHaveCount(1)
   const zoomInput = page.getByTestId('canvas-map-zoom-input')
   await expect(zoomInput).toHaveValue('40')
   const initialCanvasTransform = await page.locator('.canvas-inner').evaluate(element =>

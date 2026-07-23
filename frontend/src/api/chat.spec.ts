@@ -35,6 +35,15 @@ import {
   sendStreamChat
 } from './chat'
 
+const successfulStreamResponse = (payload: string) => {
+  const reader = {
+    read: vi.fn()
+      .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode(payload) })
+      .mockResolvedValue({ done: true, value: undefined })
+  }
+  return { ok: true, body: { getReader: () => reader } }
+}
+
 describe('chat stream lifecycle semantics', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -66,7 +75,9 @@ describe('chat stream lifecycle semantics', () => {
   })
 
   it('binds a conversation-history load to its caller abort signal', async () => {
-    vi.mocked(http.get).mockResolvedValue({ data: { data: [] } })
+    vi.mocked(http.get).mockResolvedValue({
+      data: { data: { messages: [], nextBeforeId: null, hasMore: false } }
+    })
     const controller = new AbortController()
 
     await getSessionHistory('session-1', controller.signal)
@@ -74,6 +85,145 @@ describe('chat stream lifecycle semantics', () => {
     expect(http.get).toHaveBeenCalledWith(
       '/chat/sessions/session-1/messages',
       { signal: controller.signal }
+    )
+  })
+
+  it('rejects an unknown persisted execution status at the history boundary', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: {
+        data: {
+          messages: [{
+            sessionId: 'session-1',
+            role: 'assistant',
+            content: 'A future server response.',
+            turnId: 'turn-1',
+            executionStatus: 'FUTURE_STATUS'
+          }],
+          nextBeforeId: null,
+          hasMore: false
+        }
+      }
+    })
+
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history message 0 has an unknown execution status'
+    )
+  })
+
+  it('rejects completed history without persisted usable tool evidence', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: {
+        data: {
+          messages: [{
+            sessionId: 'session-1',
+            role: 'assistant',
+            content: 'Unproven completion.',
+            turnId: 'turn-1',
+            executionStatus: 'COMPLETED'
+          }],
+          nextBeforeId: null,
+          hasMore: false
+        }
+      }
+    })
+
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history message 0 has unproven completed status'
+    )
+  })
+
+  it('rejects malformed persisted message content and execution traces', async () => {
+    vi.mocked(http.get).mockResolvedValueOnce({
+      data: {
+        data: {
+          messages: [{
+            sessionId: 'session-1',
+            role: 'assistant',
+            content: { text: 'not a string' }
+          }],
+          nextBeforeId: null,
+          hasMore: false
+        }
+      }
+    })
+
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history message 0 is incomplete'
+    )
+
+    vi.mocked(http.get).mockResolvedValueOnce({
+      data: {
+        data: {
+          messages: [{
+            sessionId: 'session-1',
+            role: 'assistant',
+            content: 'Saved response',
+            executionTrace: [{ stage: 'FUTURE_STAGE' }]
+          }],
+          nextBeforeId: null,
+          hasMore: false
+        }
+      }
+    })
+
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history message 0 is incomplete'
+    )
+  })
+
+  it('rejects a history page containing a message from another session', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: {
+        data: {
+          messages: [{
+            sessionId: 'session-2',
+            role: 'assistant',
+            content: 'Do not render this in session 1.'
+          }],
+          nextBeforeId: null,
+          hasMore: false
+        }
+      }
+    })
+
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history message 0 is incomplete'
+    )
+  })
+
+  it('rejects an unusable history cursor instead of paginating with corrupted state', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: {
+        data: {
+          messages: [{ sessionId: 'session-1', role: 'assistant', content: 'Saved response' }],
+          nextBeforeId: null,
+          hasMore: true
+        }
+      }
+    })
+
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history response is incomplete'
+    )
+  })
+
+  it('rejects obsolete array history and internal tool messages', async () => {
+    vi.mocked(http.get).mockResolvedValueOnce({ data: { data: [] } })
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history response is incomplete'
+    )
+
+    vi.mocked(http.get).mockResolvedValueOnce({
+      data: {
+        data: {
+          messages: [{ sessionId: 'session-1', role: 'tool', content: '{"secret":true}' }],
+          nextBeforeId: null,
+          hasMore: false
+        }
+      }
+    })
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history message 0 is incomplete'
     )
   })
 
@@ -270,6 +420,133 @@ describe('chat stream lifecycle semantics', () => {
       'hello',
       { onMessage: vi.fn() }
     )).rejects.toMatchObject({ kind: 'EMPTY_STREAM' })
+  })
+
+  it('rejects malformed structured progress before it reaches the UI', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"progress":{"stage":"FUTURE_STAGE"}}\n\n'
+    )))
+    const onProgress = vi.fn()
+    const onError = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onProgress, onError }
+    )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+
+    expect(onProgress).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'INVALID_FRAME' }))
+  })
+
+  it('requires an outcome that matches each progress stage', async () => {
+    const invalidPayloads = [
+      { progress: { stage: 'TOOL_RESULT' } },
+      { progress: { stage: 'TOOL_RESULT', outcome: 'EMERGENCY_LIMIT' } },
+      { progress: { stage: 'EXECUTION_GUARD', outcome: 'USABLE' } },
+      { progress: { stage: 'PLANNING', outcome: 'USABLE' } }
+    ]
+
+    for (const payload of invalidPayloads) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+        `data: ${JSON.stringify(payload)}\n\n`
+      )))
+      await expect(sendStreamChat(
+        'session-1',
+        'hello',
+        { onMessage: vi.fn(), onProgress: vi.fn() }
+      )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+    }
+  })
+
+  it('rejects empty, non-object, and non-JSON stream frames without completing', async () => {
+    const invalidPayloads = ['{}', '{"content":42}', '[]', 'plain assistant text']
+
+    for (const payload of invalidPayloads) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+        `data: ${payload}\n\n`
+      )))
+      const onFinish = vi.fn()
+      await expect(sendStreamChat(
+        'session-1',
+        'hello',
+        { onMessage: vi.fn(), onFinish }
+      )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+      expect(onFinish).not.toHaveBeenCalled()
+    }
+  })
+
+  it('validates the complete structured frame before invoking any callback', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"command":{"type":"REFRESH_DATA"},"progress":{"stage":"TOOL_RESULT"}}\n\n'
+    )))
+    const onCommand = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onCommand }
+    )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+    expect(onCommand).not.toHaveBeenCalled()
+  })
+
+  it('accepts only documented refresh commands and targets', async () => {
+    for (const command of [
+      { type: 'NAVIGATE', payload: { target: 'board_state' } },
+      { type: 'REFRESH_DATA', payload: { target: 'future_target' } },
+      { type: 'REFRESH_DATA', payload: { target: 'board_state', extra: true } }
+    ]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+        `data: ${JSON.stringify({ command })}\n\n`
+      )))
+      await expect(sendStreamChat(
+        'session-1',
+        'hello',
+        { onMessage: vi.fn(), onCommand: vi.fn() }
+      )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+    }
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"command":{"type":"REFRESH_DATA","payload":{"target":"board_state"}}}\n\n'
+    )))
+    const onCommand = vi.fn()
+    await sendStreamChat('session-1', 'hello', { onMessage: vi.fn(), onCommand })
+    expect(onCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+  })
+
+  it('accepts a complete structured progress frame', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"progress":{"stage":"TOOL_RESULT","toolName":"get_board","round":1,"outcome":"USABLE","successfulSteps":1,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+    )))
+    const onProgress = vi.fn()
+    const onFinish = vi.fn()
+
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onProgress, onFinish }
+    )
+
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'TOOL_RESULT',
+      outcome: 'USABLE',
+      successfulSteps: 1
+    }))
+    expect(onFinish).toHaveBeenCalledOnce()
+  })
+
+  it('accepts the documented partial tool-result outcome', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"progress":{"stage":"TOOL_RESULT","outcome":"PARTIAL","successfulSteps":1,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+    )))
+    const onProgress = vi.fn()
+
+    await sendStreamChat('session-1', 'hello', { onMessage: vi.fn(), onProgress })
+
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'PARTIAL' }))
   })
 
   it('reports transport acceptance before parsing a successful stream', async () => {

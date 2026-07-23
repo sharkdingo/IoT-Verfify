@@ -15,6 +15,11 @@ counterexample visualization, an AI chat panel, and bilingual (zh-CN / en) UI. T
 Stack: Vue 3 (Composition API), TypeScript, Vite, Tailwind CSS, Ant Design Vue,
 Element Plus, Vue Router, Vue I18n.
 
+This project is in active development and has no released compatibility contract.
+Unless the user explicitly requests a migration path, remove superseded client contracts
+and dead UI branches instead of adding legacy payload adapters, deprecated aliases, or
+silent fallbacks for old development data.
+
 ## Commands
 
 ```bash

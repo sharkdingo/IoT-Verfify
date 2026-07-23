@@ -68,9 +68,6 @@ const findingTitle = (finding: FuzzingFindingSummary | FuzzingFinding) => {
     || t('app.unknownSpecification')
 }
 
-const findingDataAvailable = (finding: FuzzingFindingSummary | FuzzingFinding) =>
-  !('dataAvailable' in finding) || finding.dataAvailable !== false
-
 const elapsedSeconds = computed(() => Math.max(0, Math.round((props.run?.elapsedMs || 0) / 1000)))
 const elapsedLabel = computed(() => t(
   elapsedSeconds.value === 1 ? 'app.fuzzElapsedSecond' : 'app.fuzzElapsedSeconds',
@@ -370,7 +367,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
                       type="button"
                       :data-testid="`replay-fuzzing-finding-${finding.id}`"
                       class="inline-flex min-h-11 items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-                      :disabled="actionLocked || !findingDataAvailable(finding)"
+                      :disabled="actionLocked"
                       @click="emit('replay', finding.id)"
                     >
                       <span class="material-symbols-outlined text-sm" aria-hidden="true">play_arrow</span>{{ t('app.replay') }}
@@ -379,7 +376,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
                       type="button"
                       :data-testid="`verify-fuzzing-finding-${finding.id}`"
                       class="inline-flex min-h-11 items-center gap-1 rounded-md bg-emerald-100 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-200 disabled:opacity-50 dark:bg-emerald-900/60 dark:text-emerald-100 dark:hover:bg-emerald-800"
-                      :disabled="actionLocked || !findingDataAvailable(finding)"
+                      :disabled="actionLocked"
                       @click="emit('verify', finding)"
                     >
                         <span class="material-symbols-outlined text-sm" aria-hidden="true">fact_check</span>{{ t('app.verifyCurrentBoard') }}

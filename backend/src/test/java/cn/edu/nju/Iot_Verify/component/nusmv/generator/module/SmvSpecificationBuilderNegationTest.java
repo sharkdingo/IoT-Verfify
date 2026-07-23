@@ -66,7 +66,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecificationDto spec = buildSpec("1", List.of(cond), null, null);
 
         String generated = builder.generateSpecString(
-                spec, false, 0, Map.of("ac_1", smv));
+                spec, Map.of("ac_1", smv));
 
         assertTrue(generated.contains("ac_1.AcState=on"));
     }
@@ -78,7 +78,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto cond = buildCondition("sensor_1", "state", null, "=", "active");
         SpecificationDto spec = buildSpec("1", List.of(cond), null, null);
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("CTLSPEC EF(!("));
         assertTrue(negated.contains("sensor_1.SensorState=active"));
@@ -91,7 +91,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecificationDto spec = buildSpec("1", null, List.of(ifCond), List.of(thenCond));
 
         assertThrows(SmvSpecificationBuilder.InvalidConditionException.class,
-                () -> builder.generateNegatedSpec(spec, false, 0, buildDeviceMap()));
+                () -> builder.generateNegatedSpec(spec, buildDeviceMap()));
     }
 
     // ===== Template 2: eventually AF(A) → EG(!A) =====
@@ -101,7 +101,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto cond = buildCondition("sensor_1", "state", null, "=", "active");
         SpecificationDto spec = buildSpec("2", List.of(cond), null, null);
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("CTLSPEC EG(!("));
     }
@@ -113,7 +113,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto cond = buildCondition("sensor_1", "state", null, "=", "active");
         SpecificationDto spec = buildSpec("3", List.of(cond), null, null);
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("CTLSPEC EF("));
         assertFalse(negated.contains("!(")); // Not negated — EF(A) not EF(!A)
@@ -127,7 +127,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto thenCond = buildCondition("sensor_1", "state", null, "=", "idle");
         SpecificationDto spec = buildSpec("4", null, List.of(ifCond), List.of(thenCond));
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("CTLSPEC EF("));
         assertTrue(negated.contains("EX(!("));
@@ -141,7 +141,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto thenCond = buildCondition("sensor_1", "state", null, "=", "idle");
         SpecificationDto spec = buildSpec("5", null, List.of(ifCond), List.of(thenCond));
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("CTLSPEC EF("));
         assertTrue(negated.contains("EG(!("));
@@ -155,7 +155,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto thenCond = buildCondition("sensor_1", "state", null, "=", "idle");
         SpecificationDto spec = buildSpec("6", null, List.of(ifCond), List.of(thenCond));
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("LTLSPEC F("));
         assertTrue(negated.contains("G F(!("));
@@ -168,7 +168,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto cond = buildCondition("sensor_1", "state", null, "=", "active");
         SpecificationDto spec = buildSpec("7", List.of(cond), null, null);
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("CTLSPEC EF("));
         assertTrue(negated.contains("sensor_1.SensorState=active"));
@@ -181,7 +181,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto cond = buildCondition("sensor_1", "state", null, "=", "active");
         SpecificationDto spec = buildSpec("7", List.of(cond), null, null);
 
-        String negated = builder.generateNegatedSpec(spec, true, 3, buildDeviceMap());
+        String negated = builder.generateNegatedSpec(spec, buildDeviceMap());
 
         assertTrue(negated.startsWith("CTLSPEC EF("));
         assertTrue(negated.contains("sensor_1.SensorState=active"));
@@ -198,7 +198,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto condition = buildCondition("ac_1", "state", "state", "=", "on;cool");
         SpecificationDto spec = buildSpec("7", List.of(condition), null, null);
 
-        String generated = builder.generateSpecString(spec, false, 0, Map.of("ac_1", smv));
+        String generated = builder.generateSpecString(spec, Map.of("ac_1", smv));
 
         assertEquals("CTLSPEC AG !((ac_1.Power=on & ac_1.Mode=cool) & "
                 + "(ac_1.trust_Power_on=untrusted | ac_1.trust_Mode_cool=untrusted))", generated);
@@ -216,7 +216,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto condition = buildCondition("ac_1", "state", "state", "=", "on;_");
         SpecificationDto spec = buildSpec("1", List.of(condition), null, null);
 
-        String generated = builder.generateSpecString(spec, false, 0, Map.of("ac_1", smv));
+        String generated = builder.generateSpecString(spec, Map.of("ac_1", smv));
 
         assertEquals("CTLSPEC AG(ac_1.Power=on)", generated);
     }
@@ -237,7 +237,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto humid = buildCondition("sensor_1", "variable", "humidity", ">", "70");
         SpecificationDto spec = buildSpec("7", List.of(hot, humid), null, null);
 
-        String generated = builder.generateSpecString(spec, false, 0, Map.of("sensor_1", smv));
+        String generated = builder.generateSpecString(spec, Map.of("sensor_1", smv));
 
         assertEquals("CTLSPEC AG !(sensor_1.temperature>30 & sensor_1.humidity>70 & "
                 + "(sensor_1.trust_temperature=untrusted | sensor_1.trust_humidity=untrusted))", generated);
@@ -261,7 +261,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecConditionDto condition = buildCondition("ac_1", "api", "startCooling", "=", "TRUE");
         SpecificationDto spec = buildSpec("7", List.of(condition), null, null);
 
-        String generated = builder.generateSpecString(spec, false, 0, Map.of("ac_1", smv));
+        String generated = builder.generateSpecString(spec, Map.of("ac_1", smv));
 
         assertEquals("CTLSPEC AG !(ac_1.startCooling_a=TRUE & "
                 + "(ac_1.trust_Power_on=untrusted | ac_1.trust_Mode_cool=untrusted))", generated);
@@ -284,7 +284,7 @@ class SmvSpecificationBuilderNegationTest {
 
         SmvSpecificationBuilder.InvalidConditionException error = assertThrows(
                 SmvSpecificationBuilder.InvalidConditionException.class,
-                () -> builder.generateSpecString(spec, false, 0, Map.of("service_1", smv)));
+                () -> builder.generateSpecString(spec, Map.of("service_1", smv)));
 
         assertTrue(error.getMessage().contains("cannot resolve the MEDIC control-source label"));
     }
@@ -296,7 +296,7 @@ class SmvSpecificationBuilderNegationTest {
 
         SmvSpecificationBuilder.InvalidConditionException error = assertThrows(
                 SmvSpecificationBuilder.InvalidConditionException.class,
-                () -> builder.generateSpecString(spec, false, 0, buildDeviceMap()));
+                () -> builder.generateSpecString(spec, buildDeviceMap()));
 
         assertTrue(error.getMessage().contains("protected event or value"));
     }
@@ -308,7 +308,7 @@ class SmvSpecificationBuilderNegationTest {
 
         SmvSpecificationBuilder.InvalidConditionException error = assertThrows(
                 SmvSpecificationBuilder.InvalidConditionException.class,
-                () -> builder.generateSpecString(spec, false, 0, buildDeviceMap()));
+                () -> builder.generateSpecString(spec, buildDeviceMap()));
 
         assertTrue(error.getMessage().contains("require '='"));
     }
@@ -322,7 +322,7 @@ class SmvSpecificationBuilderNegationTest {
         SpecificationDto spec2 = buildSpec("3", List.of(cond), null, null);
 
         String result = builder.buildNegated(List.of(spec1, spec2), 0,
-                false, 0, buildDeviceMap(), false);
+                buildDeviceMap(), false);
 
         assertTrue(result.contains("Negated specification (index 0)"));
         assertTrue(result.contains("CTLSPEC EF(!("));
@@ -333,8 +333,8 @@ class SmvSpecificationBuilderNegationTest {
     @Test
     void buildNegated_invalidIndex_failsClosed() {
         assertThrows(SmvGenerationException.class,
-                () -> builder.buildNegated(List.of(), 0, false, 0, Map.of(), false));
+                () -> builder.buildNegated(List.of(), 0, Map.of(), false));
         assertThrows(SmvGenerationException.class,
-                () -> builder.buildNegated(null, 0, false, 0, Map.of(), false));
+                () -> builder.buildNegated(null, 0, Map.of(), false));
     }
 }

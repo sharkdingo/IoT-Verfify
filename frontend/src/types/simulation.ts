@@ -52,7 +52,7 @@ export interface SimulationDevice {
   deviceId: string
   deviceLabel: string
   templateName: string
-  modelTokenSource?: ModelTokenSource
+  modelTokenSource: ModelTokenSource
   state?: string
   mode?: string
   compromised?: boolean
@@ -65,17 +65,17 @@ export interface SimulationDevice {
 export interface SimulationVariable {
   name: string
   value: string
-  trust?: string
-  modelTokenSource?: ModelTokenSource
+  trust?: string | null
+  modelTokenSource: ModelTokenSource
 }
 
 // 可信度/隐私
 export interface SimulationTrustPrivacy {
   name: string
   propertyScope: 'state' | 'variable' | 'content'
-  mode?: string
+  mode?: string | null
   trust?: boolean | null
-  privacy?: string
+  privacy?: string | null
 }
 
 // 模拟记录摘要 (列表用) — SimulationTraceSummaryDto 不返回 userId

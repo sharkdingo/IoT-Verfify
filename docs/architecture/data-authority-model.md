@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-22. Source: board/fuzz DTOs and services,
+Verified against code on 2026-07-24. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -215,10 +215,10 @@ internal `execution_order` column, exposes an atomic complete-id reorder command
 always returns rules in effective order. NuSMV state changes, execution probes, and
 trust/privacy propagation use the same selected branch. The generator also walks rule
 conditions in list order when building guards and internal parameterized fix locators.
-Fault localization and repair application retain
-zero-based positions server-side as trace-snapshot diagnostics, while REST/AI DTOs expose
-readable rule/condition descriptions and the opaque `ParameterTarget.targetId` rather
-than `ruleIndex` / `conditionIndex`.
+Fault localization and repair application retain zero-based positions as trace-snapshot
+diagnostics. Trace REST DTOs expose the frozen `ruleIndex` needed to identify execution
+evidence, but repair suggestions do not ask clients to apply raw rule or condition
+positions: they expose readable descriptions and the opaque `ParameterTarget.targetId`.
 Portable scene JSON therefore omits backend rule row ids but preserves the `rules[]` and
 `sources[]` array order during import/export.
 
@@ -389,8 +389,8 @@ Backend DTOs: `TraceDto`, `TraceStateDto`, `TraceDeviceDto`,
 | `createdAt` | DB | Trace creation time | History sorting |
 | `TraceStateDto.stateIndex` | NuSMV parser | Step index | Timeline |
 | `TraceStateDto.devices` | NuSMV parser | Per-device state in this step | Visualization |
-| `TraceStateDto.triggeredRules` | Internal rule probes resolved by the parser | Stable `{ ruleId, ruleLabel }` snapshots for rules whose modeled transition drove this state; never exposes probe indexes | Visualization/fault localization |
-| `TraceStateDto.compromisedAutomationLinks` | Internal fixed link choices resolved by the parser | Stable rule snapshots for logical automation delivery links selected as compromised; never exposes generated indexes | Trace explanation and broken-link canvas emphasis |
+| `TraceStateDto.triggeredRules` | Internal rule probes resolved by the parser | Frozen `{ ruleIndex, ruleId, ruleLabel }` snapshots for rules whose modeled transition drove this state. The required zero-based index identifies exactly one rule in the run request even when ids/labels collide; it is not current-Board identity | Visualization/fault localization |
+| `TraceStateDto.compromisedAutomationLinks` | Internal fixed link choices resolved by the parser | The same frozen rule identity for logical automation delivery links selected as compromised | Trace explanation and broken-link canvas emphasis |
 | `trustPrivacies` | NuSMV parser | State-level trust/privacy | Visualization |
 | `envVariables` | NuSMV parser | Board environment variables; generated NuSMV `a_<name>` identifiers are mapped back to literal board names before serialization | Visualization |
 | `globalVariables` | NuSMV parser | Runtime values such as user-facing `compromisedPointCount`; generated names are translated and kept separate from the environment namespace | Visualization/run context |
@@ -461,10 +461,10 @@ server-owned persisted JSON and is never exposed through the API.
 | `outcome` | Fuzz engine + service mapping | `FOUND_VIOLATION`, `BUDGET_EXHAUSTED`, or `INCONCLUSIVE`; never a proof of satisfaction | Neutral/red/amber result presentation |
 | `effectiveSeed` | Fuzz engine | Exact reproducibility seed | Retry/research reporting |
 | `iterations` / `generatedPaths` / `elapsedMs` | Fuzz engine | Bounded execution statistics; completed data must have `iterations <= maxIterations` and either `0/0` or `iterations <= generatedPaths <= iterations * populationSize` | Result explanation only; not coverage |
-| `modelSnapshot` | Board capture boundary | Frozen run-scope counts/time plus an optional canonical semantic fingerprint; bounded-exploration runs populate the fingerprint | Historical scope explanation and exact exploration-history drift checks |
+| `modelSnapshot` | Board capture boundary | Frozen run-scope counts/time plus the required canonical semantic fingerprint | Historical scope explanation and exact exploration-history drift checks |
 | `eligibility` | Fuzz model/spec classifier | Eligible IDs plus itemized unsupported/invalid specs | Fail-closed user explanation |
 | `limitations` | Fuzz engine | Stable codes for the run's semantic boundary | Localized result detail |
-| `dataAvailable` / `unavailableReasonCode` | Fuzz mapper | Fail-closed history-row decode status | Disable open/replay while preserving delete |
+| `FuzzRunSummary.dataAvailable` / `FuzzRunSummary.unavailableReasonCode` | Fuzz mapper | Fail-closed history-row decode status; these fields do not exist on run detail or finding summaries | Disable open/replay while preserving delete |
 | `FuzzFinding.id` | DB | Candidate evidence identity | Lazy detail/replay |
 | `fuzzTaskId` | Owning completed run | Finding ownership and grouping | Run history |
 | `violatedSpecId` / `violatedSpec` | Captured structured specification | Historical target identity and readable context | Replay/formal-verification handoff |
@@ -475,8 +475,10 @@ server-owned persisted JSON and is never exposed through the API.
 
 Fuzz findings are deliberately separate from NuSMV `trace` rows. They do not carry a
 formal `checkedExpression`, cannot be submitted to fault localization or fix endpoints,
-and must not be rebuilt from the mutable current Board. The frontend loads full states
-only when replay is requested and offers formal verification as the next action.
+and must not be rebuilt from the mutable current Board. Run detail loads and validates
+the complete states for every finding. Replay independently loads both the selected finding
+detail and its owning full run detail; it never treats lightweight history metadata as
+snapshot or replay authority. The UI offers formal verification as the next action.
 
 ## Fix
 
@@ -506,6 +508,8 @@ operation list or internal locator.
 Persisted board rule ids cross the verification/simulation model boundary as correlation
 identity only: `modelRequest.ts` includes a positive database id so parsed
 `triggeredRules[].ruleId` and `compromisedAutomationLinks[].ruleId` can highlight the
-corresponding current canvas rule. The id has no NuSMV behavioral meaning. Portable scene
-files and unsaved `rule_<timestamp>` drafts omit it; after scene import, the atomic batch
-response supplies newly persisted ids before any model run.
+corresponding current canvas rule. Every non-null rule id in one model request must be
+positive and unique; repeated `null` values remain valid for unsaved rules, whose frozen
+identity is their run-local `ruleIndex`. The id has no NuSMV behavioral meaning. Portable
+scene files and unsaved `rule_<timestamp>` drafts omit it; after scene import, the atomic
+batch response supplies newly persisted ids before any model run.

@@ -148,7 +148,8 @@ describe('CanvasBoard device context actions', () => {
       fromApi: 'motion',
       toApi: 'turn on',
       itemType: 'api' as const,
-      ruleId: 'rule-1'
+      ruleId: 'rule-1',
+      ruleIndex: 0
     }
     const wrapper = mount(CanvasBoard, {
       props: {
@@ -170,7 +171,7 @@ describe('CanvasBoard device context actions', () => {
             },
             {
               stateIndex: 2,
-              triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Motion turns on light' }],
+              triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Motion turns on light' }],
               compromisedAutomationLinks: [],
               devices: [
                 { deviceId: 'motion_1', deviceLabel: source.label, state: 'active', variables: [] },
@@ -229,17 +230,18 @@ describe('CanvasBoard device context actions', () => {
       itemType: 'variable' as const,
       relation: '=',
       value: 'active',
-      ruleId: 'rule-1'
+      ruleId: 'rule-1',
+      ruleIndex: 0
     }
     const states = [
       { triggeredRules: [], compromisedAutomationLinks: [], devices: [] },
       {
-        triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Motion turns on light' }],
+        triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Motion turns on light' }],
         compromisedAutomationLinks: [],
         devices: []
       },
       {
-        triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Motion turns on light' }],
+        triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Motion turns on light' }],
         compromisedAutomationLinks: [],
         devices: []
       }
@@ -370,6 +372,7 @@ describe('CanvasBoard device context actions', () => {
           deviceId: 'camera_1',
           deviceLabel: node.label,
           templateName: 'Camera',
+          modelTokenSource: 'BUNDLED' as const,
           mode: 'MachineState',
           state: 'on',
           variables: [],
@@ -394,7 +397,9 @@ describe('CanvasBoard device context actions', () => {
         getNodeIcon: () => '',
         hasNodeStateMachine: () => true,
         getNodeEffectiveState: currentNode => currentNode.state || 'Working',
-        formatNodeModelToken: (_node, value) => labels[String(value)] || String(value ?? '')
+        formatPlaybackModelToken: (source, value) => source === 'BUNDLED'
+          ? (labels[String(value)] || String(value ?? ''))
+          : String(value ?? '')
       },
       global: { plugins: [i18n] }
     })
@@ -404,6 +409,142 @@ describe('CanvasBoard device context actions', () => {
     expect(titles.some(title => title?.includes('照片'))).toBe(true)
     expect(titles.join(' ')).not.toContain('MachineState: on')
     expect(highlightedTrace).toEqual(canonicalSnapshot)
+    wrapper.unmount()
+  })
+
+  it('formats playback state and variables only from their frozen token sources', () => {
+    const nodes = [
+      { id: 'bundled-1', label: 'Bundled state', templateName: 'Current bundled', position: { x: 0, y: 0 }, state: 'current', width: 176, height: 128 },
+      { id: 'custom-1', label: 'Custom state', templateName: 'Current bundled', position: { x: 200, y: 0 }, state: 'current', width: 176, height: 128 },
+      { id: 'unknown-1', label: 'Unknown state', templateName: 'Current bundled', position: { x: 400, y: 0 }, state: 'current', width: 176, height: 128 }
+    ]
+    const liveFormatter = vi.fn((_node, value) => `current:${String(value ?? '')}`)
+    const playbackFormatter = vi.fn((source, value) => source === 'BUNDLED'
+      ? `history:${String(value ?? '')}`
+      : String(value ?? ''))
+    const wrapper = mount(CanvasBoard, {
+      props: {
+        nodes,
+        edges: [],
+        pan: { x: 0, y: 0 },
+        zoom: 1,
+        highlightedTrace: {
+          selectedStateIndex: 0,
+          states: [{
+            devices: [
+              {
+                deviceId: 'bundled_1',
+                state: 'off',
+                mode: 'MachineState',
+                modelTokenSource: 'BUNDLED' as const,
+                variables: [{ name: 'workingState', value: 'on', trust: 'untrusted', modelTokenSource: 'BUNDLED' as const }]
+              },
+              {
+                deviceId: 'custom_1',
+                state: 'off',
+                mode: 'MachineState',
+                modelTokenSource: 'CUSTOM' as const,
+                variables: [{ name: 'workingState', value: 'on', trust: 'untrusted', modelTokenSource: 'CUSTOM' as const }]
+              },
+              {
+                deviceId: 'unknown_1',
+                state: 'off',
+                mode: 'MachineState',
+                modelTokenSource: 'UNKNOWN' as const,
+                variables: [{ name: 'workingState', value: 'on', modelTokenSource: 'UNKNOWN' as const }]
+              }
+            ]
+          }]
+        },
+        getNodeIcon: () => '',
+        hasNodeStateMachine: () => true,
+        getNodeEffectiveState: () => 'current',
+        formatNodeModelToken: liveFormatter,
+        formatPlaybackModelToken: playbackFormatter
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const bundled = wrapper.get('[data-node-id="bundled-1"]')
+    expect(bundled.get('.device-state-value').text()).toBe('history:off')
+    expect(bundled.get('.device-runtime-chip__label').text()).toBe('history:workingState')
+    expect(bundled.get('.device-runtime-chip__value').text()).toBe('history:on')
+    expect(bundled.get('.device-node-trust--trust').attributes('title')).toContain('history:workingState')
+
+    const custom = wrapper.get('[data-node-id="custom-1"]')
+    expect(custom.get('.device-state-value').text()).toBe('off')
+    expect(custom.get('.device-runtime-chip__label').text()).toBe('workingState')
+    expect(custom.get('.device-runtime-chip__value').text()).toBe('on')
+    expect(custom.get('.device-node-trust--trust').attributes('title')).toContain('workingState')
+    expect(custom.get('.device-node-trust--trust').attributes('title')).not.toContain('history:workingState')
+
+    const unknown = wrapper.get('[data-node-id="unknown-1"]')
+    expect(unknown.get('.device-state-value').text()).toBe('off')
+    expect(unknown.get('.device-runtime-chip__label').text()).toBe('workingState')
+    expect(unknown.get('.device-runtime-chip__value').text()).toBe('on')
+    expect(liveFormatter).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('uses historical state-machine evidence instead of the current template', () => {
+    const recordedStateful = {
+      id: 'was-stateful-1',
+      templateName: 'Now stateless',
+      label: 'Was stateful',
+      position: { x: 20, y: 30 },
+      state: 'current-placeholder',
+      width: 176,
+      height: 128
+    }
+    const recordedStateless = {
+      id: 'was-stateless-1',
+      templateName: 'Now stateful',
+      label: 'Was stateless',
+      position: { x: 220, y: 30 },
+      state: 'current-state',
+      width: 176,
+      height: 128
+    }
+    const wrapper = mount(CanvasBoard, {
+      props: {
+        nodes: [recordedStateful, recordedStateless],
+        edges: [],
+        pan: { x: 0, y: 0 },
+        zoom: 1,
+        highlightedTrace: {
+          selectedStateIndex: 0,
+          states: [{
+            devices: [
+              {
+                deviceId: 'was_stateful_1',
+                state: 'historic-state',
+                mode: 'HistoricMode',
+                modelTokenSource: 'CUSTOM' as const,
+                variables: []
+              },
+              {
+                deviceId: 'was_stateless_1',
+                modelTokenSource: 'BUNDLED' as const,
+                variables: []
+              }
+            ]
+          }]
+        },
+        getNodeIcon: () => '',
+        hasNodeStateMachine: node => node.id === recordedStateless.id,
+        getNodeEffectiveState: node => node.state || 'Working',
+        formatPlaybackModelToken: (_source, value) => String(value ?? '')
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const stateful = wrapper.get('[data-node-id="was-stateful-1"]')
+    expect(stateful.get('.device-state').classes()).toContain('state-defined')
+    expect(stateful.get('.device-state-value').text()).toBe('historic-state')
+
+    const stateless = wrapper.get('[data-node-id="was-stateless-1"]')
+    expect(stateless.get('.device-state').classes()).toContain('state-stateless')
+    expect(stateless.get('.device-state-value').text()).toBe(i18n.global.t('app.noStateMachine'))
     wrapper.unmount()
   })
 
@@ -468,7 +609,7 @@ describe('CanvasBoard device context actions', () => {
     expect(rendered.findAll('.resize-handle')).toHaveLength(4)
     await wrapper.setProps({ zoom: 0.5 })
     expect(rendered.classes()).toContain('device-node--compact')
-    expect(rendered.findAll('.resize-handle')).toHaveLength(4)
+    expect(rendered.findAll('.resize-handle')).toHaveLength(1)
 
     await rendered.trigger('keydown', { key: 'ArrowRight', ctrlKey: true })
     await rendered.trigger('keydown', { key: 'ArrowDown', ctrlKey: true, shiftKey: true })
@@ -478,7 +619,7 @@ describe('CanvasBoard device context actions', () => {
     wrapper.unmount()
   })
 
-  it('hides overlapping pointer resize targets at minimum size and low zoom while keeping keyboard resize', async () => {
+  it('reduces overlapping pointer resize targets to one, then hides it while keeping keyboard resize', async () => {
     const node = {
       id: 'small-light-1',
       templateName: 'Light',
@@ -508,7 +649,7 @@ describe('CanvasBoard device context actions', () => {
     expect(wrapper.emitted('node-moved-or-resized')).toEqual([['small-light-1']])
 
     await wrapper.setProps({ zoom: 1 })
-    expect(rendered.findAll('.resize-handle')).toHaveLength(4)
+    expect(rendered.findAll('.resize-handle')).toHaveLength(1)
     wrapper.unmount()
   })
 })

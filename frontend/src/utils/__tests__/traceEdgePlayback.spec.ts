@@ -41,7 +41,7 @@ describe('trace edge playback', () => {
           ]
         },
         {
-          triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Press starts alarm' }],
+          triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Press starts alarm' }],
           devices: [
             { deviceId: 'button_1', variables: [{ name: 'press_a', value: 'TRUE' }] }
           ]
@@ -92,17 +92,42 @@ describe('trace edge playback', () => {
     expect(isEdgeActiveInTrace(edge, [edge], trace)).toBe(false)
   })
 
-  it('matches historical playback by stable rule id rather than current list position', () => {
+  it('matches historical playback by a unique stable rule id rather than current list position', () => {
     const edge = apiEdge({ ruleIndex: 99 })
     const trace = {
       selectedStateIndex: 1,
       states: [
         { triggeredRules: [], devices: [] },
-        { triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Historical rule' }], devices: [] }
+        { triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Historical rule' }], devices: [] }
       ]
     }
 
     expect(isEdgeActiveInTrace(edge, [edge], trace)).toBe(true)
+  })
+
+  it('does not guess a current edge when historical rule ids are duplicated', () => {
+    const first = apiEdge({ id: 'edge-1', ruleId: 'duplicate', ruleIndex: 0 })
+    const second = apiEdge({ id: 'edge-2', ruleId: 'duplicate', ruleIndex: 1 })
+    const trace = {
+      selectedStateIndex: 1,
+      states: [
+        { triggeredRules: [], devices: [] },
+        { triggeredRules: [{ ruleIndex: 1, ruleId: 'duplicate', ruleLabel: 'Second rule' }], devices: [] }
+      ]
+    }
+
+    expect(isEdgeActiveInTrace(first, [first, second], trace)).toBe(false)
+    expect(isEdgeActiveInTrace(second, [first, second], trace)).toBe(false)
+  })
+
+  it('does not bind an id-less historical rule to the current board by list position', () => {
+    const edge = apiEdge()
+    const trace = {
+      selectedStateIndex: 0,
+      states: [{ triggeredRules: [{ ruleIndex: 0, ruleId: null, ruleLabel: 'No id' }], devices: [] }]
+    }
+
+    expect(isEdgeActiveInTrace(edge, [edge], trace)).toBe(false)
   })
 
   it('animates only a delivered rule and stops a compromised link', () => {
@@ -112,25 +137,25 @@ describe('trace edge playback', () => {
       selectedStateIndex: 0,
       states: [{
         triggeredRules: [
-          { ruleId: 'rule-1', ruleLabel: 'Blocked historical rule' },
-          { ruleId: 'rule-2', ruleLabel: 'Delivered rule' }
+          { ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Blocked historical rule' },
+          { ruleIndex: 1, ruleId: 'rule-2', ruleLabel: 'Delivered rule' }
         ],
-        compromisedAutomationLinks: [{ ruleId: 'rule-1', ruleLabel: 'Historical rule' }],
+        compromisedAutomationLinks: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Historical rule' }],
         devices: []
       }]
     }
 
-    expect(isEdgeCompromisedInTrace(edge, trace)).toBe(true)
-    expect(isEdgeCompromisedInTrace(other, trace)).toBe(false)
-    expect(shouldAnimateEdgeFlow(edge, trace)).toBe(false)
-    expect(shouldAnimateEdgeFlow(other, trace)).toBe(true)
+    expect(isEdgeCompromisedInTrace(edge, [edge, other], trace)).toBe(true)
+    expect(isEdgeCompromisedInTrace(other, [edge, other], trace)).toBe(false)
+    expect(shouldAnimateEdgeFlow(edge, [edge, other], trace)).toBe(false)
+    expect(shouldAnimateEdgeFlow(other, [edge, other], trace)).toBe(true)
   })
 
   it('does not imply command delivery outside playback or for an idle rule', () => {
     const edge = apiEdge()
 
-    expect(shouldAnimateEdgeFlow(edge, null)).toBe(false)
-    expect(shouldAnimateEdgeFlow(edge, {
+    expect(shouldAnimateEdgeFlow(edge, [edge], null)).toBe(false)
+    expect(shouldAnimateEdgeFlow(edge, [edge], {
       selectedStateIndex: 0,
       states: [{ triggeredRules: [], compromisedAutomationLinks: [], devices: [] }]
     })).toBe(false)

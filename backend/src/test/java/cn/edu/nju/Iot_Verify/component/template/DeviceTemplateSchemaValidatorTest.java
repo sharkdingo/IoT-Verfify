@@ -295,8 +295,7 @@ class DeviceTemplateSchemaValidatorTest {
                 validator.validateRawManifest("Lamp", manifest));
 
         org.assertj.core.api.Assertions.assertThat(exception.getMessage())
-                .contains("API 'turn_on'")
-                .contains("would be ignored")
+                .contains("unsupported Assignments field")
                 .contains("triggered Transition");
     }
 
@@ -1092,6 +1091,35 @@ class DeviceTemplateSchemaValidatorTest {
                 .contains("away;idle")
                 .contains("MachineState='idle'")
                 .contains("cannot be represented losslessly");
+    }
+
+    @Test
+    void apiAssignmentsFieldIsRejectedEvenWhenEmpty() throws Exception {
+        JsonNode manifest = objectMapper.readTree("""
+                {
+                  "Name": "Lamp",
+                  "Modes": ["Power"],
+                  "InitState": "off",
+                  "WorkingStates": [
+                    {"Name": "off", "Trust": "trusted", "Privacy": "public"},
+                    {"Name": "on", "Trust": "trusted", "Privacy": "public"}
+                  ],
+                  "APIs": [{
+                    "Name": "turn_on",
+                    "StartState": "off",
+                    "EndState": "on",
+                    "Signal": true,
+                    "Assignments": []
+                  }]
+                }
+                """);
+
+        BadRequestException exception = assertThrows(BadRequestException.class,
+                () -> validator.validateRawManifest("Lamp", manifest));
+
+        org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                .contains("unsupported Assignments field")
+                .contains("triggered Transition");
     }
 
     private void assertVariableTrust(String templateName, String variableName, String expectedTrust)

@@ -58,7 +58,6 @@
 			"StartState": "",
 			"EndState": "on",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -67,7 +66,6 @@
 			"StartState": "",
 			"EndState": "off",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

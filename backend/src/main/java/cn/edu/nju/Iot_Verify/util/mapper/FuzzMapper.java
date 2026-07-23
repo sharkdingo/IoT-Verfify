@@ -4,6 +4,10 @@ import cn.edu.nju.Iot_Verify.component.fuzz.FuzzInputEventKind;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzInputEventSource;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzLimitationContract;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzMetadataPolicy;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelFingerprint;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelInputSnapshotCodec;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzEligibilityDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
@@ -17,14 +21,19 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRunSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.FuzzFindingPo;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzFindingSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.TraceStateIntegrity;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.stereotype.Component;
@@ -34,6 +43,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -47,8 +57,17 @@ public class FuzzMapper {
     private static final int MAX_ELIGIBILITY_REASON_CHARS = FuzzMetadataPolicy.MAX_ELIGIBILITY_REASON_CHARS;
     private static final int MAX_STABLE_CODE_CHARS = FuzzMetadataPolicy.MAX_STABLE_CODE_CHARS;
     private static final Pattern STABLE_CODE = Pattern.compile("^[A-Z][A-Z0-9_]*$");
+    private static final Pattern MODEL_FINGERPRINT = Pattern.compile("^[0-9a-f]{64}$");
+
+    private final FuzzModelFingerprint modelFingerprint;
+
+    public FuzzMapper(FuzzModelFingerprint modelFingerprint) {
+        this.modelFingerprint = Objects.requireNonNull(modelFingerprint, "modelFingerprint");
+    }
+
     public FuzzTaskDto toTaskDto(FuzzTaskPo task) {
         if (task == null) return null;
+        validateTaskLifecycle(task);
         return FuzzTaskDto.builder()
                 .id(task.getId())
                 .status(statusName(task))
@@ -73,6 +92,7 @@ public class FuzzMapper {
 
     public FuzzTaskSummaryDto toTaskSummaryDto(FuzzTaskPo task) {
         if (task == null) return null;
+        validateTaskLifecycle(task);
         return FuzzTaskSummaryDto.builder()
                 .id(task.getId())
                 .status(statusName(task))
@@ -246,6 +266,7 @@ public class FuzzMapper {
 
     public FuzzFindingDto toFindingDto(FuzzTaskPo task, FuzzFindingPo finding) {
         if (finding == null) return null;
+        validateTaskLifecycle(task);
         if (task == null
                 || finding.getId() == null
                 || !Objects.equals(task.getId(), finding.getFuzzTaskId())
@@ -298,7 +319,6 @@ public class FuzzMapper {
                 .seed(finding.getSeed())
                 .createdAt(finding.getCreatedAt())
                 .stateCount(data.states().size())
-                .dataAvailable(true)
                 .build();
     }
 
@@ -321,7 +341,6 @@ public class FuzzMapper {
                 .seed(finding.getSeed())
                 .createdAt(finding.getCreatedAt())
                 .stateCount(finding.getStateCount())
-                .dataAvailable(true)
                 .build();
     }
 
@@ -334,11 +353,11 @@ public class FuzzMapper {
     }
 
     private String statusName(FuzzTaskPo task) {
-        return task.getStatus() == null ? "UNKNOWN" : task.getStatus().name();
+        return task.getStatus().name();
     }
 
     private String statusName(FuzzTaskSummaryProjection task) {
-        return task.getStatus() == null ? "UNKNOWN" : task.getStatus().name();
+        return task.getStatus().name();
     }
 
     private Long runId(FuzzTaskPo task) {
@@ -350,9 +369,14 @@ public class FuzzMapper {
     }
 
     private List<String> readTargetSpecIds(FuzzTaskPo task) {
-        return JsonUtils.readPersistedJsonRequired("FuzzTask", task.getId(), "targetSpecIdsJson",
+        List<String> targetSpecIds = JsonUtils.readPersistedJsonRequired(
+                "FuzzTask", task.getId(), "targetSpecIdsJson",
                 task.getTargetSpecIdsJson(), () -> JsonUtils.fromJson(
                         task.getTargetSpecIdsJson(), new TypeReference<List<String>>() {}));
+        if (!validTargetSpecIds(targetSpecIds)) {
+            throw invalidTask(task, "targetSpecIdsJson", "target specification IDs are invalid");
+        }
+        return targetSpecIds;
     }
 
     private List<String> readTargetSpecIds(FuzzTaskSummaryProjection task) {
@@ -362,21 +386,39 @@ public class FuzzMapper {
     }
 
     private ModelRunSnapshotDto readModelSnapshot(FuzzTaskPo task) {
-        return JsonUtils.readPersistedJsonRequired("FuzzTask", task.getId(), "modelSnapshotJson",
+        ModelRunSnapshotDto snapshot = JsonUtils.readPersistedJsonRequired(
+                "FuzzTask", task.getId(), "modelSnapshotJson",
                 task.getModelSnapshotJson(), () -> JsonUtils.fromJson(
                         task.getModelSnapshotJson(), ModelRunSnapshotDto.class));
+        requireModelSnapshotShape(task.getId(), snapshot);
+        return snapshot;
     }
 
     private ModelRunSnapshotDto readModelSnapshot(FuzzTaskSummaryProjection task) {
-        return JsonUtils.readPersistedJsonRequired("FuzzTask", task.getId(), "modelSnapshotJson",
+        ModelRunSnapshotDto snapshot = JsonUtils.readPersistedJsonRequired(
+                "FuzzTask", task.getId(), "modelSnapshotJson",
                 task.getModelSnapshotJson(), () -> JsonUtils.fromJson(
                         task.getModelSnapshotJson(), ModelRunSnapshotDto.class));
+        requireModelSnapshotShape(task.getId(), snapshot);
+        return snapshot;
+    }
+
+    private void requireModelSnapshotShape(Long taskId, ModelRunSnapshotDto snapshot) {
+        if (snapshot == null || snapshot.getCapturedAt() == null || !snapshot.isTemplatesFrozen()
+                || snapshot.getDeviceCount() < 0 || snapshot.getRuleCount() < 0
+                || snapshot.getSpecificationCount() < 0
+                || snapshot.getEnvironmentVariableCount() < 0
+                || snapshot.getDeviceTemplateCount() < 0
+                || !validModelFingerprint(snapshot.getModelFingerprint())) {
+            throw new PersistedDataIntegrityException(
+                    "FuzzTask", taskId, "modelSnapshotJson", "model snapshot fields are invalid");
+        }
     }
 
     private ModelInputSnapshot readModelInputSnapshot(FuzzTaskPo task) {
         return JsonUtils.readPersistedJsonRequired("FuzzTask", task.getId(), "modelInputSnapshotJson",
-                task.getModelInputSnapshotJson(), () -> JsonUtils.fromJson(
-                        task.getModelInputSnapshotJson(), ModelInputSnapshot.class));
+                task.getModelInputSnapshotJson(), () -> FuzzModelInputSnapshotCodec.decode(
+                        task.getModelInputSnapshotJson()));
     }
 
     private FuzzEligibilityDto readEligibility(FuzzTaskPo task) {
@@ -463,16 +505,11 @@ public class FuzzMapper {
                     "FuzzFinding", finding.getId(), "firstViolationStep",
                     "stored trace is not truncated at the first violation");
         }
-        for (int index = 0; index < states.size(); index++) {
-            TraceStateDto state = states.get(index);
-            if (!Objects.equals(state.getStateIndex(), index)
-                    || state.getDevices() == null
-                    || state.getTriggeredRules() == null
-                    || state.getCompromisedAutomationLinks() == null) {
-                throw new PersistedDataIntegrityException(
-                        "FuzzFinding", finding.getId(), "statesJson",
-                        "state indices or required state collections are invalid");
-            }
+        try {
+            TraceStateIntegrity.requireValidStates(states, 0);
+        } catch (IllegalArgumentException exception) {
+            throw new PersistedDataIntegrityException(
+                    "FuzzFinding", finding.getId(), "statesJson", exception.getMessage());
         }
         if (inputEvents == null) {
             throw new PersistedDataIntegrityException(
@@ -481,9 +518,6 @@ public class FuzzMapper {
         int previousStep = -1;
         int previousSourceOrder = -1;
         for (FuzzInputEventDto event : inputEvents) {
-            if (event != null && !hasText(event.getSource())) {
-                event.setSource(FuzzInputEventSource.MODEL_CHOICE.name());
-            }
             if (event == null || event.getStep() < 0 || event.getStep() > violationStep
                     || !isPersistedInputEventKind(event.getKind())
                     || !isPersistedInputEventSource(event.getSource())
@@ -647,6 +681,7 @@ public class FuzzMapper {
 
     private PersistedRunWithFindings readAndValidateRun(
             FuzzTaskPo task, List<FuzzFindingPo> findings) {
+        validateTaskLifecycle(task);
         validateRunEvidence(task, findings);
         PersistedRunContext context = readAndValidateRunContext(
                 task, findings == null ? 0 : findings.size());
@@ -682,19 +717,19 @@ public class FuzzMapper {
                 || task.getPopulationSize() > 50) {
             throw invalidProjectedTask(task, "task budgets are invalid");
         }
+        validateProjectedLifecycle(task);
         List<String> targetSpecIds = readTargetSpecIds(task);
         if (!validTargetSpecIds(targetSpecIds)) {
             throw invalidProjectedTask(task, "target specification IDs are invalid");
         }
-        validateProjectedModelSnapshot(task, readModelSnapshot(task));
     }
 
     private ProjectedRunContext readAndValidateProjectedRunContext(
             FuzzTaskSummaryProjection task, List<FuzzFindingSummaryProjection> findings) {
+        validateTaskSummaryProjection(task);
         validateProjectedRunEvidence(task, findings);
         validateProjectedRequiredRunScalars(task);
         ModelRunSnapshotDto modelSnapshot = readModelSnapshot(task);
-        validateProjectedModelSnapshot(task, modelSnapshot);
         List<String> targetSpecIds = readTargetSpecIds(task);
         if (!validTargetSpecIds(targetSpecIds)) {
             throw invalidProjectedRun(task, "targetSpecIdsJson", "target specification IDs are invalid");
@@ -883,17 +918,6 @@ public class FuzzMapper {
         }
     }
 
-    private void validateProjectedModelSnapshot(
-            FuzzTaskSummaryProjection task, ModelRunSnapshotDto snapshot) {
-        if (snapshot == null || snapshot.getCapturedAt() == null || !snapshot.isTemplatesFrozen()
-                || snapshot.getDeviceCount() < 0 || snapshot.getRuleCount() < 0
-                || snapshot.getSpecificationCount() < 0
-                || snapshot.getEnvironmentVariableCount() < 0
-                || snapshot.getDeviceTemplateCount() < 0) {
-            throw invalidProjectedRun(task, "modelSnapshotJson", "model snapshot fields are invalid");
-        }
-    }
-
     private boolean validTargetSpecIds(List<String> targetSpecIds) {
         return targetSpecIds != null && targetSpecIds.size() <= 100
                 && targetSpecIds.stream().allMatch(id -> hasText(id) && id.length() <= 100)
@@ -921,7 +945,8 @@ public class FuzzMapper {
         FuzzEligibilityDto eligibility = readEligibility(task);
         requireMetadataSize(task.getId(), task.getEligibilityJson(), task.getLimitationsJson());
         List<String> limitations = normalizeLimitations(task, readLimitations(task));
-        Map<String, SpecificationDto> specificationsById = validateModelInputSnapshot(task, inputSnapshot);
+        FrozenInputData frozenInput = validateModelInputSnapshot(task, inputSnapshot);
+        Map<String, SpecificationDto> specificationsById = frozenInput.specificationsById();
         Set<String> expectedTargetIds = validateTargetSpecIds(
                 task, targetSpecIds, specificationsById);
         validateModelSnapshot(task, modelSnapshot, inputSnapshot);
@@ -935,7 +960,8 @@ public class FuzzMapper {
         PersistedRunData data = new PersistedRunData(
                 targetSpecIds, modelSnapshot, eligibility, limitations);
         return new PersistedRunContext(
-                data, specificationsById, new HashSet<>(eligibility.getEligibleSpecIds()));
+                data, specificationsById, new HashSet<>(eligibility.getEligibleSpecIds()),
+                frozenInput.rules(), frozenInput.tokenSources());
     }
 
     private void validateFindingAgainstRun(
@@ -959,6 +985,13 @@ public class FuzzMapper {
             throw invalidRun(task, "findings",
                     "findings must match eligible frozen specifications, ownership, time, and run seed");
         }
+        try {
+            TraceStateIntegrity.requireRuleEvidenceMatchesFrozenRules(
+                    findingData.states(), context.rules());
+        } catch (IllegalArgumentException exception) {
+            throw invalidRun(task, "findings", exception.getMessage());
+        }
+        validateFindingTokenSources(task, findingData.states(), context.tokenSources());
     }
 
     private void validateRequiredRunScalars(FuzzTaskPo task) {
@@ -991,6 +1024,154 @@ public class FuzzMapper {
         }
     }
 
+    private void validateTaskLifecycle(FuzzTaskPo task) {
+        if (task == null) {
+            throw new PersistedDataIntegrityException("FuzzTask", null, "task", "task is missing");
+        }
+        if (task.getId() == null || task.getId() < 1) {
+            throw invalidTask(task, "id", "task id is missing or invalid");
+        }
+        if (task.getUserId() == null || task.getUserId() < 1) {
+            throw invalidTask(task, "userId", "task owner is missing or invalid");
+        }
+        if (task.getStatus() == null) {
+            throw invalidTask(task, "status", "task status is missing");
+        }
+        if (task.getCreatedAt() == null) {
+            throw invalidTask(task, "createdAt", "task creation time is missing");
+        }
+        if (task.getProgress() == null || task.getProgress() < 0 || task.getProgress() > 100) {
+            throw invalidTask(task, "progress", "task progress must be between zero and 100");
+        }
+        if (task.getProcessingTimeMs() != null && task.getProcessingTimeMs() < 0) {
+            throw invalidTask(task, "processingTimeMs", "processing time cannot be negative");
+        }
+        if (task.getFindingCount() == null || task.getFindingCount() < 0) {
+            throw invalidTask(task, "findingCount", "finding count is missing or invalid");
+        }
+        if (task.getMaxIterations() == null || task.getMaxIterations() < 1
+                || task.getMaxIterations() > 5_000
+                || task.getPathLength() == null || task.getPathLength() < 1
+                || task.getPathLength() > 50
+                || task.getPopulationSize() == null || task.getPopulationSize() < 1
+                || task.getPopulationSize() > 50) {
+            throw invalidTask(task, "budgets", "task budgets are invalid");
+        }
+        if (task.getSeed() != null
+                && (task.getSeed() < 0 || task.getSeed() > FuzzRequestDto.JS_SAFE_SEED_MAX)) {
+            throw invalidTask(task, "seed", "requested seed is outside the safe range");
+        }
+        validateTimeOrder(task);
+
+        FuzzTaskPo.TaskStatus status = task.getStatus();
+        boolean terminal = status == FuzzTaskPo.TaskStatus.COMPLETED
+                || status == FuzzTaskPo.TaskStatus.FAILED
+                || status == FuzzTaskPo.TaskStatus.CANCELLED;
+        if (status == FuzzTaskPo.TaskStatus.PENDING && task.getStartedAt() != null) {
+            throw invalidTask(task, "startedAt", "pending task cannot have a start time");
+        }
+        if ((status == FuzzTaskPo.TaskStatus.RUNNING || status == FuzzTaskPo.TaskStatus.COMPLETED)
+                && task.getStartedAt() == null) {
+            throw invalidTask(task, "startedAt", "running or completed task start time is missing");
+        }
+        if (terminal) {
+            if (task.getCompletedAt() == null) {
+                throw invalidTask(task, "completedAt", "terminal task completion time is missing");
+            }
+            if (task.getProgress() != 100) {
+                throw invalidTask(task, "progress", "terminal task progress must be 100");
+            }
+        } else if (task.getCompletedAt() != null) {
+            throw invalidTask(task, "completedAt", "active task cannot have a completion time");
+        }
+        if (status == FuzzTaskPo.TaskStatus.FAILED
+                && (task.getErrorMessage() == null || task.getErrorMessage().isBlank())) {
+            throw invalidTask(task, "errorMessage", "failed task error message is missing");
+        }
+        if (status == FuzzTaskPo.TaskStatus.COMPLETED) {
+            if (task.getProcessingTimeMs() == null) {
+                throw invalidTask(task, "processingTimeMs", "completed task processing time is missing");
+            }
+            if (task.getOutcome() == null) {
+                throw invalidTask(task, "outcome", "completed task outcome is missing");
+            }
+        } else if (task.getOutcome() != null) {
+            throw invalidTask(task, "outcome", "non-completed task cannot have a run outcome");
+        }
+    }
+
+    private void validateTimeOrder(FuzzTaskPo task) {
+        if (task.getStartedAt() != null && task.getStartedAt().isBefore(task.getCreatedAt())) {
+            throw invalidTask(task, "startedAt", "task start time precedes creation time");
+        }
+        if (task.getCompletedAt() != null
+                && (task.getCompletedAt().isBefore(task.getCreatedAt())
+                || (task.getStartedAt() != null && task.getCompletedAt().isBefore(task.getStartedAt())))) {
+            throw invalidTask(task, "completedAt", "task completion time is out of order");
+        }
+        if (task.getProcessingTimeMs() != null
+                && (task.getStartedAt() == null || task.getCompletedAt() == null)) {
+            throw invalidTask(task, "processingTimeMs",
+                    "processing time requires start and completion times");
+        }
+    }
+
+    private void validateProjectedLifecycle(FuzzTaskSummaryProjection task) {
+        FuzzTaskPo.TaskStatus status = task.getStatus();
+        boolean terminal = status == FuzzTaskPo.TaskStatus.COMPLETED
+                || status == FuzzTaskPo.TaskStatus.FAILED
+                || status == FuzzTaskPo.TaskStatus.CANCELLED;
+        if (task.getProcessingTimeMs() != null && task.getProcessingTimeMs() < 0) {
+            throw invalidProjectedTask(task, "processing time cannot be negative");
+        }
+        if (task.getFindingCount() == null || task.getFindingCount() < 0) {
+            throw invalidProjectedTask(task, "finding count is missing or invalid");
+        }
+        if (task.getStartedAt() != null && task.getStartedAt().isBefore(task.getCreatedAt())) {
+            throw invalidProjectedTask(task, "task start time precedes creation time");
+        }
+        if (task.getCompletedAt() != null
+                && (task.getCompletedAt().isBefore(task.getCreatedAt())
+                || (task.getStartedAt() != null && task.getCompletedAt().isBefore(task.getStartedAt())))) {
+            throw invalidProjectedTask(task, "task completion time is out of order");
+        }
+        if (task.getProcessingTimeMs() != null
+                && (task.getStartedAt() == null || task.getCompletedAt() == null)) {
+            throw invalidProjectedTask(task, "processing time requires start and completion times");
+        }
+        if (status == FuzzTaskPo.TaskStatus.PENDING && task.getStartedAt() != null) {
+            throw invalidProjectedTask(task, "pending task cannot have a start time");
+        }
+        if ((status == FuzzTaskPo.TaskStatus.RUNNING || status == FuzzTaskPo.TaskStatus.COMPLETED)
+                && task.getStartedAt() == null) {
+            throw invalidProjectedTask(task, "running or completed task start time is missing");
+        }
+        if (terminal) {
+            if (task.getCompletedAt() == null || task.getProgress() != 100) {
+                throw invalidProjectedTask(task, "terminal task completion metadata is invalid");
+            }
+        } else if (task.getCompletedAt() != null) {
+            throw invalidProjectedTask(task, "active task cannot have a completion time");
+        }
+        if (status == FuzzTaskPo.TaskStatus.FAILED
+                && (task.getErrorMessage() == null || task.getErrorMessage().isBlank())) {
+            throw invalidProjectedTask(task, "failed task error message is missing");
+        }
+        if (status == FuzzTaskPo.TaskStatus.COMPLETED) {
+            if (task.getProcessingTimeMs() == null || task.getOutcome() == null) {
+                throw invalidProjectedTask(task, "completed task result metadata is incomplete");
+            }
+        } else if (task.getOutcome() != null) {
+            throw invalidProjectedTask(task, "non-completed task cannot have a run outcome");
+        }
+    }
+
+    private PersistedDataIntegrityException invalidTask(
+            FuzzTaskPo task, String field, String detail) {
+        return new PersistedDataIntegrityException(
+                "FuzzTask", task == null ? null : task.getId(), field, detail);
+    }
+
     private FuzzExplorationMode explorationMode(FuzzTaskPo task) {
         if (task == null || task.getExplorationMode() == null) {
             throw new PersistedDataIntegrityException(
@@ -1007,7 +1188,7 @@ public class FuzzMapper {
         return task.getExplorationMode();
     }
 
-    private Map<String, SpecificationDto> validateModelInputSnapshot(
+    private FrozenInputData validateModelInputSnapshot(
             FuzzTaskPo task, ModelInputSnapshot snapshot) {
         if (snapshot == null || snapshot.devices() == null || snapshot.rules() == null
                 || snapshot.specifications() == null || snapshot.environmentVariables() == null
@@ -1023,7 +1204,152 @@ public class FuzzMapper {
                         "frozen specifications have missing or duplicate identities");
             }
         }
-        return specificationsById;
+        if (snapshot.rules().stream().anyMatch(Objects::isNull)) {
+            throw invalidRun(task, "modelInputSnapshotJson", "frozen rules contain null");
+        }
+        return new FrozenInputData(
+                specificationsById, List.copyOf(snapshot.rules()), frozenTokenSources(task, snapshot));
+    }
+
+    private FrozenTokenSources frozenTokenSources(FuzzTaskPo task, ModelInputSnapshot snapshot) {
+        Map<String, ModelTokenSource> deviceSources = new LinkedHashMap<>();
+        Map<String, Set<String>> localVariablesByDevice = new LinkedHashMap<>();
+        Map<String, ModelTokenSource> environmentSources = new LinkedHashMap<>();
+        Map<String, DeviceManifest> manifestsByNormalizedName = new LinkedHashMap<>();
+        snapshot.templateManifests().forEach((name, manifest) -> {
+            if (hasText(name) && manifest != null) {
+                manifestsByNormalizedName.putIfAbsent(
+                        name.trim().toLowerCase(Locale.ROOT), manifest);
+            }
+        });
+        for (DeviceVerificationDto device : snapshot.devices()) {
+            if (device == null || !hasText(device.getVarName()) || !hasText(device.getTemplateName())) {
+                throw invalidRun(task, "modelInputSnapshotJson", "frozen device identity is invalid");
+            }
+            String deviceId = device.getVarName().trim();
+            ModelTokenSource source = device.getModelTokenSource();
+            if (source == null) {
+                throw invalidRun(task, "modelInputSnapshotJson",
+                        "frozen device token provenance is missing");
+            }
+            if (deviceSources.putIfAbsent(deviceId, source) != null) {
+                throw invalidRun(task, "modelInputSnapshotJson", "frozen device identities are duplicate");
+            }
+            DeviceManifest manifest = manifestsByNormalizedName.get(
+                    device.getTemplateName().trim().toLowerCase(Locale.ROOT));
+            if (manifest == null) {
+                throw invalidRun(task, "modelInputSnapshotJson",
+                        "frozen device template manifest is missing");
+            }
+            Set<String> locals = new LinkedHashSet<>();
+            Set<String> environment = new LinkedHashSet<>();
+            for (DeviceManifest.InternalVariable variable : safe(manifest.getInternalVariables())) {
+                if (variable == null || !hasText(variable.getName())) {
+                    throw invalidRun(task, "modelInputSnapshotJson",
+                            "frozen template variables are invalid");
+                }
+                if (Boolean.TRUE.equals(variable.getIsInside())) {
+                    if (!locals.add(variable.getName())) {
+                        throw invalidRun(task, "modelInputSnapshotJson",
+                                "frozen template local variables are duplicate");
+                    }
+                } else {
+                    environment.add(variable.getName());
+                }
+            }
+            for (String variable : safe(manifest.getImpactedVariables())) {
+                if (!hasText(variable)) {
+                    throw invalidRun(task, "modelInputSnapshotJson",
+                            "frozen template impacted variables are invalid");
+                }
+                environment.add(variable);
+            }
+            localVariablesByDevice.put(deviceId, Set.copyOf(locals));
+            for (String name : environment) {
+                ModelTokenSource existing = environmentSources.get(name);
+                environmentSources.put(name, existing == null || existing == source
+                        ? source : ModelTokenSource.UNKNOWN);
+            }
+        }
+        return new FrozenTokenSources(
+                Map.copyOf(deviceSources), Map.copyOf(localVariablesByDevice),
+                Map.copyOf(environmentSources));
+    }
+
+    private void validateFindingTokenSources(
+            FuzzTaskPo task, List<TraceStateDto> states, FrozenTokenSources expected) {
+        for (TraceStateDto state : states) {
+            Map<String, TraceDeviceDto> devicesById = new LinkedHashMap<>();
+            for (TraceDeviceDto device : safe(state.getDevices())) {
+                if (device == null || !hasText(device.getDeviceId())
+                        || devicesById.putIfAbsent(device.getDeviceId(), device) != null) {
+                    throw invalidRun(task, "findings", "finding device provenance identities are invalid");
+                }
+            }
+            if (!devicesById.keySet().equals(expected.deviceSources().keySet())) {
+                throw invalidRun(task, "findings",
+                        "finding device provenance does not match the frozen model input");
+            }
+            for (Map.Entry<String, TraceDeviceDto> entry : devicesById.entrySet()) {
+                String deviceId = entry.getKey();
+                ModelTokenSource source = expected.deviceSources().get(deviceId);
+                TraceDeviceDto device = entry.getValue();
+                if (device.getModelTokenSource() != source) {
+                    throw invalidRun(task, "findings",
+                            "finding device provenance does not match the frozen model input");
+                }
+                if (device.getVariables() == null) {
+                    throw invalidRun(task, "findings",
+                            "finding device provenance does not match the frozen model input");
+                }
+                Set<String> expectedLocals = expected.localVariablesByDevice().get(deviceId);
+                Set<String> localNames = new LinkedHashSet<>();
+                for (TraceVariableDto variable : device.getVariables()) {
+                    if (variable == null || !hasText(variable.getName())
+                            || !localNames.add(variable.getName())
+                            || !expectedLocals.contains(variable.getName())) {
+                        throw invalidRun(task, "findings",
+                                "finding local-variable provenance does not match the frozen model input");
+                    }
+                    if (variable.getModelTokenSource() != source) {
+                        throw invalidRun(task, "findings",
+                                "finding local-variable provenance does not match the frozen model input");
+                    }
+                }
+                if (!localNames.equals(expectedLocals)) {
+                    throw invalidRun(task, "findings",
+                            "finding local variables do not match the frozen model input");
+                }
+            }
+            if (state.getEnvVariables() == null) {
+                if (!expected.environmentSources().isEmpty()) {
+                    throw invalidRun(task, "findings", "finding environment provenance is missing");
+                }
+                continue;
+            }
+            Set<String> environmentNames = new LinkedHashSet<>();
+            for (TraceVariableDto variable : state.getEnvVariables()) {
+                ModelTokenSource source = variable == null || !hasText(variable.getName())
+                        ? null : expected.environmentSources().get(variable.getName());
+                if (variable == null || !environmentNames.add(variable.getName())
+                        || source == null) {
+                    throw invalidRun(task, "findings",
+                            "finding environment provenance does not match the frozen model input");
+                }
+                if (variable.getModelTokenSource() != source) {
+                    throw invalidRun(task, "findings",
+                            "finding environment provenance does not match the frozen model input");
+                }
+            }
+            if (!environmentNames.equals(expected.environmentSources().keySet())) {
+                throw invalidRun(task, "findings",
+                        "finding environment variables do not match the frozen model input");
+            }
+        }
+    }
+
+    private <T> List<T> safe(List<T> values) {
+        return values == null ? List.of() : values;
     }
 
     private Set<String> validateTargetSpecIds(
@@ -1051,17 +1377,19 @@ public class FuzzMapper {
 
     private void validateModelSnapshot(
             FuzzTaskPo task, ModelRunSnapshotDto snapshot, ModelInputSnapshot inputSnapshot) {
-        if (snapshot == null || snapshot.getCapturedAt() == null || !snapshot.isTemplatesFrozen()
-                || snapshot.getDeviceCount() < 0 || snapshot.getRuleCount() < 0
-                || snapshot.getSpecificationCount() < 0 || snapshot.getEnvironmentVariableCount() < 0
-                || snapshot.getDeviceTemplateCount() < 0
-                || snapshot.getDeviceCount() != inputSnapshot.devices().size()
+        if (snapshot.getDeviceCount() != inputSnapshot.devices().size()
                 || snapshot.getRuleCount() != inputSnapshot.rules().size()
                 || snapshot.getSpecificationCount() != inputSnapshot.specifications().size()
                 || snapshot.getEnvironmentVariableCount() != inputSnapshot.environmentVariables().size()
-                || snapshot.getDeviceTemplateCount() != inputSnapshot.templateManifests().size()) {
+                || snapshot.getDeviceTemplateCount() != inputSnapshot.templateManifests().size()
+                || !Objects.equals(snapshot.getModelFingerprint(),
+                        modelFingerprint.modelFingerprint(inputSnapshot))) {
             throw invalidRun(task, "modelSnapshotJson", "model snapshot fields are invalid");
         }
+    }
+
+    private boolean validModelFingerprint(String fingerprint) {
+        return fingerprint != null && MODEL_FINGERPRINT.matcher(fingerprint).matches();
     }
 
     private void validateEligibility(FuzzTaskPo task,
@@ -1213,7 +1541,21 @@ public class FuzzMapper {
     private record PersistedRunContext(
             PersistedRunData data,
             Map<String, SpecificationDto> specificationsById,
-            Set<String> eligibleIds) {
+            Set<String> eligibleIds,
+            List<RuleDto> rules,
+            FrozenTokenSources tokenSources) {
+    }
+
+    private record FrozenInputData(
+            Map<String, SpecificationDto> specificationsById,
+            List<RuleDto> rules,
+            FrozenTokenSources tokenSources) {
+    }
+
+    private record FrozenTokenSources(
+            Map<String, ModelTokenSource> deviceSources,
+            Map<String, Set<String>> localVariablesByDevice,
+            Map<String, ModelTokenSource> environmentSources) {
     }
 
     private record PersistedRunWithFindings(

@@ -38,7 +38,7 @@ public class TraceDto {
     @NotNull(message = "User ID is required")
     private Long userId;
     
-    /** Owning completed verification-run id. Legacy orphan traces may have no owner. */
+    /** Owning completed verification-run id; absent only before a result is persisted. */
     private Long verificationTaskId;
     
     /**

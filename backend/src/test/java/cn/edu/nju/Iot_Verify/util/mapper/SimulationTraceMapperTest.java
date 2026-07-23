@@ -2,9 +2,12 @@ package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.projection.SimulationTraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
+import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -23,8 +26,15 @@ class SimulationTraceMapperTest {
     private static final String VALID_STATE_JSON = "{\"stateIndex\":1,\"devices\":[],"
             + "\"triggeredRules\":[],\"compromisedAutomationLinks\":[]}";
     private static final String MODEL_SNAPSHOT_JSON = "{\"capturedAt\":\"2026-07-12T09:30:00\","
-            + "\"deviceCount\":1,\"ruleCount\":1,\"specificationCount\":0,"
+            + "\"deviceCount\":1,\"ruleCount\":2,\"specificationCount\":0,"
             + "\"environmentVariableCount\":0,\"deviceTemplateCount\":1,\"templatesFrozen\":true}";
+    private static final String MODEL_SEMANTICS_JSON = JsonUtils.toJson(
+            ModelSemanticsDto.forRun(AttackScenarioDto.anyUpToBudget(2), true, 1, 2, 1));
+    private static final String VALID_REQUEST_JSON = "{\"devices\":[],\"rules\":["
+            + "{\"id\":42,\"ruleString\":\"Rule A\"},"
+            + "{\"id\":43,\"ruleString\":\"Rule B\"}],\"steps\":10,"
+            + "\"attackScenario\":{\"mode\":\"ANY_UP_TO_BUDGET\",\"budget\":2},"
+            + "\"enablePrivacy\":true}";
 
     private static String stateJson(int stateIndex) {
         return "{\"stateIndex\":" + stateIndex + ",\"devices\":[],"
@@ -42,9 +52,10 @@ class SimulationTraceMapperTest {
                 .stateCount(4)
                 .logsJson("[\"log1\",\"log2\"]")
                 .nusmvOutput("raw output")
-                .requestJson("{\"devices\":[],\"rules\":[],\"steps\":10,\"isAttack\":true,\"attackBudget\":2,\"enablePrivacy\":true}")
+                .requestJson(VALID_REQUEST_JSON)
                 .templateSnapshotsJson("{\"light\":{\"Name\":\"Light\"}}")
                 .modelSnapshotJson(MODEL_SNAPSHOT_JSON)
+                .modelSemanticsJson(MODEL_SEMANTICS_JSON)
                 .isAttack(true)
                 .attackBudget(2)
                 .enablePrivacy(true)
@@ -72,7 +83,7 @@ class SimulationTraceMapperTest {
         assertEquals(4, dto.getStates().size());
         assertEquals(List.of("log1", "log2"), dto.getLogs());
         assertEquals("raw output", dto.getNusmvOutput());
-        assertTrue(dto.getRequestJson().contains("\"isAttack\":true"));
+        assertTrue(dto.getRequestJson().contains("\"mode\":\"ANY_UP_TO_BUDGET\""));
         assertEquals(Boolean.TRUE, dto.getAttack());
         assertEquals(2, dto.getAttackBudget());
         assertEquals(Boolean.TRUE, dto.getEnablePrivacy());
@@ -127,17 +138,40 @@ class SimulationTraceMapperTest {
     }
 
     @Test
-    void toDto_normalizesLegacyStatesWithoutRuleEventLists() {
+    void toDto_rejectsStatesWithoutRequiredRuleEventLists() {
         SimulationTracePo po = samplePo();
         po.setStatesJson("[{\"stateIndex\":1,\"devices\":[]}]");
         po.setSteps(0);
         po.setStateCount(1);
 
-        SimulationTraceDto dto = mapper.toDto(po);
+        assertEquals("statesJson", assertThrows(
+                PersistedDataIntegrityException.class, () -> mapper.toDto(po)).getField());
+    }
 
-        assertEquals(1, dto.getStates().size());
-        assertTrue(dto.getStates().get(0).getTriggeredRules().isEmpty());
-        assertTrue(dto.getStates().get(0).getCompromisedAutomationLinks().isEmpty());
+    @Test
+    void toDto_bindsRuleEvidenceToTheFrozenRequestSnapshot() {
+        SimulationTracePo valid = samplePo();
+        valid.setStatesJson("[{\"stateIndex\":1,\"devices\":[],"
+                + "\"triggeredRules\":[{\"ruleIndex\":1,\"ruleId\":\"43\","
+                + "\"ruleLabel\":\"Rule B\"}],\"compromisedAutomationLinks\":[]}]");
+        valid.setSteps(0);
+        valid.setStateCount(1);
+        assertDoesNotThrow(() -> mapper.toDto(valid));
+
+        for (String evidence : List.of(
+                "{\"ruleIndex\":2}",
+                "{\"ruleIndex\":1,\"ruleId\":\"99\",\"ruleLabel\":\"Rule B\"}",
+                "{\"ruleIndex\":1,\"ruleId\":\"43\",\"ruleLabel\":\"Forged\"}")) {
+            SimulationTracePo corrupt = samplePo();
+            corrupt.setStatesJson("[{\"stateIndex\":1,\"devices\":[],"
+                    + "\"triggeredRules\":[],\"compromisedAutomationLinks\":["
+                    + evidence + "]}]");
+            corrupt.setSteps(0);
+            corrupt.setStateCount(1);
+
+            assertEquals("statesJson", assertThrows(
+                    PersistedDataIntegrityException.class, () -> mapper.toDto(corrupt)).getField());
+        }
     }
 
     @Test
@@ -185,42 +219,32 @@ class SimulationTraceMapperTest {
         missingPrivacy.setEnablePrivacy(null);
         assertEquals("enablePrivacy", assertThrows(
                 PersistedDataIntegrityException.class, () -> mapper.toDto(missingPrivacy)).getField());
+
+        SimulationTracePo missingSemantics = samplePo();
+        missingSemantics.setModelSemanticsJson(null);
+        assertEquals("modelSemanticsJson", assertThrows(
+                PersistedDataIntegrityException.class, () -> mapper.toDto(missingSemantics)).getField());
     }
 
     @Test
-    void summaryProjectionMapsWithoutDetailOnlySnapshots() {
-        SimulationTraceSummaryProjection projection = mock(SimulationTraceSummaryProjection.class);
-        when(projection.getId()).thenReturn(4L);
-        when(projection.getRequestedSteps()).thenReturn(10);
-        when(projection.getSteps()).thenReturn(2);
-        when(projection.getStateCount()).thenReturn(3);
-        when(projection.getLogsJson()).thenReturn("[]");
-        when(projection.getGenerationIssuesJson()).thenReturn("[]");
-        when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
+    void summaryProjectionRejectsInconsistentAttackContext() {
+        SimulationTraceSummaryProjection projection = validProjection(4L);
         when(projection.getIsAttack()).thenReturn(false);
         when(projection.getAttackBudget()).thenReturn(9);
         when(projection.getEnablePrivacy()).thenReturn(false);
 
-        SimulationTraceSummaryDto summary = mapper.toSummaryProjectionDto(projection);
-
-        assertEquals(4L, summary.getId());
-        assertEquals(2, summary.getSteps());
-        assertEquals(0, summary.getAttackBudget());
-        assertTrue(summary.getDataAvailable());
+        assertEquals("attackBudget", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toSummaryProjectionDto(projection)).getField());
     }
 
     @Test
     void summaryProjectionList_isolatesMissingPersistedRunContext() {
-        SimulationTraceSummaryProjection projection = mock(SimulationTraceSummaryProjection.class);
-        when(projection.getId()).thenReturn(5L);
+        SimulationTraceSummaryProjection projection = validProjection(5L);
         when(projection.getRequestedSteps()).thenReturn(1);
         when(projection.getSteps()).thenReturn(0);
         when(projection.getStateCount()).thenReturn(1);
-        when(projection.getLogsJson()).thenReturn("[]");
-        when(projection.getGenerationIssuesJson()).thenReturn("[]");
-        when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
-        when(projection.getIsAttack()).thenReturn(false);
-        when(projection.getAttackBudget()).thenReturn(0);
+        when(projection.getStatesJson()).thenReturn("[" + stateJson(1) + "]");
         when(projection.getEnablePrivacy()).thenReturn((Boolean) null);
 
         List<SimulationTraceSummaryDto> list = mapper.toSummaryProjectionDtoList(List.of(projection));
@@ -229,5 +253,127 @@ class SimulationTraceMapperTest {
         assertFalse(list.get(0).getDataAvailable());
         assertEquals(5L, list.get(0).getId());
         assertEquals("PERSISTED_SEMANTIC_DATA_INVALID", list.get(0).getUnavailableReasonCode());
+    }
+
+    @Test
+    void summaryProjectionListDoesNotMisreportProgrammingErrorsAsCorruptData() {
+        SimulationTraceSummaryProjection projection = mock(SimulationTraceSummaryProjection.class);
+        when(projection.getId()).thenThrow(new IllegalStateException("unexpected mapper bug"));
+
+        assertThrows(IllegalStateException.class,
+                () -> mapper.toSummaryProjectionDtoList(List.of(projection)));
+    }
+
+    @Test
+    void emptyOrContradictoryStructuredContextFailsClosed() {
+        SimulationTracePo emptySemantics = samplePo();
+        emptySemantics.setModelSemanticsJson("{}");
+        assertEquals("modelSemanticsJson", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toDto(emptySemantics)).getField());
+
+        SimulationTracePo emptySnapshot = samplePo();
+        emptySnapshot.setModelSnapshotJson("{}");
+        assertEquals("modelSnapshotJson", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toDto(emptySnapshot)).getField());
+
+        SimulationTracePo contradictoryCounts = samplePo();
+        contradictoryCounts.setModeledDeviceAttackPointCount(0);
+        assertEquals("modelSemanticsJson", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toDto(contradictoryCounts)).getField());
+    }
+
+    @Test
+    void summaryProjectionValidatesSemanticsThatAreNotReturnedInTheSummary() {
+        SimulationTraceSummaryProjection projection = validProjection(6L);
+        when(projection.getModelSemanticsJson()).thenReturn("{}");
+
+        assertEquals("modelSemanticsJson", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toSummaryProjectionDto(projection)).getField());
+    }
+
+    @Test
+    void summaryProjectionValidatesStatesAndMapsSummary() {
+        SimulationTraceSummaryDto summary = mapper.toSummaryProjectionDto(validProjection(7L));
+
+        assertEquals(7L, summary.getId());
+        assertEquals(2, summary.getSteps());
+        assertTrue(summary.getDataAvailable());
+    }
+
+    @Test
+    void summaryProjectionRejectsMalformedStatesJson() {
+        SimulationTraceSummaryProjection projection = validProjection(8L);
+        when(projection.getStatesJson()).thenReturn("{ not valid json");
+
+        assertEquals("statesJson", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toSummaryProjectionDto(projection)).getField());
+    }
+
+    @Test
+    void summaryProjectionRejectsOutOfRangeFrozenRuleEvidence() {
+        SimulationTraceSummaryProjection projection = validProjection(11L);
+        when(projection.getStatesJson()).thenReturn(
+                "[{\"stateIndex\":1,\"devices\":[],\"triggeredRules\":[],"
+                        + "\"compromisedAutomationLinks\":[]},"
+                        + "{\"stateIndex\":2,\"devices\":[],"
+                        + "\"triggeredRules\":[{\"ruleIndex\":2}],"
+                        + "\"compromisedAutomationLinks\":[]},"
+                        + "{\"stateIndex\":3,\"devices\":[],\"triggeredRules\":[],"
+                        + "\"compromisedAutomationLinks\":[]}]");
+
+        assertEquals("statesJson", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toSummaryProjectionDto(projection)).getField());
+    }
+
+    @Test
+    void summaryProjectionRejectsEmptyStructurallyInvalidOrNonSequentialStates() {
+        for (String statesJson : List.of(
+                "[]", "[{}]", "[" + stateJson(2) + "]")) {
+            SimulationTraceSummaryProjection projection = validProjection(9L);
+            when(projection.getStatesJson()).thenReturn(statesJson);
+
+            assertEquals("statesJson", assertThrows(
+                    PersistedDataIntegrityException.class,
+                    () -> mapper.toSummaryProjectionDto(projection)).getField());
+        }
+    }
+
+    @Test
+    void summaryProjectionRejectsStateCountMismatch() {
+        SimulationTraceSummaryProjection projection = validProjection(10L);
+        when(projection.getStatesJson()).thenReturn(
+                "[" + stateJson(1) + "," + stateJson(2) + "]");
+
+        assertEquals("stateCount", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toSummaryProjectionDto(projection)).getField());
+    }
+
+    private SimulationTraceSummaryProjection validProjection(Long id) {
+        SimulationTraceSummaryProjection projection = mock(SimulationTraceSummaryProjection.class);
+        when(projection.getId()).thenReturn(id);
+        when(projection.getRequestedSteps()).thenReturn(10);
+        when(projection.getSteps()).thenReturn(2);
+        when(projection.getStateCount()).thenReturn(3);
+        when(projection.getStatesJson()).thenReturn(
+                "[" + stateJson(1) + "," + stateJson(2) + "," + stateJson(3) + "]");
+        when(projection.getLogsJson()).thenReturn("[]");
+        when(projection.getGenerationIssuesJson()).thenReturn("[]");
+        when(projection.getRequestJson()).thenReturn(VALID_REQUEST_JSON);
+        when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
+        when(projection.getModelSemanticsJson()).thenReturn(MODEL_SEMANTICS_JSON);
+        when(projection.getIsAttack()).thenReturn(true);
+        when(projection.getAttackBudget()).thenReturn(2);
+        when(projection.getEnablePrivacy()).thenReturn(true);
+        when(projection.getModeledDeviceAttackPointCount()).thenReturn(1);
+        when(projection.getModeledFalsifiableReadingDeviceCount()).thenReturn(1);
+        when(projection.getModeledAutomationLinkAttackPointCount()).thenReturn(2);
+        return projection;
     }
 }

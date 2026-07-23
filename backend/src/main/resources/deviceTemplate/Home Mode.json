@@ -80,7 +80,6 @@
 				"Relation": "=",
 				"Value": "sendingAlertMessage"
 			},
-			"Assignments": [],
 			"Description": ""
 		},
 		{
@@ -92,7 +91,6 @@
 				"Relation": "=",
 				"Value": "sendingPhoto"
 			},
-			"Assignments": [],
 			"Description": ""
 		}
 	],
@@ -102,7 +100,6 @@
 			"StartState": "",
 			"EndState": "home;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -111,7 +108,6 @@
 			"StartState": "",
 			"EndState": "away;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -120,7 +116,6 @@
 			"StartState": "",
 			"EndState": "sleep;",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -129,7 +124,6 @@
 			"StartState": "",
 			"EndState": ";sendingAlertMessage",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -138,7 +132,6 @@
 			"StartState": "",
 			"EndState": ";sendingPhoto",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"AcceptsContent": true,
 			"Description": ""

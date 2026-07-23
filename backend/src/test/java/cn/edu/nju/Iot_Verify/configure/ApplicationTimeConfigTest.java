@@ -63,11 +63,13 @@ class ApplicationTimeConfigTest {
     }
 
     @Test
-    void legacyLocalTimestampRemainsReadableButWrongOffsetIsRejected() throws Exception {
+    void offsetTimestampIsRequiredAndMustMatchTheConfiguredZone() throws Exception {
         ObjectMapper objectMapper = configuredObjectMapper(ZoneId.of("Asia/Shanghai"));
 
         assertEquals(LocalDateTime.of(2026, 7, 22, 14, 30),
-                objectMapper.readValue("\"2026-07-22T14:30:00\"", LocalDateTime.class));
+                objectMapper.readValue("\"2026-07-22T14:30:00+08:00\"", LocalDateTime.class));
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> objectMapper.readValue("\"2026-07-22T14:30:00\"", LocalDateTime.class));
         assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
                 () -> objectMapper.readValue("\"2026-07-22T14:30:00Z\"", LocalDateTime.class));
     }

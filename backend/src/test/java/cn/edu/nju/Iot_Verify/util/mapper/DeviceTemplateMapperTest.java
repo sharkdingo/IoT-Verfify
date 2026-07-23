@@ -40,4 +40,20 @@ class DeviceTemplateMapperTest {
 
         assertEquals("manifestJson", error.getField());
     }
+
+    @Test
+    void missingTemplateProvenanceFailsClosed() {
+        DeviceTemplatePo po = DeviceTemplatePo.builder()
+                .id(3L)
+                .userId(1L)
+                .name("Light")
+                .defaultTemplate(null)
+                .manifestJson("{\"Name\":\"Light\"}")
+                .build();
+
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class, () -> mapper.toDto(po));
+
+        assertEquals("defaultTemplate", error.getField());
+    }
 }

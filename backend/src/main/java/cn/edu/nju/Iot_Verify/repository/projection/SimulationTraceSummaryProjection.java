@@ -2,7 +2,7 @@ package cn.edu.nju.Iot_Verify.repository.projection;
 
 import java.time.LocalDateTime;
 
-/** Closed projection for simulation history; excludes request snapshots and raw NuSMV output. */
+/** Closed projection for simulation history; requestJson is used only for integrity validation. */
 public interface SimulationTraceSummaryProjection {
 
     Long getId();
@@ -10,6 +10,8 @@ public interface SimulationTraceSummaryProjection {
     int getRequestedSteps();
 
     int getSteps();
+
+    String getStatesJson();
 
     Integer getStateCount();
 
@@ -19,11 +21,21 @@ public interface SimulationTraceSummaryProjection {
 
     String getModelSnapshotJson();
 
+    String getModelSemanticsJson();
+
+    String getRequestJson();
+
     Boolean getIsAttack();
 
     Integer getAttackBudget();
 
     Boolean getEnablePrivacy();
+
+    Integer getModeledDeviceAttackPointCount();
+
+    Integer getModeledFalsifiableReadingDeviceCount();
+
+    Integer getModeledAutomationLinkAttackPointCount();
 
     LocalDateTime getCreatedAt();
 }

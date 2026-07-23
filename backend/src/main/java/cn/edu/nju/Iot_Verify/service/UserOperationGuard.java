@@ -66,19 +66,26 @@ public class UserOperationGuard {
         for (int slot = 0; slot < slots; slot++) {
             String key = "iot-verify:operation:" + kind.name().toLowerCase() + ":" + userId + ":" + slot;
             if (localSlots.putIfAbsent(key, token) != null) continue;
+            long confirmationStartedNanos = System.nanoTime();
+            Boolean acquired;
             try {
-                Boolean acquired = redisTemplate.opsForValue().setIfAbsent(key, token, effectiveTtl);
-                if (Boolean.TRUE.equals(acquired)) {
-                    Lease lease = new Lease(key, token, true, effectiveTtl);
-                    renewableLeases.put(key, lease);
-                    return lease;
-                }
-                localSlots.remove(key, token);
+                acquired = redisTemplate.opsForValue().setIfAbsent(key, token, effectiveTtl);
             } catch (RuntimeException e) {
                 redisAvailable = false;
                 log.warn("Redis operation admission is unavailable; using local guard for {}: {}", kind, e.toString());
-                return new Lease(key, token, false, effectiveTtl);
+                return new Lease(key, token, false, effectiveTtl, confirmationStartedNanos);
             }
+            if (Boolean.TRUE.equals(acquired)) {
+                Lease lease = new Lease(key, token, true, effectiveTtl, confirmationStartedNanos);
+                renewableLeases.put(key, lease);
+                if (!lease.isActive()) {
+                    lease.close();
+                    throw new ServiceUnavailableException(
+                            "The operation admission response arrived after its lease TTL expired.");
+                }
+                return lease;
+            }
+            localSlots.remove(key, token);
         }
         String scope = redisAvailable ? "all backend instances" : "this backend instance";
         throw new UserOperationBusyException(
@@ -132,25 +139,35 @@ public class UserOperationGuard {
         private final long ttlMillis;
         private volatile boolean closed;
         private volatile boolean lost;
-        private volatile long lastConfirmedNanos = System.nanoTime();
+        private volatile long lastConfirmedNanos;
         private volatile Thread ownerThread = Thread.currentThread();
 
-        private Lease(String key, String token, boolean redisBacked, Duration ttl) {
+        private Lease(String key,
+                      String token,
+                      boolean redisBacked,
+                      Duration ttl,
+                      long lastConfirmedNanos) {
             this.key = key;
             this.token = token;
             this.redisBacked = redisBacked;
             this.ttlMillis = Math.max(1, ttl.toMillis());
+            this.lastConfirmedNanos = lastConfirmedNanos;
         }
 
         private synchronized void renew() {
-            if (closed || !redisBacked) return;
+            if (closed || lost || !redisBacked) return;
+            long confirmationStartedNanos = System.nanoTime();
             try {
                 Long renewed = redisTemplate.execute(
                         RENEW_SCRIPT, java.util.List.of(key), token, Long.toString(ttlMillis));
                 if (!Long.valueOf(1L).equals(renewed)) {
                     markLost("the distributed lease is no longer owned by this worker");
                 } else {
-                    lastConfirmedNanos = System.nanoTime();
+                    lastConfirmedNanos = confirmationStartedNanos;
+                    if (System.nanoTime() - lastConfirmedNanos
+                            >= Duration.ofMillis(ttlMillis).toNanos()) {
+                        markLost("the distributed lease renewal response arrived after its TTL expired");
+                    }
                 }
             } catch (RuntimeException e) {
                 long elapsed = System.nanoTime() - lastConfirmedNanos;

@@ -29,8 +29,8 @@ export type TraceDeviceLike = {
 export type TraceStateLike = {
   devices?: TraceDeviceLike[]
   envVariables?: TraceVariableLike[]
-  triggeredRules?: Array<{ ruleId?: string | null; ruleLabel?: string | null }>
-  compromisedAutomationLinks?: Array<{ ruleId?: string | null; ruleLabel?: string | null }>
+  triggeredRules?: Array<{ ruleIndex: number; ruleId?: string | null; ruleLabel?: string | null }>
+  compromisedAutomationLinks?: Array<{ ruleIndex: number; ruleId?: string | null; ruleLabel?: string | null }>
 }
 
 export type TracePlaybackLike = {
@@ -261,35 +261,60 @@ export const getTraceEdgeEvaluationIndex = (trace: TracePlaybackLike) => {
   return selectedIndex > 0 ? selectedIndex - 1 : selectedIndex
 }
 
+type FrozenRuleIdentity = {
+  ruleIndex: number
+  ruleId?: string | null
+}
+
+const edgeMatchesFrozenRule = (
+  edge: DeviceEdge,
+  allEdges: DeviceEdge[],
+  frozenRule: FrozenRuleIdentity
+): boolean => {
+  if (!edge.ruleId || frozenRule.ruleId == null || !Number.isSafeInteger(edge.ruleIndex)) {
+    return false
+  }
+  if (String(edge.ruleId) !== String(frozenRule.ruleId)) return false
+
+  const currentIndexes = new Set<number>()
+  for (const candidate of allEdges) {
+    if (candidate.ruleId == null || String(candidate.ruleId) !== String(edge.ruleId)) continue
+    if (!Number.isSafeInteger(candidate.ruleIndex)) return false
+    currentIndexes.add(candidate.ruleIndex as number)
+  }
+  return currentIndexes.size === 1 && currentIndexes.has(edge.ruleIndex as number)
+}
+
 export const isEdgeActiveInTrace = (
   edge: DeviceEdge,
-  _allEdges: DeviceEdge[],
+  allEdges: DeviceEdge[],
   trace: TracePlaybackLike
 ): boolean => {
   if (!trace?.states || trace.selectedStateIndex === undefined || trace.selectedStateIndex < 0) return false
-  if (!edge.ruleId) return false
   const triggeredRules = trace.states[trace.selectedStateIndex]?.triggeredRules
   if (!Array.isArray(triggeredRules)) return false
-  return triggeredRules.some(rule => rule.ruleId != null && String(rule.ruleId) === String(edge.ruleId))
+  return triggeredRules.some(rule => edgeMatchesFrozenRule(edge, allEdges, rule))
 }
 
 export const isEdgeCompromisedInTrace = (
   edge: DeviceEdge,
+  allEdges: DeviceEdge[],
   trace: TracePlaybackLike
 ): boolean => {
   if (!trace?.states || trace.selectedStateIndex === undefined || trace.selectedStateIndex < 0) return false
-  if (!edge.ruleId) return false
   const compromisedLinks = trace.states[trace.selectedStateIndex]?.compromisedAutomationLinks
   if (!Array.isArray(compromisedLinks)) return false
-  return compromisedLinks.some(rule => rule.ruleId != null && String(rule.ruleId) === String(edge.ruleId))
+  return compromisedLinks.some(rule => edgeMatchesFrozenRule(edge, allEdges, rule))
 }
 
 export const shouldAnimateEdgeFlow = (
   edge: DeviceEdge,
+  allEdges: DeviceEdge[],
   trace: TracePlaybackLike
 ): boolean => {
   if (!trace?.states || trace.selectedStateIndex === undefined || trace.selectedStateIndex < 0) {
     return false
   }
-  return isEdgeActiveInTrace(edge, [], trace) && !isEdgeCompromisedInTrace(edge, trace)
+  return isEdgeActiveInTrace(edge, allEdges, trace)
+    && !isEdgeCompromisedInTrace(edge, allEdges, trace)
 }

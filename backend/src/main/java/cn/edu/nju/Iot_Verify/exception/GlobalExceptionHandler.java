@@ -124,6 +124,17 @@ public class GlobalExceptionHandler {
         return json(HttpStatus.CONFLICT).body(result);
     }
 
+    @ExceptionHandler(DeviceRuntimeConflictException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleDeviceRuntimeConflictException(
+            DeviceRuntimeConflictException e) {
+        log.warn("Device runtime compare-and-set conflict");
+        Result<Map<String, Object>> result = Result.error(HttpStatus.CONFLICT.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", DeviceRuntimeConflictException.REASON_CODE,
+                "currentDevice", e.getCurrentDevice()));
+        return json(HttpStatus.CONFLICT).body(result);
+    }
+
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<Result<Void>> handleConflictException(ConflictException e) {
         log.warn("Conflict response [{}]", e.getCode());

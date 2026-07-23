@@ -92,19 +92,19 @@ const states = (prefix: string): SimulationState[] => [
     stateIndex: 1,
     triggeredRules: [],
     compromisedAutomationLinks: [],
-    devices: [{ deviceId: `${prefix}_sensor`, deviceLabel: `${prefix} sensor`, templateName: 'Sensor', state: 'idle', variables: [] }]
+    devices: [{ deviceId: `${prefix}_sensor`, deviceLabel: `${prefix} sensor`, templateName: 'Sensor', modelTokenSource: 'UNKNOWN', state: 'idle', variables: [] }]
   },
   {
     stateIndex: 2,
-    triggeredRules: [{ ruleId: 'rule-1', ruleLabel: `${prefix} activation` }],
+    triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: `${prefix} activation` }],
     compromisedAutomationLinks: [],
-    devices: [{ deviceId: `${prefix}_sensor`, deviceLabel: `${prefix} sensor`, templateName: 'Sensor', state: 'active', variables: [] }]
+    devices: [{ deviceId: `${prefix}_sensor`, deviceLabel: `${prefix} sensor`, templateName: 'Sensor', modelTokenSource: 'UNKNOWN', state: 'active', variables: [] }]
   },
   {
     stateIndex: 3,
     triggeredRules: [],
     compromisedAutomationLinks: [],
-    devices: [{ deviceId: `${prefix}_sensor`, deviceLabel: `${prefix} sensor`, templateName: 'Sensor', state: 'done', variables: [] }]
+    devices: [{ deviceId: `${prefix}_sensor`, deviceLabel: `${prefix} sensor`, templateName: 'Sensor', modelTokenSource: 'UNKNOWN', state: 'done', variables: [] }]
   }
 ]
 
@@ -208,9 +208,9 @@ describe('SimulationTimeline', () => {
             stateIndex: 1,
             triggeredRules: [],
             compromisedAutomationLinks: [],
-            devices: [{ deviceId: 'sensor_1', deviceLabel: 'Sensor', templateName: 'Sensor', variables: [] }],
-            envVariables: [{ name: 'attackBudget', value: '9' }],
-            globalVariables: [{ name: 'compromisedPointCount', value: '4' }]
+            devices: [{ deviceId: 'sensor_1', deviceLabel: 'Sensor', templateName: 'Sensor', modelTokenSource: 'UNKNOWN', variables: [] }],
+            envVariables: [{ name: 'attackBudget', value: '9', modelTokenSource: 'UNKNOWN' }],
+            globalVariables: [{ name: 'compromisedPointCount', value: '4', modelTokenSource: 'UNKNOWN' }]
           }
         ]
       },
@@ -288,8 +288,8 @@ describe('SimulationTimeline', () => {
             stateIndex: 1,
             triggeredRules: [],
             compromisedAutomationLinks: [],
-            devices: [{ deviceId: 'sensor_1', deviceLabel: 'Sensor', templateName: 'Sensor', variables: [] }],
-            envVariables: [{ name: 'attackBudget', value: '9' }]
+            devices: [{ deviceId: 'sensor_1', deviceLabel: 'Sensor', templateName: 'Sensor', modelTokenSource: 'UNKNOWN', variables: [] }],
+            envVariables: [{ name: 'attackBudget', value: '9', modelTokenSource: 'UNKNOWN' }]
           }
         ]
       },
@@ -311,7 +311,7 @@ describe('SimulationTimeline', () => {
           triggeredRules: [],
           compromisedAutomationLinks: [],
           devices: [],
-          globalVariables: [{ name: 'compromisedPointCount', value: 'unknown' }]
+          globalVariables: [{ name: 'compromisedPointCount', value: 'unknown', modelTokenSource: 'UNKNOWN' }]
         }]
       },
       global: { plugins: [i18n] }
@@ -368,8 +368,8 @@ describe('SimulationTimeline', () => {
             triggeredRules: [],
             compromisedAutomationLinks: [],
             devices: [
-              { deviceId: 'current_sensor', deviceLabel: 'Current sensor', templateName: 'Sensor', state: 'idle', variables: [] },
-              { deviceId: 'removed_lock', deviceLabel: 'Removed lock', templateName: 'Lock', state: 'locked', variables: [] }
+              { deviceId: 'current_sensor', deviceLabel: 'Current sensor', templateName: 'Sensor', modelTokenSource: 'UNKNOWN', state: 'idle', variables: [] },
+              { deviceId: 'removed_lock', deviceLabel: 'Removed lock', templateName: 'Lock', modelTokenSource: 'UNKNOWN', state: 'locked', variables: [] }
             ]
           },
           {
@@ -377,11 +377,12 @@ describe('SimulationTimeline', () => {
             triggeredRules: [],
             compromisedAutomationLinks: [],
             devices: [
-              { deviceId: 'current_sensor', deviceLabel: 'Current sensor', templateName: 'Sensor', state: 'active', variables: [] },
+              { deviceId: 'current_sensor', deviceLabel: 'Current sensor', templateName: 'Sensor', modelTokenSource: 'UNKNOWN', state: 'active', variables: [] },
               {
                 deviceId: 'removed_lock',
                 deviceLabel: 'Removed lock',
                 templateName: 'Lock',
+                modelTokenSource: 'UNKNOWN',
                 state: 'unlocked',
                 compromised: true,
                 variables: []
@@ -420,9 +421,10 @@ describe('SimulationTimeline', () => {
             deviceId: 'camera_1',
             deviceLabel: 'Hall camera',
             templateName: 'Camera',
+            modelTokenSource: 'UNKNOWN',
             mode: 'CameraMode',
             state: 'recording',
-            variables: [{ name: 'motion', value: 'TRUE', trust: 'untrusted' }],
+            variables: [{ name: 'motion', value: 'TRUE', trust: 'untrusted', modelTokenSource: 'UNKNOWN' }],
             trustPrivacy: [{ name: 'recording', propertyScope: 'state', mode: 'CameraMode', trust: true }],
             privacies: [{ name: 'video', propertyScope: 'content', privacy: 'private' }]
           }]
@@ -447,13 +449,14 @@ describe('SimulationTimeline', () => {
         deviceId: 'camera_1',
         deviceLabel: 'Hall camera',
         templateName: 'Camera',
+        modelTokenSource: 'BUNDLED',
         mode: 'MachineState',
         state: 'on',
-        variables: [{ name: 'weather', value: 'sunny' }],
+        variables: [{ name: 'weather', value: 'sunny', modelTokenSource: 'BUNDLED' }],
         trustPrivacy: [{ name: 'on', propertyScope: 'state', mode: 'MachineState', trust: false }],
         privacies: [{ name: 'photo', propertyScope: 'content', privacy: 'private' }]
       }],
-      envVariables: [{ name: 'weather', value: 'sunny' }]
+      envVariables: [{ name: 'weather', value: 'sunny', modelTokenSource: 'BUNDLED' }]
     }]
     const canonicalSnapshot = structuredClone(savedStates)
     const translations: Record<string, string> = {
@@ -497,7 +500,7 @@ describe('SimulationTimeline', () => {
         states: [{
           stateIndex: 1,
           triggeredRules: [],
-          compromisedAutomationLinks: [{ ruleId: 'rule-1', ruleLabel: 'Hall motion turns on light' }],
+          compromisedAutomationLinks: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Hall motion turns on light' }],
           devices: []
         }]
       },

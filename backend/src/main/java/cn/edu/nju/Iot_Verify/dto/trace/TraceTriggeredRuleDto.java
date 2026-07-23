@@ -11,6 +11,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class TraceTriggeredRuleDto {
+    /** Zero-based position in the immutable rule list submitted for this run. */
+    private Integer ruleIndex;
+
     /** Stable persisted rule identity when the submitted rule had one. */
     private String ruleId;
 

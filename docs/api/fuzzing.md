@@ -5,7 +5,7 @@ module. The endpoint index lives in [rest-endpoints.md](rest-endpoints.md); glob
 authentication, `Result<T>`, and error conventions live in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-20. Source: `controller/FuzzController.java`,
+Verified against code on 2026-07-24. Source: `controller/FuzzController.java`,
 `service/impl/FuzzServiceImpl.java`, and `dto/fuzz/`.
 
 ---
@@ -41,9 +41,12 @@ change exploration behavior.
 
 Completed runs store this fingerprint in `modelSnapshot.modelFingerprint`. The frontend
 uses exact fingerprint equality to decide whether a historical run still matches the
-current Board, including edits that leave all public item counts unchanged. Runs created
-before this field existed remain readable; their UI may use the documented count-based
-comparison as a weaker legacy fallback and must not claim exact semantic equality.
+current Board, including edits that leave all public item counts unchanged. The field is
+required on every stored task and run; missing or malformed fingerprints make the row
+unavailable instead of weakening the comparison to item counts. When full run detail is
+read, the backend decodes the strict versioned frozen-input envelope, recomputes this same
+canonical fingerprint, and requires exact equality with the stored public snapshot; a
+same-count content change is persisted-data corruption, not a compatible history shape.
 
 ### `POST /api/fuzz/workload/preview`
 
@@ -221,6 +224,12 @@ guessing from elapsed time.
 Task statuses are `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, and `CANCELLED`.
 `FAILED` is an execution status, not a search outcome. The task APIs are:
 
+Persisted task responses fail closed when lifecycle fields contradict that status.
+Identity, request budgets, progress, timestamp ordering, processing duration, finding
+count, failure diagnostics, and outcome presence are validated before mapping. A completed
+task requires a start/completion time, `progress=100`, non-negative processing duration,
+and an outcome; pending cancellation may legitimately have no start time.
+
 Each accepted task has an instance lease that is renewed while it is queued or executing.
 Lease creation, renewal, and expiry comparison use the database clock, so JVM timezone or
 host-clock differences cannot make another instance expire healthy work. Another backend
@@ -339,16 +348,18 @@ deletes its findings in the same transaction.
 
 Run-list decoding uses a lightweight finding projection that excludes the frozen
 `violatedSpec`, trace-state, and input-event LONGTEXT. It returns `violatedSpecId`, the
-frozen `specificationLabel`, `stateCount`, and `dataAvailable` instead, and validates run
+frozen `specificationLabel`, and `stateCount`, and validates run
 metadata, finding ownership/counts, seed, timestamps, and bounded state-count/violation-step
-metadata, including `stateCount <= pathLength`. Full run or finding detail then reads and
-validates the complete frozen
-specification and state/event prefix. A corruption
-inside full evidence can therefore be discovered when detail is opened even if its list
-summary metadata was valid.
+metadata, including `stateCount <= pathLength`. A finding summary intentionally has no
+`dataAvailable` field: the list projection has not loaded enough evidence to make that
+claim. Replay loads the owned finding and its full frozen run on demand; full run or finding
+detail validates the complete frozen specification and state/event prefix before returning
+it. Corruption inside full evidence therefore fails closed at that detail boundary even when
+the preceding list metadata was valid.
 
-Detail decoding treats the persisted full `modelInputSnapshotJson` as the integrity
-root. The public model counts must exactly match it; target IDs must belong to its
+Detail decoding treats the persisted, versioned `modelInputSnapshotJson` envelope as the
+integrity root. The public model counts must exactly match
+the model snapshot; target IDs must belong to its
 specification set; eligibility must partition every effective target exactly once; an
 eligible specification must use finite template `1`, `3`, or `4` with the required
 condition side shape; and every finding must belong to the run, use its effective seed,
@@ -406,17 +417,37 @@ fallback for future unknown codes.
 | `violatedSpecId` | string | Captured specification identity |
 | `violatedSpec` | `SpecificationDto` | Frozen structured specification snapshot; never rebuilt from the current Board |
 | `firstViolationStep` | integer | Zero-based first violating state; always `states.length - 1` |
-| `states` | `TraceStateDto[]` | Candidate finite prefix ending exactly at the first violation |
+| `states` | `TraceStateDto[]` | Candidate finite prefix ending exactly at the first violation. Device, device-local-variable, and environment entries carry the frozen `modelTokenSource` contract defined in [verification trace structure](verification.md#3-trace-structure) |
 | `seed` | integer | Run's effective seed |
 | `inputEvents` | `FuzzInputEventDto[]` | Ordered replay evidence as `{ step, kind, targetId, property, value, source }`. `kind` is `DEVICE_STATE`, `DEVICE_VARIABLE`, `ENVIRONMENT_VALUE`, or `ENVIRONMENT_RATE`; `source` is `MODEL_CHOICE`, `RANDOM_INITIAL_STATE`, or `SEED_EVENT`. Paper-compatible one-based `Position` is exposed as zero-based `step` |
 | `createdAt` | datetime | Persistence time |
 
 Run-list summaries replace `violatedSpec`, `states`, and `inputEvents` with the bounded
-`specificationLabel`, `stateCount`, and `dataAvailable` fields. The optional `violatedSpec`
+`specificationLabel` and `stateCount` fields. They do not expose `dataAvailable`, because
+summary metadata alone cannot establish trace replayability. The optional `violatedSpec`
 field is omitted from JSON in list summaries; it is present in full `FuzzFindingDto` detail.
-For every available summary, `firstViolationStep` likewise equals `stateCount - 1`.
+For every summary, `firstViolationStep` likewise equals `stateCount - 1`.
 Findings use separate persistence from formal `trace` rows and cannot be sent to fix
 endpoints.
+
+The task stores `modelInputSnapshotJson` as one strict schema-version-`1` envelope containing
+the complete `ModelInputSnapshot` and an exact canonical device-id to
+`BUNDLED | CUSTOM | UNKNOWN` source map. Keeping both parts in one column makes the frozen
+input and its server-resolved display-token provenance atomic. Missing fields, unsupported
+versions, incomplete device membership, null sources, or extra root fields make the full
+evidence unavailable; obsolete unversioned development data is not inferred or upgraded.
+Finding states must copy the frozen source to each device and local variable. A shared
+environment variable is `BUNDLED` or `CUSTOM` only when every captured template declaring it
+agrees; mixed declarations are `UNKNOWN`. Missing or conflicting finding sources are invalid
+and are never synthesized from current templates. Clients localize only `BUNDLED`.
+
+Before replay, the frontend validates every nested state, device, variable, triggered-rule,
+trust/privacy, and environment/global entry. Invalid scalar types, property scopes,
+trust/privacy enum values, duplicate identities, incomplete device/variable membership between
+complete snapshots, per-list evidence semantics, cross-state source drift, or missing, null, or
+unsupported `modelTokenSource` values reject the finding as an incomplete response;
+malformed provenance therefore cannot opt custom tokens into bundled localization. Empty
+`state` and `mode` strings remain valid for captured stateless devices.
 
 The source field makes causal precedence inspectable and machine-checked. Steps must be
 non-decreasing; within one step the only valid source order is
@@ -434,5 +465,5 @@ current device impact before clamping; an explicit formal transition assignment 
 has final authority. A paper-mode discrete environment stays unchanged when neither an
 Event nor a formal effect writes it. Numeric environment seed values are reported as
 `ENVIRONMENT_RATE`; discrete direct-value compatibility Events remain
-`ENVIRONMENT_VALUE`. Old persisted event JSON without `source` is read as
-`MODEL_CHOICE`; unknown kinds or sources fail closed.
+`ENVIRONMENT_VALUE`. Every persisted event must contain an explicit valid `source`;
+missing or unknown kinds and sources fail closed.

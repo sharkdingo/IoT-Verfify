@@ -16,7 +16,6 @@ import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -29,7 +28,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class NodeServiceImpl implements NodeService {
@@ -238,16 +236,14 @@ public class NodeServiceImpl implements NodeService {
     private InitialStateResolution resolveInitialState(String templateName, DeviceManifest manifest) {
         if (!hasStateMachine(manifest)) {
             if (hasAnyStateDefinition(manifest)) {
-                log.warn("Template {} manifest has an incomplete state-machine definition", templateName);
-                return fallbackState(templateName);
+                throw invalidStateMachine(templateName);
             }
             return new InitialStateResolution(HARD_FALLBACK_STATE, "statelessPlaceholder", null);
         }
         if (manifest != null && manifest.getInitState() != null && !manifest.getInitState().isBlank()) {
             return new InitialStateResolution(manifest.getInitState().trim(), "templateDefault", null);
         }
-        log.warn("Template {} manifest has missing or blank InitState", templateName);
-        return fallbackState(templateName);
+        throw invalidStateMachine(templateName);
     }
 
     private DeviceRuntimeConfigDto effectiveRuntime(DeviceManifest manifest,
@@ -345,13 +341,10 @@ public class NodeServiceImpl implements NodeService {
         return result;
     }
 
-    private InitialStateResolution fallbackState(String templateName) {
-        return new InitialStateResolution(
-                HARD_FALLBACK_STATE,
-                "systemFallback",
-                "Template '" + templateName + "' has no usable initial state; system fallback '"
-                        + HARD_FALLBACK_STATE + "' was applied."
-        );
+    private PersistedDataIntegrityException invalidStateMachine(String templateName) {
+        return new PersistedDataIntegrityException(
+                "device template", templateName, "manifestJson",
+                "stateful template has an incomplete state-machine definition");
     }
 
     private record InitialStateResolution(String state, String source, String warning) {

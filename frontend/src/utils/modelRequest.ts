@@ -12,11 +12,7 @@ interface ModelRequestBase {
   deviceTemplates: DeviceTemplate[]
   environmentVariables?: ModelEnvironmentVariable[]
   rules: RuleForm[]
-  attackScenario?: AttackScenario
-  /** @deprecated Test/helper compatibility; new callers must provide attackScenario. */
-  isAttack?: boolean
-  /** @deprecated Test/helper compatibility; new callers must provide attackScenario. */
-  attackBudget?: number
+  attackScenario: AttackScenario
   enablePrivacy: boolean
 }
 
@@ -277,11 +273,6 @@ const buildAttackScenario = (attackScenario: AttackScenario): AttackScenario => 
   }
 }
 
-const resolveAttackScenario = (params: ModelRequestBase): AttackScenario =>
-  params.attackScenario || (params.isAttack
-    ? { mode: 'ANY_UP_TO_BUDGET', budget: params.attackBudget, points: [] }
-    : { mode: 'NONE', budget: 0, points: [] })
-
 export const buildVerificationRequestPayload = (
   params: ModelRequestBase & { specifications: Specification[] }
 ): VerificationRequest => ({
@@ -289,7 +280,7 @@ export const buildVerificationRequestPayload = (
   environmentVariables: buildEnvironmentVariables(params.environmentVariables),
   rules: buildRules(params.rules),
   specs: buildSpecs(params.specifications),
-  attackScenario: buildAttackScenario(resolveAttackScenario(params)),
+  attackScenario: buildAttackScenario(params.attackScenario),
   enablePrivacy: params.enablePrivacy
 })
 
@@ -300,7 +291,7 @@ export const buildSimulationRequestPayload = (
   environmentVariables: buildEnvironmentVariables(params.environmentVariables),
   rules: buildRules(params.rules),
   steps: params.steps,
-  attackScenario: buildAttackScenario(resolveAttackScenario(params)),
+  attackScenario: buildAttackScenario(params.attackScenario),
   enablePrivacy: params.enablePrivacy
 })
 

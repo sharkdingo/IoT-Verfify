@@ -306,7 +306,19 @@ test.describe('bounded counterexample exploration', () => {
       await expect(page.getByTestId('trace-history-panel').locator('[data-testid^="view-verification-trace-"]')).toHaveCount(2)
       await page.getByTestId('history-result-filter-fuzzing').click()
       await page.getByTestId(`open-fuzzing-run-${runId}`).click()
+      const replayFindingResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'GET'
+          && new URL(response.url()).pathname === `/api/fuzz/findings/${findingId}`)
+      const replayRunResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'GET'
+          && new URL(response.url()).pathname === `/api/fuzz/runs/${runId}`)
       await page.getByTestId(`replay-fuzzing-finding-${findingId}`).click()
+      const [replayFindingResponse, replayRunResponse] = await Promise.all([
+        replayFindingResponsePromise,
+        replayRunResponsePromise
+      ])
+      expect(replayFindingResponse.ok()).toBe(true)
+      expect(replayRunResponse.ok()).toBe(true)
       await expect(page.getByTestId('trace-timeline')).toBeVisible({ timeout: 30_000 })
       await expect(page.getByTestId('fuzzing-playback-notice')).toBeVisible()
       await page.getByTestId('trace-timeline-close').click()

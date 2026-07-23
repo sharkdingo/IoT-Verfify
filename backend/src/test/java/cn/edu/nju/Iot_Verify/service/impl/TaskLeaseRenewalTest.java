@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -70,7 +71,58 @@ class TaskLeaseRenewalTest {
         assertEquals(afterLock.plusMinutes(2), task.getLeaseExpiresAt());
     }
 
+    @Test
+    void commitResponseThatConsumesTheRenewedTtlCannotConfirmLease() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 23, 10, 0, 5);
+        Duration leaseDuration = Duration.ofSeconds(2);
+        TestTask task = new TestTask("worker-a", "RUNNING", now.plusSeconds(1));
+        AtomicLong monotonicNanos = new AtomicLong(100L);
+        AtomicBoolean flushed = new AtomicBoolean();
+
+        TaskLeaseRenewal.RenewalResult renewal = TaskLeaseRenewal.renewWithConfirmation(
+                transactionTemplate(() -> monotonicNanos.addAndGet(leaseDuration.toNanos())),
+                () -> Optional.of(task),
+                () -> now,
+                ignored -> flushed.set(true),
+                "worker-a",
+                leaseDuration,
+                monotonicNanos::get);
+
+        assertFalse(renewal.renewed());
+        assertTrue(flushed.get());
+        assertEquals(now.plus(leaseDuration), task.getLeaseExpiresAt());
+    }
+
+    @Test
+    void successfulRenewalConfirmationRemainsAnchoredBeforeCommitResponse() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 23, 10, 0, 5);
+        Duration leaseDuration = Duration.ofSeconds(2);
+        TestTask task = new TestTask("worker-a", "RUNNING", now.plusSeconds(1));
+        AtomicLong monotonicNanos = new AtomicLong(100L);
+
+        TaskLeaseRenewal.RenewalResult renewal = TaskLeaseRenewal.renewWithConfirmation(
+                transactionTemplate(() -> monotonicNanos.addAndGet(Duration.ofSeconds(1).toNanos())),
+                () -> Optional.of(task),
+                () -> now,
+                ignored -> { },
+                "worker-a",
+                leaseDuration,
+                monotonicNanos::get);
+
+        assertTrue(renewal.renewed());
+        assertEquals(100L, renewal.confirmationStartedNanos());
+
+        LeaseConfirmation confirmation = new LeaseConfirmation(0L);
+        confirmation.confirmAt(renewal.confirmationStartedNanos());
+        monotonicNanos.set(renewal.confirmationStartedNanos() + leaseDuration.toNanos());
+        assertTrue(confirmation.isUnconfirmedFor(leaseDuration, monotonicNanos::get));
+    }
+
     private TransactionTemplate transactionTemplate() {
+        return transactionTemplate(() -> { });
+    }
+
+    private TransactionTemplate transactionTemplate(Runnable afterCommit) {
         return new TransactionTemplate(new PlatformTransactionManager() {
             @Override
             public TransactionStatus getTransaction(TransactionDefinition definition) {
@@ -79,6 +131,7 @@ class TaskLeaseRenewalTest {
 
             @Override
             public void commit(TransactionStatus status) {
+                afterCommit.run();
             }
 
             @Override

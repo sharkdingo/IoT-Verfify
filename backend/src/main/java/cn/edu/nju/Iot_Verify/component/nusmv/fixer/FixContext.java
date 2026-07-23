@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -39,8 +40,6 @@ public class FixContext {
     private final Map<String, DeviceSmvData> deviceSmvMap;
     private final int violatedSpecIndex;
     private final Long userId;
-    private final boolean isAttack;
-    private final int attackBudget;
     private final AttackScenarioDto attackScenario;
     private final boolean enablePrivacy;
     private final int maxAttempts;
@@ -181,10 +180,7 @@ public class FixContext {
     }
 
     public AttackScenarioDto resolvedAttackScenario() {
-        if (attackScenario != null) {
-            return attackScenario;
-        }
-        return isAttack ? AttackScenarioDto.anyUpToBudget(attackBudget) : AttackScenarioDto.none();
+        return Objects.requireNonNull(attackScenario, "attackScenario is required");
     }
 
     public record StrategyNoResult(String status, String reason) {

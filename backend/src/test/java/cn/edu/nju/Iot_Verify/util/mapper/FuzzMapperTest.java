@@ -1,6 +1,10 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzLimitationContract;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelFingerprint;
+import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelInputSnapshotCodec;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzEligibilityDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzInputEventDto;
@@ -11,9 +15,15 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRunSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceTrustPrivacyDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceTriggeredRuleDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.FuzzFindingPo;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
@@ -21,6 +31,7 @@ import cn.edu.nju.Iot_Verify.repository.projection.FuzzFindingSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -36,13 +47,228 @@ import static org.mockito.Mockito.when;
 
 class FuzzMapperTest {
 
-    private final FuzzMapper mapper = new FuzzMapper();
+    private final FuzzModelFingerprint modelFingerprint =
+            new FuzzModelFingerprint(new ObjectMapper().findAndRegisterModules());
+    private final FuzzMapper mapper = new FuzzMapper(modelFingerprint);
+
+    @Test
+    void mapsCompletedRunWrittenWithVersionedSnapshotEnvelope() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification),
+                List.of("spec-1"),
+                FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(),
+                FuzzOutcome.BUDGET_EXHAUSTED,
+                0);
+        ModelInputSnapshot snapshot = inputSnapshot(List.of(specification));
+        run.setModelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(snapshot));
+
+        assertDoesNotThrow(() -> mapper.toRunDto(run, List.of()));
+        assertDoesNotThrow(() -> mapper.toRunSummaryDto(run, List.of()));
+    }
+
+    @Test
+    void rejectsFuzzSnapshotsWithoutASemanticFingerprint() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification),
+                List.of("spec-1"),
+                FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(),
+                FuzzOutcome.BUDGET_EXHAUSTED,
+                0);
+        run.setModelSnapshotJson(JsonUtils.toJson(ModelRunSnapshotDto.captured(
+                run.getCreatedAt(), 0, 0, 1, 0, 0)));
+
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toTaskDto(run));
+        assertThrows(PersistedDataIntegrityException.class,
+                () -> mapper.toRunSummaryDto(run, List.of()));
+    }
+
+    @Test
+    void rejectsFrozenInputWhoseContentNoLongerMatchesItsFingerprint() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification), List.of("spec-1"), FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(), FuzzOutcome.BUDGET_EXHAUSTED, 0);
+        SpecificationDto altered = supportedSpecification("spec-1");
+        altered.getAConditions().get(0).setValue("off");
+        run.setModelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(
+                inputSnapshot(List.of(altered))));
+
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toRunSummaryDto(run, List.of()));
+
+        assertEquals("modelSnapshotJson", error.getField());
+    }
+
+    @Test
+    void rejectsContradictoryTaskLifecycleMetadata() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification), List.of("spec-1"), FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(), FuzzOutcome.BUDGET_EXHAUSTED, 0);
+
+        run.setStartedAt(null);
+        run.setProcessingTimeMs(null);
+        assertEquals("startedAt", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toTaskDto(run)).getField());
+
+        run.setStartedAt(run.getCreatedAt());
+        run.setProcessingTimeMs(2_000L);
+        run.setCompletedAt(run.getCreatedAt().minusSeconds(1));
+        assertEquals("completedAt", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toTaskSummaryDto(run)).getField());
+
+        run.setCompletedAt(run.getCreatedAt().plusSeconds(2));
+        run.setStatus(FuzzTaskPo.TaskStatus.FAILED);
+        run.setOutcome(null);
+        run.setErrorMessage(" ");
+        assertEquals("errorMessage", assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toTaskDto(run)).getField());
+    }
+
+    @Test
+    void mapsSnapshotWhoseDeviceUsesANonCanonicalTemplateAlias() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        ModelInputSnapshot snapshot = provenanceSnapshot(specification);
+        snapshot.devices().get(0).setTemplateName("  sWiTcH  ");
+        FuzzTaskPo run = completedRun(
+                List.of(specification), List.of("spec-1"), FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(), FuzzOutcome.BUDGET_EXHAUSTED, 0);
+        run.setModelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(snapshot));
+        run.setModelSnapshotJson(JsonUtils.toJson(fuzzSnapshot(run.getCreatedAt(), snapshot)));
+
+        assertDoesNotThrow(() -> mapper.toRunDto(run, List.of()));
+    }
+
+    @Test
+    void runDetailRejectsMalformedNestedStateAndForgedProvenance() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        ModelInputSnapshot snapshot = provenanceSnapshot(specification);
+        FuzzTaskPo run = completedRun(
+                List.of(specification), List.of("spec-1"), FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(), FuzzOutcome.FOUND_VIOLATION, 1);
+        run.setModelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(snapshot));
+        run.setModelSnapshotJson(JsonUtils.toJson(fuzzSnapshot(run.getCreatedAt(), snapshot)));
+
+        TraceVariableDto local = traceVariable("battery", ModelTokenSource.BUNDLED);
+        TraceVariableDto environment = traceVariable("temperature", ModelTokenSource.BUNDLED);
+        TraceVariableDto global = traceVariable("compromisedPointCount", ModelTokenSource.UNKNOWN);
+        TraceDeviceDto device = new TraceDeviceDto();
+        device.setDeviceId("switch_1");
+        device.setDeviceLabel("Switch one");
+        device.setTemplateName("Switch");
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        device.setVariables(List.of(local));
+        TraceTrustPrivacyDto trust = trustPrivacy(
+                "battery", "variable", null, true, null);
+        TraceTrustPrivacyDto privacy = trustPrivacy(
+                "battery", "variable", null, null, "public");
+        device.setTrustPrivacy(List.of(trust));
+        device.setPrivacies(List.of(privacy));
+        TraceStateDto state = TraceStateDto.builder()
+                .stateIndex(0)
+                .devices(List.of(device))
+                .triggeredRules(List.of())
+                .compromisedAutomationLinks(List.of())
+                .envVariables(List.of(environment))
+                .globalVariables(List.of(global))
+                .build();
+        FuzzFindingPo finding = finding(run, specification);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+
+        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding));
+
+        device.setDeviceLabel(" ");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        device.setDeviceLabel("Switch one");
+        local.setValue(null);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        local.setValue("0");
+        trust.setMode(" ");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        trust.setMode(null);
+        trust.setPrivacy("private");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        trust.setPrivacy(null);
+        privacy.setPrivacy("secret");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        privacy.setPrivacy("public");
+        global.setModelTokenSource(ModelTokenSource.BUNDLED);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        global.setModelTokenSource(ModelTokenSource.UNKNOWN);
+        device.setModelTokenSource(null);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        local.setModelTokenSource(null);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        local.setModelTokenSource(ModelTokenSource.BUNDLED);
+        environment.setModelTokenSource(null);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        environment.setModelTokenSource(ModelTokenSource.BUNDLED);
+        device.setModelTokenSource(ModelTokenSource.CUSTOM);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        local.setModelTokenSource(ModelTokenSource.CUSTOM);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+
+        local.setModelTokenSource(ModelTokenSource.BUNDLED);
+        environment.setModelTokenSource(ModelTokenSource.CUSTOM);
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+    }
 
     @Test
     void mapsCompletedRunAndEmbedsFindingSummaries() {
         LocalDateTime createdAt = LocalDateTime.of(2026, 7, 14, 9, 30);
         SpecificationDto specification = supportedSpecification("spec-1");
         specification.setTemplateLabel("Never unlock while away");
+        ModelInputSnapshot frozenInput = inputSnapshot(List.of(specification));
         TraceStateDto state = TraceStateDto.builder()
                 .stateIndex(0)
                 .devices(List.of())
@@ -63,6 +289,7 @@ class FuzzMapperTest {
                         .targetId("DoorLock")
                         .property("battery")
                         .value("80")
+                        .source("MODEL_CHOICE")
                         .build())))
                 .seed(42L)
                 .stateCount(1)
@@ -73,16 +300,17 @@ class FuzzMapperTest {
                 .userId(3L)
                 .status(FuzzTaskPo.TaskStatus.COMPLETED)
                 .createdAt(createdAt)
+                .startedAt(createdAt)
                 .completedAt(createdAt.plusSeconds(2))
+                .processingTimeMs(2_000L)
                 .progress(100)
                 .targetSpecIdsJson(JsonUtils.toJson(List.of("spec-1")))
                 .maxIterations(1000)
                 .pathLength(20)
                 .populationSize(10)
                 .explorationMode(FuzzExplorationMode.PAPER_COMPATIBLE)
-                .modelInputSnapshotJson(JsonUtils.toJson(inputSnapshot(List.of(specification))))
-                .modelSnapshotJson(JsonUtils.toJson(ModelRunSnapshotDto.captured(
-                        createdAt, 0, 0, 1, 0, 0)))
+                .modelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(frozenInput))
+                .modelSnapshotJson(JsonUtils.toJson(fuzzSnapshot(createdAt, frozenInput)))
                 .outcome(FuzzOutcome.FOUND_VIOLATION)
                 .effectiveSeed(42L)
                 .iterations(12)
@@ -115,7 +343,6 @@ class FuzzMapperTest {
         assertEquals(1, dto.getFindings().size());
         assertEquals("spec-1", dto.getFindings().get(0).getViolatedSpecId());
         assertEquals(42L, dto.getFindings().get(0).getSeed());
-        assertTrue(dto.getFindings().get(0).isDataAvailable());
         assertEquals("MODEL_CHOICE", runDetail.getFindings().get(0)
                 .getInputEvents().get(0).getSource());
         assertEquals(0, dto.getModelSnapshot().getDeviceCount());
@@ -160,8 +387,12 @@ class FuzzMapperTest {
         finding.setStateCount(1);
         finding.setInputEventsJson("[{\"step\":0,\"kind\":\"DEVICE_VARIABLE\","
                 + "\"targetId\":\"device-1\",\"property\":\"temperature\",\"value\":\"21\"}]");
-        assertEquals("MODEL_CHOICE",
-                mapper.toFindingDto(finding).getInputEvents().get(0).getSource());
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(finding));
+
+        finding.setInputEventsJson("[{\"step\":0,\"kind\":\"DEVICE_VARIABLE\","
+                + "\"targetId\":\"device-1\",\"property\":\"temperature\",\"value\":\"21\","
+                + "\"source\":\"MODEL_CHOICE\"}]");
+        assertEquals("MODEL_CHOICE", mapper.toFindingDto(finding).getInputEvents().get(0).getSource());
 
         TraceStateDto trailingState = TraceStateDto.builder()
                 .stateIndex(1)
@@ -362,12 +593,16 @@ class FuzzMapperTest {
     @Test
     void runSummaryRejectsMissingRequiredScalarsAndEligibilityCountDrift() {
         LocalDateTime createdAt = LocalDateTime.of(2026, 7, 14, 12, 0);
+        ModelInputSnapshot frozenInput = inputSnapshot(List.of(supportedSpecification("spec-1")));
         FuzzTaskPo run = FuzzTaskPo.builder()
                 .id(12L)
                 .userId(3L)
                 .status(FuzzTaskPo.TaskStatus.COMPLETED)
                 .createdAt(createdAt)
+                .startedAt(createdAt)
                 .completedAt(createdAt.plusSeconds(1))
+                .processingTimeMs(1_000L)
+                .progress(100)
                 .outcome(FuzzOutcome.BUDGET_EXHAUSTED)
                 .iterations(1)
                 .generatedPaths(1L)
@@ -377,10 +612,8 @@ class FuzzMapperTest {
                 .populationSize(1)
                 .findingCount(0)
                 .targetSpecIdsJson("[]")
-                .modelInputSnapshotJson(JsonUtils.toJson(inputSnapshot(List.of(
-                        supportedSpecification("spec-1")))))
-                .modelSnapshotJson(JsonUtils.toJson(ModelRunSnapshotDto.captured(
-                        createdAt, 0, 0, 1, 0, 0)))
+                .modelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(frozenInput))
+                .modelSnapshotJson(JsonUtils.toJson(fuzzSnapshot(createdAt, frozenInput)))
                 .eligibilityJson(JsonUtils.toJson(FuzzEligibilityDto.builder()
                         .eligibleSpecIds(List.of("spec-1"))
                         .requestedSpecCount(1)
@@ -475,6 +708,130 @@ class FuzzMapperTest {
         finding.setSeed(43L);
         assertThrows(PersistedDataIntegrityException.class,
                 () -> mapper.toFindingDto(run, finding));
+    }
+
+    @Test
+    void singleFindingDetailRejectsInvalidRunLifecycle() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification),
+                List.of("spec-1"),
+                FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(),
+                FuzzOutcome.FOUND_VIOLATION,
+                1);
+        FuzzFindingPo finding = finding(run, specification);
+        run.setProgress(99);
+
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(run, finding));
+
+        assertEquals("progress", error.getField());
+    }
+
+    @Test
+    void findingDetailRejectsMissingAndDuplicateRuleEvidenceIndexes() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification), List.of("spec-1"), FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(), FuzzOutcome.FOUND_VIOLATION, 1);
+        FuzzFindingPo finding = finding(run, specification);
+        TraceTriggeredRuleDto first = TraceTriggeredRuleDto.builder()
+                .ruleIndex(0)
+                .ruleId("7")
+                .ruleLabel("Rule 7")
+                .build();
+        TraceTriggeredRuleDto duplicate = TraceTriggeredRuleDto.builder()
+                .ruleIndex(0)
+                .ruleId("8")
+                .ruleLabel("Rule 8")
+                .build();
+        TraceStateDto state = TraceStateDto.builder()
+                .stateIndex(0)
+                .devices(List.of())
+                .triggeredRules(List.of(first, duplicate))
+                .compromisedAutomationLinks(List.of())
+                .build();
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+
+        assertThrows(PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(finding));
+
+        first.setRuleIndex(null);
+        state.setTriggeredRules(List.of(first));
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(finding));
+    }
+
+    @Test
+    void findingDetailRejectsRuleEvidenceOutsideOrDifferentFromFrozenRules() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification), List.of("spec-1"), FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(), FuzzOutcome.FOUND_VIOLATION, 1);
+        RuleDto frozenRule = RuleDto.builder()
+                .id(7L)
+                .ruleString("Frozen rule")
+                .build();
+        ModelInputSnapshot frozenInput = new ModelInputSnapshot(
+                List.of(), List.of(), List.of(), List.of(frozenRule),
+                List.of(specification), Map.of());
+        run.setModelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(frozenInput));
+        run.setModelSnapshotJson(JsonUtils.toJson(fuzzSnapshot(run.getCreatedAt(), frozenInput)));
+        FuzzFindingPo finding = finding(run, specification);
+        TraceTriggeredRuleDto evidence = TraceTriggeredRuleDto.builder()
+                .ruleIndex(1)
+                .ruleId("7")
+                .ruleLabel("Frozen rule")
+                .build();
+        TraceStateDto state = TraceStateDto.builder()
+                .stateIndex(0)
+                .devices(List.of())
+                .triggeredRules(List.of(evidence))
+                .compromisedAutomationLinks(List.of())
+                .build();
+
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(run, finding));
+
+        evidence.setRuleIndex(0);
+        evidence.setRuleId("8");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(run, finding));
+
+        evidence.setRuleId("7");
+        evidence.setRuleLabel("Altered rule");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(run, finding));
+
+        evidence.setRuleLabel("Frozen rule");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding));
+
+        state.setTriggeredRules(List.of());
+        state.setCompromisedAutomationLinks(List.of(evidence));
+        evidence.setRuleLabel("Altered compromised link");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertThrows(PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(run, finding));
+
+        evidence.setRuleLabel("Frozen rule");
+        finding.setStatesJson(JsonUtils.toJson(List.of(state)));
+        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding));
     }
 
     @Test
@@ -596,7 +953,10 @@ class FuzzMapperTest {
         when(run.getUserId()).thenReturn(3L);
         when(run.getStatus()).thenReturn(FuzzTaskPo.TaskStatus.COMPLETED);
         when(run.getCreatedAt()).thenReturn(createdAt);
+        when(run.getStartedAt()).thenReturn(createdAt);
         when(run.getCompletedAt()).thenReturn(createdAt.plusSeconds(1));
+        when(run.getProcessingTimeMs()).thenReturn(1_000L);
+        when(run.getProgress()).thenReturn(100);
         when(run.getOutcome()).thenReturn(FuzzOutcome.BUDGET_EXHAUSTED);
         when(run.getEffectiveSeed()).thenReturn(42L);
         when(run.getIterations()).thenReturn(1);
@@ -609,7 +969,7 @@ class FuzzMapperTest {
         when(run.getExplorationMode()).thenReturn(FuzzExplorationMode.BOARD_SNAPSHOT);
         when(run.getTargetSpecIdsJson()).thenReturn("[]");
         when(run.getModelSnapshotJson()).thenReturn(JsonUtils.toJson(
-                ModelRunSnapshotDto.captured(createdAt, 0, 0, 2, 0, 0)));
+                fuzzSnapshot(createdAt, 0, 0, 2, 0, 0)));
         when(run.getEligibilityJson()).thenReturn(JsonUtils.toJson(FuzzEligibilityDto.builder()
                 .eligibleSpecIds(List.of("spec-1"))
                 .eligibleSpecLabels(Map.of("spec-1", "Safety property"))
@@ -624,7 +984,7 @@ class FuzzMapperTest {
                 () -> mapper.toRunSummaryDtoFromTaskProjection(run, List.of()));
 
         when(run.getModelSnapshotJson()).thenReturn(JsonUtils.toJson(
-                ModelRunSnapshotDto.captured(createdAt, 0, 0, 1, 0, 0)));
+                fuzzSnapshot(createdAt, 0, 0, 1, 0, 0)));
         when(run.getEligibilityJson()).thenReturn(JsonUtils.toJson(FuzzEligibilityDto.builder()
                 .eligibleSpecIds(List.of("spec-1"))
                 .eligibleSpecLabels(Map.of("spec-1", "Safety\nproperty"))
@@ -644,7 +1004,10 @@ class FuzzMapperTest {
         when(run.getUserId()).thenReturn(3L);
         when(run.getStatus()).thenReturn(FuzzTaskPo.TaskStatus.COMPLETED);
         when(run.getCreatedAt()).thenReturn(createdAt);
+        when(run.getStartedAt()).thenReturn(createdAt);
         when(run.getCompletedAt()).thenReturn(createdAt.plusSeconds(1));
+        when(run.getProcessingTimeMs()).thenReturn(1_000L);
+        when(run.getProgress()).thenReturn(100);
         when(run.getOutcome()).thenReturn(FuzzOutcome.FOUND_VIOLATION);
         when(run.getEffectiveSeed()).thenReturn(42L);
         when(run.getIterations()).thenReturn(1);
@@ -657,7 +1020,7 @@ class FuzzMapperTest {
         when(run.getExplorationMode()).thenReturn(FuzzExplorationMode.BOARD_SNAPSHOT);
         when(run.getTargetSpecIdsJson()).thenReturn(JsonUtils.toJson(List.of("spec-1")));
         when(run.getModelSnapshotJson()).thenReturn(JsonUtils.toJson(
-                ModelRunSnapshotDto.captured(createdAt, 0, 0, 1, 0, 0)));
+                fuzzSnapshot(createdAt, 0, 0, 1, 0, 0)));
         when(run.getEligibilityJson()).thenReturn(JsonUtils.toJson(FuzzEligibilityDto.builder()
                 .eligibleSpecIds(List.of("spec-1"))
                 .eligibleSpecLabels(Map.of("spec-1", "Safety property"))
@@ -715,7 +1078,10 @@ class FuzzMapperTest {
         when(run.getUserId()).thenReturn(3L);
         when(run.getStatus()).thenReturn(FuzzTaskPo.TaskStatus.COMPLETED);
         when(run.getCreatedAt()).thenReturn(createdAt);
+        when(run.getStartedAt()).thenReturn(createdAt);
         when(run.getCompletedAt()).thenReturn(createdAt.plusSeconds(1));
+        when(run.getProcessingTimeMs()).thenReturn(1_000L);
+        when(run.getProgress()).thenReturn(100);
         when(run.getOutcome()).thenReturn(FuzzOutcome.BUDGET_EXHAUSTED);
         when(run.getExplorationMode()).thenReturn(FuzzExplorationMode.BOARD_SNAPSHOT);
         when(run.getEffectiveSeed()).thenReturn(42L);
@@ -728,7 +1094,7 @@ class FuzzMapperTest {
         when(run.getFindingCount()).thenReturn(0);
         when(run.getTargetSpecIdsJson()).thenReturn("[]");
         when(run.getModelSnapshotJson()).thenReturn(JsonUtils.toJson(
-                ModelRunSnapshotDto.captured(createdAt, 0, 0, 1, 0, 0)));
+                fuzzSnapshot(createdAt, 0, 0, 1, 0, 0)));
         when(run.getEligibilityJson()).thenReturn(JsonUtils.toJson(FuzzEligibilityDto.builder()
                 .eligibleSpecIds(List.of("spec-1"))
                 .eligibleSpecLabels(Map.of("spec-1", "Safety property"))
@@ -759,6 +1125,7 @@ class FuzzMapperTest {
             FuzzOutcome outcome,
             int findingCount) {
         LocalDateTime createdAt = LocalDateTime.of(2026, 7, 14, 15, 0);
+        ModelInputSnapshot frozenInput = inputSnapshot(specifications);
         if (eligibility.getEligibleSpecLabels() == null
                 || eligibility.getEligibleSpecLabels().isEmpty()) {
             Map<String, SpecificationDto> byId = specifications.stream()
@@ -777,16 +1144,17 @@ class FuzzMapperTest {
                 .userId(3L)
                 .status(FuzzTaskPo.TaskStatus.COMPLETED)
                 .createdAt(createdAt)
+                .startedAt(createdAt)
                 .completedAt(createdAt.plusSeconds(2))
+                .processingTimeMs(2_000L)
                 .progress(100)
                 .targetSpecIdsJson(JsonUtils.toJson(targetSpecIds))
                 .maxIterations(10)
                 .pathLength(2)
                 .populationSize(1)
                 .explorationMode(FuzzExplorationMode.BOARD_SNAPSHOT)
-                .modelInputSnapshotJson(JsonUtils.toJson(inputSnapshot(specifications)))
-                .modelSnapshotJson(JsonUtils.toJson(ModelRunSnapshotDto.captured(
-                        createdAt, 0, 0, specifications.size(), 0, 0)))
+                .modelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(frozenInput))
+                .modelSnapshotJson(JsonUtils.toJson(fuzzSnapshot(createdAt, frozenInput)))
                 .outcome(outcome)
                 .effectiveSeed(42L)
                 .iterations(1)
@@ -820,9 +1188,81 @@ class FuzzMapperTest {
                 .build();
     }
 
+    private ModelInputSnapshot provenanceSnapshot(SpecificationDto specification) {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("switch_1");
+        device.setTemplateName("Switch");
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .name("Switch")
+                .internalVariables(List.of(
+                        DeviceManifest.InternalVariable.builder()
+                                .name("battery")
+                                .isInside(true)
+                                .build(),
+                        DeviceManifest.InternalVariable.builder()
+                                .name("temperature")
+                                .isInside(false)
+                                .build()))
+                .impactedVariables(List.of())
+                .build();
+        return new ModelInputSnapshot(
+                List.of(), List.of(device), List.of(), List.of(), List.of(specification),
+                Map.of("Switch", manifest));
+    }
+
+    private TraceVariableDto traceVariable(String name, ModelTokenSource source) {
+        TraceVariableDto variable = new TraceVariableDto();
+        variable.setName(name);
+        variable.setValue("0");
+        variable.setModelTokenSource(source);
+        return variable;
+    }
+
+    private TraceTrustPrivacyDto trustPrivacy(
+            String name,
+            String propertyScope,
+            String mode,
+            Boolean trust,
+            String privacy) {
+        TraceTrustPrivacyDto value = new TraceTrustPrivacyDto();
+        value.setName(name);
+        value.setPropertyScope(propertyScope);
+        value.setMode(mode);
+        value.setTrust(trust);
+        value.setPrivacy(privacy);
+        return value;
+    }
+
     private ModelInputSnapshot inputSnapshot(List<SpecificationDto> specifications) {
         return new ModelInputSnapshot(
                 List.of(), List.of(), List.of(), List.of(), specifications, Map.of());
+    }
+
+    private ModelRunSnapshotDto fuzzSnapshot(LocalDateTime capturedAt,
+                                             int deviceCount,
+                                             int ruleCount,
+                                             int specificationCount,
+                                             int environmentVariableCount,
+                                             int deviceTemplateCount) {
+        ModelRunSnapshotDto snapshot = ModelRunSnapshotDto.captured(
+                capturedAt, deviceCount, ruleCount, specificationCount,
+                environmentVariableCount, deviceTemplateCount);
+        snapshot.setModelFingerprint("a".repeat(64));
+        return snapshot;
+    }
+
+    private ModelRunSnapshotDto fuzzSnapshot(
+            LocalDateTime capturedAt, ModelInputSnapshot frozenInput) {
+        ModelRunSnapshotDto snapshot = ModelRunSnapshotDto.captured(
+                capturedAt,
+                frozenInput.devices().size(),
+                frozenInput.rules().size(),
+                frozenInput.specifications().size(),
+                frozenInput.environmentVariables().size(),
+                frozenInput.templateManifests().size());
+        snapshot.setModelFingerprint(modelFingerprint.modelFingerprint(frozenInput));
+        return snapshot;
     }
 
     private SpecificationDto supportedSpecification(String id) {

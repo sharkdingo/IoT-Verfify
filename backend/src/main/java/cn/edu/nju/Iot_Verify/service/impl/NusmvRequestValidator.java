@@ -370,9 +370,18 @@ final class NusmvRequestValidator {
                               List<DeviceVerificationDto> devices,
                               Map<String, String> errors) {
         Set<String> deviceRefs = deviceRefs(devices);
+        Set<Long> persistedRuleIds = new HashSet<>();
         for (int i = 0; i < rules.size(); i++) {
             RuleDto rule = rules.get(i);
             String prefix = "rules[" + i + "]";
+            Long ruleId = rule.getId();
+            if (ruleId != null) {
+                if (ruleId <= 0) {
+                    putError(errors, prefix + ".id", "Rule id must be positive when provided");
+                } else if (!persistedRuleIds.add(ruleId)) {
+                    putError(errors, prefix + ".id", "Rule id must be unique within one model request");
+                }
+            }
             if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
                 putError(errors, prefix + ".conditions", "Conditions cannot be empty");
             } else {

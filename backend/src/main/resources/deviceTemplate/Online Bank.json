@@ -31,7 +31,6 @@
 				"Relation": "=",
 				"Value": "transfering"
 			},
-			"Assignments": [],
 			"Description": ""
 		}
 	],
@@ -41,7 +40,6 @@
 			"StartState": "idle",
 			"EndState": "transfering",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

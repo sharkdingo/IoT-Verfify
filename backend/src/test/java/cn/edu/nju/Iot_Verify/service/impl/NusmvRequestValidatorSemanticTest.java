@@ -24,6 +24,32 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class NusmvRequestValidatorSemanticTest {
 
     @Test
+    void validateRules_rejectsNonPositiveAndDuplicatePersistedIds() {
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+
+        NusmvRequestValidator.validateRules(
+                List.of(validRule(0L), validRule(-1L), validRule(7L), validRule(7L)),
+                List.of(device("sensor_1", "Sensor")),
+                errors);
+
+        assertEquals("Rule id must be positive when provided", errors.get("rules[0].id"));
+        assertEquals("Rule id must be positive when provided", errors.get("rules[1].id"));
+        assertEquals("Rule id must be unique within one model request", errors.get("rules[3].id"));
+    }
+
+    @Test
+    void validateRules_allowsRepeatedNullIdsForUnsavedRules() {
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+
+        NusmvRequestValidator.validateRules(
+                List.of(validRule(null), validRule(null)),
+                List.of(device("sensor_1", "Sensor")),
+                errors);
+
+        assertTrue(errors.isEmpty(), () -> "Expected unsaved rule ids to validate, got: " + errors);
+    }
+
+    @Test
     void validateRuleSemantics_rejectsNonSignalApiConditionAndUnknownCommandApi() {
         Map<String, String> errors = NusmvRequestValidator.newErrors();
         RuleDto rule = RuleDto.builder()
@@ -525,7 +551,7 @@ class NusmvRequestValidatorSemanticTest {
         spec.setDevices(new ArrayList<>());
 
         String smvText = new SmvSpecificationBuilder()
-                .build(List.of(spec), false, 3, Map.of("sensor_1", aPrefixedEnvSmv()), false);
+                .build(List.of(spec), Map.of("sensor_1", aPrefixedEnvSmv()), false);
 
         assertTrue(smvText.contains("a_a_temperature>28"), smvText);
     }
@@ -562,7 +588,7 @@ class NusmvRequestValidatorSemanticTest {
         spec.setDevices(new ArrayList<>());
 
         String smvText = new SmvSpecificationBuilder()
-                .build(List.of(spec), false, 3, Map.of("sensor_1", trustPrefixedLocalSmv()), false);
+                .build(List.of(spec), Map.of("sensor_1", trustPrefixedLocalSmv()), false);
 
         assertTrue(smvText.contains("sensor_1.trust_trust_temperature=untrusted"), smvText);
     }
@@ -602,7 +628,7 @@ class NusmvRequestValidatorSemanticTest {
         spec.setDevices(new ArrayList<>());
 
         String smvText = new SmvSpecificationBuilder()
-                .build(List.of(spec), false, 3, Map.of("sensor_1", smv()), false);
+                .build(List.of(spec), Map.of("sensor_1", smv()), false);
 
         assertTrue(smvText.contains("sensor_1.fanMode=fanonly"));
     }
@@ -617,6 +643,23 @@ class NusmvRequestValidatorSemanticTest {
         condition.setRelation(relation);
         condition.setValue(value);
         return condition;
+    }
+
+    private static RuleDto validRule(Long id) {
+        return RuleDto.builder()
+                .id(id)
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor_1")
+                        .attribute("state")
+                        .targetType("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("sensor_1")
+                        .action("turnOn")
+                        .build())
+                .build();
     }
 
     private static SpecConditionDto propertyCondition(String targetType,

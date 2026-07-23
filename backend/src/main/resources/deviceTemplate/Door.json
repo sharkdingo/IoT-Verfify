@@ -29,7 +29,6 @@
 			"StartState": "",
 			"EndState": "locked",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -38,7 +37,6 @@
 			"StartState": "",
 			"EndState": "unlocked",
 			"Trigger": null,
-			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

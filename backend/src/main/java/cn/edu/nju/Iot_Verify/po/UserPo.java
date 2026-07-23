@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.po;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -31,10 +32,16 @@ public class UserPo {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
+    @Column(name = "formal_operation_fence", nullable = false)
+    @Builder.Default
+    @JsonIgnore
+    private Long formalOperationFence = 0L;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
         }
+        if (formalOperationFence == null) formalOperationFence = 0L;
     }
 }

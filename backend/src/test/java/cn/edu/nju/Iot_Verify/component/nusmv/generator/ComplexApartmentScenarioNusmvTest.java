@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -52,7 +53,7 @@ class ComplexApartmentScenarioNusmvTest {
         List<SpecificationDto> specs = buildSpecs();
 
         SmvGenerator.GenerateResult generated = generator.generate(
-                USER_ID, devices, rules, specs, false, 0, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                USER_ID, devices, rules, specs, AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         String smv = Files.readString(generated.smvFile().toPath());
 
         assertTrue(smv.contains("next(camera_1.MachineState) :="));

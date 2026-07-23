@@ -38,6 +38,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -210,17 +211,17 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         }
         for (LocalVerificationExecution execution : executions) {
             try {
-                boolean renewed = TaskLeaseRenewal.renew(
+                TaskLeaseRenewal.RenewalResult renewal = TaskLeaseRenewal.renewWithConfirmation(
                         transactionTemplate,
                         () -> taskRepository.findByIdForUpdate(execution.taskId),
                         this::databaseNow,
                         taskRepository::saveAndFlush,
                         workerId,
                         TASK_LEASE_DURATION);
-                if (!renewed) {
+                if (!renewal.renewed()) {
                     execution.requestStop();
                 } else {
-                    execution.leaseConfirmation.confirm();
+                    execution.leaseConfirmation.confirmAt(renewal.confirmationStartedNanos());
                 }
             } catch (RuntimeException e) {
                 if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
@@ -293,7 +294,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         try {
             future = syncVerificationExecutor.submit(() ->
                     doVerify(userId, input.devices(), input.rules(), input.specs(),
-                            input.attack(), input.attackBudget(), input.enablePrivacy(), input.request(),
+                            input.enablePrivacy(), input.request(),
                             input.deviceSmvMap(), input.templateManifests(), input.modelSnapshot(),
                             SmvGenerator.TempModelContext.sync()));
         } catch (RejectedExecutionException e) {
@@ -330,6 +331,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         } catch (AsyncTaskQuotaExceededException e) {
             log.info("Verification completed but run history is full for user {}", userId);
             result.setHistoryPersistence(RunPersistenceDto.failed(e.getReasonCode()));
+        } catch (ServiceUnavailableException e) {
+            throw e;
         } catch (RuntimeException e) {
             log.error("Verification completed but could not be added to run history for user {}", userId, e);
             result.setHistoryPersistence(RunPersistenceDto.outcomeUnknown("RUN_HISTORY_SAVE_OUTCOME_UNKNOWN"));
@@ -345,8 +348,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                            List<DeviceVerificationDto> devices,
                                            List<RuleDto> rules,
                                            List<SpecificationDto> specs,
-                                            boolean isAttack, int attackBudget,
-                                            boolean enablePrivacy,
+                                           boolean enablePrivacy,
                                             VerificationRequestDto request,
                                             Map<String, DeviceSmvData> resolvedDeviceSmvMap,
                                             Map<String, DeviceManifest> templateManifests,
@@ -480,12 +482,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         if (request == null) {
             throw new ValidationException("request", "Verification request cannot be null");
         }
-        if (request.getAttackScenario() != null && request.hasLegacyAttackFields()) {
-            throw new ValidationException("attackScenario",
-                    "Use attackScenario only; it cannot be combined with legacy isAttack/attackBudget fields");
-        }
         AttackScenarioDto attackScenario = AttackScenarioValidator.canonicalizeForVerification(
-                request.resolvedAttackScenario());
+                request.getAttackScenario());
         VerificationRequestDto snapshot = snapshotRequest(request, attackScenario);
         List<DeviceVerificationDto> devices = copyRequiredList(
                 snapshot.getDevices(), "devices", "Devices list cannot be empty");
@@ -494,7 +492,6 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
         List<BoardEnvironmentVariableDto> environmentVariables = copyOptionalList(
                 snapshot.getEnvironmentVariables(), "environmentVariables");
-        int effectiveAttackBudget = attackScenario.effectiveBudget();
         snapshot.setDevices(devices);
         snapshot.setRules(rules);
         snapshot.setSpecs(specs);
@@ -515,7 +512,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         AttackSurface attackSurface = modelInput.attackSurface();
         AttackScenarioValidator.validateAgainstSurface(attackScenario, attackSurface, rules);
 
-        return new VerificationInput(modelInput.devices(), rules, specs, snapshot.isAttack(), effectiveAttackBudget,
+        return new VerificationInput(modelInput.devices(), rules, specs,
                 snapshot.isEnablePrivacy(), attackSurface.deviceCount(), attackSurface.automationLinkCount(),
                 attackSurface.falsifiableReadingDeviceCount(), attackScenario, snapshot, modelInput.deviceSmvMap(),
                 modelInput.templateManifests(), modelInput.modelSnapshot(), attackSurface);
@@ -543,8 +540,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         if (result == null) {
             return null;
         }
-        AttackScenarioDto safeAttackScenario = attackScenario != null
-                ? attackScenario : AttackScenarioDto.none();
+        AttackScenarioDto safeAttackScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         boolean isAttack = safeAttackScenario.isEnabled();
         int attackBudget = safeAttackScenario.effectiveBudget();
         result.setIsAttack(isAttack);
@@ -756,7 +753,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     private Long submitVerificationInput(Long userId, VerificationInput input) {
-        Long taskId = createTask(userId, input.attack(), input.attackBudget(), input.enablePrivacy(),
+        Long taskId = createTask(userId, input.attackScenario(), input.enablePrivacy(),
                 input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
                 input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
                 JsonUtils.toJson(ModelSemanticsDto.forRun(
@@ -775,29 +772,31 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     // the package-private async path below; it is no longer part of the public interface.
     @Transactional
     Long createTask(Long userId,
-                    boolean isAttack,
-                    int attackBudget,
+                    AttackScenarioDto attackScenario,
                     boolean enablePrivacy,
                     int devicePointCount,
                     int linkPointCount,
                     int falsifiableReadingDeviceCount,
                     ModelRunSnapshotDto modelSnapshot) {
-        return createTask(userId, isAttack, attackBudget, enablePrivacy,
+        AttackScenarioDto requiredScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
+        return createTask(userId, requiredScenario, enablePrivacy,
                 devicePointCount, linkPointCount, falsifiableReadingDeviceCount, modelSnapshot,
                 JsonUtils.toJson(ModelSemanticsDto.forRun(
-                        isAttack, enablePrivacy, devicePointCount, linkPointCount,
+                        requiredScenario, enablePrivacy, devicePointCount, linkPointCount,
                         falsifiableReadingDeviceCount)));
     }
 
     private Long createTask(Long userId,
-                            boolean isAttack,
-                            int attackBudget,
+                            AttackScenarioDto attackScenario,
                             boolean enablePrivacy,
                             int devicePointCount,
                             int linkPointCount,
                             int falsifiableReadingDeviceCount,
                             ModelRunSnapshotDto modelSnapshot,
                             String modelSemanticsJson) {
+        AttackScenarioDto requiredScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         return transactionTemplate.execute(status -> {
             requireActiveUserForTracePersistence(userId);
             requireChatExecutionLease();
@@ -818,8 +817,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             VerificationTaskPo task = VerificationTaskPo.builder()
                     .userId(userId)
                     .status(VerificationTaskPo.TaskStatus.PENDING)
-                    .isAttack(isAttack)
-                    .attackBudget(attackBudget)
+                    .isAttack(requiredScenario.isEnabled())
+                    .attackBudget(requiredScenario.effectiveBudget())
                     .modeledDeviceAttackPointCount(devicePointCount)
                     .modeledFalsifiableReadingDeviceCount(falsifiableReadingDeviceCount)
                     .modeledAutomationLinkAttackPointCount(linkPointCount)
@@ -858,7 +857,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             throw e;
         }
         try {
-            persistTaskModelContext(requiredTaskId, input.attack(), input.attackBudget(), input.enablePrivacy(),
+            persistTaskModelContext(requiredTaskId, input.attackScenario(), input.enablePrivacy(),
                     input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
                     input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
                     JsonUtils.toJson(ModelSemanticsDto.forRun(
@@ -929,6 +928,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             // Atomically transition PENDING → RUNNING to close the cancel-vs-start race window.
             // A plain findById + save was vulnerable to TOCTOU: a concurrent cancel could set
             // CANCELLED between the read and the save, and the save would overwrite it back to RUNNING.
+            long startConfirmationNanos = TaskLeaseRenewal.monotonicNow();
             LocalDateTime currentTime = databaseNow();
             LocalDateTime startedAt = currentTime;
             String startCheckLogs = serializeCheckLogs(List.of("Task started"));
@@ -944,8 +944,14 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 log.info("Task {} is no longer PENDING (cancelled or already started), aborting", taskId);
                 return;
             }
+            if (!TaskLeaseRenewal.completedBeforeTtl(startConfirmationNanos, TASK_LEASE_DURATION)) {
+                log.warn("Verification task {} lease expired before its start was committed", taskId);
+                return;
+            }
             LocalVerificationExecution localExecution = localExecutions.get(taskId);
-            if (localExecution != null) localExecution.leaseConfirmation.confirm();
+            if (localExecution != null) {
+                localExecution.leaseConfirmation.confirmAt(startConfirmationNanos);
+            }
 
             // Load entity for subsequent use (failTask/completeTask only need id and startedAt).
             task = taskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
@@ -1050,8 +1056,6 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private record VerificationInput(List<DeviceVerificationDto> devices,
                                      List<RuleDto> rules,
                                      List<SpecificationDto> specs,
-                                     boolean attack,
-                                     int attackBudget,
                                      boolean enablePrivacy,
                                      int modeledDeviceAttackPointCount,
                                      int modeledAutomationLinkAttackPointCount,
@@ -1061,7 +1065,19 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                      Map<String, DeviceSmvData> deviceSmvMap,
                                      Map<String, DeviceManifest> templateManifests,
                                      ModelRunSnapshotDto modelSnapshot,
-                                     AttackSurface attackSurface) {}
+                                     AttackSurface attackSurface) {
+        private VerificationInput {
+            Objects.requireNonNull(attackScenario, "attackScenario is required");
+        }
+
+        boolean attack() {
+            return attackScenario.isEnabled();
+        }
+
+        int attackBudget() {
+            return attackScenario.effectiveBudget();
+        }
+    }
 
     private record ModelBoundaryInput(List<DeviceVerificationDto> devices,
                                        List<BoardEnvironmentVariableDto> environmentVariables,
@@ -1140,7 +1156,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             summary.setCounterexamples(List.copyOf(counterexamples));
             summary.setDataAvailable(true);
             return summary;
-        } catch (RuntimeException e) {
+        } catch (PersistedDataIntegrityException e) {
             log.error("Verification history item {} is unavailable because persisted data is invalid",
                     run != null ? run.getId() : null, e);
             return VerificationRunSummaryDto.builder()
@@ -1160,7 +1176,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private TraceSummaryDto toTraceSummaryOrUnavailable(TraceSummaryProjection trace) {
         try {
             return traceMapper.toSummaryDto(trace);
-        } catch (RuntimeException e) {
+        } catch (PersistedDataIntegrityException e) {
             log.error("Verification trace summary {} is unavailable because persisted data is invalid",
                     trace != null ? trace.getId() : null, e);
             return TraceSummaryDto.builder()
@@ -1216,7 +1232,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         if (counterexamples == null || counterexamples.isEmpty()) return 0;
         long count = counterexamples.stream()
                 .filter(Objects::nonNull)
-                .filter(trace -> !Boolean.FALSE.equals(trace.getDataAvailable()))
+                .filter(trace -> Boolean.TRUE.equals(trace.getDataAvailable()))
                 .count();
         return count > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) count;
     }
@@ -1268,15 +1284,17 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     private void persistTaskModelContext(Long taskId,
-                                         boolean isAttack,
-                                         int attackBudget,
+                                         AttackScenarioDto attackScenario,
                                          boolean enablePrivacy,
                                          int devicePointCount,
                                          int linkPointCount,
                                          int falsifiableReadingDeviceCount,
                                          ModelRunSnapshotDto modelSnapshot,
                                          String modelSemanticsJson) {
-        taskRepository.updateModelContext(taskId, isAttack, isAttack ? attackBudget : 0, enablePrivacy,
+        AttackScenarioDto requiredScenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
+        taskRepository.updateModelContext(taskId, requiredScenario.isEnabled(),
+                requiredScenario.effectiveBudget(), enablePrivacy,
                 devicePointCount, falsifiableReadingDeviceCount, linkPointCount,
                 JsonUtils.toJson(modelSnapshot), modelSemanticsJson);
     }
@@ -1890,16 +1908,11 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             SmvGenerator.GeneratePurpose purpose,
             SmvGenerator.TempModelContext tempModelContext,
             Map<String, DeviceSmvData> resolvedDeviceSmvMap) throws IOException {
-        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
-        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
-            return smvGenerator.generateWithResolvedDeviceModel(
-                    userId, devices, environmentVariables, rules, specs, scenario,
-                    enablePrivacy, purpose, tempModelContext, resolvedDeviceSmvMap);
-        }
+        AttackScenarioDto scenario = Objects.requireNonNull(
+                attackScenario, "attackScenario is required");
         return smvGenerator.generateWithResolvedDeviceModel(
-                userId, devices, environmentVariables, rules, specs,
-                scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
-                purpose, tempModelContext, resolvedDeviceSmvMap);
+                userId, devices, environmentVariables, rules, specs, scenario,
+                enablePrivacy, purpose, tempModelContext, resolvedDeviceSmvMap);
     }
 
     private void cleanupTempFile(File file) {

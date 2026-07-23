@@ -6,7 +6,7 @@ rules run before SMV generation.
 Request field contract for specs → [../api/verification.md](../api/verification.md).
 Modeling pipeline → [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-14. Source:
+Verified against code on 2026-07-24. Source:
 `component/nusmv/generator/module/SmvSpecificationBuilder.java`,
 `component/nusmv/generator/SmvModelValidator.java`,
 `frontend/src/assets/config/specTemplates.ts`.
@@ -156,8 +156,9 @@ FROZENVAR
 INVAR iot_verify_compromised_point_count <= 3;
 ```
 
-The generated name is internal. Public requests use `attackBudget`, and traces expose
-the actual branch count as `compromisedPointCount`. Only device instances with a declared
+The generated name is internal. Public requests express the upper bound through
+`attackScenario.mode=ANY_UP_TO_BUDGET` and its `budget`, and traces expose the actual
+branch count as `compromisedPointCount`. Only device instances with a declared
 falsifiable reading or an incoming rule command are device points; logical automation
 command-delivery links are separate points. The invariant is an upper bound;
 it includes every modeled selection from zero through the budget.
@@ -187,10 +188,10 @@ natural-change rates, and signal APIs without a representable state change fail 
 generation. Only an *omitted* valid local initial value may use the template's declared
 default or documented nondeterministic initialization.
 
-`attackBudget` is likewise exact: every generator entry rejects values outside `0..50`,
-requires `1..50` when attack modeling is enabled, and requires `0` when it is disabled.
-The service layer additionally rejects a budget above the current behavior-changing
-attack-point count.
+Every generator entry requires an explicit `AttackScenarioDto`. `NONE` permits only an
+omitted or zero budget, `ANY_UP_TO_BUDGET` requires `1..50`, and `EXACT_POINTS` derives
+its size from `1..50` selected points. The service layer additionally rejects an exhaustive
+budget above the current behavior-changing attack-point count.
 
 ### Generation-time fail-closed (not part of P1–P5)
 

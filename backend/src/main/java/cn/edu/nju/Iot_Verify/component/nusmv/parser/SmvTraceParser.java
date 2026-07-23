@@ -181,16 +181,6 @@ public class SmvTraceParser {
             }
         }
 
-        // Legacy parser compatibility.
-        if ("state".equals(attr)) {
-            String matchedState = matchState(smv, cleanValue);
-            devTrace.setState(matchedState != null ? matchedState : cleanValue);
-            if (devTrace.getMode() == null && smv.getModes() != null && smv.getModes().size() == 1) {
-                devTrace.setMode(smv.getModes().get(0));
-            }
-            return;
-        }
-
         // NuSMV state variable name is mode name (e.g. HvacMode / SwitchState).
         if (smv.getModes() != null && smv.getModes().contains(attr)) {
             TraceVariableDto modeVar = findOrCreateVariable(devTrace, "__mode__" + attr);
@@ -287,6 +277,7 @@ public class SmvTraceParser {
                         label = null;
                     }
                     triggeredRules.add(TraceTriggeredRuleDto.builder()
+                            .ruleIndex(index)
                             .ruleId(rule.getId() != null ? String.valueOf(rule.getId()) : null)
                             .ruleLabel(label)
                             .build());
@@ -316,6 +307,7 @@ public class SmvTraceParser {
                         label = null;
                     }
                     compromisedLinks.add(TraceTriggeredRuleDto.builder()
+                            .ruleIndex(index)
                             .ruleId(rule.getId() != null ? String.valueOf(rule.getId()) : null)
                             .ruleLabel(label)
                             .build());

@@ -18,6 +18,7 @@ import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
@@ -136,7 +137,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult generated = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertEquals(0, generated.disabledRuleCount());
         assertEquals(0, generated.skippedSpecCount());
 
@@ -163,7 +164,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult simulationModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, true, SmvGenerator.GeneratePurpose.SIMULATION);
+                AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.SIMULATION);
         NusmvExecutor.SimulationOutput simulation =
                 executor.executeInteractiveSimulation(simulationModel.smvFile(), 6);
         assertTrue(simulation.isSuccess(), simulation::getErrorMessage);
@@ -179,7 +180,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult attackedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                true, 1, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.anyUpToBudget(1), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         NusmvExecutor.NusmvResult attackedVerification = executor.execute(attackedModel.smvFile());
         assertTrue(attackedVerification.isSuccess(), attackedVerification::getErrorMessage);
         assertEquals(specs.size(), attackedVerification.getSpecResults().size());
@@ -203,9 +204,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 specs,
                 generated.deviceSmvMap(),
                 USER_ID,
-                false,
-                0,
-                true,
+                AttackScenarioDto.none(), true,
                 List.of("remove"),
                 10,
                 Map.of());
@@ -234,7 +233,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, repairedRules, specs,
-                false, 0, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(repairedModel);
         NusmvExecutor.NusmvResult repairedVerification = executor.execute(repairedModel.smvFile());
         assertTrue(repairedVerification.isSuccess(), repairedVerification::getErrorMessage);
@@ -267,7 +266,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertEquals(0, baselineModel.disabledRuleCount());
         assertEquals(0, baselineModel.skippedSpecCount());
 
@@ -297,7 +296,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult simulationModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, true, SmvGenerator.GeneratePurpose.SIMULATION);
+                AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.SIMULATION);
         NusmvExecutor.SimulationOutput simulation =
                 executor.executeInteractiveSimulation(simulationModel.smvFile(), 6);
         assertTrue(simulation.isSuccess(), simulation::getErrorMessage);
@@ -323,9 +322,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 specs,
                 baselineModel.deviceSmvMap(),
                 USER_ID,
-                false,
-                0,
-                true,
+                AttackScenarioDto.none(), true,
                 List.of("remove"),
                 10,
                 Map.of());
@@ -341,7 +338,7 @@ class AcceptanceDemoScenarioNusmvTest {
         List<RuleDto> repairedRules = new ArrayList<>(rules.subList(1, rules.size()));
         SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, repairedRules, specs,
-                false, 0, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
         assertTrue(repaired.isSuccess(), repaired::getErrorMessage);
         assertEquals(5, repaired.getSpecResults().size());
@@ -379,7 +376,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -404,7 +401,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 fixConfig);
         FixResultDto fixResult = fixer.fix(
                 301L, specs.get(0).getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 List.of("parameter"), 20, Map.of());
 
         assertTrue(fixResult.isFixable(), fixResult::getSummary);
@@ -427,7 +424,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 "parameter", suggestion, rules, baselineModel.deviceSmvMap());
         SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, repairedRules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(repairedModel);
         NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
         assertTrue(repaired.isSuccess(), repaired::getErrorMessage);
@@ -462,7 +459,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -487,7 +484,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 fixConfig);
         FixResultDto fixResult = fixer.fix(
                 304L, occupancySafety.getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 List.of("condition"), 20, Map.of());
 
         assertTrue(fixResult.isFixable(), fixResult::getSummary);
@@ -510,7 +507,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 Map.of("occupancy_1", "occupancy_1"));
         SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, repairedRules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(repairedModel);
         NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
         assertTrue(repaired.isSuccess(), repaired::getErrorMessage);
@@ -565,7 +562,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -600,7 +597,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 "parameter", expectedParameterRepair, rules, baselineModel.deviceSmvMap());
         SmvGenerator.GenerateResult expectedParameterModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, expectedParameterRules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(expectedParameterModel);
         NusmvExecutor.NusmvResult expectedParameterVerification =
                 executor.execute(expectedParameterModel.smvFile());
@@ -623,7 +620,7 @@ class AcceptanceDemoScenarioNusmvTest {
         List<String> strategies = List.of("parameter", "condition", "remove");
         FixResultDto fixResult = fixer.fix(
                 305L, neverUnsafeLowHeat.getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 strategies, 20, Map.of());
 
         assertTrue(fixResult.isFixable(), fixResult::getSummary);
@@ -657,7 +654,7 @@ class AcceptanceDemoScenarioNusmvTest {
                             suggestion.getStrategy(), suggestion, rules, baselineModel.deviceSmvMap());
             SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                     USER_ID, devices, environment, repairedRules, specs,
-                    false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                    AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
             assertCompleteModel(repairedModel);
             NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
             assertTrue(repaired.isSuccess(), repaired::getErrorMessage);
@@ -668,7 +665,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         FixResultDto unknownSpecResult = fixer.fix(
                 306L, "UNKNOWN_SPEC", states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 strategies, 20, Map.of());
         assertEquals("SKIPPED_NO_SPEC", attemptStatus(unknownSpecResult, "parameter"));
         assertEquals("SKIPPED_NO_SPEC", attemptStatus(unknownSpecResult, "condition"));
@@ -708,7 +705,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -726,7 +723,7 @@ class AcceptanceDemoScenarioNusmvTest {
         List<String> strategies = List.of("parameter", "condition", "remove");
         FixResultDto fixResult = fixer.fix(
                 307L, safety.getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 strategies, 20, Map.of());
 
         assertEquals(3, fixResult.getSuggestions().size(), fixResult::getSummary);
@@ -787,7 +784,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -804,7 +801,7 @@ class AcceptanceDemoScenarioNusmvTest {
         List<String> strategies = List.of("parameter", "condition", "remove");
         FixResultDto fixResult = fixer.fix(
                 308L, safety.getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 strategies, 20, Map.of());
 
         assertEquals(Set.of(0), fixResult.getFaultRules().stream()
@@ -864,7 +861,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -877,7 +874,7 @@ class AcceptanceDemoScenarioNusmvTest {
         // This test asserts strategy fall-through, not timeout behavior.
         FixResultDto fixResult = allStrategyFixer(generator, executor, 30_000).fix(
                 309L, safety.getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 strategies, 20, Map.of());
 
         assertFalse(fixResult.isFixable());
@@ -916,7 +913,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -928,7 +925,7 @@ class AcceptanceDemoScenarioNusmvTest {
         List<String> strategies = List.of("parameter", "condition", "remove");
         FixResultDto fixResult = allStrategyFixer(generator, executor, 10_000).fix(
                 310L, safety.getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 strategies, 20, Map.of());
 
         assertEquals("NO_VERIFIED_SUGGESTION", attemptStatus(fixResult, "parameter"));
@@ -980,7 +977,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertCompleteModel(baselineModel);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
@@ -991,7 +988,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         FixResultDto fixResult = allStrategyFixer(generator, executor, 20_000).fix(
                 311L, safety.getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 List.of("parameter"), 20, Map.of());
 
         assertVerifiedAttempt(fixResult, "parameter");
@@ -1048,7 +1045,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
         assertEquals(1, violationCount(baseline));
@@ -1071,7 +1068,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 fixConfig);
         FixResultDto fixResult = fixer.fix(
                 302L, specs.get(0).getId(), states, rules, devices, environment, specs,
-                baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
+                baselineModel.deviceSmvMap(), USER_ID, AttackScenarioDto.none(), false,
                 List.of("condition"), 20, Map.of());
 
         FixSuggestionDto suggestion = fixResult.getSuggestions().stream()
@@ -1089,7 +1086,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 "condition", suggestion, rules, baselineModel.deviceSmvMap());
         SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, repairedRules, specs,
-                false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
         NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
         assertTrue(repaired.isSuccess(), repaired::getErrorMessage);
         assertFalse(repaired.hasAnyViolation(),
@@ -1113,7 +1110,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult attackedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
-                true, 1, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.anyUpToBudget(1), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         NusmvExecutor.NusmvResult attacked = executor.execute(attackedModel.smvFile());
         assertTrue(attacked.isSuccess(), attacked::getErrorMessage);
         assertEquals(4, violationCount(attacked));
@@ -1137,7 +1134,7 @@ class AcceptanceDemoScenarioNusmvTest {
                 fixConfig);
         FixResultDto fixResult = fixer.fix(
                 303L, specs.get(0).getId(), states, rules, devices, environment, specs,
-                attackedModel.deviceSmvMap(), USER_ID, true, 1, true,
+                attackedModel.deviceSmvMap(), USER_ID, AttackScenarioDto.anyUpToBudget(1), true,
                 List.of("remove"), 10, Map.of());
 
         FixSuggestionDto suggestion = fixResult.getSuggestions().stream()
@@ -1150,7 +1147,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
         SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, repairedRules, specs,
-                true, 1, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                AttackScenarioDto.anyUpToBudget(1), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
         assertTrue(repaired.isSuccess(), repaired::getErrorMessage);
         assertFalse(repaired.hasAnyViolation(),
@@ -1185,7 +1182,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
             SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                     USER_ID, devices, environment, rules, specs,
-                    false, 0, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                    AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
             assertEquals(0, baselineModel.disabledRuleCount(), expectation.name());
             assertEquals(0, baselineModel.skippedSpecCount(), expectation.name());
             NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
@@ -1195,7 +1192,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
             SmvGenerator.GenerateResult simulationModel = generator.generateWithEnvironment(
                     USER_ID, devices, environment, rules, specs,
-                    false, 0, true, SmvGenerator.GeneratePurpose.SIMULATION);
+                    AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.SIMULATION);
             NusmvExecutor.SimulationOutput simulation =
                     executor.executeInteractiveSimulation(simulationModel.smvFile(), 6);
             assertTrue(simulation.isSuccess(), simulation::getErrorMessage);
@@ -1210,7 +1207,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
             SmvGenerator.GenerateResult attackedModel = generator.generateWithEnvironment(
                     USER_ID, devices, environment, rules, specs,
-                    true, 1, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                    AttackScenarioDto.anyUpToBudget(1), true, SmvGenerator.GeneratePurpose.VERIFICATION);
             assertEquals(0, attackedModel.disabledRuleCount(), expectation.name());
             assertEquals(0, attackedModel.skippedSpecCount(), expectation.name());
             NusmvExecutor.NusmvResult attacked = executor.execute(attackedModel.smvFile());
@@ -1243,7 +1240,7 @@ class AcceptanceDemoScenarioNusmvTest {
 
                 SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                         USER_ID, devices, environment, repairedRules, specs,
-                        false, 0, true, SmvGenerator.GeneratePurpose.VERIFICATION);
+                        AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
                 NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
                 assertTrue(repaired.isSuccess(), repaired::getErrorMessage);
                 assertFalse(repaired.hasAnyViolation(),
@@ -1287,9 +1284,7 @@ class AcceptanceDemoScenarioNusmvTest {
                     specs,
                     baselineModel.deviceSmvMap(),
                     USER_ID,
-                    false,
-                    0,
-                    true,
+                    AttackScenarioDto.none(), true,
                     List.of("remove"),
                     10,
                     Map.of());
@@ -1373,7 +1368,7 @@ class AcceptanceDemoScenarioNusmvTest {
                             suggestion.getStrategy(), suggestion, originalRules, deviceSmvMap);
             SmvGenerator.GenerateResult repairedModel = generator.generateWithEnvironment(
                     USER_ID, devices, environment, repairedRules, specs,
-                    false, 0, false, SmvGenerator.GeneratePurpose.VERIFICATION);
+                    AttackScenarioDto.none(), false, SmvGenerator.GeneratePurpose.VERIFICATION);
             assertCompleteModel(repairedModel);
             NusmvExecutor.NusmvResult repaired = executor.execute(repairedModel.smvFile());
             assertTrue(repaired.isSuccess(), repaired::getErrorMessage);

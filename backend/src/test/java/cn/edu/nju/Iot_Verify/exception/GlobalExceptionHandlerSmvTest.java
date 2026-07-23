@@ -227,7 +227,8 @@ class GlobalExceptionHandlerSmvTest {
 
     @Test
     void handleHttpMessageNotReadable_shouldReturn400() {
-        HttpMessageNotReadableException ex = new HttpMessageNotReadableException("bad json");
+        HttpMessageNotReadableException ex = new HttpMessageNotReadableException(
+                "bad json", new MockHttpInputMessage(new byte[0]));
 
         ResponseEntity<Result<Map<String, Object>>> response = handler.handleHttpMessageNotReadableException(ex);
 

@@ -98,6 +98,7 @@ const snapshot = (specificationCount: number) => ({
   specificationCount,
   environmentVariableCount: 0,
   deviceTemplateCount: 4,
+  modelFingerprint: 'a'.repeat(64),
   templatesFrozen: true as const
 })
 
@@ -410,6 +411,64 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(wrapper.findAll('button').some(button => button.text() === 'Open Result')).toBe(false)
     expect(wrapper.findAll('button').some(button => button.text() === 'Replay')).toBe(false)
     expect(wrapper.findAll('button').some(button => button.text() === 'Verify formally')).toBe(false)
+  })
+
+  it('treats fuzz findings as metadata-only summaries and validates evidence on action', async () => {
+    const run: FuzzingRunSummary = {
+      id: 40,
+      explorationMode: 'BOARD_SNAPSHOT',
+      outcome: 'FOUND_VIOLATION',
+      effectiveSeed: 42,
+      iterations: 1,
+      generatedPaths: 1,
+      elapsedMs: 10,
+      modelSnapshot: snapshot(1),
+      eligibility: {
+        eligibleSpecIds: ['spec-1'],
+        eligibleSpecLabels: { 'spec-1': 'Frozen door safety label' },
+        ineligibleSpecs: [],
+        requestedSpecCount: 1,
+        eligibleSpecCount: 1
+      },
+      limitations: [],
+      maxIterations: 10,
+      pathLength: 2,
+      populationSize: 1,
+      createdAt: '2026-07-13T11:00:00',
+      completedAt: '2026-07-13T11:00:01',
+      findingCount: 1,
+      findings: [{
+        id: 401,
+        fuzzTaskId: 40,
+        violatedSpecId: 'spec-1',
+        specificationLabel: 'Frozen door safety label',
+        firstViolationStep: 0,
+        seed: 42,
+        createdAt: '2026-07-13T11:00:01',
+        stateCount: 1
+      }],
+      dataAvailable: true
+    }
+
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'results',
+        resultFilter: 'fuzzing',
+        fuzzingRuns: [run]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.text()).toContain('Frozen door safety label')
+    const replay = wrapper.get('[data-testid="view-fuzzing-finding-401"]')
+    const verifyButton = wrapper.get('[data-testid="verify-fuzzing-finding-401"]')
+    expect(replay.attributes('disabled')).toBeUndefined()
+    expect(verifyButton.attributes('disabled')).toBeUndefined()
+    await replay.trigger('click')
+    await verifyButton.trigger('click')
+    expect(wrapper.emitted('view-fuzzing-finding')).toEqual([[401, 40]])
+    expect(wrapper.emitted('verify-fuzzing-finding')).toEqual([[run.findings[0]]])
   })
 
   it('presents budget exhaustion as a neutral heuristic result, not a proof or fix target', () => {
