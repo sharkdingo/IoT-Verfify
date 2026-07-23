@@ -15,12 +15,14 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.dto.model.TemplateSnapshotBundleDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -45,6 +47,8 @@ import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import cn.edu.nju.Iot_Verify.util.SpecificationFormulaPreview;
@@ -61,6 +65,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskRejectedException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -195,30 +200,66 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     void maintainTaskLeases() {
+        List<LocalVerificationExecution> executions = List.copyOf(localExecutions.values());
         try {
-            LocalDateTime now = databaseNow();
-            LocalDateTime renewedUntil = now.plus(TASK_LEASE_DURATION);
-            for (LocalVerificationExecution execution : List.copyOf(localExecutions.values())) {
-                int renewed = taskRepository.renewOwnedActiveLease(
-                        execution.taskId, workerId, now, renewedUntil, ACTIVE_STATUSES);
-                if (renewed == 0) {
+            databaseNow();
+        } catch (RuntimeException e) {
+            stopVerificationExecutionsWithExpiredConfirmation(executions);
+            log.warn("Could not read database time while maintaining verification task leases", e);
+            return;
+        }
+        for (LocalVerificationExecution execution : executions) {
+            try {
+                boolean renewed = TaskLeaseRenewal.renew(
+                        transactionTemplate,
+                        () -> taskRepository.findByIdForUpdate(execution.taskId),
+                        this::databaseNow,
+                        taskRepository::saveAndFlush,
+                        workerId,
+                        TASK_LEASE_DURATION);
+                if (!renewed) {
                     execution.requestStop();
+                } else {
+                    execution.leaseConfirmation.confirm();
+                }
+            } catch (RuntimeException e) {
+                if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
+                    execution.requestStop();
+                    log.warn("Stopped local verification task {} after its lease could not be confirmed for a full TTL",
+                            execution.taskId);
+                } else {
+                    log.warn("Could not renew verification task lease {}; the next cycle will retry",
+                            execution.taskId, e);
                 }
             }
+        }
+        try {
+            LocalDateTime recoveryTime = databaseNow();
             String message = "The verification worker stopped before the task completed";
             int recovered = taskRepository.failExpiredActiveTasks(
                     VerificationTaskPo.TaskStatus.FAILED,
-                    now,
+                    recoveryTime,
                     VerificationOutcome.INCONCLUSIVE,
                     message,
                     serializeCheckLogs(List.of(message)),
                     ACTIVE_STATUSES,
-                    now);
+                    recoveryTime);
             if (recovered > 0) {
                 log.warn("Recovered {} expired verification task lease(s)", recovered);
             }
         } catch (RuntimeException e) {
-            log.warn("Could not maintain verification task leases; the next cycle will retry", e);
+            log.warn("Could not recover expired verification task leases; the next cycle will retry", e);
+        }
+    }
+
+    private void stopVerificationExecutionsWithExpiredConfirmation(
+            List<LocalVerificationExecution> executions) {
+        for (LocalVerificationExecution execution : executions) {
+            if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
+                execution.requestStop();
+                log.warn("Stopped local verification task {} after the database could not confirm its lease for a full TTL",
+                        execution.taskId);
+            }
         }
     }
 
@@ -240,6 +281,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     private VerificationResultDto verifyInput(Long userId, VerificationInput input) {
+
+        requireVerificationRunStorageCapacity(userId);
 
         log.info("Starting sync verification: userId={}, devices={}, specs={}, attack={}, attackBudget={}",
                 userId, input.devices().size(), input.specs().size(), input.attack(), input.attackBudget());
@@ -267,7 +310,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             log.warn("Sync verification timed out after {}ms", timeoutMs);
             result = applyRunContext(buildErrorResult("", List.of("Verification timed out")),
                     input.attackScenario(), input.enablePrivacy(), input.attackSurface(), input.modelSnapshot(),
-                    JsonUtils.toJson(input.templateManifests()));
+                    buildTemplateSnapshotsJson(input.templateManifests(), input.deviceSmvMap()));
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof InternalServerException ise) throw ise;
@@ -284,6 +327,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         try {
             Long runId = persistCompletedVerificationRun(userId, input, result, startedAt);
             result.setHistoryPersistence(RunPersistenceDto.saved(runId));
+        } catch (AsyncTaskQuotaExceededException e) {
+            log.info("Verification completed but run history is full for user {}", userId);
+            result.setHistoryPersistence(RunPersistenceDto.failed(e.getReasonCode()));
         } catch (RuntimeException e) {
             log.error("Verification completed but could not be added to run history for user {}", userId, e);
             result.setHistoryPersistence(RunPersistenceDto.outcomeUnknown("RUN_HISTORY_SAVE_OUTCOME_UNKNOWN"));
@@ -312,7 +358,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         AttackSurface attackSurface = new AttackSurface(Set.of(), rules != null ? rules.size() : 0, 0);
         VerificationResultDto finalResult = null;
         String requestJson = buildRequestSnapshot(request);
-        String templateSnapshotsJson = JsonUtils.toJson(templateManifests);
+        String templateSnapshotsJson = buildTemplateSnapshotsJson(
+                templateManifests, resolvedDeviceSmvMap);
 
         try {
             checkLogs.add("Generating NuSMV model...");
@@ -537,6 +584,24 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         return result;
     }
 
+    private String buildTemplateSnapshotsJson(
+            Map<String, DeviceManifest> templateManifests,
+            Map<String, DeviceSmvData> deviceSmvMap) {
+        Map<String, ModelTokenSource> sourcesByDeviceId = new LinkedHashMap<>();
+        if (deviceSmvMap != null) {
+            for (DeviceSmvData device : deviceSmvMap.values()) {
+                if (device == null || device.getVarName() == null || device.getVarName().isBlank()) {
+                    continue;
+                }
+                sourcesByDeviceId.put(device.getVarName(), device.getModelTokenSource() != null
+                        ? device.getModelTokenSource()
+                        : ModelTokenSource.UNKNOWN);
+            }
+        }
+        return JsonUtils.toJson(TemplateSnapshotBundleDto.captured(
+                templateManifests, sourcesByDeviceId));
+    }
+
     private ModelBoundaryInput validateModelSemantics(Long userId,
                                                       List<DeviceVerificationDto> devices,
                                                       List<RuleDto> rules,
@@ -596,6 +661,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                                    AttackScenarioDto attackScenario) {
         try {
             VerificationRequestDto snapshot = objectMapper.convertValue(request, VerificationRequestDto.class);
+            ModelRequestSnapshotSupport.preserveDeviceMetadata(
+                    request.getDevices(), snapshot.getDevices());
             snapshot.setAttackScenario(attackScenario);
             return snapshot;
         } catch (IllegalArgumentException e) {
@@ -843,7 +910,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
     private void runVerificationTask(Long userId, Long taskId, VerificationInput input) {
         String requestJson = buildRequestSnapshot(input.request());
-        String templateSnapshotsJson = JsonUtils.toJson(input.templateManifests());
+        String templateSnapshotsJson = buildTemplateSnapshotsJson(
+                input.templateManifests(), input.deviceSmvMap());
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
 
         registerRunningTask(taskId, Thread.currentThread());
@@ -876,6 +944,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 log.info("Task {} is no longer PENDING (cancelled or already started), aborting", taskId);
                 return;
             }
+            LocalVerificationExecution localExecution = localExecutions.get(taskId);
+            if (localExecution != null) localExecution.leaseConfirmation.confirm();
 
             // Load entity for subsequent use (failTask/completeTask only need id and startedAt).
             task = taskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
@@ -1042,24 +1112,31 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     @Override
     @Transactional(readOnly = true)
     public List<VerificationRunSummaryDto> getRuns(Long userId) {
+        List<VerificationRunSummaryProjection> runs =
+                taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                        userId, VerificationTaskPo.TaskStatus.COMPLETED,
+                        PageRequest.of(0, taskAdmissionLimits.getMaxStoredTasksPerUser()));
+        if (runs.isEmpty()) return List.of();
+        List<Long> runIds = runs.stream().map(VerificationRunSummaryProjection::getId).toList();
         Map<Long, List<TraceSummaryDto>> tracesByRun = new LinkedHashMap<>();
-        for (TracePo trace : traceRepository.findByUserIdOrderByCreatedAtDesc(userId)) {
+        for (TraceSummaryProjection trace :
+                traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(userId, runIds)) {
             if (trace == null || trace.getVerificationTaskId() == null) continue;
             tracesByRun.computeIfAbsent(trace.getVerificationTaskId(), ignored -> new ArrayList<>())
                     .add(toTraceSummaryOrUnavailable(trace));
         }
-        return taskRepository.findByUserIdAndStatusOrderByCompletedAtDesc(
-                        userId, VerificationTaskPo.TaskStatus.COMPLETED).stream()
+        return runs.stream()
                 .map(run -> toRunSummaryOrUnavailable(
                         run, tracesByRun.getOrDefault(run.getId(), List.of())))
                 .toList();
     }
 
     private VerificationRunSummaryDto toRunSummaryOrUnavailable(
-            VerificationTaskPo run, List<TraceSummaryDto> counterexamples) {
+            VerificationRunSummaryProjection run, List<TraceSummaryDto> counterexamples) {
+        int replayableCounterexampleCount = replayableCounterexampleCount(counterexamples);
         try {
             VerificationRunSummaryDto summary = verificationTaskMapper.toRunSummaryDto(
-                    run, counterexamples.size());
+                    run, replayableCounterexampleCount);
             summary.setCounterexamples(List.copyOf(counterexamples));
             summary.setDataAvailable(true);
             return summary;
@@ -1072,7 +1149,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     .startedAt(run != null ? run.getStartedAt() : null)
                     .completedAt(run != null ? run.getCompletedAt() : null)
                     .processingTimeMs(run != null ? run.getProcessingTimeMs() : null)
-                    .counterexampleCount(counterexamples.size())
+                    .counterexampleCount(replayableCounterexampleCount)
                     .counterexamples(List.copyOf(counterexamples))
                     .dataAvailable(false)
                     .unavailableReasonCode("PERSISTED_SEMANTIC_DATA_INVALID")
@@ -1080,7 +1157,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         }
     }
 
-    private TraceSummaryDto toTraceSummaryOrUnavailable(TracePo trace) {
+    private TraceSummaryDto toTraceSummaryOrUnavailable(TraceSummaryProjection trace) {
         try {
             return traceMapper.toSummaryDto(trace);
         } catch (RuntimeException e) {
@@ -1102,7 +1179,13 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     public VerificationRunDto getRun(Long userId, Long runId) {
         VerificationTaskPo run = getCompletedRun(userId, runId);
         run.setCheckLogs(readCheckLogs(run));
-        return verificationTaskMapper.toRunDto(run, counterexampleCount(userId, runId));
+        List<TraceSummaryDto> counterexamples = traceRepository
+                .findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(userId, List.of(runId))
+                .stream()
+                .filter(Objects::nonNull)
+                .map(this::toTraceSummaryOrUnavailable)
+                .toList();
+        return verificationTaskMapper.toRunDto(run, replayableCounterexampleCount(counterexamples));
     }
 
     @Override
@@ -1129,8 +1212,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         return run;
     }
 
-    private int counterexampleCount(Long userId, Long runId) {
-        long count = traceRepository.countByUserIdAndVerificationTaskId(userId, runId);
+    private int replayableCounterexampleCount(List<TraceSummaryDto> counterexamples) {
+        if (counterexamples == null || counterexamples.isEmpty()) return 0;
+        long count = counterexamples.stream()
+                .filter(Objects::nonNull)
+                .filter(trace -> !Boolean.FALSE.equals(trace.getDataAvailable()))
+                .count();
         return count > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) count;
     }
 
@@ -1176,7 +1263,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     @Override
     @Transactional
     public TaskCancellationResultDto cancelTask(Long userId, Long taskId) {
-        requireChatExecutionLease();
+        chatExecutionLeaseGuard.requireCurrentExecutionLeaseAndLock();
         return super.cancelTask(userId, taskId);
     }
 
@@ -1597,10 +1684,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 ? new ArrayList<>(result.getCheckLogs()) : new ArrayList<>();
         appendTracePersistenceLog(persistedCheckLogs, traces);
         Long runId = transactionTemplate.execute(status -> {
+            formalOperationAdmission.registerCurrentLeaseCommitFence();
             if (!lockActiveUserForTracePersistence(userId)) {
                 throw new InternalServerException("Verification completed after the user account was removed");
             }
             requireChatExecutionLease();
+            enforceVerificationRunStorageCapacity(userId);
 
             LocalDateTime completedAt = LocalDateTime.now();
             VerificationOutcome outcome = result.getOutcome() != null
@@ -1647,6 +1736,23 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         }
         result.setCheckLogs(persistedCheckLogs);
         return runId;
+    }
+
+    private void requireVerificationRunStorageCapacity(Long userId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            requireActiveUserForTracePersistence(userId);
+            requireChatExecutionLease();
+            enforceVerificationRunStorageCapacity(userId);
+        });
+    }
+
+    private void enforceVerificationRunStorageCapacity(Long userId) {
+        long storedTaskCount = taskRepository.countByUserId(userId);
+        if (storedTaskCount >= taskAdmissionLimits.getMaxStoredTasksPerUser()) {
+            throw new AsyncTaskQuotaExceededException(
+                    "verification", AsyncTaskQuotaExceededException.QuotaType.STORED,
+                    storedTaskCount, taskAdmissionLimits.getMaxStoredTasksPerUser());
+        }
     }
 
     private boolean completeTaskAndSaveTraces(VerificationTaskPo task,
@@ -1867,6 +1973,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         private final VerificationInput input;
         private final AtomicReference<LocalExecutionState> state =
                 new AtomicReference<>(LocalExecutionState.QUEUED);
+        private final LeaseConfirmation leaseConfirmation = new LeaseConfirmation();
         private final FutureTask<Void> futureTask = new FutureTask<>(this, null);
 
         private LocalVerificationExecution(Long userId, Long taskId, VerificationInput input) {

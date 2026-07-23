@@ -5,10 +5,13 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SimulationOu
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
+import cn.edu.nju.Iot_Verify.configure.AsyncTaskAdmissionConfig;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
@@ -28,6 +31,7 @@ import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.SimulationTraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
@@ -40,8 +44,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.task.TaskRejectedException;
+import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -56,6 +62,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -215,6 +222,35 @@ class SimulationServiceImplTest {
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 executor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
                 formalOperationAdmission);
+    }
+
+    private SimulationServiceImpl serviceWithAdmissionConfig(AsyncTaskAdmissionConfig admissionConfig) {
+        return new SimulationServiceImpl(
+                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                simulationTraceRepository, simulationTaskRepository, userRepository,
+                simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
+                simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
+                chatExecutionLeaseGuard, formalOperationAdmission, admissionConfig);
+    }
+
+    @Test
+    void requestSnapshotPreservesServerCapturedTokenProvenance() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("bundled_device");
+        device.setTemplateName("bundled-template");
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        SimulationRequestDto request = new SimulationRequestDto();
+        request.setDevices(List.of(device));
+        Method method = SimulationServiceImpl.class.getDeclaredMethod(
+                "snapshotRequest", SimulationRequestDto.class, AttackScenarioDto.class);
+        method.setAccessible(true);
+
+        SimulationRequestDto snapshot = (SimulationRequestDto) method.invoke(
+                service, request, AttackScenarioDto.none());
+
+        assertNotSame(device, snapshot.getDevices().get(0));
+        assertEquals(ModelTokenSource.BUNDLED,
+                snapshot.getDevices().get(0).getModelTokenSource());
     }
 
     private TransactionTemplate inlineTransactionTemplate() {
@@ -440,6 +476,7 @@ class SimulationServiceImplTest {
         InOrder completionLocks = inOrder(userRepository, simulationTaskRepository);
         completionLocks.verify(userRepository).findByIdForUpdate(1L);
         completionLocks.verify(simulationTaskRepository, times(2)).findByIdForUpdate(9L);
+        verify(formalOperationAdmission, never()).registerCurrentLeaseCommitFence();
     }
 
     @Test
@@ -853,15 +890,32 @@ class SimulationServiceImplTest {
         capturingService.maintainTaskLeases();
         capturingExecutor.capturedTask().run();
 
-        verify(simulationTaskRepository).renewOwnedActiveLease(
-                eq(151L), anyString(), any(LocalDateTime.class), any(LocalDateTime.class),
-                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)));
+        verify(simulationTaskRepository).findByIdForUpdate(151L);
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generateWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
                 anyBoolean(), any(), any(), anyMap());
+    }
+
+    @Test
+    void queuedSimulationStopsAfterDatabaseCannotConfirmItsLeaseForFullTtl() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        SimulationServiceImpl capturingService = serviceWithSimulationExecutor(capturingExecutor);
+        capturingService.simulateAsync(
+                1L, 152L, simRequest(singleDevice(), List.of(makeRule()), 10, false, 0, false));
+        LeaseConfirmationTestSupport.ageExecutionLease(
+                capturingService, "localExecutions", 152L, Duration.ofMinutes(3));
+        when(simulationTaskRepository.currentDatabaseTime())
+                .thenThrow(new RuntimeException("database unavailable"));
+
+        capturingService.maintainTaskLeases();
+
+        assertTrue(((Future<?>) capturingExecutor.capturedTask()).isCancelled());
+        verify(simulationTaskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
     }
 
     // ==================== simulate (public) tests ====================
@@ -1070,6 +1124,7 @@ class SimulationServiceImplTest {
         assertEquals(5, requestJson.path("steps").asInt());
         assertEquals("testdevice", requestJson.path("devices").get(0).path("varName").asText());
         assertEquals("testdevice", requestJson.path("rules").get(0).path("conditions").get(0).path("deviceName").asText());
+        verify(formalOperationAdmission).registerCurrentLeaseCommitFence();
     }
 
     @Test
@@ -1111,17 +1166,52 @@ class SimulationServiceImplTest {
 
     @Test
     void getUserSimulations_delegatesToMapperAndRepo() {
-        SimulationTracePo po = SimulationTracePo.builder().id(1L).userId(1L).steps(3).build();
-        when(simulationTraceRepository.findByUserIdOrderByCreatedAtDesc(1L))
-                .thenReturn(List.of(po));
+        SimulationTraceSummaryProjection projection = mock(SimulationTraceSummaryProjection.class);
+        when(simulationTraceRepository.findByUserIdOrderByCreatedAtDescIdDesc(
+                eq(1L), any(Pageable.class)))
+                .thenReturn(List.of(projection));
         SimulationTraceSummaryDto summary = SimulationTraceSummaryDto.builder().id(1L).steps(3).build();
-        when(simulationTraceMapper.toSummaryDtoList(List.of(po)))
+        when(simulationTraceMapper.toSummaryProjectionDtoList(List.of(projection)))
                 .thenReturn(List.of(summary));
 
         List<SimulationTraceSummaryDto> result = service.getUserSimulations(1L);
 
         assertEquals(1, result.size());
         assertEquals(1L, result.get(0).getId());
+    }
+
+    @Test
+    void getUserSimulations_usesConfiguredStoredTaskLimitAsQueryBound() {
+        AsyncTaskAdmissionConfig admissionConfig = new AsyncTaskAdmissionConfig();
+        admissionConfig.getSimulation().setMaxStoredTasksPerUser(137);
+        SimulationServiceImpl configuredService = serviceWithAdmissionConfig(admissionConfig);
+        when(simulationTraceRepository.findByUserIdOrderByCreatedAtDescIdDesc(
+                eq(1L), any(Pageable.class))).thenReturn(List.of());
+        when(simulationTraceMapper.toSummaryProjectionDtoList(List.of())).thenReturn(List.of());
+
+        assertTrue(configuredService.getUserSimulations(1L).isEmpty());
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(simulationTraceRepository).findByUserIdOrderByCreatedAtDescIdDesc(
+                eq(1L), pageable.capture());
+        assertEquals(0, pageable.getValue().getPageNumber());
+        assertEquals(137, pageable.getValue().getPageSize());
+    }
+
+    @Test
+    void savedSimulationRejectsCombinedTaskAndStandaloneTraceQuotaBeforeStartingNusmv() throws Exception {
+        when(simulationTaskRepository.countByUserId(1L)).thenReturn(60L);
+        when(simulationTraceRepository.countStandaloneByUserId(1L)).thenReturn(40L);
+
+        AsyncTaskQuotaExceededException error = assertThrows(
+                AsyncTaskQuotaExceededException.class,
+                () -> service.simulateAndSave(
+                        1L, simRequest(singleDevice(), List.of(), 5, false, 0, false)));
+
+        assertEquals("SIMULATION_STORED_TASK_LIMIT_REACHED", error.getReasonCode());
+        verify(smvGenerator, never()).generateWithEnvironment(
+                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
+                anyBoolean(), any(), any());
     }
 
     @Test
@@ -1243,7 +1333,7 @@ class SimulationServiceImplTest {
 
         assertTrue(result.isCancellationAccepted());
         assertEquals("CANCELLED", result.getTaskStatus());
-        verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
+        verify(chatExecutionLeaseGuard).requireCurrentExecutionLeaseAndLock();
         verify(simulationTaskRepository).cancelTaskIfStillActive(
                 eq(60L), eq(SimulationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList());
         assertFalse(wasSimulationTaskSaveCalled());

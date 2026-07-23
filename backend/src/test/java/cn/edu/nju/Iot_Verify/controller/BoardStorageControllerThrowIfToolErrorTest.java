@@ -312,6 +312,8 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "label":"temperature","appliedValues":{"value":"20"}}],
                  "rawCandidateCount":2,"inspectedCount":2,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Exercise a shared reading",
+                 "objectiveStatus":"PARTIAL","objectiveIssues":[
+                   {"code":"NO_AUTOMATION_RULES","message":"No automation rule."}],
                  "verificationReady":true,"readinessIssues":[],
                  "semanticWarnings":[{"code":"NO_AUTOMATION_RULES",
                  "message":"The final draft contains no retained automation rules."}],
@@ -340,6 +342,8 @@ class BoardStorageControllerThrowIfToolErrorTest {
         JsonNode condition = scene.path("specs").get(0).path("aConditions").get(0);
         assertEquals(List.of("deviceId", "key", "relation", "targetType", "value"),
                 iterableFieldNames(condition));
+        assertEquals("PARTIAL", response.getObjectiveStatus());
+        assertEquals("NO_AUTOMATION_RULES", response.getObjectiveIssues().get(0).getCode());
         assertTrue(response.getVerificationReady());
         assertTrue(response.getReadinessIssues().isEmpty());
         assertEquals("NO_AUTOMATION_RULES", response.getSemanticWarnings().get(0).getCode());
@@ -353,7 +357,36 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "adjustedCount":0,"adjustedItems":[],
                  "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Missing a specification",
+                 "objectiveStatus":"PARTIAL","objectiveIssues":[
+                   {"code":"NO_AUTOMATION_RULES","message":"No automation rule."},
+                   {"code":"NO_SPECIFICATIONS","message":"No formal specification."}],
                  "verificationReady":true,"readinessIssues":[],
+                 "semanticWarnings":[
+                   {"code":"NO_AUTOMATION_RULES","message":"No retained rules."},
+                   {"code":"UNREFERENCED_DEVICES","message":"One device is unreferenced."}
+                 ],
+                 "scene":{"schema":"iot-verify.board-scene","version":4,
+                 "templates":[],"devices":[{"id":"device_1","templateName":"Sensor",
+                 "label":"Hall sensor","position":{"x":0,"y":0},"width":176,"height":128}],
+                 "environmentVariables":[],"rules":[],"specs":[]}}
+                """);
+
+        assertThrows(BadGatewayException.class,
+                () -> controller.recommendScenario(
+                        1L, "request-123", new ScenarioRecommendationRequestDto()));
+    }
+
+    @Test
+    void scenarioObjectiveStatusMustMatchScene() {
+        when(recommendScenarioTool.execute(anyString())).thenReturn("""
+                {"message":"Scenario generated.","count":1,"requestedCount":3,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":0,"adjustedItems":[],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "scenarioName":"Home","rationale":"Missing core content",
+                 "objectiveStatus":"COMPLETE","objectiveIssues":[],
+                 "verificationReady":false,"readinessIssues":[
+                   {"code":"NO_SPECIFICATIONS","message":"Add a specification."}],
                  "semanticWarnings":[
                    {"code":"NO_AUTOMATION_RULES","message":"No retained rules."},
                    {"code":"UNREFERENCED_DEVICES","message":"One device is unreferenced."}

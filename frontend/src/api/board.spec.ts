@@ -12,6 +12,7 @@ vi.mock('./http', () => ({
 
 import http from './http'
 import boardApi, { BOARD_RESPONSE_INCOMPLETE_CODE } from './board'
+import { FIX_RESPONSE_INCOMPLETE_CODE } from '@/utils/fixResponse'
 import type { DeviceNode } from '@/types/node'
 import type { Specification } from '@/types/spec'
 
@@ -37,6 +38,22 @@ const completeDeviceCreation = () => ({
   updatedSpecificationCount: 0,
   currentCount: 1
 })
+
+const completeDeviceRename = (overrides: Record<string, unknown> = {}) => {
+  const renamed = { ...device, label: 'Kitchen sensor' }
+  return {
+    operation: 'renamed',
+    affectedDevices: [renamed],
+    currentNodes: [renamed],
+    environmentVariables: [],
+    environmentChanges: [],
+    currentSpecifications: [],
+    previousLabel: 'Hall sensor',
+    updatedSpecificationCount: 0,
+    currentCount: 1,
+    ...overrides
+  }
+}
 
 const template = {
   id: 4,
@@ -164,6 +181,54 @@ describe('board mutation response contracts', () => {
       currentStateTrust: 'trusted',
       currentStatePrivacy: 'private'
     })).resolves.toEqual(response)
+  })
+
+  it('accepts inherited variable trust when the server serializes it as null', async () => {
+    const configured = {
+      ...device,
+      variables: [{ name: 'mode', value: 'eco', trust: null }]
+    }
+    const response = {
+      operation: 'updated',
+      mutationType: 'runtime',
+      changedFields: ['variables'],
+      previousDevice: device,
+      currentDevice: configured,
+      currentNodes: [configured],
+      currentCount: 1
+    }
+    vi.mocked(http.put).mockResolvedValue(resultEnvelope(response))
+
+    await expect(boardApi.updateNodeRuntime('device_1', {
+      variables: [{ name: 'mode', value: 'eco' }]
+    })).resolves.toEqual(response)
+  })
+
+  it('sends the label observed when the rename dialog opened', async () => {
+    vi.mocked(http.patch).mockResolvedValue(resultEnvelope(completeDeviceRename()))
+
+    await boardApi.renameNode('device_1', 'Kitchen sensor', 'Hall sensor')
+
+    expect(vi.mocked(http.patch)).toHaveBeenCalledWith('/board/nodes/device_1/label', {
+      label: 'Kitchen sensor',
+      expectedLabel: 'Hall sensor'
+    })
+  })
+
+  it.each([
+    ['an unchanged affected device', { affectedDevices: [device] }],
+    ['an unchanged authoritative device', { currentNodes: [device] }],
+    ['a different previous label', { previousLabel: 'Renamed elsewhere' }],
+    ['a negative specification count', { updatedSpecificationCount: -1 }],
+    ['a fractional specification count', { updatedSpecificationCount: 0.5 }]
+  ])('rejects a rename response with %s', async (_label, overrides) => {
+    vi.mocked(http.patch).mockResolvedValue(resultEnvelope(completeDeviceRename(overrides)))
+
+    await expect(boardApi.renameNode(
+      'device_1',
+      'Kitchen sensor',
+      'Hall sensor'
+    )).rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
   })
 
   it('rejects a scene replacement response that omits a required collection', async () => {
@@ -385,6 +450,23 @@ describe('board mutation response contracts', () => {
     })
   })
 
+  it('rejects invalid environment token provenance in a reset preview', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope({
+      ...completeTemplateResetPreview(),
+      environmentChanges: [{
+        changeType: 'ADDED',
+        name: 'weather',
+        currentValue: { name: 'weather', value: 'sunny' },
+        previousModelTokenSource: 'UNKNOWN',
+        currentModelTokenSource: 'UNVERIFIED'
+      }]
+    }))
+
+    await expect(boardApi.previewDefaultTemplateReset()).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
   it('rejects a committed reset whose final catalog contradicts its changes', async () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({
       ...completeTemplateResetPreview(),
@@ -523,7 +605,7 @@ describe('board mutation response contracts', () => {
       conditionAdjustments: [],
       removedRuleDescriptions: []
     })).rejects.toMatchObject({
-      code: BOARD_RESPONSE_INCOMPLETE_CODE
+      code: FIX_RESPONSE_INCOMPLETE_CODE
     })
   })
 })

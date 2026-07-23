@@ -6,7 +6,9 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.po.TracePo;
+import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.TraceStateIntegrity;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.stereotype.Component;
 
@@ -53,11 +55,17 @@ public class TraceMapper {
         applyPersistedModelContext(dto, tracePo);
 
         List<TraceStateDto> states = JsonUtils.readPersistedRequired("verification trace", tracePo.getId(),
-                "statesJson", () -> JsonUtils.fromJson(
-                        tracePo.getStatesJson(), new TypeReference<List<TraceStateDto>>() {}));
+                "statesJson", () -> TraceStateIntegrity.requireValidStates(JsonUtils.fromJson(
+                        tracePo.getStatesJson(), new TypeReference<List<TraceStateDto>>() {})));
         if (states.isEmpty()) {
             throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
                     "verification trace", tracePo.getId(), "statesJson", "trace has no states");
+        }
+        int persistedStateCount = requiredStateCount(tracePo.getId(), tracePo.getStateCount());
+        if (states.size() != persistedStateCount) {
+            throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
+                    "verification trace", tracePo.getId(), "stateCount",
+                    "state count does not match statesJson");
         }
         dto.setStates(states);
 
@@ -126,8 +134,10 @@ public class TraceMapper {
 
         if (traceDto.getStates() != null && !traceDto.getStates().isEmpty()) {
             po.setStatesJson(JsonUtils.toJson(traceDto.getStates()));
+            po.setStateCount(traceDto.getStates().size());
         } else {
             po.setStatesJson("[]");
+            po.setStateCount(0);
         }
 
         return po;
@@ -140,28 +150,28 @@ public class TraceMapper {
         return tracePoList.stream().map(this::toDto).toList();
     }
 
-    public TraceSummaryDto toSummaryDto(TracePo tracePo) {
-        if (tracePo == null) return null;
+    public TraceSummaryDto toSummaryDto(TraceSummaryProjection projection) {
+        if (projection == null) return null;
         SpecificationDto violatedSpec = JsonUtils.readPersistedRequired(
-                "verification trace", tracePo.getId(), "violatedSpecJson",
-                () -> JsonUtils.fromJson(tracePo.getViolatedSpecJson(), SpecificationDto.class));
-        List<TraceStateDto> states = JsonUtils.readPersistedRequired(
-                "verification trace", tracePo.getId(), "statesJson",
-                () -> JsonUtils.fromJson(
-                        tracePo.getStatesJson(), new TypeReference<List<TraceStateDto>>() {}));
-        if (states.isEmpty()) {
-            throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
-                    "verification trace", tracePo.getId(), "statesJson", "trace has no states");
-        }
+                "verification trace", projection.getId(), "violatedSpecJson",
+                () -> JsonUtils.fromJson(projection.getViolatedSpecJson(), SpecificationDto.class));
         return TraceSummaryDto.builder()
-                .id(tracePo.getId())
-                .verificationTaskId(tracePo.getVerificationTaskId())
-                .violatedSpecId(tracePo.getViolatedSpecId())
+                .id(projection.getId())
+                .verificationTaskId(projection.getVerificationTaskId())
+                .violatedSpecId(projection.getViolatedSpecId())
                 .violatedSpec(violatedSpec)
-                .stateCount(states.size())
-                .createdAt(tracePo.getCreatedAt())
+                .stateCount(requiredStateCount(projection.getId(), projection.getStateCount()))
+                .createdAt(projection.getCreatedAt())
                 .dataAvailable(true)
                 .build();
+    }
+
+    private int requiredStateCount(Long id, Integer stateCount) {
+        if (stateCount == null || stateCount < 1) {
+            throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
+                    "verification trace", id, "stateCount", "trace has no states");
+        }
+        return stateCount;
     }
 
 }

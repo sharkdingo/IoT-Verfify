@@ -170,7 +170,13 @@ public class UserOperationGuard {
         }
 
         public boolean isActive() {
-            return !closed && !lost;
+            if (closed || lost) return false;
+            if (redisBacked
+                    && System.nanoTime() - lastConfirmedNanos >= Duration.ofMillis(ttlMillis).toNanos()) {
+                markLost("the distributed lease has not been confirmed within its TTL");
+                return false;
+            }
+            return true;
         }
 
         public void requireActive() {

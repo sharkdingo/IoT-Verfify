@@ -13,6 +13,7 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.Duration;
+import java.lang.reflect.Field;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -94,6 +95,22 @@ class UserOperationGuardTest {
                 7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofMinutes(1));
 
         guard.renewActiveLeases();
+
+        assertFalse(lease.isActive());
+        assertThrows(ServiceUnavailableException.class, lease::requireActive);
+        lease.close();
+    }
+
+    @Test
+    void elapsedRedisLeaseCannotRemainActiveWhenHeartbeatDidNotRun() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        UserOperationGuard guard = new UserOperationGuard(redisTemplate);
+        UserOperationGuard.Lease lease = guard.acquire(
+                7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofMinutes(1));
+        Field lastConfirmed = lease.getClass().getDeclaredField("lastConfirmedNanos");
+        lastConfirmed.setAccessible(true);
+        lastConfirmed.setLong(lease, System.nanoTime() - Duration.ofMinutes(2).toNanos());
 
         assertFalse(lease.isActive());
         assertThrows(ServiceUnavailableException.class, lease::requireActive);

@@ -44,6 +44,7 @@ import cn.edu.nju.Iot_Verify.dto.recommendation.RecommendationResponseDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.RuleRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioObjectiveIssueDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioReadinessIssueDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioSemanticWarningDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.StandaloneRecommendationRequestDto;
@@ -156,7 +157,8 @@ public class BoardStorageController {
             @CurrentUser Long userId,
             @PathVariable String nodeId,
             @NotNull @Valid @RequestBody DeviceRenameRequestDto request) {
-        return Result.success(boardService.renameNode(userId, nodeId, request.getLabel()));
+        return Result.success(boardService.renameNode(
+                userId, nodeId, request.getLabel(), request.getExpectedLabel()));
     }
 
     @GetMapping("/nodes/{nodeId}/deletion-preview")
@@ -675,7 +677,8 @@ public class BoardStorageController {
                 "message", "count", "requestedCount", "validatedCount",
                 "filteredCount", "filteredItems", "adjustedCount", "adjustedItems",
                 "rawCandidateCount", "inspectedCount", "truncatedCount",
-                "scenarioName", "rationale", "verificationReady", "readinessIssues",
+                "scenarioName", "rationale", "objectiveStatus", "objectiveIssues",
+                "verificationReady", "readinessIssues",
                 "semanticWarnings", "scene"), context);
         RecommendationAudit audit = parseRecommendationAudit(result, true, context);
         PortableSceneDto scene = convertRecommendationItem(
@@ -711,6 +714,10 @@ public class BoardStorageController {
         response.setTruncatedCount(audit.truncatedCount());
         response.setScenarioName(requireRecommendationString(result, "scenarioName", context));
         response.setRationale(requireRecommendationString(result, "rationale", context));
+        String objectiveStatus = requireRecommendationString(result, "objectiveStatus", context);
+        List<ScenarioObjectiveIssueDto> objectiveIssues = convertRecommendationItems(
+                requireRecommendationList(result, "objectiveIssues", context),
+                ScenarioObjectiveIssueDto.class, context);
         boolean verificationReady = requireRecommendationBoolean(result, "verificationReady", context);
         List<ScenarioReadinessIssueDto> readinessIssues = convertRecommendationItems(
                 requireRecommendationList(result, "readinessIssues", context),
@@ -721,10 +728,14 @@ public class BoardStorageController {
         validateScenarioAnalysis(
                 scene,
                 audit.filteredCount(),
+                objectiveStatus,
+                objectiveIssues,
                 verificationReady,
                 readinessIssues,
                 semanticWarnings,
                 context);
+        response.setObjectiveStatus(objectiveStatus);
+        response.setObjectiveIssues(objectiveIssues);
         response.setVerificationReady(verificationReady);
         response.setReadinessIssues(readinessIssues);
         response.setSemanticWarnings(semanticWarnings);
@@ -734,12 +745,32 @@ public class BoardStorageController {
 
     private void validateScenarioAnalysis(PortableSceneDto scene,
                                           int filteredCount,
+                                          String objectiveStatus,
+                                          List<ScenarioObjectiveIssueDto> objectiveIssues,
                                           boolean verificationReady,
                                           List<ScenarioReadinessIssueDto> readinessIssues,
                                           List<ScenarioSemanticWarningDto> semanticWarnings,
                                           String context) {
         ScenarioVerificationReadiness.Status expected = ScenarioVerificationReadiness.assess(
                 objectMapper.valueToTree(scene), filteredCount, "en");
+        List<String> actualObjectiveCodes = new ArrayList<>();
+        for (int index = 0; index < objectiveIssues.size(); index++) {
+            ScenarioObjectiveIssueDto issue = objectiveIssues.get(index);
+            if (issue == null || isBlank(issue.getCode()) || isBlank(issue.getMessage())) {
+                throw invalidRecommendationResult(
+                        context, "objectiveIssues[" + index + "] requires non-blank code and message");
+            }
+            actualObjectiveCodes.add(issue.getCode());
+        }
+        List<String> expectedObjectiveCodes = expected.objectiveIssues().stream()
+                .map(ScenarioVerificationReadiness.Issue::code)
+                .toList();
+        if (!expected.objectiveStatus().equals(objectiveStatus)
+                || !actualObjectiveCodes.equals(expectedObjectiveCodes)) {
+            throw invalidRecommendationResult(
+                    context, "objectiveStatus/objectiveIssues must match the returned scene");
+        }
+
         List<String> actualCodes = new ArrayList<>();
         for (int index = 0; index < readinessIssues.size(); index++) {
             ScenarioReadinessIssueDto issue = readinessIssues.get(index);

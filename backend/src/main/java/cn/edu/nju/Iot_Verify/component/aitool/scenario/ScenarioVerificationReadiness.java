@@ -18,6 +18,7 @@ public final class ScenarioVerificationReadiness {
     }
 
     public static Status assess(JsonNode scene, int filteredCount, String language) {
+        boolean chinese = "zh-CN".equals(language);
         List<Issue> issues = new ArrayList<>();
         if (scene == null || !scene.path("devices").isArray() || scene.path("devices").isEmpty()) {
             issues.add(new Issue("NO_DEVICES", "Add at least one device before verification."));
@@ -25,10 +26,30 @@ public final class ScenarioVerificationReadiness {
         if (scene == null || !scene.path("specs").isArray() || scene.path("specs").isEmpty()) {
             issues.add(new Issue("NO_SPECIFICATIONS", "Add at least one valid specification before verification."));
         }
+        List<Issue> objectiveIssues = objectiveIssues(scene, chinese);
         return new Status(
+                objectiveIssues.isEmpty() ? "COMPLETE" : "PARTIAL",
+                objectiveIssues,
                 issues.isEmpty(),
                 List.copyOf(issues),
-                semanticWarnings(scene, Math.max(0, filteredCount), "zh-CN".equals(language)));
+                semanticWarnings(scene, Math.max(0, filteredCount), chinese));
+    }
+
+    private static List<Issue> objectiveIssues(JsonNode scene, boolean chinese) {
+        List<Issue> issues = new ArrayList<>();
+        if (scene == null || !scene.path("devices").isArray() || scene.path("devices").isEmpty()) {
+            issues.add(new Issue("NO_DEVICES",
+                    chinese ? "草案中没有设备。" : "The draft contains no device."));
+        }
+        if (scene == null || !scene.path("rules").isArray() || scene.path("rules").isEmpty()) {
+            issues.add(new Issue("NO_AUTOMATION_RULES",
+                    chinese ? "草案中没有自动化规则。" : "The draft contains no automation rule."));
+        }
+        if (scene == null || !scene.path("specs").isArray() || scene.path("specs").isEmpty()) {
+            issues.add(new Issue("NO_SPECIFICATIONS",
+                    chinese ? "草案中没有形式化规约。" : "The draft contains no formal specification."));
+        }
+        return List.copyOf(issues);
     }
 
     private static List<Issue> semanticWarnings(JsonNode scene, int filteredCount, boolean chinese) {
@@ -117,6 +138,8 @@ public final class ScenarioVerificationReadiness {
     }
 
     public record Status(
+            String objectiveStatus,
+            List<Issue> objectiveIssues,
             boolean verificationReady,
             List<Issue> readinessIssues,
             List<Issue> semanticWarnings) {

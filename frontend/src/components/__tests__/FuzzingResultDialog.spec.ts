@@ -31,6 +31,8 @@ const i18n = createI18n({
         fuzzIterations: 'Iterations',
         fuzzGeneratedPaths: 'Generated paths',
         fuzzElapsed: 'Elapsed',
+        fuzzElapsedSecond: '{count} second',
+        fuzzElapsedSeconds: '{count} seconds',
         fuzzEffectiveSeed: 'Effective seed',
         fuzzReproductionSettings: 'Reproduction settings',
         fuzzReproductionHint: 'Same settings and Board snapshot required.',
@@ -163,6 +165,17 @@ describe('FuzzingResultDialog', () => {
     })
 
     expect(wrapper.text()).toContain('Candidate violation found')
+    expect(wrapper.text()).toContain('1 second')
+    expect(wrapper.text()).not.toContain('1s')
+    expect(wrapper.get('[role="dialog"]').classes()).toEqual(expect.arrayContaining([
+      'dark:border-slate-700',
+      'dark:bg-slate-900'
+    ]))
+    expect(wrapper.get('[data-testid="fuzzing-result-mode"]').classes()).toEqual(expect.arrayContaining([
+      'dark:border-amber-800',
+      'dark:bg-amber-950/50',
+      'dark:text-amber-100'
+    ]))
     expect(wrapper.text()).toContain('7/14/2026')
     expect(wrapper.get('[data-testid="fuzzing-result-mode"]').text()).toContain('Random state and events')
     expect(wrapper.get('[data-testid="fuzzing-result-mode"]').text()).toContain('legal random state')
@@ -222,7 +235,10 @@ describe('FuzzingResultDialog', () => {
     expect(formalNotice.classes()).toEqual(expect.arrayContaining([
       'border-indigo-200',
       'bg-indigo-50',
-      'text-indigo-950'
+      'text-indigo-950',
+      'dark:border-indigo-800',
+      'dark:bg-indigo-950/50',
+      'dark:text-indigo-100'
     ]))
     expect(formalNotice.attributes('class')).not.toMatch(/emerald|green/)
     await wrapper.get('[data-testid="verify-current-board-without-finding"]').trigger('click')

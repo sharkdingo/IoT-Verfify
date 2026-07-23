@@ -57,6 +57,109 @@ export const isAccountDeletionOutcomeUncertain = (error: unknown): boolean => {
   const status = Number((error as { response?: { status?: unknown } } | null)?.response?.status)
   return !Number.isInteger(status) || status < 400 || status >= 500
 }
+
+export const collectBundledEnvironmentNames = (
+  providers: readonly { bundled: boolean; names: readonly string[] }[]
+): string[] => {
+  const environmentProviders = new Map<string, { bundled: boolean; seen: boolean }>()
+  providers.forEach(provider => {
+    provider.names.forEach(name => {
+      const current = environmentProviders.get(name) || { bundled: true, seen: false }
+      current.bundled = current.bundled && provider.bundled
+      current.seen = true
+      environmentProviders.set(name, current)
+    })
+  })
+  return [...environmentProviders.entries()]
+    .filter(([, provider]) => provider.seen && provider.bundled)
+    .map(([name]) => name)
+}
+
+export const shouldRedirectNarrowPanelFocus = (
+  scrimVisible: boolean,
+  target: EventTarget | null,
+  openPanel: HTMLElement | null,
+  scrim: HTMLElement | null
+): boolean => {
+  if (!scrimVisible || !(target instanceof HTMLElement) || !openPanel) return false
+  return !openPanel.contains(target)
+    && !scrim?.contains(target)
+    && !target.closest('.board-nav-bar')
+    && !target.closest('[aria-modal="true"]')
+}
+
+type NarrowPanelName = 'control' | 'inspector'
+
+export const focusCollapsedNarrowPanelToggle = (
+  panel: NarrowPanelName,
+  root: ParentNode = document
+): boolean => {
+  const testId = panel === 'control' ? 'control-center' : 'system-inspector'
+  const toggle = root.querySelector<HTMLElement>(
+    `[data-testid="${testId}"].is-collapsed button`
+  )
+  toggle?.focus()
+  return Boolean(toggle)
+}
+
+export type ReconciledBoardNode = {
+  id: string
+  position: { x: number; y: number }
+  width: number
+  height: number
+}
+
+export type ReconciledBoardNodeLayout = Pick<ReconciledBoardNode, 'position' | 'width' | 'height'>
+
+/**
+ * Merge a server snapshot without detaching nodes that an in-flight pointer interaction owns.
+ * Pending local layouts also win over older targeted-mutation snapshots from the server.
+ */
+export const reconcileBoardNodeSnapshot = <T extends ReconciledBoardNode>(
+  currentNodes: readonly T[],
+  incomingNodes: readonly T[],
+  pendingLayouts: ReadonlyMap<string, { layout: ReconciledBoardNodeLayout }>,
+  activeNodeIds: ReadonlySet<string>
+): T[] => {
+  const currentById = new Map(currentNodes.map(node => [node.id, node]))
+  return incomingNodes.map(incoming => {
+    const current = currentById.get(incoming.id)
+    if (!current) {
+      return { ...incoming, position: { ...incoming.position } }
+    }
+
+    const preservedLayout = activeNodeIds.has(incoming.id)
+      ? {
+          position: { ...current.position },
+          width: current.width,
+          height: current.height
+        }
+      : pendingLayouts.get(incoming.id)?.layout
+
+    Object.assign(current, incoming, { position: { ...incoming.position } })
+    if (preservedLayout) {
+      current.position = { ...preservedLayout.position }
+      current.width = preservedLayout.width
+      current.height = preservedLayout.height
+    }
+    return current
+  })
+}
+
+export const clampFloatingMenuPosition = (
+  position: { x: number; y: number },
+  menuSize: { width: number; height: number },
+  viewportSize: { width: number; height: number },
+  margin = 8
+) => ({
+  x: Math.max(margin, Math.min(position.x, viewportSize.width - menuSize.width - margin)),
+  y: Math.max(margin, Math.min(position.y, viewportSize.height - menuSize.height - margin))
+})
+
+export const resolveCurrentBoardNode = <T extends { id: string }>(
+  nodes: readonly T[],
+  nodeId: string | null | undefined
+): T | null => nodeId ? nodes.find(node => node.id === nodeId) || null : null
 </script>
 
 <script setup lang="ts">
@@ -69,6 +172,11 @@ import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
 import { subscribeBoardInvalidation } from '@/utils/boardInvalidation'
+import {
+  formatRecommendationCategory,
+  RULE_RECOMMENDATION_CATEGORY_OPTIONS,
+  SPEC_RECOMMENDATION_CATEGORY_OPTIONS
+} from '@/utils/recommendationCategory'
 import { authApi } from '@/api/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
@@ -127,7 +235,11 @@ import type {
 // Panel types removed
 
 // Utils
-import { getNodeIcon as resolveNodeIcon, validateManifest } from '../utils/device'
+import {
+  getNodeIcon as resolveNodeIcon,
+  MANIFEST_VALIDATION_MESSAGE_KEYS,
+  validateManifest
+} from '../utils/device'
 import { getVerificationOutcome, normalizeSpecResults } from '../utils/verificationResult'
 import { createDeviceInstanceId, deviceLabelKey, getUniqueLabel } from '../utils/canvas/nodeCreate'
 import { NODE_HEIGHT_RANGE, NODE_POSITION_ABS_MAX, NODE_WIDTH_RANGE } from '../utils/canvas/nodeLayout'
@@ -141,6 +253,7 @@ import { assertRuleHasTrigger, getLinkPoints, ruleSimilarityReasonKey } from '..
 import {
   canOpenTracePlayback,
   deriveTraceContext,
+  formatPlaybackSecurityLabel,
   formatTraceSpec,
   isPlaybackDeviceAttacked,
   normalizePlaybackDeviceId,
@@ -215,6 +328,7 @@ import {
   TRUST_OPTIONS,
   buildDeviceRuntimeConfig,
   createDeviceRuntimeDraft,
+  deviceRuntimeConfigsEqual,
   findTemplateStatePrivacy,
   findTemplateStateTrust,
   getTemplateLocalVariables,
@@ -226,6 +340,14 @@ import {
   validateDeviceRuntimeConfig,
   type DeviceRuntimeConfig
 } from '@/utils/deviceRuntime'
+import { getNodeAccentColor } from '@/utils/canvas/nodePalette'
+import { hasModeledStateMachine, resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
+import {
+  formatBuiltInModelToken,
+  formatModelTokenBySource,
+  formatModelTokenForTemplate
+} from '@/utils/modelTokenDisplay'
+import type { ModelTokenSource } from '@/types/modelToken'
 
 // Config
 import { defaultSpecTemplates, specTemplateDetails } from '../assets/config/specTemplates'
@@ -276,7 +398,7 @@ const props = defineProps<{
   prepareChatForLogout?: () => Promise<ChatLogoutPreparation>
 }>()
 
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const router = useRouter()
 const chatStore = useChatStore()
 const { toggleChat } = chatStore
@@ -436,8 +558,6 @@ const LAYOUT_LOGOUT_FLUSH_TIMEOUT_MS = 1_500
 const DEFAULT_CONTROL_PANEL_WIDTH = 320
 const DEFAULT_INSPECTOR_PANEL_WIDTH = 320
 
-const BASE_NODE_WIDTH = DEFAULT_NODE_WIDTH
-const BASE_FONT_SIZE = 16
 const ASYNC_TASK_POLL_INTERVAL_MS = 1000
 const ASYNC_TASK_MAX_POLLS = 600
 const TASK_INBOX_REFRESH_INTERVAL_MS = 5000
@@ -445,14 +565,26 @@ const AI_RECOMMENDATION_REQUIREMENT_MAX_LENGTH = 2000
 let pollingEpoch = 0
 let boardLifecycleDisposed = false
 
-const formatEnvironmentSnapshot = (variable: ModelEnvironmentVariable | null | undefined): string => {
+const formatBoardEnvironmentModelToken = (
+  name: string,
+  value: unknown,
+  bundledNames: readonly string[] = bundledBoardEnvironmentNames.value
+): string => bundledNames.includes(name)
+  ? formatBundledModelToken(value)
+  : String(value ?? '')
+
+const formatEnvironmentSnapshot = (
+  variable: ModelEnvironmentVariable | null | undefined,
+  bundledNames: readonly string[] = bundledBoardEnvironmentNames.value
+): string => {
   if (!variable) return ''
+  const displayName = formatBoardEnvironmentModelToken(variable.name, variable.name, bundledNames)
   const labels = [
-    variable.value,
+    formatBoardEnvironmentModelToken(variable.name, variable.value, bundledNames),
     variable.trust ? t(`app.${variable.trust}`) : '',
     variable.privacy ? t(`app.${variable.privacy}`) : ''
   ].filter(Boolean)
-  return labels.length > 0 ? `${variable.name}: ${labels.join(' · ')}` : variable.name
+  return labels.length > 0 ? `${displayName}: ${labels.join(' · ')}` : displayName
 }
 
 const formatEnvironmentChange = (change: EnvironmentVariableChange): string => {
@@ -468,14 +600,17 @@ const formatEnvironmentChange = (change: EnvironmentVariableChange): string => {
   return t('app.environmentChangeRemoved', { item: formatEnvironmentSnapshot(change.previousValue) })
 }
 
-const reportEnvironmentChanges = (changes: EnvironmentVariableChange[] | null | undefined) => {
+const reportEnvironmentChanges = (
+  changes: EnvironmentVariableChange[] | null | undefined,
+  bundledNames: readonly string[] = bundledBoardEnvironmentNames.value
+) => {
   const values = Array.isArray(changes) ? changes : []
   const added = values.filter(change => change.changeType === 'ADDED')
-    .map(change => formatEnvironmentSnapshot(change.currentValue))
+    .map(change => formatEnvironmentSnapshot(change.currentValue, bundledNames))
   const updated = values.filter(change => change.changeType === 'UPDATED')
-    .map(change => `${formatEnvironmentSnapshot(change.previousValue)} -> ${formatEnvironmentSnapshot(change.currentValue)}`)
+    .map(change => `${formatEnvironmentSnapshot(change.previousValue, bundledNames)} -> ${formatEnvironmentSnapshot(change.currentValue, bundledNames)}`)
   const removed = values.filter(change => change.changeType === 'REMOVED')
-    .map(change => formatEnvironmentSnapshot(change.previousValue))
+    .map(change => formatEnvironmentSnapshot(change.previousValue, bundledNames))
   if (added.length > 0) ElMessage.info(t('app.environmentPoolAddedByDeviceChange', { items: added.join(', ') }))
   if (updated.length > 0) ElMessage.info(t('app.environmentPoolUpdatedByDeviceChange', { items: updated.join(', ') }))
   if (removed.length > 0) ElMessage.info(t('app.environmentPoolRemovedByDeviceChange', { items: removed.join(', ') }))
@@ -633,6 +768,8 @@ const isCanvasHovered = ref(false)
 const canvasPan = ref<CanvasPan>({ x: 0, y: 0 })
 
 let isPanning = false
+let canvasPanPointerId: number | null = null
+let canvasPanTarget: HTMLElement | null = null
 let panStart = { x: 0, y: 0 }
 let panOrigin = { x: 0, y: 0 }
 let layoutSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -643,7 +780,8 @@ type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'
 type InspectorSection = 'devices' | 'rules' | 'specs'
 
 const isNarrowViewport = () =>
-  typeof window !== 'undefined' && window.innerWidth < 768
+  typeof window !== 'undefined'
+  && (window.innerWidth < 1024 || window.innerHeight < 600)
 
 let wasNarrowViewport = isNarrowViewport()
 
@@ -675,6 +813,10 @@ const boardPanels = reactive({
 type ActionDockMode = 'expanded' | 'compact' | 'packed'
 
 const actionDockViewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
+const boardViewportHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 900)
+const isNarrowBoardLayout = computed(() =>
+  actionDockViewportWidth.value < 1024 || boardViewportHeight.value < 600
+)
 const actionDockPreferredMode = ref<ActionDockMode>('expanded')
 const wideActionDockModeCycle: ActionDockMode[] = ['expanded', 'compact', 'packed']
 const narrowActionDockModeCycle: ActionDockMode[] = ['compact', 'packed']
@@ -747,10 +889,14 @@ const updateActionDockViewport = () => {
     void saveBoardLayout({ silent: true })
   }
   actionDockViewportWidth.value = window.innerWidth
+  boardViewportHeight.value = window.innerHeight
   if (narrow) {
     applyViewportPanelConstraints()
     if (!wasNarrowViewport && layoutHydrated.value) {
-      void nextTick(() => fitNodesToCanvas(getVisibleDeviceNodes()))
+      const visibleNodes = getVisibleDeviceNodes()
+      if (visibleNodes.length > 0) {
+        void nextTick(() => fitNodesToCanvas(visibleNodes))
+      }
     }
   } else if (wasNarrowViewport && persistedWideLayout) {
     applyBoardLayout(persistedWideLayout)
@@ -776,6 +922,72 @@ const applyViewportPanelConstraints = () => {
   boardPanels.control.collapsed = true
   boardPanels.inspector.collapsed = true
 }
+
+const closeNarrowSidePanels = () => {
+  boardPanels.control.collapsed = true
+  boardPanels.inspector.collapsed = true
+}
+
+const openNarrowPanelName = computed<NarrowPanelName | null>(() => {
+  if (!isNarrowBoardLayout.value) return null
+  if (!boardPanels.control.collapsed) return 'control'
+  if (!boardPanels.inspector.collapsed) return 'inspector'
+  return null
+})
+const showNarrowPanelScrim = computed(() => openNarrowPanelName.value !== null)
+
+const boardPanelScrimRef = ref<HTMLButtonElement | null>(null)
+const narrowPanelFocusableSelector = [
+  'button:not([disabled])',
+  'a[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',')
+
+const getOpenNarrowPanel = () => document.querySelector<HTMLElement>(
+  !boardPanels.control.collapsed
+    ? '[data-testid="control-center"].is-expanded'
+    : '[data-testid="system-inspector"].is-expanded'
+)
+
+const focusOpenNarrowPanel = (panel: HTMLElement | null) => {
+  panel?.querySelector<HTMLElement>(narrowPanelFocusableSelector)?.focus()
+}
+
+const handleBoardFocusIn = (event: FocusEvent) => {
+  const panel = getOpenNarrowPanel()
+  if (shouldRedirectNarrowPanelFocus(
+    showNarrowPanelScrim.value,
+    event.target,
+    panel,
+    boardPanelScrimRef.value
+  )) {
+    focusOpenNarrowPanel(panel)
+  }
+}
+
+watch(openNarrowPanelName, (open, previous) => {
+  void nextTick(() => {
+    if (open) {
+      const panel = getOpenNarrowPanel()
+      if (shouldRedirectNarrowPanelFocus(
+        true,
+        document.activeElement,
+        panel,
+        boardPanelScrimRef.value
+      )) {
+        focusOpenNarrowPanel(panel)
+      }
+      return
+    }
+
+    if (previous && isNarrowBoardLayout.value) {
+      focusCollapsedNarrowPanelToggle(previous)
+    }
+  })
+})
 
 watch(actionDockViewportWidth, applyViewportPanelConstraints, { immediate: true })
 
@@ -1273,6 +1485,29 @@ const validateTemplateInstanceRuntimeConfig = (template: DeviceTemplate, runtime
 let boardMutationQueue: Promise<void> = Promise.resolve()
 let nodeLayoutMutationVersion = 0
 const pendingNodeLayouts = new Map<string, { version: number; layout: DeviceLayout }>()
+const activeNodeLayoutInteractions = new Set<string>()
+
+const replaceNodesFromServer = (source: DeviceNode[]) => {
+  const incomingNodes = getVisibleDeviceNodes(source)
+  nodes.value = reconcileBoardNodeSnapshot(
+    nodes.value,
+    incomingNodes,
+    pendingNodeLayouts,
+    activeNodeLayoutInteractions
+  )
+  const incomingIds = new Set(incomingNodes.map(node => node.id))
+  for (const nodeId of pendingNodeLayouts.keys()) {
+    if (!incomingIds.has(nodeId)) pendingNodeLayouts.delete(nodeId)
+  }
+}
+
+const handleNodeLayoutInteractionStart = (nodeId: string) => {
+  activeNodeLayoutInteractions.add(nodeId)
+}
+
+const handleNodeLayoutInteractionEnd = (nodeId: string) => {
+  activeNodeLayoutInteractions.delete(nodeId)
+}
 
 const enqueueBoardMutation = async <T,>(work: () => Promise<T>): Promise<T> => {
   const authScopeEpoch = boardAuthScopeEpoch
@@ -1305,17 +1540,23 @@ const deviceLayoutMatches = (node: DeviceNode | undefined, layout: DeviceLayout)
   && node.width === layout.width
   && node.height === layout.height
 
-const deviceRuntimeMatches = (node: DeviceNode | undefined, runtime: DeviceRuntimeConfig) => {
+const deviceRuntimeMatches = (
+  node: DeviceNode | undefined,
+  runtime: DeviceRuntimeConfig,
+  template: DeviceTemplate
+) => {
   if (!node) return false
-  if (runtime.state !== undefined && node.state !== runtime.state) return false
-  if ((node.currentStateTrust ?? null) !== (runtime.currentStateTrust ?? null)) return false
-  if ((node.currentStatePrivacy ?? null) !== (runtime.currentStatePrivacy ?? null)) return false
-  if (JSON.stringify(node.variables ?? []) !== JSON.stringify(runtime.variables ?? [])) return false
-  return JSON.stringify(node.privacies ?? []) === JSON.stringify(runtime.privacies ?? [])
+  return deviceRuntimeConfigsEqual(template, node, runtime, {
+    includeEmptyCollections: true,
+    variableScope: 'local'
+  })
 }
 
 // --- UI State ---
 const dialogVisible = ref(false)
+let deviceDialogReturnFocusNodeId: string | null = null
+let renameDialogReturnFocusNodeId: string | null = null
+let deleteDialogReturnFocusNodeId: string | null = null
 const dialogMeta = reactive<DeviceDialogMeta>({
   nodeId: '',
   deviceName: '',
@@ -1329,12 +1570,15 @@ const deviceRuntimeSaving = ref(false)
 
 // Custom dialog states
 const renameDialogVisible = ref(false)
+const renameDialogSubmitting = ref(false)
 const renameDialogData = reactive({
   node: null as DeviceNode | null,
-  newName: ''
+  newName: '',
+  originalLabel: ''
 })
 
 const deleteConfirmDialogVisible = ref(false)
+const deleteConfirmSubmitting = ref(false)
 const deleteConfirmDialogData = reactive({
   node: null as DeviceNode | null,
   hasRelations: false,
@@ -1355,17 +1599,6 @@ const deleteConfirmDialogData = reactive({
 // getCardWidth removed
 
 
-const getNodeLabelStyle = (node: DeviceNode) => {
-  const ratio = Math.min(node.width / BASE_NODE_WIDTH, node.height / 100)
-  const scale = Math.min(Math.max(ratio, 0.68), 1.05)
-  const fontSize = Math.min(13, Math.max(10, BASE_FONT_SIZE * scale * 0.72))
-  return {
-    fontSize: fontSize + 'px',
-    lineHeight: '1.18',
-    maxWidth: Math.max(48, node.width - 18) + 'px'
-  }
-}
-
 const normalizeTemplateLookupName = (value: unknown): string =>
   String(value ?? '').trim().toLowerCase()
 
@@ -1381,6 +1614,88 @@ const findTemplateByAnyName = (name: unknown): DeviceTemplate | undefined =>
 
 const resolveTemplateForNode = (node: DeviceNode): DeviceTemplate | null => {
   return findTemplateByAnyName(node.templateName) || null
+}
+
+const isBundledDeviceTemplate = (template?: DeviceTemplate | null): boolean =>
+  template?.defaultTemplate === true
+
+const formatBundledModelToken = (value: unknown): string => formatBuiltInModelToken(
+  value,
+  key => te(key) ? t(key) : key
+)
+
+const formatNodeModelToken = (node: DeviceNode, value: unknown): string =>
+  isBundledDeviceTemplate(resolveTemplateForNode(node))
+    ? formatBundledModelToken(value)
+    : String(value ?? '')
+
+const formatTemplateModelToken = (template: DeviceTemplate | null | undefined, value: unknown): string =>
+  formatModelTokenForTemplate(template, value, key => te(key) ? t(key) : key)
+
+const formatRecommendedDeviceModelToken = (recommendation: DeviceRecommendation, value: unknown): string =>
+  formatTemplateModelToken(findTemplateByAnyName(recommendation.templateName), value)
+
+const formatRecommendedDeviceEnvironmentAdditions = (recommendation: DeviceRecommendation): string =>
+  recommendedDeviceEnvironmentAdditions(recommendation)
+    .map(name => formatRecommendedDeviceModelToken(recommendation, name))
+    .join(', ')
+
+const getTemplateEnvironmentNames = (template?: DeviceTemplate | null): string[] => {
+  const manifest = template?.manifest
+  if (!manifest) return []
+  const names = new Set<string>()
+  ;(manifest.InternalVariables || []).forEach(variable => {
+    if (variable.IsInside !== true && variable.Name?.trim()) names.add(variable.Name.trim())
+  })
+  ;(manifest.EnvironmentDomains || []).forEach(variable => {
+    if (variable.Name?.trim()) names.add(variable.Name.trim())
+  })
+  ;(manifest.ImpactedVariables || []).forEach(name => {
+    if (name?.trim()) names.add(name.trim())
+  })
+  return [...names]
+}
+
+type ModelTokenDevice = {
+  templateName?: string | null
+  modelTokenSource?: ModelTokenSource | null
+}
+
+const getBundledEnvironmentNames = (devices: readonly ModelTokenDevice[]): string[] => {
+  return collectBundledEnvironmentNames(devices.map(device => {
+    const template = findTemplateByAnyName(device.templateName)
+    return {
+      bundled: isBundledDeviceTemplate(template),
+      names: getTemplateEnvironmentNames(template)
+    }
+  }))
+}
+
+const formatPlaybackDeviceModelToken = (device: ModelTokenDevice, value: unknown): string => {
+  const fallbackSource = activePlaybackKind.value === 'fuzzing'
+    && isBundledDeviceTemplate(findTemplateByAnyName(device.templateName))
+    ? 'BUNDLED'
+    : 'UNKNOWN'
+  return formatModelTokenBySource(
+    device.modelTokenSource || fallbackSource,
+    value,
+    key => te(key) ? t(key) : key
+  )
+}
+
+const bundledBoardDeviceIds = computed(() => nodes.value
+  .filter(node => isBundledDeviceTemplate(resolveTemplateForNode(node)))
+  .map(node => node.id))
+
+const bundledBoardEnvironmentNames = computed(() => getBundledEnvironmentNames(nodes.value))
+
+const hasNodeStateMachine = (node: DeviceNode): boolean => {
+  return hasModeledStateMachine(resolveTemplateForNode(node)?.manifest)
+}
+
+const getNodeEffectiveState = (node: DeviceNode): string => {
+  const manifest = resolveTemplateForNode(node)?.manifest
+  return resolveEffectiveNodeState(node.state, manifest, t('app.unknown'))
 }
 
 const getBoardNodeIcon = (node: DeviceNode, stateOverride?: string): string => {
@@ -1440,7 +1755,13 @@ const onCanvasEnter = () => (isCanvasHovered.value = true)
 const onCanvasLeave = () => (isCanvasHovered.value = false)
 
 const onGlobalKeydown = (e: KeyboardEvent) => {
-  if (e.ctrlKey) {
+  const target = e.target as HTMLElement | null
+  const isEditableTarget = target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || Boolean(target?.isContentEditable)
+
+  if (!e.defaultPrevented && isCanvasHovered.value && !isEditableTarget && (e.ctrlKey || e.metaKey)) {
     if (['=', '+', '-', '0'].includes(e.key)) {
       e.preventDefault()
       if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
@@ -1457,22 +1778,25 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
 }
 
 const onCanvasPointerDown = (e: PointerEvent) => {
-  if (e.button !== 0) return
+  if (e.button !== 0 || e.isPrimary === false || canvasPanPointerId !== null) return
+  e.preventDefault()
   isPanning = true
+  canvasPanPointerId = e.pointerId
   panStart = { x: e.clientX, y: e.clientY }
   panOrigin = { x: canvasPan.value.x, y: canvasPan.value.y }
 
   const target = e.currentTarget as HTMLElement
-  if (target && target.setPointerCapture) {
-    target.setPointerCapture(e.pointerId)
-  }
+  canvasPanTarget = target
+  try { target.setPointerCapture?.(e.pointerId) } catch {}
+  target.addEventListener('lostpointercapture', onCanvasPointerLost)
 
   window.addEventListener('pointermove', onCanvasPointerMove)
   window.addEventListener('pointerup', onCanvasPointerUp)
+  window.addEventListener('pointercancel', onCanvasPointerCancel)
 }
 
 const onCanvasPointerMove = (e: PointerEvent) => {
-  if (!isPanning) return
+  if (!isPanning || e.pointerId !== canvasPanPointerId) return
   const dx = e.clientX - panStart.x
   const dy = e.clientY - panStart.y
   if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
@@ -1482,17 +1806,32 @@ const onCanvasPointerMove = (e: PointerEvent) => {
   }
 }
 
-const onCanvasPointerUp = async (e: PointerEvent) => {
+const finishCanvasPan = (pointerId: number | null = canvasPanPointerId) => {
+  if (pointerId !== null && pointerId !== canvasPanPointerId) return
+  const target = canvasPanTarget
+  const activePointerId = canvasPanPointerId
   isPanning = false
-
-  const target = e.target as HTMLElement
-  if (target && target.releasePointerCapture) {
-    try { target.releasePointerCapture(e.pointerId) } catch(err){}
+  canvasPanPointerId = null
+  canvasPanTarget = null
+  target?.removeEventListener('lostpointercapture', onCanvasPointerLost)
+  if (target && activePointerId !== null) {
+    try { target.releasePointerCapture?.(activePointerId) } catch {}
   }
-
-  // Layout saving removed
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
+  window.removeEventListener('pointercancel', onCanvasPointerCancel)
+}
+
+const onCanvasPointerUp = (e: PointerEvent) => {
+  finishCanvasPan(e.pointerId)
+}
+
+const onCanvasPointerCancel = (e: PointerEvent) => {
+  finishCanvasPan(e.pointerId)
+}
+
+const onCanvasPointerLost = (e: PointerEvent) => {
+  finishCanvasPan(e.pointerId)
 }
 
 // Panel interaction removed
@@ -1538,7 +1877,7 @@ const createDeviceInstanceAt = async (
     }
     try {
       const mutation = await boardApi.addNodes([node])
-      nodes.value = getVisibleDeviceNodes(mutation.currentNodes)
+      replaceNodesFromServer(mutation.currentNodes)
       environmentVariables.value = mutation.environmentVariables
       reportEnvironmentChanges(mutation.environmentChanges)
       syncRuleDerivedEdges()
@@ -1580,6 +1919,15 @@ const cancelTemplateInstanceCreate = () => {
   templateInstanceDialogData.name = ''
   resetTemplateInstanceRuntime(null)
 }
+
+const {
+  setDialogRef: setTemplateInstanceDialogRef,
+  handleModalKeydown: handleTemplateInstanceDialogKeydown
+} = useModalAccessibility(
+  templateInstanceDialogVisible,
+  cancelTemplateInstanceCreate,
+  () => document.querySelector<HTMLElement>('[data-testid="control-center"] button')
+)
 
 const confirmTemplateInstanceCreate = async () => {
   if (!ensurePlaybackClosedForMutation()) return
@@ -1679,11 +2027,9 @@ const handleNodeMovedOrResized = async (nodeId: string) => {
   await enqueueBoardMutation(async () => {
     try {
       const mutation = await boardApi.updateNodeLayout(nodeId, layout)
-      nodes.value = getVisibleDeviceNodes(mutation.currentNodes)
+      replaceNodesFromServer(mutation.currentNodes)
       const pending = pendingNodeLayouts.get(nodeId)
-      if (pending && pending.version > version) {
-        applyLayoutToNode(nodes.value.find(candidate => candidate.id === nodeId), pending.layout)
-      } else if (pending?.version === version) {
+      if (pending?.version === version) {
         pendingNodeLayouts.delete(nodeId)
       }
       syncRuleDerivedEdges()
@@ -1786,19 +2132,42 @@ const formatRecommendedRuleDevice = (deviceId?: string, label?: string): string 
   return displayLabel || t('app.unknownModelItem')
 }
 
+const formatRecommendedNodeModelToken = (deviceId: unknown, value: unknown): string => {
+  const node = resolveNodeRef(String(deviceId || '').trim())
+  return node ? formatNodeModelToken(node, value) : String(value ?? '')
+}
+
+const formatRecommendedRuleConditionAttribute = (
+  condition: RuleRecommendation['conditions'][number]
+): string => formatRecommendedNodeModelToken(condition.deviceId, condition.attribute)
+
+const formatRecommendedRuleConditionValue = (
+  condition: RuleRecommendation['conditions'][number]
+): string => formatRecommendedNodeModelToken(condition.deviceId, condition.value)
+
+const formatRecommendedRuleCommandAction = (command: RuleRecommendation['command']): string =>
+  formatRecommendedNodeModelToken(command.deviceId, command.action)
+
+const formatRecommendedRuleCommandContent = (command: RuleRecommendation['command']): string =>
+  formatRecommendedNodeModelToken(command.contentDevice, command.content)
+
 const formatRecommendedSpecConditionTarget = (condition: any): string => {
   const device = formatRecommendedRuleDevice(condition?.deviceId, condition?.deviceLabel)
   const targetType = String(condition?.targetType || '').trim().toLowerCase()
   const key = String(condition?.key || '').trim()
+  const displayKey = formatRecommendedNodeModelToken(condition?.deviceId, key)
   if (targetType === 'trust' || targetType === 'privacy') {
     const property = condition?.propertyScope === 'state'
-      ? t('app.currentModeStateProperty', { mode: key })
-      : key
+      ? t('app.currentModeStateProperty', { mode: displayKey })
+      : displayKey
     const dimension = targetType === 'trust' ? t('app.sourceLabel') : t('app.sensitivityLabel')
     return `${device} · ${property} · ${dimension}`
   }
-  return key ? `${device}.${key}` : device
+  return key ? `${device}.${displayKey}` : device
 }
+
+const formatRecommendedSpecConditionValue = (condition: any): string =>
+  formatRecommendedNodeModelToken(condition?.deviceId, condition?.value)
 
 const formatRecommendedRuleConditionDevice = (condition: RuleRecommendation['conditions'][number]): string =>
   formatRecommendedRuleDevice(condition.deviceId, condition.deviceLabel || condition.deviceName)
@@ -1985,6 +2354,20 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
  * 8. Context Menu & Deletion
  * ================================================================================= */
 
+const getDeviceNodeElement = (nodeId: string | null | undefined) => {
+  if (!nodeId) return null
+  const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(nodeId)
+    : nodeId.replace(/["\\]/g, '\\$&')
+  return document.querySelector<HTMLElement>(`[data-node-id="${escaped}"]`)
+}
+
+const getDeleteDialogFallbackFocus = () =>
+  getDeviceNodeElement(deleteDialogReturnFocusNodeId)
+  ?? document.querySelector<HTMLElement>('[data-testid="control-tab-devices"]')
+  ?? document.querySelector<HTMLElement>('[data-testid="control-center"] button:not([disabled])')
+  ?? document.querySelector<HTMLElement>('.board-nav-bar button:not([disabled])')
+
 const onDeviceListClick = (deviceId: string, options: { focus?: boolean; ensureReadable?: boolean } = {}) => {
   if (isModelPlaybackActive.value) {
     ElMessage.info({ message: t('app.playbackDeviceDetailsUseTimeline'), type: 'info' })
@@ -1998,6 +2381,12 @@ const onDeviceListClick = (deviceId: string, options: { focus?: boolean; ensureR
     focusDeviceNodeOnCanvas(node, { ensureReadable: options.ensureReadable })
   }
 
+  bindDeviceDialogNode(node)
+  deviceDialogReturnFocusNodeId = node.id
+  dialogVisible.value = true
+}
+
+const bindDeviceDialogNode = (node: DeviceNode) => {
   const tpl = resolveTemplateForNode(node)
   const manifest = tpl?.manifest || null
   dialogMeta.nodeId = node.id
@@ -2009,7 +2398,24 @@ const onDeviceListClick = (deviceId: string, options: { focus?: boolean; ensureR
   dialogMeta.specs = specifications.value.filter(spec =>
     isSpecRelatedToNode(spec, node.id)
   )
-  dialogVisible.value = true
+}
+
+const clearDeviceDialogMeta = () => {
+  dialogMeta.nodeId = ''
+  dialogMeta.label = ''
+  dialogMeta.deviceName = ''
+  dialogMeta.description = ''
+  dialogMeta.manifest = null
+  dialogMeta.rules = []
+  dialogMeta.specs = []
+}
+
+const handleDeviceDialogVisibility = (visible: boolean) => {
+  dialogVisible.value = visible
+  if (!visible) {
+    const nodeId = deviceDialogReturnFocusNodeId
+    void nextTick(() => getDeviceNodeElement(nodeId)?.focus({ preventScroll: true }))
+  }
 }
 
 const focusDeviceFromInspector = (deviceId: string) => {
@@ -2025,38 +2431,91 @@ const contextMenu = ref({
   y: 0,
   node: null as DeviceNode | null
 })
+const contextMenuRef = ref<HTMLElement | null>(null)
+let contextMenuReturnFocus: HTMLElement | null = null
+
+const contextMenuItems = () => Array.from(
+  contextMenuRef.value?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') || []
+)
 
 const onNodeContext = (node: DeviceNode, position: { x: number; y: number }) => {
   if (isInternalVariableNode(node)) {
     return
   }
+  contextMenuReturnFocus = getDeviceNodeElement(node.id)
   contextMenu.value = {
     visible: true,
     x: position.x,
     y: position.y,
     node
   }
+  void nextTick(() => {
+    const menu = contextMenuRef.value
+    if (!menu || !contextMenu.value.visible) return
+    const rect = menu.getBoundingClientRect()
+    const clamped = clampFloatingMenuPosition(
+      position,
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight }
+    )
+    contextMenu.value.x = clamped.x
+    contextMenu.value.y = clamped.y
+    contextMenuItems()[0]?.focus({ preventScroll: true })
+  })
 }
 
 const openNodeFromCanvas = (node: DeviceNode) => {
-  onDeviceListClick(node.id, { ensureReadable: true })
+  onDeviceListClick(node.id, { focus: false })
 }
 
-const closeContextMenu = () => {
+const closeContextMenu = (restoreFocus = true) => {
+  const returnFocus = contextMenuReturnFocus
   contextMenu.value.visible = false
+  contextMenu.value.node = null
+  contextMenuReturnFocus = null
+  if (restoreFocus && returnFocus?.isConnected) {
+    void nextTick(() => returnFocus.focus({ preventScroll: true }))
+  }
+}
+
+const handleContextMenuKeydown = (event: KeyboardEvent) => {
+  const items = contextMenuItems()
+  const currentIndex = items.indexOf(document.activeElement as HTMLElement)
+  let nextIndex: number | null = null
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeContextMenu()
+    return
+  }
+  if (event.key === 'ArrowDown') nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length
+  if (event.key === 'ArrowUp') nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = items.length - 1
+  if (event.key === 'Tab') {
+    event.preventDefault()
+    closeContextMenu()
+    return
+  }
+  if (nextIndex !== null && items[nextIndex]) {
+    event.preventDefault()
+    items[nextIndex].focus({ preventScroll: true })
+  }
 }
 
 const openRenameDialog = (node: DeviceNode) => {
+  renameDialogReturnFocusNodeId = node.id
   renameDialogData.node = node
   renameDialogData.newName = node.label
+  renameDialogData.originalLabel = node.label
   renameDialogVisible.value = true
 }
 
 // 右键菜单操作
 const renameDevice = () => {
   if (!contextMenu.value.node) return
-  openRenameDialog(contextMenu.value.node)
-  closeContextMenu()
+  const node = contextMenu.value.node
+  closeContextMenu(false)
+  openRenameDialog(node)
 }
 
 const handleDialogRename = () => {
@@ -2068,11 +2527,16 @@ const handleDialogRename = () => {
 
 const deleteDevice = () => {
   if (!contextMenu.value.node) return
-  deleteCurrentNodeWithConfirm(contextMenu.value.node.id)
+  const nodeId = contextMenu.value.node.id
   closeContextMenu()
+  void deleteCurrentNodeWithConfirm(nodeId)
 }
 
-const handleRenameDevice = async (nodeId: string, newLabel: string): Promise<boolean> => {
+const handleRenameDevice = async (
+  nodeId: string,
+  newLabel: string,
+  expectedLabel: string
+): Promise<boolean> => {
   if (!ensurePlaybackClosedForMutation()) return false
   if (!ensureBoardDataReady(['nodes', 'specs'])) return false
   return enqueueBoardMutation(async () => {
@@ -2085,8 +2549,8 @@ const handleRenameDevice = async (nodeId: string, newLabel: string): Promise<boo
     if (!nodes.value.some(node => node.id === nodeId)) return false
 
     try {
-      const mutation = await boardApi.renameNode(nodeId, newLabel)
-      nodes.value = getVisibleDeviceNodes(mutation.currentNodes)
+      const mutation = await boardApi.renameNode(nodeId, newLabel, expectedLabel)
+      replaceNodesFromServer(mutation.currentNodes)
       environmentVariables.value = mutation.environmentVariables
       specifications.value = mutation.currentSpecifications
       reportEnvironmentChanges(mutation.environmentChanges)
@@ -2094,6 +2558,28 @@ const handleRenameDevice = async (nodeId: string, newLabel: string): Promise<boo
       ElMessage.success(t('app.renameSuccess'))
       return true
     } catch (error: any) {
+      if (error?.response?.status === 409) {
+        const [nodesRefreshed, specsRefreshed, environmentRefreshed] = await Promise.all([
+          refreshDevices(),
+          refreshSpecifications(),
+          refreshEnvironmentVariables()
+        ])
+        const currentNode = nodes.value.find(candidate => candidate.id === nodeId)
+        if (nodesRefreshed && specsRefreshed && environmentRefreshed && currentNode) {
+          if (currentNode.label === newLabel) {
+            ElMessage.warning(t('app.deviceRenameOutcomeRefreshed', { name: newLabel }))
+            return true
+          }
+          if (renameDialogVisible.value && renameDialogData.node?.id === nodeId) {
+            renameDialogData.node = currentNode
+            renameDialogData.originalLabel = currentNode.label
+          }
+          ElMessage.warning(t('app.deviceRenameConflictRefreshed', { name: currentNode.label }))
+        } else {
+          ElMessage.warning(t('app.deviceRenameConflictRefreshFailed'))
+        }
+        return false
+      }
       if (!isDefinitiveMutationRejection(error)) {
         const [nodesRefreshed, specsRefreshed, environmentRefreshed] = await Promise.all([
           refreshDevices(),
@@ -2138,20 +2624,24 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
     await enqueueBoardMutation(async () => {
       try {
         const mutation = await boardApi.updateNodeRuntime(nodeId, runtimeRequest)
-        nodes.value = getVisibleDeviceNodes(mutation.currentNodes)
+        replaceNodesFromServer(mutation.currentNodes)
         syncRuleDerivedEdges()
         ElMessage.success(mutation.operation === 'updated'
           ? t('app.instanceConfigSaved')
           : t('app.instanceConfigUnchanged'))
-        onDeviceListClick(nodeId)
+        if (dialogVisible.value && dialogMeta.nodeId === nodeId) {
+          onDeviceListClick(nodeId, { focus: false })
+        }
       } catch (error: any) {
         console.error('保存设备实例配置失败', error)
         if (!isDefinitiveMutationRejection(error)) {
           const nodesRefreshed = await refreshDevices()
           const persisted = nodes.value.find(candidate => candidate.id === nodeId)
-          if (nodesRefreshed && deviceRuntimeMatches(persisted, runtimeRequest)) {
+          if (nodesRefreshed && deviceRuntimeMatches(persisted, runtimeRequest, template)) {
             ElMessage.warning(t('app.deviceRuntimeOutcomeRefreshed'))
-            onDeviceListClick(nodeId)
+            if (dialogVisible.value && dialogMeta.nodeId === nodeId) {
+              onDeviceListClick(nodeId, { focus: false })
+            }
             return
           }
         }
@@ -2165,14 +2655,49 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
 
 const viewDeviceDetails = () => {
   if (!contextMenu.value.node) return
-  // 显示设备详情 - 复用左侧列表点击的逻辑
-  onDeviceListClick(contextMenu.value.node.id)
+  const nodeId = contextMenu.value.node.id
   closeContextMenu()
+  onDeviceListClick(nodeId, { focus: false })
 }
+
+watch(
+  [nodes, edges, specifications, deviceTemplates],
+  () => {
+    if (dialogVisible.value) {
+      const currentDialogNode = resolveCurrentBoardNode(nodes.value, dialogMeta.nodeId)
+      if (currentDialogNode) {
+        bindDeviceDialogNode(currentDialogNode)
+      } else {
+        dialogVisible.value = false
+        clearDeviceDialogMeta()
+      }
+    }
+
+    if (contextMenu.value.visible) {
+      const currentContextNode = resolveCurrentBoardNode(nodes.value, contextMenu.value.node?.id)
+      if (currentContextNode) {
+        contextMenu.value.node = currentContextNode
+      } else {
+        closeContextMenu(false)
+      }
+    }
+
+    if (renameDialogVisible.value && renameDialogData.node) {
+      const currentRenameNode = resolveCurrentBoardNode(nodes.value, renameDialogData.node.id)
+      if (currentRenameNode) {
+        renameDialogData.node = currentRenameNode
+      } else if (!renameDialogSubmitting.value) {
+        cancelRename()
+      }
+    }
+  },
+  { flush: 'sync' }
+)
 
 
 type DeviceDeletionOutcome = {
   responseConfirmed: boolean
+  stalePreview?: boolean
 }
 
 const forceDeleteNode = async (
@@ -2181,13 +2706,14 @@ const forceDeleteNode = async (
 ): Promise<DeviceDeletionOutcome | null> => {
   if (!ensureBoardDataReady(['nodes', 'environment', 'rules', 'specs'])) return null
   return enqueueBoardMutation(async () => {
+    const bundledEnvironmentNamesBeforeDelete = [...bundledBoardEnvironmentNames.value]
     try {
       const mutation = await boardApi.deleteNode(nodeId, impactToken)
-      nodes.value = getVisibleDeviceNodes(mutation.currentNodes)
+      replaceNodesFromServer(mutation.currentNodes)
       environmentVariables.value = mutation.environmentVariables
       rules.value = mutation.currentRules
       specifications.value = mutation.currentSpecifications
-      reportEnvironmentChanges(mutation.environmentChanges)
+      reportEnvironmentChanges(mutation.environmentChanges, bundledEnvironmentNamesBeforeDelete)
       syncRuleDerivedEdges()
       return { responseConfirmed: true }
     } catch (error: any) {
@@ -2195,8 +2721,8 @@ const forceDeleteNode = async (
       const message = extractApiErrorMessage(error, t('app.deleteDeviceFailedRetry'))
       if (error?.response?.status === 409) {
         await Promise.all([refreshDevices(), refreshEnvironmentVariables(), refreshRules(), refreshSpecifications()])
-        void deleteCurrentNodeWithConfirm(nodeId)
         ElMessage.warning(message)
+        return { responseConfirmed: false, stalePreview: true }
       } else if (!isDefinitiveMutationRejection(error)) {
         const refreshed = await refreshSceneForReconciliation()
         if (!refreshed) {
@@ -2216,8 +2742,10 @@ const forceDeleteNode = async (
 }
 
 const deleteCurrentNodeWithConfirm = async (nodeId: string) => {
+  if (deleteConfirmSubmitting.value) return
   if (!ensurePlaybackClosedForMutation()) return
   if (!ensureBoardDataReady(['nodes', 'environment', 'rules', 'specs'])) return
+  deleteDialogReturnFocusNodeId = nodeId
   try {
     const preview = await boardApi.previewNodeDeletion(nodeId)
     const impactToken = preview.impactToken?.trim()
@@ -2252,44 +2780,80 @@ const handleDialogDelete = () => {
 
 // Custom dialog handlers
 const confirmRename = async () => {
-  if (!renameDialogData.node || !renameDialogData.newName.trim()) return
+  if (renameDialogSubmitting.value
+    || !renameDialogData.node
+    || !renameDialogData.newName.trim()) return
 
-  const saved = await handleRenameDevice(renameDialogData.node.id, renameDialogData.newName.trim())
-  if (!saved) return
-  renameDialogVisible.value = false
-  renameDialogData.node = null
-  renameDialogData.newName = ''
+  renameDialogSubmitting.value = true
+  try {
+    const saved = await handleRenameDevice(
+      renameDialogData.node.id,
+      renameDialogData.newName.trim(),
+      renameDialogData.originalLabel
+    )
+    if (!saved) return
+    renameDialogVisible.value = false
+    renameDialogData.node = null
+    renameDialogData.newName = ''
+    renameDialogData.originalLabel = ''
+  } finally {
+    renameDialogSubmitting.value = false
+  }
 }
 
 const cancelRename = () => {
+  if (renameDialogSubmitting.value) return
   renameDialogVisible.value = false
   renameDialogData.node = null
   renameDialogData.newName = ''
+  renameDialogData.originalLabel = ''
 }
 
 const isRenameDialogOpen = computed(() => renameDialogVisible.value)
 const {
   setDialogRef: setRenameDialogRef,
   handleModalKeydown: handleRenameDialogKeydown
-} = useModalAccessibility(isRenameDialogOpen, cancelRename)
+} = useModalAccessibility(
+  isRenameDialogOpen,
+  cancelRename,
+  () => getDeviceNodeElement(renameDialogReturnFocusNodeId)
+)
 
 const confirmDelete = async () => {
+  if (deleteConfirmSubmitting.value) return
   if (!ensurePlaybackClosedForMutation()) return
   if (!deleteConfirmDialogData.node) return
 
+  const deletion = {
+    nodeId: deleteConfirmDialogData.node.id,
+    nodeName: deleteConfirmDialogData.node.label,
+    impactToken: deleteConfirmDialogData.impactToken,
+    ruleCount: deleteConfirmDialogData.relationCount.rules,
+    specCount: deleteConfirmDialogData.relationCount.specs,
+    environmentChangeCount: deleteConfirmDialogData.environmentChanges.length
+  }
+  deleteConfirmSubmitting.value = true
+  let reopenDeletionPreview = false
   try {
-    const nodeName = deleteConfirmDialogData.node.label
     const outcome = await forceDeleteNode(
-      deleteConfirmDialogData.node.id,
-      deleteConfirmDialogData.impactToken
+      deletion.nodeId,
+      deletion.impactToken
     )
     if (!outcome) return
+    if (outcome.stalePreview) {
+      deleteConfirmDialogVisible.value = false
+      deleteConfirmDialogData.node = null
+      deleteConfirmDialogData.impactToken = ''
+      deleteConfirmDialogData.environmentChanges = []
+      reopenDeletionPreview = true
+      return
+    }
     if (outcome.responseConfirmed) {
       ElMessage.success(t('app.deviceDeleteSuccessSummary', {
-        name: nodeName,
-        rules: deleteConfirmDialogData.relationCount.rules,
-        specs: deleteConfirmDialogData.relationCount.specs,
-        variables: deleteConfirmDialogData.environmentChanges.length
+        name: deletion.nodeName,
+        rules: deletion.ruleCount,
+        specs: deletion.specCount,
+        variables: deletion.environmentChangeCount
       }))
     }
     // 如果设备详情对话框是打开的，也要关闭它
@@ -2303,10 +2867,14 @@ const confirmDelete = async () => {
   } catch (error) {
     console.error('删除设备失败:', error)
     ElMessage.error(t('app.deleteDeviceFailedRetry'))
+  } finally {
+    deleteConfirmSubmitting.value = false
+    if (reopenDeletionPreview) void deleteCurrentNodeWithConfirm(deletion.nodeId)
   }
 }
 
 const cancelDelete = () => {
+  if (deleteConfirmSubmitting.value) return
   deleteConfirmDialogVisible.value = false
   deleteConfirmDialogData.node = null
   deleteConfirmDialogData.impactToken = ''
@@ -2317,7 +2885,11 @@ const isDeleteConfirmDialogOpen = computed(() => deleteConfirmDialogVisible.valu
 const {
   setDialogRef: setDeleteConfirmDialogRef,
   handleModalKeydown: handleDeleteConfirmDialogKeydown
-} = useModalAccessibility(isDeleteConfirmDialogOpen, cancelDelete)
+} = useModalAccessibility(
+  isDeleteConfirmDialogOpen,
+  cancelDelete,
+  getDeleteDialogFallbackFocus
+)
 
 const deleteNodeFromStatus = (nodeId: string) => deleteCurrentNodeWithConfirm(nodeId)
 
@@ -2654,6 +3226,7 @@ const openControlSection = (section: InspectorSection) => {
     panelStateTouchedBeforeLayout = true
   }
   boardPanels.control.collapsed = false
+  if (isNarrowViewport()) boardPanels.inspector.collapsed = true
   boardPanels.control.activeSection = controlSection
 }
 
@@ -2662,6 +3235,7 @@ const handleControlCollapsedUpdate = (value: boolean) => {
     panelStateTouchedBeforeLayout = true
   }
   boardPanels.control.collapsed = value
+  if (!value && isNarrowViewport()) boardPanels.inspector.collapsed = true
 }
 
 const handleControlActiveSectionUpdate = (value: ControlCenterSection) => {
@@ -2676,6 +3250,7 @@ const handleInspectorCollapsedUpdate = (value: boolean) => {
     panelStateTouchedBeforeLayout = true
   }
   boardPanels.inspector.collapsed = value
+  if (!value && isNarrowViewport()) boardPanels.control.collapsed = true
 }
 
 const handleInspectorActiveSectionUpdate = (value: InspectorSection) => {
@@ -2778,7 +3353,7 @@ const refreshDevices = async (): Promise<boolean> => {
   boardDataLoadState.nodes = 'loading'
   try {
     const loadedNodes = await boardApi.getNodes()
-    nodes.value = getVisibleDeviceNodes(loadedNodes)
+    replaceNodesFromServer(loadedNodes)
     syncRuleDerivedEdges()
     boardDataLoadState.nodes = 'ready'
     return true
@@ -2810,7 +3385,7 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
     const snapshot = await boardApi.getSnapshot()
     if (!isCurrentBoardAuthScope(authScopeEpoch)) return false
     deviceTemplates.value = snapshot.deviceTemplates
-    nodes.value = getVisibleDeviceNodes(snapshot.nodes)
+    replaceNodesFromServer(snapshot.nodes)
     environmentVariables.value = snapshot.environmentVariables
     rules.value = snapshot.rules
     specifications.value = snapshot.specifications
@@ -2890,7 +3465,7 @@ const environmentPatchFieldLabel = (field: EnvironmentVariablePatchResult['suppl
 const formatEnvironmentPatchResults = (results: EnvironmentVariablePatchResult[]) =>
   results.map(result => {
     const fields = result.changedFields.length > 0 ? result.changedFields : result.suppliedFields
-    return `${result.name} (${fields.map(environmentPatchFieldLabel).join(', ')})`
+    return `${formatBoardEnvironmentModelToken(result.name, result.name)} (${fields.map(environmentPatchFieldLabel).join(', ')})`
   }).join('; ')
 
 const saveEnvironmentVariables = async (patches: ModelEnvironmentVariable[]) => {
@@ -3438,9 +4013,12 @@ const normalizeSceneTemplates = (value: unknown): DeviceTemplate[] => {
     }
     const validation = validateManifest(manifest)
     if (!validation.valid) {
+      const reason = validation.code
+        ? t(MANIFEST_VALIDATION_MESSAGE_KEYS[validation.code], validation.params || {})
+        : validation.msg || t('app.unknownOmissionReason')
       throw new Error(t('app.sceneImportInvalidTemplateManifest', {
         name,
-        reason: validation.msg || t('app.unknownOmissionReason')
+        reason
       }))
     }
     return {
@@ -4158,7 +4736,7 @@ const importScene = async (scene: BoardSceneModel): Promise<boolean> => {
         return false
       }
 
-      nodes.value = getVisibleDeviceNodes(saved.nodes)
+      replaceNodesFromServer(saved.nodes)
       environmentVariables.value = saved.environmentVariables
       rules.value = saved.rules
       specifications.value = saved.specs
@@ -4251,7 +4829,7 @@ const clearScene = async () => {
           || saved.rules.length > 0 || saved.specs.length > 0) {
           throw new Error('Scene clear response still contained board items')
         }
-        nodes.value = getVisibleDeviceNodes(saved.nodes)
+        replaceNodesFromServer(saved.nodes)
         environmentVariables.value = saved.environmentVariables
         rules.value = saved.rules
         specifications.value = saved.specs
@@ -4393,7 +4971,10 @@ const applyLoadedBoardLayout = (layout: BoardLayoutDto | null, initialHydration:
     && (panelStateTouchedBeforeLayout || canvasStateTouchedBeforeLayout)
   if (isNarrowViewport()) {
     applyViewportPanelConstraints()
-    void nextTick(() => fitNodesToCanvas(getVisibleDeviceNodes()))
+    const visibleNodes = getVisibleDeviceNodes()
+    if (visibleNodes.length > 0) {
+      void nextTick(() => fitNodesToCanvas(visibleNodes))
+    }
   } else if (layout) {
     applyBoardLayout(layout)
   }
@@ -4445,28 +5026,8 @@ onMounted(async () => {
 })
 
 
-// Color utilities (matching CanvasBoard colors)
-const getCanvasMapColorIndex = (nodeId: string): number => {
-  // 为每个节点生成随机但一致的颜色索引
-  // 使用节点ID作为种子，确保同一个节点始终有相同颜色
-  let hash = 5381
-  for (let i = 0; i < nodeId.length; i++) {
-    const char = nodeId.charCodeAt(i)
-    hash = ((hash << 5) + hash) + char // hash * 33 + char
-  }
-
-  // 使用8种颜色，与CanvasBoard.vue保持一致
-  return Math.abs(hash) % 8
-}
-
 const getCanvasMapColor = (nodeId: string): string => {
-  // Return actual color values instead of Tailwind classes
-  const colorIndex = getCanvasMapColorIndex(nodeId)
-  const colorValues = [
-    '#2563eb', '#0891b2', '#0f766e', '#7c3aed',
-    '#475569', '#0284c7', '#4f46e5', '#0d9488'
-  ] // non-alert map colors; red is reserved for actual warnings elsewhere
-  return colorValues[colorIndex] || colorValues[0]
+  return getNodeAccentColor(nodeId)
 }
 
 const getCanvasMapSize = (): string => {
@@ -4754,6 +5315,9 @@ const focusRuleOnCanvas = async (ruleId?: string | null) => {
   focusedRuleId.value = ruleId
   focusedNodeId.value = null
   focusedSpecId.value = null
+  if (!layoutHydrated.value) panelStateTouchedBeforeLayout = true
+  boardPanels.inspector.collapsed = false
+  if (isNarrowViewport()) boardPanels.control.collapsed = true
   boardPanels.inspector.activeSection = 'rules'
 
   const relatedEdges = edges.value.filter(edge => edge.ruleId === ruleId)
@@ -4771,7 +5335,13 @@ const focusRuleOnCanvas = async (ruleId?: string | null) => {
   const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
     ? CSS.escape(ruleId)
     : ruleId.replace(/["\\]/g, '\\$&')
-  document.querySelector<HTMLElement>(`[data-rule-id="${escaped}"]`)?.focus({ preventScroll: true })
+  const inspectorCard = document.querySelector<HTMLElement>(
+    `[data-testid="system-inspector"].is-expanded [data-rule-id="${escaped}"]`
+  )
+  const canvasEdge = document.querySelector<HTMLElement>(
+    `.edge-hitarea[data-rule-id="${escaped}"]`
+  )
+  ;(inspectorCard || canvasEdge)?.focus({ preventScroll: true })
 }
 
 const focusSpecInInspector = async (specId?: string | null) => {
@@ -4779,12 +5349,17 @@ const focusSpecInInspector = async (specId?: string | null) => {
   focusedSpecId.value = specId
   focusedNodeId.value = null
   focusedRuleId.value = null
+  if (!layoutHydrated.value) panelStateTouchedBeforeLayout = true
+  boardPanels.inspector.collapsed = false
+  if (isNarrowViewport()) boardPanels.control.collapsed = true
   boardPanels.inspector.activeSection = 'specs'
   await nextTick()
   const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
     ? CSS.escape(specId)
     : specId.replace(/["\\]/g, '\\$&')
-  document.querySelector<HTMLElement>(`[data-spec-id="${escaped}"]`)?.focus({ preventScroll: true })
+  document.querySelector<HTMLElement>(
+    `[data-testid="system-inspector"].is-expanded [data-spec-id="${escaped}"]`
+  )?.focus({ preventScroll: true })
 }
 
 const canvasMapViewportRect = computed(() => {
@@ -4823,7 +5398,10 @@ const navigateCanvasMap = (event: PointerEvent, rect?: DOMRect | null) => {
 }
 
 const onCanvasMapPointerDown = (event: PointerEvent) => {
-  if (!canvasMapData.value.bounds) return
+  if (!canvasMapData.value.bounds
+    || event.button !== 0
+    || event.isPrimary === false
+    || canvasMapDragPointerId !== null) return
   event.preventDefault()
   isCanvasMapDragging.value = true
 
@@ -4833,25 +5411,44 @@ const onCanvasMapPointerDown = (event: PointerEvent) => {
   canvasMapDragPointerId = event.pointerId
   navigateCanvasMap(event, canvasMapDragRect)
   try { target.setPointerCapture(event.pointerId) } catch {}
+  target.addEventListener('lostpointercapture', onCanvasMapPointerLost)
   window.addEventListener('pointermove', onCanvasMapPointerMove)
   window.addEventListener('pointerup', onCanvasMapPointerUp)
+  window.addEventListener('pointercancel', onCanvasMapPointerCancel)
 }
 
 const onCanvasMapPointerMove = (event: PointerEvent) => {
-  if (!isCanvasMapDragging.value) return
+  if (!isCanvasMapDragging.value || event.pointerId !== canvasMapDragPointerId) return
   navigateCanvasMap(event, canvasMapDragRect)
 }
 
-const onCanvasMapPointerUp = () => {
+const finishCanvasMapDrag = (pointerId: number | null = canvasMapDragPointerId) => {
+  if (pointerId !== null && pointerId !== canvasMapDragPointerId) return
+  const target = canvasMapDragElement
+  const activePointerId = canvasMapDragPointerId
   isCanvasMapDragging.value = false
-  if (canvasMapDragElement && canvasMapDragPointerId !== null) {
-    try { canvasMapDragElement.releasePointerCapture(canvasMapDragPointerId) } catch {}
-  }
   canvasMapDragElement = null
   canvasMapDragRect = null
   canvasMapDragPointerId = null
+  target?.removeEventListener('lostpointercapture', onCanvasMapPointerLost)
+  if (target && activePointerId !== null) {
+    try { target.releasePointerCapture(activePointerId) } catch {}
+  }
   window.removeEventListener('pointermove', onCanvasMapPointerMove)
   window.removeEventListener('pointerup', onCanvasMapPointerUp)
+  window.removeEventListener('pointercancel', onCanvasMapPointerCancel)
+}
+
+const onCanvasMapPointerUp = (event: PointerEvent) => {
+  finishCanvasMapDrag(event.pointerId)
+}
+
+const onCanvasMapPointerCancel = (event: PointerEvent) => {
+  finishCanvasMapDrag(event.pointerId)
+}
+
+const onCanvasMapPointerLost = (event: PointerEvent) => {
+  finishCanvasMapDrag(event.pointerId)
 }
 
 const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
@@ -4931,7 +5528,7 @@ const handleCreateDevice = async (data: {
       }
       requestedNode = node
       const mutation = await boardApi.addNodes([node])
-      nodes.value = getVisibleDeviceNodes(mutation.currentNodes)
+      replaceNodesFromServer(mutation.currentNodes)
       environmentVariables.value = mutation.environmentVariables
       reportEnvironmentChanges(mutation.environmentChanges)
       const created = mutation.affectedDevices[0]
@@ -5031,7 +5628,7 @@ const handleCreateDevices = async (data: {
 
     try {
       const mutation = await boardApi.addNodes(createdNodes, data.environmentVariables || [])
-      nodes.value = getVisibleDeviceNodes(mutation.currentNodes)
+      replaceNodesFromServer(mutation.currentNodes)
       environmentVariables.value = mutation.environmentVariables
       reportEnvironmentChanges(mutation.environmentChanges)
       syncRuleDerivedEdges()
@@ -5284,13 +5881,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', refreshBoardOnForeground)
   document.removeEventListener('visibilitychange', refreshBoardOnForeground)
   boardInvalidationBinding.dispose()
-  window.removeEventListener('pointermove', onCanvasPointerMove)
-  window.removeEventListener('pointerup', onCanvasPointerUp)
-  window.removeEventListener('pointermove', onCanvasMapPointerMove)
-  window.removeEventListener('pointerup', onCanvasMapPointerUp)
-  canvasMapDragElement = null
-  canvasMapDragRect = null
-  canvasMapDragPointerId = null
+  finishCanvasPan()
+  finishCanvasMapDrag()
+  activeNodeLayoutInteractions.clear()
 })
 
 const refreshDevicesFromChat = async () => enqueueBoardMutation(() => refreshDevices())
@@ -5422,13 +6015,7 @@ const ruleRecommendationFilters = reactive({
 const ruleRecommendationAbortController = ref<AbortController | null>(null)
 const ruleRecommendationRequestId = ref<string | null>(null)
 let ruleRecommendationRequestEpoch = 0
-const ruleRecommendationCategories = [
-  { labelKey: 'app.recommendationCategoryAll', value: 'all' },
-  { labelKey: 'app.recommendationCategorySecurity', value: 'security' },
-  { labelKey: 'app.recommendationCategoryEnergySaving', value: 'energy_saving' },
-  { labelKey: 'app.recommendationCategoryComfort', value: 'comfort' },
-  { labelKey: 'app.recommendationCategoryAutomation', value: 'automation' }
-]
+const ruleRecommendationCategories = RULE_RECOMMENDATION_CATEGORY_OPTIONS
 
 const validateRecommendationCount = (value: unknown, field = t('app.maxRecommendationsField')): number =>
   optionalIntegerInRange(value, field, 5, 1, 10)
@@ -5463,37 +6050,84 @@ const formatRecommendationFilteredItem = (item: RecommendationFilteredItem): str
     : t('app.recommendationFilteredReason', { type, index, reason })
 }
 
-const formatScenarioAdjustmentValue = (key: string, value: unknown): string | null => {
+type RecommendationAdjustmentContext = 'rule' | 'device' | 'scenario'
+
+const recommendationAdjustmentTemplate = (
+  item: RecommendationAdjustmentItem,
+  context: RecommendationAdjustmentContext
+): DeviceTemplate | undefined => {
+  if (String(item.type).toLowerCase() !== 'device') return undefined
+  const label = item.label?.trim()
+  if (!label) return undefined
+  if (context === 'device') {
+    const recommendation = deviceRecommendations.value.find(candidate => candidate.suggestedLabel === label)
+    return findTemplateByAnyName(recommendation?.templateName)
+  }
+  if (context === 'scenario') {
+    const device = recommendedScenarioScene.value?.devices.find(candidate => candidate.label === label)
+    return findTemplateByAnyName(device?.templateName)
+  }
+  return undefined
+}
+
+const formatRecommendationAdjustmentToken = (
+  item: RecommendationAdjustmentItem,
+  context: RecommendationAdjustmentContext,
+  value: unknown
+): string => {
+  if (context === 'scenario' && String(item.type).toLowerCase() === 'environment') {
+    const name = item.label?.trim() || ''
+    return formatScenarioEnvironmentModelToken(name, value)
+  }
+  return formatTemplateModelToken(recommendationAdjustmentTemplate(item, context), value)
+}
+
+const formatScenarioAdjustmentValue = (
+  item: RecommendationAdjustmentItem,
+  context: RecommendationAdjustmentContext,
+  key: string,
+  value: unknown
+): string | null => {
+  const formatToken = (token: unknown) => formatRecommendationAdjustmentToken(item, context, token)
   if (key === 'suggestedLabel') return t('app.scenarioDefaultSuggestedLabel', { value })
-  if (key === 'state') return t('app.scenarioDefaultInitialState', { value })
+  if (key === 'state') return t('app.scenarioDefaultInitialState', { value: formatToken(value) })
   if (key === 'currentStateTrust') return t('app.scenarioDefaultStateTrust', { value: t(`app.${value}`) })
   if (key === 'currentStatePrivacy') return t('app.scenarioDefaultStatePrivacy', { value: t(`app.${value}`) })
-  if (key === 'value') return t('app.scenarioDefaultEnvironmentValue', { value })
+  if (key === 'value') return t('app.scenarioDefaultEnvironmentValue', { value: formatToken(value) })
   if (key === 'trust') return t('app.scenarioDefaultEnvironmentTrust', { value: t(`app.${value}`) })
   if (key === 'privacy') return t('app.scenarioDefaultEnvironmentPrivacy', { value: t(`app.${value}`) })
   if (key.startsWith('variables.') && key.endsWith('.trust')) {
     const variable = key.slice('variables.'.length, -'.trust'.length)
-    return t('app.scenarioDefaultVariableTrust', { variable, value: t(`app.${value}`) })
+    return t('app.scenarioDefaultVariableTrust', { variable: formatToken(variable), value: t(`app.${value}`) })
   }
   if (key.startsWith('variables.') && key.endsWith('.value')) {
     const variable = key.slice('variables.'.length, -'.value'.length)
-    return t('app.scenarioDefaultVariableValue', { variable, value })
+    return t('app.scenarioDefaultVariableValue', {
+      variable: formatToken(variable),
+      value: formatToken(value)
+    })
   }
   if (key.startsWith('privacies.') && key.endsWith('.privacy')) {
     const variable = key.slice('privacies.'.length, -'.privacy'.length)
-    return t('app.scenarioDefaultVariablePrivacy', { variable, value: t(`app.${value}`) })
+    return t('app.scenarioDefaultVariablePrivacy', { variable: formatToken(variable), value: t(`app.${value}`) })
   }
   return null
 }
 
-const formatRecommendationAdjustmentItem = (item: RecommendationAdjustmentItem): string => {
+const formatRecommendationAdjustmentItem = (
+  item: RecommendationAdjustmentItem,
+  context: RecommendationAdjustmentContext
+): string => {
   const reason = localizedRecommendationText(
     item.reason,
     t('app.recommendationAdjustedUnknownReason')
   )
-  const label = item.label?.trim() || formatRecommendationFilteredType(item.type)
+  const rawLabel = item.label?.trim()
+  const label = rawLabel
+    ? formatRecommendationAdjustmentToken(item, context, rawLabel)
+    : formatRecommendationFilteredType(item.type)
   const values = Object.entries(item.appliedValues || {})
-    .map(([key, value]) => formatScenarioAdjustmentValue(key, value))
+    .map(([key, value]) => formatScenarioAdjustmentValue(item, context, key, value))
     .filter((value): value is string => Boolean(value))
   const hasLayoutDefaults = Object.keys(item.appliedValues || {})
     .some(key => key === 'position' || key.startsWith('position.') || key === 'width' || key === 'height')
@@ -6009,13 +6643,7 @@ const specRecommendationFilters = reactive({
   userRequirement: ''
 })
 let specRecommendationRequestEpoch = 0
-const specRecommendationCategories = [
-  { labelKey: 'app.recommendationCategoryAll', value: 'all' },
-  { labelKey: 'app.recommendationCategorySafety', value: 'safety' },
-  { labelKey: 'app.recommendationCategoryResponse', value: 'response' },
-  { labelKey: 'app.recommendationCategoryConsistency', value: 'consistency' },
-  { labelKey: 'app.recommendationCategoryPrivacy', value: 'privacy' }
-]
+const specRecommendationCategories = SPEC_RECOMMENDATION_CATEGORY_OPTIONS
 
 // ==== Coupled Scenario Recommendation Logic ====
 const showScenarioRecommendationPanel = ref(false)
@@ -6355,6 +6983,26 @@ const formatScenarioDeviceLabel = (deviceId: string): string => {
   return device?.label || t('app.unknownModelItem')
 }
 
+const scenarioDeviceById = (deviceId: string): DeviceNode | undefined =>
+  recommendedScenarioScene.value?.devices.find(candidate => candidate.id === deviceId)
+
+const formatScenarioDeviceModelToken = (device: DeviceNode, value: unknown): string =>
+  formatTemplateModelToken(findTemplateByAnyName(device.templateName), value)
+
+const formatScenarioRuleModelToken = (deviceId: string, value: unknown): string => {
+  const device = scenarioDeviceById(deviceId)
+  return device ? formatScenarioDeviceModelToken(device, value) : String(value ?? '')
+}
+
+const scenarioBundledEnvironmentNames = computed(() =>
+  getBundledEnvironmentNames(recommendedScenarioScene.value?.devices || [])
+)
+
+const formatScenarioEnvironmentModelToken = (name: string, value: unknown): string =>
+  scenarioBundledEnvironmentNames.value.includes(name)
+    ? formatBundledModelToken(value)
+    : String(value ?? '')
+
 const scenarioDeviceTemplate = (device: DeviceNode): DeviceTemplate | undefined =>
   recommendedScenarioScene.value?.templates.find(candidate => {
     const candidateName = candidate.manifest?.Name || candidate.name
@@ -6384,16 +7032,26 @@ const scenarioDeviceVariableTrust = (
     .find(candidate => candidate.Name === variable.name)?.Trust
   || 'trusted'
 
+const formatRelationForDisplay = (relation: unknown): string => {
+  const raw = String(relation ?? '').trim()
+  const normalized = raw.toLowerCase().replace(/_/g, ' ')
+  if (normalized === 'in') return t('app.relationIn')
+  if (normalized === 'not in') return t('app.relationNotIn')
+  return raw
+}
+
 const formatScenarioRuleSource = (source: RuleForm['sources'][number]): string => {
   const device = formatScenarioDeviceLabel(source.fromId)
-  if (source.itemType === 'api') return `${device}.${source.fromApi}`
-  return `${device}.${source.fromApi} ${source.relation || '='} ${source.value ?? ''}`.trim()
+  const attribute = formatScenarioRuleModelToken(source.fromId, source.fromApi)
+  if (source.itemType === 'api') return `${device}.${attribute}`
+  const value = formatScenarioRuleModelToken(source.fromId, source.value)
+  return `${device}.${attribute} ${formatRelationForDisplay(source.relation || '=')} ${value}`.trim()
 }
 
 const formatScenarioRuleAction = (rule: RuleForm): string => {
-  const action = `${formatScenarioDeviceLabel(rule.toId)}.${rule.toApi}`
+  const action = `${formatScenarioDeviceLabel(rule.toId)}.${formatScenarioRuleModelToken(rule.toId, rule.toApi)}`
   if (!rule.contentDevice || !rule.content) return action
-  return `${action} · ${t('app.copyFrom')} ${formatScenarioDeviceLabel(rule.contentDevice)}.${rule.content}`
+  return `${action} · ${t('app.copyFrom')} ${formatScenarioDeviceLabel(rule.contentDevice)}.${formatScenarioRuleModelToken(rule.contentDevice, rule.content)}`
 }
 
 const formatScenarioSpecFormula = (spec: Specification): string =>
@@ -9093,7 +9751,6 @@ const openFormalVerificationForCurrentBoard = () => {
 const closeVerificationPanel = () => {
   showVerificationPanel.value = false
   fuzzVerificationHandoff.value = null
-  void nextTick(() => verificationActionButtonRef.value?.focus())
 }
 
 const reuseFuzzingSettings = () => {
@@ -9130,13 +9787,7 @@ const reuseFuzzingSettings = () => {
 
 // Floating panel visibility state
 const showVerificationPanel = ref(false)
-const verificationPanelCloseButtonRef = ref<HTMLButtonElement | null>(null)
 const verificationActionButtonRef = ref<HTMLButtonElement | null>(null)
-
-watch(showVerificationPanel, visible => {
-  if (!visible) return
-  void nextTick(() => verificationPanelCloseButtonRef.value?.focus())
-})
 
 // 异步模拟任务状态
 const asyncSimulationTask = ref<{
@@ -9188,6 +9839,69 @@ const notifyTaskCancellationResult = (
 
 // Floating panel visibility state
 const showSimulationPanel = ref(false)
+const closeSimulationPanel = () => {
+  showSimulationPanel.value = false
+}
+
+const floatingPanelAccessibility = { trapFocus: false } as const
+const recommendationPanelAccessibility = {
+  trapFocus: false,
+  shouldRestoreFocus: () => !isAnyRecommendationPanelVisible()
+} as const
+const {
+  setDialogRef: setVerificationPanelRef,
+  handleModalKeydown: handleVerificationPanelKeydown
+} = useModalAccessibility(
+  showVerificationPanel,
+  closeVerificationPanel,
+  () => verificationActionButtonRef.value,
+  floatingPanelAccessibility
+)
+const {
+  setDialogRef: setSimulationPanelRef,
+  handleModalKeydown: handleSimulationPanelKeydown
+} = useModalAccessibility(
+  showSimulationPanel,
+  closeSimulationPanel,
+  () => document.querySelector<HTMLElement>('[data-testid="open-simulation-panel"]'),
+  floatingPanelAccessibility
+)
+const {
+  setDialogRef: setRuleRecommendationPanelRef,
+  handleModalKeydown: handleRuleRecommendationPanelKeydown
+} = useModalAccessibility(
+  showRecommendationPanel,
+  closeRecommendationPanel,
+  () => document.querySelector<HTMLElement>('[data-testid="open-rule-recommendations"]'),
+  recommendationPanelAccessibility
+)
+const {
+  setDialogRef: setDeviceRecommendationPanelRef,
+  handleModalKeydown: handleDeviceRecommendationPanelKeydown
+} = useModalAccessibility(
+  showDeviceRecommendationPanel,
+  closeDeviceRecommendationPanel,
+  () => document.querySelector<HTMLElement>('[data-testid="open-device-recommendations"]'),
+  recommendationPanelAccessibility
+)
+const {
+  setDialogRef: setSpecRecommendationPanelRef,
+  handleModalKeydown: handleSpecRecommendationPanelKeydown
+} = useModalAccessibility(
+  showSpecRecommendationPanel,
+  closeSpecRecommendationPanel,
+  () => document.querySelector<HTMLElement>('[data-testid="open-spec-recommendations"]'),
+  recommendationPanelAccessibility
+)
+const {
+  setDialogRef: setScenarioRecommendationPanelRef,
+  handleModalKeydown: handleScenarioRecommendationPanelKeydown
+} = useModalAccessibility(
+  showScenarioRecommendationPanel,
+  closeScenarioRecommendationPanel,
+  () => document.querySelector<HTMLElement>('[data-testid="open-scenario-recommendations"]'),
+  recommendationPanelAccessibility
+)
 
 // Fix dialog 状态
 const showFixDialog = ref(false)
@@ -9467,6 +10181,30 @@ const activePlaybackStates = computed<ActivePlaybackState[]>(() => {
   return highlightedTrace.value.states
 })
 
+const activePlaybackDevices = computed(() =>
+  activePlaybackStates.value[activePlaybackStateIndex.value]?.devices || [])
+
+const activePlaybackEnvironmentVariables = computed(() =>
+  activePlaybackStates.value[activePlaybackStateIndex.value]?.envVariables || [])
+
+const bundledPlaybackDeviceIds = computed(() => activePlaybackDevices.value
+  .filter(device => activePlaybackKind.value === 'fuzzing'
+    ? isBundledDeviceTemplate(findTemplateByAnyName(device.templateName))
+    : device.modelTokenSource === 'BUNDLED')
+  .map(device => device.deviceId))
+
+const bundledPlaybackEnvironmentNames = computed(() => activePlaybackKind.value === 'fuzzing'
+  ? getBundledEnvironmentNames(activePlaybackDevices.value)
+  : activePlaybackEnvironmentVariables.value
+    .filter(variable => variable.modelTokenSource === 'BUNDLED')
+    .map(variable => variable.name)
+)
+
+const formatPlaybackEnvironmentModelToken = (name: string, value: unknown): string =>
+  bundledPlaybackEnvironmentNames.value.includes(name)
+    ? formatBundledModelToken(value)
+    : String(value ?? '')
+
 const activePlaybackStateIndex = computed(() => {
   const selected = Number(highlightedTrace.value?.selectedStateIndex ?? 0)
   const lastIndex = Math.max(activePlaybackStates.value.length - 1, 0)
@@ -9679,11 +10417,17 @@ const traceDeviceExistsOnBoard = (device: TraceDevice) =>
   currentBoardDeviceIdSet.value.has(normalizePlaybackDeviceId(device.deviceId))
 
 const traceDeviceSummary = (device: TraceDevice) => {
-  const parts = playbackDeviceSummaryParts(device)
+  const parts = playbackDeviceSummaryParts(device, value => formatPlaybackDeviceModelToken(device, value))
   return parts.length > 0 ? parts.join(' · ') : t('app.unknown')
 }
 
 const traceDeviceSecurityFacts = (device: TraceDevice) => playbackDeviceSecurityFacts(device)
+
+const formattedTraceDeviceSecurityLabels = (device: TraceDevice, labels: string[]) =>
+  labels.map(label => formatPlaybackSecurityLabel(
+    label,
+    value => formatPlaybackDeviceModelToken(device, value)
+  ))
 
 const traceTriggeredRuleLabel = (rule: { ruleId?: string | null; ruleLabel?: string | null }, index: number) => {
   if (rule.ruleLabel?.trim()) return rule.ruleLabel.trim()
@@ -9720,10 +10464,12 @@ const traceEnvironmentVariableChanged = (name: string, value: string) =>
 
 const traceEnvironmentVariableTitle = (name: string, value: string) => {
   const previous = getPreviousTraceEnvValue(name)
+  const displayName = formatPlaybackEnvironmentModelToken(name, name)
+  const displayValue = formatPlaybackEnvironmentModelToken(name, value)
   if (previous === undefined || previous === value) {
-    return `${name}: ${value}`
+    return `${displayName}: ${displayValue}`
   }
-  return `${name}: ${previous} -> ${value}`
+  return `${displayName}: ${formatPlaybackEnvironmentModelToken(name, previous)} -> ${displayValue}`
 }
 
 // 选择并播放指定索引的反例路径动画
@@ -10909,7 +11655,7 @@ const verificationResultStatus = computed(() => {
   if (outcome === 'SATISFIED' && !isVerificationModelComplete(verificationResult.value, outcome)) {
     return {
       headerClass: 'bg-amber-50 border-amber-200',
-      cardClass: 'bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200',
+      cardClass: 'bg-amber-50 border border-amber-200',
       iconBgClass: 'bg-amber-100',
       iconTextClass: 'text-amber-600',
       titleClass: 'text-amber-800',
@@ -10923,7 +11669,7 @@ const verificationResultStatus = computed(() => {
   if (outcome === 'SATISFIED') {
     return {
       headerClass: 'bg-green-50 border-green-200',
-      cardClass: 'bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200',
+      cardClass: 'bg-green-50 border border-green-200',
       iconBgClass: 'bg-green-100',
       iconTextClass: 'text-green-600',
       titleClass: 'text-green-800',
@@ -10936,7 +11682,7 @@ const verificationResultStatus = computed(() => {
 
   return {
     headerClass: 'bg-red-50 border-red-200',
-    cardClass: 'bg-gradient-to-r from-red-50 to-orange-50 border border-red-200',
+    cardClass: 'bg-red-50 border border-red-200',
     iconBgClass: 'bg-red-100',
     iconTextClass: 'text-red-600',
     titleClass: 'text-red-800',
@@ -11032,16 +11778,21 @@ const counterexampleTraceHelpText = computed(() => {
 </script>
 
 <template>
-  <!-- [Fix] @wheel.ctrl.prevent 阻止浏览器原生缩放 -->
   <div
     :class="[
       'iot-board',
-      { 'is-inspector-collapsed': boardPanels.inspector.collapsed }
+      {
+        'is-inspector-collapsed': boardPanels.inspector.collapsed,
+        'is-narrow-layout': isNarrowBoardLayout,
+        'has-narrow-panel-open': showNarrowPanelScrim,
+        'has-control-panel-open': isNarrowBoardLayout && !boardPanels.control.collapsed,
+        'has-inspector-panel-open': isNarrowBoardLayout && !boardPanels.inspector.collapsed
+      }
     ]"
     data-testid="board-root"
     :aria-busy="!isBoardDataReady"
     :style="boardShellStyle"
-    @wheel.ctrl.prevent="onBoardWheel"
+    @focusin="handleBoardFocusIn"
   >
     <!-- Navigation Bar - 与首页风格一致 -->
     <nav class="board-nav-bar">
@@ -11052,7 +11803,9 @@ const counterexampleTraceHelpText = computed(() => {
           :aria-label="t('app.title')"
           @click="router.push('/board')"
         >
-          IoT-Verify<sup class="logo-sup">®</sup>
+          <span class="logo-wordmark">IoT-Verify</span>
+          <span class="logo-short" aria-hidden="true">IoT</span>
+          <sup class="logo-sup">®</sup>
         </button>
 
         <div class="nav-actions">
@@ -11229,15 +11982,18 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="templateInstanceDialogVisible"
-      class="fixed inset-0 z-[2400] flex items-center justify-center bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
+      class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
       @click="cancelTemplateInstanceCreate"
+      @keydown="handleTemplateInstanceDialogKeydown"
     >
       <div
-        class="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        :ref="setTemplateInstanceDialogRef"
+        class="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
         data-testid="template-instance-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="template-instance-title"
+        tabindex="-1"
         @click.stop
       >
         <div class="mb-4 flex items-start gap-3">
@@ -11264,7 +12020,6 @@ const counterexampleTraceHelpText = computed(() => {
           :placeholder="t('app.deviceNamePlaceholder')"
           :disabled="templateInstanceSaving"
           @keydown.enter.prevent="confirmTemplateInstanceCreate"
-          @keydown.esc.prevent="cancelTemplateInstanceCreate"
         />
 
         <div
@@ -11304,7 +12059,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="template-instance-state"
                 class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-orange-500/20"
               >
-                <option v-for="state in templateInstanceWorkingStates" :key="state.Name" :value="state.Name">{{ state.Name }}</option>
+                <option v-for="state in templateInstanceWorkingStates" :key="state.Name" :value="state.Name">{{ formatTemplateModelToken(templateInstanceDialogData.template, state.Name) }}</option>
               </select>
             </label>
 
@@ -11340,7 +12095,7 @@ const counterexampleTraceHelpText = computed(() => {
               class="rounded-lg border border-slate-200 bg-white/80 p-2 dark:border-slate-700 dark:bg-slate-950/80"
             >
               <div class="mb-2 flex items-center justify-between gap-2">
-                <span class="truncate text-[11px] font-bold text-slate-700 dark:text-slate-200" :title="variable.Name">{{ variable.Name }}</span>
+                <span class="truncate text-[11px] font-bold text-slate-700 dark:text-slate-200" :title="formatTemplateModelToken(templateInstanceDialogData.template, variable.Name)">{{ formatTemplateModelToken(templateInstanceDialogData.template, variable.Name) }}</span>
                 <span v-if="templateVariableUsesNumericBounds(variable)" class="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
                   {{ templateVariableInputPlaceholder(variable) }}
                 </span>
@@ -11356,7 +12111,7 @@ const counterexampleTraceHelpText = computed(() => {
                     class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
                     <option value="">{{ t('app.useTemplateDefault') }}</option>
-                    <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ value }}</option>
+                    <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatTemplateModelToken(templateInstanceDialogData.template, value) }}</option>
                   </select>
                   <input
                     v-else
@@ -11524,9 +12279,10 @@ const counterexampleTraceHelpText = computed(() => {
                 class="canvas-map__tool inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                 data-testid="canvas-map-fit"
                 :title="t('app.fitToContent')"
+                :aria-label="t('app.fitToContent')"
                 @click="fitToContent"
               >
-                <span class="material-symbols-outlined text-sm">fit_screen</span>
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">fit_screen</span>
               </button>
             </div>
           </div>
@@ -11586,6 +12342,22 @@ const counterexampleTraceHelpText = computed(() => {
     </SystemInspector>
 
     <button
+      v-if="showNarrowPanelScrim"
+      ref="boardPanelScrimRef"
+      type="button"
+      class="board-panel-scrim"
+      data-testid="board-panel-scrim"
+      :aria-label="t('app.close')"
+      @click="closeNarrowSidePanels"
+    ></button>
+
+    <div
+      class="contents"
+      data-testid="board-narrow-background"
+      :inert="showNarrowPanelScrim ? true : undefined"
+      :aria-hidden="showNarrowPanelScrim ? 'true' : undefined"
+    >
+    <button
       type="button"
       class="canvas-fit-mobile"
       data-testid="canvas-fit-mobile"
@@ -11597,7 +12369,7 @@ const counterexampleTraceHelpText = computed(() => {
     </button>
 
     <!-- Canvas Area -->
-    <div class="canvas-container">
+    <div class="canvas-container" @wheel.ctrl.prevent="onBoardWheel">
       <!-- Canvas Board -->
       <CanvasBoard
           :nodes="nodes"
@@ -11605,7 +12377,9 @@ const counterexampleTraceHelpText = computed(() => {
           :pan="canvasPan"
           :zoom="canvasZoom"
           :get-node-icon="getBoardNodeIcon"
-          :get-node-label-style="getNodeLabelStyle"
+          :has-node-state-machine="hasNodeStateMachine"
+          :get-node-effective-state="getNodeEffectiveState"
+          :format-node-model-token="formatNodeModelToken"
           :highlighted-trace="highlightedTrace"
           :focused-node-id="focusedNodeId"
           :focused-rule-id="focusedRuleId"
@@ -11618,6 +12392,8 @@ const counterexampleTraceHelpText = computed(() => {
           @node-context="onNodeContext"
           @node-open="openNodeFromCanvas"
           @node-delete="deleteNodeFromStatus"
+          @node-layout-interaction-start="handleNodeLayoutInteractionStart"
+          @node-layout-interaction-end="handleNodeLayoutInteractionEnd"
           @node-moved-or-resized="handleNodeMovedOrResized"
       />
 
@@ -11680,6 +12456,8 @@ const counterexampleTraceHelpText = computed(() => {
         :kind="activePlaybackKind"
         :position="playbackChangePosition"
         :input-events="activeFuzzingStepInputEvents"
+        :bundled-device-ids="bundledPlaybackDeviceIds"
+        :bundled-environment-names="bundledPlaybackEnvironmentNames"
         :first-violation-state-number="firstFuzzingViolationStateNumber"
         @dismiss="dismissPlaybackChanges"
         @move="movePlaybackChanges"
@@ -12138,6 +12916,8 @@ const counterexampleTraceHelpText = computed(() => {
       :workload-loading="fuzzingWorkloadPreviewLoading"
       :workload-error="fuzzingWorkloadPreviewError"
       :paper-domain-preview="paperDomainPreview"
+      :bundled-device-ids="bundledBoardDeviceIds"
+      :bundled-environment-names="bundledBoardEnvironmentNames"
       :paper-domain-loading="paperDomainPreviewLoading"
       :paper-domain-error="paperDomainPreviewError"
       :notice="fuzzingSettingsNotice"
@@ -12154,11 +12934,13 @@ const counterexampleTraceHelpText = computed(() => {
     <!-- Verification Panel -->
     <div 
       v-if="showVerificationPanel"
+      :ref="setVerificationPanelRef"
       data-testid="verification-panel"
       class="board-floating-panel board-run-panel board-surface-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
       role="dialog"
       aria-labelledby="verification-panel-title"
       tabindex="-1"
+      @keydown="handleVerificationPanelKeydown"
     >
       <!-- Verification Header with gradient -->
       <div class="relative overflow-hidden">
@@ -12175,7 +12957,6 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
           <button
-            ref="verificationPanelCloseButtonRef"
             type="button"
             @click="closeVerificationPanel"
             data-testid="close-verification-panel"
@@ -12447,9 +13228,10 @@ const counterexampleTraceHelpText = computed(() => {
                 class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="cancellingVerificationTask"
                 :title="t('app.cancelVerificationTask')"
+                :aria-label="t('app.cancelVerificationTask')"
                 @click="cancelAsyncVerification"
               >
-                <span class="material-symbols-outlined text-sm">{{ cancellingVerificationTask ? 'hourglass_empty' : 'cancel' }}</span>
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ cancellingVerificationTask ? 'hourglass_empty' : 'cancel' }}</span>
               </button>
             </div>
           </div>
@@ -12489,8 +13271,13 @@ const counterexampleTraceHelpText = computed(() => {
     <!-- Scenario Recommendation Panel -->
     <div
       v-if="showScenarioRecommendationPanel"
+      :ref="setScenarioRecommendationPanelRef"
       data-testid="scenario-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-[28rem] max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
+      role="dialog"
+      aria-labelledby="scenario-recommendation-panel-title"
+      tabindex="-1"
+      @keydown="handleScenarioRecommendationPanelKeydown"
     >
       <div class="relative overflow-hidden">
         <div class="absolute inset-0 bg-gradient-to-br from-teal-500 to-cyan-600"></div>
@@ -12500,7 +13287,7 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-white text-xl">account_tree</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">{{ t('app.scenarioRecommendations') }}</h3>
+              <h3 id="scenario-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.scenarioRecommendations') }}</h3>
               <p class="text-black/70 text-xs">{{ t('app.aiPoweredScenarioSuggestions') }}</p>
             </div>
           </div>
@@ -12646,7 +13433,7 @@ const counterexampleTraceHelpText = computed(() => {
               v-for="(item, index) in scenarioRecommendationResult.adjustedItems || []"
               :key="`${item.type || 'item'}-${item.index || index}-${item.reasonCode || item.reason}`"
             >
-              {{ formatRecommendationAdjustmentItem(item) }}
+              {{ formatRecommendationAdjustmentItem(item, 'scenario') }}
             </li>
           </ul>
         </div>
@@ -12770,7 +13557,7 @@ const counterexampleTraceHelpText = computed(() => {
                     <div class="font-medium text-slate-700">{{ device.label }} · {{ device.templateName }}</div>
                     <div v-if="scenarioDeviceHasStateMachine(device)" class="mt-0.5 text-[11px] text-slate-500">
                       {{ t('app.scenarioDeviceRuntime', {
-                        state: device.state,
+                        state: formatScenarioDeviceModelToken(device, device.state),
                         trust: t(`app.${scenarioDeviceStateTrust(device)}`),
                         privacy: t(`app.${scenarioDeviceStatePrivacy(device)}`)
                       }) }}
@@ -12780,12 +13567,12 @@ const counterexampleTraceHelpText = computed(() => {
                     </div>
                     <div v-if="device.variables?.length" class="mt-0.5 text-[11px] text-slate-500">
                       {{ t('app.scenarioLocalVariables', {
-                        values: device.variables.map(variable => `${variable.name}=${variable.value} (${t(`app.${scenarioDeviceVariableTrust(device, variable)}`)})`).join('，')
+                        values: device.variables.map(variable => `${formatScenarioDeviceModelToken(device, variable.name)}=${formatScenarioDeviceModelToken(device, variable.value)} (${t(`app.${scenarioDeviceVariableTrust(device, variable)}`)})`).join(t('app.listSeparator'))
                       }) }}
                     </div>
                     <div v-if="device.privacies?.length" class="mt-0.5 text-[11px] text-slate-500">
                       {{ t('app.scenarioLocalSensitivities', {
-                        values: device.privacies.map(item => `${item.name}=${t(`app.${item.privacy}`)}`).join('，')
+                        values: device.privacies.map(item => `${formatScenarioDeviceModelToken(device, item.name)}=${t(`app.${item.privacy}`)}`).join(t('app.listSeparator'))
                       }) }}
                     </div>
                   </div>
@@ -12800,8 +13587,10 @@ const counterexampleTraceHelpText = computed(() => {
                     class="rounded bg-slate-50 px-2 py-1"
                   >
                     {{ t('app.scenarioEnvironmentRuntime', {
-                      name: variable.name,
-                      value: variable.value ?? t('app.empty'),
+                      name: formatScenarioEnvironmentModelToken(variable.name, variable.name),
+                      value: variable.value == null
+                        ? t('app.empty')
+                        : formatScenarioEnvironmentModelToken(variable.name, variable.value),
                       trust: t(`app.${variable.trust}`),
                       privacy: t(`app.${variable.privacy}`)
                     }) }}
@@ -12875,8 +13664,13 @@ const counterexampleTraceHelpText = computed(() => {
     <!-- Rule Recommendation Panel -->
     <div 
       v-if="showRecommendationPanel"
+      :ref="setRuleRecommendationPanelRef"
       data-testid="rule-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
+      role="dialog"
+      aria-labelledby="rule-recommendation-panel-title"
+      tabindex="-1"
+      @keydown="handleRuleRecommendationPanelKeydown"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -12888,7 +13682,7 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-white text-xl">auto_awesome</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">{{ t('app.ruleRecommendations') }}</h3>
+              <h3 id="rule-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.ruleRecommendations') }}</h3>
               <p class="text-black/70 text-xs">{{ t('app.aiPoweredAutomationSuggestions') }}</p>
             </div>
           </div>
@@ -13029,7 +13823,7 @@ const counterexampleTraceHelpText = computed(() => {
               v-for="(item, index) in ruleRecommendationAdjustedItems"
               :key="`${item.type || 'item'}-${item.index || index}-${item.reasonCode || item.reason}`"
             >
-              {{ formatRecommendationAdjustmentItem(item) }}
+              {{ formatRecommendationAdjustmentItem(item, 'rule') }}
             </li>
           </ul>
         </div>
@@ -13099,7 +13893,9 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Reason -->
             <div class="px-3 pb-2">
               <p class="text-xs text-slate-600 break-words">
-                {{ rec.category ? t('app.categoryWithValue', { value: rec.category }) : t('app.aiGeneratedAutomationRule') }}
+                {{ rec.category
+                  ? t('app.categoryWithValue', { value: formatRecommendationCategory(rec.category, key => t(key)) })
+                  : t('app.aiGeneratedAutomationRule') }}
               </p>
             </div>
 
@@ -13116,11 +13912,11 @@ const counterexampleTraceHelpText = computed(() => {
                     <ul class="space-y-1">
                       <li v-for="(cond, condIndex) in rec.conditions" :key="condIndex" class="text-xs">
                         <span class="font-mono rounded bg-white px-1 py-0.5">
-                          {{ formatRecommendedRuleConditionDevice(cond) }}.{{ cond.attribute }}
+                          {{ formatRecommendedRuleConditionDevice(cond) }}.{{ formatRecommendedRuleConditionAttribute(cond) }}
                         </span>
                         <template v-if="isValueBasedRuleRecommendationCondition(cond.targetType)">
-                          <span class="mx-1">{{ cond.relation }}</span>
-                          <span class="font-mono rounded bg-white px-1 py-0.5">{{ cond.value }}</span>
+                          <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
+                          <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedRuleConditionValue(cond) }}</span>
                         </template>
                         <span v-else class="ml-1 text-slate-500">{{ t('app.apiSignalFires') }}</span>
                       </li>
@@ -13130,10 +13926,10 @@ const counterexampleTraceHelpText = computed(() => {
                     <div class="mb-1 font-semibold text-amber-700">{{ t('app.action') }}:</div>
                     <div class="text-xs">
                       <span class="font-mono rounded bg-white px-1 py-0.5">
-                        {{ formatRecommendedRuleCommandDevice(rec.command) }}.{{ rec.command.action }}
+                        {{ formatRecommendedRuleCommandDevice(rec.command) }}.{{ formatRecommendedRuleCommandAction(rec.command) }}
                       </span>
                       <span v-if="rec.command.contentDevice && rec.command.content" class="ml-2 text-slate-500">
-                        ({{ t('app.copyFrom') }} {{ formatRecommendedRuleContentDevice(rec.command) }}<template v-if="rec.command.content">.{{ rec.command.content }}<template v-if="rec.command.contentPrivacy"> ({{ t(`app.${rec.command.contentPrivacy}`) }})</template></template>)
+                        ({{ t('app.copyFrom') }} {{ formatRecommendedRuleContentDevice(rec.command) }}<template v-if="rec.command.content">.{{ formatRecommendedRuleCommandContent(rec.command) }}<template v-if="rec.command.contentPrivacy"> ({{ t(`app.${rec.command.contentPrivacy}`) }})</template></template>)
                       </span>
                     </div>
                   </div>
@@ -13177,8 +13973,13 @@ const counterexampleTraceHelpText = computed(() => {
     <!-- Device Recommendation Panel -->
     <div 
       v-if="showDeviceRecommendationPanel"
+      :ref="setDeviceRecommendationPanelRef"
       data-testid="device-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
+      role="dialog"
+      aria-labelledby="device-recommendation-panel-title"
+      tabindex="-1"
+      @keydown="handleDeviceRecommendationPanelKeydown"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -13190,7 +13991,7 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-white text-xl">devices</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">{{ t('app.deviceRecommendations') }}</h3>
+              <h3 id="device-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.deviceRecommendations') }}</h3>
               <p class="text-black/70 text-xs">{{ t('app.aiPoweredDeviceSuggestions') }}</p>
             </div>
           </div>
@@ -13314,7 +14115,7 @@ const counterexampleTraceHelpText = computed(() => {
               v-for="(item, index) in deviceRecommendationAdjustedItems"
               :key="`${item.type || 'device'}-${item.index || index}-${item.reasonCode || item.reason}`"
             >
-              {{ formatRecommendationAdjustmentItem(item) }}
+              {{ formatRecommendationAdjustmentItem(item, 'device') }}
             </li>
           </ul>
         </div>
@@ -13395,7 +14196,7 @@ const counterexampleTraceHelpText = computed(() => {
                   {{ t('app.deviceRecommendationSuggestedPlacement', { value: localizedRecommendationText(rec.suggestedPlacement, t('app.recommendedBasedOnCurrentDevices')) }) }}
                 </span>
                 <span v-if="rec.initialState" class="rounded-full bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
-                  {{ t('app.deviceRecommendationInitialState', { value: rec.initialState }) }}
+                  {{ t('app.deviceRecommendationInitialState', { value: formatRecommendedDeviceModelToken(rec, rec.initialState) }) }}
                 </span>
                 <span v-if="rec.currentStateTrust" class="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
                   {{ t('app.deviceRecommendationStateTrust', { value: t(`app.${rec.currentStateTrust}`) }) }}
@@ -13411,19 +14212,19 @@ const counterexampleTraceHelpText = computed(() => {
                 v-if="recommendedDeviceEnvironmentAdditions(rec).length > 0"
                 class="mb-2 rounded-lg border border-sky-100 bg-sky-50 px-2 py-1.5 text-[11px] leading-relaxed text-sky-800"
               >
-                {{ t('app.deviceCreationEnvironmentAdditionsPreview', { names: recommendedDeviceEnvironmentAdditions(rec).join(', ') }) }}
+                {{ t('app.deviceCreationEnvironmentAdditionsPreview', { names: formatRecommendedDeviceEnvironmentAdditions(rec) }) }}
               </p>
               <div v-if="rec.initialVariables?.length || rec.initialPrivacies?.length" class="mb-2 space-y-1 text-[11px] text-slate-600">
                 <div v-for="variable in rec.initialVariables || []" :key="`value-${variable.name}`" class="break-words">
                   {{ t('app.deviceRecommendationInitialVariable', {
-                    name: variable.name,
-                    value: variable.value,
+                    name: formatRecommendedDeviceModelToken(rec, variable.name),
+                    value: formatRecommendedDeviceModelToken(rec, variable.value),
                     trust: variable.trust ? t(`app.${variable.trust}`) : t('app.useTemplateDefault')
                   }) }}
                 </div>
                 <div v-for="privacy in rec.initialPrivacies || []" :key="`privacy-${privacy.name}`" class="break-words">
                   {{ t('app.deviceRecommendationInitialPrivacy', {
-                    name: privacy.name,
+                    name: formatRecommendedDeviceModelToken(rec, privacy.name),
                     privacy: t(`app.${privacy.privacy}`)
                   }) }}
                 </div>
@@ -13467,8 +14268,13 @@ const counterexampleTraceHelpText = computed(() => {
     <!-- Specification Recommendation Panel -->
     <div 
       v-if="showSpecRecommendationPanel"
+      :ref="setSpecRecommendationPanelRef"
       data-testid="spec-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
+      role="dialog"
+      aria-labelledby="spec-recommendation-panel-title"
+      tabindex="-1"
+      @keydown="handleSpecRecommendationPanelKeydown"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -13480,7 +14286,7 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-white text-xl">policy</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">{{ t('app.specificationRecommendations') }}</h3>
+              <h3 id="spec-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.specificationRecommendations') }}</h3>
               <p class="text-black/70 text-xs">{{ t('app.aiPoweredSpecificationSuggestions') }}</p>
             </div>
           </div>
@@ -13700,8 +14506,8 @@ const counterexampleTraceHelpText = computed(() => {
                         <span class="font-mono rounded bg-white px-1 py-0.5">
                           {{ formatRecommendedSpecConditionTarget(cond) }}
                         </span>
-                        <span class="mx-1">{{ cond.relation }}</span>
-                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ cond.value }}</span>
+                        <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
+                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
                       </li>
                     </ul>
                   </div>
@@ -13712,8 +14518,8 @@ const counterexampleTraceHelpText = computed(() => {
                         <span class="font-mono rounded bg-white px-1 py-0.5">
                           {{ formatRecommendedSpecConditionTarget(cond) }}
                         </span>
-                        <span class="mx-1">{{ cond.relation }}</span>
-                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ cond.value }}</span>
+                        <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
+                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
                       </li>
                     </ul>
                   </div>
@@ -13724,8 +14530,8 @@ const counterexampleTraceHelpText = computed(() => {
                         <span class="font-mono rounded bg-white px-1 py-0.5">
                           {{ formatRecommendedSpecConditionTarget(cond) }}
                         </span>
-                        <span class="mx-1">{{ cond.relation }}</span>
-                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ cond.value }}</span>
+                        <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
+                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
                       </li>
                     </ul>
                   </div>
@@ -13769,8 +14575,13 @@ const counterexampleTraceHelpText = computed(() => {
     <!-- Simulation Panel (Appears when clicking simulation button) -->
     <div 
       v-if="showSimulationPanel"
+      :ref="setSimulationPanelRef"
       data-testid="simulation-panel"
       class="board-floating-panel board-run-panel board-surface-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
+      role="dialog"
+      aria-labelledby="simulation-panel-title"
+      tabindex="-1"
+      @keydown="handleSimulationPanelKeydown"
     >
       <!-- Simulation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -13782,13 +14593,13 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-white text-xl">play_circle</span>
             </div>
             <div>
-              <span class="text-sm font-bold text-black">{{ t('app.simulationTitle') }}</span>
+              <span id="simulation-panel-title" class="text-sm font-bold text-black">{{ t('app.simulationTitle') }}</span>
               <p class="text-indigo-900/80 text-xs">{{ t('app.configureSimulation') }}</p>
             </div>
           </div>
           <button 
             type="button"
-            @click="showSimulationPanel = false"
+            @click="closeSimulationPanel"
             data-testid="close-simulation-panel"
             :aria-label="t('app.close')"
             :title="t('app.close')"
@@ -14049,9 +14860,10 @@ const counterexampleTraceHelpText = computed(() => {
                 class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="cancellingSimulationTask"
                 :title="t('app.cancelSimulationTask')"
+                :aria-label="t('app.cancelSimulationTask')"
                 @click="cancelAsyncSimulation"
               >
-                <span class="material-symbols-outlined text-sm">{{ cancellingSimulationTask ? 'hourglass_empty' : 'cancel' }}</span>
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ cancellingSimulationTask ? 'hourglass_empty' : 'cancel' }}</span>
               </button>
             </div>
           </div>
@@ -14107,7 +14919,7 @@ const counterexampleTraceHelpText = computed(() => {
         :rules="dialogMeta.rules"
         :specs="dialogMeta.specs"
         :runtime-saving="deviceRuntimeSaving"
-        @update:visible="dialogVisible = $event"
+        @update:visible="handleDeviceDialogVisibility"
         @rename="handleDialogRename"
         @delete="handleDialogDelete"
         @save-runtime="handleDeviceRuntimeSave"
@@ -14116,33 +14928,40 @@ const counterexampleTraceHelpText = computed(() => {
     <!-- Context Menu for Node Right Click -->
     <div
       v-if="contextMenu.visible"
-      class="board-context-menu fixed z-50 border rounded-lg shadow-lg py-2 min-w-48"
+      ref="contextMenuRef"
+      class="board-context-menu fixed z-50 border shadow-lg py-2 min-w-48"
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      role="menu"
+      :aria-label="t('app.deviceContextMenuLabel', { name: contextMenu.node?.label || '' })"
       @click.stop
+      @keydown="handleContextMenuKeydown"
     >
-      <div class="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-100">
+      <div class="board-context-menu__title px-3 py-2 text-xs font-semibold border-b">
         {{ contextMenu.node?.label }}
       </div>
       <button
         @click="renameDevice"
-        class="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+        class="board-context-menu__item w-full px-3 py-2 text-left text-sm flex items-center gap-2"
+        role="menuitem"
       >
-        <span class="material-icons-round text-base">edit</span>
+        <span class="material-icons-round text-base" aria-hidden="true">edit</span>
         {{ t('app.rename') }}
       </button>
       <button
         @click="viewDeviceDetails"
-        class="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+        class="board-context-menu__item w-full px-3 py-2 text-left text-sm flex items-center gap-2"
+        role="menuitem"
       >
-        <span class="material-icons-round text-base">visibility</span>
+        <span class="material-icons-round text-base" aria-hidden="true">visibility</span>
         {{ t('app.viewDetails') }}
       </button>
-      <div class="border-t border-slate-100 my-1"></div>
+      <div class="board-context-menu__divider border-t my-1" role="separator"></div>
       <button
         @click="deleteDevice"
-        class="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+        class="board-context-menu__item board-context-menu__item--danger w-full px-3 py-2 text-left text-sm flex items-center gap-2"
+        role="menuitem"
       >
-        <span class="material-icons-round text-base">delete</span>
+        <span class="material-icons-round text-base" aria-hidden="true">delete</span>
         {{ t('app.deleteDevice') }}
       </button>
     </div>
@@ -14151,8 +14970,11 @@ const counterexampleTraceHelpText = computed(() => {
     <div
       v-if="contextMenu.visible"
       class="fixed inset-0 z-40"
-      @click="closeContextMenu"
+      aria-hidden="true"
+      @click="closeContextMenu()"
+      @contextmenu.prevent="closeContextMenu()"
     ></div>
+    </div>
 
 
     <RuleBuilderDialog
@@ -14186,6 +15008,7 @@ const counterexampleTraceHelpText = computed(() => {
               <input
                 v-model="renameDialogData.newName"
                 @keyup.enter="confirmRename"
+                :disabled="renameDialogSubmitting"
                 class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                 :placeholder="t('app.enterDeviceName')"
               />
@@ -14194,16 +15017,19 @@ const counterexampleTraceHelpText = computed(() => {
           <div class="flex justify-end space-x-3">
             <button
               @click="cancelRename"
+              :disabled="renameDialogSubmitting"
               class="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
             >
               {{ t('app.cancel') }}
             </button>
             <button
               @click="confirmRename"
-              :disabled="!renameDialogData.newName.trim() || renameDialogData.newName.trim() === renameDialogData.node?.label"
-              class="rounded-lg border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="renameDialogSubmitting || !renameDialogData.newName.trim() || renameDialogData.newName.trim() === renameDialogData.originalLabel"
+              :aria-busy="renameDialogSubmitting"
+              class="inline-flex items-center gap-2 rounded-lg border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {{ t('app.confirm') }}
+              <span v-if="renameDialogSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
+              {{ renameDialogSubmitting ? t('app.saving') : t('app.confirm') }}
             </button>
           </div>
         </div>
@@ -14214,20 +15040,20 @@ const counterexampleTraceHelpText = computed(() => {
     <Teleport to="body">
       <div
         v-if="deleteConfirmDialogVisible"
-        class="fixed inset-0 z-[2400] flex items-center justify-center bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
+        class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-3 backdrop-blur-[2px] dark:bg-slate-950/35 sm:p-4"
         @click.self="cancelDelete"
         @keydown="handleDeleteConfirmDialogKeydown"
       >
         <div
           :ref="setDeleteConfirmDialogRef"
-          class="w-96 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+          class="flex max-h-[calc(100dvh-1.5rem)] w-96 max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:max-h-[calc(100dvh-2rem)] sm:max-w-[calc(100vw-2rem)]"
           role="dialog"
           aria-modal="true"
           aria-labelledby="delete-device-dialog-title"
           tabindex="-1"
           @click.stop
         >
-          <div class="mb-6">
+          <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 sm:p-6">
             <div class="flex items-center mb-4">
               <div class="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center dark:bg-red-950/50">
                 <span class="material-symbols-outlined text-red-600 dark:text-red-300" aria-hidden="true">warning</span>
@@ -14241,7 +15067,7 @@ const counterexampleTraceHelpText = computed(() => {
             <div v-if="deleteConfirmDialogData.hasRelations" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4 dark:border-yellow-900/60 dark:bg-yellow-950/30">
               <div class="flex items-start">
                 <span class="material-symbols-outlined text-yellow-600 mr-2 mt-0.5 dark:text-yellow-300" aria-hidden="true">info</span>
-                <div>
+                <div class="min-w-0">
                   <p class="text-sm font-medium text-yellow-800 mb-1 dark:text-yellow-100">{{ t('app.deviceDeleteConsequences') }}</p>
                   <div class="text-xs text-yellow-700 space-y-1 dark:text-yellow-200">
                     <div v-if="deleteConfirmDialogData.relationCount.rules > 0">
@@ -14277,21 +15103,24 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
 
-          <div class="flex justify-end space-x-3">
+          <div class="flex shrink-0 flex-wrap justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-700 dark:bg-slate-950/60 sm:px-6">
             <button
               type="button"
               @click="cancelDelete"
-              class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              :disabled="deleteConfirmSubmitting"
+              class="min-h-11 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
             >
               {{ t('app.cancel') }}
             </button>
             <button
               type="button"
               @click="confirmDelete"
-              :disabled="!deleteConfirmDialogData.impactToken"
-              class="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-600 dark:hover:bg-red-500"
+              :disabled="deleteConfirmSubmitting || !deleteConfirmDialogData.impactToken"
+              :aria-busy="deleteConfirmSubmitting"
+              class="inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-600 dark:hover:bg-red-500"
             >
-              {{ t('app.deleteDevice') }}
+              <span v-if="deleteConfirmSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
+              {{ deleteConfirmSubmitting ? t('app.deleting') : t('app.deleteDevice') }}
             </button>
           </div>
         </div>
@@ -14324,7 +15153,7 @@ const counterexampleTraceHelpText = computed(() => {
   >
     <div
       :ref="setSimulationResultDialogRef"
-      class="min-h-0 flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+      class="board-result-dialog-surface min-h-0 flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="simulation-result-dialog-title"
@@ -14476,7 +15305,7 @@ const counterexampleTraceHelpText = computed(() => {
                       >
                         <span class="font-medium">{{ device.deviceLabel || t('app.unknownModelItem') }}</span>
                         <span class="text-slate-400">:</span>
-                        <span class="text-indigo-700">{{ device.state || 'N/A' }}</span>
+                        <span class="text-indigo-700">{{ device.state ? formatPlaybackDeviceModelToken(device, device.state) : t('app.notAvailableShort') }}</span>
                       </span>
                     </div>
                   </td>
@@ -14552,7 +15381,7 @@ const counterexampleTraceHelpText = computed(() => {
   >
     <div
       :ref="setVerificationResultDialogRef"
-      class="min-h-0 max-h-[85vh] w-[650px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
+      class="board-result-dialog-surface min-h-0 max-h-[85vh] w-[650px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
       role="dialog"
       aria-modal="true"
       aria-labelledby="verification-result-dialog-title"
@@ -15130,14 +15959,14 @@ const counterexampleTraceHelpText = computed(() => {
             <span
               v-if="traceDeviceSecurityFacts(device).untrustedLabels.length > 0"
               class="rounded bg-amber-100 px-1 text-[9px] text-amber-800"
-              :title="t('app.traceVisualization.untrustedLabelDetails', { labels: traceDeviceSecurityFacts(device).untrustedLabels.join(', ') })"
+              :title="t('app.traceVisualization.untrustedLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).untrustedLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesUntrustedSource') }}
             </span>
             <span
               v-if="traceDeviceSecurityFacts(device).privateLabels.length > 0"
               class="rounded bg-fuchsia-100 px-1 text-[9px] text-fuchsia-800"
-              :title="t('app.traceVisualization.privateLabelDetails', { labels: traceDeviceSecurityFacts(device).privateLabels.join(', ') })"
+              :title="t('app.traceVisualization.privateLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).privateLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesPrivateData') }}
             </span>
@@ -15159,8 +15988,8 @@ const counterexampleTraceHelpText = computed(() => {
               : 'border-slate-200 bg-slate-50 text-slate-600'"
             :title="traceEnvironmentVariableTitle(envVar.name, envVar.value)"
           >
-            <span class="max-w-[7rem] truncate">{{ envVar.name }}</span>
-            <span class="font-mono">{{ envVar.value }}</span>
+            <span class="max-w-[7rem] truncate">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.name) }}</span>
+            <span class="font-mono">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.value) }}</span>
             <span v-if="traceEnvironmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[9px] text-amber-800">
               {{ t('app.traceVisualization.changed') }}
             </span>
@@ -15248,6 +16077,8 @@ const counterexampleTraceHelpText = computed(() => {
     :board-comparison="simulationBoardComparison"
     :current-rule-ids="currentBoardRuleIds"
     :current-device-ids="currentBoardDeviceIds"
+    :format-device-model-token="formatPlaybackDeviceModelToken"
+    :format-environment-model-token="formatPlaybackEnvironmentModelToken"
     :style="boardShellStyle"
     @update:visible="handleSimulationTimelineClose"
     @highlight-state="handleHighlightTrace"

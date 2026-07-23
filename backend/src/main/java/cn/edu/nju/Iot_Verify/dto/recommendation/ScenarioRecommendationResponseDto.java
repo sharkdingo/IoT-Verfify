@@ -19,6 +19,8 @@ public class ScenarioRecommendationResponseDto {
     private Integer truncatedCount;
     private String scenarioName;
     private String rationale;
+    private String objectiveStatus;
+    private List<ScenarioObjectiveIssueDto> objectiveIssues;
     private Boolean verificationReady;
     private List<ScenarioReadinessIssueDto> readinessIssues;
     private List<ScenarioSemanticWarningDto> semanticWarnings;

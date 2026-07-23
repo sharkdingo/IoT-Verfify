@@ -48,6 +48,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskRejectedException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -174,29 +175,65 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     void maintainTaskLeases() {
+        List<LocalSimulationExecution> executions = List.copyOf(localExecutions.values());
         try {
-            LocalDateTime now = databaseNow();
-            LocalDateTime renewedUntil = now.plus(TASK_LEASE_DURATION);
-            for (LocalSimulationExecution execution : List.copyOf(localExecutions.values())) {
-                int renewed = simulationTaskRepository.renewOwnedActiveLease(
-                        execution.taskId, workerId, now, renewedUntil, ACTIVE_STATUSES);
-                if (renewed == 0) {
+            databaseNow();
+        } catch (RuntimeException e) {
+            stopSimulationExecutionsWithExpiredConfirmation(executions);
+            log.warn("Could not read database time while maintaining simulation task leases", e);
+            return;
+        }
+        for (LocalSimulationExecution execution : executions) {
+            try {
+                boolean renewed = TaskLeaseRenewal.renew(
+                        transactionTemplate,
+                        () -> simulationTaskRepository.findByIdForUpdate(execution.taskId),
+                        this::databaseNow,
+                        simulationTaskRepository::saveAndFlush,
+                        workerId,
+                        TASK_LEASE_DURATION);
+                if (!renewed) {
                     execution.requestStop();
+                } else {
+                    execution.leaseConfirmation.confirm();
+                }
+            } catch (RuntimeException e) {
+                if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
+                    execution.requestStop();
+                    log.warn("Stopped local simulation task {} after its lease could not be confirmed for a full TTL",
+                            execution.taskId);
+                } else {
+                    log.warn("Could not renew simulation task lease {}; the next cycle will retry",
+                            execution.taskId, e);
                 }
             }
+        }
+        try {
+            LocalDateTime recoveryTime = databaseNow();
             String message = "The simulation worker stopped before the task completed";
             int recovered = simulationTaskRepository.failExpiredActiveTasks(
                     SimulationTaskPo.TaskStatus.FAILED,
-                    now,
+                    recoveryTime,
                     message,
                     serializeCheckLogs(List.of(message)),
                     ACTIVE_STATUSES,
-                    now);
+                    recoveryTime);
             if (recovered > 0) {
                 log.warn("Recovered {} expired simulation task lease(s)", recovered);
             }
         } catch (RuntimeException e) {
-            log.warn("Could not maintain simulation task leases; the next cycle will retry", e);
+            log.warn("Could not recover expired simulation task leases; the next cycle will retry", e);
+        }
+    }
+
+    private void stopSimulationExecutionsWithExpiredConfirmation(
+            List<LocalSimulationExecution> executions) {
+        for (LocalSimulationExecution execution : executions) {
+            if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
+                execution.requestStop();
+                log.warn("Stopped local simulation task {} after the database could not confirm its lease for a full TTL",
+                        execution.taskId);
+            }
         }
     }
 
@@ -379,6 +416,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                                  AttackScenarioDto attackScenario) {
         try {
             SimulationRequestDto snapshot = objectMapper.convertValue(request, SimulationRequestDto.class);
+            ModelRequestSnapshotSupport.preserveDeviceMetadata(
+                    request.getDevices(), snapshot.getDevices());
             snapshot.setAttackScenario(attackScenario);
             return snapshot;
         } catch (IllegalArgumentException e) {
@@ -434,7 +473,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         return transactionTemplate.execute(status -> {
             requireActiveUserForPersistence(userId);
             requireChatExecutionLease();
-            long storedTaskCount = simulationTaskRepository.countByUserId(userId);
+            long storedTaskCount = storedSimulationRunCount(userId);
             if (storedTaskCount >= taskAdmissionLimits.getMaxStoredTasksPerUser()) {
                 throw new AsyncTaskQuotaExceededException(
                         "simulation", AsyncTaskQuotaExceededException.QuotaType.STORED,
@@ -619,6 +658,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 log.info("Simulation task {} is no longer PENDING (cancelled or already started), aborting", taskId);
                 return;
             }
+            LocalSimulationExecution localExecution = localExecutions.get(taskId);
+            if (localExecution != null) localExecution.leaseConfirmation.confirm();
 
             // Load entity for subsequent use (failTask/completeTask only need id and startedAt).
             task = simulationTaskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
@@ -750,7 +791,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     @Override
     @Transactional
     public TaskCancellationResultDto cancelTask(Long userId, Long taskId) {
-        requireChatExecutionLease();
+        chatExecutionLeaseGuard.requireCurrentExecutionLeaseAndLock();
         return super.cancelTask(userId, taskId);
     }
 
@@ -761,6 +802,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     private SimulationTraceDto simulateAndSaveWithoutAdmission(Long userId, SimulationRequestDto request) {
         SimulationInput input = validateAndNormalize(userId, request);
+        requireSimulationRunStorageCapacity(userId);
         SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.savedTrace());
 
         if (result.getStates() == null || result.getStates().isEmpty()) {
@@ -769,9 +811,15 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
         SimulationTracePo saved;
         try {
-            saved = transactionTemplate.execute(status -> persistSimulationTrace(
-                    userId, result, buildRequestSnapshot(input.request()),
-                    JsonUtils.toJson(input.templateManifests())));
+            saved = transactionTemplate.execute(status -> {
+                formalOperationAdmission.registerCurrentLeaseCommitFence();
+                return persistSimulationTrace(
+                        userId, result, buildRequestSnapshot(input.request()),
+                        JsonUtils.toJson(input.templateManifests()));
+            });
+        } catch (AsyncTaskQuotaExceededException e) {
+            log.info("Simulation completed but run history is full for user {}", userId);
+            return unsavedSimulationTrace(result, RunPersistenceDto.failed(e.getReasonCode()));
         } catch (RuntimeException e) {
             log.error("Simulation completed but its history persistence outcome is unknown for user {}", userId, e);
             return unsavedSimulationTrace(result, RunPersistenceDto.outcomeUnknown(
@@ -810,8 +858,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     @Override
     @Transactional(readOnly = true)
     public List<SimulationTraceSummaryDto> getUserSimulations(Long userId) {
-        return simulationTraceMapper.toSummaryDtoList(
-                simulationTraceRepository.findByUserIdOrderByCreatedAtDesc(userId));
+        return simulationTraceMapper.toSummaryProjectionDtoList(
+                simulationTraceRepository.findByUserIdOrderByCreatedAtDescIdDesc(
+                        userId, PageRequest.of(0, taskAdmissionLimits.getMaxStoredTasksPerUser())));
     }
 
     @Override
@@ -1026,7 +1075,31 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private SimulationTracePo persistSimulationTrace(Long userId, SimulationResultDto result,
                                                      String requestJson, String templateSnapshotsJson) {
         requireActiveUserForPersistence(userId);
+        enforceSimulationRunStorageCapacity(userId);
         return persistSimulationTraceForActiveUser(userId, result, requestJson, templateSnapshotsJson);
+    }
+
+    private void requireSimulationRunStorageCapacity(Long userId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            requireActiveUserForPersistence(userId);
+            requireChatExecutionLease();
+            enforceSimulationRunStorageCapacity(userId);
+        });
+    }
+
+    private void enforceSimulationRunStorageCapacity(Long userId) {
+        long storedRunCount = storedSimulationRunCount(userId);
+        if (storedRunCount >= taskAdmissionLimits.getMaxStoredTasksPerUser()) {
+            throw new AsyncTaskQuotaExceededException(
+                    "simulation", AsyncTaskQuotaExceededException.QuotaType.STORED,
+                    storedRunCount, taskAdmissionLimits.getMaxStoredTasksPerUser());
+        }
+    }
+
+    private long storedSimulationRunCount(Long userId) {
+        return Math.addExact(
+                simulationTaskRepository.countByUserId(userId),
+                simulationTraceRepository.countStandaloneByUserId(userId));
     }
 
     private SimulationTracePo persistSimulationTraceForActiveUser(Long userId, SimulationResultDto result,
@@ -1037,6 +1110,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 .requestedSteps(result.getRequestedSteps())
                 .steps(result.getSteps())
                 .statesJson(JsonUtils.toJson(result.getStates()))
+                .stateCount(result.getStates().size())
                 .logsJson(JsonUtils.toJsonOrEmpty(result.getLogs()))
                 .generationIssuesJson(JsonUtils.toJsonOrEmpty(result.getGenerationIssues()))
                 .nusmvOutput(result.getNusmvOutput())
@@ -1307,6 +1381,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         private final SimulationInput input;
         private final AtomicReference<LocalExecutionState> state =
                 new AtomicReference<>(LocalExecutionState.QUEUED);
+        private final LeaseConfirmation leaseConfirmation = new LeaseConfirmation();
         private final FutureTask<Void> futureTask = new FutureTask<>(this, null);
 
         private LocalSimulationExecution(Long userId, Long taskId, SimulationInput input) {

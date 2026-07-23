@@ -205,29 +205,64 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     }
 
     void maintainTaskLeases() {
+        List<LocalFuzzExecution> executions = List.copyOf(localExecutions.values());
         try {
-            LocalDateTime now = databaseNow();
-            LocalDateTime renewedUntil = now.plus(TASK_LEASE_DURATION);
-            for (LocalFuzzExecution execution : List.copyOf(localExecutions.values())) {
-                int renewed = taskRepository.renewOwnedActiveLease(
-                        execution.taskId, workerId, now, renewedUntil, ACTIVE_STATUSES);
-                if (renewed == 0) {
+            databaseNow();
+        } catch (RuntimeException e) {
+            stopFuzzExecutionsWithExpiredConfirmation(executions);
+            log.warn("Could not read database time while maintaining counterexample-search task leases", e);
+            return;
+        }
+        for (LocalFuzzExecution execution : executions) {
+            try {
+                boolean renewed = TaskLeaseRenewal.renew(
+                        transactionTemplate,
+                        () -> taskRepository.findByIdForUpdate(execution.taskId),
+                        this::databaseNow,
+                        taskRepository::saveAndFlush,
+                        workerId,
+                        TASK_LEASE_DURATION);
+                if (!renewed) {
                     execution.requestStop();
+                } else {
+                    execution.leaseConfirmation.confirm();
+                }
+            } catch (RuntimeException e) {
+                if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
+                    execution.requestStop();
+                    log.warn("Stopped local counterexample-search task {} after its lease could not be confirmed for a full TTL",
+                            execution.taskId);
+                } else {
+                    log.warn("Could not renew counterexample-search task lease {}; the next cycle will retry",
+                            execution.taskId, e);
                 }
             }
+        }
+        try {
+            LocalDateTime recoveryTime = databaseNow();
             int recovered = taskRepository.failExpiredActiveTasks(
                     FuzzTaskPo.TaskStatus.FAILED,
-                    now,
+                    recoveryTime,
                     "The counterexample search stopped before the task completed",
                     serializeCheckLogs(List.of(
                             "Counterexample search task lease expired before completion")),
                     ACTIVE_STATUSES,
-                    now);
+                    recoveryTime);
             if (recovered > 0) {
                 log.warn("Recovered {} expired fuzz task lease(s)", recovered);
             }
         } catch (RuntimeException e) {
-            log.warn("Could not maintain fuzz task leases; the next cycle will retry", e);
+            log.warn("Could not recover expired counterexample-search task leases; the next cycle will retry", e);
+        }
+    }
+
+    private void stopFuzzExecutionsWithExpiredConfirmation(List<LocalFuzzExecution> executions) {
+        for (LocalFuzzExecution execution : executions) {
+            if (execution.leaseConfirmation.isUnconfirmedFor(TASK_LEASE_DURATION)) {
+                execution.requestStop();
+                log.warn("Stopped local counterexample-search task {} after the database could not confirm its lease for a full TTL",
+                        execution.taskId);
+            }
         }
     }
 
@@ -455,6 +490,8 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 log.info("Fuzz task {} is no longer pending; skipping execution", taskId);
                 return;
             }
+            LocalFuzzExecution localExecution = localExecutions.get(taskId);
+            if (localExecution != null) localExecution.leaseConfirmation.confirm();
             task = taskRepository.findById(taskId).orElse(null);
             if (task == null) {
                 log.error("Fuzz task {} disappeared after it started", taskId);
@@ -1620,6 +1657,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         private final SubmissionCapacityPermit capacityPermit;
         private final AtomicReference<LocalExecutionState> state =
                 new AtomicReference<>(LocalExecutionState.QUEUED);
+        private final LeaseConfirmation leaseConfirmation = new LeaseConfirmation();
         private final FutureTask<Void> futureTask;
 
         private LocalFuzzExecution(Long taskId,

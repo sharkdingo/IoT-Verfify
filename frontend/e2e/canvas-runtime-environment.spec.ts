@@ -47,7 +47,7 @@ const addNodes = async (
   data: { devices, environmentVariablePatches }
 }))
 
-test('canvas node focus keeps environment variables scenario-level', async ({ page, request }) => {
+test('opening canvas node details preserves the viewport while inspector focus remains explicit', async ({ page, request }) => {
   const auth = await createAuthenticatedUser(request)
 
   const seedNode = {
@@ -59,8 +59,17 @@ test('canvas node focus keeps environment variables scenario-level', async ({ pa
     width: 220,
     height: 180
   }
+  const minimumNode = {
+    id: 'minimum_sensor_1',
+    templateName: 'Temperature Sensor',
+    label: 'Minimum Sensor',
+    position: { x: 760, y: 320 },
+    state: 'Working',
+    width: 80,
+    height: 60
+  }
 
-  await addNodes(request, auth, [seedNode], [
+  await addNodes(request, auth, [seedNode, minimumNode], [
     { name: 'temperature', value: '31', trust: 'trusted', privacy: 'public' }
   ])
 
@@ -82,33 +91,81 @@ test('canvas node focus keeps environment variables scenario-level', async ({ pa
   const node = page.locator('[data-node-id="temp_sensor_1"]')
   await expect(node).toBeVisible({ timeout: 30_000 })
   await expect(node).toHaveClass(/device-node--compact/)
+  const zoomInput = page.getByTestId('canvas-map-zoom-input')
+  await expect(zoomInput).toHaveValue('40')
+  const initialCanvasTransform = await page.locator('.canvas-inner').evaluate(element =>
+    getComputedStyle(element).transform
+  )
+  const minimumRenderedNode = page.locator('[data-node-id="minimum_sensor_1"]')
+  await expect(minimumRenderedNode).toBeVisible()
+  const lowZoomHitTarget = await minimumRenderedNode.evaluate(element => {
+    const rect = element.getBoundingClientRect()
+    const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    return {
+      nodeId: target?.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId || null,
+      resizeHandleCount: element.querySelectorAll('.resize-handle').length
+    }
+  })
+  expect(lowZoomHitTarget).toEqual({ nodeId: minimumNode.id, resizeHandleCount: 0 })
+
   await node.click({ button: 'right' })
   await expect(page.getByTestId('device-dialog')).toHaveCount(0)
   const contextMenu = page.locator('.board-context-menu')
   await expect(contextMenu).toBeVisible()
-  await contextMenu.getByRole('button', { name: 'View Details' }).click()
+  await contextMenu.getByRole('menuitem', { name: 'View Details' }).click()
   await expect(page.locator('.board-context-menu')).toHaveCount(0)
   const contextDialog = page.getByTestId('device-dialog')
   await expect(contextDialog).toBeVisible()
+  await expect(zoomInput).toHaveValue('40')
+  await expect(node).toHaveClass(/device-node--compact/)
+  await expect.poll(() => page.locator('.canvas-inner').evaluate(element =>
+    getComputedStyle(element).transform
+  )).toBe(initialCanvasTransform)
   await contextDialog.getByLabel('Close', { exact: true }).click()
   await expect(contextDialog).toHaveCount(0)
 
   const environmentPool = page.getByTestId('environment-pool')
   await expect(environmentPool).toBeVisible()
-  await expect(environmentPool).toContainText('temperature')
+  await expect(environmentPool).toContainText('Temperature')
   await page.getByTestId('toggle-environment-pool').click()
-  await environmentPool.locator('article').filter({ hasText: 'temperature' }).getByRole('button').first().click()
+  await environmentPool.locator('article').filter({ hasText: 'Temperature' }).getByRole('button').first().click()
   await expect(environmentPool).not.toContainText('a_temperature')
   await expect(page.getByTestId('environment-value-temperature')).toHaveValue('31')
 
   await node.click()
-  await expect(node).toHaveClass(/device-node--expanded/)
   await expect(page.getByTestId('device-dialog')).toBeVisible()
+  await expect(zoomInput).toHaveValue('40')
+  await expect(node).toHaveClass(/device-node--compact/)
+  await expect.poll(() => page.locator('.canvas-inner').evaluate(element =>
+    getComputedStyle(element).transform
+  )).toBe(initialCanvasTransform)
   await expect(page.getByTestId('device-dialog')).toContainText('No state machine')
   await expect(page.getByTestId('device-dialog')).toContainText('Environment variable')
   await expect(page.getByTestId('device-dialog')).not.toContainText('Working, Off')
   await expect(page.getByTestId('device-instance-runtime')).toHaveCount(0)
   await expect(page.getByTestId('environment-value-temperature')).toHaveValue('31')
+  await page.getByTestId('device-dialog').getByLabel('Close', { exact: true }).click()
+
+  await expect.poll(async () => {
+    const response = await request.get(`${apiBaseURL}/api/board/layout`, {
+      headers: authHeaders(auth)
+    })
+    if (!response.ok()) return null
+    const persistedLayout = await unwrap<{
+      canvasPan: { x: number; y: number }
+      canvasZoom: number
+    }>(response)
+    return {
+      canvasZoom: persistedLayout.canvasZoom,
+      canvasPan: persistedLayout.canvasPan
+    }
+  }).toEqual({ canvasZoom: 0.4, canvasPan: { x: 0, y: 0 } })
+
+  const inspectorDevice = page.locator('[data-testid="system-inspector"] [data-device-id="temp_sensor_1"]')
+  await inspectorDevice.getByRole('button', { name: 'Temp Sensor' }).click()
+  await expect(zoomInput).toHaveValue('100')
+  await expect(node).toHaveClass(/device-node--expanded/)
+  await expect(node).toHaveClass(/node-focused/)
 })
 
 test('device info renders multi-mode API state tuples as readable mode changes', async ({ page, request }) => {
@@ -133,8 +190,8 @@ test('device info renders multi-mode API state tuples as readable mode changes',
   const apiSection = page.getByTestId('device-dialog-apis')
   await expect(apiSection).toBeVisible()
   await expect(apiSection).toContainText('Any state')
-  await expect(apiSection).toContainText('ThermostatFanMode: auto')
-  await expect(apiSection).toContainText('ThermostatMode: cool')
+  await expect(apiSection).toContainText('Thermostat fan mode: Auto')
+  await expect(apiSection).toContainText('Thermostat mode: Cool')
   await expect(apiSection).not.toContainText('auto;')
   await expect(apiSection).not.toContainText(';cool')
 })
@@ -170,7 +227,7 @@ test('environment pool keeps one shared value for multiple readers before simula
   const environmentPool = page.getByTestId('environment-pool')
   await expect(environmentPool).toBeVisible()
   await page.getByTestId('toggle-environment-pool').click()
-  await environmentPool.locator('article').filter({ hasText: 'temperature' }).getByRole('button').first().click()
+  await environmentPool.locator('article').filter({ hasText: 'Temperature' }).getByRole('button').first().click()
   await expect(environmentPool).not.toContainText('a_temperature')
   await expect(page.getByTestId('environment-value-temperature')).toHaveValue('28')
   await expect(environmentPool).not.toContainText('Conflicting values')

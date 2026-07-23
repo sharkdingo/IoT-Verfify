@@ -9,8 +9,9 @@ import type {
   PlaybackDeviceChangeDetail,
   PlaybackEnvironmentChange
 } from '@/utils/traceView'
+import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   changes: PlaybackDeviceChange[]
   environmentChanges: PlaybackEnvironmentChange[]
   triggeredRules: TraceTriggeredRule[]
@@ -23,14 +24,37 @@ const props = defineProps<{
   position: { x: number; y: number }
   inputEvents?: Array<FuzzingInputEvent & { targetLabel?: string }>
   firstViolationStateNumber?: number
-}>()
+  bundledDeviceIds?: string[]
+  bundledEnvironmentNames?: string[]
+}>(), {
+  bundledDeviceIds: () => [],
+  bundledEnvironmentNames: () => []
+})
 
 const emit = defineEmits<{
   dismiss: []
   move: [position: { x: number; y: number }]
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
+const formatBundledModelToken = (value: unknown) => formatBuiltInModelToken(
+  value,
+  key => te(key) ? t(key) : key
+)
+const bundledDeviceIdSet = computed(() => new Set(props.bundledDeviceIds))
+const bundledEnvironmentNameSet = computed(() => new Set(props.bundledEnvironmentNames))
+const formatDeviceToken = (deviceId: string, value: unknown) =>
+  bundledDeviceIdSet.value.has(deviceId)
+    ? formatBundledModelToken(value)
+    : String(value ?? '')
+const formatDeviceProperty = (deviceId: string, property: unknown, stateProperty = false) =>
+  (stateProperty && property === 'workingState') || bundledDeviceIdSet.value.has(deviceId)
+    ? formatBundledModelToken(property)
+    : String(property ?? '')
+const formatEnvironmentToken = (name: string, value: unknown) =>
+  bundledEnvironmentNameSet.value.has(name)
+    ? formatBundledModelToken(value)
+    : String(value ?? '')
 
 const title = computed(() => {
   if (props.kind === 'simulation') return t('app.traceVisualization.simulationStepChanges')
@@ -73,10 +97,19 @@ const inputEventSourceLabel = (event: FuzzingInputEvent) => {
   return t('app.traceVisualization.fuzzModelChoiceSource')
 }
 
-const inputEventValue = (event: FuzzingInputEvent) =>
-  event.kind === 'ENVIRONMENT_RATE' && event.value.startsWith('rate:')
+const inputEventValue = (event: FuzzingInputEvent) => {
+  const value = event.kind === 'ENVIRONMENT_RATE' && event.value.startsWith('rate:')
     ? event.value.slice(5)
     : event.value
+  return event.kind === 'DEVICE_STATE' || event.kind === 'DEVICE_VARIABLE'
+    ? formatDeviceToken(event.targetId, value)
+    : formatEnvironmentToken(event.property, value)
+}
+
+const inputEventProperty = (event: FuzzingInputEvent) =>
+  event.kind === 'DEVICE_STATE' || event.kind === 'DEVICE_VARIABLE'
+    ? formatDeviceProperty(event.targetId, event.property, event.kind === 'DEVICE_STATE')
+    : formatEnvironmentToken(event.property, event.property)
 
 const popoverRef = ref<HTMLElement | null>(null)
 let dragState: {
@@ -169,24 +202,24 @@ onBeforeUnmount(() => {
   window.removeEventListener('mouseup', onMouseUp)
 })
 
-const detailLabel = (detail: PlaybackDeviceChangeDetail): string => {
+const detailLabel = (detail: PlaybackDeviceChangeDetail, deviceId: string): string => {
   const labels: Record<PlaybackChangeKind, string> = {
     state: t('app.state'),
     mode: t('app.mode'),
-    variable: detail.name || t('app.variableValue'),
+    variable: detail.name ? formatDeviceToken(deviceId, detail.name) : t('app.variableValue'),
     security: t('app.traceVisualization.securityLabels'),
     compromised: t('app.traceVisualization.compromiseStatus')
   }
   return labels[detail.kind]
 }
 
-const formatValue = (value: string, kind: PlaybackChangeKind): string => {
+const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string): string => {
   if (kind === 'compromised') {
     return value === 'true'
       ? t('app.traceVisualization.compromised')
       : t('app.traceVisualization.notCompromised')
   }
-  if (kind !== 'security') return value
+  if (kind !== 'security') return formatDeviceToken(deviceId, value)
   return [
     ['untrusted', t('app.untrusted')],
     ['trusted', t('app.trusted')],
@@ -273,7 +306,7 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
               <span class="mr-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 font-bold text-indigo-800">{{ inputEventSourceLabel(event) }}</span>
               <span class="font-semibold">{{ inputEventKindLabel(event) }}</span>
               <span class="px-1 text-indigo-400" aria-hidden="true">·</span>
-              <span>{{ event.targetLabel || event.targetId }}.{{ event.property }}</span>
+              <span>{{ event.targetLabel || event.targetId }}.{{ inputEventProperty(event) }}</span>
               <span class="px-1 font-bold text-indigo-500" aria-hidden="true">=</span>
               <span class="break-all font-mono font-semibold">{{ inputEventValue(event) }}</span>
             </li>
@@ -327,11 +360,11 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
               :key="`${detail.kind}-${detail.name || ''}-${index}`"
               class="grid grid-cols-[minmax(4.5rem,auto)_minmax(0,1fr)] items-baseline gap-2 text-[10px] leading-4"
             >
-              <span class="truncate font-semibold text-slate-600" :title="detailLabel(detail)">{{ detailLabel(detail) }}</span>
+              <span class="truncate font-semibold text-slate-600" :title="detailLabel(detail, change.deviceId)">{{ detailLabel(detail, change.deviceId) }}</span>
               <span class="min-w-0 break-words font-mono text-slate-800">
-                <span class="text-slate-500">{{ formatValue(detail.previousValue, detail.kind) }}</span>
+                <span class="text-slate-500">{{ formatValue(detail.previousValue, detail.kind, change.deviceId) }}</span>
                 <span class="px-1 font-sans font-bold text-indigo-500" aria-hidden="true">-&gt;</span>
-                <span class="font-semibold text-indigo-900">{{ formatValue(detail.currentValue, detail.kind) }}</span>
+                <span class="font-semibold text-indigo-900">{{ formatValue(detail.currentValue, detail.kind, change.deviceId) }}</span>
               </span>
             </li>
           </ul>
@@ -357,11 +390,11 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
               :key="change.name"
               class="grid grid-cols-[minmax(4.5rem,auto)_minmax(0,1fr)] items-baseline gap-2 text-[10px] leading-4"
             >
-              <span class="truncate font-semibold text-slate-600" :title="change.name">{{ change.name }}</span>
+              <span class="truncate font-semibold text-slate-600" :title="formatEnvironmentToken(change.name, change.name)">{{ formatEnvironmentToken(change.name, change.name) }}</span>
               <span class="min-w-0 break-words font-mono text-slate-800">
-                <span class="text-slate-500">{{ change.previousValue }}</span>
+                <span class="text-slate-500">{{ formatEnvironmentToken(change.name, change.previousValue) }}</span>
                 <span class="px-1 font-sans font-bold text-amber-500" aria-hidden="true">-&gt;</span>
-                <span class="font-semibold text-amber-900">{{ change.currentValue }}</span>
+                <span class="font-semibold text-amber-900">{{ formatEnvironmentToken(change.name, change.currentValue) }}</span>
               </span>
             </li>
           </ul>

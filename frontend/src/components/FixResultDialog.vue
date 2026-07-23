@@ -8,6 +8,7 @@ import { FIX_RESPONSE_INCOMPLETE_CODE } from '@/utils/fixResponse'
 import { generationIssueReasonKey } from '@/utils/generationIssue'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { requestInteractiveCancellation } from '@/utils/interactiveCancellation'
+import { formatModelTokenBySource } from '@/utils/modelTokenDisplay'
 import type {
   FaultLocalizationResult,
   FaultRule,
@@ -17,6 +18,7 @@ import type {
   FixStrategyAttemptStatus,
   FixStrategyName,
   FixSuggestion,
+  ModelTokenSource,
   ParameterAdjustment,
   ParameterTarget,
   PreferredRangeSelection
@@ -211,11 +213,32 @@ const parameterAdjustments = computed(() => {
 
 const preferredRangeTargetId = (adjustment: ParameterTarget) => adjustment.targetId
 
+const formatModelToken = (value: unknown, source: ModelTokenSource) => {
+  return formatModelTokenBySource(source, value, t)
+}
+
+const formatRelation = (value: unknown) => {
+  const raw = String(value ?? '').trim()
+  const normalized = raw.toLowerCase().replace(/_/g, ' ')
+  const labels: Record<string, string> = {
+    '=': t('app.relationEquals'),
+    '==': t('app.relationEquals'),
+    '!=': t('app.relationNotEquals'),
+    '>': t('app.relationGreater'),
+    '<': t('app.relationLess'),
+    '>=': t('app.relationGreaterEqual'),
+    '<=': t('app.relationLessEqual'),
+    in: t('app.relationIn'),
+    'not in': t('app.relationNotIn')
+  }
+  return labels[normalized] || raw
+}
+
 const formatPreferredRangeTarget = (adjustment: ParameterTarget) => t('app.preferredRangeTargetLabel', {
-  description: adjustment.description || t('app.parameterTargetFallback', {
-    attribute: adjustment.attribute,
-    relation: adjustment.relation,
-    original: adjustment.originalValue
+  description: t('app.parameterTargetFallback', {
+    attribute: formatModelToken(adjustment.attribute, adjustment.modelTokenSource),
+    relation: formatRelation(adjustment.relation),
+    original: formatModelToken(adjustment.originalValue, adjustment.modelTokenSource)
   })
 })
 
@@ -700,14 +723,14 @@ const getFaultRuleReason = (rule: FaultRule) => {
     return t('app.faultRuleConflictReason', {
       rule: rule.conflictingRuleString,
       device: rule.targetDeviceLabel,
-      first: rule.targetEndState,
-      second: rule.conflictingEndState
+      first: formatModelToken(rule.targetEndState, rule.modelTokenSource),
+      second: formatModelToken(rule.conflictingEndState, rule.modelTokenSource)
     })
   }
   if (rule.reasonCode === 'TRIGGERED') {
     return t('app.faultRuleTriggeredReason', {
       transition: rule.transitionNumber,
-      action: rule.targetActionLabel,
+      action: formatModelToken(rule.targetActionLabel, rule.modelTokenSource),
       device: rule.targetDeviceLabel
     })
   }
@@ -724,9 +747,11 @@ const getConditionActionLabel = (action?: string) => {
 const formatConditionAdjustment = (adjustment: NonNullable<FixSuggestion['conditionAdjustments']>[number]) => {
   const device = adjustment.deviceLabel || t('app.unknownModelItem')
   const condition = [
-    `${device}.${adjustment.attribute}`,
-    adjustment.relation,
-    adjustment.value
+    `${device}.${formatModelToken(adjustment.attribute, adjustment.modelTokenSource)}`,
+    formatRelation(adjustment.relation),
+    adjustment.value === undefined
+      ? undefined
+      : formatModelToken(adjustment.value, adjustment.modelTokenSource)
   ].filter(Boolean).join(' ')
   const rule = adjustment.ruleDescription || t('app.affectedRule')
   if (adjustment.action === 'add') {
@@ -735,7 +760,7 @@ const formatConditionAdjustment = (adjustment: NonNullable<FixSuggestion['condit
   if (adjustment.action === 'remove') {
     return t('app.removeConditionAdjustment', { condition, rule })
   }
-  return adjustment.description
+  return t('app.keepConditionAdjustment', { condition, rule })
 }
 
 const clearActiveFixTracking = (requestId: string) => {
@@ -842,7 +867,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   >
     <div
       :ref="setDialogRef"
-      class="min-h-0 max-h-[85vh] w-[800px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
+      class="min-h-0 max-h-[85vh] w-[800px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col dark:border-slate-700 dark:bg-slate-900"
       role="dialog"
       aria-modal="true"
       aria-labelledby="fix-result-dialog-title"
@@ -855,35 +880,35 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
         data-testid="fix-result-header"
         class="relative flex-shrink-0 overflow-hidden rounded-t-2xl border-b"
         :class="verifiedCount > 0
-          ? 'bg-amber-50 border-amber-200'
+          ? 'bg-amber-50 border-amber-200 dark:border-amber-800 dark:bg-amber-950/50'
           : hasAttemptResults
-            ? 'bg-red-50 border-red-200'
-            : 'bg-blue-50 border-blue-200'"
+            ? 'bg-red-50 border-red-200 dark:border-red-800 dark:bg-red-950/50'
+            : 'bg-blue-50 border-blue-200 dark:border-blue-800 dark:bg-blue-950/50'"
       >
         <div class="relative flex items-center justify-between p-5">
           <div class="flex items-center gap-4">
             <div
               class="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm"
-              :class="verifiedCount > 0 ? 'bg-amber-100' : hasAttemptResults ? 'bg-red-100' : 'bg-blue-100'"
+              :class="verifiedCount > 0 ? 'bg-amber-100 dark:bg-amber-900/60' : hasAttemptResults ? 'bg-red-100 dark:bg-red-900/60' : 'bg-blue-100 dark:bg-blue-900/60'"
             >
               <span
                 class="material-symbols-outlined text-2xl"
-                :class="verifiedCount > 0 ? 'text-amber-600' : hasAttemptResults ? 'text-red-600' : 'text-blue-600'"
+                :class="verifiedCount > 0 ? 'text-amber-600 dark:text-amber-300' : hasAttemptResults ? 'text-red-600 dark:text-red-300' : 'text-blue-600 dark:text-blue-300'"
                 aria-hidden="true"
               >
                 {{ strategyLoading ? 'progress_activity' : verifiedCount > 0 ? 'build' : hasAttemptResults ? 'search_off' : 'build' }}
               </span>
             </div>
             <div>
-              <h3 id="fix-result-dialog-title" class="text-xl font-bold text-slate-800">{{ t('app.fixSuggestions') }}</h3>
-              <p class="text-sm text-slate-600">{{ headerStatus }}</p>
+              <h3 id="fix-result-dialog-title" class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ t('app.fixSuggestions') }}</h3>
+              <p class="text-sm text-slate-600 dark:text-slate-300">{{ headerStatus }}</p>
             </div>
           </div>
           <button
             type="button"
             :disabled="applyingFix"
             @click="closeDialog"
-            class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all disabled:cursor-not-allowed disabled:opacity-40"
+            class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all disabled:cursor-not-allowed disabled:opacity-40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
             :aria-label="t('app.close')"
           >
             <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
@@ -892,45 +917,45 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
       </div>
 
       <!-- Content -->
-      <div data-testid="fix-result-scroll" class="min-h-0 flex-1 overflow-y-auto p-6">
+      <div data-testid="fix-result-scroll" class="fix-result-scroll min-h-0 flex-1 overflow-y-auto p-6">
         
         <div class="space-y-4">
           
           <!-- Violation Info Card -->
-          <div class="p-5 rounded-xl bg-gradient-to-r from-red-50 to-orange-50 border border-red-200">
+          <div class="p-5 rounded-xl bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 dark:border-red-800 dark:from-red-950/60 dark:to-orange-950/40">
             <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-red-100">
-                <span class="material-symbols-outlined text-red-600">warning</span>
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-red-100 dark:bg-red-900/60">
+                <span class="material-symbols-outlined text-red-600 dark:text-red-300">warning</span>
               </div>
               <div class="flex-1">
-                <span class="text-lg font-bold text-red-800">{{ t('app.violationDetected') }}</span>
+                <span class="text-lg font-bold text-red-800 dark:text-red-100">{{ t('app.violationDetected') }}</span>
                 <div class="flex items-center gap-2 mt-1">
-                  <span class="text-sm text-red-600">
+                  <span class="text-sm text-red-600 dark:text-red-300">
                     {{ faultLoading
                       ? t('app.loadingFaultLocalization')
                       : t('app.faultRulesIdentified', { count: faultRules.length }) }}
                   </span>
                 </div>
-                <p v-if="localizedFaultLocalizationSummary" class="mt-2 text-xs leading-relaxed text-red-700">
+                <p v-if="localizedFaultLocalizationSummary" class="mt-2 text-xs leading-relaxed text-red-700 dark:text-red-200">
                   {{ localizedFaultLocalizationSummary }}
                 </p>
-                <details v-if="fixResult?.violatedSpecId || violatedSpecId" class="mt-2 text-[11px] text-red-700/80">
+                <details v-if="fixResult?.violatedSpecId || violatedSpecId" class="mt-2 text-[11px] text-red-700/80 dark:text-red-200/90">
                   <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
                   <div class="mt-1 grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]">
                     <span class="font-medium">{{ t('app.specificationTechnicalId') }}</span>
-                    <code class="break-all rounded bg-red-100/70 px-2 py-1 text-[11px] text-red-800">{{ fixResult?.violatedSpecId || violatedSpecId }}</code>
+                    <code class="break-all rounded bg-red-100/70 px-2 py-1 text-[11px] text-red-800 dark:bg-red-900/60 dark:text-red-100">{{ fixResult?.violatedSpecId || violatedSpecId }}</code>
                   </div>
                 </details>
               </div>
             </div>
-            <p class="text-sm text-red-700 mt-3 ml-13">
+            <p class="text-sm text-red-700 mt-3 ml-13 dark:text-red-200">
               {{ fixResult ? t('app.fixResultsRemainAdvisory') : t('app.fixAdvisoryBeforeRun') }}
             </p>
           </div>
 
           <div
             v-if="localizedFixLimitations.length || displayedFixWarnings.length || displayedSourceGenerationIssues.length"
-            class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"
+            class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
           >
             <div class="mb-2 flex items-center gap-2 font-bold">
               <span class="material-symbols-outlined text-lg">warning</span>
@@ -945,7 +970,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 <strong>{{ issue.itemLabel }}</strong>: {{ t(generationIssueReasonKey(issue)) }}
               </li>
             </ul>
-            <details v-if="displayedFixWarnings.length" class="mt-3 text-xs text-amber-800/80">
+            <details v-if="displayedFixWarnings.length" class="mt-3 text-xs text-amber-800/80 dark:text-amber-200/90">
               <summary class="cursor-pointer font-semibold">{{ t('app.fixTechnicalDiagnostics') }}</summary>
               <ul class="mt-2 list-disc space-y-1 pl-5 font-mono text-[11px]">
                 <li v-for="warning in displayedFixWarnings" :key="warning">{{ warning }}</li>
@@ -954,11 +979,11 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
           </div>
 
           <!-- Strategy Tabs -->
-          <div class="border border-slate-200 rounded-xl overflow-hidden">
-            <div class="bg-slate-50 px-4 py-3 border-b border-slate-200">
+          <div class="border border-slate-200 rounded-xl overflow-hidden dark:border-slate-700">
+            <div class="bg-slate-50 px-4 py-3 border-b border-slate-200 dark:border-slate-700 dark:bg-slate-800">
               <div class="flex items-center gap-2">
-                <span class="material-symbols-outlined text-slate-600">tune</span>
-                <span class="font-bold text-slate-800">{{ t('app.fixStrategies') }}</span>
+                <span class="material-symbols-outlined text-slate-600 dark:text-slate-300">tune</span>
+                <span class="font-bold text-slate-800 dark:text-slate-100">{{ t('app.fixStrategies') }}</span>
               </div>
             </div>
             
@@ -974,8 +999,8 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                   :aria-pressed="selectedStrategy === option.value"
                   class="flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2"
                   :class="selectedStrategy === option.value
-                    ? 'bg-blue-500 text-white shadow-md' 
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+                    ? 'bg-blue-500 text-white shadow-md dark:bg-blue-600'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700'"
                 >
                   <span class="material-symbols-outlined text-lg" aria-hidden="true">
                     {{ option.icon }}
@@ -989,11 +1014,11 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               </div>
 
               <!-- Strategy Description -->
-              <div class="text-sm text-slate-500 mb-4 pl-1">
+              <div class="text-sm text-slate-500 mb-4 pl-1 dark:text-slate-300">
                 {{ strategyDescriptions[selectedStrategy] }}
                 <div
                   v-if="currentStrategyAttempt"
-                  class="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                  class="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 >
                   <span class="font-bold">{{ strategyAttemptStatusLabel(currentStrategyAttempt.status) }}</span>
                   <span class="ml-1">{{ strategyAttemptReasonLabel(currentStrategyAttempt.status) }}</span>
@@ -1006,21 +1031,21 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               <div
                 v-if="currentStrategyLoading"
                 data-testid="fix-strategy-loading"
-                class="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800"
+                class="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-100"
               >
                 <div class="flex items-center gap-2 font-semibold">
                   <span class="material-symbols-outlined animate-spin text-lg" aria-hidden="true">progress_activity</span>
                   {{ t('app.tryingFixStrategy', { strategy: strategyLabels[selectedStrategy] }) }}
                 </div>
-                <p class="mt-1 text-xs text-blue-700">{{ t('app.fixAttemptDoesNotApply') }}</p>
-                <p class="mt-1 text-xs font-semibold text-blue-800">{{ fixProgressStageLabel }}</p>
-                <p class="mt-1 text-xs text-blue-700">
+                <p class="mt-1 text-xs text-blue-700 dark:text-blue-200">{{ t('app.fixAttemptDoesNotApply') }}</p>
+                <p class="mt-1 text-xs font-semibold text-blue-800 dark:text-blue-100">{{ fixProgressStageLabel }}</p>
+                <p class="mt-1 text-xs text-blue-700 dark:text-blue-200">
                   {{ t('app.fixSearchProgress', { seconds: fixSearchElapsedSeconds }) }}
                 </p>
               </div>
               <div
                 v-else-if="anotherStrategyLoading"
-                class="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600"
+                class="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
               >
                 {{ t('app.anotherFixStrategyRunning', { strategy: strategyLabels[strategyLoading!] }) }}
               </div>
@@ -1028,14 +1053,14 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               <!-- Preferred Ranges -->
               <div
                 v-if="selectedStrategy === 'parameter' && parameterAdjustments.length"
-                class="border border-slate-200 rounded-lg overflow-hidden mb-4"
+                class="border border-slate-200 rounded-lg overflow-hidden mb-4 dark:border-slate-700"
               >
-                <div class="bg-slate-50 px-3 py-2 border-b border-slate-200 flex items-center gap-2">
-                  <span class="material-symbols-outlined text-slate-600 text-lg">speed</span>
-                  <span class="font-bold text-sm text-slate-800">{{ t('app.parameterPreferences') }}</span>
+                <div class="bg-slate-50 px-3 py-2 border-b border-slate-200 flex items-center gap-2 dark:border-slate-700 dark:bg-slate-800">
+                  <span class="material-symbols-outlined text-slate-600 text-lg dark:text-slate-300">speed</span>
+                  <span class="font-bold text-sm text-slate-800 dark:text-slate-100">{{ t('app.parameterPreferences') }}</span>
                   <span
                     v-if="activePreferredRangeCount"
-                    class="ml-auto px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full"
+                    class="ml-auto px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full dark:bg-blue-900/60 dark:text-blue-200"
                   >{{ activePreferredRangeCount }} {{ t('app.active') }}</span>
                 </div>
                 <div class="p-3 space-y-3">
@@ -1045,11 +1070,11 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                       :key="row.id"
                       class="grid grid-cols-1 sm:grid-cols-[minmax(0,1.6fr)_1fr_1fr_36px] gap-2 items-end"
                     >
-                      <label class="text-xs font-medium text-slate-600">
+                      <label class="text-xs font-medium text-slate-600 dark:text-slate-300">
                         {{ t('app.preferredRangeTarget') }}
                         <select
                           v-model="row.targetId"
-                          class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none"
+                          class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
                         >
                           <option value="" disabled>{{ t('app.selectPreferredRangeTarget') }}</option>
                           <option
@@ -1061,20 +1086,20 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                           </option>
                         </select>
                       </label>
-                      <label class="text-xs font-medium text-slate-600">
+                      <label class="text-xs font-medium text-slate-600 dark:text-slate-300">
                         {{ t('app.lowerBound') }}
                         <input
                           v-model.number="row.lower"
                           type="number"
-                          class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none"
+                          class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
                         />
                       </label>
-                      <label class="text-xs font-medium text-slate-600">
+                      <label class="text-xs font-medium text-slate-600 dark:text-slate-300">
                         {{ t('app.upperBound') }}
                         <input
                           v-model.number="row.upper"
                           type="number"
-                          class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none"
+                          class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
                         />
                       </label>
                       <button
@@ -1082,7 +1107,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                         :title="t('app.removePreference')"
                         :aria-label="t('app.removePreference')"
                         @click="removePreferenceRow(row.id)"
-                        class="w-9 h-9 rounded-md bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 flex items-center justify-center transition-colors"
+                        class="w-9 h-9 rounded-md bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 flex items-center justify-center transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-red-900/60 dark:hover:text-red-200"
                       >
                         <span class="material-symbols-outlined text-lg" aria-hidden="true">delete</span>
                       </button>
@@ -1090,14 +1115,14 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                   </div>
                   <div
                     v-else-if="preferredRangeTargetOptions.length === 0"
-                    class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500"
+                    class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
                   >
                     {{ t('app.noParameterPreferenceTargets') }}
                   </div>
 
                   <div
                     v-if="fixResult?.unusedPreferredRangeSelections?.length"
-                    class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700"
+                    class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
                   >
                     {{ t('app.unusedPreferencesDetail', { count: fixResult.unusedPreferredRangeSelections.length }) }}
                   </div>
@@ -1108,7 +1133,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                       data-testid="fix-use-current-preferences"
                       @click="seedPreferenceRowsFromSuggestion"
                       :disabled="preferredRangeTargetOptions.length === 0"
-                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                     >
                       <span class="material-symbols-outlined text-base">playlist_add</span>
                       {{ t('app.useCurrent') }}
@@ -1117,7 +1142,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                       type="button"
                       @click="addPreferenceRow()"
                       :disabled="preferredRangeTargetOptions.length === 0"
-                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                     >
                       <span class="material-symbols-outlined text-base">add</span>
                       {{ t('app.add') }}
@@ -1126,7 +1151,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                       type="button"
                       data-testid="fix-run-with-preferences"
                       @click="refreshWithPreferences"
-                      class="px-3 py-2 rounded-md bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold flex items-center gap-1 transition-colors"
+                      class="px-3 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold flex items-center gap-1 transition-colors"
                     >
                       <span class="material-symbols-outlined text-base">refresh</span>
                       {{ t('app.runWithPreferences') }}
@@ -1135,7 +1160,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                       v-if="preferredRangeRows.length || activePreferredRangeCount"
                       type="button"
                       @click="clearPreferenceRows"
-                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors"
+                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                     >
                       <span class="material-symbols-outlined text-base">restart_alt</span>
                       {{ t('app.reset') }}
@@ -1149,19 +1174,19 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 
                 <!-- Status Card -->
                 <div class="p-4 rounded-xl mb-4" :class="currentSuggestion.verified 
-                  ? 'bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200' 
-                  : 'bg-gradient-to-r from-red-50 to-orange-50 border border-red-200'">
+                  ? 'bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 dark:border-green-800 dark:from-green-950/60 dark:to-emerald-950/40'
+                  : 'bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 dark:border-red-800 dark:from-red-950/60 dark:to-orange-950/40'">
                   <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-xl flex items-center justify-center" :class="currentSuggestion.verified ? 'bg-green-100' : 'bg-red-100'">
-                      <span class="material-symbols-outlined" :class="currentSuggestion.verified ? 'text-green-600' : 'text-red-600'">
+                    <div class="w-10 h-10 rounded-xl flex items-center justify-center" :class="currentSuggestion.verified ? 'bg-green-100 dark:bg-green-900/60' : 'bg-red-100 dark:bg-red-900/60'">
+                      <span class="material-symbols-outlined" :class="currentSuggestion.verified ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'">
                         {{ currentSuggestion.verified ? 'verified' : 'cancel' }}
                       </span>
                     </div>
                     <div class="flex-1">
-                      <span class="font-bold" :class="currentSuggestion.verified ? 'text-green-800' : 'text-red-800'">
+                      <span class="font-bold" :class="currentSuggestion.verified ? 'text-green-800 dark:text-green-100' : 'text-red-800 dark:text-red-100'">
                         {{ currentSuggestion.verified ? t('app.verifiedSolution') : t('app.notVerified') }}
                       </span>
-                      <p class="text-sm" :class="currentSuggestion.verified ? 'text-green-600' : 'text-red-600'">
+                      <p class="text-sm" :class="currentSuggestion.verified ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'">
                         {{ strategyDescriptions[currentSuggestion.strategy] }}
                       </p>
                     </div>
@@ -1170,30 +1195,30 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
                 <!-- Parameter Adjustments -->
                 <div v-if="currentSuggestion.parameterAdjustments?.length" class="mb-4">
-                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
-                    <span class="material-symbols-outlined text-blue-500">tune</span>
+                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <span class="material-symbols-outlined text-blue-500 dark:text-blue-300">tune</span>
                     {{ t('app.parameterAdjustments') }} ({{ currentSuggestion.parameterAdjustments.length }})
                   </div>
                   <div class="space-y-2">
                     <div
                       v-for="(adj, idx) in currentSuggestion.parameterAdjustments"
                       :key="idx"
-                      class="bg-blue-50 border border-blue-200 rounded-lg p-3"
+                      class="bg-blue-50 border border-blue-200 rounded-lg p-3 dark:border-blue-800 dark:bg-blue-950/50"
                     >
                       <div class="flex items-center justify-between">
                         <div class="min-w-0 flex items-center gap-2">
                           <span
-                            class="max-w-[14rem] truncate px-2 py-0.5 bg-blue-500 text-white text-xs rounded font-bold"
+                            class="max-w-[14rem] truncate px-2 py-0.5 bg-blue-600 text-white text-xs rounded font-bold"
                             :title="formatPreferredRangeTarget(adj)"
                           >{{ formatPreferredRangeTarget(adj) }}</span>
-                          <code class="min-w-0 truncate text-sm font-mono text-slate-700" :title="`${adj.attribute} ${adj.relation}`">{{ adj.attribute }} {{ adj.relation }}</code>
+                          <code class="min-w-0 truncate text-sm font-mono text-slate-700 dark:text-slate-200" :title="`${formatModelToken(adj.attribute, adj.modelTokenSource)} ${adj.relation}`">{{ formatModelToken(adj.attribute, adj.modelTokenSource) }} {{ adj.relation }}</code>
                         </div>
                         <div class="flex items-center gap-2">
-                          <span class="text-xs text-slate-500">{{ t('app.rangeLabel') }}: [{{ adj.lowerBound }}, {{ adj.upperBound }}]</span>
+                          <span class="text-xs text-slate-500 dark:text-slate-300">{{ t('app.rangeLabel') }}: [{{ adj.lowerBound }}, {{ adj.upperBound }}]</span>
                           <button
                             type="button"
                             @click="useAdjustmentAsPreference(adj)"
-                            class="px-2 py-1 rounded bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 text-xs font-medium transition-colors"
+                            class="px-2 py-1 rounded bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 text-xs font-medium transition-colors dark:border-blue-700 dark:bg-slate-900 dark:text-blue-200 dark:hover:bg-blue-900/60"
                           >
                             {{ t('app.prefer') }}
                           </button>
@@ -1203,21 +1228,21 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                             :title="t('app.lockOriginalValue')"
                             :aria-label="t('app.lockOriginalValue')"
                             @click="lockAdjustmentAtOriginal(adj)"
-                            class="flex h-7 w-7 items-center justify-center rounded border border-blue-200 bg-white text-blue-700 transition-colors hover:bg-blue-100"
+                            class="flex h-7 w-7 items-center justify-center rounded border border-blue-200 bg-white text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-700 dark:bg-slate-900 dark:text-blue-200 dark:hover:bg-blue-900/60"
                           >
                             <span class="material-symbols-outlined text-base" aria-hidden="true">lock</span>
                           </button>
                         </div>
                       </div>
                       <div class="flex items-center gap-2 mt-2">
-                        <span class="px-2 py-1 bg-red-100 text-red-700 rounded font-mono text-sm line-through">{{ adj.originalValue }}</span>
-                        <span class="material-symbols-outlined text-slate-400">arrow_forward</span>
-                        <span class="px-2 py-1 bg-green-100 text-green-700 rounded font-mono text-sm">{{ adj.newValue }}</span>
+                        <span class="px-2 py-1 bg-red-100 text-red-700 rounded font-mono text-sm line-through dark:bg-red-900/60 dark:text-red-200">{{ adj.originalValue }}</span>
+                        <span class="material-symbols-outlined text-slate-400 dark:text-slate-500">arrow_forward</span>
+                        <span class="px-2 py-1 bg-green-100 text-green-700 rounded font-mono text-sm dark:bg-green-900/60 dark:text-green-200">{{ adj.newValue }}</span>
                       </div>
                       <p
                         v-if="parameterAdjustmentMakesRuleUnreachable(adj)"
                         data-testid="fix-parameter-unreachable-warning"
-                        class="mt-2 text-xs font-semibold text-amber-700"
+                        class="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-300"
                       >
                         {{ t('app.fixParameterMakesRuleUnreachable') }}
                       </p>
@@ -1227,30 +1252,30 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
                 <!-- Condition Adjustments -->
                 <div v-if="currentSuggestion.conditionAdjustments?.length" class="mb-4">
-                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
-                    <span class="material-symbols-outlined text-emerald-500">checklist</span>
+                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <span class="material-symbols-outlined text-emerald-500 dark:text-emerald-300">checklist</span>
                     {{ t('app.conditionAdjustments') }} ({{ currentSuggestion.conditionAdjustments.length }})
                   </div>
                   <div class="space-y-2">
                     <div
                       v-for="(adj, idx) in currentSuggestion.conditionAdjustments"
                       :key="idx"
-                      class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center gap-3"
+                      class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center gap-3 dark:border-emerald-800 dark:bg-emerald-950/50"
                     >
                       <div 
                         class="w-8 h-8 rounded-lg flex items-center justify-center"
-                        :class="adj.action === 'remove' ? 'bg-red-100' : adj.action === 'add' ? 'bg-emerald-100' : 'bg-slate-100'"
+                        :class="adj.action === 'remove' ? 'bg-red-100 dark:bg-red-900/60' : adj.action === 'add' ? 'bg-emerald-100 dark:bg-emerald-900/60' : 'bg-slate-100 dark:bg-slate-700'"
                       >
-                        <span class="material-symbols-outlined text-sm" :class="adj.action === 'remove' ? 'text-red-600' : adj.action === 'add' ? 'text-emerald-600' : 'text-slate-600'">
+                        <span class="material-symbols-outlined text-sm" :class="adj.action === 'remove' ? 'text-red-600 dark:text-red-300' : adj.action === 'add' ? 'text-emerald-600 dark:text-emerald-300' : 'text-slate-600 dark:text-slate-200'" aria-hidden="true">
                           {{ adj.action === 'remove' ? 'remove' : adj.action === 'add' ? 'add' : 'check' }}
                         </span>
                       </div>
                       <div class="flex-1">
-                        <span class="text-sm font-medium text-slate-700">{{ formatConditionAdjustment(adj) }}</span>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ formatConditionAdjustment(adj) }}</span>
                       </div>
                       <span 
                         class="px-2 py-0.5 rounded text-xs font-medium"
-                        :class="adj.action === 'remove' ? 'bg-red-100 text-red-700' : adj.action === 'add' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'"
+                        :class="adj.action === 'remove' ? 'bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-200' : adj.action === 'add' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200'"
                       >
                         {{ getConditionActionLabel(adj.action) }}
                       </span>
@@ -1260,17 +1285,17 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
                 <!-- Disabled Rules -->
                 <div v-if="currentSuggestion.removedRuleDescriptions?.length" class="mb-4">
-                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
-                    <span class="material-symbols-outlined text-orange-500">block</span>
+                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700 dark:text-slate-200">
+                    <span class="material-symbols-outlined text-orange-500 dark:text-orange-300">block</span>
                     {{ t('app.rulesToRemove') }} ({{ currentSuggestion.removedRuleDescriptions.length }})
                   </div>
-                  <div class="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                  <div class="bg-orange-50 border border-orange-200 rounded-lg p-3 dark:border-orange-800 dark:bg-orange-950/50">
                     <div class="space-y-2">
                       <span
                         v-for="(description, index) in currentSuggestion.removedRuleDescriptions"
                         :key="`${index}-${description}`"
                         data-testid="fix-removed-rule"
-                        class="block rounded-lg bg-orange-500 px-3 py-1 text-sm font-medium text-white"
+                        class="block rounded-lg bg-orange-700 px-3 py-1 text-sm font-medium text-white"
                       >
                         {{ description }}
                       </span>
@@ -1279,15 +1304,15 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 </div>
 
                 <!-- Apply Button -->
-                <div v-if="currentSuggestion.verified" class="pt-4 border-t border-slate-200">
+                <div v-if="currentSuggestion.verified" class="pt-4 border-t border-slate-200 dark:border-slate-700">
                   <button 
                     data-testid="fix-apply-current"
                     class="w-full py-3 rounded-lg font-bold text-base transition-all flex items-center justify-center gap-2"
                     :class="applyingFix || strategyLoading || !templateSnapshotAllowsApply
-                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400'
                       : currentSuggestion.strategy === 'remove'
                         ? 'bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-lg'
-                        : 'bg-green-500 hover:bg-green-600 text-white shadow-md hover:shadow-lg'"
+                        : 'bg-green-700 hover:bg-green-800 text-white shadow-md hover:shadow-lg'"
                     :disabled="applyingFix || strategyLoading !== null || !templateSnapshotAllowsApply"
                     @click="applyFix(currentSuggestion)"
                   >
@@ -1300,16 +1325,16 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                         : t('app.applyThisFix') }}
                   </button>
                 </div>
-                <div v-else class="pt-4 border-t border-slate-200 text-center">
-                  <div class="flex items-center justify-center gap-2 text-red-600">
+                <div v-else class="pt-4 border-t border-slate-200 text-center dark:border-slate-700">
+                  <div class="flex items-center justify-center gap-2 text-red-600 dark:text-red-300">
                     <span class="material-symbols-outlined">info</span>
                     <span class="font-medium">{{ t('app.solutionNotVerified') }}</span>
                   </div>
-                  <p class="text-xs text-red-500 mt-1">{{ t('app.tryAnotherStrategy') }}</p>
+                  <p class="text-xs text-red-500 mt-1 dark:text-red-300">{{ t('app.tryAnotherStrategy') }}</p>
                 </div>
               </div>
 
-              <div v-else-if="strategyErrors[selectedStrategy]" class="rounded-lg border border-red-200 bg-red-50 px-4 py-4 text-red-700">
+              <div v-else-if="strategyErrors[selectedStrategy]" class="rounded-lg border border-red-200 bg-red-50 px-4 py-4 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200">
                 <div class="flex items-start gap-2">
                   <span class="material-symbols-outlined text-lg" aria-hidden="true">error</span>
                   <div>
@@ -1322,7 +1347,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               <div
                 v-else-if="selectedStrategy === 'parameter' && parameterPreferencesChanged"
                 data-testid="fix-parameter-preferences-stale"
-                class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-4 text-amber-800"
+                class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-4 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
               >
                 <div class="flex items-start gap-2">
                   <span class="material-symbols-outlined text-lg" aria-hidden="true">edit_note</span>
@@ -1333,24 +1358,24 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 </div>
               </div>
 
-              <div v-else-if="currentStrategyAttempt" class="text-center py-8 text-slate-500">
+              <div v-else-if="currentStrategyAttempt" class="text-center py-8 text-slate-500 dark:text-slate-300">
                 <span class="material-symbols-outlined text-4xl mb-2 block">help</span>
                 <p>{{ strategyAttemptOutcomeTitle(currentStrategyAttempt) }}</p>
-                <p class="mx-auto mt-2 max-w-lg text-xs text-slate-500">
+                <p class="mx-auto mt-2 max-w-lg text-xs text-slate-500 dark:text-slate-400">
                   {{ strategyAttemptOutcomeDetail(currentStrategyAttempt) }}
                 </p>
                 <p
                   v-if="strategyAttemptProgress(currentStrategyAttempt)"
-                  class="mx-auto mt-2 max-w-lg text-xs font-semibold text-slate-600"
+                  class="mx-auto mt-2 max-w-lg text-xs font-semibold text-slate-600 dark:text-slate-300"
                 >
                   {{ strategyAttemptProgress(currentStrategyAttempt) }}
                 </p>
               </div>
 
-              <div v-else-if="!currentStrategyLoading" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center text-slate-600">
-                <span class="material-symbols-outlined mb-2 block text-3xl text-slate-400" aria-hidden="true">science</span>
+              <div v-else-if="!currentStrategyLoading" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <span class="material-symbols-outlined mb-2 block text-3xl text-slate-400 dark:text-slate-500" aria-hidden="true">science</span>
                 <p class="font-semibold">{{ t('app.fixStrategyNotTried') }}</p>
-                <p class="mt-1 text-xs text-slate-500">{{ t('app.fixAttemptDoesNotApply') }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ t('app.fixAttemptDoesNotApply') }}</p>
               </div>
 
               <button
@@ -1359,7 +1384,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 data-testid="fix-try-current"
                 :disabled="strategyLoading !== null"
                 @click="trySelectedStrategy"
-                class="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                class="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
               >
                 <span class="material-symbols-outlined text-lg" aria-hidden="true">science</span>
                 {{ currentStrategyAttempt || strategyErrors[selectedStrategy]
@@ -1370,25 +1395,25 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
           </div>
 
           <!-- Fault Rules Section -->
-          <div class="border border-slate-200 rounded-xl overflow-hidden">
-            <div class="bg-slate-50 px-4 py-3 border-b border-slate-200">
+          <div class="border border-slate-200 rounded-xl overflow-hidden dark:border-slate-700">
+            <div class="bg-slate-50 px-4 py-3 border-b border-slate-200 dark:border-slate-700 dark:bg-slate-800">
               <div class="flex items-center gap-2">
-                <span class="material-symbols-outlined text-slate-600">search</span>
-                <span class="font-bold text-slate-800">{{ t('app.faultLocalization') }}</span>
-                <span class="ml-auto px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">{{ t('app.rulesCount', { count: faultRules.length }) }}</span>
+                <span class="material-symbols-outlined text-slate-600 dark:text-slate-300">search</span>
+                <span class="font-bold text-slate-800 dark:text-slate-100">{{ t('app.faultLocalization') }}</span>
+                <span class="ml-auto px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full dark:bg-red-900/60 dark:text-red-200">{{ t('app.rulesCount', { count: faultRules.length }) }}</span>
               </div>
             </div>
             
             <div class="p-4">
-              <div v-if="faultLoading" class="flex items-center justify-center gap-2 py-8 text-sm text-slate-500">
+              <div v-if="faultLoading" class="flex items-center justify-center gap-2 py-8 text-sm text-slate-500 dark:text-slate-300">
                 <span class="material-symbols-outlined animate-spin" aria-hidden="true">progress_activity</span>
                 {{ t('app.loadingFaultLocalization') }}
               </div>
-              <div v-else-if="faultLoadFailed" class="text-center py-8 text-red-600">
+              <div v-else-if="faultLoadFailed" class="text-center py-8 text-red-600 dark:text-red-300">
                 <span class="material-symbols-outlined text-3xl" aria-hidden="true">error</span>
                 <p class="mt-2 text-sm font-medium">{{ t('app.failedToLoadFaultLocalization') }}</p>
               </div>
-              <div v-else-if="faultRules.length === 0" class="text-center py-8 text-slate-400">
+              <div v-else-if="faultRules.length === 0" class="text-center py-8 text-slate-400 dark:text-slate-400">
                 <span class="material-symbols-outlined text-4xl mb-2 block">check_circle</span>
                 <p>{{ t('app.noFaultRulesFound') }}</p>
                 <p class="text-xs mt-1">{{ t('app.violationMayBeDeviceTransitions') }}</p>
@@ -1398,25 +1423,25 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 <div 
                   v-for="(rule, idx) in faultRules"
                   :key="idx"
-                  class="border border-slate-200 rounded-lg p-3 hover:bg-slate-50 transition-colors"
-                  :class="{ 'border-orange-300 bg-orange-50/50': rule.conflicting }"
+                  class="border border-slate-200 rounded-lg p-3 hover:bg-slate-50 transition-colors dark:border-slate-700 dark:hover:bg-slate-800"
+                  :class="{ 'border-orange-300 bg-orange-50/50 dark:border-orange-700 dark:bg-orange-950/40': rule.conflicting }"
                 >
                   <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
-                      <span class="w-6 h-6 bg-blue-500 text-white rounded flex items-center justify-center text-xs font-bold">{{ idx + 1 }}</span>
-                      <code class="text-xs bg-slate-100 px-2 py-1 rounded font-mono">{{ rule.ruleString }}</code>
+                      <span class="w-6 h-6 bg-blue-700 text-white rounded flex items-center justify-center text-xs font-bold">{{ idx + 1 }}</span>
+                      <code class="text-xs bg-slate-100 px-2 py-1 rounded font-mono dark:bg-slate-800 dark:text-slate-100">{{ rule.ruleString }}</code>
                     </div>
-                    <span v-if="rule.conflicting" class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded flex items-center gap-1">
+                    <span v-if="rule.conflicting" class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded flex items-center gap-1 dark:bg-orange-900/60 dark:text-orange-200">
                       <span class="material-symbols-outlined text-xs">warning</span>
                       {{ t('app.conflicts') }}
                     </span>
                   </div>
-                  <div class="grid grid-cols-1 gap-2 text-xs text-slate-600 sm:grid-cols-3">
+                  <div class="grid grid-cols-1 gap-2 text-xs text-slate-600 sm:grid-cols-3 dark:text-slate-300">
                     <div>{{ t('app.transitionNumberLabel') }}: <span class="font-medium">{{ rule.transitionNumber }}</span></div>
                     <div>{{ t('app.device') }}: <span class="font-medium">{{ rule.targetDeviceLabel }}</span></div>
-                    <div>{{ t('app.action') }}: <span class="font-medium">{{ rule.targetActionLabel }}</span></div>
+                    <div>{{ t('app.action') }}: <span data-testid="fix-fault-action" class="font-medium">{{ formatModelToken(rule.targetActionLabel, rule.modelTokenSource) }}</span></div>
                   </div>
-                  <div v-if="rule.reason" class="mt-2 text-xs text-slate-500 flex items-start gap-1">
+                  <div v-if="rule.reason" class="mt-2 text-xs text-slate-500 flex items-start gap-1 dark:text-slate-400">
                     <span class="material-symbols-outlined text-xs mt-0.5">info</span>
                     {{ getFaultRuleReason(rule) }}
                   </div>
@@ -1426,9 +1451,9 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
           </div>
 
           <!-- Other Strategies -->
-          <div v-if="(fixResult?.suggestions.length || 0) > 1" class="border border-slate-200 rounded-xl p-4">
-            <div class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
-              <span class="material-symbols-outlined text-slate-600">layers</span>
+          <div v-if="(fixResult?.suggestions.length || 0) > 1" class="border border-slate-200 rounded-xl p-4 dark:border-slate-700">
+            <div class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2 dark:text-slate-200">
+              <span class="material-symbols-outlined text-slate-600 dark:text-slate-300">layers</span>
               {{ t('app.otherAvailableStrategies') }}
             </div>
             <div class="flex flex-wrap gap-2">
@@ -1439,14 +1464,14 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 @click="switchStrategy(s.strategy)"
                 class="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
                 :class="s.verified && suggestionIsCurrent(s)
-                  ? 'bg-green-100 text-green-700 hover:bg-green-200 border border-green-300' 
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-300'"
+                  ? 'bg-green-100 text-green-700 hover:bg-green-200 border border-green-300 dark:border-green-700 dark:bg-green-900/60 dark:text-green-200 dark:hover:bg-green-800'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700'"
               >
                 <span class="material-symbols-outlined text-sm">
                   {{ strategyIcons[s.strategy] }}
                 </span>
                 {{ strategyLabels[s.strategy] }}
-                <span v-if="s.verified && suggestionIsCurrent(s)" class="material-symbols-outlined text-green-600 text-xs">verified</span>
+                <span v-if="s.verified && suggestionIsCurrent(s)" class="material-symbols-outlined text-green-600 text-xs dark:text-green-300">verified</span>
               </button>
             </div>
           </div>
@@ -1455,13 +1480,13 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
       </div>
 
       <!-- Footer -->
-      <div class="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl">
+      <div class="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl dark:border-slate-700 dark:bg-slate-950">
         <div class="flex justify-end">
           <button 
             type="button"
             :disabled="applyingFix"
             @click="closeDialog"
-            class="px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
+            class="px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
           >
             <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
             {{ t('app.close') }}
@@ -1474,21 +1499,33 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
 <style scoped>
 /* Custom scrollbar */
-:deep(.p-6::-webkit-scrollbar) {
+.fix-result-scroll::-webkit-scrollbar {
   width: 8px;
 }
 
-:deep(.p-6::-webkit-scrollbar-track) {
+.fix-result-scroll::-webkit-scrollbar-track {
   background: #f1f5f9;
   border-radius: 4px;
 }
 
-:deep(.p-6::-webkit-scrollbar-thumb) {
+.fix-result-scroll::-webkit-scrollbar-thumb {
   background: #cbd5e1;
   border-radius: 4px;
 }
 
-:deep(.p-6::-webkit-scrollbar-thumb:hover) {
+.fix-result-scroll::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+:global(.dark .fix-result-scroll::-webkit-scrollbar-track) {
+  background: #0f172a;
+}
+
+:global(.dark .fix-result-scroll::-webkit-scrollbar-thumb) {
+  background: #475569;
+}
+
+:global(.dark .fix-result-scroll::-webkit-scrollbar-thumb:hover) {
+  background: #64748b;
 }
 </style>

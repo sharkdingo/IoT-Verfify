@@ -1,10 +1,13 @@
 package cn.edu.nju.Iot_Verify.po;
 
+import java.time.LocalDateTime;
+
 /**
  * 任务 PO 的公共视图接口，为 {@link cn.edu.nju.Iot_Verify.service.impl.AbstractAsyncTaskService}
  * 的泛型参数提供类型约束。
  *
- * <p>{@link VerificationTaskPo} 和 {@link SimulationTaskPo} 各自实现此接口。
+ * <p>{@link VerificationTaskPo}, {@link SimulationTaskPo}, and {@link FuzzTaskPo}
+ * implement this interface.
  */
 public interface TaskView {
 
@@ -24,4 +27,10 @@ public interface TaskView {
     String getCheckLogsJson();
 
     void setCheckLogsJson(String json);
+
+    String getWorkerId();
+
+    LocalDateTime getLeaseExpiresAt();
+
+    void setLeaseExpiresAt(LocalDateTime leaseExpiresAt);
 }

@@ -35,6 +35,10 @@ class ScenarioVerificationReadinessTest {
         ScenarioVerificationReadiness.Status status =
                 ScenarioVerificationReadiness.assess(scene, 1, "en");
 
+        assertEquals("PARTIAL", status.objectiveStatus());
+        assertEquals(List.of("NO_AUTOMATION_RULES"), status.objectiveIssues().stream()
+                .map(ScenarioVerificationReadiness.Issue::code)
+                .toList());
         assertTrue(status.verificationReady());
         assertTrue(status.readinessIssues().isEmpty());
         assertEquals(

@@ -10,7 +10,8 @@ import {
   normalizePlaybackDeviceId,
   playbackDeviceChanged,
   playbackDeviceSecurityFacts,
-  playbackDeviceSummaryParts
+  playbackDeviceSummaryParts,
+  formatPlaybackSecurityLabel
 } from '../utils/traceView'
 
 const props = defineProps<{
@@ -28,6 +29,8 @@ const props = defineProps<{
   boardComparison?: RunBoardComparison
   currentRuleIds?: string[]
   currentDeviceIds?: string[]
+  formatDeviceModelToken?: (device: SimulationState['devices'][number], value: unknown) => string
+  formatEnvironmentModelToken?: (name: string, value: unknown) => string
 }>()
 
 const emit = defineEmits<{
@@ -104,8 +107,20 @@ const deviceChanged = (device: SimulationState['devices'][number]) =>
 const deviceExistsOnCurrentBoard = (deviceId: string) =>
   currentDeviceIdSet.value.has(normalizePlaybackDeviceId(deviceId))
 
+const formatDeviceModelToken = (
+  device: SimulationState['devices'][number],
+  value: unknown
+): string => props.formatDeviceModelToken
+  ? props.formatDeviceModelToken(device, value)
+  : String(value ?? '')
+
+const formatEnvironmentModelToken = (name: string, value: unknown): string =>
+  props.formatEnvironmentModelToken
+    ? props.formatEnvironmentModelToken(name, value)
+    : String(value ?? '')
+
 const deviceSummary = (device: SimulationState['devices'][number]) => {
-  const parts = playbackDeviceSummaryParts(device)
+  const parts = playbackDeviceSummaryParts(device, value => formatDeviceModelToken(device, value))
   return parts.length > 0 ? parts.join(' · ') : t('app.unknown')
 }
 
@@ -114,16 +129,24 @@ const deviceChangeSummary = (device: SimulationState['devices'][number]) => {
   if (!previous) return t('app.traceVisualization.changed')
   const changes: string[] = []
   if ((previous.state || '') !== (device.state || '')) {
-    changes.push(`${t('app.state')}: ${previous.state || t('app.unknown')} -> ${device.state || t('app.unknown')}`)
+    changes.push(`${t('app.state')}: ${previous.state
+      ? formatDeviceModelToken(device, previous.state)
+      : t('app.unknown')} -> ${device.state
+      ? formatDeviceModelToken(device, device.state)
+      : t('app.unknown')}`)
   }
   if ((previous.mode || '') !== (device.mode || '')) {
-    changes.push(`${t('app.mode')}: ${previous.mode || t('app.unknown')} -> ${device.mode || t('app.unknown')}`)
+    changes.push(`${t('app.mode')}: ${previous.mode
+      ? formatDeviceModelToken(device, previous.mode)
+      : t('app.unknown')} -> ${device.mode
+      ? formatDeviceModelToken(device, device.mode)
+      : t('app.unknown')}`)
   }
   const previousVariables = new Map((previous.variables || []).map(variable => [variable.name, variable.value]))
   ;(device.variables || []).forEach(variable => {
     const previousValue = previousVariables.get(variable.name)
     if (previousValue !== undefined && previousValue !== variable.value) {
-      changes.push(`${variable.name}: ${previousValue} -> ${variable.value}`)
+      changes.push(`${formatDeviceModelToken(device, variable.name)}: ${formatDeviceModelToken(device, previousValue)} -> ${formatDeviceModelToken(device, variable.value)}`)
     }
   })
   if (previous.compromised !== device.compromised) {
@@ -171,6 +194,14 @@ const attackSelectionShortText = computed(() => {
 const deviceSecurityFacts = (device: SimulationState['devices'][number]) =>
   playbackDeviceSecurityFacts(device)
 
+const formattedDeviceSecurityLabels = (
+  device: SimulationState['devices'][number],
+  labels: string[]
+) => labels.map(label => formatPlaybackSecurityLabel(
+  label,
+  value => formatDeviceModelToken(device, value)
+))
+
 const getPreviousEnvValue = (name: string) =>
   previousState.value?.envVariables?.find(variable => variable.name === name)?.value
 
@@ -179,10 +210,12 @@ const environmentVariableChanged = (name: string, value: string) =>
 
 const environmentVariableTitle = (name: string, value: string) => {
   const previous = getPreviousEnvValue(name)
+  const displayName = formatEnvironmentModelToken(name, name)
+  const displayValue = formatEnvironmentModelToken(name, value)
   if (previous === undefined || previous === value) {
-    return `${name}: ${value}`
+    return `${displayName}: ${displayValue}`
   }
-  return `${name}: ${previous} -> ${value}`
+  return `${displayName}: ${formatEnvironmentModelToken(name, previous)} -> ${displayValue}`
 }
 
 // Runtime compromised-point count from NuSMV globals, not the configured attack budget.
@@ -654,14 +687,14 @@ watch(selectedStateIndex, () => {
             <span
               v-if="deviceSecurityFacts(device).untrustedLabels.length > 0"
               class="rounded bg-amber-100 px-1 text-[9px] text-amber-800"
-              :title="t('app.traceVisualization.untrustedLabelDetails', { labels: deviceSecurityFacts(device).untrustedLabels.join(', ') })"
+              :title="t('app.traceVisualization.untrustedLabelDetails', { labels: formattedDeviceSecurityLabels(device, deviceSecurityFacts(device).untrustedLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesUntrustedSource') }}
             </span>
             <span
               v-if="deviceSecurityFacts(device).privateLabels.length > 0"
               class="rounded bg-fuchsia-100 px-1 text-[9px] text-fuchsia-800"
-              :title="t('app.traceVisualization.privateLabelDetails', { labels: deviceSecurityFacts(device).privateLabels.join(', ') })"
+              :title="t('app.traceVisualization.privateLabelDetails', { labels: formattedDeviceSecurityLabels(device, deviceSecurityFacts(device).privateLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesPrivateData') }}
             </span>
@@ -685,8 +718,8 @@ watch(selectedStateIndex, () => {
               : 'border-slate-200 bg-slate-50 text-slate-600'"
             :title="environmentVariableTitle(envVar.name, envVar.value)"
           >
-            <span class="max-w-[7rem] truncate">{{ envVar.name }}</span>
-            <span class="font-mono">{{ envVar.value }}</span>
+            <span class="max-w-[7rem] truncate">{{ formatEnvironmentModelToken(envVar.name, envVar.name) }}</span>
+            <span class="font-mono">{{ formatEnvironmentModelToken(envVar.name, envVar.value) }}</span>
             <span v-if="environmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[9px] text-amber-800">{{ t('app.traceVisualization.changed') }}</span>
           </span>
         </div>

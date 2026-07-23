@@ -423,6 +423,8 @@ public class RecommendScenarioTool extends AbstractAiTool {
             String language) {
         ScenarioVerificationReadiness.Status analysis =
                 ScenarioVerificationReadiness.assess(scene, filteredCount, language);
+        result.put("objectiveStatus", analysis.objectiveStatus());
+        result.put("objectiveIssues", analysis.objectiveIssues());
         result.put("verificationReady", analysis.verificationReady());
         result.put("readinessIssues", analysis.readinessIssues());
         result.put("semanticWarnings", analysis.semanticWarnings());

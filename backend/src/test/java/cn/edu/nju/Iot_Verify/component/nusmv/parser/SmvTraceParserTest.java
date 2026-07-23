@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.nusmv.parser;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceTrustPrivacyDto;
@@ -62,6 +63,7 @@ class SmvTraceParserTest {
         smv.setVarName("sensor_1");
         smv.setDeviceLabel("Hall sensor");
         smv.setTemplateName("Sensor");
+        smv.setModelTokenSource(ModelTokenSource.BUNDLED);
         smv.getModes().add("Mode");
         smv.getModeStates().put("Mode", List.of("idle", "active"));
         smv.getStates().addAll(List.of("idle", "active"));
@@ -88,8 +90,11 @@ class SmvTraceParserTest {
                 counterexample, Map.of("sensor_1", smv));
 
         TraceDeviceDto secondDevice = states.get(1).getDevices().get(0);
+        assertEquals(ModelTokenSource.BUNDLED, secondDevice.getModelTokenSource());
         assertEquals("idle", secondDevice.getState());
         assertEquals("21", findVariable(secondDevice, "temperature").getValue());
+        assertEquals(ModelTokenSource.BUNDLED,
+                findVariable(secondDevice, "temperature").getModelTokenSource());
         assertEquals("untrusted", findVariable(secondDevice, "temperature").getTrust());
         assertTrue(Boolean.TRUE.equals(secondDevice.getCompromised()));
         assertNull(findVariable(secondDevice, "is_attack"));
@@ -99,6 +104,10 @@ class SmvTraceParserTest {
         TraceDeviceDto thirdDevice = states.get(2).getDevices().get(0);
         assertEquals("21", findVariable(thirdDevice, "temperature").getValue());
         assertEquals("21", findEnvValue(states.get(2), "temperature"));
+        assertEquals(ModelTokenSource.BUNDLED,
+                findEnvironmentVariable(states.get(2), "temperature").getModelTokenSource());
+        assertEquals(ModelTokenSource.UNKNOWN,
+                findGlobalVariable(states.get(2), "compromisedPointCount").getModelTokenSource());
         assertEquals("1", findGlobalValue(states.get(2), "compromisedPointCount"));
         assertNotSame(secondDevice, thirdDevice, "Each API state must be an independent snapshot");
     }
@@ -199,6 +208,24 @@ class SmvTraceParserTest {
         assertNull(findEnvValue(states.get(0), "a_unknown"));
         assertEquals("raw", findGlobalValue(states.get(0), "a_unknown"),
                 "Unknown bare SMV names are runtime globals, not user environment variables");
+    }
+
+    @Test
+    void parseCounterexample_usesUnknownForEnvironmentTokensWithMixedTemplateSources() {
+        DeviceSmvData bundled = new DeviceSmvData();
+        bundled.setModelTokenSource(ModelTokenSource.BUNDLED);
+        bundled.getEnvVariables().put("temperature", internalVariable("temperature"));
+        DeviceSmvData custom = new DeviceSmvData();
+        custom.setModelTokenSource(ModelTokenSource.CUSTOM);
+        custom.getImpactedVariables().add("temperature");
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates("""
+                -> State: 1.1 <-
+                  a_temperature = 25
+                """, Map.of("bundled", bundled, "custom", custom));
+
+        assertEquals(ModelTokenSource.UNKNOWN,
+                findEnvironmentVariable(states.get(0), "temperature").getModelTokenSource());
     }
 
     @Test
@@ -429,6 +456,22 @@ class SmvTraceParserTest {
         return state.getEnvVariables().stream()
                 .filter(v -> name.equals(v.getName()))
                 .map(TraceVariableDto::getValue)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private TraceVariableDto findEnvironmentVariable(TraceStateDto state, String name) {
+        if (state.getEnvVariables() == null) return null;
+        return state.getEnvVariables().stream()
+                .filter(v -> name.equals(v.getName()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private TraceVariableDto findGlobalVariable(TraceStateDto state, String name) {
+        if (state.getGlobalVariables() == null) return null;
+        return state.getGlobalVariables().stream()
+                .filter(v -> name.equals(v.getName()))
                 .findFirst()
                 .orElse(null);
     }

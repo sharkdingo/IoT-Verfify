@@ -23,6 +23,14 @@ const validStandalone = () => ({
   recommendations: [{ description: 'Keep this one' }]
 })
 
+const partialScenarioObjective = {
+  objectiveStatus: 'PARTIAL',
+  objectiveIssues: [
+    { code: 'NO_AUTOMATION_RULES', message: 'Add an automation rule.' },
+    { code: 'NO_SPECIFICATIONS', message: 'Add a formal specification.' }
+  ]
+}
+
 describe('recommendation candidate accounting', () => {
   it('accepts kept, rejected, and uninspected candidates when all counts reconcile', () => {
     expect(validateStandaloneRecommendationResponse(validStandalone(), 'Rules')).toEqual(validStandalone())
@@ -105,6 +113,7 @@ describe('recommendation candidate accounting', () => {
       truncatedCount: 0,
       scenarioName: 'Home',
       rationale: '',
+      ...partialScenarioObjective,
       verificationReady: false,
       readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
       semanticWarnings: [{
@@ -121,6 +130,13 @@ describe('recommendation candidate accounting', () => {
     }
 
     expect(validateScenarioRecommendationResponse(result, 'Scenario')).toEqual(result)
+    expect(() => validateScenarioRecommendationResponse({
+      ...result,
+      objectiveStatus: 'COMPLETE',
+      objectiveIssues: []
+    }, 'Scenario')).toThrow(expect.objectContaining({
+      code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE
+    }))
   })
 
   it('requires scenario adjustment details to match their count', () => {
@@ -138,6 +154,7 @@ describe('recommendation candidate accounting', () => {
       truncatedCount: 0,
       scenarioName: 'Home',
       rationale: '',
+      ...partialScenarioObjective,
       verificationReady: false,
       readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
       semanticWarnings: [{
@@ -165,6 +182,7 @@ describe('recommendation candidate accounting', () => {
       truncatedCount: 0,
       scenarioName: 'Home',
       rationale: '',
+      ...partialScenarioObjective,
       verificationReady: true,
       readinessIssues: [],
       semanticWarnings: [{
@@ -194,6 +212,7 @@ describe('recommendation candidate accounting', () => {
       truncatedCount: 0,
       scenarioName: 'Home',
       rationale: 'Final retained content only.',
+      ...partialScenarioObjective,
       verificationReady: false,
       readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
       semanticWarnings: [{

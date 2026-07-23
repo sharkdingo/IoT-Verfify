@@ -75,7 +75,8 @@
     "changelog",
     "frontmatter",
     "cspell",
-    "runoob"
+    "runoob",
+    "slop"
   ],
   "ignorePaths": [
     "node_modules/**",

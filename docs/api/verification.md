@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-22. Source:
+Verified against code on 2026-07-23. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -112,6 +112,12 @@ row exists; it must not retry the verification automatically or claim that the r
 was saved. Counterexamples and the completed run are written in one transaction, so a
 confirmed saved run cannot contain only part of its counterexamples. Requests rejected
 before a result exists do not create a history row.
+
+The distributed formal-operation lease is checked again in the transaction's
+`beforeCommit` phase. If ownership expires while a synchronous verification or saved
+simulation is waiting on a database lock, the transaction rolls back instead of
+publishing evidence after its admission lease was lost. The completed in-memory result
+remains usable and reports a failed or outcome-unknown history persistence status.
 
 `RunPersistenceDto` is `{ status, runId?, reasonCode? }`. `status` is `SAVED`,
 `NOT_REQUESTED`, `FAILED`, or `OUTCOME_UNKNOWN`. `NOT_REQUESTED` is used by preview-only
@@ -240,8 +246,10 @@ the run-history endpoint so their counterexamples are removed atomically.
 
 ### Completed verification runs
 
-- `GET /api/verify/runs` returns `VerificationRunSummaryDto[]`, ordered by completion
-  time descending. It includes run scope/context, `outcome`, `modelComplete`, omission
+- `GET /api/verify/runs` returns every retained `VerificationRunSummaryDto` item, up to
+  the configured `VERIFICATION_MAX_STORED_TASKS_PER_USER` bound, ordered by completion
+  time descending. It includes run scope/context,
+  `outcome`, `modelComplete`, omission
   counts and itemized `generationIssues`, `violatedSpecCount`, `counterexampleCount`,
   and lightweight nested `counterexamples` summaries. It does not return trace states.
 - `GET /api/verify/runs/{id}` returns `VerificationRunDto`, adding `specResults`,
@@ -261,10 +269,10 @@ the run-history endpoint so their counterexamples are removed atomically.
 | `modelSemantics` / `modelSnapshot` | DTOs | Structured model meaning and submitted scope |
 | `outcome` / `modelComplete` | enum / `Boolean` | Verification conclusion and completeness qualifier |
 | `violatedSpecCount` | `Integer` | Reliably false emitted specifications |
-| `counterexampleCount` | `Integer` | Persisted traces that can be opened/replayed; may be lower than `violatedSpecCount` |
+| `counterexampleCount` | `Integer` | Persisted traces whose lightweight semantic metadata is available for open/replay; damaged placeholders are excluded and the count may be lower than `violatedSpecCount` or `counterexamples.length` |
 | `disabledRuleCount` / `skippedSpecCount` | `Integer` | Model omissions |
 | `generationIssues` | `ModelGenerationIssueDto[]` | Itemized omission explanations |
-| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count, and timestamp; full states are loaded only when replay/fix is opened |
+| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count, and timestamp; damaged rows remain as `dataAvailable=false` placeholders, while full states are loaded only when replay/fix is opened |
 | `dataAvailable` | `Boolean` | `true` when persisted semantic fields decoded successfully; `false` keeps a damaged row visible without treating it as usable |
 | `unavailableReasonCode` | `String` | Present for an unavailable row; currently `PERSISTED_SEMANTIC_DATA_INVALID` |
 
@@ -276,11 +284,16 @@ not embed counterexample summaries or full trace states; load those from
 `violatedSpecCount` and `counterexampleCount` are intentionally separate. NuSMV can
 report a property as false without returning a trace that the parser can reconstruct;
 clients must say how many violations were concluded and how many counterexamples can
-actually be replayed. A verification run is the top-level history item. Its
+actually be replayed. Both run-list and run-detail responses derive this count from the
+same bounded lightweight trace projections; a known-damaged trace remains visible in the
+summary array but is not counted as replayable. A verification run is the top-level history item. Its
 counterexamples are evidence/actions nested under that result, not independent runs.
 One malformed run or trace summary does not fail the whole history list. The backend
 returns an unavailable placeholder with its stable id/timestamp where possible. Clients
 may offer deletion, but must disable open, replay, and repair actions for that item.
+Trace summaries read a persisted scalar state count and do not fetch or parse the full
+`statesJson` payload. Detail reads still parse every state and require the scalar count
+to match, so the list remains bounded without weakening replay integrity.
 
 ### `GET /api/verify/tasks/{id}` — task status
 
@@ -642,7 +655,11 @@ recorded as skipped generation warnings rather than being silently accepted.
 > `violatedSpecJson`, and `userId`,
 > but they are `@JsonIgnore` — **not serialized to clients**. The raw fields restore
 > server-side fix context. Automatic fix replays the exact saved manifests rather than
-> whichever template versions happen to be current. `TraceMapper` instead returns structured `violatedSpec` and
+> whichever template versions happen to be current. New verification traces store the manifests
+> in a versioned internal envelope together with each canonical device id's frozen
+> `BUNDLED | CUSTOM | UNKNOWN` model-token provenance. Older plain-manifest snapshots remain
+> readable, but their provenance is deliberately `UNKNOWN`; the server never infers a bundled
+> source from a template or token name. `TraceMapper` instead returns structured `violatedSpec` and
 > `isAttack` / `attackBudget` / `enablePrivacy` / `modelSemantics`, so clients do not parse persistence JSON.
 > A non-attack request and historical snapshot use `attackBudget=0`. A positive budget
 > with `isAttack=false` is rejected before model generation rather than normalized away.
@@ -654,6 +671,10 @@ recorded as skipped generation warnings rather than being silently accepted.
 triggeredRules: TraceTriggeredRuleDto[], compromisedAutomationLinks: TraceTriggeredRuleDto[],
 trustPrivacies: TraceTrustPrivacyDto[], envVariables: TraceVariableDto[],
 globalVariables: TraceVariableDto[] }`.
+Formal verification and simulation state arrays are strictly one-based and contiguous:
+the first `stateIndex` is `1`, and each following item increments by exactly one. Empty,
+zero-based, duplicate, or gapped persisted trajectories are rejected as unavailable.
+Fuzz findings use their separately documented zero-based finite-prefix contract.
 `envVariables[].name` uses the literal board/template name. Generated NuSMV aliases are
 not part of this API boundary: `a_temperature` in SMV is serialized as `temperature`,
 while a real variable named `a_temperature` is serialized as `a_temperature`.
@@ -670,13 +691,19 @@ into this state; it is not merely a condition that looked true in the frontend.
 same stable rule snapshot shape, so users see the affected automation rather than an
 internal link index.
 
-`TraceDeviceDto`: `{ deviceId, deviceLabel, templateName, state, mode, compromised,
+`TraceDeviceDto`: `{ deviceId, deviceLabel, templateName, modelTokenSource, state, mode, compromised,
 variables: TraceVariableDto[], trustPrivacy[], privacies[] }`. `deviceId` is the
 model-boundary identity; user-facing trace and simulation UIs should display
 `deviceLabel` when it is present and keep `deviceId` in technical/debug details.
 `compromised` is the user-facing boolean translated from NuSMV's internal attack flag;
 the internal `is_attack` variable is not mixed into `variables[]`.
-`TraceVariableDto`: `{ name, value, trust }`.
+`TraceVariableDto`: `{ name, value, trust, modelTokenSource }`.
+`modelTokenSource` is `BUNDLED`, `CUSTOM`, or `UNKNOWN`. Device provenance is frozen
+from the exact template captured for the run. An environment variable has one source
+only when every active template declaring it has that same source; mixed declarations
+become `UNKNOWN`, and global parser values are always `UNKNOWN`. Clients may localize
+exact known tokens only for `BUNDLED`; `CUSTOM`, `UNKNOWN`, and legacy records with an
+absent field must remain verbatim.
 `TraceTrustPrivacyDto`: `{ name, propertyScope ('state'|'variable'|'content'),
 mode?, trust? (Boolean), privacy? ('private'|'public') }`. For a state property, `name`
 is the literal state and `mode` is its literal mode. Generated `Mode_state`, `trust_*`,
@@ -812,7 +839,8 @@ summary.
   modelComplete, disabledRuleCount, generationIssues, states, logs, nusmvOutput,
   isAttack, attackBudget, enablePrivacy, modelSemantics, modelSnapshot, createdAt,
   historyPersistence }`
-- `GET /api/simulate/traces` → `SimulationTraceSummaryDto[]` `{ id, requestedSteps,
+- `GET /api/simulate/traces` → every retained `SimulationTraceSummaryDto` item, up to
+  the configured `SIMULATION_MAX_STORED_TASKS_PER_USER` bound, `{ id, requestedSteps,
   steps, modelComplete, disabledRuleCount, generationIssues, isAttack, attackBudget,
   enablePrivacy, modelSnapshot, createdAt, dataAvailable,
   unavailableReasonCode? }` (summary, no states)
@@ -836,6 +864,13 @@ requires a history refresh before the UI says whether the trace was saved; the s
 remain valid for immediate animation. A known `FAILED` status means no row was created.
 History list conversion isolates malformed rows as `dataAvailable=false`; it never
 silently replaces malformed semantic JSON with empty states/logs/default context.
+Simulation summaries validate `stateCount = steps + 1` from scalar metadata without
+loading `statesJson`; opening a detail then verifies that the decoded state array has
+that exact count and the contiguous one-based indexes documented above.
+Both synchronous saved-simulation and verification requests check the configured stored-run
+quota before NuSMV starts. A full history returns HTTP 429 with the same stable async-task
+quota details; a concurrent fill detected only during persistence reports a known
+`historyPersistence.status=FAILED` while preserving the completed formal result or trajectory.
 
 ---
 
@@ -867,12 +902,13 @@ Fast, no NuSMV invocation. **Response**: `FaultLocalizationResultDto`
 | `ruleString` | `String` | |
 | `transitionNumber` | `int` | One-based counterexample transition where the rule fired |
 | `targetDeviceLabel` | `String` | User-facing target device label |
-| `targetActionLabel` | `String` | User-facing target action label |
+| `targetActionLabel` | `String` | For `BUNDLED`, the canonical action token that clients may localize; for `CUSTOM`/`UNKNOWN`, the preserved display label |
 | `conflicting` | `boolean` | |
 | `conflictingRuleString` | `String` | Readable conflicting rule when `conflicting=true` |
 | `targetEndState` / `conflictingEndState` | `String` | Conflicting target outcomes when available |
 | `reasonCode` | `String` | `TRIGGERED` or `CONFLICTING_END_STATES`; clients localize from this code |
 | `reason` | `String` | Backend-readable fallback explanation |
+| `modelTokenSource` | `BUNDLED \| CUSTOM \| UNKNOWN` | Frozen source for `targetActionLabel` and end-state tokens. Localize exact known tokens only for `BUNDLED`; preserve `CUSTOM` and `UNKNOWN` verbatim |
 
 Trace-snapshot rule positions and database ids stay server-internal. Clients identify a
 localized rule through its readable `ruleString`, target, and trigger context; they do
@@ -976,17 +1012,23 @@ All collection fields in `FixResultDto` and `FixSuggestionDto` are always serial
 JSON arrays. A collection that does not apply to the selected strategy is `[]`, never
 `null`, so clients can distinguish "no such changes" from a malformed response.
 `ParameterAdjustment`: `{ targetId, attribute, relation, originalValue, newValue,
-lowerBound, upperBound, description }`.
+lowerBound, upperBound, description, modelTokenSource }`.
 `ParameterTarget`: `{ targetId, attribute, relation, originalValue, lowerBound,
-upperBound, description }`.
+upperBound, description, modelTokenSource }`.
 `ConditionAdjustment`: `{ action, attribute, targetType, description, ruleDescription,
-deviceLabel, relation, value }`. `ruleDescription` and `deviceLabel` are required,
+deviceLabel, relation, value, modelTokenSource }`. `ruleDescription` and `deviceLabel` are required,
 non-blank display snapshots; `relation` and `value` remain action-dependent optional fields.
-the internal model device reference used to apply an add operation is not serialized.
+The internal model device reference used to apply an add operation is not serialized.
 `targetType` is required and is one of `api`, `variable`, `mode`, or `state`; trust and
 privacy labels are not rule-condition targets.
 `targetId` is the opaque API-facing selector for preferred ranges within the same
 trace/fix context. Clients should copy it from a returned `ParameterTarget`, not generate it.
+For all three row types, `modelTokenSource` is `BUNDLED`, `CUSTOM`, or `UNKNOWN` and
+governs the row's model-facing attribute/value tokens. Clients may localize exact known
+tokens only for `BUNDLED`. `CUSTOM` and `UNKNOWN`, including legacy trace rows, must remain
+verbatim. The English `description` is a technical fallback, not the primary localized
+parameter-target label; clients should construct that label from the structured attribute,
+relation, and original value.
 If a copied target is not available during generation, the response reports it in
 `unusedPreferredRangeSelections`. A target that matched and constrained the search is not
 unused merely because no verified suggestion was found. Rule/condition positions remain server-side

@@ -39,6 +39,9 @@ public class TracePo {
     @Column(name = "states_json", columnDefinition = "JSON", nullable = false)
     private String statesJson;
 
+    @Column(name = "state_count")
+    private Integer stateCount;
+
     @Column(name = "request_json", columnDefinition = "JSON")
     private String requestJson;
 

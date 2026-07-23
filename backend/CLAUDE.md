@@ -69,6 +69,23 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 - Keep docs in sync in the same change: touching a controller/DTO/config/spec-template/
   AI-tool means updating the owning doc under `docs/` (see CONTRIBUTING.md).
 
+### Backend anti-slop checks
+
+- Do not catch broad exceptions to manufacture an empty, successful, or retryable result.
+  Preserve the typed failure, transaction outcome, and whether a mutation may have committed.
+- For concurrent or asynchronous work, state the owner, clock, lease/version precondition,
+  idempotency rule, and terminal transition explicitly. A JVM lock is not a cross-instance
+  guarantee, and request acceptance is not completion.
+- Validate DTOs and provider/tool output at the boundary, then keep one canonical internal
+  representation. Do not add repair-by-guessing paths that silently coerce malformed data or
+  let model prose overrule authoritative state.
+- A new service, mapper, projection, or helper must remove concrete duplication or enforce a
+  named invariant. Pass-through layers, one-call wrappers, and parallel snapshots require a
+  demonstrated reason and focused tests.
+- Backend tests must cover rejection, ownership loss, stale writes, cancellation, and partial
+  persistence where relevant; a happy-path Mockito interaction alone is not evidence of the
+  database or distributed contract.
+
 ## Gotchas (the "why", not the "what")
 
 - **Ordinary board mutations are targeted and serialized per user.** Do not expose the
@@ -88,10 +105,12 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 - **Async task state** uses atomic status predicates to avoid TOCTOU races. Verification,
   simulation, and fuzz queue/running work also use renewable per-instance database leases;
   start, progress, renewal, worker success, and worker failure require the owning worker
-  and an unexpired lease measured by the microsecond database clock. Completion/failure
-  transactions lock the task row before sampling their terminal time and persisting linked
-  evidence. Cancellation remains user-authoritative. Do not replace these transitions with
-  read-then-write, a pre-lock JVM timestamp, or global startup cleanup.
+  and an unexpired lease measured by the microsecond database clock. Renewal must lock the
+  task row before sampling that clock; a JVM/pre-lock timestamp or statement-start
+  `CURRENT_TIMESTAMP` can expire while waiting and must not confirm the local heartbeat.
+  Completion/failure transactions lock the task row before sampling their terminal time
+  and persisting linked evidence. Cancellation remains user-authoritative. Do not replace
+  these transitions with read-then-write, a pre-lock JVM timestamp, or global startup cleanup.
 - **Fuzz findings are not formal traces.** The bounded explorer supports only its
   documented finite safety subset, and budget exhaustion is never satisfaction. Keep
   `fuzz_finding` separate from NuSMV `trace`; direct automatic fix remains formal-only.

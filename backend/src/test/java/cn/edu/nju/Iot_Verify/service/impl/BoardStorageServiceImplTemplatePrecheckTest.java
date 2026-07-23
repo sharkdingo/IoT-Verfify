@@ -9,9 +9,11 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.exception.TemplateDeletionConflictException;
@@ -56,6 +58,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -164,6 +167,67 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         assertFalse(preview.getTemplateChanges().get(0).isSemanticsChanged());
         verify(deviceTemplateRepo, never()).deleteDefaultsForReset(anyLong(), anyList());
         verify(deviceTemplateRepo, never()).saveAllAndFlush(anyList());
+    }
+
+    @Test
+    void previewDefaultTemplateReset_marksBundledEnvironmentAdditionsForSafeLocalization() {
+        String manifestJson = """
+                {"Name":"Weather Sensor","Modes":[],"InitState":"","WorkingStates":[],
+                 "InternalVariables":[{"Name":"weather","IsInside":false,
+                 "Values":["sunny","rainy"],"Trust":"trusted","Privacy":"public"}],
+                 "EnvironmentDomains":[],"ImpactedVariables":[],"Transitions":[],"APIs":[],"Contents":[]}
+                """;
+        DeviceTemplatePo bundled = templatePo("Weather Sensor", manifestJson);
+        bundled.setId(null);
+        bundled.setDefaultTemplate(true);
+        DeviceTemplatePo current = templatePo("Weather Sensor", manifestJson);
+        current.setDefaultTemplate(true);
+        DeviceNodeDto node = buildNode("weather_1", "Weather Sensor");
+        node.setState("Working");
+
+        when(deviceTemplateService.getDefaultTemplateDefinitions(1L)).thenReturn(List.of(bundled));
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(current));
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(deviceNodeMapper.toEntity(node, 1L)));
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of());
+
+        DefaultTemplateResetResultDto preview = service.previewDefaultTemplateReset(1L);
+
+        assertEquals(1, preview.getEnvironmentChanges().size());
+        assertEquals("weather", preview.getEnvironmentChanges().get(0).getName());
+        assertEquals(ModelTokenSource.UNKNOWN,
+                preview.getEnvironmentChanges().get(0).getPreviousModelTokenSource());
+        assertEquals(ModelTokenSource.BUNDLED,
+                preview.getEnvironmentChanges().get(0).getCurrentModelTokenSource());
+    }
+
+    @Test
+    void environmentModelTokenSources_requiresEveryProviderToBeBundled() {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setInternalVariables(List.of(DeviceManifest.InternalVariable.builder()
+                .name("weather")
+                .isInside(false)
+                .values(List.of("sunny", "rainy"))
+                .build()));
+
+        DeviceTemplateDto bundled = new DeviceTemplateDto();
+        bundled.setName("Bundled Weather");
+        bundled.setManifest(manifest);
+        bundled.setDefaultTemplate(true);
+        DeviceTemplateDto custom = new DeviceTemplateDto();
+        custom.setName("Custom Weather");
+        custom.setManifest(manifest);
+        custom.setDefaultTemplate(false);
+
+        DeviceNodeDto bundledNode = buildNode("bundled_1", bundled.getName());
+        DeviceNodeDto customNode = buildNode("custom_1", custom.getName());
+
+        assertEquals(ModelTokenSource.BUNDLED,
+                service.environmentModelTokenSources(
+                        List.of(bundledNode), List.of(bundled, custom)).get("weather"));
+        assertEquals(ModelTokenSource.CUSTOM,
+                service.environmentModelTokenSources(
+                        List.of(bundledNode, customNode), List.of(bundled, custom)).get("weather"));
     }
 
     @Test
@@ -429,7 +493,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 .height(90)
                 .build();
 
-        when(deviceTemplateRepo.findById(10L)).thenReturn(java.util.Optional.of(template));
+        when(deviceTemplateRepo.findByIdAndUserId(10L, 1L)).thenReturn(java.util.Optional.of(template));
         when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
         when(nodeRepo.findByUserId(1L)).thenReturn(List.of(node));
 
@@ -441,6 +505,22 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         assertEquals("TEMPLATE_DELETION_BLOCKED", ex.getReasonCode());
         assertFalse(ex.getCurrentPreview().isCanDelete());
         assertEquals("living_light", ex.getCurrentPreview().getBlockers().get(0).getItemId());
+        verify(deviceTemplateRepo, never()).delete(any());
+    }
+
+    @Test
+    void templateDeletionDoesNotRevealWhetherAnotherUsersTemplateExists() {
+        when(deviceTemplateRepo.findByIdAndUserId(10L, 1L)).thenReturn(java.util.Optional.empty());
+
+        ResourceNotFoundException previewError = assertThrows(ResourceNotFoundException.class,
+                () -> service.previewDeviceTemplateDeletion(1L, 10L));
+        ResourceNotFoundException deleteError = assertThrows(ResourceNotFoundException.class,
+                () -> service.deleteDeviceTemplate(1L, 10L, "confirmed-impact-token"));
+
+        assertEquals(404, previewError.getCode());
+        assertEquals(previewError.getMessage(), deleteError.getMessage());
+        verify(deviceTemplateRepo, times(2)).findByIdAndUserId(10L, 1L);
+        verify(deviceTemplateRepo, never()).findById(anyLong());
         verify(deviceTemplateRepo, never()).delete(any());
     }
 

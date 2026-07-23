@@ -25,6 +25,7 @@ import {
   type TraceDeviceLike
 } from '../utils/traceEdgePlayback'
 import {
+  formatPlaybackSecurityLabel,
   isDeviceRepresentedInPlayback,
   playbackDeviceChanged,
   playbackDeviceSecurityFacts
@@ -35,6 +36,7 @@ const { t } = useI18n()
 import {
   createNodeDragState,
   beginNodeDrag,
+  cancelNodeDrag,
   updateNodeDrag,
   endNodeDrag
 } from '../utils/canvas/nodeDrag'
@@ -42,9 +44,19 @@ import {
 import {
   createNodeResizeState,
   beginNodeResize,
+  cancelNodeResize,
   updateNodeResize,
-  endNodeResize
+  endNodeResize,
+  NODE_HEIGHT_RANGE,
+  NODE_WIDTH_RANGE
 } from '../utils/canvas/nodeResize'
+import {
+  getNodeAccentColor,
+  getNodeBorderColor,
+  getNodeColorIndex,
+  getNodeSurfaceColor
+} from '../utils/canvas/nodePalette'
+import { estimateCanvasTextWidth, truncateCanvasTextToWidth } from '../utils/canvas/canvasText'
 
 // Particle animation utilities
 const getParticleOpacity = (index: number): string => {
@@ -81,88 +93,21 @@ const getParticleSize = (index: number): number => {
 }
 
 const TRACE_FLOW_DURATION = '1.1s'
+const NODE_DRAG_THRESHOLD_PX = 5
 
-// Node color utilities (matching Canvas Map colors)
-// Use node ID to generate stable color assignment
-const getNodeColorIndex = (nodeId: string): number => {
-  // 为每个节点生成随机但一致的颜色索引
-  // 使用节点ID作为种子，确保同一个节点始终有相同颜色
-  let hash = 5381
-  for (let i = 0; i < nodeId.length; i++) {
-    const char = nodeId.charCodeAt(i)
-    hash = ((hash << 5) + hash) + char // hash * 33 + char
-  }
+const prefersReducedMotion = ref(false)
+let reducedMotionQuery: MediaQueryList | null = null
 
-  // 使用更大的模数来获得更多颜色变化
-  return Math.abs(hash) % 8 // 现在有8种可能的颜色
+const syncReducedMotionPreference = () => {
+  prefersReducedMotion.value = reducedMotionQuery?.matches === true
 }
 
-// Test function to verify color distribution (removed console logs)
-const testColorDistribution = () => {
-  // 使用后端设备模板名称作为测试数据
-  const testIds = [
-    'Temperature Sensor', 'Air Conditioner', 'Light', 
-    'Window', 'Door', 'Camera', 'Thermostat'
-  ]
-  const colorCounts = [0, 0, 0, 0]
-  testIds.forEach(id => {
-    const index = getNodeColorIndex(id)
-    colorCounts[index]++
-  })
-  // Color distribution verified silently
-}
-
-const getNodeColorClass = (nodeId: string): string => {
-  const colors = [
-    'border-primary', 'border-online', 'border-secondary', 'border-offline',
-    'border-red-500', 'border-teal-500', 'border-pink-500', 'border-yellow-500'
-  ]
-  return colors[getNodeColorIndex(nodeId)]
-}
-
-const getNodeBgColorClass = (nodeId: string): string => {
-  const bgColors = [
-    'bg-blue-50', 'bg-green-50', 'bg-purple-50', 'bg-orange-50',
-    'bg-red-50', 'bg-teal-50', 'bg-pink-50', 'bg-yellow-50'
-  ]
-  return bgColors[getNodeColorIndex(nodeId)]
-}
-
-// Get actual background color for inline styling
-const getNodeBgColor = (nodeId: string): string => {
-  const colorIndex = getNodeColorIndex(nodeId)
-  const bgColors: Record<number, string> = {
-    0: 'rgba(239, 246, 255, 0.9)', // blue-50 with opacity
-    1: 'rgba(236, 253, 245, 0.9)', // green-50 with opacity
-    2: 'rgba(245, 243, 255, 0.9)', // purple-50 with opacity
-    3: 'rgba(255, 247, 237, 0.9)', // orange-50 with opacity
-    4: 'rgba(254, 242, 242, 0.9)', // red-50 with opacity
-    5: 'rgba(240, 253, 250, 0.9)', // teal-50 with opacity
-    6: 'rgba(253, 244, 255, 0.9)', // pink-50 with opacity
-    7: 'rgba(254, 249, 195, 0.9)'  // yellow-50 with opacity
-  }
-  return bgColors[colorIndex] || bgColors[0]
-}
-
-// Get actual border color for inline styling
-const getNodeBorderColor = (nodeId: string): string => {
-  const colorIndex = getNodeColorIndex(nodeId)
-  const borderColors: Record<number, string> = {
-    0: '#2563EB', // primary blue
-    1: '#059669', // online green
-    2: '#C026D3', // secondary purple
-    3: '#dc2626', // offline red
-    4: '#ef4444', // red
-    5: '#14b8a6', // teal
-    6: '#ec4899', // pink
-    7: '#eab308'  // yellow
-  }
-  return borderColors[colorIndex] || borderColors[0]
-}
+const shouldRenderEdgeFlow = (edge: DeviceEdge) =>
+  !prefersReducedMotion.value && shouldAnimateEdgeFlow(edge, props.highlightedTrace)
 
 const getVariableNodeBorderColor = (node: DeviceNode): string => getNodeBorderColor(node.id)
 
-const getVariableNodeBgColor = (node: DeviceNode): string => getNodeBgColor(node.id)
+const getVariableNodeBgColor = (node: DeviceNode): string => getNodeSurfaceColor(node.id)
 
 // Get arrow marker ID based on source device color
 const getArrowMarker = (edge: DeviceEdge): string => {
@@ -185,14 +130,7 @@ const getArrowMarker = (edge: DeviceEdge): string => {
 // Get particle fill color (solid color) based on source device color
 const getParticleFillColor = (edge: DeviceEdge): string => {
   const sourceNode = props.nodes.find(n => n.id === edge.from)
-  if (!sourceNode) return '#3B82F6' // fallback blue
-
-  const colorIndex = getNodeColorIndex(sourceNode.id)
-  const colors = [
-    '#2563EB', '#059669', '#C026D3', '#dc2626',
-    '#ef4444', '#14b8a6', '#ec4899', '#eab308'
-  ] // solid colors
-  return colors[colorIndex] || colors[0]
+  return sourceNode ? getNodeAccentColor(sourceNode.id) : 'var(--iot-node-accent-0)'
 }
 
 const fallbackDeviceSvg = `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -273,25 +211,16 @@ const getNodeState = (node: DeviceNode): string => {
     }
     return traceDevice.state?.trim() || t('app.traceVisualization.stateUnavailableInTrace')
   }
-  return node.state || 'Working'
+  return props.getNodeEffectiveState(node)
 }
 
-// 获取状态显示的样式类
-const getStateDisplayClass = (node: DeviceNode): string => {
-  const state = getNodeState(node) || 'Working'
-  // 根据状态返回不同的样式类
-  const stateLower = state.toLowerCase()
-  if (stateLower === 'off' || stateLower === 'closed' || stateLower === 'locked' || stateLower === 'stop' || stateLower === 'pause') {
-    return 'state-offline'
-  }
-  if (stateLower === 'on' || stateLower === 'open' || stateLower === 'unlocked' || stateLower === 'run' || stateLower === 'working') {
-    return 'state-online'
-  }
-  if (stateLower.includes('heat') || stateLower.includes('cool') || stateLower.includes('dry')) {
-    return 'state-active'
-  }
-  return 'state-default'
-}
+const getNodeDisplayState = (node: DeviceNode): string =>
+  props.hasNodeStateMachine(node)
+    ? formatNodeModelToken(node, getNodeState(node))
+    : t('app.noStateMachine')
+
+const getStateDisplayClass = (node: DeviceNode): string =>
+  props.hasNodeStateMachine(node) ? 'state-defined' : 'state-stateless'
 
 const isVariableNode = (_node: DeviceNode): boolean => false
 
@@ -319,14 +248,21 @@ const props = defineProps<{
   zoom: number
   /** 获取节点图标路径（Board.vue 传入 getNodeIcon） */
   getNodeIcon: (node: DeviceNode, stateOverride?: string) => string
-  /** 获取节点标签样式（Board.vue 传入 getNodeLabelStyle） */
-  getNodeLabelStyle: (node: DeviceNode) => Record<string, string | number>
+  /** Whether this template has a modelled state machine. */
+  hasNodeStateMachine: (node: DeviceNode) => boolean
+  /** Resolve the current persisted state against the template's legal states. */
+  getNodeEffectiveState: (node: DeviceNode) => string
+  /** Localize canonical bundled-template identifiers without changing stored values. */
+  formatNodeModelToken?: (node: DeviceNode, value: unknown) => string
   /** 高亮显示的反例路径 */
   highlightedTrace?: {
     states: Array<{
+      stateIndex?: number
       devices: TraceDeviceLike[]
       envVariables?: Array<{ name: string; value: string; trust?: string }>
       rules?: number[]
+      triggeredRules?: Array<{ ruleId?: string | null; ruleLabel?: string | null }>
+      compromisedAutomationLinks?: Array<{ ruleId?: string | null; ruleLabel?: string | null }>
     }>
     selectedStateIndex?: number
   } | null
@@ -335,6 +271,10 @@ const props = defineProps<{
   /** Model playback is a saved snapshot; prevent canvas mutations while it is visible. */
   interactionLocked?: boolean
 }>()
+
+function formatNodeModelToken(node: DeviceNode, value: unknown): string {
+  return props.formatNodeModelToken?.(node, value) ?? String(value ?? '')
+}
 
 const GRID_SIZE_PX = 32
 
@@ -524,15 +464,57 @@ const emit = defineEmits<{
   (e: 'node-delete', nodeId: string): void
   /** 节点拖拽或缩放结束，通知 Board.vue 持久化 nodes/edges */
   (e: 'node-moved-or-resized', nodeId: string): void
+  /** Keep server snapshots from replacing a node while a pointer interaction owns it. */
+  (e: 'node-layout-interaction-start', nodeId: string): void
+  (e: 'node-layout-interaction-end', nodeId: string): void
 }>()
 
 /* ====== 节点拖拽状态 ====== */
 
 const dragState = createNodeDragState()
+let activeDragPointerId: number | null = null
+let activeDragTarget: HTMLElement | null = null
+let activeDragNodeId: string | null = null
+let activeDragStartPoint: { x: number; y: number } | null = null
+let activeDragMoved = false
+
+const removeDragListeners = () => {
+  window.removeEventListener('pointermove', onNodePointerMove)
+  window.removeEventListener('pointerup', onNodePointerUp)
+  window.removeEventListener('pointercancel', onNodePointerCancel)
+}
+
+const releaseDragPointer = () => {
+  const target = activeDragTarget
+  const pointerId = activeDragPointerId
+  const nodeId = activeDragNodeId
+  activeDragPointerId = null
+  activeDragTarget = null
+  activeDragNodeId = null
+  activeDragStartPoint = null
+  activeDragMoved = false
+  target?.removeEventListener('lostpointercapture', onNodeLostPointerCapture)
+  if (target && pointerId !== null) {
+    try {
+      target.releasePointerCapture(pointerId)
+    } catch {
+      // The browser may release capture before pointerup/cancel reaches the window.
+    }
+  }
+  removeDragListeners()
+  if (nodeId) emit('node-layout-interaction-end', nodeId)
+}
+
+const onNodeLostPointerCapture = (e: PointerEvent) => {
+  if (e.pointerId !== activeDragPointerId) return
+  const restored = cancelNodeDrag(dragState)
+  if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
+  releaseDragPointer()
+}
 
 const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
   e.preventDefault()
-  if (e.button !== 0 || !e.isPrimary) {
+  if (e.button !== 0 || e.isPrimary === false || activeDragPointerId !== null) {
     return
   }
   if (props.interactionLocked) {
@@ -540,11 +522,34 @@ const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
   }
   // 只处理节点自身拖拽，不影响画布平移（事件在模板里用了 .stop）
   beginNodeDrag(e, node, dragState)
+  activeDragPointerId = e.pointerId
+  activeDragTarget = e.currentTarget as HTMLElement
+  activeDragNodeId = node.id
+  activeDragStartPoint = { x: e.clientX, y: e.clientY }
+  activeDragMoved = false
+  emit('node-layout-interaction-start', node.id)
+  activeDragTarget.focus({ preventScroll: true })
+  try {
+    activeDragTarget.setPointerCapture?.(e.pointerId)
+  } catch {
+    // Pointer capture is an enhancement; window listeners still complete the drag.
+  }
+  activeDragTarget.addEventListener('lostpointercapture', onNodeLostPointerCapture)
   window.addEventListener('pointermove', onNodePointerMove)
   window.addEventListener('pointerup', onNodePointerUp)
+  window.addEventListener('pointercancel', onNodePointerCancel)
 }
 
 const onNodePointerMove = (e: PointerEvent) => {
+  if (e.pointerId !== activeDragPointerId) return
+  if (!activeDragMoved && activeDragStartPoint) {
+    const distance = Math.hypot(
+      e.clientX - activeDragStartPoint.x,
+      e.clientY - activeDragStartPoint.y
+    )
+    if (distance < NODE_DRAG_THRESHOLD_PX) return
+    activeDragMoved = true
+  }
   const changed = updateNodeDrag(e, dragState, props.zoom)
   if (!changed || !dragState.node) return
 
@@ -552,14 +557,9 @@ const onNodePointerMove = (e: PointerEvent) => {
   updateEdgesForNode(dragState.node.id, props.nodes, props.edges)
 }
 
-const onNodePointerUp = () => {
-  const node = dragState.node
-  const movedEnough = node
-    ? Math.hypot(
-      node.position.x - dragState.origin.x,
-      node.position.y - dragState.origin.y
-    ) > 1
-    : false
+const onNodePointerUp = (e: PointerEvent) => {
+  if (e.pointerId !== activeDragPointerId) return
+  const movedEnough = activeDragMoved
   const moved = endNodeDrag(dragState)
   if (moved) {
     if (movedEnough) {
@@ -568,13 +568,54 @@ const onNodePointerUp = () => {
       emit('node-open', moved)
     }
   }
-  window.removeEventListener('pointermove', onNodePointerMove)
-  window.removeEventListener('pointerup', onNodePointerUp)
+  releaseDragPointer()
+}
+
+const onNodePointerCancel = (e: PointerEvent) => {
+  if (e.pointerId !== activeDragPointerId) return
+  const restored = cancelNodeDrag(dragState)
+  if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
+  releaseDragPointer()
 }
 
 /* ====== 节点缩放状态 ====== */
 
 const resizeState = createNodeResizeState()
+let activeResizePointerId: number | null = null
+let activeResizeTarget: HTMLElement | null = null
+let activeResizeNodeId: string | null = null
+
+const removeResizeListeners = () => {
+  window.removeEventListener('pointermove', onPointerMoveResize)
+  window.removeEventListener('pointerup', onPointerUpResize)
+  window.removeEventListener('pointercancel', onPointerCancelResize)
+}
+
+const releaseResizePointer = () => {
+  const target = activeResizeTarget
+  const pointerId = activeResizePointerId
+  const nodeId = activeResizeNodeId
+  activeResizePointerId = null
+  activeResizeTarget = null
+  activeResizeNodeId = null
+  target?.removeEventListener('lostpointercapture', onResizeLostPointerCapture)
+  if (target && pointerId !== null) {
+    try {
+      target.releasePointerCapture(pointerId)
+    } catch {
+      // Capture may already be released by the browser after pointerup/cancel.
+    }
+  }
+  removeResizeListeners()
+  if (nodeId) emit('node-layout-interaction-end', nodeId)
+}
+
+const onResizeLostPointerCapture = (e: PointerEvent) => {
+  if (e.pointerId !== activeResizePointerId) return
+  const restored = cancelNodeResize(resizeState)
+  if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
+  releaseResizePointer()
+}
 
 const onPointerDownResize = (
     e: PointerEvent,
@@ -583,26 +624,45 @@ const onPointerDownResize = (
 ) => {
   e.stopPropagation()
   e.preventDefault()
-  if (props.interactionLocked) return
+  if (props.interactionLocked || e.button !== 0 || e.isPrimary === false || activeResizePointerId !== null) return
   beginNodeResize(e, node, dir, resizeState)
+  activeResizePointerId = e.pointerId
+  activeResizeTarget = e.currentTarget as HTMLElement
+  activeResizeNodeId = node.id
+  emit('node-layout-interaction-start', node.id)
+  try {
+    activeResizeTarget.setPointerCapture?.(e.pointerId)
+  } catch {
+    // Pointer capture is optional; window listeners still complete the resize.
+  }
+  activeResizeTarget.addEventListener('lostpointercapture', onResizeLostPointerCapture)
   window.addEventListener('pointermove', onPointerMoveResize)
   window.addEventListener('pointerup', onPointerUpResize)
+  window.addEventListener('pointercancel', onPointerCancelResize)
 }
 
 const onPointerMoveResize = (e: PointerEvent) => {
+  if (e.pointerId !== activeResizePointerId) return
   const changed = updateNodeResize(e, resizeState, props.zoom)
   if (!changed || !resizeState.node) return
 
   updateEdgesForNode(resizeState.node.id, props.nodes, props.edges)
 }
 
-const onPointerUpResize = () => {
+const onPointerUpResize = (e: PointerEvent) => {
+  if (e.pointerId !== activeResizePointerId) return
   const resized = endNodeResize(resizeState)
   if (resized) {
     emit('node-moved-or-resized', resized.id)
   }
-  window.removeEventListener('pointermove', onPointerMoveResize)
-  window.removeEventListener('pointerup', onPointerUpResize)
+  releaseResizePointer()
+}
+
+const onPointerCancelResize = (e: PointerEvent) => {
+  if (e.pointerId !== activeResizePointerId) return
+  const restored = cancelNodeResize(resizeState)
+  if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
+  releaseResizePointer()
 }
 
 /* ====== 自环路径封装（调用 utils/canvas/geometry） ====== */
@@ -654,7 +714,7 @@ const getAdjustedLinkPoints = (fromNode: DeviceNode | undefined, toNode: DeviceN
   return { fromPoint, toPoint }
 }
 
-type NodeVisualTier = 'compact' | 'expanded'
+type NodeVisualTier = 'compact' | 'condensed' | 'expanded'
 
 const relationSymbols: Record<string, string> = {
   EQ: '=',
@@ -662,33 +722,34 @@ const relationSymbols: Record<string, string> = {
   GT: '>',
   GTE: '>=',
   LT: '<',
-  LTE: '<=',
-  in: 'in',
-  not_in: 'not in',
-  'not in': 'not in'
+  LTE: '<='
 }
 
-const getRelationSymbol = (relation?: string) =>
-  relation ? (relationSymbols[relation] || relation) : ''
+const getRelationSymbol = (relation?: string) => {
+  if (!relation) return ''
+  if (relation === 'in') return t('app.relationIn')
+  if (relation === 'not_in' || relation === 'not in') return t('app.relationNotIn')
+  return relationSymbols[relation] || relation
+}
 
 const hasValue = (value: unknown) =>
   value !== null && value !== undefined && String(value).trim() !== ''
 
-const truncateCanvasText = (value: string, maxLength = 46) => {
-  const normalized = String(value || '').trim()
-  if (normalized.length <= maxLength) return normalized
-  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`
-}
-
 const getNodeVisualTier = (node: DeviceNode): NodeVisualTier => {
   const screenWidth = node.width * props.zoom
   const screenHeight = node.height * props.zoom
-  if (screenWidth < 128 || screenHeight < 98) return 'compact'
+  if (screenWidth < 100 || screenHeight < 72) return 'compact'
+  if (screenWidth < 168 || screenHeight < 118) return 'condensed'
   return 'expanded'
 }
 
 const getNodeVisualTierClass = (node: DeviceNode) =>
   `device-node--${getNodeVisualTier(node)}`
+
+const POINTER_RESIZE_TARGET_SIZE_PX = 44
+const canPointerResizeNode = (node: DeviceNode) =>
+  node.width * props.zoom > POINTER_RESIZE_TARGET_SIZE_PX
+  && node.height * props.zoom > POINTER_RESIZE_TARGET_SIZE_PX
 
 const getNodeRuntimeBadges = (node: DeviceNode) => {
   const traceDevice = isTraceActive.value ? getLatestTraceDeviceForNode(node.id) : null
@@ -725,13 +786,18 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
       const changed = traceValue !== null &&
         previousTraceValue !== null &&
         previousTraceValue !== traceValue
+      const displayLabel = formatNodeModelToken(node, variable.name)
+      const displayValue = formatNodeModelToken(node, value)
+      const displayPreviousValue = changed && previousTraceValue !== null
+        ? formatNodeModelToken(node, previousTraceValue)
+        : null
       return {
-        label: variable.name,
-        value,
-        previousValue: changed ? previousTraceValue : null,
+        label: displayLabel,
+        value: displayValue,
+        previousValue: displayPreviousValue,
         trust,
         changed,
-        title: `${variable.name}: ${value}${trustLabel ? ` (${trustLabel})` : ''}`
+        title: `${displayLabel}: ${displayValue}${trustLabel ? ` (${trustLabel})` : ''}`
       }
     })
 }
@@ -741,12 +807,15 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
     const traceDevice = getLatestTraceDeviceForNode(node.id)
     if (!traceDevice) return []
     const facts = playbackDeviceSecurityFacts(traceDevice as Parameters<typeof playbackDeviceSecurityFacts>[0])
+    const formatSecurityLabels = (labels: string[]) => labels
+      .map(label => formatPlaybackSecurityLabel(label, value => formatNodeModelToken(node, value)))
+      .join(', ')
     const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
     if (facts.untrustedLabels.length > 0) {
       badges.push({
         kind: 'trust',
         label: t('app.traceVisualization.includesUntrustedSource'),
-        title: t('app.traceVisualization.untrustedLabelDetails', { labels: facts.untrustedLabels.join(', ') })
+        title: t('app.traceVisualization.untrustedLabelDetails', { labels: formatSecurityLabels(facts.untrustedLabels) })
       })
     } else if (facts.hasTrustLabels) {
       badges.push({
@@ -759,7 +828,7 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
       badges.push({
         kind: 'privacy',
         label: t('app.traceVisualization.includesPrivateData'),
-        title: t('app.traceVisualization.privateLabelDetails', { labels: facts.privateLabels.join(', ') })
+        title: t('app.traceVisualization.privateLabelDetails', { labels: formatSecurityLabels(facts.privateLabels) })
       })
     }
     return badges
@@ -775,7 +844,7 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
   }
   const privateLabels = (node.privacies || [])
     .filter(entry => entry.privacy === 'private')
-    .map(entry => entry.name)
+    .map(entry => formatNodeModelToken(node, entry.name))
   if (node.currentStatePrivacy === 'private') {
     privateLabels.unshift(t('app.currentStateProperty'))
   }
@@ -797,10 +866,11 @@ const isNodeTraceChanged = (node: DeviceNode) => {
 }
 
 const getNodeStateTitle = (node: DeviceNode) => {
-  const current = getNodeState(node)
+  const current = getNodeDisplayState(node)
+  if (!props.hasNodeStateMachine(node)) return current
   const previous = getPreviousState(node)
   if (previous && previous !== getNodeState(node)) {
-    return `${previous} -> ${getNodeState(node)}`
+    return `${formatNodeModelToken(node, previous)} -> ${current}`
   }
   return current
 }
@@ -808,21 +878,29 @@ const getNodeStateTitle = (node: DeviceNode) => {
 const getFullEdgeLabel = (edge: DeviceEdge) => {
   const sourceName = edge.fromLabel || edge.from
   const targetName = edge.toLabel || edge.to
+  const sourceNode = props.nodes.find(node => node.id === edge.from)
+  const targetNode = props.nodes.find(node => node.id === edge.to)
   const relation = getRelationSymbol(edge.relation)
-  const sourceSignal = edge.fromApi || edge.itemType || t('app.condition')
+  const sourceSignal = edge.fromApi
+    ? (sourceNode ? formatNodeModelToken(sourceNode, edge.fromApi) : edge.fromApi)
+    : edge.itemType || t('app.condition')
+  const sourceValue = sourceNode ? formatNodeModelToken(sourceNode, edge.value) : edge.value
   const condition = relation && hasValue(edge.value)
-    ? `${sourceName}.${sourceSignal} ${relation} ${edge.value}`
+    ? `${sourceName}.${sourceSignal} ${relation} ${sourceValue}`
     : `${sourceName}.${sourceSignal}`
-  const action = edge.toApi ? `${targetName}.${edge.toApi}` : targetName
+  const targetAction = edge.toApi && targetNode
+    ? formatNodeModelToken(targetNode, edge.toApi)
+    : edge.toApi
+  const action = targetAction ? `${targetName}.${targetAction}` : targetName
   return `${condition} -> ${action}`
 }
 
 const getEdgeLabelText = (edge: DeviceEdge) =>
-  truncateCanvasText(getFullEdgeLabel(edge))
+  truncateCanvasTextToWidth(getFullEdgeLabel(edge), 222)
 
 const getEdgeLabelWidth = (edge: DeviceEdge) => {
-  const length = getEdgeLabelText(edge).length
-  return Math.min(240, Math.max(76, length * 6 + 18))
+  const textWidth = estimateCanvasTextWidth(getEdgeLabelText(edge))
+  return Math.min(240, Math.max(76, textWidth + 18))
 }
 
 const hoveredEdgeId = ref<string | null>(null)
@@ -860,15 +938,32 @@ const onNodeContextInternal = (node: DeviceNode, e: MouseEvent) => {
 }
 
 const getNodeAriaLabel = (node: DeviceNode) => {
-  const base = `${node.label}, ${node.templateName}, ${t('app.state')}: ${getNodeState(node)}`
+  const base = `${node.label}, ${node.templateName}, ${t('app.state')}: ${getNodeDisplayState(node)}`
   return isTraceActive.value && !isNodeRepresentedInTrace(node)
     ? `${base}. ${t('app.traceVisualization.currentBoardDeviceNotRepresented')}`
     : base
 }
 
+const getNodeTitle = (node: DeviceNode) => {
+  const details = [getNodeAriaLabel(node)]
+  const security = getNodeSecurityBadges(node).map(badge => badge.label)
+  if (security.length > 0) details.push(security.join(', '))
+  return details.join(' - ')
+}
+
 const moveNodeByKeyboard = (node: DeviceNode, dx: number, dy: number) => {
   node.position.x += dx
   node.position.y += dy
+  updateEdgesForNode(node.id, props.nodes, props.edges)
+  emit('node-moved-or-resized', node.id)
+}
+
+const resizeNodeByKeyboard = (node: DeviceNode, dw: number, dh: number) => {
+  const width = Math.min(NODE_WIDTH_RANGE.max, Math.max(NODE_WIDTH_RANGE.min, node.width + dw))
+  const height = Math.min(NODE_HEIGHT_RANGE.max, Math.max(NODE_HEIGHT_RANGE.min, node.height + dh))
+  if (width === node.width && height === node.height) return
+  node.width = width
+  node.height = height
   updateEdgesForNode(node.id, props.nodes, props.edges)
   emit('node-moved-or-resized', node.id)
 }
@@ -912,22 +1007,31 @@ const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
   if (!delta || event.repeat) return
   event.preventDefault()
   if (props.interactionLocked) return
-  moveNodeByKeyboard(node, delta.dx, delta.dy)
+  if (event.ctrlKey || event.metaKey) {
+    resizeNodeByKeyboard(node, delta.dx, delta.dy)
+  } else {
+    moveNodeByKeyboard(node, delta.dx, delta.dy)
+  }
 }
 
 /* ====== 生命周期清理 ====== */
 
-// Run test on component mount
-onMounted(() => {
-  testColorDistribution()
-})
-
 onBeforeUnmount(() => {
   if (nodeAnimationResetTimer) clearTimeout(nodeAnimationResetTimer)
-  window.removeEventListener('pointermove', onNodePointerMove)
-  window.removeEventListener('pointerup', onNodePointerUp)
-  window.removeEventListener('pointermove', onPointerMoveResize)
-  window.removeEventListener('pointerup', onPointerUpResize)
+  const restoredDrag = cancelNodeDrag(dragState)
+  if (restoredDrag) updateEdgesForNode(restoredDrag.id, props.nodes, props.edges)
+  releaseDragPointer()
+  const restored = cancelNodeResize(resizeState)
+  if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
+  releaseResizePointer()
+  reducedMotionQuery?.removeEventListener?.('change', syncReducedMotionPreference)
+})
+
+onMounted(() => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+  reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  syncReducedMotionPreference()
+  reducedMotionQuery.addEventListener?.('change', syncReducedMotionPreference)
 })
 </script>
 
@@ -943,11 +1047,18 @@ onBeforeUnmount(() => {
       @mouseleave="() => emit('canvas-leave')"
       @wheel="(e: WheelEvent) => emit('canvas-wheel', e)"
   >
+    <p id="canvas-node-keyboard-instructions" class="sr-only">
+      {{ t('app.canvasNodeKeyboardInstructions') }}
+    </p>
     <div
         class="canvas-inner"
         :style="{
         transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-        transformOrigin: '0 0'
+        transformOrigin: '0 0',
+        '--canvas-zoom': zoom,
+        '--resize-hit-size': `${44 / Math.max(zoom, 0.01)}px`,
+        '--resize-hit-offset': `${-22 / Math.max(zoom, 0.01)}px`,
+        '--resize-visual-size': `${11.2 / Math.max(zoom, 0.01)}px`
       }"
     >
       <!-- 连线层 -->
@@ -965,77 +1076,77 @@ onBeforeUnmount(() => {
 
           <!-- Gradient definitions -->
           <linearGradient id="grad-blue" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#3B82F6;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#3B82F6;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-0);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-0);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-0);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <linearGradient id="grad-purple" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#C026D3;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#C026D3;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#C026D3;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-2);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-2);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-2);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <linearGradient id="grad-green" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#059669;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#059669;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#059669;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-1);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-1);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-1);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <linearGradient id="grad-orange" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#dc2626;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#dc2626;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#dc2626;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-3);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-3);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-3);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <linearGradient id="grad-red" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#ef4444;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#ef4444;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#ef4444;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-4);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-4);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-4);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <linearGradient id="grad-teal" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#14b8a6;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#14b8a6;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#14b8a6;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-5);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-5);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-5);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <linearGradient id="grad-pink" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#ec4899;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#ec4899;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#ec4899;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-6);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-6);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-6);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <linearGradient id="grad-yellow" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" style="stop-color:#eab308;stop-opacity:0.2"></stop>
-            <stop offset="50%" style="stop-color:#eab308;stop-opacity:1"></stop>
-            <stop offset="100%" style="stop-color:#eab308;stop-opacity:0.2"></stop>
+            <stop offset="0%" style="stop-color:var(--iot-node-accent-7);stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:var(--iot-node-accent-7);stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:var(--iot-node-accent-7);stop-opacity:0.2"></stop>
           </linearGradient>
 
           <!-- Arrow markers for different colors -->
           <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#2563EB"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-0)"></path>
           </marker>
           <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#059669"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-1)"></path>
           </marker>
           <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#C026D3"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-2)"></path>
           </marker>
           <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#dc2626"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-3)"></path>
           </marker>
           <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#ef4444"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-4)"></path>
           </marker>
           <marker id="arrow-teal" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#14b8a6"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-5)"></path>
           </marker>
           <marker id="arrow-pink" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#ec4899"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-6)"></path>
           </marker>
           <marker id="arrow-yellow" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="#eab308"></path>
+            <path d="M0,0 L0,6 L9,3 z" fill="var(--iot-node-accent-7)"></path>
           </marker>
         </defs>
 
@@ -1134,7 +1245,7 @@ onBeforeUnmount(() => {
 
           <!-- During model playback, motion represents a backend-reported delivered automation. -->
           <path
-              v-if="edge.from === edge.to && shouldAnimateEdgeFlow(edge, props.highlightedTrace)"
+              v-if="edge.from === edge.to && shouldRenderEdgeFlow(edge)"
               :key="`edge-flow-loop-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
@@ -1148,7 +1259,7 @@ onBeforeUnmount(() => {
               :marker-end="getArrowMarker(edge)"
           />
           <line
-              v-else-if="shouldAnimateEdgeFlow(edge, props.highlightedTrace)"
+              v-else-if="shouldRenderEdgeFlow(edge)"
               :key="`edge-flow-line-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
@@ -1183,7 +1294,7 @@ onBeforeUnmount(() => {
 
           <!-- A compromised or idle automation remains visible as a static edge. -->
           <circle
-              v-if="edge.from !== edge.to && shouldAnimateEdgeFlow(edge, props.highlightedTrace)"
+              v-if="edge.from !== edge.to && shouldRenderEdgeFlow(edge)"
               :key="`edge-flow-particle-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="trace-flow-particle"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
@@ -1254,14 +1365,16 @@ onBeforeUnmount(() => {
           role="button"
           :aria-disabled="interactionLocked ? 'true' : undefined"
           :aria-label="getNodeAriaLabel(node)"
-          :title="isTraceActive && !isNodeRepresentedInTrace(node) ? t('app.traceVisualization.currentBoardDeviceNotRepresented') : undefined"
-          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), getNodeVisualTierClass(node), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
+          aria-describedby="canvas-node-keyboard-instructions"
+          :title="getNodeTitle(node)"
+          :class="[getNodeVisualTierClass(node), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
           :style="{
           left: node.position.x + 'px',
           top: node.position.y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
-          backgroundColor: isVariableNode(node) ? getVariableNodeBgColor(node) : getNodeBgColor(node.id),
+          '--node-accent-color': getNodeAccentColor(node.id),
+          backgroundColor: isVariableNode(node) ? getVariableNodeBgColor(node) : getNodeSurfaceColor(node.id),
           borderColor: isDeviceAttacked(node.id) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)),
           ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)) } : {})
         }"
@@ -1296,7 +1409,7 @@ onBeforeUnmount(() => {
             <div class="variable-tooltip-info">
               <span class="variable-tooltip-label">{{ node.label }}</span>
               <span v-if="isTraceActive && getTraceVariableValue(node)" class="variable-tooltip-value">
-                {{ t('app.variableValue') }}: {{ getTraceVariableValue(node)?.value }}
+                {{ t('app.variableValue') }}: {{ formatNodeModelToken(node, getTraceVariableValue(node)?.value) }}
               </span>
             </div>
           </div>
@@ -1328,7 +1441,7 @@ onBeforeUnmount(() => {
           </div>
           <!-- 名字 -->
           <div class="device-label-wrapper">
-            <div class="device-label" :style="getNodeLabelStyle(node)" :title="node.label">
+            <div class="device-label" :title="node.label">
               {{ node.label }}
             </div>
           </div>
@@ -1336,7 +1449,7 @@ onBeforeUnmount(() => {
           <div class="device-state" :class="getStateDisplayClass(node)" :title="getNodeStateTitle(node)">
             <span class="device-state-dot"></span>
             <Transition name="trace-device-state" mode="out-in">
-              <span :key="getNodeVisualStateKey(node)" class="device-state-value">{{ getNodeState(node) }}</span>
+              <span :key="getNodeVisualStateKey(node)" class="device-state-value">{{ getNodeDisplayState(node) }}</span>
             </Transition>
           </div>
           <div v-if="getNodeRuntimeBadges(node).length > 0" class="device-runtime-strip">
@@ -1366,23 +1479,27 @@ onBeforeUnmount(() => {
 
         <!-- 四角缩放手柄 -->
         <div
-            v-if="!interactionLocked"
+            v-if="!interactionLocked && canPointerResizeNode(node)"
             class="resize-handle tl"
+            aria-hidden="true"
             @pointerdown.stop="onPointerDownResize($event, node, 'tl')"
         ></div>
         <div
-            v-if="!interactionLocked"
+            v-if="!interactionLocked && canPointerResizeNode(node)"
             class="resize-handle tr"
+            aria-hidden="true"
             @pointerdown.stop="onPointerDownResize($event, node, 'tr')"
         ></div>
         <div
-            v-if="!interactionLocked"
+            v-if="!interactionLocked && canPointerResizeNode(node)"
             class="resize-handle bl"
+            aria-hidden="true"
             @pointerdown.stop="onPointerDownResize($event, node, 'bl')"
         ></div>
         <div
-            v-if="!interactionLocked"
+            v-if="!interactionLocked && canPointerResizeNode(node)"
             class="resize-handle br"
+            aria-hidden="true"
             @pointerdown.stop="onPointerDownResize($event, node, 'br')"
         ></div>
       </div>
@@ -1471,18 +1588,20 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: clamp(0.2rem, 2.4cqmin, 0.5rem);
   justify-self: center;
   min-width: 0;
-  min-height: 1.25rem;
-  width: min(78%, 9rem);
-  padding: 3px clamp(6px, 6%, 10px);
-  border-radius: 12px;
-  font-size: 10px;
-  font-weight: 600;
+  min-height: clamp(1.15rem, 13cqmin, 10rem);
+  width: 82%;
+  padding: clamp(0.18rem, 1.7cqmin, 1.5rem) clamp(0.4rem, 4cqmin, 4rem);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
+  color: var(--text);
+  font-weight: 700;
   z-index: 5;
   box-sizing: border-box;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 12%, transparent);
   line-height: 1;
   overflow: hidden;
 }
@@ -1490,15 +1609,12 @@ onBeforeUnmount(() => {
 .device-node--expanded .device-state {
   grid-area: state;
   justify-self: start;
-  width: min(100%, 9.5rem);
-  min-height: 1.35rem;
-  padding: 4px 8px;
-  border-radius: 999px;
+  width: 100%;
 }
 
 .device-state-dot {
-  width: 6px;
-  height: 6px;
+  width: clamp(0.35rem, 3.5cqmin, 0.75rem);
+  height: clamp(0.35rem, 3.5cqmin, 0.75rem);
   border-radius: 50%;
   flex-shrink: 0;
   display: inline-block;
@@ -1510,72 +1626,33 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: clamp(0.625rem, 5cqmin, 5rem);
   line-height: 1;
 }
 
-.state-offline {
-  background: linear-gradient(135deg, rgba(148, 163, 184, 0.2) 0%, rgba(100, 116, 139, 0.15) 100%);
-  color: #475569;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+.state-defined {
+  border-color: color-mix(in srgb, var(--node-accent-color) 44%, var(--border));
+  background: color-mix(in srgb, var(--node-accent-color) 13%, var(--surface-elevated));
 }
 
-.state-offline .device-state-dot {
-  background: #94A3B8;
-  box-shadow: 0 0 4px #94A3B8;
+.state-defined .device-state-dot {
+  background: var(--node-accent-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-accent-color) 18%, transparent);
 }
 
-.state-online {
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(16, 185, 129, 0.15) 100%);
-  color: #059669;
-  border: 1px solid rgba(34, 197, 94, 0.3);
+.state-stateless {
+  background: color-mix(in srgb, var(--surface-muted) 88%, transparent);
+  color: var(--text-muted);
 }
 
-.state-online .device-state-dot {
-  background: #22C55E;
-  box-shadow: 0 0 5px #22C55E;
-  animation: pulse-green 2s infinite;
-}
-
-.state-active {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(37, 99, 235, 0.15) 100%);
-  color: #2563EB;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.state-active .device-state-dot {
-  background: #3B82F6;
-  box-shadow: 0 0 5px #3B82F6;
-  animation: pulse-blue 1.5s infinite;
-}
-
-/* Playback motion identifies a transition, not a device that merely remains on. */
-.device-node.trace-active .device-state-dot {
-  animation: none;
-}
-
-.state-default {
-  background: linear-gradient(135deg, rgba(148, 163, 184, 0.15) 0%, rgba(100, 116, 139, 0.1) 100%);
-  color: #64748B;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.state-default .device-state-dot {
-  background: #94A3B8;
-}
-
-@keyframes pulse-green {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-@keyframes pulse-blue {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+.state-stateless .device-state-dot {
+  background: var(--text-muted);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .device-state-dot {
+  .attack-indicator,
+  .device-state-dot,
+  .trace-state-dot {
     animation: none !important;
   }
 }

@@ -154,6 +154,27 @@ export const validateScenarioRecommendationResponse = <T>(
   if (typeof result.scenarioName !== 'string' || typeof result.rationale !== 'string') {
     throw new RecommendationResponseContractError(context, 'scenarioName and rationale are required')
   }
+  const objectiveStatus = requireNonBlankText(result.objectiveStatus, 'objectiveStatus', context)
+  const objectiveIssues = requireArray(result, 'objectiveIssues', context)
+  const expectedObjectiveCodes: string[] = []
+  if (devices.length === 0) expectedObjectiveCodes.push('NO_DEVICES')
+  if (rules.length === 0) expectedObjectiveCodes.push('NO_AUTOMATION_RULES')
+  if (specs.length === 0) expectedObjectiveCodes.push('NO_SPECIFICATIONS')
+  const actualObjectiveCodes = objectiveIssues.map((item, index) => {
+    const issue = requireRecord(item, context)
+    const code = requireNonBlankText(issue.code, `objectiveIssues[${index}].code`, context)
+    requireNonBlankText(issue.message, `objectiveIssues[${index}].message`, context)
+    return code
+  })
+  const expectedObjectiveStatus = expectedObjectiveCodes.length === 0 ? 'COMPLETE' : 'PARTIAL'
+  if (objectiveStatus !== expectedObjectiveStatus
+    || actualObjectiveCodes.length !== expectedObjectiveCodes.length
+    || actualObjectiveCodes.some((code, index) => code !== expectedObjectiveCodes[index])) {
+    throw new RecommendationResponseContractError(
+      context,
+      'objectiveStatus/objectiveIssues must match the returned scene'
+    )
+  }
   if (typeof result.verificationReady !== 'boolean') {
     throw new RecommendationResponseContractError(context, 'verificationReady must be boolean')
   }

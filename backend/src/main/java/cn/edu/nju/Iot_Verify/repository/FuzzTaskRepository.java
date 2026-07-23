@@ -101,17 +101,6 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE FuzzTaskPo t SET t.leaseExpiresAt = :leaseExpiresAt "
-         + "WHERE t.id = :taskId AND t.workerId = :workerId "
-         + "AND t.status IN (:activeStatuses) AND t.leaseExpiresAt > :currentTime")
-    int renewOwnedActiveLease(@Param("taskId") Long taskId,
-                              @Param("workerId") String workerId,
-                              @Param("currentTime") LocalDateTime currentTime,
-                              @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt,
-                              @Param("activeStatuses") List<FuzzTaskPo.TaskStatus> activeStatuses);
-
-    @Transactional
-    @Modifying(clearAutomatically = true)
     @Query("UPDATE FuzzTaskPo t SET t.workerId = NULL, t.leaseExpiresAt = :expiredAt "
          + "WHERE t.id = :taskId AND t.workerId = :workerId "
          + "AND t.status IN (:activeStatuses)")

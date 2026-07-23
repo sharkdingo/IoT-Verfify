@@ -438,6 +438,57 @@ describe('SimulationTimeline', () => {
     expect(devices.find('[title="Private-data labels: video"]').exists()).toBe(true)
   })
 
+  it('formats bundled playback tokens at the display boundary without mutating saved states', () => {
+    const savedStates: SimulationState[] = [{
+      stateIndex: 1,
+      triggeredRules: [],
+      compromisedAutomationLinks: [],
+      devices: [{
+        deviceId: 'camera_1',
+        deviceLabel: 'Hall camera',
+        templateName: 'Camera',
+        mode: 'MachineState',
+        state: 'on',
+        variables: [{ name: 'weather', value: 'sunny' }],
+        trustPrivacy: [{ name: 'on', propertyScope: 'state', mode: 'MachineState', trust: false }],
+        privacies: [{ name: 'photo', propertyScope: 'content', privacy: 'private' }]
+      }],
+      envVariables: [{ name: 'weather', value: 'sunny' }]
+    }]
+    const canonicalSnapshot = structuredClone(savedStates)
+    const translations: Record<string, string> = {
+      MachineState: '设备状态',
+      on: '开启',
+      weather: '天气',
+      sunny: '晴朗',
+      photo: '照片'
+    }
+    const formatToken = (_device: SimulationState['devices'][number], value: unknown) =>
+      translations[String(value)] || String(value ?? '')
+    const formatEnvironmentToken = (_name: string, value: unknown) =>
+      translations[String(value)] || String(value ?? '')
+
+    const wrapper = mount(SimulationTimeline, {
+      props: {
+        visible: true,
+        states: savedStates,
+        currentDeviceIds: ['camera_1'],
+        formatDeviceModelToken: formatToken,
+        formatEnvironmentModelToken: formatEnvironmentToken
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const devices = wrapper.get('[data-testid="simulation-timeline-devices"]')
+    expect(devices.text()).toContain('开启')
+    expect(devices.text()).toContain('设备状态')
+    expect(devices.text()).toContain('天气=晴朗')
+    expect(devices.find('[title="Untrusted source labels: 设备状态: 开启"]').exists()).toBe(true)
+    expect(devices.find('[title="Private-data labels: 照片"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="simulation-timeline-env"]').text()).toContain('天气晴朗')
+    expect(savedStates).toEqual(canonicalSnapshot)
+  })
+
   it('names a compromised automation link without exposing its generated index', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {

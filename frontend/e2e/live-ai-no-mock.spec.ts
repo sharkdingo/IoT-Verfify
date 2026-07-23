@@ -40,6 +40,8 @@ test.describe('live AI full-stack audit', () => {
     expect(Array.isArray(recommendationBody.data.scene.devices)).toBeTruthy()
     expect(Array.isArray(recommendationBody.data.scene.rules)).toBeTruthy()
     expect(Array.isArray(recommendationBody.data.scene.specs)).toBeTruthy()
+    expect(['COMPLETE', 'PARTIAL']).toContain(recommendationBody.data.objectiveStatus)
+    expect(Array.isArray(recommendationBody.data.objectiveIssues)).toBeTruthy()
     expect(recommendationBody.data.rawCandidateCount).toBeGreaterThanOrEqual(
       recommendationBody.data.inspectedCount)
 

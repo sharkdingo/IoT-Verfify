@@ -20,6 +20,16 @@ public interface ChatSessionRepository extends JpaRepository<ChatSessionPo, Stri
     long countByUserId(Long userId);
     Optional<ChatSessionPo> findByIdAndUserId(String id, Long userId);
 
+    @Query("""
+            select chatSession.activeExecutionId as activeExecutionId,
+                   chatSession.activeExecutionExpiresAt as activeExecutionExpiresAt,
+                   chatSession.executionStopRequested as executionStopRequested
+              from ChatSessionPo chatSession
+             where chatSession.id = :id and chatSession.userId = :userId
+            """)
+    Optional<ExecutionLeaseView> findExecutionLeaseByIdAndUserId(@Param("id") String id,
+                                                                  @Param("userId") Long userId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select chatSession from ChatSessionPo chatSession where chatSession.id = :id and chatSession.userId = :userId")
     Optional<ChatSessionPo> findByIdAndUserIdForUpdate(@Param("id") String id,
@@ -28,22 +38,6 @@ public interface ChatSessionRepository extends JpaRepository<ChatSessionPo, Stri
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select chatSession from ChatSessionPo chatSession where chatSession.userId = :userId")
     List<ChatSessionPo> findByUserIdForUpdate(@Param("userId") Long userId);
-
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Transactional
-    @Query("""
-            update ChatSessionPo chatSession
-               set chatSession.activeExecutionExpiresAt = :expiresAt
-             where chatSession.id = :sessionId
-               and chatSession.userId = :userId
-               and chatSession.activeExecutionId = :executionId
-               and chatSession.activeExecutionExpiresAt > :now
-            """)
-    int renewActiveExecutionLease(@Param("sessionId") String sessionId,
-                                  @Param("userId") Long userId,
-                                  @Param("executionId") String executionId,
-                                  @Param("now") LocalDateTime now,
-                                  @Param("expiresAt") LocalDateTime expiresAt);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
@@ -60,4 +54,10 @@ public interface ChatSessionRepository extends JpaRepository<ChatSessionPo, Stri
     int clearExpiredExecutionLeases(@Param("now") LocalDateTime now);
 
     void deleteByUserId(Long userId);
+
+    interface ExecutionLeaseView {
+        String getActiveExecutionId();
+        LocalDateTime getActiveExecutionExpiresAt();
+        Boolean getExecutionStopRequested();
+    }
 }

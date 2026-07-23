@@ -11,6 +11,8 @@ import type {Specification} from '../types/spec'
 import { buildSpecFormula } from '@/utils/spec'
 import { resolveImpactEnvironmentDefinition } from '@/utils/device'
 import { specTemplateDetails } from '@/assets/config/specTemplates'
+import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
+import { resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
 import {
   PRIVACY_OPTIONS,
   TRUST_OPTIONS,
@@ -22,7 +24,8 @@ import {
   templateVariableHasEnumValues,
   templateVariableUsesNumericBounds,
   validateDeviceRuntimeConfig,
-  type DeviceRuntimeConfig
+  type DeviceRuntimeConfig,
+  type DeviceRuntimeDraft
 } from '@/utils/deviceRuntime'
 
 const props = defineProps<{
@@ -68,6 +71,13 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
 const manifest = computed<DeviceManifest | null>(() => props.manifest ?? null)
 
+function formatDeviceModelToken(value: unknown): string {
+  const raw = value === null || value === undefined ? '' : String(value)
+  return currentTemplate.value?.defaultTemplate === true
+    ? formatBuiltInModelToken(raw, key => t(key))
+    : raw
+}
+
 type StateDisplaySegment = {
   mode: string
   value: string
@@ -75,7 +85,7 @@ type StateDisplaySegment = {
 
 const stateModeLabel = (index: number) => {
   const mode = manifest.value?.Modes?.[index]?.trim()
-  return mode || `${t('app.mode')} ${index + 1}`
+  return mode ? formatDeviceModelToken(mode) : `${t('app.mode')} ${index + 1}`
 }
 
 const getStateDisplaySegments = (rawState?: string | null): StateDisplaySegment[] => {
@@ -90,7 +100,7 @@ const getStateDisplaySegments = (rawState?: string | null): StateDisplaySegment[
   return parts
     .map((part, index) => ({
       mode: stateModeLabel(index),
-      value: part.trim()
+      value: formatDeviceModelToken(part.trim())
     }))
     .filter(segment => segment.value && segment.value !== '_')
 }
@@ -110,6 +120,7 @@ const getManifestModes = () =>
   (manifest.value?.Modes || [])
     .map(mode => String(mode || '').trim())
     .filter(Boolean)
+    .map(formatDeviceModelToken)
 
 const currentNode = computed(() =>
   props.nodes?.find(node => node.id === props.nodeId) || null
@@ -126,12 +137,13 @@ const currentTemplate = computed<DeviceTemplate | null>(() => {
   )
   return matched || {
     name: props.deviceName || m.Name,
-    manifest: m
+    manifest: m,
+    defaultTemplate: false
   }
 })
 
 const runtimeDraft = ref(createDeviceRuntimeDraft())
-const syncingRuntimeDraft = ref(false)
+const runtimeDraftBaseline = ref('')
 
 const runtimeWorkingStates = computed(() =>
   getTemplateWorkingStates(currentTemplate.value)
@@ -169,7 +181,16 @@ const variableInputPlaceholder = (variable: InternalVariable) => {
   return t('app.enterValuePlaceholder')
 }
 
-const syncRuntimeDraftFromNode = () => {
+const runtimeDraftFingerprint = (draft: DeviceRuntimeDraft) => JSON.stringify({
+  state: draft.state,
+  currentStateTrust: draft.currentStateTrust,
+  currentStatePrivacy: draft.currentStatePrivacy,
+  variables: Object.entries(draft.variables).sort(([left], [right]) => left.localeCompare(right)),
+  variableTrusts: Object.entries(draft.variableTrusts).sort(([left], [right]) => left.localeCompare(right)),
+  privacies: Object.entries(draft.privacies).sort(([left], [right]) => left.localeCompare(right))
+})
+
+const createRuntimeDraftFromNode = () => {
   const template = currentTemplate.value
   const draft = createDeviceRuntimeDraft()
   resetDeviceRuntimeDraft(draft, template)
@@ -177,7 +198,7 @@ const syncRuntimeDraftFromNode = () => {
   const node = currentNode.value
   if (node) {
     if (runtimeHasModes.value && node.state) {
-      draft.state = node.state
+      draft.state = resolveEffectiveNodeState(node.state, template?.manifest, draft.state)
       draft.currentStateTrust = node.currentStateTrust || ''
       draft.currentStatePrivacy = node.currentStatePrivacy || ''
     }
@@ -194,19 +215,47 @@ const syncRuntimeDraftFromNode = () => {
     }
   }
 
-  syncingRuntimeDraft.value = true
+  return draft
+}
+
+const replaceRuntimeDraft = (draft: DeviceRuntimeDraft) => {
   runtimeDraft.value = draft
-  queueMicrotask(() => {
-    syncingRuntimeDraft.value = false
-  })
+  runtimeDraftBaseline.value = runtimeDraftFingerprint(draft)
+}
+
+const syncRuntimeDraftFromNode = () => {
+  replaceRuntimeDraft(createRuntimeDraftFromNode())
+}
+
+const reconcileRuntimeDraftFromNode = () => {
+  const incomingDraft = createRuntimeDraftFromNode()
+  const incomingFingerprint = runtimeDraftFingerprint(incomingDraft)
+  const currentFingerprint = runtimeDraftFingerprint(runtimeDraft.value)
+
+  // Keep in-progress edits when a foreground/cross-tab refresh replaces the board snapshot.
+  // A matching snapshot is the save acknowledgement and can safely become the new baseline.
+  if (currentFingerprint === runtimeDraftBaseline.value || currentFingerprint === incomingFingerprint) {
+    replaceRuntimeDraft(incomingDraft)
+  }
 }
 
 watch(
-  () => [props.visible, props.nodeId, props.manifest, props.nodes] as const,
-  () => {
-    if (props.visible) syncRuntimeDraftFromNode()
+  () => [props.visible, props.nodeId] as const,
+  ([visible, nodeId], previous) => {
+    if (!visible) return
+    const [wasVisible, previousNodeId] = previous || []
+    if (!wasVisible || nodeId !== previousNodeId) {
+      syncRuntimeDraftFromNode()
+    }
   },
   { immediate: true }
+)
+
+watch(
+  () => [props.nodes, props.manifest, props.deviceTemplates] as const,
+  () => {
+    if (props.visible) reconcileRuntimeDraftFromNode()
+  }
 )
 
 const saveRuntime = () => {
@@ -242,7 +291,7 @@ const basicInfo = computed(() => {
       ? formatStateForDisplay(m.InitState, t('app.notSpecified'))
       : t('app.noStateMachine'),
     modes,
-    impactedVariables: m.ImpactedVariables
+    impactedVariables: m.ImpactedVariables?.map(formatDeviceModelToken)
   }
 })
 
@@ -258,12 +307,13 @@ const variables = computed(() => {
     m.InternalVariables.forEach(iv => {
       // 智能格式化 Value 列：显示枚举值 或 数值范围
       let valDisplay = ''
-      if (iv.Values && iv.Values.length) valDisplay = iv.Values.join(' / ')
+      if (iv.Values && iv.Values.length) valDisplay = iv.Values.map(formatDeviceModelToken).join(' / ')
       else if (iv.LowerBound !== undefined && iv.UpperBound !== undefined) valDisplay = `[${iv.LowerBound}, ${iv.UpperBound}]`
 
       const isEnvironment = iv.IsInside !== true
       list.push({
         name: iv.Name,
+        displayName: formatDeviceModelToken(iv.Name),
         range: valDisplay || (isEnvironment ? t('app.fromEnvironmentPool') : ''),
         trust: iv.Trust,
         privacy: iv.Privacy,
@@ -282,12 +332,13 @@ const variables = computed(() => {
       if (!list.some(item => item.name === vName)) {
         const definition = resolveImpactEnvironmentDefinition(m, vName)
         const range = definition?.Values?.length
-          ? definition.Values.join(' / ')
+          ? definition.Values.map(formatDeviceModelToken).join(' / ')
           : definition?.LowerBound !== undefined && definition?.UpperBound !== undefined
             ? `[${definition.LowerBound}, ${definition.UpperBound}]`
             : ''
         list.push({
           name: vName,
+          displayName: formatDeviceModelToken(vName),
           range,
           trust: definition?.Trust || null,
           privacy: definition?.Privacy || null,
@@ -321,6 +372,7 @@ const apis = computed(() => {
   if (!m || !m.APIs) return []
   return m.APIs.map(api => ({
     name: api.Name,
+    displayName: formatDeviceModelToken(api.Name),
     description: api.Description || '',
     startState: api.StartState,
     endState: api.EndState,
@@ -336,9 +388,25 @@ const apis = computed(() => {
 const formatTrigger = (trigger: any): string => {
   if (!trigger) return t('app.userRole')
   if (typeof trigger !== 'object') return t('app.userRole')
-  const rel = trigger.Relation || '='
-  const val = trigger.Value !== undefined && trigger.Value !== '' ? ` ${rel} ${trigger.Value}` : ''
-  return trigger.Attribute ? `${trigger.Attribute}${val}` : t('app.userRole')
+  const relation = String(trigger.Relation || '=').trim().toLowerCase()
+  const relationLabels: Record<string, string> = {
+    '=': t('app.relationEquals'),
+    '!=': t('app.relationNotEquals'),
+    '>': t('app.relationGreater'),
+    '<': t('app.relationLess'),
+    '>=': t('app.relationGreaterEqual'),
+    '<=': t('app.relationLessEqual'),
+    in: t('app.relationIn'),
+    'not in': t('app.relationNotIn'),
+    not_in: t('app.relationNotIn')
+  }
+  const rel = relationLabels[relation] || String(trigger.Relation || '=')
+  const value = trigger.Value !== undefined && trigger.Value !== ''
+    ? ` ${rel} ${formatDeviceModelToken(trigger.Value)}`
+    : ''
+  return trigger.Attribute
+    ? `${formatDeviceModelToken(trigger.Attribute)}${value}`
+    : t('app.userRole')
 }
 
 // 获取设备图标
@@ -556,7 +624,7 @@ const deviceSpecs = computed(() => {
           <div
             :ref="setDialogRef"
             data-testid="device-dialog"
-            class="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-6rem)]"
+            class="device-dialog-surface bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]"
             role="dialog"
             aria-modal="true"
             aria-labelledby="device-dialog-title"
@@ -564,25 +632,25 @@ const deviceSpecs = computed(() => {
           >
 
             <!-- Header -->
-            <div class="px-8 py-6 border-b border-slate-200 bg-gradient-to-r from-white to-slate-50/50 flex justify-between items-center sticky top-0 z-10 shadow-sm">
-              <div class="flex items-center gap-4">
-                <div class="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-50 to-blue-100 border-2 border-blue-200 flex items-center justify-center shadow-lg">
+            <div class="device-dialog-header sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-200 bg-gradient-to-r from-white to-slate-50/50 px-4 py-4 shadow-sm sm:px-8 sm:py-6">
+              <div class="flex min-w-0 items-center gap-3 sm:gap-4">
+                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100 shadow-lg sm:h-14 sm:w-14">
                   <span class="material-icons-round text-3xl text-blue-600">{{ getDeviceIcon(deviceName) }}</span>
                 </div>
-                <div>
+                <div class="min-w-0">
                   <h1 id="device-dialog-title" class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') }}</h1>
-                  <div class="flex items-center gap-2 mt-1">
-                    <p class="text-sm text-slate-500 font-medium">{{ label }}</p>
+                  <div class="mt-1 flex min-w-0 items-center gap-2">
+                    <p class="truncate text-sm font-medium text-slate-500" :title="label">{{ label }}</p>
                   </div>
                 </div>
               </div>
-              <button type="button" @click="close" class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all" :aria-label="t('app.close')">
+              <button type="button" @click="close" class="shrink-0 rounded-lg p-2 text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600" :aria-label="t('app.close')">
                 <span class="material-icons-round text-xl" aria-hidden="true">close</span>
               </button>
             </div>
 
             <!-- Body -->
-            <div class="flex-1 overflow-y-auto custom-scrollbar px-8 py-6 space-y-8">
+            <div class="device-dialog-body custom-scrollbar flex-1 space-y-6 overflow-y-auto px-4 py-5 sm:space-y-8 sm:px-8 sm:py-6">
               <div
                 v-if="!manifest"
                 data-testid="device-template-details-unavailable"
@@ -631,7 +699,7 @@ const deviceSpecs = computed(() => {
                                 :key="mode"
                                 class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-md font-medium border border-slate-200"
                               >
-                                {{ mode }}
+                                {{ formatDeviceModelToken(mode) }}
                               </span>
                             </template>
                             <span
@@ -733,7 +801,7 @@ const deviceSpecs = computed(() => {
                     >
                       <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
                         <div class="min-w-0">
-                          <span class="block truncate text-xs font-bold text-slate-700" :title="variable.Name">{{ variable.Name }}</span>
+                          <span class="block truncate text-xs font-bold text-slate-700" :title="formatDeviceModelToken(variable.Name)">{{ formatDeviceModelToken(variable.Name) }}</span>
                           <span class="text-[10px] font-semibold text-slate-400">
                             {{ variable.IsInside !== true ? t('app.environmentVariable') : t('app.internalVariable') }}
                           </span>
@@ -753,7 +821,7 @@ const deviceSpecs = computed(() => {
                             class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                           >
                             <option value="">{{ t('app.modelControlled') }}</option>
-                            <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ value }}</option>
+                            <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatDeviceModelToken(value) }}</option>
                           </select>
                           <input
                             v-else
@@ -811,7 +879,7 @@ const deviceSpecs = computed(() => {
                         :key="`security-${variable.Name}`"
                         class="grid grid-cols-1 gap-2 border-t border-slate-200 pt-2 sm:grid-cols-[minmax(0,1fr)_8rem_8rem]"
                       >
-                        <span class="self-center break-words text-xs font-semibold text-slate-600">{{ variable.Name }}</span>
+                        <span class="self-center break-words text-xs font-semibold text-slate-600">{{ formatDeviceModelToken(variable.Name) }}</span>
                         <label class="min-w-0">
                           <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableTrust') }}</span>
                           <select
@@ -860,7 +928,7 @@ const deviceSpecs = computed(() => {
                     </thead>
                     <tbody class="divide-y divide-slate-100 bg-white">
                       <tr v-for="(v, idx) in variables" :key="idx" class="hover:bg-blue-50/30 transition-colors">
-                        <td class="px-4 py-3 text-sm font-medium text-slate-700" :title="v.name">{{ v.name }}</td>
+                        <td class="px-4 py-3 text-sm font-medium text-slate-700" :title="v.displayName">{{ v.displayName }}</td>
                         <td class="px-4 py-3 text-sm text-slate-600 font-mono" :title="v.range || '-'">{{ v.range || '-' }}</td>
                         <td class="px-4 py-3 text-sm text-slate-600">
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
@@ -975,7 +1043,7 @@ const deviceSpecs = computed(() => {
                         <div class="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center group-hover:bg-emerald-100 transition-colors">
                         <span class="material-icons-round text-emerald-600 text-lg">api</span>
                         </div>
-                        <span class="text-sm font-bold text-slate-800">{{ api.name }}</span>
+                        <span class="text-sm font-bold text-slate-800" :title="api.displayName">{{ api.displayName }}</span>
                       </div>
                       <div class="flex flex-wrap justify-end gap-1">
                         <span v-if="api.signal" class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-medium border border-amber-200">
@@ -1057,21 +1125,21 @@ const deviceSpecs = computed(() => {
             </div>
 
             <!-- Footer -->
-            <div class="px-8 py-5 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-white flex justify-end items-center gap-3">
+            <div class="device-dialog-footer flex flex-col items-stretch justify-end gap-2 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-white px-4 py-4 sm:flex-row sm:items-center sm:gap-3 sm:px-8 sm:py-5">
               <button
                 v-if="nodeId"
                 type="button"
                 data-testid="device-rename"
                 @click="onRename"
-                class="px-5 py-2.5 text-sm font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 rounded-lg transition-all flex items-center gap-2 border border-blue-200"
+                class="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-semibold text-blue-800 transition-all hover:bg-blue-100 sm:w-auto"
               >
                 <span class="material-icons-round text-lg text-blue-600" aria-hidden="true">edit</span>
                 {{ t('app.rename') }}
               </button>
-                <button type="button" @click="close" class="px-6 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-all shadow-sm border border-slate-200">
+                <button type="button" @click="close" class="w-full rounded-lg border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-200 hover:text-slate-900 sm:w-auto">
                   {{ t('app.close') }}
                 </button>
-              <button type="button" @click="onDelete" class="px-5 py-2.5 text-sm font-semibold text-rose-900 bg-rose-100 hover:bg-rose-200 rounded-lg transition-all flex items-center gap-2 border border-rose-200">
+              <button type="button" @click="onDelete" class="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-100 px-5 py-2.5 text-sm font-semibold text-rose-900 transition-all hover:bg-rose-200 sm:w-auto">
                 <span class="material-icons-round text-lg text-rose-600" aria-hidden="true">delete_outline</span>
                 {{ t('app.deleteDevice') }}
               </button>
@@ -1086,13 +1154,10 @@ const deviceSpecs = computed(() => {
 <style scoped>
 .device-dialog-overlay {
   position: fixed;
-  top: 4rem;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   z-index: 2200;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   overflow-y: auto;
   padding: 1rem;
@@ -1102,9 +1167,53 @@ const deviceSpecs = computed(() => {
 
 @media (max-width: 640px) {
   .device-dialog-overlay {
-    top: 3.5rem;
     padding: 0.75rem;
   }
+}
+
+:global(.dark) .device-dialog-surface {
+  background: var(--surface-panel);
+  color: var(--text);
+}
+
+:global(.dark) .device-dialog-surface :deep(.bg-white),
+:global(.dark) .device-dialog-surface :deep(.bg-slate-50),
+:global(.dark) .device-dialog-surface :deep(.bg-slate-50\/50),
+:global(.dark) .device-dialog-surface :deep(.bg-slate-100) {
+  background-color: var(--surface-elevated) !important;
+}
+
+:global(.dark) .device-dialog-surface :deep([class*="from-white"]),
+:global(.dark) .device-dialog-surface :deep([class*="from-slate-50"]) {
+  background-image: none !important;
+  background-color: var(--surface-elevated) !important;
+}
+
+:global(.dark) .device-dialog-surface :deep(.text-slate-900),
+:global(.dark) .device-dialog-surface :deep(.text-slate-800),
+:global(.dark) .device-dialog-surface :deep(.text-slate-700) {
+  color: var(--text) !important;
+}
+
+:global(.dark) .device-dialog-surface :deep(.text-slate-600),
+:global(.dark) .device-dialog-surface :deep(.text-slate-500),
+:global(.dark) .device-dialog-surface :deep(.text-slate-400) {
+  color: var(--text-muted) !important;
+}
+
+:global(.dark) .device-dialog-surface :deep(.border-slate-100),
+:global(.dark) .device-dialog-surface :deep(.border-slate-200),
+:global(.dark) .device-dialog-surface :deep(.divide-slate-100) {
+  border-color: var(--border) !important;
+}
+
+:global(.dark) .device-dialog-surface :deep(input),
+:global(.dark) .device-dialog-surface :deep(select),
+:global(.dark) .device-dialog-surface :deep(textarea) {
+  border-color: var(--border) !important;
+  background: var(--surface-control) !important;
+  color: var(--text) !important;
+  color-scheme: dark;
 }
 
 /* Modal Transitions */
@@ -1127,6 +1236,15 @@ const deviceSpecs = computed(() => {
 .modal-scale-leave-to {
   opacity: 0;
   transform: scale(0.95);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-fade-enter-active,
+  .modal-fade-leave-active,
+  .modal-scale-enter-active,
+  .modal-scale-leave-active {
+    transition: none;
+  }
 }
 
 /* Custom Scrollbar */

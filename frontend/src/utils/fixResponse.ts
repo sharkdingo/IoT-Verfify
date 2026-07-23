@@ -7,6 +7,7 @@ import type {
   FixStrategyAttemptStatus,
   FixStrategyName,
   FixSuggestion,
+  ModelTokenSource,
   ParameterAdjustment,
   ParameterTarget,
   PreferredRangeSelection
@@ -47,6 +48,7 @@ const TEMPLATE_SNAPSHOT_COMPARISONS = new Set([
   'UNAVAILABLE'
 ])
 const TARGET_ID_PATTERN = /^param_[A-Za-z0-9_-]{24}$/
+const MODEL_TOKEN_SOURCES = new Set<ModelTokenSource>(['BUNDLED', 'CUSTOM', 'UNKNOWN'])
 
 const record = (value: unknown, context: string, field = 'result'): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -81,6 +83,12 @@ const integer = (value: Record<string, any>, field: string, context: string, min
     throw new FixResponseContractError(context, `${field} must be an integer >= ${min}`)
   }
   return value[field]
+}
+
+const validateModelTokenSource = (value: Record<string, any>, context: string, field: string) => {
+  if (!MODEL_TOKEN_SOURCES.has(value.modelTokenSource)) {
+    throw new FixResponseContractError(context, `${field}.modelTokenSource is invalid`)
+  }
 }
 
 const stringArray = (value: Record<string, any>, field: string, context: string): string[] => {
@@ -127,6 +135,7 @@ const validateFaultRule = (value: unknown, context: string, index: number): Faul
     throw new FixResponseContractError(context, `faultRules[${index}].reasonCode is invalid`)
   }
   text(row, 'reason', context)
+  validateModelTokenSource(row, context, `faultRules[${index}]`)
   if (conflicting) {
     text(row, 'conflictingRuleString', context)
     if (row.reasonCode !== 'CONFLICTING_END_STATES') {
@@ -169,6 +178,7 @@ const validateParameterAdjustment = (
   for (const field of ['attribute', 'relation', 'originalValue', 'newValue', 'description']) {
     text(row, field, context)
   }
+  validateModelTokenSource(row, context, `parameterAdjustments[${index}]`)
   const lower = integer(row, 'lowerBound', context, Number.MIN_SAFE_INTEGER)
   const upper = integer(row, 'upperBound', context, Number.MIN_SAFE_INTEGER)
   if (lower > upper) {
@@ -193,6 +203,7 @@ const validateParameterTarget = (
   for (const field of ['attribute', 'relation', 'originalValue', 'description']) {
     text(row, field, context)
   }
+  validateModelTokenSource(row, context, `parameterTargets[${index}]`)
   const lower = integer(row, 'lowerBound', context, Number.MIN_SAFE_INTEGER)
   const upper = integer(row, 'upperBound', context, Number.MIN_SAFE_INTEGER)
   if (lower > upper) {
@@ -216,6 +227,7 @@ const validateConditionAdjustment = (
   if (!['api', 'variable', 'mode', 'state'].includes(row.targetType)) {
     throw new FixResponseContractError(context, `conditionAdjustments[${index}].targetType is invalid`)
   }
+  validateModelTokenSource(row, context, `conditionAdjustments[${index}]`)
   return row as ConditionAdjustment
 }
 

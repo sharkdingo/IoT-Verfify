@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { describe, expect, it } from 'vitest'
 import PlaybackChangePopover from '../PlaybackChangePopover.vue'
+import { i18n as appI18n } from '@/assets/i18n'
 
 const i18n = createI18n({
   legacy: false,
@@ -287,5 +288,92 @@ describe('PlaybackChangePopover', () => {
     expect(evidence).toContain('Environment-rate input')
     expect(evidence).toContain('-1')
     expect(evidence).not.toContain('rate:-1')
+  })
+
+  it('localizes canonical model evidence in Chinese and leaves custom tokens unchanged', () => {
+    appI18n.global.locale.value = 'zh-CN'
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'fuzzing',
+        stateNumber: 2,
+        totalStates: 3,
+        position: { x: 0, y: 0 },
+        inputEvents: [{
+          step: 1,
+          kind: 'DEVICE_STATE',
+          targetId: 'door-1',
+          targetLabel: '前门',
+          property: 'workingState',
+          value: 'locked',
+          source: 'SEED_EVENT'
+        }],
+        changes: [{
+          deviceId: 'door-1',
+          deviceLabel: '前门',
+          details: [
+            { kind: 'state', previousValue: 'off', currentValue: 'locked' },
+            { kind: 'variable', name: 'temperature', previousValue: '20', currentValue: '21' },
+            { kind: 'variable', name: 'customMetric', previousValue: 'eco', currentValue: 'ecoBoost' }
+          ]
+        }],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0,
+        bundledDeviceIds: ['door-1']
+      },
+      global: { plugins: [appI18n] }
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('工作状态')
+    expect(text).toContain('关闭')
+    expect(text).toContain('已锁定')
+    expect(text).toContain('温度')
+    expect(text).toContain('customMetric')
+    expect(text).toContain('ecoBoost')
+  })
+
+  it('keeps custom tokens raw when they collide with bundled identifiers', () => {
+    appI18n.global.locale.value = 'zh-CN'
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'fuzzing',
+        stateNumber: 2,
+        totalStates: 2,
+        position: { x: 0, y: 0 },
+        inputEvents: [{
+          step: 1,
+          kind: 'DEVICE_VARIABLE',
+          targetId: 'custom-1',
+          targetLabel: '自定义设备',
+          property: 'workingState',
+          value: 'off',
+          source: 'MODEL_CHOICE'
+        }],
+        changes: [{
+          deviceId: 'custom-1',
+          deviceLabel: '自定义设备',
+          details: [
+            { kind: 'state', previousValue: 'off', currentValue: 'active' },
+            { kind: 'variable', name: 'workingState', previousValue: 'off', currentValue: 'active' }
+          ]
+        }],
+        environmentChanges: [{ name: 'weather', previousValue: 'off', currentValue: 'active' }],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [appI18n] }
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('workingState')
+    expect(text).toContain('weather')
+    expect(text).toContain('off')
+    expect(text).toContain('active')
+    expect(text).not.toContain('工作状态')
   })
 })

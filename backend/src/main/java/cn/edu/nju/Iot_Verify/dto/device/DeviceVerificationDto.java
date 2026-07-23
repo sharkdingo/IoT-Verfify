@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.dto.device;
 
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -34,6 +36,10 @@ public class DeviceVerificationDto {
     @NotBlank(message = "Template name is required")
     @Size(max = 100, message = "Template name must be at most 100 characters")
     private String templateName;
+
+    /** Server-only provenance captured with the resolved template; never accepted from REST input. */
+    @JsonIgnore
+    private ModelTokenSource modelTokenSource = ModelTokenSource.UNKNOWN;
 
     @Size(max = RequestLimits.MAX_VALUE_LENGTH, message = "Device state must be at most 1000 characters")
     private String state;

@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
@@ -174,6 +175,26 @@ class DeviceSmvDataFactoryExceptionTest {
 
         assertEquals(manifest, result.get("lamp_1").getManifest());
         verifyNoInteractions(deviceTemplateService);
+    }
+
+    @Test
+    void buildDeviceSmvMap_capturesRepositoryTemplateProvenanceForDirectRequests() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder().name("Light").internalVariables(List.of()).build();
+        DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
+                .id(1L)
+                .userId(1L)
+                .name("Light")
+                .defaultTemplate(true)
+                .manifestJson(new ObjectMapper().writeValueAsString(manifest))
+                .build();
+        DeviceVerificationDto device = buildDevice("lamp_1", "Light");
+        when(deviceTemplateService.findTemplateByName(1L, "Light"))
+                .thenReturn(Optional.of(templatePo));
+
+        DeviceSmvData resolved = factory.buildDeviceSmvMap(1L, List.of(device)).get("lamp_1");
+
+        assertEquals(ModelTokenSource.BUNDLED, resolved.getModelTokenSource());
+        assertEquals(ModelTokenSource.BUNDLED, device.getModelTokenSource());
     }
 
     @Test

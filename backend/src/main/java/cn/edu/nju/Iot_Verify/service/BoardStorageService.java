@@ -34,7 +34,8 @@ public interface BoardStorageService {
                                      List<BoardEnvironmentVariableDto> environmentVariablePatches);
     DeviceUpdateResultDto updateNodeLayout(Long userId, String nodeId, DeviceLayoutDto layout);
     DeviceUpdateResultDto updateNodeRuntime(Long userId, String nodeId, DeviceRuntimeUpdateDto runtime);
-    DeviceMutationResultDto renameNode(Long userId, String nodeId, String newLabel);
+    DeviceMutationResultDto renameNode(
+            Long userId, String nodeId, String newLabel, String expectedLabel);
     DeviceDeletionResultDto previewNodeDeletion(Long userId, String nodeId);
     DeviceDeletionResultDto deleteNodeCascade(Long userId, String nodeId, String expectedImpactToken);
     List<BoardEnvironmentVariableDto> getEnvironmentVariables(Long userId);

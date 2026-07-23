@@ -360,14 +360,67 @@ export const resolveImpactEnvironmentDefinition = (
     } : undefined
 }
 
-export const validateManifest = (obj: any): { valid: boolean; msg?: string } => {
-    if (!obj || typeof obj !== 'object') return { valid: false, msg: 'Invalid JSON object' }
+export const MANIFEST_VALIDATION_MESSAGE_KEYS = {
+    invalidObject: 'app.manifestValidation.invalidObject',
+    missingName: 'app.manifestValidation.missingName',
+    fieldMustBeArray: 'app.manifestValidation.fieldMustBeArray',
+    stateMachineFieldRequired: 'app.manifestValidation.stateMachineFieldRequired',
+    initStateUndefined: 'app.manifestValidation.initStateUndefined',
+    workingStateInvariantUnsupported: 'app.manifestValidation.workingStateInvariantUnsupported',
+    workingStateSecurityLabelsRequired: 'app.manifestValidation.workingStateSecurityLabelsRequired',
+    workingStateArityMismatch: 'app.manifestValidation.workingStateArityMismatch',
+    workingStateModeValueRequired: 'app.manifestValidation.workingStateModeValueRequired',
+    workingStateDuplicate: 'app.manifestValidation.workingStateDuplicate',
+    workingStateLabelConflict: 'app.manifestValidation.workingStateLabelConflict',
+    internalVariableNameRequired: 'app.manifestValidation.internalVariableNameRequired',
+    internalVariableDuplicate: 'app.manifestValidation.internalVariableDuplicate',
+    internalVariableSecurityLabelsRequired: 'app.manifestValidation.internalVariableSecurityLabelsRequired',
+    internalVariableFalsifiableRequired: 'app.manifestValidation.internalVariableFalsifiableRequired',
+    internalVariableScopeRequired: 'app.manifestValidation.internalVariableScopeRequired',
+    internalVariableDomainRequired: 'app.manifestValidation.internalVariableDomainRequired',
+    environmentDomainNameRequired: 'app.manifestValidation.environmentDomainNameRequired',
+    environmentDomainDuplicate: 'app.manifestValidation.environmentDomainDuplicate',
+    environmentDomainConflictsWithVariable: 'app.manifestValidation.environmentDomainConflictsWithVariable',
+    environmentDomainSecurityLabelsRequired: 'app.manifestValidation.environmentDomainSecurityLabelsRequired',
+    environmentDomainValuesRequired: 'app.manifestValidation.environmentDomainValuesRequired',
+    impactedVariableNameRequired: 'app.manifestValidation.impactedVariableNameRequired',
+    impactedVariableDuplicate: 'app.manifestValidation.impactedVariableDuplicate',
+    impactedVariableConflictsWithLocal: 'app.manifestValidation.impactedVariableConflictsWithLocal',
+    impactedVariableDomainRequired: 'app.manifestValidation.impactedVariableDomainRequired',
+    environmentDomainNotImpacted: 'app.manifestValidation.environmentDomainNotImpacted',
+    contentNameRequired: 'app.manifestValidation.contentNameRequired',
+    contentPrivacyRequired: 'app.manifestValidation.contentPrivacyRequired',
+    transitionSignalUnsupported: 'app.manifestValidation.transitionSignalUnsupported',
+    apiStartStateRequired: 'app.manifestValidation.apiStartStateRequired',
+    apiSignalRequired: 'app.manifestValidation.apiSignalRequired',
+    apiAcceptsContentBoolean: 'app.manifestValidation.apiAcceptsContentBoolean'
+} as const
 
-    if (!obj.Name) return { valid: false, msg: 'Missing field "Name"' }
+export type ManifestValidationCode = keyof typeof MANIFEST_VALIDATION_MESSAGE_KEYS
+
+export interface ManifestValidationResult {
+    valid: boolean
+    msg?: string
+    code?: ManifestValidationCode
+    params?: Record<string, string | number>
+}
+
+const invalidManifest = (
+    code: ManifestValidationCode,
+    msg: string,
+    params: Record<string, string | number> = {}
+): ManifestValidationResult => ({ valid: false, code, params, msg })
+
+export const validateManifest = (obj: any): ManifestValidationResult => {
+    if (!obj || typeof obj !== 'object') {
+        return invalidManifest('invalidObject', 'Invalid JSON object')
+    }
+
+    if (!obj.Name) return invalidManifest('missingName', 'Missing field "Name"')
 
     for (const field of ['Modes', 'InternalVariables', 'EnvironmentDomains', 'ImpactedVariables', 'WorkingStates', 'Transitions', 'APIs', 'Contents']) {
         if (obj[field] !== undefined && !Array.isArray(obj[field])) {
-            return { valid: false, msg: `"${field}" must be an array` }
+            return invalidManifest('fieldMustBeArray', `"${field}" must be an array`, { field })
         }
     }
 
@@ -378,16 +431,32 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
     const validPrivacy = (value: unknown) => ['public', 'private'].includes(String(value || '').trim().toLowerCase())
 
     if (hasModes || hasInitState || hasWorkingStates) {
-        if (!hasModes) return { valid: false, msg: 'Mode-based templates must contain non-empty "Modes"' }
-        if (!hasInitState) return { valid: false, msg: 'Mode-based templates must contain "InitState"' }
-        if (!hasWorkingStates) return { valid: false, msg: 'Mode-based templates must contain non-empty "WorkingStates"' }
+        if (!hasModes) return invalidManifest(
+            'stateMachineFieldRequired',
+            'Mode-based templates must contain non-empty "Modes"',
+            { field: 'Modes' }
+        )
+        if (!hasInitState) return invalidManifest(
+            'stateMachineFieldRequired',
+            'Mode-based templates must contain "InitState"',
+            { field: 'InitState' }
+        )
+        if (!hasWorkingStates) return invalidManifest(
+            'stateMachineFieldRequired',
+            'Mode-based templates must contain non-empty "WorkingStates"',
+            { field: 'WorkingStates' }
+        )
     }
 
     if (hasInitState && hasWorkingStates) {
         const initialState = obj.InitState.trim()
         const stateNames = obj.WorkingStates.map((s: any) => String(s?.Name || '').trim())
         if (!stateNames.includes(initialState)) {
-            return { valid: false, msg: `InitState "${obj.InitState}" is not defined in WorkingStates` }
+            return invalidManifest(
+                'initStateUndefined',
+                `InitState "${obj.InitState}" is not defined in WorkingStates`,
+                { state: obj.InitState }
+            )
         }
     }
 
@@ -399,39 +468,44 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
         for (const state of obj.WorkingStates) {
             const rawState = String(state?.Name || '').trim()
             if (Object.prototype.hasOwnProperty.call(state || {}, 'Invariant')) {
-                return {
-                    valid: false,
-                    msg: `WorkingState "${rawState}" uses unsupported Invariant; define behavior with structured Dynamics, Transitions, rules, or specifications`
-                }
+                return invalidManifest(
+                    'workingStateInvariantUnsupported',
+                    `WorkingState "${rawState}" uses unsupported Invariant; define behavior with structured Dynamics, Transitions, rules, or specifications`,
+                    { state: rawState }
+                )
             }
             if (!validTrust(state?.Trust) || !validPrivacy(state?.Privacy)) {
-                return {
-                    valid: false,
-                    msg: `WorkingState "${rawState}" must define Trust as trusted/untrusted and Privacy as public/private`
-                }
+                return invalidManifest(
+                    'workingStateSecurityLabelsRequired',
+                    `WorkingState "${rawState}" must define Trust as trusted/untrusted and Privacy as public/private`,
+                    { state: rawState }
+                )
             }
             const segments = rawState.split(';')
             if (segments.length !== obj.Modes.length) {
-                return {
-                    valid: false,
-                    msg: `WorkingState "${rawState}" must contain one semicolon-separated value for each mode`
-                }
+                return invalidManifest(
+                    'workingStateArityMismatch',
+                    `WorkingState "${rawState}" must contain one semicolon-separated value for each mode`,
+                    { state: rawState }
+                )
             }
             const normalizedSegments = segments.map(normalizeStateComponent)
             const missingModeIndex = normalizedSegments.findIndex(segment => !segment || segment === '_')
             if (missingModeIndex >= 0) {
-                return {
-                    valid: false,
-                    msg: `WorkingState "${rawState}" must define a concrete value for mode "${obj.Modes[missingModeIndex]}"`
-                }
+                return invalidManifest(
+                    'workingStateModeValueRequired',
+                    `WorkingState "${rawState}" must define a concrete value for mode "${obj.Modes[missingModeIndex]}"`,
+                    { state: rawState, mode: obj.Modes[missingModeIndex] }
+                )
             }
             const fullStateKey = normalizedSegments.join(';')
             const previousFullState = fullStates.get(fullStateKey)
             if (previousFullState) {
-                return {
-                    valid: false,
-                    msg: `WorkingStates "${previousFullState}" and "${rawState}" are duplicates after model normalization`
-                }
+                return invalidManifest(
+                    'workingStateDuplicate',
+                    `WorkingStates "${previousFullState}" and "${rawState}" are duplicates after model normalization`,
+                    { previousState: previousFullState, state: rawState }
+                )
             }
             fullStates.set(fullStateKey, rawState)
 
@@ -441,10 +515,16 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
                 const componentKey = `${normalizeStateComponent(obj.Modes[index])}\u0000${normalizedSegments[index]}`
                 const previous = components.get(componentKey)
                 if (previous && (previous.trust !== trust || previous.privacy !== privacy)) {
-                    return {
-                        valid: false,
-                        msg: `WorkingStates "${previous.fullState}" and "${rawState}" assign conflicting Trust/Privacy labels to ${obj.Modes[index]}="${segments[index].trim()}"`
-                    }
+                    return invalidManifest(
+                        'workingStateLabelConflict',
+                        `WorkingStates "${previous.fullState}" and "${rawState}" assign conflicting Trust/Privacy labels to ${obj.Modes[index]}="${segments[index].trim()}"`,
+                        {
+                            previousState: previous.fullState,
+                            state: rawState,
+                            mode: obj.Modes[index],
+                            value: segments[index].trim()
+                        }
+                    )
                 }
                 components.set(componentKey, { fullState: rawState, trust, privacy })
             }
@@ -455,25 +535,49 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
     const internalNames = new Map<string, any>()
     for (const variable of obj.InternalVariables || []) {
         const name = normalizedName(variable?.Name)
-        if (!name) return { valid: false, msg: 'Every InternalVariables item must contain Name' }
-        if (internalNames.has(name)) return { valid: false, msg: `Duplicate InternalVariable "${variable.Name}"` }
+        if (!name) {
+            return invalidManifest(
+                'internalVariableNameRequired',
+                'Every InternalVariables item must contain Name'
+            )
+        }
+        if (internalNames.has(name)) {
+            return invalidManifest(
+                'internalVariableDuplicate',
+                `Duplicate InternalVariable "${variable.Name}"`,
+                { name: variable.Name }
+            )
+        }
         if (!validTrust(variable.Trust) || !validPrivacy(variable.Privacy)) {
-            return {
-                valid: false,
-                msg: `InternalVariable "${variable.Name}" must define Trust as trusted/untrusted and Privacy as public/private`
-            }
+            return invalidManifest(
+                'internalVariableSecurityLabelsRequired',
+                `InternalVariable "${variable.Name}" must define Trust as trusted/untrusted and Privacy as public/private`,
+                { name: variable.Name }
+            )
         }
         if (typeof variable.FalsifiableWhenCompromised !== 'boolean') {
-            return { valid: false, msg: `InternalVariable "${variable.Name}" must define FalsifiableWhenCompromised` }
+            return invalidManifest(
+                'internalVariableFalsifiableRequired',
+                `InternalVariable "${variable.Name}" must define FalsifiableWhenCompromised`,
+                { name: variable.Name }
+            )
         }
         if (typeof variable.IsInside !== 'boolean') {
-            return { valid: false, msg: `InternalVariable "${variable.Name}" must explicitly define IsInside as true (device-local) or false (shared environment)` }
+            return invalidManifest(
+                'internalVariableScopeRequired',
+                `InternalVariable "${variable.Name}" must explicitly define IsInside as true (device-local) or false (shared environment)`,
+                { name: variable.Name }
+            )
         }
         const hasValues = Array.isArray(variable.Values) && variable.Values.length > 0
         const hasLower = Number.isInteger(variable.LowerBound)
         const hasUpper = Number.isInteger(variable.UpperBound)
         if (hasValues === (hasLower && hasUpper) || hasLower !== hasUpper) {
-            return { valid: false, msg: `InternalVariable "${variable.Name}" must explicitly define Values or LowerBound+UpperBound` }
+            return invalidManifest(
+                'internalVariableDomainRequired',
+                `InternalVariable "${variable.Name}" must explicitly define Values or LowerBound+UpperBound`,
+                { name: variable.Name }
+            )
         }
         internalNames.set(name, variable)
     }
@@ -481,22 +585,42 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
     const domainNames = new Map<string, any>()
     for (const domain of obj.EnvironmentDomains || []) {
         const name = normalizedName(domain?.Name)
-        if (!name) return { valid: false, msg: 'Every EnvironmentDomains item must contain Name' }
-        if (domainNames.has(name)) return { valid: false, msg: `Duplicate EnvironmentDomain "${domain.Name}"` }
+        if (!name) {
+            return invalidManifest(
+                'environmentDomainNameRequired',
+                'Every EnvironmentDomains item must contain Name'
+            )
+        }
+        if (domainNames.has(name)) {
+            return invalidManifest(
+                'environmentDomainDuplicate',
+                `Duplicate EnvironmentDomain "${domain.Name}"`,
+                { name: domain.Name }
+            )
+        }
         if (internalNames.has(name)) {
-            return { valid: false, msg: `EnvironmentDomain "${domain.Name}" duplicates an InternalVariable` }
+            return invalidManifest(
+                'environmentDomainConflictsWithVariable',
+                `EnvironmentDomain "${domain.Name}" duplicates an InternalVariable`,
+                { name: domain.Name }
+            )
         }
         if (!validTrust(domain.Trust) || !validPrivacy(domain.Privacy)) {
-            return {
-                valid: false,
-                msg: `EnvironmentDomain "${domain.Name}" must define Trust as trusted/untrusted and Privacy as public/private`
-            }
+            return invalidManifest(
+                'environmentDomainSecurityLabelsRequired',
+                `EnvironmentDomain "${domain.Name}" must define Trust as trusted/untrusted and Privacy as public/private`,
+                { name: domain.Name }
+            )
         }
         const hasValues = Array.isArray(domain.Values) && domain.Values.length > 0
         const hasLower = Number.isInteger(domain.LowerBound)
         const hasUpper = Number.isInteger(domain.UpperBound)
         if (hasValues === (hasLower && hasUpper) || hasLower !== hasUpper) {
-            return { valid: false, msg: `EnvironmentDomain "${domain.Name}" must define Values or LowerBound+UpperBound` }
+            return invalidManifest(
+                'environmentDomainValuesRequired',
+                `EnvironmentDomain "${domain.Name}" must define Values or LowerBound+UpperBound`,
+                { name: domain.Name }
+            )
         }
         domainNames.set(name, domain)
     }
@@ -504,60 +628,93 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
     const impactedNames = new Set<string>()
     for (const rawName of obj.ImpactedVariables || []) {
         const name = normalizedName(rawName)
-        if (!name) return { valid: false, msg: 'ImpactedVariables cannot contain an empty name' }
-        if (impactedNames.has(name)) return { valid: false, msg: `Duplicate ImpactedVariable "${rawName}"` }
+        if (!name) {
+            return invalidManifest(
+                'impactedVariableNameRequired',
+                'ImpactedVariables cannot contain an empty name'
+            )
+        }
+        if (impactedNames.has(name)) {
+            return invalidManifest(
+                'impactedVariableDuplicate',
+                `Duplicate ImpactedVariable "${rawName}"`,
+                { name: rawName }
+            )
+        }
         impactedNames.add(name)
         const variable = internalNames.get(name)
         if (variable?.IsInside === true) {
-            return { valid: false, msg: `ImpactedVariable "${rawName}" conflicts with a device-local InternalVariable` }
+            return invalidManifest(
+                'impactedVariableConflictsWithLocal',
+                `ImpactedVariable "${rawName}" conflicts with a device-local InternalVariable`,
+                { name: rawName }
+            )
         }
         if (!variable && !domainNames.has(name)) {
-            return { valid: false, msg: `ImpactedVariable "${rawName}" needs a domain in this manifest` }
+            return invalidManifest(
+                'impactedVariableDomainRequired',
+                `ImpactedVariable "${rawName}" needs a domain in this manifest`,
+                { name: rawName }
+            )
         }
     }
     for (const [name, domain] of domainNames) {
         if (!impactedNames.has(name)) {
-            return { valid: false, msg: `EnvironmentDomain "${domain.Name}" is not listed in ImpactedVariables` }
+            return invalidManifest(
+                'environmentDomainNotImpacted',
+                `EnvironmentDomain "${domain.Name}" is not listed in ImpactedVariables`,
+                { name: domain.Name }
+            )
         }
     }
 
     for (const content of obj.Contents || []) {
         const name = String(content?.Name || '').trim()
-        if (!name) return { valid: false, msg: 'Every Contents item must contain Name' }
+        if (!name) {
+            return invalidManifest('contentNameRequired', 'Every Contents item must contain Name')
+        }
         if (!validPrivacy(content?.Privacy)) {
-            return { valid: false, msg: `Content "${name}" must define Privacy as public/private` }
+            return invalidManifest(
+                'contentPrivacyRequired',
+                `Content "${name}" must define Privacy as public/private`,
+                { name }
+            )
         }
     }
 
     for (const transition of obj.Transitions || []) {
         const name = String(transition?.Name || '').trim() || '<unnamed>'
         if (Object.prototype.hasOwnProperty.call(transition || {}, 'Signal')) {
-            return {
-                valid: false,
-                msg: `Transition "${name}" uses unsupported Signal; event pulses are available only on state-changing APIs with Signal=true`
-            }
+            return invalidManifest(
+                'transitionSignalUnsupported',
+                `Transition "${name}" uses unsupported Signal; event pulses are available only on state-changing APIs with Signal=true`,
+                { name }
+            )
         }
     }
 
     for (const api of obj.APIs || []) {
         const name = String(api?.Name || '').trim() || '<unnamed>'
         if (typeof api?.StartState !== 'string') {
-            return {
-                valid: false,
-                msg: `API "${name}" must explicitly define StartState (use an empty string for any state)`
-            }
+            return invalidManifest(
+                'apiStartStateRequired',
+                `API "${name}" must explicitly define StartState (use an empty string for any state)`,
+                { name }
+            )
         }
         if (typeof api?.Signal !== 'boolean') {
-            return {
-                valid: false,
-                msg: `API "${name}" must explicitly define boolean Signal (true = observable automation trigger; false = command only)`
-            }
+            return invalidManifest(
+                'apiSignalRequired',
+                `API "${name}" must explicitly define boolean Signal (true = observable automation trigger; false = command only)`,
+                { name }
+            )
         }
         if (api?.AcceptsContent !== undefined && typeof api.AcceptsContent !== 'boolean') {
-            return {
-                valid: false,
-                msg: `API "${name}" AcceptsContent must be boolean when provided`
-            }
+            return invalidManifest(
+                'apiAcceptsContentBoolean',
+                `API "${name}" AcceptsContent must be boolean when provided`,
+                { name }
+            )
         }
     }
 

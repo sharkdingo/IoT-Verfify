@@ -31,13 +31,19 @@ const confirm = () => {
           <!-- Header -->
           <div class="px-8 py-6 border-b border-slate-100 flex items-center justify-center relative">
             <div class="absolute right-4 top-4">
-              <button @click="close" class="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-50 transition-colors">
-                <span class="material-symbols-outlined text-xl">close</span>
+              <button
+                type="button"
+                :aria-label="t('app.close')"
+                :title="t('app.close')"
+                @click="close"
+                class="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-50 transition-colors"
+              >
+                <span aria-hidden="true" class="material-symbols-outlined text-xl">close</span>
               </button>
             </div>
             <div class="text-center">
               <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                <span class="material-symbols-outlined text-4xl text-red-500">logout</span>
+                <span aria-hidden="true" class="material-symbols-outlined text-4xl text-red-500">logout</span>
               </div>
               <h3 class="text-xl font-bold text-slate-800">{{ t('app.logoutTitle') }}</h3>
             </div>
@@ -62,7 +68,7 @@ const confirm = () => {
               @click="confirm"
               class="px-5 py-2.5 text-sm font-semibold text-white bg-red-500 hover:bg-red-600 rounded-xl transition-all shadow-lg hover:shadow-red-500/30 flex items-center gap-2"
             >
-              <span class="material-symbols-outlined text-lg">logout</span>
+              <span aria-hidden="true" class="material-symbols-outlined text-lg">logout</span>
               {{ t('app.logout') }}
             </button>
           </div>

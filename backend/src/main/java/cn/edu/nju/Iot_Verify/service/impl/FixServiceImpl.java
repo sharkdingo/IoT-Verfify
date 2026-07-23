@@ -16,10 +16,15 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixApplyResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixStrategyAttemptDto;
+import cn.edu.nju.Iot_Verify.dto.fix.ConditionAdjustment;
+import cn.edu.nju.Iot_Verify.dto.fix.ParameterAdjustment;
+import cn.edu.nju.Iot_Verify.dto.fix.ParameterTarget;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.fix.TemplateSnapshotComparison;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import cn.edu.nju.Iot_Verify.dto.model.TemplateSnapshotBundleDto;
 import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -79,9 +84,11 @@ public class FixServiceImpl implements FixService {
     @Transactional(readOnly = true)
     public FaultLocalizationResultDto localizeFault(Long userId, Long traceId) {
         VerificationContext ctx = loadContext(userId, traceId);
-        ModelBoundaryInput modelInput = modelBoundaryInput(ctx.request, ctx.templateManifests);
+        ModelBoundaryInput modelInput = modelBoundaryInput(
+                ctx.request, ctx.templateManifests, ctx.modelTokenSourcesByDeviceId);
         List<FaultRuleDto> faultRules = ruleFixer.localizeFaults(
                 ctx.trace.getStates(), ctx.request.getRules(), modelInput.deviceSmvMap());
+        attachModelTokenSources(faultRules, modelInput.deviceSmvMap());
         boolean modelComplete = sourceModelComplete(ctx.trace);
         String summary = faultRules.isEmpty()
                 ? "No user-defined automation rule was localized in the counterexample transitions. "
@@ -128,7 +135,8 @@ public class FixServiceImpl implements FixService {
         VerificationContext ctx = loadContext(userId, traceId);
         VerificationRequestDto req = ctx.request;
         progress.accept(InteractiveOperationStage.PREPARING_MODEL);
-        ModelBoundaryInput modelInput = modelBoundaryInput(req, ctx.templateManifests);
+        ModelBoundaryInput modelInput = modelBoundaryInput(
+                req, ctx.templateManifests, ctx.modelTokenSourcesByDeviceId);
         Map<String, DeviceSmvData> deviceSmvMap = modelInput.deviceSmvMap();
 
         if (!sourceModelComplete(ctx.trace)) {
@@ -169,7 +177,6 @@ public class FixServiceImpl implements FixService {
         return result;
     }
 
-    @Transactional
     public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
                                       Map<String, PreferredRange> preferredRanges) {
         return formalOperationAdmission.execute(userId,
@@ -181,7 +188,6 @@ public class FixServiceImpl implements FixService {
      * the public API applies the server-recomputed proposal for the selected strategy.
      */
     @Deprecated
-    @Transactional
     public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy, FixSuggestionDto suggestion,
                                       Map<String, PreferredRange> preferredRanges) {
         if (suggestion == null) {
@@ -232,7 +238,8 @@ public class FixServiceImpl implements FixService {
             throw new BadRequestException("Verification context has no rules; cannot apply fix.");
         }
 
-        ModelBoundaryInput modelInput = modelBoundaryInput(ctx.request, ctx.templateManifests);
+        ModelBoundaryInput modelInput = modelBoundaryInput(
+                ctx.request, ctx.templateManifests, ctx.modelTokenSourcesByDeviceId);
         Map<String, DeviceSmvData> deviceSmvMap = modelInput.deviceSmvMap();
 
         FixSuggestionDto trusted = clientSuggestion;
@@ -705,6 +712,7 @@ public class FixServiceImpl implements FixService {
                 .toList();
         List<FaultRuleDto> faultRules = ruleFixer.localizeFaults(
                 ctx.trace.getStates(), ctx.request.getRules(), deviceSmvMap);
+        attachModelTokenSources(faultRules, deviceSmvMap);
         return FixResultDto.builder()
                 .traceId(traceId)
                 .violatedSpecId(ctx.trace.getViolatedSpecId())
@@ -870,6 +878,99 @@ public class FixServiceImpl implements FixService {
         }
     }
 
+    private void attachModelTokenSources(
+            FixResultDto result,
+            List<RuleDto> rules,
+            Map<String, DeviceSmvData> deviceSmvMap) {
+        if (result == null) {
+            return;
+        }
+        attachModelTokenSources(result.getFaultRules(), deviceSmvMap);
+        if (result.getParameterTargets() != null) {
+            for (ParameterTarget target : result.getParameterTargets()) {
+                if (target != null) {
+                    target.setModelTokenSource(modelTokenSourceForCondition(
+                            rules, target.getRuleIndex(), target.getConditionIndex(), deviceSmvMap));
+                }
+            }
+        }
+        if (result.getSuggestions() == null) {
+            return;
+        }
+        for (FixSuggestionDto suggestion : result.getSuggestions()) {
+            if (suggestion == null) {
+                continue;
+            }
+            if (suggestion.getParameterAdjustments() != null) {
+                for (ParameterAdjustment adjustment : suggestion.getParameterAdjustments()) {
+                    if (adjustment != null) {
+                        adjustment.setModelTokenSource(modelTokenSourceForCondition(
+                                rules, adjustment.getRuleIndex(), adjustment.getConditionIndex(), deviceSmvMap));
+                    }
+                }
+            }
+            if (suggestion.getConditionAdjustments() != null) {
+                for (ConditionAdjustment adjustment : suggestion.getConditionAdjustments()) {
+                    if (adjustment == null) {
+                        continue;
+                    }
+                    String deviceName = trimToNull(adjustment.getDeviceName());
+                    ModelTokenSource source = deviceName != null
+                            ? modelTokenSourceForDevice(deviceName, deviceSmvMap)
+                            : modelTokenSourceForCondition(
+                                    rules, adjustment.getRuleIndex(), adjustment.getConditionIndex(), deviceSmvMap);
+                    adjustment.setModelTokenSource(source);
+                }
+            }
+        }
+    }
+
+    private void attachModelTokenSources(
+            List<FaultRuleDto> faultRules,
+            Map<String, DeviceSmvData> deviceSmvMap) {
+        if (faultRules == null) {
+            return;
+        }
+        for (FaultRuleDto faultRule : faultRules) {
+            if (faultRule != null) {
+                ModelTokenSource source = modelTokenSourceForDevice(
+                        faultRule.getTargetDeviceId(), deviceSmvMap);
+                faultRule.setModelTokenSource(source);
+                if (source == ModelTokenSource.BUNDLED
+                        && trimToNull(faultRule.getTargetActionId()) != null) {
+                    faultRule.setTargetActionLabel(faultRule.getTargetActionId());
+                }
+            }
+        }
+    }
+
+    private ModelTokenSource modelTokenSourceForCondition(
+            List<RuleDto> rules,
+            int ruleIndex,
+            int conditionIndex,
+            Map<String, DeviceSmvData> deviceSmvMap) {
+        if (rules == null || ruleIndex < 0 || ruleIndex >= rules.size()) {
+            return ModelTokenSource.UNKNOWN;
+        }
+        RuleDto rule = rules.get(ruleIndex);
+        List<RuleDto.Condition> conditions = rule != null ? rule.getConditions() : null;
+        if (conditions == null || conditionIndex < 0 || conditionIndex >= conditions.size()) {
+            return ModelTokenSource.UNKNOWN;
+        }
+        RuleDto.Condition condition = conditions.get(conditionIndex);
+        return modelTokenSourceForDevice(
+                condition != null ? condition.getDeviceName() : null, deviceSmvMap);
+    }
+
+    private ModelTokenSource modelTokenSourceForDevice(
+            String deviceName,
+            Map<String, DeviceSmvData> deviceSmvMap) {
+        DeviceSmvData device = DeviceReferenceResolver.resolve(deviceName, deviceSmvMap);
+        return device != null && device.getModelTokenSource() != null
+                ? device.getModelTokenSource()
+                : ModelTokenSource.UNKNOWN;
+    }
+
     private FixResultDto runFixer(
             Long traceId,
             String violatedSpecId,
@@ -886,15 +987,70 @@ public class FixServiceImpl implements FixService {
             int maxAttempts,
             Map<String, PreferredRange> preferredRanges) {
         AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        FixResultDto result;
         if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
-            return ruleFixer.fix(
+            result = ruleFixer.fix(
                     traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
                     deviceSmvMap, userId, scenario, enablePrivacy, strategies, maxAttempts, preferredRanges);
+        } else {
+            result = ruleFixer.fix(
+                    traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
+                    deviceSmvMap, userId, scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
+                    strategies, maxAttempts, preferredRanges);
         }
-        return ruleFixer.fix(
-                traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
-                deviceSmvMap, userId, scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
-                strategies, maxAttempts, preferredRanges);
+        attachModelTokenSources(result, rules, deviceSmvMap);
+        return result;
+    }
+
+    private FrozenTemplateSnapshots readFrozenTemplateSnapshots(String json) {
+        Map<String, Object> shape = JsonUtils.fromJson(
+                json, new TypeReference<Map<String, Object>>() {});
+        boolean isBundle = shape != null
+                && shape.get("schemaVersion") instanceof Number
+                && shape.get("manifests") instanceof Map<?, ?>;
+        if (!isBundle) {
+            Map<String, DeviceManifest> legacyManifests = JsonUtils.fromJson(
+                    json, new TypeReference<Map<String, DeviceManifest>>() {});
+            return new FrozenTemplateSnapshots(
+                    legacyManifests != null ? legacyManifests : Map.of(), Map.of());
+        }
+
+        TemplateSnapshotBundleDto bundle = JsonUtils.fromJson(json, TemplateSnapshotBundleDto.class);
+        if (bundle == null || bundle.getSchemaVersion() != TemplateSnapshotBundleDto.CURRENT_SCHEMA_VERSION) {
+            throw new BadRequestException(
+                    "This trace uses an unsupported device-template snapshot format. "
+                    + "Please re-run verification before requesting or applying an automatic fix.");
+        }
+        Map<String, ModelTokenSource> sources = new LinkedHashMap<>();
+        if (bundle.getModelTokenSourcesByDeviceId() != null) {
+            bundle.getModelTokenSourcesByDeviceId().forEach((deviceId, source) -> {
+                String normalizedDeviceId = trimToNull(deviceId);
+                if (normalizedDeviceId != null) {
+                    sources.put(normalizedDeviceId,
+                            source != null ? source : ModelTokenSource.UNKNOWN);
+                }
+            });
+        }
+        return new FrozenTemplateSnapshots(
+                bundle.getManifests() != null ? bundle.getManifests() : Map.of(), sources);
+    }
+
+    private void applyFrozenModelTokenSources(
+            List<DeviceVerificationDto> devices,
+            Map<String, ModelTokenSource> modelTokenSourcesByDeviceId) {
+        Map<String, ModelTokenSource> sources = modelTokenSourcesByDeviceId != null
+                ? modelTokenSourcesByDeviceId : Map.of();
+        for (DeviceVerificationDto device : devices) {
+            if (device == null) {
+                continue;
+            }
+            String deviceId = trimToNull(device.getVarName());
+            ModelTokenSource source = deviceId != null ? sources.get(deviceId) : null;
+            if (source == null && deviceId != null) {
+                source = sources.get(DeviceNameNormalizer.normalize(deviceId));
+            }
+            device.setModelTokenSource(source != null ? source : ModelTokenSource.UNKNOWN);
+        }
     }
 
     private VerificationContext loadContext(Long userId, Long traceId) {
@@ -914,9 +1070,9 @@ public class FixServiceImpl implements FixService {
             throw new BadRequestException("Invalid verification context in trace requestJson.");
         }
 
-        Map<String, DeviceManifest> templateManifests = JsonUtils.fromJson(
-                po.getTemplateSnapshotsJson(), new TypeReference<Map<String, DeviceManifest>>() {});
-        if (templateManifests == null || templateManifests.isEmpty()) {
+        FrozenTemplateSnapshots templateSnapshots = readFrozenTemplateSnapshots(
+                po.getTemplateSnapshotsJson());
+        if (templateSnapshots.manifests().isEmpty()) {
             throw new BadRequestException(
                     "This trace does not contain the exact device-template snapshot used for verification. "
                     + "Please re-run verification before requesting or applying an automatic fix.");
@@ -924,12 +1080,18 @@ public class FixServiceImpl implements FixService {
 
         log.debug("Loaded verification context for trace {}", traceId);
 
-        return new VerificationContext(trace, request, Map.copyOf(templateManifests));
+        return new VerificationContext(
+                trace,
+                request,
+                Map.copyOf(templateSnapshots.manifests()),
+                Map.copyOf(templateSnapshots.modelTokenSourcesByDeviceId()));
     }
 
     private ModelBoundaryInput modelBoundaryInput(VerificationRequestDto request,
-                                                  Map<String, DeviceManifest> templateManifests) {
+                                                   Map<String, DeviceManifest> templateManifests,
+                                                   Map<String, ModelTokenSource> modelTokenSourcesByDeviceId) {
         List<DeviceVerificationDto> devices = request.getDevices() == null ? List.of() : request.getDevices();
+        applyFrozenModelTokenSources(devices, modelTokenSourcesByDeviceId);
         Map<String, DeviceSmvData> rawDeviceSmvMap =
                 smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(devices, templateManifests);
         List<BoardEnvironmentVariableDto> environmentVariables = NusmvEnvironmentPool.mergeWithDefaults(
@@ -944,7 +1106,12 @@ public class FixServiceImpl implements FixService {
 
     private record VerificationContext(TraceDto trace,
                                        VerificationRequestDto request,
-                                       Map<String, DeviceManifest> templateManifests) {}
+                                       Map<String, DeviceManifest> templateManifests,
+                                       Map<String, ModelTokenSource> modelTokenSourcesByDeviceId) {}
+
+    private record FrozenTemplateSnapshots(
+            Map<String, DeviceManifest> manifests,
+            Map<String, ModelTokenSource> modelTokenSourcesByDeviceId) {}
 
     private record ModelBoundaryInput(List<DeviceVerificationDto> devices,
                                       List<BoardEnvironmentVariableDto> environmentVariables,

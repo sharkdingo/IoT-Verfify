@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.nusmv.parser;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
@@ -163,6 +164,10 @@ public class SmvTraceParser {
         if (devTrace.getTemplateName() == null) {
             devTrace.setTemplateName(smv.getTemplateName());
         }
+        if (devTrace.getModelTokenSource() == null) {
+            devTrace.setModelTokenSource(smv.getModelTokenSource() != null
+                    ? smv.getModelTokenSource() : ModelTokenSource.UNKNOWN);
+        }
         if (devTrace.getDeviceLabel() == null) {
             devTrace.setDeviceLabel(smv.getDeviceLabel() != null
                     ? smv.getDeviceLabel()
@@ -247,14 +252,16 @@ public class SmvTraceParser {
         }
         if (SmvConstants.NUSMV_COMPROMISED_POINT_COUNT.equals(name)) {
             putStateVariable(state.getGlobalVariables(), state::setGlobalVariables,
-                    SmvConstants.TRACE_COMPROMISED_POINT_COUNT, cleanValue);
+                    SmvConstants.TRACE_COMPROMISED_POINT_COUNT, cleanValue, ModelTokenSource.UNKNOWN);
             return;
         }
         String publicName = toPublicEnvironmentVariableName(name, deviceSmvMap);
         if (isGeneratedEnvironmentVariableName(name, deviceSmvMap)) {
-            putStateVariable(state.getEnvVariables(), state::setEnvVariables, publicName, cleanValue);
+            putStateVariable(state.getEnvVariables(), state::setEnvVariables, publicName, cleanValue,
+                    environmentModelTokenSource(publicName, deviceSmvMap));
         } else {
-            putStateVariable(state.getGlobalVariables(), state::setGlobalVariables, name, cleanValue);
+            putStateVariable(state.getGlobalVariables(), state::setGlobalVariables,
+                    name, cleanValue, ModelTokenSource.UNKNOWN);
         }
     }
 
@@ -361,6 +368,7 @@ public class SmvTraceParser {
         if (update.getDeviceId() != null) target.setDeviceId(update.getDeviceId());
         if (update.getDeviceLabel() != null) target.setDeviceLabel(update.getDeviceLabel());
         if (update.getTemplateName() != null) target.setTemplateName(update.getTemplateName());
+        if (update.getModelTokenSource() != null) target.setModelTokenSource(update.getModelTokenSource());
         if (update.getState() != null) target.setState(update.getState());
         if (update.getMode() != null) target.setMode(update.getMode());
         if (update.getCompromised() != null) target.setCompromised(update.getCompromised());
@@ -393,6 +401,9 @@ public class SmvTraceParser {
                 });
                 if (update.getValue() != null) target.setValue(update.getValue());
                 if (update.getTrust() != null) target.setTrust(update.getTrust());
+                if (update.getModelTokenSource() != null) {
+                    target.setModelTokenSource(update.getModelTokenSource());
+                }
             }
         }
         return new ArrayList<>(merged.values());
@@ -403,6 +414,7 @@ public class SmvTraceParser {
         copy.setName(source.getName());
         copy.setValue(source.getValue());
         copy.setTrust(source.getTrust());
+        copy.setModelTokenSource(source.getModelTokenSource());
         return copy;
     }
 
@@ -457,7 +469,8 @@ public class SmvTraceParser {
     private void putStateVariable(List<TraceVariableDto> variables,
                                   Consumer<List<TraceVariableDto>> setter,
                                   String name,
-                                  String value) {
+                                  String value,
+                                  ModelTokenSource modelTokenSource) {
         List<TraceVariableDto> effectiveVariables = variables;
         if (effectiveVariables == null) {
             effectiveVariables = new ArrayList<>();
@@ -466,13 +479,37 @@ public class SmvTraceParser {
         for (TraceVariableDto variable : effectiveVariables) {
             if (name.equals(variable.getName())) {
                 variable.setValue(value);
+                variable.setModelTokenSource(modelTokenSource);
                 return;
             }
         }
         TraceVariableDto created = new TraceVariableDto();
         created.setName(name);
         created.setValue(value);
+        created.setModelTokenSource(modelTokenSource);
         effectiveVariables.add(created);
+    }
+
+    private ModelTokenSource environmentModelTokenSource(
+            String name, Map<String, DeviceSmvData> deviceSmvMap) {
+        ModelTokenSource sharedSource = null;
+        if (deviceSmvMap == null) return ModelTokenSource.UNKNOWN;
+        for (DeviceSmvData smv : deviceSmvMap.values()) {
+            if (!declaresEnvironmentVariable(smv, name)) continue;
+            ModelTokenSource source = smv.getModelTokenSource() != null
+                    ? smv.getModelTokenSource() : ModelTokenSource.UNKNOWN;
+            if (sharedSource != null && sharedSource != source) return ModelTokenSource.UNKNOWN;
+            sharedSource = source;
+        }
+        return sharedSource != null ? sharedSource : ModelTokenSource.UNKNOWN;
+    }
+
+    private boolean declaresEnvironmentVariable(DeviceSmvData smv, String name) {
+        if (smv == null || name == null) return false;
+        return (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(name))
+                || (smv.getImpactedEnvironmentVariables() != null
+                    && smv.getImpactedEnvironmentVariables().containsKey(name))
+                || (smv.getImpactedVariables() != null && smv.getImpactedVariables().contains(name));
     }
 
     private String toPublicEnvironmentVariableName(String smvName, Map<String, DeviceSmvData> deviceSmvMap) {
@@ -619,14 +656,23 @@ public class SmvTraceParser {
 
         for (TraceVariableDto var : devTrace.getVariables()) {
             if (name.equals(var.getName())) {
+                if (var.getModelTokenSource() == null) {
+                    var.setModelTokenSource(deviceModelTokenSource(devTrace));
+                }
                 return var;
             }
         }
 
         TraceVariableDto created = new TraceVariableDto();
         created.setName(name);
+        created.setModelTokenSource(deviceModelTokenSource(devTrace));
         devTrace.getVariables().add(created);
         return created;
+    }
+
+    private ModelTokenSource deviceModelTokenSource(TraceDeviceDto device) {
+        return device != null && device.getModelTokenSource() != null
+                ? device.getModelTokenSource() : ModelTokenSource.UNKNOWN;
     }
 
     private TraceVariableDto findVariable(TraceDeviceDto devTrace, String name) {

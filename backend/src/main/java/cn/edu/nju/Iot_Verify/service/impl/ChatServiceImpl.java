@@ -405,34 +405,85 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     @Scheduled(fixedDelayString = "${chat.execution.lease-heartbeat-ms:10000}")
     public void maintainExecutionLeases() {
-        LocalDateTime now = databaseNow();
-        LocalDateTime expiresAt = now.plus(executionLeaseTtl());
+        try {
+            databaseNow();
+        } catch (RuntimeException e) {
+            stopChatExecutionsWithExpiredConfirmation(e);
+            return;
+        }
         activeStreamRequests.forEach((sessionId, request) -> {
             try {
-                int renewed = sessionRepo.renewActiveExecutionLease(
-                        sessionId, request.userId(), request.requestId(), now, expiresAt);
+                int renewed = renewActiveExecutionLease(sessionId, request);
                 if (renewed == 0 && activeStreamRequests.remove(sessionId, request)) {
                     stopActiveRequest(sessionId, request, false);
                     log.warn("Stopped local chat execution after losing its lease: sessionId={}, executionId={}",
                             sessionId, request.requestId());
                 } else if (renewed > 0) {
+                    request.leaseConfirmation().confirm();
                     sessionRepo.findByIdAndUserId(sessionId, request.userId())
                             .filter(session -> Boolean.TRUE.equals(session.getExecutionStopRequested()))
                             .ifPresent(session -> stopActiveRequest(
                                     sessionId, request, Boolean.TRUE.equals(session.getExecutionUserStopRequested())));
                 }
             } catch (RuntimeException e) {
-                log.warn("Could not renew chat execution lease for session {}: {}", sessionId, e.toString());
+                if (request.leaseConfirmation().isUnconfirmedFor(executionLeaseTtl())
+                        && activeStreamRequests.remove(sessionId, request)) {
+                    stopActiveRequest(sessionId, request, false);
+                    log.warn("Stopped local chat execution after its lease could not be confirmed for a full TTL: "
+                                    + "sessionId={}, executionId={}",
+                            sessionId, request.requestId());
+                } else {
+                    log.warn("Could not renew chat execution lease for session {}: {}", sessionId, e.toString());
+                }
             }
         });
         try {
-            int cleared = sessionRepo.clearExpiredExecutionLeases(now);
+            int cleared = sessionRepo.clearExpiredExecutionLeases(databaseNow());
             if (cleared > 0) {
                 log.debug("Cleared {} expired chat execution lease(s)", cleared);
             }
         } catch (RuntimeException e) {
             log.warn("Could not clear expired chat execution leases: {}", e.toString());
         }
+    }
+
+    private int renewActiveExecutionLease(String sessionId, ActiveStreamRequest request) {
+        long checkedAtNanos = System.nanoTime();
+        LocalDateTime checkedAt = databaseNow();
+        Integer renewed = transactionTemplate.execute(status -> {
+            ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, request.userId())
+                    .orElse(null);
+            if (session == null || !Objects.equals(request.requestId(), session.getActiveExecutionId())) {
+                return 0;
+            }
+
+            LocalDateTime databaseNow = databaseNow();
+            long elapsedNanos = Math.max(0L, System.nanoTime() - checkedAtNanos);
+            LocalDateTime monotonicNow = checkedAt.plusNanos(elapsedNanos);
+            LocalDateTime effectiveNow = databaseNow.isAfter(monotonicNow) ? databaseNow : monotonicNow;
+            if (session.getActiveExecutionExpiresAt() == null
+                    || !session.getActiveExecutionExpiresAt().isAfter(effectiveNow)) {
+                return 0;
+            }
+            session.setActiveExecutionExpiresAt(effectiveNow.plus(executionLeaseTtl()));
+            sessionRepo.saveAndFlush(session);
+            return 1;
+        });
+        return renewed != null ? renewed : 0;
+    }
+
+    private void stopChatExecutionsWithExpiredConfirmation(RuntimeException cause) {
+        activeStreamRequests.forEach((sessionId, request) -> {
+            if (!request.leaseConfirmation().isUnconfirmedFor(executionLeaseTtl())
+                    || !activeStreamRequests.remove(sessionId, request)) {
+                return;
+            }
+            stopActiveRequest(sessionId, request, false);
+            log.warn("Stopped local chat execution after the database could not confirm its lease for a full TTL: "
+                            + "sessionId={}, executionId={}",
+                    sessionId, request.requestId());
+        });
+        log.warn("Could not read database time while maintaining chat execution leases: {}", cause.toString());
     }
 
     private Duration executionLeaseTtl() {
@@ -824,6 +875,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 isDisconnect.set(true);
                 return true;
             }
+            activeRequest.leaseConfirmation().confirm();
             if (Boolean.TRUE.equals(session.getExecutionStopRequested())) {
                 if (Boolean.TRUE.equals(session.getExecutionUserStopRequested())) {
                     isUserStop.set(true);
@@ -831,8 +883,16 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 isDisconnect.set(true);
             }
         } catch (RuntimeException e) {
-            log.warn("Could not poll distributed chat execution control for session {}: {}",
-                    sessionId, e.toString());
+            if (activeRequest.leaseConfirmation().isUnconfirmedFor(executionLeaseTtl())) {
+                isDisconnect.set(true);
+                activeRequest.requestControl().cancel();
+                log.warn("Stopped local chat execution after its lease could not be confirmed for a full TTL: "
+                                + "sessionId={}, executionId={}",
+                        sessionId, activeRequest.requestId());
+            } else {
+                log.warn("Could not poll distributed chat execution control for session {}: {}",
+                        sessionId, e.toString());
+            }
         }
         return isDisconnect.get();
     }
@@ -1297,6 +1357,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         int resultUnavailableToolCalls = 0;
         int uncertainMutationCalls = 0;
         boolean confirmationPending = false;
+        boolean partialObjectiveResult = false;
         String previousRoundFingerprint = null;
         int stagnantRoundCount = 0;
 
@@ -1337,7 +1398,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 if (!aiText.isBlank()) {
                     log.debug("Tool planning completed with final text; regenerating visible answer through streaming.");
                 }
-                return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.COMPLETED, successfulToolCalls,
+                ToolLoopStopReason stopReason = partialObjectiveResult
+                        ? ToolLoopStopReason.PARTIAL_RESULT
+                        : ToolLoopStopReason.COMPLETED;
+                return new ToolLoopResult(hadToolCalls, stopReason, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
             }
@@ -1403,6 +1467,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     toolResult = aiToolManager.execute(functionName, argsJson);
                     stoppedAfterTool = forceStopCheck.getAsBoolean();
                     executionOutcome = classifyToolExecution(toolResult);
+                    if ("recommend_scenario".equals(functionName)) {
+                        partialObjectiveResult = executionOutcome == ToolExecutionOutcome.PARTIAL;
+                    }
                     if (executionOutcome == ToolExecutionOutcome.USABLE
                             || (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE
                                 && mutationMayHaveCommitted(toolResult))) {
@@ -1413,7 +1480,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 boolean requiresConfirmation = requiresUserConfirmation(toolResult);
                 if (requiresConfirmation) {
                     confirmationPending = true;
-                } else if (executionOutcome == ToolExecutionOutcome.USABLE) {
+                } else if (executionOutcome == ToolExecutionOutcome.USABLE
+                        || executionOutcome == ToolExecutionOutcome.PARTIAL) {
                     successfulToolCalls++;
                 } else if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
                     resultUnavailableToolCalls++;
@@ -1612,6 +1680,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             if ((root.has("resultAvailable") && !root.path("resultAvailable").asBoolean(true))
                     || "RESULT_UNAVAILABLE".equals(root.path("resultStatus").asText())) {
                 return ToolExecutionOutcome.RESULT_UNAVAILABLE;
+            }
+            if ("PARTIAL".equals(root.path("objectiveStatus").asText())) {
+                return ToolExecutionOutcome.PARTIAL;
             }
             return ToolExecutionOutcome.USABLE;
         } catch (Exception ignore) {
@@ -1974,10 +2045,20 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     private String toolExecutionNotice(ToolLoopResult result, boolean preferChinese) {
-        if (result == null || !result.hadToolCalls()) {
+        if (result == null) {
             return "";
         }
+        if (!result.hadToolCalls()) {
+            return preferChinese
+                    ? "系统状态：本轮未执行平台工具，因此回复不代表已读取当前画布数据或已完成平台操作。\n\n"
+                    : "System status: no platform tool ran in this turn, so the response does not confirm current Board data or a completed platform operation.\n\n";
+        }
         List<String> notices = new ArrayList<>();
+        if (result.stopReason() == ToolLoopStopReason.PARTIAL_RESULT) {
+            notices.add(preferChinese
+                    ? "工具返回了可审阅但不完整的场景草案；缺少的核心场景部分未被视为已完成。"
+                    : "The tool returned a reviewable but incomplete scene draft; missing core scene parts were not treated as completed.");
+        }
         if (result.failedToolCalls() > 0) {
             notices.add(preferChinese
                     ? "工具执行状态：" + result.successfulToolCalls() + " 个步骤返回了可用结果，"
@@ -2123,6 +2204,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     ? ChatExecutionStatus.PARTIAL
                     : ChatExecutionStatus.FAILED;
         }
+        if (result.stopReason() == ToolLoopStopReason.PARTIAL_RESULT) {
+            return ChatExecutionStatus.PARTIAL;
+        }
         return ChatExecutionStatus.COMPLETED;
     }
 
@@ -2227,12 +2311,14 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             AtomicBoolean userStopRequested,
             AtomicReference<SseEmitter> emitter,
             AtomicLong nextControlPollNanos,
+            LeaseConfirmation leaseConfirmation,
             LlmRequestControl requestControl) {
 
         private ActiveStreamRequest(Long userId, String requestId) {
             this(userId, requestId, new AtomicBoolean(false), new AtomicBoolean(false),
                     new AtomicReference<>(),
                     new AtomicLong(System.nanoTime() + EXECUTION_CONTROL_POLL_NANOS),
+                    new LeaseConfirmation(),
                     new LlmRequestControl());
         }
     }
@@ -2450,9 +2536,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     if (confirmationRequired) {
                         unconfirmed++;
                         outcome = "CONFIRMATION_REQUIRED";
-                    } else if (executionOutcome == ToolExecutionOutcome.USABLE) {
+                    } else if (executionOutcome == ToolExecutionOutcome.USABLE
+                            || executionOutcome == ToolExecutionOutcome.PARTIAL) {
                         successful++;
-                        outcome = "USABLE";
+                        outcome = executionOutcome.name();
                     } else if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
                         unconfirmed++;
                         outcome = "RESULT_UNAVAILABLE";
@@ -2639,6 +2726,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private enum ToolExecutionOutcome {
         USABLE,
+        PARTIAL,
         FAILED,
         RESULT_UNAVAILABLE
     }
@@ -2649,6 +2737,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         PROVIDER_UNAVAILABLE,
         CONFIRMATION_REQUIRED,
         RESULT_UNAVAILABLE,
+        PARTIAL_RESULT,
         NO_PROGRESS,
         EMERGENCY_LIMIT
     }

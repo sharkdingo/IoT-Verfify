@@ -21,6 +21,7 @@ import {
   isKnownFuzzingSpecificationSupported
 } from '@/utils/fuzzingConfig'
 import { fuzzingLimitationKey } from '@/utils/fuzzingPresentation'
+import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 
 export type FuzzingPanelForm = {
   explorationMode: FuzzingExplorationMode
@@ -50,12 +51,16 @@ const props = withDefaults(defineProps<{
   paperDomainPreview?: FuzzPaperDomainPreview | null
   paperDomainLoading?: boolean
   paperDomainError?: string | null
+  bundledDeviceIds?: string[]
+  bundledEnvironmentNames?: string[]
   notice?: string | null
   preflightBlocked?: boolean
   preflightMessage?: string | null
   frozenTask?: FuzzingTaskSummary | null
 }>(), {
-  workloadReady: true
+  workloadReady: true,
+  bundledDeviceIds: () => [],
+  bundledEnvironmentNames: () => []
 })
 
 const emit = defineEmits<{
@@ -66,7 +71,26 @@ const emit = defineEmits<{
   refreshWorkload: []
 }>()
 
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
+const formatBundledModelToken = (value: unknown) => formatBuiltInModelToken(
+  value,
+  key => te(key) ? t(key) : key
+)
+const bundledDeviceIdSet = computed(() => new Set(props.bundledDeviceIds))
+const bundledEnvironmentNameSet = computed(() => new Set(props.bundledEnvironmentNames))
+const isBundledDevice = (targetId: string) => bundledDeviceIdSet.value.has(targetId)
+const formatDeviceStateProperty = (targetId: string, property: unknown) =>
+  property === 'workingState' || isBundledDevice(targetId)
+    ? formatBundledModelToken(property)
+    : String(property ?? '')
+const formatDeviceVariableProperty = (targetId: string, property: unknown) =>
+  isBundledDevice(targetId) ? formatBundledModelToken(property) : String(property ?? '')
+const formatDeviceValue = (targetId: string, value: unknown) =>
+  isBundledDevice(targetId) ? formatBundledModelToken(value) : String(value ?? '')
+const formatEnvironmentToken = (name: string, value: unknown) =>
+  bundledEnvironmentNameSet.value.has(name)
+    ? formatBundledModelToken(value)
+    : String(value ?? '')
 
 const formatNumber = (value: number) => value.toLocaleString(
   locale.value.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US'
@@ -201,18 +225,24 @@ const onSpecChange = (id: string, event: Event) => {
 const specTitle = (spec: Specification) =>
   formatTraceSpec(spec, t) || spec.templateLabel || spec.formula || t('app.unknownSpecification')
 
-const formatDomainValues = (values: string[], stripRatePrefix = false) => values
+const formatDomainValues = (
+  values: string[],
+  stripRatePrefix = false,
+  formatter: (value: unknown) => string = value => String(value ?? '')
+) => values
   .map(value => stripRatePrefix && value.startsWith('rate:') ? value.slice(5) : value)
+  .map(formatter)
   .join(', ')
 
 const formatDomain = (
   values: string[],
   lower?: number | null,
   upper?: number | null,
-  stripRatePrefix = false
+  stripRatePrefix = false,
+  formatter?: (value: unknown) => string
 ) => Number.isSafeInteger(lower) && Number.isSafeInteger(upper)
   ? `${lower}..${upper}`
-  : formatDomainValues(values, stripRatePrefix)
+  : formatDomainValues(values, stripRatePrefix, formatter)
 
 const frozenModeLabel = computed(() => t(
   props.frozenTask?.explorationMode === 'PAPER_COMPATIBLE'
@@ -423,9 +453,10 @@ const frozenTargetScope = computed(() => {
                 <p class="font-bold">{{ t('app.fuzzPaperDeviceStateDomains') }}</p>
                 <ul class="mt-1 space-y-1">
                   <li v-for="domain in paperDomainPreview.deviceDomains" :key="`${domain.targetId}-${domain.property}`" class="break-words">
-                    <span class="font-semibold">{{ domain.label }}.{{ domain.property }}</span>:
+                    <span class="font-semibold">{{ domain.label }}.{{ formatDeviceStateProperty(domain.targetId, domain.property) }}</span>:
                     <span class="font-mono">{{ formatDomain(
-                      domain.legalValues, domain.lowerBound, domain.upperBound
+                      domain.legalValues, domain.lowerBound, domain.upperBound, false,
+                      value => formatDeviceValue(domain.targetId, value)
                     ) }}</span>
                   </li>
                 </ul>
@@ -437,9 +468,10 @@ const frozenTargetScope = computed(() => {
                 <p class="font-bold">{{ t('app.fuzzPaperLocalVariableDomains') }}</p>
                 <ul class="mt-1 space-y-1">
                   <li v-for="domain in paperDomainPreview.localVariableDomains" :key="`${domain.targetId}-${domain.property}`" class="break-words">
-                    <span class="font-semibold">{{ domain.label }}.{{ domain.property }}</span>:
+                    <span class="font-semibold">{{ domain.label }}.{{ formatDeviceVariableProperty(domain.targetId, domain.property) }}</span>:
                     <span class="font-mono">{{ formatDomain(
-                      domain.legalValues, domain.lowerBound, domain.upperBound
+                      domain.legalValues, domain.lowerBound, domain.upperBound, false,
+                      value => formatDeviceValue(domain.targetId, value)
                     ) }}</span>
                   </li>
                 </ul>
@@ -448,16 +480,18 @@ const frozenTargetScope = computed(() => {
                 <p class="font-bold">{{ t('app.fuzzPaperEnvironmentDomains') }}</p>
                 <ul class="mt-1 space-y-1.5">
                   <li v-for="domain in paperDomainPreview.environmentDomains" :key="domain.name" class="break-words">
-                    <span class="font-semibold">{{ domain.name }}</span>:
+                    <span class="font-semibold">{{ formatEnvironmentToken(domain.name, domain.name) }}</span>:
                     {{ t('app.fuzzPaperInitialValues') }} <span class="font-mono">{{ formatDomain(
-                      domain.initialValues, domain.initialLowerBound, domain.initialUpperBound
+                      domain.initialValues, domain.initialLowerBound, domain.initialUpperBound, false,
+                      value => formatEnvironmentToken(domain.name, value)
                     ) }}</span>;
                     {{ domain.eventValueKind === 'CHANGE_RATE' ? t('app.fuzzPaperRateEvents') : t('app.fuzzPaperDirectValueEvents') }}
                     <span class="font-mono">{{ formatDomain(
                       domain.eventValues,
                       domain.eventRateLowerBound,
                       domain.eventRateUpperBound,
-                      domain.eventValueKind === 'CHANGE_RATE'
+                      domain.eventValueKind === 'CHANGE_RATE',
+                      value => formatEnvironmentToken(domain.name, value)
                     ) }}</span>
                   </li>
                 </ul>

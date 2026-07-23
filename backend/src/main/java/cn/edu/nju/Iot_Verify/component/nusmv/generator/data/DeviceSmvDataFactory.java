@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
@@ -44,7 +45,7 @@ public class DeviceSmvDataFactory {
     public Map<String, DeviceSmvData> buildDeviceSmvMap(Long userId,
                                                         List<DeviceVerificationDto> devices,
                                                         Map<String, DeviceManifest> templateCache) {
-        return buildDeviceSmvMap(userId, devices, templateCache, false);
+        return buildDeviceSmvMap(userId, devices, templateCache, new HashMap<>(), false);
     }
 
     /** Build from an immutable run snapshot and never fall back to the mutable template repository. */
@@ -54,12 +55,13 @@ public class DeviceSmvDataFactory {
         if (templateSnapshots == null) {
             throw SmvGenerationException.smvGenerationError("Captured device-template manifests are missing");
         }
-        return buildDeviceSmvMap(null, devices, new LinkedHashMap<>(templateSnapshots), true);
+        return buildDeviceSmvMap(null, devices, new LinkedHashMap<>(templateSnapshots), Map.of(), true);
     }
 
     private Map<String, DeviceSmvData> buildDeviceSmvMap(Long userId,
                                                          List<DeviceVerificationDto> devices,
                                                          Map<String, DeviceManifest> templateCache,
+                                                         Map<String, ModelTokenSource> templateSourceCache,
                                                          boolean snapshotOnly) {
         Map<String, DeviceSmvData> deviceSmvMap = new LinkedHashMap<>();
         List<String> missingTemplateDevices = new ArrayList<>();
@@ -71,6 +73,9 @@ public class DeviceSmvDataFactory {
             DeviceSmvData smv = new DeviceSmvData();
             smv.setTemplateName(device.getTemplateName());
             smv.setDeviceLabel(displayLabel(device));
+            smv.setModelTokenSource(snapshotOnly
+                    ? safeModelTokenSource(device.getModelTokenSource())
+                    : ModelTokenSource.UNKNOWN);
             smv.setCurrentState(device.getState());
             smv.setInstanceStateTrust(normalizeTrustPrivacy(device.getCurrentStateTrust()));
             smv.setInstanceStatePrivacy(normalizeTrustPrivacy(device.getCurrentStatePrivacy()));
@@ -91,13 +96,18 @@ public class DeviceSmvDataFactory {
             }
 
             DeviceManifest manifest = loadManifest(
-                    templateCache, userId, smv.getTemplateName(), snapshotOnly);
+                    templateCache, templateSourceCache, userId, smv.getTemplateName(), snapshotOnly);
             if (manifest == null) {
                 log.warn("Template not found or invalid for device: {}", smv.getTemplateName());
                 missingTemplateDevices.add(device.getVarName() + "(template=" + smv.getTemplateName() + ")");
                 continue;
             }
             smv.setManifest(manifest);
+            if (!snapshotOnly) {
+                smv.setModelTokenSource(templateSourceCache.getOrDefault(
+                        smv.getTemplateName(), ModelTokenSource.UNKNOWN));
+            }
+            device.setModelTokenSource(smv.getModelTokenSource());
 
             extractModes(smv, manifest);
             extractStatesAndTrust(smv, manifest);
@@ -138,7 +148,9 @@ public class DeviceSmvDataFactory {
 
     // ==================== 模板加载 ====================
 
-    private DeviceManifest loadManifest(Map<String, DeviceManifest> cache, Long userId,
+    private DeviceManifest loadManifest(Map<String, DeviceManifest> cache,
+                                        Map<String, ModelTokenSource> sourceCache,
+                                        Long userId,
                                         String templateName, boolean snapshotOnly) {
         if (templateName == null) return null;
         if (cache.containsKey(templateName)) return cache.get(templateName);
@@ -150,6 +162,8 @@ public class DeviceSmvDataFactory {
             templateSchemaValidator.validateRawManifest(templateName, rawManifest);
             DeviceManifest manifest = objectMapper.treeToValue(rawManifest, DeviceManifest.class);
             cache.put(templateName, manifest);
+            sourceCache.put(templateName,
+                    ModelTokenSource.fromDefaultTemplate(po.get().getDefaultTemplate()));
             return manifest;
         } catch (BaseException e) {
             throw e;
@@ -158,6 +172,10 @@ public class DeviceSmvDataFactory {
         } catch (Exception e) {
             throw SmvGenerationException.templateLoadError(templateName, e);
         }
+    }
+
+    private ModelTokenSource safeModelTokenSource(ModelTokenSource source) {
+        return source != null ? source : ModelTokenSource.UNKNOWN;
     }
 
     // ==================== 提取方法 ====================

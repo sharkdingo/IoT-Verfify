@@ -3,7 +3,9 @@ package cn.edu.nju.Iot_Verify.repository;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -46,8 +48,8 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     List<VerificationTaskPo> findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
             Long userId, VerificationTaskPo.TaskStatus status, List<Long> excludedIds);
 
-    List<VerificationTaskPo> findByUserIdAndStatusOrderByCompletedAtDesc(
-            Long userId, VerificationTaskPo.TaskStatus status);
+    List<VerificationRunSummaryProjection> findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+            Long userId, VerificationTaskPo.TaskStatus status, Pageable pageable);
 
     /**
      * 根据ID和用户ID查询任务
@@ -139,17 +141,6 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
                                 @Param("workerId") String workerId,
                                 @Param("currentTime") LocalDateTime currentTime,
                                 @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt);
-
-    @Transactional
-    @Modifying(clearAutomatically = true)
-    @Query("UPDATE VerificationTaskPo t SET t.leaseExpiresAt = :leaseExpiresAt "
-         + "WHERE t.id = :taskId AND t.workerId = :workerId "
-         + "AND t.status IN (:activeStatuses) AND t.leaseExpiresAt > :currentTime")
-    int renewOwnedActiveLease(@Param("taskId") Long taskId,
-                              @Param("workerId") String workerId,
-                              @Param("currentTime") LocalDateTime currentTime,
-                              @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt,
-                              @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses);
 
     @Transactional
     @Modifying(clearAutomatically = true)

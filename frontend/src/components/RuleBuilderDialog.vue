@@ -9,6 +9,7 @@ import type { RuleForm, RuleSourceItemType } from '../types/rule'
 import boardApi from '../api/board'
 import { duplicateRuleReasonKey, ruleSimilarityReasonKey } from '@/utils/rule'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
+import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 
 const { t } = useI18n()
 
@@ -115,6 +116,29 @@ const resolveDeviceTemplate = (templateName: string): DeviceTemplate | undefined
   })
 }
 
+const formatTemplateModelToken = (templateName: string, value: unknown) => {
+  const raw = value === null || value === undefined ? '' : String(value)
+  const template = resolveDeviceTemplate(templateName)
+  return template?.defaultTemplate === true
+    ? formatBuiltInModelToken(raw, t)
+    : raw
+}
+
+const formatCurrentSourceModelToken = (value: unknown) =>
+  formatTemplateModelToken(currentSourceNode.value?.templateName || '', value)
+
+const formatRuleSourceModelToken = (source: RuleForm['sources'][number], value: unknown) =>
+  formatTemplateModelToken(resolveDeviceNode(source.fromId)?.templateName || '', value)
+
+const formatRuleSourceName = (source: RuleForm['sources'][number]) =>
+  source.itemType === 'state' ? t('app.state') : formatRuleSourceModelToken(source, source.fromApi)
+
+const formatTargetModelToken = (value: unknown) =>
+  formatTemplateModelToken(resolveDeviceNode(ruleData.toId)?.templateName || '', value)
+
+const formatContentModelToken = (value: unknown) =>
+  formatTemplateModelToken(resolveDeviceNode(ruleData.contentDevice)?.templateName || '', value)
+
 const splitStateTuple = (stateName: string) =>
   String(stateName || '').split(';').map(part => part.trim()).filter(Boolean)
 
@@ -161,7 +185,7 @@ const getDeviceVariables = (templateName: string): SourceOption[] => {
         const scope = v.IsInside === true ? t('app.internalVariable') : t('app.environmentVariable')
         variables.push({
           name,
-          label: `${name} (${scope})`,
+          label: `${formatTemplateModelToken(templateName, name)} (${scope})`,
           type: 'variable' as const,
           values: Array.isArray(v.Values) ? v.Values.map((value: unknown) => String(value)) : undefined,
           lowerBound: typeof v.LowerBound === 'number' ? v.LowerBound : undefined,
@@ -350,8 +374,8 @@ const isRuleDraftComplete = computed(() => !ruleDraftIncompleteReasonKey.value)
 const hasSourceValue = (value: unknown) =>
   value !== null && value !== undefined && value !== ''
 
-const formatSourceValue = (value: unknown, fallback: string) =>
-  hasSourceValue(value) ? String(value) : fallback
+const formatSourceValue = (value: unknown, fallback: string, templateName = '') =>
+  hasSourceValue(value) ? formatTemplateModelToken(templateName, value) : fallback
 
 watch(() => currentSource.fromId, () => {
   currentSource.itemType = ''
@@ -790,16 +814,12 @@ const getDeviceIcon = (node?: DeviceNode | null) => {
   return 'devices_other'
 }
 
-const formatApiLabel = (api: string) => {
-  return api.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-}
-
 function buildReadableRuleName(): string {
   const sources = ruleData.sources.map(source => {
     const deviceLabel = resolveDeviceNode(source.fromId)?.label || t('app.unknown')
-    const itemLabel = formatApiLabel(source.fromApi)
+    const itemLabel = formatRuleSourceName(source)
     if (isValueBasedSourceType(source.itemType)) {
-      return `${deviceLabel}.${itemLabel} ${source.relation || '='} ${formatSourceValue(source.value, '')}`.trim()
+      return `${deviceLabel}.${itemLabel} ${source.relation || '='} ${formatRuleSourceModelToken(source, source.value)}`.trim()
     }
     return `${deviceLabel} ${t('app.triggers')} ${itemLabel}`
   })
@@ -807,7 +827,7 @@ function buildReadableRuleName(): string {
   return t('app.ifThenDescription', {
     source: sources.join(` ${t('app.and')} `),
     target: targetLabel,
-    action: formatApiLabel(ruleData.toApi)
+    action: formatTargetModelToken(ruleData.toApi)
   })
 }
 
@@ -842,7 +862,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
 <template>
   <div
     v-show="modelValue"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+    class="fixed inset-0 z-[2400] flex items-center justify-center bg-black/50 backdrop-blur-sm"
     @keydown="handleModalKeydown"
   >
     <div
@@ -969,7 +989,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
                   <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
-                    {{ item.label || formatApiLabel(item.name) }}
+                    {{ item.label || formatCurrentSourceModelToken(item.name) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
@@ -992,7 +1012,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
                   <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
-                    {{ item.label || formatApiLabel(item.name) }}
+                    {{ item.label || formatCurrentSourceModelToken(item.name) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
@@ -1015,7 +1035,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
                   <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
-                    {{ item.name }}
+                    {{ formatCurrentSourceModelToken(item.name) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
@@ -1059,7 +1079,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   :disabled="!currentSource.relation"
                 >
                   <option v-for="value in currentValueOptions" :key="value" :value="value">
-                    {{ value }}
+                    {{ formatCurrentSourceModelToken(value) }}
                   </option>
                 </select>
               </div>
@@ -1075,7 +1095,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                 >
                   <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="value in currentValueOptions" :key="value" :value="value">
-                    {{ value }}
+                    {{ formatCurrentSourceModelToken(value) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
@@ -1116,8 +1136,8 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                 {{ resolveDeviceNode(source.fromId)?.label || source.fromId }}
               </span>
               <span class="text-xs text-slate-400">•</span>
-              <span class="text-sm font-medium text-blue-600 dark:text-blue-400 truncate" :title="formatApiLabel(source.fromApi)">
-                {{ formatApiLabel(source.fromApi) }}
+              <span class="text-sm font-medium text-blue-600 dark:text-blue-400 truncate" :title="formatRuleSourceName(source)">
+                {{ formatRuleSourceName(source) }}
               </span>
               <span class="text-xs px-1.5 py-0.5 rounded" :class="getSourceTypeClass(source.itemType)">
                 {{ getSourceTypeLabel(source.itemType) }}
@@ -1128,8 +1148,8 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                 <span class="text-sm font-medium text-orange-600 dark:text-orange-400">
                   {{ relationOptions.find(r => r.value === source.relation)?.label || source.relation || '=' }}
                 </span>
-                <span class="text-sm text-slate-600 dark:text-slate-300 truncate" :title="formatSourceValue(source.value, `(${t('app.anyValue')})`)">
-                  {{ formatSourceValue(source.value, `(${t('app.anyValue')})`) }}
+                <span class="text-sm text-slate-600 dark:text-slate-300 truncate" :title="formatSourceValue(source.value, `(${t('app.anyValue')})`, resolveDeviceNode(source.fromId)?.templateName)">
+                  {{ formatSourceValue(source.value, `(${t('app.anyValue')})`, resolveDeviceNode(source.fromId)?.templateName) }}
                 </span>
               </template>
               <button
@@ -1195,7 +1215,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   <option v-else-if="availableTargetApis.length === 0" value="">{{ t('app.none') }}</option>
                   <option v-else value="" disabled hidden>{{ t('app.selectAction') }}</option>
                   <option v-for="api in availableTargetApis" :key="api" :value="api">
-                    {{ formatApiLabel(api) }}
+                    {{ formatTargetModelToken(api) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
@@ -1262,7 +1282,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                     <option v-else-if="availableContentItems.length === 0" value="">{{ t('app.none') }}</option>
                     <option v-else value="" disabled hidden>{{ t('app.selectContent') }}</option>
                     <option v-for="content in availableContentItems" :key="content.name" :value="content.name">
-                      {{ t('app.contentItemWithSensitivity', { name: content.name, privacy: t(`app.${content.privacy}`) }) }}
+                      {{ t('app.contentItemWithSensitivity', { name: formatContentModelToken(content.name), privacy: t(`app.${content.privacy}`) }) }}
                     </option>
                   </select>
                   <span class="material-icons-round dropdown-arrow">expand_more</span>
@@ -1283,14 +1303,14 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   <span class="material-icons-round text-blue-500 text-sm">sensors</span>
                   <span class="truncate" :title="resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown')">{{ resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown') }}</span>
                   <span class="text-slate-400">→</span>
-                  <span class="text-blue-600 dark:text-blue-400 truncate" :title="formatApiLabel(source.fromApi)">{{ formatApiLabel(source.fromApi) }}</span>
+                  <span class="text-blue-600 dark:text-blue-400 truncate" :title="formatRuleSourceName(source)">{{ formatRuleSourceName(source) }}</span>
                   <span class="text-xs px-1 py-0.5 rounded" :class="getSourceTypeClass(source.itemType)">
                     {{ getSourceTypeLabel(source.itemType) }}
                   </span>
                   <!-- 条件和值仅对值条件类型显示 -->
                   <template v-if="sourceShowsRelationValue(source.itemType)">
                     <span class="text-orange-600 dark:text-orange-400">{{ relationOptions.find(r => r.value === source.relation)?.label.split(' ')[0] || '=' }}</span>
-                    <span class="text-slate-700 dark:text-slate-300">{{ formatSourceValue(source.value, '*') }}</span>
+                    <span class="text-slate-700 dark:text-slate-300">{{ formatSourceValue(source.value, '*', resolveDeviceNode(source.fromId)?.templateName) }}</span>
                   </template>
                 </div>
                 <!-- Add "AND" connector if not the last source -->
@@ -1312,16 +1332,16 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <!-- Description -->
             <div class="ml-auto text-xs text-slate-400 italic max-w-xs">
               <template v-if="rulePreview.sources.length === 1">
-                {{ t('app.singleSourceRulePreview', { source: rulePreview.sources[0]?.label, target: rulePreview.target?.label, action: formatApiLabel(rulePreview.action) }) }}
+                {{ t('app.singleSourceRulePreview', { source: rulePreview.sources[0]?.label, target: rulePreview.target?.label, action: formatTargetModelToken(rulePreview.action) }) }}
               </template>
               <template v-else-if="rulePreview.sources.length === 2">
-                {{ t('app.twoSourceRulePreview', { sourceA: rulePreview.sources[0]?.label, sourceB: rulePreview.sources[1]?.label, target: rulePreview.target?.label, action: formatApiLabel(rulePreview.action) }) }}
+                {{ t('app.twoSourceRulePreview', { sourceA: rulePreview.sources[0]?.label, sourceB: rulePreview.sources[1]?.label, target: rulePreview.target?.label, action: formatTargetModelToken(rulePreview.action) }) }}
               </template>
               <template v-else>
-                {{ t('app.multiSourceRulePreview', { source: rulePreview.sources[0]?.label, count: rulePreview.sources.length - 1, target: rulePreview.target?.label, action: formatApiLabel(rulePreview.action) }) }}
+                {{ t('app.multiSourceRulePreview', { source: rulePreview.sources[0]?.label, count: rulePreview.sources.length - 1, target: rulePreview.target?.label, action: formatTargetModelToken(rulePreview.action) }) }}
               </template>
               <span v-if="rulePreview.contentDevice && rulePreview.content" class="mt-1 block not-italic text-emerald-600 dark:text-emerald-300">
-                {{ t('app.copyFrom') }} {{ rulePreview.contentDevice.label }}.{{ rulePreview.content }}
+                {{ t('app.copyFrom') }} {{ rulePreview.contentDevice.label }}.{{ formatContentModelToken(rulePreview.content) }}
               </span>
             </div>
           </div>
@@ -1423,6 +1443,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fixed.inset-0,
+  .rule-builder-dialog {
+    animation: none;
   }
 }
 

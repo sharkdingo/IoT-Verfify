@@ -122,6 +122,31 @@ describe('Landing authentication usability', () => {
     wrapper.unmount()
   })
 
+  it('does not blame the account when the authentication window capacity is full', async () => {
+    authApi.login.mockRejectedValueOnce({
+      response: {
+        status: 429,
+        data: {
+          data: {
+            reasonCode: 'AUTH_LOGIN_RATE_LIMIT_REACHED',
+            scope: 'CAPACITY',
+            retryAfterSeconds: 9
+          }
+        }
+      }
+    })
+    const { wrapper } = await mountLanding()
+
+    await wrapper.get('input[autocomplete="username"]').setValue('alice')
+    await wrapper.get('input[autocomplete="current-password"]').setValue('wrong-password')
+    await wrapper.get('#login-panel').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('.auth-request-error').text()).toContain('登录服务当前繁忙')
+    expect(wrapper.get('.auth-request-error').text()).toContain('9 秒')
+    wrapper.unmount()
+  })
+
   it('provides a discoverable exit from the authentication panel', async () => {
     const { router, wrapper } = await mountLanding()
 

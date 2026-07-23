@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.data;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import lombok.Data;
 
 import java.util.*;
@@ -17,6 +18,7 @@ public class DeviceSmvData {
     // ── 设备标识 ──
     private String templateName;   // 模板名称（如 "Light"）
     private String deviceLabel;    // 用户可见实例名称；仅用于结果展示
+    private ModelTokenSource modelTokenSource = ModelTokenSource.UNKNOWN;
 
     // ── NuSMV 标识符（由 Factory 计算填充） ──
     private String moduleName;    // MODULE 名称（如 "Light_light1"）

@@ -17,7 +17,70 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-07-23
 
+#### Changed
+- Added an explicit anti-AI-slop engineering standard to the repository, backend, and
+  frontend contributor manuals: generated changes must have a named requirement or defect,
+  one authoritative implementation path, boundary and failure-state coverage, synchronized
+  contracts and documentation, and a maintainer-readable full-diff review before delivery.
+
 #### Fixed
+- Made Board renames compare-and-set against the name shown when the dialog opened. A stale
+  edit or a different device claiming the requested case-insensitive name now returns
+  `409 Conflict` before any write; the client refreshes the full semantic snapshot, preserves
+  the user's draft for explicit resubmission, recognizes an already-achieved rename, and
+  validates the returned old name, new name, and affected-specification count before showing
+  success.
+- Made Board device nodes theme-aware and responsive to their rendered size, kept the
+  canvas camera stable when opening ordinary device details, distinguished stateless
+  devices from manifest-defined states, and added pointer- and keyboard-safe move/resize
+  behavior. Server snapshots now preserve every pending or active node layout instead of
+  rolling back a second drag, pointer cancellation cannot leave canvas/minimap panning
+  stuck, pointer resize handles disappear when a low-zoom node cannot fit them while keyboard
+  resize remains available, and the dark-theme device context menu stays inside the viewport
+  with complete keyboard focus, navigation, and restoration behavior. Runtime and
+  private-data badges remain readable in dark mode; hidden, inert, collapsed, or detached
+  controls cannot capture modal focus; and device dialogs return focus to the originating
+  node or a stable scene control even after failed or completed deletion paths.
+- Preserved dirty device-runtime drafts across foreground and cross-tab snapshots, normalized
+  equivalent nullable/omitted runtime values, and prevented late save/delete responses from
+  reopening a closed dialog or accepting repeated destructive submissions. Stale device
+  dialogs and context menus now reconcile to the authoritative node or close when it was
+  deleted.
+- Localized bundled model tokens at the display boundary without changing canonical model
+  values, completed compact and short-viewport drawer behavior, improved floating-panel
+  focus and Escape handling, and added dark-theme surfaces for device, verification,
+  simulation, fuzzing, and fix-result dialogs. Scene-import manifest validation now presents
+  structured reasons in the selected UI language. Default-template reset previews now enumerate
+  exact Environment Pool changes, localize each old/new value only from server-confirmed
+  bundled provenance, and warn when verification and simulation must be rerun.
+  Device API names and states, recommendation details, and automatic-fix conditions now
+  localize bundled model tokens and `in`/`not in` relations while preserving custom model
+  tokens verbatim. Every token in the bundled device manifests is covered by a data-driven
+  Chinese/English localization regression, while custom `workingState` values remain visibly
+  distinct from bundled provenance.
+- Made fault-localization and automatic-fix token localization provenance-safe: new traces
+  freeze bundled/custom source per device, legacy traces fall back to unknown and preserve
+  raw text, shared environment values require unanimous source provenance, and parameter,
+  condition, action, and end-state labels no longer translate custom tokens that happen to
+  collide with bundled names.
+- Stopped chat, verification, simulation, and counterexample-search workers after a full
+  lease TTL without database confirmation; enforced stored-run quotas for synchronous
+  verification and saved simulation; and bounded verification and simulation history
+  summaries by their configured stored-run quotas with bounded scalar-metadata validation. Formal
+  and simulation playback now rejects non-contiguous or non-one-based persisted states,
+  history summaries use scalar state counts instead of loading full trace JSON, and
+  known-damaged trace placeholders no longer inflate the replayable counterexample count in
+  verification run summaries or details. Task lease renewal now locks each row before
+  sampling the database clock, so lock wait cannot revive or locally confirm an expired lease, and
+  synchronous result transactions recheck distributed admission immediately before commit.
+  Long AI tool transactions no longer block chat lease heartbeats, ordinary AI writes recheck
+  ownership immediately before commit, and a heartbeat delayed behind a row lock cannot
+  revive a lease that expired while it waited.
+- Bounded process-local authentication rate-limit state with a fail-closed active-window
+  ceiling. Capacity exhaustion now has its own `CAPACITY` scope, reports the earliest tracked
+  expiry instead of a misleading full-window delay, and shows localized busy feedback instead
+  of blaming an account or source. Cross-account custom-template preview/delete lookups now
+  return the same not-found response as an absent template.
 - Rejected ambiguous legacy phone/username logins when the supplied password matches both
   colliding accounts, instead of selecting the phone-owned account by lookup order.
 - Replaced scenario recommendation's model-authored rationale with a deterministic summary
@@ -26,10 +89,20 @@ history into a technical spec. The spec content itself now lives under
   devices unused by every retained rule/specification. A submit-ready draft therefore no
   longer implies that it satisfies the user's natural-language requirement or forms a
   closed automation loop.
+- Made zero-tool assistant replies explicitly state that no platform tool ran and no current
+  Board state was read or changed, even when a model hallucinates completion. Stream
+  `COMPLETED` now describes response delivery and persistence only, while structurally valid
+  but semantically incomplete scenario recommendations persist and report `PARTIAL` instead
+  of being presented as fully successful. The standalone scenario-recommendation REST
+  contract now carries the same objective status and issues, and both backend and frontend
+  recompute them from the returned canonical scene instead of trusting inconsistent model
+  claims.
 - Kept Board account actions reachable at tablet widths, made the permanent-account
   deletion dialog scroll within short viewports, and stopped Tab or other navigation keys
   from satisfying its deliberate-edit guard. Long canvas labels now expose their full text
-  on hover, and the action-dock mode control announces whether labels are expanded.
+  on hover, the mobile brand target remains at least 44 pixels, and the action dock scrolls
+  to every command in short landscape viewports while its mode control announces whether
+  labels are expanded.
   Refreshed the real browser check to use the current scene-replacement, layered-history,
   simulation, and eight-tool contracts and to fail on page exceptions.
 

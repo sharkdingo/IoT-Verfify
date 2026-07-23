@@ -81,6 +81,34 @@ describe('recommendation materialization', () => {
     expect(rule.sources[0]).toMatchObject({ relation: '>=', value: '28' })
   })
 
+  it('keeps canonical model tokens intact when a recommendation is applied', () => {
+    const rule = materializeRuleRecommendation({
+      name: 'Send the photo',
+      conditions: [{
+        deviceId: 'phone-1',
+        deviceName: 'Phone',
+        attribute: 'SwitchState',
+        targetType: 'variable',
+        relation: '=',
+        value: 'off'
+      }],
+      command: {
+        deviceId: 'phone-1',
+        deviceName: 'Phone',
+        action: 'send photo',
+        contentDevice: 'phone-1',
+        content: 'photo'
+      }
+    }, 'temporary-rule')
+
+    expect(rule.sources[0]).toMatchObject({ fromApi: 'SwitchState', value: 'off' })
+    expect(rule).toMatchObject({
+      toApi: 'send photo',
+      contentDevice: 'phone-1',
+      content: 'photo'
+    })
+  })
+
   it('requires exact semantic fields for specification recommendations', () => {
     expect(() => materializeSpecificationRecommendationConditions([{
       deviceId: 'door-1',

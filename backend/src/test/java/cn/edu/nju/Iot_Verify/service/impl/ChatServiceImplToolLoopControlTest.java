@@ -44,8 +44,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Instant;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -55,6 +57,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -928,12 +931,6 @@ class ChatServiceImplToolLoopControlTest {
         String executionId = service.beginStreamRequest(1L, "s1");
         assertEquals(executionId, session.getActiveExecutionId());
         LocalDateTime previousExpiry = session.getActiveExecutionExpiresAt();
-        when(sessionRepo.renewActiveExecutionLease(
-                eq("s1"), eq(1L), eq(executionId), any(LocalDateTime.class), any(LocalDateTime.class)))
-                .thenAnswer(invocation -> {
-                    session.setActiveExecutionExpiresAt(invocation.getArgument(4));
-                    return 1;
-                });
         when(sessionRepo.clearExpiredExecutionLeases(any(LocalDateTime.class))).thenReturn(2);
 
         service.maintainExecutionLeases();
@@ -944,14 +941,36 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void executionLeaseMaintenanceDoesNotResurrectLeaseAfterLockWaitExceedsTtl() throws Exception {
+        ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
+        chatExecutionConfig.setLeaseTtlMs(20);
+        LocalDateTime frozenDatabaseTime = LocalDateTime.of(2026, 7, 20, 12, 0);
+        when(sessionRepo.currentDatabaseTime()).thenReturn(frozenDatabaseTime);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        LocalDateTime originalExpiry = session.getActiveExecutionExpiresAt();
+        when(sessionRepo.findByIdAndUserIdForUpdate("s1", 1L)).thenAnswer(invocation -> {
+            LockSupport.parkNanos(Duration.ofMillis(80).toNanos());
+            return Optional.of(session);
+        });
+
+        service.maintainExecutionLeases();
+
+        assertEquals(originalExpiry, session.getActiveExecutionExpiresAt());
+        verify(sessionRepo, org.mockito.Mockito.times(1)).saveAndFlush(session);
+        Field activeRequests = ChatServiceImpl.class.getDeclaredField("activeStreamRequests");
+        activeRequests.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String, ?> requests = (Map<String, ?>) activeRequests.get(service);
+        assertFalse(requests.containsKey("s1"));
+        service.endStreamRequest(1L, "s1", executionId);
+    }
+
+    @Test
     void executionLeaseMaintenanceDropsAStaleLocalRegistrationAfterLeaseLoss() {
         ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
         String executionId = service.beginStreamRequest(1L, "s1");
         String expiredExecutionId = session.getActiveExecutionId();
         session.setActiveExecutionExpiresAt(LocalDateTime.now().minusSeconds(1));
-        when(sessionRepo.renewActiveExecutionLease(
-                eq("s1"), eq(1L), eq(expiredExecutionId), any(LocalDateTime.class), any(LocalDateTime.class)))
-                .thenReturn(0);
         when(sessionRepo.clearExpiredExecutionLeases(any(LocalDateTime.class))).thenAnswer(invocation -> {
             session.setActiveExecutionId(null);
             session.setActiveExecutionExpiresAt(null);
@@ -976,14 +995,28 @@ class ChatServiceImplToolLoopControlTest {
         ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
         String executionId = service.beginStreamRequest(1L, "s1");
         session.setActiveExecutionExpiresAt(LocalDateTime.now().minusSeconds(1));
-        when(sessionRepo.renewActiveExecutionLease(
-                eq("s1"), eq(1L), eq(executionId), any(LocalDateTime.class), any(LocalDateTime.class)))
-                .thenReturn(0);
         when(sessionRepo.clearExpiredExecutionLeases(any(LocalDateTime.class))).thenAnswer(invocation -> {
             session.setActiveExecutionId(null);
             session.setActiveExecutionExpiresAt(null);
             return 1;
         });
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.maintainExecutionLeases();
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
+
+        verify(emitter).complete();
+        verify(messageRepo, never()).saveAndFlush(any());
+        verifyNoInteractions(llmChatService, aiToolManager);
+    }
+
+    @Test
+    void queuedWorkerStopsAfterDatabaseCannotConfirmItsLeaseForFullTtl() throws Exception {
+        chatExecutionConfig.setLeaseTtlMs(60_000);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        LeaseConfirmationTestSupport.ageExecutionLease(
+                service, "activeStreamRequests", "s1", Duration.ofSeconds(61));
+        when(sessionRepo.currentDatabaseTime()).thenThrow(new RuntimeException("database unavailable"));
         SseEmitter emitter = mock(SseEmitter.class);
 
         service.maintainExecutionLeases();
@@ -1360,7 +1393,7 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
-    void processStreamChat_alwaysOffersCompleteCatalogAndLetsModelUseNoTool() throws Exception {
+    void processStreamChat_whenNoToolModelClaimsCompletion_prefixesAuthoritativeNotice() throws Exception {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("s1");
         session.setUserId(1L);
@@ -1389,7 +1422,7 @@ class ChatServiceImplToolLoopControlTest {
             streamedMessages.set(messages);
             @SuppressWarnings("unchecked")
             Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
-            onDelta.accept("ok");
+            onDelta.accept("I deleted every device.");
             return null;
         }).when(llmChatService).streamReply(anyList(), any(), any());
 
@@ -1408,6 +1441,50 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(systemPrompt.contains("do not claim to have read current platform data"));
         assertTrue(systemPrompt.contains("Do not emit tool-call JSON"));
         assertFalse(systemPrompt.contains("Available tools:"));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getContent() != null
+                        && msg.getContent().startsWith("System status: no platform tool ran in this turn")
+                        && msg.getContent().contains("I deleted every device.")
+                        && msg.getExecutionStatus() == ChatExecutionStatus.COMPLETED));
+        verify(emitter).complete();
+    }
+
+    @Test
+    void processStreamChat_whenScenarioDraftMissesCoreParts_persistsPartialOutcome() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+
+        useSession(session);
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of(toolSpec("recommend_scenario")));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("recommend_scenario", "{}"), textResult("draft ready"));
+        when(aiToolManager.execute("recommend_scenario", "{}"))
+                .thenReturn("{\"objectiveStatus\":\"PARTIAL\",\"objectiveIssues\":["
+                        + "{\"code\":\"NO_AUTOMATION_RULES\"},{\"code\":\"NO_SPECIFICATIONS\"}],"
+                        + "\"scene\":{\"devices\":[{\"id\":\"device_1\"}],\"rules\":[],\"specs\":[]}}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("Review the generated draft.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        SseEmitter emitter = mock(SseEmitter.class);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "create a scene", emitter);
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getContent() != null
+                        && msg.getContent().contains("incomplete scene draft")
+                        && msg.getContent().contains("Review the generated draft.")
+                        && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL));
         verify(emitter).complete();
     }
 

@@ -182,11 +182,28 @@ export const playbackDeviceSecurityFacts = (device: PlaybackDevice): PlaybackDev
   }
 }
 
-export const playbackDeviceSummaryParts = (device: PlaybackDevice): string[] => {
+export const formatPlaybackSecurityLabel = (
+  label: string,
+  formatToken: (value: string) => string
+): string => {
+  const stateProperty = /^([^:]+):\s*(.+)$/.exec(label)
+  return stateProperty
+    ? `${formatToken(stateProperty[1])}: ${formatToken(stateProperty[2])}`
+    : formatToken(label)
+}
+
+export const playbackDeviceSummaryParts = (
+  device: PlaybackDevice,
+  formatToken: (value: string) => string = value => value
+): string[] => {
   const parts: string[] = []
-  if (device.state?.trim()) parts.push(device.state.trim())
-  if (device.mode?.trim() && device.mode.trim() !== device.state?.trim()) parts.push(device.mode.trim())
-  ;(device.variables || []).forEach(variable => parts.push(`${variable.name}=${variable.value}`))
+  if (device.state?.trim()) parts.push(formatToken(device.state.trim()))
+  if (device.mode?.trim() && device.mode.trim() !== device.state?.trim()) {
+    parts.push(formatToken(device.mode.trim()))
+  }
+  ;(device.variables || []).forEach(variable => parts.push(
+    `${formatToken(variable.name)}=${formatToken(variable.value)}`
+  ))
   return parts
 }
 

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import org.junit.jupiter.api.Test;
 
@@ -85,6 +86,50 @@ class BoardDataConverterTest {
         assertEquals("trusted", device.getCurrentStateTrust());
         assertEquals("private", device.getCurrentStatePrivacy());
         assertEquals(template.getManifest(), modelSnapshot.templateManifests().get("Window Shade Display"));
+    }
+
+    @Test
+    void getDevicesForVerification_capturesTemplateProvenanceWithoutNameGuessing() {
+        BoardStorageService storage = mock(BoardStorageService.class);
+        DeviceTemplateDto bundled = template("Bundled", List.of(), List.of());
+        bundled.setDefaultTemplate(true);
+        DeviceTemplateDto custom = template("Custom", List.of(), List.of());
+        custom.setDefaultTemplate(false);
+        DeviceTemplateDto legacy = template("Legacy", List.of(), List.of());
+        legacy.setDefaultTemplate(null);
+        when(storage.getSemanticSnapshot(1L)).thenReturn(snapshot(
+                List.of(
+                        node("bundled", "Bundled", null),
+                        node("custom", "Custom", null),
+                        node("legacy", "Legacy", null)),
+                List.of(bundled, custom, legacy)));
+
+        List<DeviceVerificationDto> devices = new BoardDataConverter(storage)
+                .getModelInputSnapshot(1L).devices();
+
+        assertEquals(ModelTokenSource.BUNDLED, devices.get(0).getModelTokenSource());
+        assertEquals(ModelTokenSource.CUSTOM, devices.get(1).getModelTokenSource());
+        assertEquals(ModelTokenSource.UNKNOWN, devices.get(2).getModelTokenSource());
+    }
+
+    @Test
+    void getDevicesForVerification_capturesBundledProvenanceThroughManifestNameAlias() {
+        BoardStorageService storage = mock(BoardStorageService.class);
+        DeviceTemplateDto bundled = template(
+                "Window Shade Display", List.of("OpenableState"), List.of("closed", "open"));
+        bundled.getManifest().setName("Window Shade");
+        bundled.setDefaultTemplate(true);
+        when(storage.getSemanticSnapshot(1L)).thenReturn(snapshot(
+                List.of(node("shade_1", "Window Shade", "closed")),
+                List.of(bundled)));
+
+        BoardDataConverter.ModelInputSnapshot modelSnapshot = new BoardDataConverter(storage)
+                .getModelInputSnapshot(1L);
+        DeviceVerificationDto device = modelSnapshot.devices().get(0);
+
+        assertEquals(ModelTokenSource.BUNDLED, device.getModelTokenSource());
+        assertEquals("closed", device.getState());
+        assertEquals(bundled.getManifest(), modelSnapshot.templateManifests().get("Window Shade"));
     }
 
     private DeviceNodeDto node(String id, String templateName, String state) {

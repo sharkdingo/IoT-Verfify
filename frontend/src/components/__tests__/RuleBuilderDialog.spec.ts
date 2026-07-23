@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { describe, expect, it, vi } from 'vitest'
 import RuleBuilderDialog from '../RuleBuilderDialog.vue'
@@ -7,7 +7,7 @@ import type { DeviceNode } from '@/types/node'
 
 vi.mock('@/api/board', () => ({
   default: {
-    checkDuplicateRule: vi.fn(),
+    checkDuplicateRule: vi.fn().mockResolvedValue({ isDuplicate: false, requiresReview: false }),
     checkRuleSimilarity: vi.fn()
   }
 }))
@@ -22,6 +22,8 @@ const i18n = createI18n({
         actionEvent: 'Action Event',
         action: 'Action',
         variable: 'Variable',
+        internalVariable: 'Internal variable',
+        environmentVariable: 'Environment variable',
         modes: 'Modes',
         state: 'State',
         none: 'None',
@@ -75,7 +77,16 @@ const i18n = createI18n({
         addConfiguredRuleSourceBeforeSubmit: 'Add the configured IF condition to the rule before continuing.',
         selectRuleTargetBeforeSubmit: 'Select the THEN target device and action.',
         completeContentPayloadFields: 'Complete payload',
-        close: 'Close'
+        close: 'Close',
+        modelTokens: {
+          lock: 'Lock device',
+          mode: 'Operating mode',
+          switchState: 'Switch status',
+          photo: 'Photo item',
+          content: 'Content item',
+          on: 'Enabled',
+          off: 'Disabled'
+        }
       }
     }
   },
@@ -103,7 +114,121 @@ const template = {
   }
 }
 
+const localizedTemplate = {
+  name: 'Switch',
+  defaultTemplate: true,
+  manifest: {
+    Name: 'Switch',
+    APIs: [{ Name: 'lock', Signal: true, AcceptsContent: true }],
+    InternalVariables: [{ Name: 'SwitchState', IsInside: true, Values: ['on', 'off'] }],
+    Modes: ['Mode'],
+    WorkingStates: [{ Name: 'off' }],
+    Contents: [{ Name: 'photo', Privacy: 'private' as const }]
+  }
+}
+
+const customCollisionTemplate = {
+  ...localizedTemplate,
+  name: 'CustomSwitch',
+  defaultTemplate: false,
+  manifest: {
+    ...localizedTemplate.manifest,
+    Name: 'CustomSwitch'
+  }
+}
+
+const localizedNodes: DeviceNode[] = [
+  { id: 'localized-source', label: 'Built-in source', templateName: 'Switch', position: { x: 0, y: 0 }, state: 'off', width: 176, height: 128 },
+  { id: 'localized-target', label: 'Built-in target', templateName: 'Switch', position: { x: 220, y: 0 }, state: 'off', width: 176, height: 128 }
+]
+
+const customCollisionNodes: DeviceNode[] = [
+  { id: 'custom-source', label: 'Custom source', templateName: 'CustomSwitch', position: { x: 0, y: 0 }, state: 'off', width: 176, height: 128 },
+  { id: 'custom-target', label: 'Custom target', templateName: 'CustomSwitch', position: { x: 220, y: 0 }, state: 'off', width: 176, height: 128 }
+]
+
 describe('RuleBuilderDialog action semantics', () => {
+  it('localizes bundled model tokens for display while submitting canonical rule values', async () => {
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes: localizedNodes, deviceTemplates: [localizedTemplate] },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('#rule-source-device').setValue('localized-source')
+
+    await wrapper.get('#rule-source-type').setValue('mode')
+    const modeOption = wrapper.get('#rule-source-mode').get('option[value="Mode"]')
+    expect(modeOption.text()).toBe('Operating mode')
+    expect(modeOption.attributes('value')).toBe('Mode')
+    await wrapper.get('#rule-source-mode').setValue('Mode')
+    expect(wrapper.get('#rule-source-value').get('option[value="off"]').text()).toBe('Disabled')
+
+    await wrapper.get('#rule-source-type').setValue('state')
+    expect(wrapper.get('#rule-source-value').get('option[value="off"]').text()).toBe('Disabled')
+
+    await wrapper.get('#rule-source-type').setValue('variable')
+    const variableOption = wrapper.get('#rule-source-variable').get('option[value="SwitchState"]')
+    expect(variableOption.text()).toBe('Switch status (Internal variable)')
+    expect(variableOption.attributes('value')).toBe('SwitchState')
+    await wrapper.get('#rule-source-variable').setValue('SwitchState')
+    const valueOption = wrapper.get('#rule-source-value').get('option[value="on"]')
+    expect(valueOption.text()).toBe('Enabled')
+    expect(valueOption.attributes('value')).toBe('on')
+    await wrapper.get('#rule-source-value').setValue('on')
+    await wrapper.get('[data-testid="rule-add-source"]').trigger('click')
+
+    await wrapper.get('#rule-target-device').setValue('localized-target')
+    const actionOption = wrapper.get('#rule-target-action').get('option[value="lock"]')
+    expect(actionOption.text()).toBe('Lock device')
+    expect(actionOption.attributes('value')).toBe('lock')
+    await wrapper.get('#rule-target-action').setValue('lock')
+    await wrapper.get('[data-testid="rule-content-device"]').setValue('localized-source')
+    const contentOption = wrapper.get('[data-testid="rule-content-name"] option[value="photo"]')
+    expect(contentOption.text()).toBe('Photo item')
+    expect(contentOption.attributes('value')).toBe('photo')
+    await wrapper.get('[data-testid="rule-content-name"]').setValue('photo')
+    expect(wrapper.text()).toContain('Built-in source.Photo item')
+    await wrapper.get('[data-testid="rule-save"]').trigger('click')
+    await flushPromises()
+
+    const saveRequest = wrapper.emitted('save-rule')?.[0]?.[0] as any
+    expect(saveRequest.rule.sources[0]).toMatchObject({
+      fromApi: 'SwitchState',
+      value: 'on'
+    })
+    expect(saveRequest.rule.toApi).toBe('lock')
+    expect(saveRequest.rule.contentDevice).toBe('localized-source')
+    expect(saveRequest.rule.content).toBe('photo')
+    saveRequest.complete(true)
+  })
+
+  it('keeps colliding custom-template tokens unchanged in every rule selector', async () => {
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes: customCollisionNodes, deviceTemplates: [customCollisionTemplate] },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('#rule-source-device').setValue('custom-source')
+    await wrapper.get('#rule-source-type').setValue('mode')
+    expect(wrapper.get('#rule-source-mode').get('option[value="Mode"]').text()).toBe('Mode')
+    await wrapper.get('#rule-source-mode').setValue('Mode')
+    expect(wrapper.get('#rule-source-value').get('option[value="off"]').text()).toBe('off')
+
+    await wrapper.get('#rule-source-type').setValue('variable')
+    expect(wrapper.get('#rule-source-variable').get('option[value="SwitchState"]').text())
+      .toBe('SwitchState (Internal variable)')
+    await wrapper.get('#rule-source-variable').setValue('SwitchState')
+    expect(wrapper.get('#rule-source-value').get('option[value="on"]').text()).toBe('on')
+
+    await wrapper.get('#rule-target-device').setValue('custom-target')
+    expect(wrapper.get('#rule-target-action').get('option[value="lock"]').text()).toBe('lock')
+    await wrapper.get('#rule-target-action').setValue('lock')
+    await wrapper.get('[data-testid="rule-content-device"]').setValue('custom-source')
+    const contentOption = wrapper.get('[data-testid="rule-content-name"] option[value="photo"]')
+    expect(contentOption.text()).toBe('photo')
+    expect(contentOption.attributes('value')).toBe('photo')
+  })
+
   it('offers only observable action events as IF sources while keeping all actions available for THEN', async () => {
     const wrapper = mount(RuleBuilderDialog, {
       props: { modelValue: true, nodes, deviceTemplates: [template] },

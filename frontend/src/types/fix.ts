@@ -5,6 +5,9 @@
 
 import type { RuleForm, RuleSourceItemType } from './rule'
 import type { ModelGenerationIssue } from './verify'
+import type { ModelTokenSource } from './modelToken'
+
+export type { ModelTokenSource } from './modelToken'
 
 // 故障规则定位结果
 export interface FaultRule {
@@ -18,6 +21,7 @@ export interface FaultRule {
   conflictingEndState?: string
   reasonCode: 'TRIGGERED' | 'CONFLICTING_END_STATES'
   reason: string
+  modelTokenSource: ModelTokenSource
 }
 
 export interface FaultLocalizationResult {
@@ -43,6 +47,7 @@ export interface ParameterTarget {
   lowerBound: number
   upperBound: number
   description: string
+  modelTokenSource: ModelTokenSource
 }
 
 // §5.1 参数调整结果
@@ -60,6 +65,7 @@ export interface ConditionAdjustment {
   deviceLabel: string
   relation?: string
   value?: string
+  modelTokenSource: ModelTokenSource
 }
 
 // 修复建议

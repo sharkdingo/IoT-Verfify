@@ -90,3 +90,15 @@ export const endNodeResize = (resizeState: NodeResizeState): DeviceNode | null =
     resizeState.node = null
     return n
 }
+
+export const cancelNodeResize = (resizeState: NodeResizeState): DeviceNode | null => {
+    const node = resizeState.node
+    if (!node) return null
+
+    node.width = resizeState.originSize.w
+    node.height = resizeState.originSize.h
+    node.position.x = resizeState.originPos.x
+    node.position.y = resizeState.originPos.y
+    resizeState.node = null
+    return node
+}

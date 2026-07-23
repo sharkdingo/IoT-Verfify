@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.dto.fix;
 
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -12,10 +14,18 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class ParameterTarget {
     private String targetId;
+    /** Internal trace-snapshot locator used only to attach frozen template provenance. */
+    @JsonIgnore
+    private int ruleIndex;
+    /** Internal trace-snapshot locator used only to attach frozen template provenance. */
+    @JsonIgnore
+    private int conditionIndex;
     private String attribute;
     private String relation;
     private String originalValue;
     private int lowerBound;
     private int upperBound;
     private String description;
+    @Builder.Default
+    private ModelTokenSource modelTokenSource = ModelTokenSource.UNKNOWN;
 }

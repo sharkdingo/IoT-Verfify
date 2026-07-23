@@ -43,6 +43,7 @@ security:
     register-per-hour: ${AUTH_REGISTER_RATE_LIMIT_PER_HOUR:5}
     source-login-per-minute: ${AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE:120}
     source-register-per-hour: ${AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR:60}
+    max-windows: ${AUTH_RATE_LIMIT_MAX_WINDOWS:65536}
   operation-admission:
     lease-heartbeat-ms: ${OPERATION_ADMISSION_LEASE_HEARTBEAT_MS:30000}
 

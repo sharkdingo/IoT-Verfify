@@ -151,6 +151,7 @@ final class NusmvEnvironmentPool {
         copy.setVarName(source.getVarName());
         copy.setDeviceLabel(source.getDeviceLabel());
         copy.setTemplateName(source.getTemplateName());
+        copy.setModelTokenSource(source.getModelTokenSource());
         copy.setState(source.getState());
         copy.setCurrentStateTrust(source.getCurrentStateTrust());
         copy.setCurrentStatePrivacy(source.getCurrentStatePrivacy());

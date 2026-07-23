@@ -3,7 +3,7 @@
 export interface NodeVariableState {
     name: string
     value: string
-    trust?: string          // "trusted" | "untrusted"
+    trust?: string | null   // "trusted" | "untrusted"; board responses may serialize an inherited value as null
 }
 
 export interface NodePrivacyState {
@@ -23,8 +23,8 @@ export interface DeviceNode {
     height: number
     // Runtime state persisted with the node (backend DeviceNodeDto). Optional because
     // not every node carries overrides; used when building a verification request.
-    currentStateTrust?: string      // "trusted" | "untrusted"
-    currentStatePrivacy?: string    // "public" | "private"
+    currentStateTrust?: string | null      // "trusted" | "untrusted"
+    currentStatePrivacy?: string | null    // "public" | "private"
     variables?: NodeVariableState[]
     privacies?: NodePrivacyState[]
 }

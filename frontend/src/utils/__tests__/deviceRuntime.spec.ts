@@ -3,6 +3,7 @@ import type { DeviceTemplate } from '@/types/device'
 import {
   buildDeviceRuntimeConfig,
   createDeviceRuntimeDraft,
+  deviceRuntimeConfigsEqual,
   findTemplateStatePrivacy,
   findTemplateStateTrust,
   getTemplateVariableDefaultValue,
@@ -141,6 +142,26 @@ describe('device runtime authority helpers', () => {
       variables: [],
       privacies: []
     }, { variableScope: 'local' })).toEqual(expected)
+  })
+
+  it('compares runtime snapshots by effective values rather than nullable transport fields', () => {
+    expect(deviceRuntimeConfigsEqual(thermostatTemplate, {
+      state: 'auto',
+      currentStateTrust: null,
+      variables: [{ name: 'presence', value: 'home', trust: null }],
+      privacies: []
+    }, {
+      state: 'auto',
+      variables: [{ name: 'presence', value: 'home' }]
+    }, { variableScope: 'local', includeEmptyCollections: true })).toBe(true)
+
+    expect(deviceRuntimeConfigsEqual(thermostatTemplate, {
+      state: 'auto',
+      variables: [{ name: 'presence', value: 'home' }]
+    }, {
+      state: 'auto',
+      variables: [{ name: 'presence', value: 'away' }]
+    }, { variableScope: 'local', includeEmptyCollections: true })).toBe(false)
   })
 
   it('can preserve empty runtime collections when editing an existing device', () => {

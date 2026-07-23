@@ -96,7 +96,7 @@ const validSimulation = () => ({
   modelComplete: true,
   disabledRuleCount: 0,
   generationIssues: [],
-  states: [state(0), state(1)],
+  states: [state(1), state(2)],
   steps: 1,
   requestedSteps: 1,
   nusmvOutput: 'Trace Type: Simulation',
@@ -217,6 +217,19 @@ describe('verification and simulation response contracts', () => {
     expect(validateSimulationResult(validSimulation())).toEqual(validSimulation())
   })
 
+  it.each([
+    { label: 'zero-based', indexes: [0, 1] },
+    { label: 'duplicate', indexes: [1, 1] },
+    { label: 'gapped', indexes: [1, 3] }
+  ])('rejects $label formal state indexes', ({ indexes }) => {
+    expect(() => validateSimulationResult({
+      ...validSimulation(),
+      states: indexes.map(state)
+    })).toThrow(expect.objectContaining({
+      code: RUN_RESPONSE_INCOMPLETE_CODE
+    }))
+  })
+
   it('does not treat missing simulation completeness as a complete model', () => {
     const result = validSimulation() as Record<string, unknown>
     delete result.modelComplete
@@ -266,6 +279,61 @@ describe('verification and simulation response contracts', () => {
     expect(() => validateVerificationRunSummary({
       ...summary,
       counterexampleCount: undefined
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+
+    const traceSummary = {
+      id: 17,
+      verificationTaskId: summary.id,
+      violatedSpecId: 'spec-1',
+      violatedSpec: {
+        id: 'spec-1',
+        templateId: '1',
+        aConditions: [],
+        ifConditions: [],
+        thenConditions: []
+      },
+      stateCount: 2,
+      createdAt: '2026-07-12T00:00:00',
+      dataAvailable: true
+    }
+    expect(validateVerificationRunSummary({
+      ...summary,
+      outcome: 'VIOLATED',
+      violatedSpecCount: 1,
+      counterexampleCount: 1,
+      counterexamples: [traceSummary]
+    }).counterexamples).toEqual([traceSummary])
+
+    const unavailableTraceSummary = {
+      id: 18,
+      verificationTaskId: summary.id,
+      dataAvailable: false,
+      unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+    } as const
+    const mixedCounterexamples = [traceSummary, unavailableTraceSummary]
+    expect(validateVerificationRunSummary({
+      ...summary,
+      outcome: 'VIOLATED',
+      violatedSpecCount: 1,
+      counterexampleCount: 1,
+      counterexamples: mixedCounterexamples
+    }).counterexamples).toEqual(mixedCounterexamples)
+
+    expect(() => validateVerificationRunSummary({
+      ...summary,
+      outcome: 'VIOLATED',
+      violatedSpecCount: 1,
+      counterexampleCount: 2,
+      counterexamples: mixedCounterexamples
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+
+    const { createdAt: _createdAt, ...traceWithoutTimestamp } = traceSummary
+    expect(() => validateVerificationRunSummary({
+      ...summary,
+      outcome: 'VIOLATED',
+      violatedSpecCount: 1,
+      counterexampleCount: 1,
+      counterexamples: [traceWithoutTimestamp]
     })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
   })
 

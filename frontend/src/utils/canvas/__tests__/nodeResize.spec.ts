@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { DeviceNode } from '../../../types/node'
 import {
   beginNodeResize,
+  cancelNodeResize,
   createNodeResizeState,
   NODE_HEIGHT_RANGE,
   NODE_WIDTH_RANGE,
@@ -58,5 +59,23 @@ describe('node resize persistence domain', () => {
     expect(node.height).toBe(NODE_HEIGHT_RANGE.min)
     expect(node.position.x + node.width).toBe(right)
     expect(node.position.y + node.height).toBe(bottom)
+  })
+
+  it('restores size and position when an active pointer resize is cancelled', () => {
+    const node = device()
+    const original = {
+      width: node.width,
+      height: node.height,
+      position: { ...node.position }
+    }
+    const state = createNodeResizeState()
+    beginNodeResize(pointer(0, 0), node, 'tl', state)
+
+    updateNodeResize(pointer(-50, -30), state)
+    expect(node.width).not.toBe(original.width)
+
+    expect(cancelNodeResize(state)).toBe(node)
+    expect(node).toMatchObject(original)
+    expect(state.node).toBeNull()
   })
 })

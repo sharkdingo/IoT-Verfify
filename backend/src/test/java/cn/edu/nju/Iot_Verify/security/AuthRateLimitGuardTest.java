@@ -4,6 +4,14 @@ import cn.edu.nju.Iot_Verify.exception.AuthRateLimitException;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -71,6 +79,60 @@ class AuthRateLimitGuardTest {
 
         assertDoesNotThrow(() -> guard.checkLogin("alice", first));
         assertDoesNotThrow(() -> guard.checkLogin("alice", second));
+    }
+
+    @Test
+    void capacityPressureFailsClosedWithoutEvictingActiveBuckets() {
+        AuthRateLimitGuard guard = new AuthRateLimitGuard(1, 1, 100, 100, 6);
+
+        guard.checkLogin("alice", request("203.0.113.10"));
+        guard.checkLogin("bob", request("203.0.113.11"));
+        guard.checkLogin("carol", request("203.0.113.12"));
+
+        AuthRateLimitException capacityError = assertThrows(
+                AuthRateLimitException.class,
+                () -> guard.checkLogin("dave", request("203.0.113.13")));
+        assertEquals("CAPACITY", capacityError.getScope());
+        org.junit.jupiter.api.Assertions.assertTrue(capacityError.getRetryAfterSeconds() <= 60);
+        assertEquals(6, guard.trackedWindowCount());
+
+        AuthRateLimitException existingAccountError = assertThrows(
+                AuthRateLimitException.class,
+                () -> guard.checkLogin("alice", request("203.0.113.10")));
+        assertEquals("ACCOUNT", existingAccountError.getScope());
+        assertEquals(6, guard.trackedWindowCount());
+    }
+
+    @Test
+    void concurrentHighCardinalityTrafficNeverExceedsConfiguredCapacity() throws Exception {
+        int capacity = 32;
+        AuthRateLimitGuard guard = new AuthRateLimitGuard(100, 100, 100, 100, capacity);
+        ExecutorService executor = Executors.newFixedThreadPool(16);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < 128; i++) {
+                int requestId = i;
+                futures.add(executor.submit(() -> {
+                    start.await();
+                    try {
+                        guard.checkLogin("user-" + requestId, request("source-" + requestId));
+                    } catch (AuthRateLimitException expectedAtCapacity) {
+                        // Capacity exhaustion is intentionally fail-closed.
+                    }
+                    return null;
+                }));
+            }
+
+            start.countDown();
+            for (Future<?> future : futures) {
+                future.get(10, TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertEquals(capacity, guard.trackedWindowCount());
     }
 
     private MockHttpServletRequest request(String address) {

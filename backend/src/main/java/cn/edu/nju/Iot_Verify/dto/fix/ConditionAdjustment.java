@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.fix;
 
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -37,4 +38,6 @@ public class ConditionAdjustment {
     private String deviceName;
     private String relation;
     private String value;
+    @Builder.Default
+    private ModelTokenSource modelTokenSource = ModelTokenSource.UNKNOWN;
 }

@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import org.junit.jupiter.api.Test;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 
@@ -13,6 +14,8 @@ import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class VerificationTaskMapperTest {
 
@@ -78,10 +81,6 @@ class VerificationTaskMapperTest {
         assertEquals(true, summary.getEnablePrivacy());
         assertEquals(5, summary.getModelSemantics().getModeledAttackPointCount());
         assertEquals(dto.getModelSnapshot(), summary.getModelSnapshot());
-        var runSummary = mapper.toRunSummaryDto(po, 1);
-        assertEquals(1, runSummary.getCounterexampleCount());
-        assertEquals(VerificationOutcome.VIOLATED, runSummary.getOutcome());
-        assertEquals(false, runSummary.getModelComplete());
         var run = mapper.toRunDto(po, 1);
         assertEquals(1, run.getCounterexampleCount());
         assertEquals("raw output", run.getNusmvOutput());
@@ -105,6 +104,31 @@ class VerificationTaskMapperTest {
 
         assertEquals(VerificationOutcome.INCONCLUSIVE, dto.getOutcome());
         assertEquals(false, dto.getModelComplete());
+    }
+
+    @Test
+    void runMappersKeepTheReplayableCountSuppliedByTheService() {
+        VerificationTaskPo po = VerificationTaskPo.builder()
+                .id(10L)
+                .userId(1L)
+                .status(VerificationTaskPo.TaskStatus.COMPLETED)
+                .createdAt(LocalDateTime.now())
+                .modelSnapshotJson(MODEL_SNAPSHOT_JSON)
+                .outcome(VerificationOutcome.VIOLATED)
+                .checkLogsJson("[]")
+                .build();
+
+        assertEquals(0, mapper.toRunDto(po, 0).getCounterexampleCount());
+
+        VerificationRunSummaryProjection projection = mock(VerificationRunSummaryProjection.class);
+        when(projection.getId()).thenReturn(10L);
+        when(projection.getOutcome()).thenReturn(VerificationOutcome.VIOLATED);
+        when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
+        when(projection.getGenerationIssuesJson()).thenReturn("[]");
+
+        var summary = mapper.toRunSummaryDto(projection, 0);
+        assertEquals(0, summary.getCounterexampleCount());
+        assertEquals(VerificationOutcome.VIOLATED, summary.getOutcome());
     }
 
     @Test

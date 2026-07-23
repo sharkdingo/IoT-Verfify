@@ -38,8 +38,8 @@ const outcome = computed(() => {
       icon: 'warning',
       label: t('app.fuzzViolationFound'),
       detail: t('app.fuzzViolationFoundDetail'),
-      className: 'border-red-200 bg-red-50 text-red-900',
-      iconClass: 'bg-red-100 text-red-700'
+      className: 'border-red-200 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/50 dark:text-red-100',
+      iconClass: 'bg-red-100 text-red-700 dark:bg-red-900/70 dark:text-red-200'
     }
   }
   if (props.run?.outcome === 'BUDGET_EXHAUSTED') {
@@ -47,16 +47,16 @@ const outcome = computed(() => {
       icon: 'search_off',
       label: t('app.fuzzBudgetExhausted'),
       detail: t('app.fuzzNoViolationWithinBudget'),
-      className: 'border-sky-200 bg-sky-50 text-sky-950',
-      iconClass: 'bg-sky-100 text-sky-700'
+      className: 'border-sky-200 bg-sky-50 text-sky-950 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-100',
+      iconClass: 'bg-sky-100 text-sky-700 dark:bg-sky-900/70 dark:text-sky-200'
     }
   }
   return {
     icon: 'help',
     label: t('app.fuzzInconclusive'),
     detail: t('app.fuzzInconclusiveDetail'),
-    className: 'border-amber-200 bg-amber-50 text-amber-950',
-    iconClass: 'bg-amber-100 text-amber-700'
+    className: 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100',
+    iconClass: 'bg-amber-100 text-amber-700 dark:bg-amber-900/70 dark:text-amber-200'
   }
 })
 
@@ -72,6 +72,10 @@ const findingDataAvailable = (finding: FuzzingFindingSummary | FuzzingFinding) =
   !('dataAvailable' in finding) || finding.dataAvailable !== false
 
 const elapsedSeconds = computed(() => Math.max(0, Math.round((props.run?.elapsedMs || 0) / 1000)))
+const elapsedLabel = computed(() => t(
+  elapsedSeconds.value === 1 ? 'app.fuzzElapsedSecond' : 'app.fuzzElapsedSeconds',
+  { count: elapsedSeconds.value }
+))
 const explorationModeLabel = computed(() => t(
   props.run?.explorationMode === 'PAPER_COMPATIBLE'
     ? 'app.fuzzModePaper'
@@ -140,27 +144,27 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
   >
     <section
       :ref="setDialogRef"
-      class="flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+      class="flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
       role="dialog"
       aria-modal="true"
       aria-labelledby="fuzzing-result-title"
       aria-describedby="fuzzing-result-description"
       tabindex="-1"
     >
-      <header class="flex items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4">
+      <header class="flex items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-700 dark:bg-slate-950">
         <div class="flex min-w-0 items-center gap-3">
-          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700">
+          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-200">
             <span class="material-symbols-outlined" aria-hidden="true">radar</span>
           </div>
           <div class="min-w-0">
-            <h3 id="fuzzing-result-title" class="text-base font-bold text-slate-900">{{ t('app.fuzzRunResult') }}</h3>
-            <p id="fuzzing-result-description" class="mt-0.5 text-xs leading-5 text-slate-600">{{ t('app.fuzzResultHeuristicNotice') }}</p>
+            <h3 id="fuzzing-result-title" class="text-base font-bold text-slate-900 dark:text-slate-100">{{ t('app.fuzzRunResult') }}</h3>
+            <p id="fuzzing-result-description" class="mt-0.5 text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t('app.fuzzResultHeuristicNotice') }}</p>
           </div>
         </div>
         <button
           type="button"
           data-testid="close-fuzzing-result"
-          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200 hover:text-slate-800"
+          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
           :title="t('app.close')"
           :aria-label="t('app.close')"
           @click="closeDialog"
@@ -170,12 +174,12 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
       </header>
 
       <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-        <div v-if="loading" class="flex flex-col items-center justify-center py-16 text-slate-500">
-          <span class="material-symbols-outlined animate-spin text-4xl text-indigo-600" aria-hidden="true">sync</span>
+        <div v-if="loading" class="flex flex-col items-center justify-center py-16 text-slate-500 dark:text-slate-300">
+          <span class="material-symbols-outlined animate-spin text-4xl text-indigo-600 dark:text-indigo-300" aria-hidden="true">sync</span>
           <p class="mt-3 text-sm">{{ t('app.loadingFuzzRun') }}</p>
         </div>
 
-        <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800" role="alert">
+        <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-100" role="alert">
           {{ error }}
         </div>
 
@@ -194,13 +198,13 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             data-testid="fuzzing-result-mode"
             class="rounded-lg border px-3 py-2.5"
             :class="run.explorationMode === 'PAPER_COMPATIBLE'
-              ? 'border-amber-200 bg-amber-50 text-amber-950'
-              : 'border-indigo-100 bg-indigo-50 text-indigo-950'"
+              ? 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100'
+              : 'border-indigo-100 bg-indigo-50 text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100'"
             :aria-label="t('app.fuzzExplorationMode')"
           >
             <div class="flex flex-wrap items-center gap-2">
-              <span class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.fuzzExplorationMode') }}</span>
-              <span class="max-w-full rounded-full bg-white px-2 py-0.5 text-[11px] font-bold shadow-sm">
+              <span class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-300">{{ t('app.fuzzExplorationMode') }}</span>
+              <span class="max-w-full rounded-full bg-white px-2 py-0.5 text-[11px] font-bold shadow-sm dark:bg-slate-800">
                 {{ explorationModeLabel }}
               </span>
             </div>
@@ -208,37 +212,37 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
           </section>
 
           <section aria-labelledby="fuzz-run-summary-title">
-            <h4 id="fuzz-run-summary-title" class="text-sm font-bold text-slate-800">{{ t('app.runSummary') }}</h4>
-            <div class="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-4">
-              <div class="bg-white p-3">
-                <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.fuzzIterations') }}</div>
-                <div class="mt-1 text-lg font-bold text-slate-900">{{ run.iterations }}</div>
+            <h4 id="fuzz-run-summary-title" class="text-sm font-bold text-slate-800 dark:text-slate-100">{{ t('app.runSummary') }}</h4>
+            <div class="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-4 dark:border-slate-700 dark:bg-slate-700">
+              <div class="bg-white p-3 dark:bg-slate-800">
+                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzIterations') }}</div>
+                <div class="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{{ run.iterations }}</div>
               </div>
-              <div class="bg-white p-3">
-                <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.fuzzGeneratedPaths') }}</div>
-                <div class="mt-1 text-lg font-bold text-slate-900">{{ run.generatedPaths }}</div>
+              <div class="bg-white p-3 dark:bg-slate-800">
+                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzGeneratedPaths') }}</div>
+                <div class="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{{ run.generatedPaths }}</div>
               </div>
-              <div class="bg-white p-3">
-                <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.fuzzElapsed') }}</div>
-                <div class="mt-1 text-lg font-bold text-slate-900">{{ elapsedSeconds }}s</div>
+              <div class="bg-white p-3 dark:bg-slate-800">
+                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzElapsed') }}</div>
+                <div class="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{{ elapsedLabel }}</div>
               </div>
-              <div class="bg-white p-3">
-                <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.fuzzEffectiveSeed') }}</div>
-                <div class="mt-1 truncate font-mono text-sm font-bold text-slate-900" :title="String(run.effectiveSeed)">{{ run.effectiveSeed }}</div>
+              <div class="bg-white p-3 dark:bg-slate-800">
+                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzEffectiveSeed') }}</div>
+                <div class="mt-1 truncate font-mono text-sm font-bold text-slate-900 dark:text-slate-100" :title="String(run.effectiveSeed)">{{ run.effectiveSeed }}</div>
               </div>
             </div>
           </section>
 
-          <section class="rounded-lg border border-slate-200 bg-white px-3 py-3" aria-labelledby="fuzz-reproduction-title">
+          <section class="rounded-lg border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-800" aria-labelledby="fuzz-reproduction-title">
             <div class="flex flex-wrap items-start justify-between gap-2">
               <div class="min-w-0">
-                <h4 id="fuzz-reproduction-title" class="text-xs font-bold text-slate-800">{{ t('app.fuzzReproductionSettings') }}</h4>
-                <p class="mt-1 text-[11px] leading-4 text-slate-500">{{ t('app.fuzzReproductionHint') }}</p>
+                <h4 id="fuzz-reproduction-title" class="text-xs font-bold text-slate-800 dark:text-slate-100">{{ t('app.fuzzReproductionSettings') }}</h4>
+                <p class="mt-1 text-[11px] leading-4 text-slate-500 dark:text-slate-400">{{ t('app.fuzzReproductionHint') }}</p>
               </div>
               <button
                 type="button"
                 data-testid="reuse-fuzzing-settings"
-                class="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-50"
+                class="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-50 dark:border-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-200 dark:hover:bg-indigo-900/70"
                 :disabled="actionLocked"
                 @click="emit('reuseSettings')"
               >
@@ -247,31 +251,31 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             </div>
             <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] sm:grid-cols-3">
               <div>
-                <dt class="text-slate-500">{{ t('app.fuzzEffectiveSeed') }}</dt>
-                <dd class="break-all font-mono font-semibold text-slate-800">{{ run.effectiveSeed }}</dd>
+                <dt class="text-slate-500 dark:text-slate-400">{{ t('app.fuzzEffectiveSeed') }}</dt>
+                <dd class="break-all font-mono font-semibold text-slate-800 dark:text-slate-100">{{ run.effectiveSeed }}</dd>
               </div>
               <div>
-                <dt class="text-slate-500">{{ t('app.fuzzMaxIterations') }}</dt>
-                <dd class="font-semibold text-slate-800">{{ run.maxIterations }}</dd>
+                <dt class="text-slate-500 dark:text-slate-400">{{ t('app.fuzzMaxIterations') }}</dt>
+                <dd class="font-semibold text-slate-800 dark:text-slate-100">{{ run.maxIterations }}</dd>
               </div>
               <div>
-                <dt class="text-slate-500">{{ t('app.fuzzPathLength') }}</dt>
-                <dd class="font-semibold text-slate-800">{{ run.pathLength }}</dd>
+                <dt class="text-slate-500 dark:text-slate-400">{{ t('app.fuzzPathLength') }}</dt>
+                <dd class="font-semibold text-slate-800 dark:text-slate-100">{{ run.pathLength }}</dd>
               </div>
               <div>
-                <dt class="text-slate-500">{{ t('app.fuzzPopulationSize') }}</dt>
-                <dd class="font-semibold text-slate-800">{{ run.populationSize }}</dd>
+                <dt class="text-slate-500 dark:text-slate-400">{{ t('app.fuzzPopulationSize') }}</dt>
+                <dd class="font-semibold text-slate-800 dark:text-slate-100">{{ run.populationSize }}</dd>
               </div>
               <div class="col-span-2">
-                <dt class="text-slate-500">{{ t('app.fuzzTargetSpecifications') }}</dt>
-                <dd class="font-semibold text-slate-800">{{ targetScopeText }}</dd>
+                <dt class="text-slate-500 dark:text-slate-400">{{ t('app.fuzzTargetSpecifications') }}</dt>
+                <dd class="font-semibold text-slate-800 dark:text-slate-100">{{ targetScopeText }}</dd>
               </div>
             </dl>
           </section>
 
-          <section class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" aria-labelledby="fuzz-snapshot-title">
-            <h4 id="fuzz-snapshot-title" class="text-xs font-bold text-slate-800">{{ t('app.runScopeAndSnapshot') }}</h4>
-            <p class="mt-1 text-[11px] leading-5 text-slate-600">
+          <section class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800" aria-labelledby="fuzz-snapshot-title">
+            <h4 id="fuzz-snapshot-title" class="text-xs font-bold text-slate-800 dark:text-slate-100">{{ t('app.runScopeAndSnapshot') }}</h4>
+            <p class="mt-1 text-[11px] leading-5 text-slate-600 dark:text-slate-300">
               {{ t('app.modelRunSnapshotSummary', {
                 time: formatDate(run.modelSnapshot.capturedAt),
                 devices: run.modelSnapshot.deviceCount,
@@ -283,17 +287,17 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             </p>
             <p
               v-if="boardDrifted"
-              class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900"
+              class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
               data-testid="fuzzing-board-drift-warning"
             >
               {{ t('app.fuzzBoardScopeChanged') }}
             </p>
-            <p v-else class="mt-1 text-[11px] leading-4 text-slate-500">{{ t('app.fuzzBoardScopeCurrent') }}</p>
+            <p v-else class="mt-1 text-[11px] leading-4 text-slate-500 dark:text-slate-400">{{ t('app.fuzzBoardScopeCurrent') }}</p>
           </section>
 
           <div
             v-if="run.eligibility.ineligibleSpecs.length > 0"
-            class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900"
+            class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
           >
             <div class="font-bold">{{ t('app.fuzzIneligibleSpecifications', { count: run.eligibility.ineligibleSpecs.length }) }}</div>
             <ul class="mt-1 list-disc space-y-1 pl-4">
@@ -305,7 +309,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 
           <div
             v-if="run.limitations.length > 0"
-            class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700"
+            class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
           >
             <div class="font-bold">{{ capabilityBoundaryHeading }}</div>
             <ul class="mt-1 list-disc space-y-1 pl-4">
@@ -315,21 +319,21 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 
           <section v-if="targetResults.length > 0" aria-labelledby="fuzz-target-results-title">
             <div class="flex items-center justify-between gap-3">
-              <h4 id="fuzz-target-results-title" class="text-sm font-bold text-slate-800">{{ t('app.fuzzTargetResults') }}</h4>
-              <span class="text-[11px] text-slate-500">{{ t('app.fuzzTargetResultsSummary', { found: run.findings.length, total: targetResults.length }) }}</span>
+              <h4 id="fuzz-target-results-title" class="text-sm font-bold text-slate-800 dark:text-slate-100">{{ t('app.fuzzTargetResults') }}</h4>
+              <span class="text-[11px] text-slate-500 dark:text-slate-400">{{ t('app.fuzzTargetResultsSummary', { found: run.findings.length, total: targetResults.length }) }}</span>
             </div>
-            <ul class="mt-2 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200">
-              <li v-for="target in targetResults" :key="target.specId" class="flex items-start gap-2 bg-white px-3 py-2.5">
+            <ul class="mt-2 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
+              <li v-for="target in targetResults" :key="target.specId" class="flex items-start gap-2 bg-white px-3 py-2.5 dark:bg-slate-800">
                 <span
                   class="material-symbols-outlined mt-0.5 text-base"
-                  :class="target.finding ? 'text-red-600' : 'text-sky-600'"
+                  :class="target.finding ? 'text-red-600 dark:text-red-300' : 'text-sky-600 dark:text-sky-300'"
                   aria-hidden="true"
                 >{{ target.finding ? 'warning' : 'search_off' }}</span>
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-xs font-semibold text-slate-800" :title="target.finding ? findingTitle(target.finding) : target.label">
+                  <p class="truncate text-xs font-semibold text-slate-800 dark:text-slate-100" :title="target.finding ? findingTitle(target.finding) : target.label">
                     {{ target.finding ? findingTitle(target.finding) : target.label }}
                   </p>
-                  <p class="mt-0.5 text-[11px] leading-4" :class="target.finding ? 'text-red-700' : 'text-sky-800'">
+                  <p class="mt-0.5 text-[11px] leading-4" :class="target.finding ? 'text-red-700 dark:text-red-300' : 'text-sky-800 dark:text-sky-300'">
                     {{ target.finding ? t('app.fuzzTargetCandidateFound') : t('app.fuzzTargetNoCandidateWithinBudget') }}
                   </p>
                 </div>
@@ -339,27 +343,27 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 
           <p
             data-testid="fuzz-formal-verification-current-board-notice"
-            class="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-950"
+            class="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100"
           >
             {{ t('app.fuzzFormalVerificationCurrentBoardNotice') }}
           </p>
 
           <section aria-labelledby="fuzz-findings-title">
             <div class="flex items-center justify-between gap-3">
-              <h4 id="fuzz-findings-title" class="text-sm font-bold text-slate-800">{{ t('app.fuzzFindings') }}</h4>
-              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{{ run.findings.length }}</span>
+              <h4 id="fuzz-findings-title" class="text-sm font-bold text-slate-800 dark:text-slate-100">{{ t('app.fuzzFindings') }}</h4>
+              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200">{{ run.findings.length }}</span>
             </div>
 
-            <div v-if="run.findings.length === 0" class="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-6 text-center text-xs leading-5 text-slate-600">
+            <div v-if="run.findings.length === 0" class="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-6 text-center text-xs leading-5 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
               {{ run.outcome === 'BUDGET_EXHAUSTED' ? t('app.fuzzNoViolationWithinBudget') : t('app.fuzzNoReplayableFindings') }}
             </div>
 
-            <div v-else class="mt-2 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200">
-              <article v-for="finding in run.findings" :key="finding.id" class="bg-white p-3">
+            <div v-else class="mt-2 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
+              <article v-for="finding in run.findings" :key="finding.id" class="bg-white p-3 dark:bg-slate-800">
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0 flex-1">
-                    <p class="truncate text-xs font-bold text-slate-800" :title="findingTitle(finding)">{{ findingTitle(finding) }}</p>
-                    <p class="mt-1 text-[11px] text-slate-500">{{ t('app.fuzzFindingMeta', { step: displayStep(finding.firstViolationStep), seed: finding.seed }) }}</p>
+                    <p class="truncate text-xs font-bold text-slate-800 dark:text-slate-100" :title="findingTitle(finding)">{{ findingTitle(finding) }}</p>
+                    <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{{ t('app.fuzzFindingMeta', { step: displayStep(finding.firstViolationStep), seed: finding.seed }) }}</p>
                   </div>
                   <div class="flex shrink-0 gap-1.5">
                     <button
@@ -374,7 +378,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
                     <button
                       type="button"
                       :data-testid="`verify-fuzzing-finding-${finding.id}`"
-                      class="inline-flex min-h-11 items-center gap-1 rounded-md bg-emerald-100 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-200 disabled:opacity-50"
+                      class="inline-flex min-h-11 items-center gap-1 rounded-md bg-emerald-100 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-200 disabled:opacity-50 dark:bg-emerald-900/60 dark:text-emerald-100 dark:hover:bg-emerald-800"
                       :disabled="actionLocked || !findingDataAvailable(finding)"
                       @click="emit('verify', finding)"
                     >
@@ -397,7 +401,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             <span class="material-symbols-outlined text-base" aria-hidden="true">fact_check</span>{{ t('app.verifyCurrentBoard') }}
           </button>
 
-          <p class="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-900">
+          <p class="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100">
             {{ t('app.fuzzFindingNotFixable') }}
           </p>
         </template>

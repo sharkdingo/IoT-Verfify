@@ -65,6 +65,31 @@ boldly adjust code, docs, type definitions, tests, and examples. Keep every chan
 evidence-based, scoped, and verifiable. The primary goal is the user's need and mental
 model.
 
+## No AI slop
+
+AI assistance does not lower the engineering bar. In this repository, "AI slop" means
+plausible-looking output that has not been understood, integrated, or verified and that
+pushes hidden review, repair, security, or maintenance cost onto the next contributor.
+Judge the work by its evidence and maintainability, not by whether a human or model typed it.
+
+- Every changed line must trace to a real requirement, reproduced defect, or necessary
+  contract. Delete speculative features, placeholder branches, dead compatibility layers,
+  and abstractions that do not remove demonstrated complexity.
+- Read the owning code and tests before editing. Reuse established domain boundaries and
+  helpers; do not clone logic, invent parallel sources of truth, or hide uncertainty behind
+  generic wrappers and broad fallbacks.
+- Never turn an unknown or failed outcome into apparent success. Reject malformed boundary
+  data, preserve typed error semantics, and make partial, stale, cancelled, or unverified
+  states explicit to both callers and users.
+- Tests must exercise observable behavior, failure paths, races, and boundary cases. Do not
+  weaken assertions to make generated code pass, mirror the implementation without testing
+  its contract, or replace a failing integration check with a mock-only claim.
+- Comments explain non-obvious invariants and tradeoffs. Remove narration, prompt-like prose,
+  copied summaries, and confident claims that the code or cited evidence does not support.
+- Before handing off, review the complete diff as a maintainer: account for every dependency,
+  public field, helper, catch block, and documentation claim; remove unnecessary volume; run
+  the proportional checks; and report anything not verified.
+
 ## Shared conventions
 
 - **Language**: all documentation is written in **English** (README, `docs/`,

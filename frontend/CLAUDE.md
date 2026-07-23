@@ -76,6 +76,23 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   `utils/userMessage.ts` for ordinary fallback copy and keep the raw text in Technical
   Details or logs.
 
+### Frontend anti-slop checks
+
+- Keep one explicit owner for each server snapshot, local draft, pending mutation, and dialog
+  intent. Background refreshes and late responses must not overwrite active edits or reopen a
+  surface the user closed.
+- Treat loading, empty, partial, stale, cancelled, unknown-outcome, and failed states as
+  distinct. Never replace missing authoritative data with fabricated success, placeholder
+  domain objects, or a toast that contradicts the persisted state.
+- Reuse typed API validators and established composables. Avoid component-local copies of
+  contract parsing, translation provenance, modal focus logic, or responsive breakpoints.
+- Verify user workflows at narrow/short and desktop viewports, light and dark themes, keyboard
+  and pointer input, low canvas zoom, slow responses, repeated actions, and cross-tab refresh
+  whenever the touched surface can encounter them.
+- Tests must assert accessible roles, user-visible outcomes, and authoritative reconciliation;
+  do not couple them to obsolete raw tokens, CSS accidents, arbitrary sleeps, or mocks that
+  bypass the failure being fixed.
+
 ## Gotchas (the "why")
 
 - **Base URL comes from one place, relative by default.** Both `http.ts` (axios,

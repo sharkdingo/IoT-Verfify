@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { useAuth } from './auth'
 
 const validToken = (signature = 'signature') => {
   const payload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }))
@@ -8,14 +9,14 @@ const validToken = (signature = 'signature') => {
 }
 
 describe('auth cross-tab synchronization', () => {
+  const auth = useAuth()
+
   beforeEach(() => {
+    auth.logout()
     localStorage.clear()
-    vi.resetModules()
   })
 
-  it('applies login and logout events emitted by another tab', async () => {
-    const { useAuth } = await import('./auth')
-    const auth = useAuth()
+  it('applies login and logout events emitted by another tab', () => {
     const token = validToken()
     const user = { userId: 7, phone: '13800138000', username: 'alice' }
 
@@ -39,9 +40,7 @@ describe('auth cross-tab synchronization', () => {
     expect(auth.state.user).toBeNull()
   })
 
-  it('replaces Alice with Bob after a cross-tab logout/login sequence', async () => {
-    const { useAuth } = await import('./auth')
-    const auth = useAuth()
+  it('replaces Alice with Bob after a cross-tab logout/login sequence', () => {
     const alice = { userId: 7, phone: '13800138000', username: 'alice' }
     const bob = { userId: 8, phone: '13900139000', username: 'bob' }
 
@@ -62,9 +61,7 @@ describe('auth cross-tab synchronization', () => {
     expect(auth.state.user).toEqual(bob)
   })
 
-  it('does not let an old request token log out a newer session', async () => {
-    const { useAuth } = await import('./auth')
-    const auth = useAuth()
+  it('does not let an old request token log out a newer session', () => {
     const aliceToken = validToken('alice')
     const bobToken = validToken('bob')
 

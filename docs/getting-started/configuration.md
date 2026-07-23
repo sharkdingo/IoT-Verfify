@@ -75,10 +75,14 @@ through Spring's `logging.level.*` properties instead.
 | `AUTH_REGISTER_RATE_LIMIT_PER_HOUR` | `5` | Maximum valid registration requests per phone number and backend instance in a one-hour fixed window. |
 | `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` | `120` | Higher source-IP ceiling across account identifiers, preventing identifier rotation without coupling ordinary users behind one NAT to the low account limit. |
 | `AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR` | `60` | Higher source-IP ceiling across phone numbers. |
+| `AUTH_RATE_LIMIT_MAX_WINDOWS` | `65536` | Hard per-instance ceiling across active account and source-IP windows. At capacity the guard rejects new window identities and preserves active counters; it never evicts an active bucket to admit a rotating identifier. Values below `2` are clamped to `2`. |
 
-All four limits apply after DTO validation and before credential/database work. Excess
+The request limits apply after DTO validation and before credential/database work. Excess
 attempts return structured `429` data (`reasonCode`, `scope`, `retryAfterSeconds`) plus a
-`Retry-After` header exposed through CORS. The guard is intentionally process-local;
+`Retry-After` header exposed through CORS. `scope` is `ACCOUNT` or `SOURCE` for a consumed
+attempt window and `CAPACITY` when a new identity cannot be tracked without evicting an
+active window. Capacity retry timing follows the earliest tracked expiry rather than
+claiming that the caller exhausted a fresh full window. The guard is intentionally process-local;
 multi-instance deployments must also enforce a distributed ceiling at the TLS reverse
 proxy or API gateway. New passwords contain 10–64 characters and must encode to at most
 72 UTF-8 bytes, matching BCrypt's input boundary.
@@ -213,12 +217,16 @@ ends; this keeps snapshot creation from outrunning the executor's configured cap
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
 | `VERIFICATION_MAX_ACTIVE_TASKS_PER_USER` | `2` | Maximum combined `PENDING` and `RUNNING` async verification tasks owned by one user. Must be at least `1`. |
-| `VERIFICATION_MAX_STORED_TASKS_PER_USER` | `100` | Maximum total async verification task rows owned by one user. Must be at least the active-task limit. |
+| `VERIFICATION_MAX_STORED_TASKS_PER_USER` | `100` | Maximum total verification task/run rows owned by one user, including synchronous completed runs. Must be at least the active-task limit. |
 | `SIMULATION_MAX_ACTIVE_TASKS_PER_USER` | `2` | Maximum combined `PENDING` and `RUNNING` async simulation tasks owned by one user. Must be at least `1`. |
-| `SIMULATION_MAX_STORED_TASKS_PER_USER` | `100` | Maximum total async simulation task rows owned by one user. Must be at least the active-task limit. |
+| `SIMULATION_MAX_STORED_TASKS_PER_USER` | `100` | Maximum total logical simulation runs owned by one user: task rows plus saved traces that are not already referenced by a task. Must be at least the active-task limit. |
 
-Each submission locks the owning user row and checks stored and active counts in the
+Each async submission locks the owning user row and checks stored and active counts in the
 same transaction that inserts the task, so concurrent requests cannot bypass the quota.
+Synchronous verification and saved-simulation requests preflight the same stored-run limit
+before starting NuSMV and recheck it under the user lock when persisting the result.
+Their history-list endpoints use these same configured limits as bounded query sizes, so
+raising a stored-run limit does not make otherwise valid retained rows invisible.
 Excess submissions return HTTP 429 with stable `reasonCode`, `taskKind`, `quotaType`,
 `taskCount`, and `maxTasksPerUser` data. Users free stored capacity by deleting old
 completed runs or dismissing failed/cancelled tasks through the documented APIs.

@@ -1,17 +1,29 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
+import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class TraceMapperTest {
 
     private final TraceMapper mapper = new TraceMapper();
+    private static final String VALID_STATE_JSON = "{\"stateIndex\":1,\"devices\":[],"
+            + "\"triggeredRules\":[],\"compromisedAutomationLinks\":[]}";
     private static final String MODEL_SNAPSHOT_JSON = "{\"capturedAt\":\"2026-07-12T09:30:00\","
             + "\"deviceCount\":1,\"ruleCount\":1,\"specificationCount\":1,"
             + "\"environmentVariableCount\":0,\"deviceTemplateCount\":1,\"templatesFrozen\":true}";
+
+    private static String stateJson(int stateIndex) {
+        return "{\"stateIndex\":" + stateIndex + ",\"devices\":[],"
+                + "\"triggeredRules\":[],\"compromisedAutomationLinks\":[]}";
+    }
 
     private TracePo baseTrace(String requestJson) {
         TracePo po = new TracePo();
@@ -20,7 +32,8 @@ class TraceMapperTest {
         po.setViolatedSpecId("s0");
         po.setViolatedSpecJson("{\"id\":\"s0\",\"templateId\":\"3\",\"templateLabel\":\"Never\","
                 + "\"aConditions\":[],\"ifConditions\":[],\"thenConditions\":[],\"devices\":[]}");
-        po.setStatesJson("[{}]");
+        po.setStatesJson("[" + VALID_STATE_JSON + "]");
+        po.setStateCount(1);
         po.setRequestJson(requestJson);
         po.setTemplateSnapshotsJson("{\"light\":{\"Name\":\"Light\"}}");
         po.setModelSnapshotJson(MODEL_SNAPSHOT_JSON);
@@ -93,6 +106,78 @@ class TraceMapperTest {
     }
 
     @Test
+    void structurallyInvalidStatesFailClosedInDetail() {
+        for (String statesJson : java.util.List.of("[null]", "[{}]")) {
+            TracePo po = baseTrace(null);
+            po.setStatesJson(statesJson);
+            assertEquals("statesJson", assertThrows(
+                    PersistedDataIntegrityException.class, () -> mapper.toDto(po)).getField());
+        }
+    }
+
+    @Test
+    void toDto_normalizesLegacyStatesWithoutRuleEventLists() {
+        TracePo po = baseTrace(null);
+        po.setStatesJson("[{\"stateIndex\":1,\"devices\":[]}]");
+
+        TraceDto dto = mapper.toDto(po);
+
+        assertEquals(1, dto.getStates().size());
+        assertTrue(dto.getStates().get(0).getTriggeredRules().isEmpty());
+        assertTrue(dto.getStates().get(0).getCompromisedAutomationLinks().isEmpty());
+    }
+
+    @Test
+    void toDto_normalizesMissingLegacyTokenProvenanceToUnknown() {
+        TracePo po = baseTrace(null);
+        po.setStatesJson("[{\"stateIndex\":1,\"devices\":[{"
+                + "\"deviceId\":\"light_1\",\"deviceLabel\":\"Hall light\","
+                + "\"templateName\":\"Light\",\"variables\":[{"
+                + "\"name\":\"workingState\",\"value\":\"off\"}]}],"
+                + "\"triggeredRules\":[],\"compromisedAutomationLinks\":[],"
+                + "\"envVariables\":[{\"name\":\"weather\",\"value\":\"sunny\"}]}]");
+
+        TraceDto dto = mapper.toDto(po);
+
+        var state = dto.getStates().get(0);
+        assertEquals(ModelTokenSource.UNKNOWN,
+                state.getDevices().get(0).getModelTokenSource());
+        assertEquals(ModelTokenSource.UNKNOWN,
+                state.getDevices().get(0).getVariables().get(0).getModelTokenSource());
+        assertEquals(ModelTokenSource.UNKNOWN,
+                state.getEnvVariables().get(0).getModelTokenSource());
+    }
+
+    @Test
+    void nonSequentialStateIndexesFailClosedInDetail() {
+        for (String statesJson : java.util.List.of(
+                "[" + stateJson(2) + "]",
+                "[" + stateJson(1) + "," + stateJson(1) + "]",
+                "[" + stateJson(1) + "," + stateJson(3) + "]")) {
+            TracePo po = baseTrace(null);
+            po.setStatesJson(statesJson);
+
+            assertEquals("statesJson", assertThrows(
+                    PersistedDataIntegrityException.class, () -> mapper.toDto(po)).getField());
+        }
+    }
+
+    @Test
+    void incompleteTraceDeviceIdentityFailsClosedInDetail() {
+        for (String deviceJson : java.util.List.of(
+                "{\"deviceLabel\":\"Hall light\",\"templateName\":\"Light\",\"variables\":[]}",
+                "{\"deviceId\":\"light_1\",\"templateName\":\"Light\",\"variables\":[]}",
+                "{\"deviceId\":\"light_1\",\"deviceLabel\":\"Hall light\",\"variables\":[]}")) {
+            TracePo po = baseTrace(null);
+            po.setStatesJson("[{\"stateIndex\":1,\"devices\":[" + deviceJson + "],"
+                    + "\"triggeredRules\":[],\"compromisedAutomationLinks\":[]}]");
+
+            assertEquals("statesJson", assertThrows(
+                    PersistedDataIntegrityException.class, () -> mapper.toDto(po)).getField());
+        }
+    }
+
+    @Test
     void mapsPersistedSpecJsonToStructuredApiSnapshot() {
         TracePo po = baseTrace(null);
         po.setViolatedSpecJson("{\"id\":\"s0\",\"templateId\":\"3\",\"templateLabel\":\"Never\","
@@ -145,6 +230,24 @@ class TraceMapperTest {
         assertEquals(1, po.getModeledFalsifiableReadingDeviceCount());
         assertEquals(2, po.getModeledAutomationLinkAttackPointCount());
         assertEquals(dto.getTemplateSnapshotsJson(), po.getTemplateSnapshotsJson());
+        assertEquals(1, po.getStateCount());
         assertTrue(po.getModelSnapshotJson().contains("\"templatesFrozen\":true"));
+    }
+
+    @Test
+    void summaryProjectionCountsStatesWithoutLoadingDetailColumns() {
+        TraceSummaryProjection projection = mock(TraceSummaryProjection.class);
+        when(projection.getId()).thenReturn(8L);
+        when(projection.getVerificationTaskId()).thenReturn(4L);
+        when(projection.getViolatedSpecId()).thenReturn("s0");
+        when(projection.getViolatedSpecJson()).thenReturn(
+                "{\"id\":\"s0\",\"templateId\":\"3\",\"aConditions\":[],"
+                        + "\"ifConditions\":[],\"thenConditions\":[],\"devices\":[]}");
+        when(projection.getStateCount()).thenReturn(2);
+
+        var summary = mapper.toSummaryDto(projection);
+
+        assertEquals(2, summary.getStateCount());
+        assertEquals(4L, summary.getVerificationTaskId());
     }
 }

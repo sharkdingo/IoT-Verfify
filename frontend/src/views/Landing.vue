@@ -192,8 +192,11 @@ const authRequestErrorMessage = (error: any, fallback: string) => {
     && typeof data?.reasonCode === 'string'
     && data.reasonCode.startsWith('AUTH_')) {
     const seconds = Number(data.retryAfterSeconds)
+    const messageKey = data.scope === 'CAPACITY'
+      ? 'auth.rateLimitCapacityReached'
+      : 'auth.rateLimitReached'
     return Number.isInteger(seconds) && seconds > 0
-      ? t('auth.rateLimitReached', { seconds })
+      ? t(messageKey, { seconds })
       : t('auth.rateLimitReachedGeneric')
   }
   return localizedErrorMessage(error, fallback, locale.value)

@@ -6,6 +6,7 @@ import type { Specification } from './spec'
 import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { RunPersistence } from './runPersistence'
 import type { AttackScenario } from './attackScenario'
+import type { ModelTokenSource } from './modelToken'
 
 export interface VerificationRequest {
   devices: ModelDevice[];
@@ -90,16 +91,26 @@ export interface Trace {
   createdAt: string;
 }
 
-export interface TraceSummary {
+export interface AvailableTraceSummary {
+  id: number
+  verificationTaskId: number
+  violatedSpecId: string
+  violatedSpec: Specification
+  stateCount: number
+  createdAt: string
+  dataAvailable: true
+}
+
+export interface UnavailableTraceSummary {
   id: number
   verificationTaskId: number
   violatedSpecId?: string
-  violatedSpec?: Specification
-  stateCount?: number
   createdAt?: string
-  dataAvailable: boolean
-  unavailableReasonCode?: 'PERSISTED_SEMANTIC_DATA_INVALID' | string
+  dataAvailable: false
+  unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID' | string
 }
+
+export type TraceSummary = AvailableTraceSummary | UnavailableTraceSummary
 
 export interface TraceState {
   stateIndex: number;
@@ -120,6 +131,7 @@ export interface TraceDevice {
   deviceId: string;
   deviceLabel: string;
   templateName: string;
+  modelTokenSource?: ModelTokenSource;
   state?: string;
   mode?: string;                       // 新增：状态机名称
   compromised?: boolean;
@@ -132,6 +144,7 @@ export interface TraceVariable {
   name: string;
   value: string;
   trust?: string;    // 改为可选
+  modelTokenSource?: ModelTokenSource;
 }
 
 export interface TraceTrustPrivacy {

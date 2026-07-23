@@ -71,6 +71,7 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -541,16 +542,45 @@ class FuzzServiceImplTest {
             submittedWorkers.add(invocation.getArgument(0));
             return null;
         }).when(fuzzTaskExecutor).execute(any(Runnable.class));
-        when(taskRepository.renewOwnedActiveLease(
-                eq(41L), anyString(), any(), any(), anyList())).thenReturn(0);
+        when(taskRepository.findByIdForUpdate(41L)).thenReturn(Optional.empty());
 
         assertEquals(41L, service.submit(7L, validRequest()));
         service.maintainTaskLeases();
 
         assertTrue(((Future<?>) submittedWorkers.get(0)).isCancelled());
         assertEquals(42L, service.submit(7L, validRequest()));
-        verify(taskRepository).renewOwnedActiveLease(
-                eq(41L), anyString(), any(), any(), anyList());
+        verify(taskRepository).findByIdForUpdate(41L);
+    }
+
+    @Test
+    void leaseMaintenanceStopsQueuedTaskAfterRenewalCannotBeConfirmedForFullTtl() throws Exception {
+        threadPoolConfig.setFuzzTask(new ThreadPoolConfig.Pool(1, 1, 0, 60));
+        rebuildService();
+        when(boardDataConverter.getModelInputSnapshot(7L))
+                .thenReturn(snapshot(List.of(specification("spec-1"))));
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(
+                UserPo.builder().id(7L).phone("13900000000")
+                        .username("alice").password("encoded").build()));
+        runTransactionsInline();
+        when(taskRepository.save(any(FuzzTaskPo.class))).thenAnswer(invocation -> {
+            FuzzTaskPo task = invocation.getArgument(0);
+            task.setId(43L);
+            return task;
+        });
+        List<Runnable> submittedWorkers = new ArrayList<>();
+        doAnswer(invocation -> {
+            submittedWorkers.add(invocation.getArgument(0));
+            return null;
+        }).when(fuzzTaskExecutor).execute(any(Runnable.class));
+        when(taskRepository.findByIdForUpdate(43L))
+                .thenThrow(new RuntimeException("database unavailable"));
+
+        assertEquals(43L, service.submit(7L, validRequest()));
+        LeaseConfirmationTestSupport.ageExecutionLease(
+                service, "localExecutions", 43L, Duration.ofMinutes(3));
+        service.maintainTaskLeases();
+
+        assertTrue(((Future<?>) submittedWorkers.get(0)).isCancelled());
     }
 
     @Test

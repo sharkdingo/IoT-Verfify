@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.fix;
 
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -38,4 +39,6 @@ public class FaultRuleDto {
     /** `TRIGGERED` or `CONFLICTING_END_STATES`; clients should localize from this code. */
     private String reasonCode;
     private String reason;
+    @Builder.Default
+    private ModelTokenSource modelTokenSource = ModelTokenSource.UNKNOWN;
 }

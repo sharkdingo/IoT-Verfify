@@ -6,6 +6,7 @@ import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { ModelGenerationIssue, TraceTriggeredRule } from './verify'
 import type { RunPersistence } from './runPersistence'
 import type { AttackScenario } from './attackScenario'
+import type { ModelTokenSource } from './modelToken'
 
 // 模拟请求 DTO
 export interface SimulationRequest {
@@ -51,6 +52,7 @@ export interface SimulationDevice {
   deviceId: string
   deviceLabel: string
   templateName: string
+  modelTokenSource?: ModelTokenSource
   state?: string
   mode?: string
   compromised?: boolean
@@ -64,6 +66,7 @@ export interface SimulationVariable {
   name: string
   value: string
   trust?: string
+  modelTokenSource?: ModelTokenSource
 }
 
 // 可信度/隐私
@@ -71,7 +74,7 @@ export interface SimulationTrustPrivacy {
   name: string
   propertyScope: 'state' | 'variable' | 'content'
   mode?: string
-  trust?: boolean
+  trust?: boolean | null
   privacy?: string
 }
 

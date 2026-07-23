@@ -28,6 +28,8 @@ class AbstractAsyncTaskServiceCancelTest {
         private boolean terminal;
         private Integer progress;
         private String checkLogsJson;
+        private String workerId;
+        private LocalDateTime leaseExpiresAt;
 
         private TestTask(Long id, Long userId) {
             this.id = id;
@@ -69,6 +71,21 @@ class AbstractAsyncTaskServiceCancelTest {
         @Override
         public void setCheckLogsJson(String json) {
             this.checkLogsJson = json;
+        }
+
+        @Override
+        public String getWorkerId() {
+            return workerId;
+        }
+
+        @Override
+        public LocalDateTime getLeaseExpiresAt() {
+            return leaseExpiresAt;
+        }
+
+        @Override
+        public void setLeaseExpiresAt(LocalDateTime leaseExpiresAt) {
+            this.leaseExpiresAt = leaseExpiresAt;
         }
     }
 

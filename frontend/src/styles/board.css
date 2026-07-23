@@ -16,6 +16,8 @@
   right: 0;
   z-index: 1000;
   display: flex;
+  height: var(--board-nav-height, 4.3125rem);
+  box-sizing: border-box;
   justify-content: center;
   padding: 0.75rem 2rem;
   background: color-mix(in srgb, var(--surface-overlay) 92%, transparent);
@@ -36,8 +38,10 @@
 
 .board-nav-bar .logo-left {
   display: inline-flex;
+  min-width: 44px;
   min-height: 44px;
   align-items: center;
+  justify-content: center;
   font-family: 'Instrument Serif', serif;
   font-size: 1.5rem;
   letter-spacing: -0.025em;
@@ -65,6 +69,10 @@
 .board-nav-bar .logo-sup {
   font-size: 0.75rem;
   vertical-align: super;
+}
+
+.board-nav-bar .logo-short {
+  display: none;
 }
 
 .board-nav-bar .nav-actions {
@@ -223,7 +231,7 @@
   font-size: 20px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px), (max-height: 599px) {
   .board-nav-bar {
     padding: 0.5rem;
   }
@@ -275,11 +283,30 @@
   }
 }
 
+@media (max-width: 420px) {
+  .board-nav-bar {
+    padding-inline: 0.25rem;
+  }
+
+  .board-nav-bar .logo-wordmark,
+  .board-nav-bar .logo-sup {
+    display: none;
+  }
+
+  .board-nav-bar .logo-short {
+    display: inline;
+  }
+
+  .board-nav-bar .nav-actions {
+    gap: 0.125rem;
+  }
+}
+
 .canvas-fit-mobile {
   display: none;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 1023px), (max-height: 599px) {
   .canvas-fit-mobile {
     position: fixed;
     top: calc(var(--board-nav-height) + 1rem);
@@ -318,7 +345,7 @@
     --board-inspector-width: 20rem;
     --board-inspector-collapsed-width: 3rem;
     --board-control-width: 20rem;
-    --board-nav-height: 4rem;
+    --board-nav-height: 4.3125rem;
     --board-floating-gap: clamp(0.75rem, 2vw, 1rem);
     --board-action-rail-width: 3.1rem;
     --board-floating-panel-right: var(--board-floating-gap);
@@ -333,20 +360,20 @@
     --board-text-muted: var(--text-muted);
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 1024px) and (min-height: 600px) {
     .iot-board {
         --board-floating-panel-right: calc(var(--board-inspector-width) + var(--board-action-rail-width) + (var(--board-floating-gap) * 2));
         --board-floating-action-right: calc(var(--board-inspector-width) + var(--board-floating-gap));
     }
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 1280px) and (min-height: 600px) {
     .iot-board {
         --board-action-rail-width: 8.25rem;
     }
 }
 
-@media (min-width: 1024px) and (max-width: 1179px) {
+@media (min-width: 1024px) and (max-width: 1179px) and (min-height: 600px) {
     .iot-board .board-floating-panel {
         width: min(24rem, calc(100vw - var(--board-control-width) - var(--board-inspector-width) - var(--board-action-rail-width) - (var(--board-floating-gap) * 3))) !important;
     }
@@ -356,6 +383,141 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
+}
+
+.iot-board .board-panel-scrim {
+    position: fixed;
+    inset: var(--board-nav-height) 0 0;
+    z-index: 46;
+    border: 0;
+    background: color-mix(in srgb, #020617 42%, transparent);
+    cursor: default;
+    backdrop-filter: blur(1px);
+}
+
+.iot-board .board-panel-scrim:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--iot-color-accent) 70%, white);
+    outline-offset: -3px;
+}
+
+.dark .board-result-dialog-surface {
+    border-color: var(--border) !important;
+    background: var(--surface-panel) !important;
+    color: var(--text);
+}
+
+.dark .board-result-dialog-surface .bg-white,
+.dark .board-result-dialog-surface .bg-slate-50,
+.dark .board-result-dialog-surface .bg-slate-100,
+.dark .board-result-dialog-surface .bg-slate-200 {
+    background-color: var(--surface-elevated) !important;
+}
+
+.dark .board-result-dialog-surface .text-slate-900,
+.dark .board-result-dialog-surface .text-slate-800,
+.dark .board-result-dialog-surface .text-slate-700 {
+    color: var(--text) !important;
+}
+
+.dark .board-result-dialog-surface .text-slate-600,
+.dark .board-result-dialog-surface .text-slate-500,
+.dark .board-result-dialog-surface .text-slate-400 {
+    color: var(--text-muted) !important;
+}
+
+.dark .board-result-dialog-surface .border-slate-100,
+.dark .board-result-dialog-surface .border-slate-200,
+.dark .board-result-dialog-surface .border-slate-300,
+.dark .board-result-dialog-surface .divide-slate-100 {
+    border-color: var(--border) !important;
+}
+
+.dark .board-result-dialog-surface .bg-red-50,
+.dark .board-result-dialog-surface .bg-red-100,
+.dark .board-result-dialog-surface .bg-red-200 {
+    background-color: color-mix(in srgb, #ef4444 13%, var(--surface-elevated)) !important;
+}
+
+.dark .board-result-dialog-surface .bg-amber-50,
+.dark .board-result-dialog-surface .bg-amber-100,
+.dark .board-result-dialog-surface .bg-amber-200 {
+    background-color: color-mix(in srgb, #f59e0b 13%, var(--surface-elevated)) !important;
+}
+
+.dark .board-result-dialog-surface .bg-green-50,
+.dark .board-result-dialog-surface .bg-green-100,
+.dark .board-result-dialog-surface .bg-emerald-50,
+.dark .board-result-dialog-surface .bg-emerald-100 {
+    background-color: color-mix(in srgb, #10b981 13%, var(--surface-elevated)) !important;
+}
+
+.dark .board-result-dialog-surface .bg-indigo-50,
+.dark .board-result-dialog-surface .bg-indigo-100 {
+    background-color: color-mix(in srgb, var(--iot-color-accent) 14%, var(--surface-elevated)) !important;
+}
+
+.dark .board-result-dialog-surface .bg-fuchsia-100 {
+    background-color: color-mix(in srgb, #d946ef 14%, var(--surface-elevated)) !important;
+}
+
+.dark .board-result-dialog-surface .bg-orange-100 {
+    background-color: color-mix(in srgb, #f97316 14%, var(--surface-elevated)) !important;
+}
+
+.dark .board-result-dialog-surface :is(
+    .text-red-500, .text-red-600, .text-red-700, .text-red-800, .text-red-900
+) {
+    color: #fecaca !important;
+}
+
+.dark .board-result-dialog-surface :is(
+    .text-amber-500, .text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900
+) {
+    color: #fde68a !important;
+}
+
+.dark .board-result-dialog-surface :is(
+    .text-green-500, .text-green-600, .text-green-700, .text-green-800, .text-green-900,
+    .text-emerald-600, .text-emerald-700, .text-emerald-800
+) {
+    color: #a7f3d0 !important;
+}
+
+.dark .board-result-dialog-surface :is(
+    .text-indigo-700, .text-indigo-800, .text-indigo-900,
+    .text-violet-600
+) {
+    color: #c7d2fe !important;
+}
+
+.dark .board-result-dialog-surface :is(
+    .text-fuchsia-600, .text-fuchsia-700, .text-fuchsia-800
+) {
+    color: #f5d0fe !important;
+}
+
+.dark .board-result-dialog-surface :is(.text-orange-600, .text-orange-700) {
+    color: #fed7aa !important;
+}
+
+.dark .board-result-dialog-surface .text-cyan-700 {
+    color: #a5f3fc !important;
+}
+
+.dark .board-result-dialog-surface :is(.border-red-200, .border-red-300) {
+    border-color: color-mix(in srgb, #ef4444 55%, var(--border)) !important;
+}
+
+.dark .board-result-dialog-surface :is(.border-amber-200, .border-amber-300) {
+    border-color: color-mix(in srgb, #f59e0b 55%, var(--border)) !important;
+}
+
+.dark .board-result-dialog-surface .border-emerald-200 {
+    border-color: color-mix(in srgb, #10b981 55%, var(--border)) !important;
+}
+
+.dark .board-result-dialog-surface .border-indigo-200 {
+    border-color: color-mix(in srgb, var(--iot-color-accent) 55%, var(--border)) !important;
 }
 
 .iot-board .modern-panel,
@@ -378,11 +540,22 @@
     max-width: min(32.5rem, 44vw);
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1023px), (max-height: 599px) {
     .iot-board .modern-panel,
     .iot-board .glass-panel,
     .iot-board .board-side-panel {
-        max-width: min(88vw, 22rem);
+        max-width: min(calc(100vw - 3rem), 22rem);
+        z-index: 47;
+    }
+
+    .iot-board.has-control-panel-open [data-testid="system-inspector"].is-collapsed,
+    .iot-board.has-inspector-panel-open [data-testid="control-center"].is-collapsed {
+        display: none;
+    }
+
+    .iot-board.has-narrow-panel-open .canvas-fit-mobile {
+        z-index: 38;
+        pointer-events: none;
     }
 }
 
@@ -833,6 +1006,145 @@
     background-color: color-mix(in srgb, #06b6d4 12%, var(--surface-panel));
 }
 
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-red-50, .bg-red-100, .bg-red-200) {
+    background-color: color-mix(in srgb, #ef4444 13%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-blue-50, .bg-blue-100, .bg-blue-200) {
+    background-color: color-mix(in srgb, #3b82f6 13%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-purple-50, .bg-purple-100, .bg-purple-200) {
+    background-color: color-mix(in srgb, #8b5cf6 13%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(
+    .bg-amber-50,
+    .bg-amber-100,
+    .bg-amber-200,
+    .bg-orange-50,
+    .bg-orange-100,
+    .bg-orange-200
+) {
+    background-color: color-mix(in srgb, #f59e0b 14%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-green-50, .bg-green-100, .bg-green-200) {
+    background-color: color-mix(in srgb, #22c55e 12%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-cyan-50, .bg-cyan-100, .bg-cyan-200) {
+    background-color: color-mix(in srgb, #06b6d4 12%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-red-600, .text-red-700, .text-red-800, .text-red-900) {
+    color: #fecaca !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900, .text-amber-950, .text-orange-600, .text-orange-700, .text-orange-800, .text-orange-900) {
+    color: #fde68a !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-blue-600, .text-blue-700, .text-blue-800, .text-blue-900) {
+    color: #bfdbfe !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-purple-600, .text-purple-700, .text-purple-800, .text-purple-900) {
+    color: #e9d5ff !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-green-600, .text-green-700, .text-green-800, .text-green-900) {
+    color: #bbf7d0 !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-cyan-600, .text-cyan-700, .text-cyan-800, .text-cyan-900) {
+    color: #a5f3fc !important;
+}
+
 .iot-board .board-floating-panel .bg-slate-100,
 .iot-board .board-mini-tasks .bg-slate-100,
 .iot-board .canvas-map .bg-slate-100,
@@ -935,7 +1247,7 @@
     background-color: rgba(255, 255, 255, 0.16);
 }
 
-@media (max-width: 1023px) {
+@media (max-width: 1023px), (max-height: 599px) {
     .iot-board .board-floating-panel {
         --board-floating-panel-max-width: 24rem;
         left: 50%;
@@ -958,21 +1270,34 @@
     }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 599px) {
     .iot-board {
-        --board-nav-height: 3.5rem;
+        --board-nav-height: 3.8125rem;
     }
 
     .iot-board .modern-panel,
     .iot-board .glass-panel,
     .iot-board .board-side-panel {
-        top: calc(3.5rem + 1px) !important;
+        top: calc(var(--board-nav-height) + 1px) !important;
     }
 
     .iot-board .board-floating-actions {
         top: 4.5rem;
         right: var(--board-action-dock-right, var(--board-floating-action-right));
+        max-height: calc(100dvh - 5rem);
         gap: 0.45rem;
+    }
+
+    .iot-board .board-action-dock__panel {
+        min-height: 0;
+        max-height: calc(100dvh - 5rem);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+    }
+
+    .iot-board .board-tool-tooltip {
+        display: none;
     }
 
     .iot-board .board-floating-panel {
@@ -1077,10 +1402,55 @@
 }
 
 .iot-board .board-context-menu {
+    width: max-content;
+    max-width: min(18rem, calc(100vw - 1rem));
     background: var(--surface-overlay);
     border-color: var(--board-border);
     color: var(--board-text);
+    border-radius: 0.5rem;
+    overflow: hidden;
     backdrop-filter: blur(14px);
+}
+
+.iot-board .board-context-menu__title {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    color: var(--text-muted);
+    border-color: var(--border);
+    letter-spacing: 0;
+}
+
+.iot-board .board-context-menu__item {
+    color: var(--text);
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.iot-board .board-context-menu__item:hover,
+.iot-board .board-context-menu__item:focus-visible {
+    background: var(--surface-muted);
+}
+
+.iot-board .board-context-menu__item:focus-visible {
+    outline: 2px solid var(--iot-color-accent);
+    outline-offset: -2px;
+}
+
+.iot-board .board-context-menu__item--danger {
+    color: #dc2626;
+}
+
+:root[data-theme='dark'] .iot-board .board-context-menu__item--danger,
+:root:not([data-theme]) .iot-board .board-context-menu__item--danger {
+    color: #f87171;
+}
+
+.iot-board .board-context-menu__item--danger:hover,
+.iot-board .board-context-menu__item--danger:focus-visible {
+    background: color-mix(in srgb, #ef4444 14%, var(--surface-muted));
+}
+
+.iot-board .board-context-menu__divider {
+    border-color: var(--border);
 }
 
 .iot-board .board-playback-change-popover {
@@ -1160,6 +1530,79 @@
     color: var(--board-text) !important;
 }
 
+.dark .iot-board .board-playback-change-popover :is(
+    .text-indigo-900, .text-indigo-950
+) {
+    color: #e0e7ff !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(
+    .text-indigo-400, .text-indigo-500, .text-indigo-600, .text-indigo-700,
+    .text-indigo-800
+) {
+    color: #c7d2fe !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(
+    .text-amber-500, .text-amber-600, .text-amber-700
+) {
+    color: #fde68a !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(
+    .text-amber-900, .text-amber-950
+) {
+    color: #fef3c7 !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(
+    .text-red-600, .text-red-700, .text-red-800
+) {
+    color: #fca5a5 !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(
+    .text-emerald-600, .text-emerald-800
+) {
+    color: #a7f3d0 !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(
+    .bg-white, .bg-slate-50
+) {
+    background-color: var(--surface-elevated) !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(.bg-indigo-50, .bg-indigo-100) {
+    background-color: color-mix(in srgb, var(--iot-color-accent) 15%, var(--surface-elevated)) !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(.bg-red-50, .bg-red-100) {
+    background-color: color-mix(in srgb, #ef4444 15%, var(--surface-elevated)) !important;
+}
+
+.dark .iot-board .board-playback-change-popover .bg-emerald-50 {
+    background-color: color-mix(in srgb, #10b981 15%, var(--surface-elevated)) !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(
+    .border-slate-200
+) {
+    border-color: var(--board-border) !important;
+}
+
+.dark .iot-board .board-playback-change-popover :is(.border-indigo-100, .border-indigo-200) {
+    border-color: color-mix(in srgb, var(--iot-color-accent) 45%, var(--board-border)) !important;
+}
+
+.dark .iot-board .board-playback-change-popover .border-red-200 {
+    border-color: color-mix(in srgb, #ef4444 52%, var(--board-border)) !important;
+}
+
+.dark .iot-board .board-playback-change-popover .border-emerald-200 {
+    border-color: color-mix(in srgb, #10b981 46%, var(--board-border)) !important;
+}
+
 .board-timeline-host {
     position: fixed;
     left: calc(var(--board-control-width, 20rem) + var(--board-floating-gap, 1rem));
@@ -1224,7 +1667,7 @@
     border-color: var(--border) !important;
 }
 
-@media (max-width: 1023px) {
+@media (max-width: 1023px), (max-height: 599px) {
     .iot-board .board-playback-change-popover {
         top: calc(var(--board-nav-height) + var(--board-floating-gap));
         left: auto;
@@ -1255,6 +1698,7 @@
     position: absolute;
     inset: 0;
     overflow: hidden; /* 避免浏览器自带滚动条 */
+    touch-action: none;
     background-color: var(--iot-color-bg-canvas);
     background-image:
             linear-gradient(90deg, var(--iot-color-grid) 1px, transparent 1px),
@@ -1349,15 +1793,18 @@
     display: grid;
     grid-template-rows: 1fr;
     cursor: grab;
-    box-shadow: 0 0.75rem 1.8rem rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.6) inset;
+    box-shadow: 0 0.75rem 1.8rem rgba(15, 23, 42, 0.12), 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent) inset;
     border: 1px solid;
     color: var(--iot-color-text);
     user-select: none;
+    touch-action: none;
     padding: clamp(0.22rem, 3.5%, 0.45rem);
     box-sizing: border-box;
     overflow: visible;
-    min-width: 5.5rem;
-    min-height: 4.75rem;
+    min-width: 5rem;
+    min-height: 3.75rem;
+    container-name: device-node;
+    container-type: size;
     backdrop-filter: blur(5px);
     transition: transform 0.16s ease, box-shadow 0.18s ease, border-color 0.18s ease, filter 0.18s ease, opacity 0.18s ease;
 }
@@ -1391,7 +1838,6 @@
 
 .iot-board .device-node.node-focused {
     z-index: 18;
-    transform: translateY(-2px) scale(1.03);
     border-width: 2px;
     box-shadow:
         var(--iot-node-shadow),
@@ -1585,9 +2031,40 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+    .iot-board :is(
+        .board-side-panel,
+        .board-floating-panel,
+        .board-mini-tasks,
+        .board-timeline
+    ),
+    .iot-board :is(
+        .board-side-panel,
+        .board-floating-panel,
+        .board-mini-tasks,
+        .board-timeline
+    ) *,
+    .board-result-dialog-surface,
+    .board-result-dialog-surface * {
+        scroll-behavior: auto !important;
+        transition-delay: 0ms !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .iot-board .board-tool-pulse,
+    .iot-board .edge-layer .edge-line--focused,
+    .iot-board .device-node.node-focused::after,
     .iot-board .device-node.trace-change-pulse::after,
     .iot-board .device-node.trace-change-pulse .device-node-content,
-    .iot-board .device-node.device-attacked::before {
+    .iot-board .device-node.device-attacked::before,
+    .iot-board .variable-img.variable-changed,
+    .iot-board .device-node.variable-node:hover .variable-tooltip,
+    .iot-board .pulse-status,
+    .iot-board .animate-spin-slow,
+    .iot-board .animate-spin,
+    .iot-board .animate-ping,
+    .iot-board .animate-pulse,
+    .iot-board .animate-pulse-glow,
+    .iot-board .fade-in {
         animation: none !important;
     }
 }
@@ -1626,7 +2103,8 @@
     bottom: calc(100% + 12px);
     left: 50%;
     transform: translateX(-50%) scale(0.9);
-    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    background: var(--surface-elevated);
+    border: 1px solid var(--board-border);
     border-radius: 10px;
     padding: 8px 12px;
     display: flex;
@@ -1636,7 +2114,7 @@
     visibility: hidden;
     transition: all 0.2s ease;
     z-index: 1000;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+    box-shadow: var(--iot-node-shadow);
     white-space: nowrap;
     pointer-events: none;
 }
@@ -1650,9 +2128,9 @@
     transform: translateX(-50%) rotate(45deg);
     width: 12px;
     height: 12px;
-    background: #f8fafc;
-    border-right: 1px solid rgba(0, 0, 0, 0.05);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    background: var(--surface-elevated);
+    border-right: 1px solid var(--board-border);
+    border-bottom: 1px solid var(--board-border);
 }
 
 /* 悬停时显示提示框 */
@@ -1703,7 +2181,7 @@
     width: 24px;
     height: 24px;
     border-radius: 6px;
-    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    background: var(--surface-muted);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -1726,14 +2204,14 @@
 .iot-board .variable-tooltip-label {
     font-size: 12px;
     font-weight: 600;
-    color: #1e293b;
-    letter-spacing: 0.3px;
+    color: var(--board-text);
+    letter-spacing: 0;
 }
 
 /* 提示框变量值 */
 .iot-board .variable-tooltip-value {
     font-size: 10px;
-    color: #3b82f6;
+    color: var(--iot-color-accent);
     font-weight: 500;
 }
 
@@ -1789,7 +2267,7 @@
 }
 
 .iot-board .device-node--compact .device-img {
-    width: min(76%, 3.5rem);
+    width: min(76%, clamp(2rem, 58cqmin, 6rem));
     max-width: 76%;
     max-height: 76%;
 }
@@ -1801,11 +2279,41 @@
     display: none;
 }
 
+.iot-board .device-node--condensed .device-node-content {
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: clamp(0.1rem, 3cqmin, 0.3rem);
+    padding: clamp(0.2rem, 5cqmin, 0.55rem);
+}
+
+.iot-board .device-node--condensed .device-top-row {
+    width: 100%;
+    height: 100%;
+}
+
+.iot-board .device-node--condensed .device-img {
+    width: min(72%, clamp(2.25rem, 44cqmin, 5.5rem));
+    max-height: 78%;
+}
+
+.iot-board .device-node--condensed .device-label-wrapper {
+    width: 92%;
+}
+
+.iot-board .device-node--condensed .device-label {
+    font-size: clamp(0.625rem, 8cqmin, 0.8rem);
+}
+
+.iot-board .device-node--condensed .device-state,
+.iot-board .device-node--condensed .device-runtime-strip,
+.iot-board .device-node--condensed .device-node-actions {
+    display: none;
+}
+
 .iot-board .device-node--expanded .device-node-content {
-    width: min(100%, 18rem);
-    height: min(100%, 12rem);
+    width: 92%;
+    height: 92%;
     place-self: center;
-    grid-template-columns: minmax(3rem, 5rem) minmax(0, 1fr);
+    grid-template-columns: minmax(clamp(3rem, 34cqmin, 42rem), clamp(4.5rem, 42cqmin, 52rem)) minmax(0, 1fr);
     grid-template-rows: auto auto auto auto;
     grid-template-areas:
         "icon label"
@@ -1815,9 +2323,9 @@
     align-content: center;
     justify-content: center;
     justify-items: stretch;
-    column-gap: clamp(0.45rem, 6%, 0.85rem);
-    row-gap: clamp(0.22rem, 4%, 0.5rem);
-    padding: clamp(0.5rem, 4%, 0.8rem);
+    column-gap: clamp(0.45rem, 6cqmin, 1.4rem);
+    row-gap: clamp(0.22rem, 4cqmin, 0.9rem);
+    padding: clamp(0.5rem, 5cqmin, 1.5rem);
 }
 
 .iot-board .device-runtime-strip {
@@ -1839,21 +2347,21 @@
 .iot-board .device-runtime-chip {
     display: inline-flex;
     min-width: 0;
-    max-width: 5.2rem;
+    max-width: 44cqmin;
     align-items: center;
     gap: 0.2rem;
     border: 1px solid var(--border);
     border-radius: 999px;
     background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
     color: var(--text-muted);
-    padding: 0.125rem 0.35rem;
-    font-size: 0.58rem;
+    padding: clamp(0.125rem, 1.2cqmin, 0.28rem) clamp(0.35rem, 2.4cqmin, 0.7rem);
+    font-size: clamp(0.58rem, 4.3cqmin, 4rem);
     font-weight: 700;
     line-height: 1;
 }
 
 .iot-board .device-runtime-chip--changed {
-    max-width: 8.5rem;
+    max-width: 58cqmin;
     border-color: color-mix(in srgb, var(--iot-color-accent) 56%, var(--border));
     background: color-mix(in srgb, var(--iot-color-accent) 14%, var(--surface-elevated));
     color: color-mix(in srgb, var(--iot-color-accent) 74%, var(--text));
@@ -1913,7 +2421,7 @@
 
 .iot-board .device-node-trust {
     min-width: 0;
-    max-width: 5.8rem;
+    max-width: 46cqmin;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1921,8 +2429,8 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--iot-color-accent) 12%, var(--surface-elevated));
     color: color-mix(in srgb, var(--iot-color-accent) 72%, var(--text));
-    padding: 0.15rem 0.45rem;
-    font-size: 0.58rem;
+    padding: clamp(0.15rem, 1.3cqmin, 0.3rem) clamp(0.45rem, 2.8cqmin, 0.8rem);
+    font-size: clamp(0.58rem, 4.3cqmin, 4rem);
     font-weight: 800;
     line-height: 1;
 }
@@ -1931,6 +2439,11 @@
     border-color: color-mix(in srgb, #c026d3 28%, var(--border));
     background: color-mix(in srgb, #c026d3 12%, var(--surface-elevated));
     color: color-mix(in srgb, #a21caf 76%, var(--text));
+}
+
+:root[data-theme='dark'] .iot-board .device-node-trust--privacy,
+:root:not([data-theme]) .iot-board .device-node-trust--privacy {
+    color: #f0abfc;
 }
 
 /* 上部分：左边图标，右边名字 */
@@ -1951,11 +2464,11 @@
     justify-self: center;
     width: 100%;
     aspect-ratio: 1;
-    max-height: 4.5rem;
+    max-height: 46cqmin;
     border-radius: 0.5rem;
     background: color-mix(in srgb, var(--surface-elevated) 78%, transparent);
     border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.66);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 /* 节点图标图片：不响应鼠标事件，避免拖拽图片 */
@@ -1972,7 +2485,7 @@
 }
 
 .iot-board .device-node--expanded .device-img {
-    width: min(68%, 3.6rem);
+    width: clamp(3.4rem, 32cqmin, 40rem);
     max-width: 68%;
     max-height: 68%;
 }
@@ -2023,7 +2536,7 @@
     border: 0;
     box-shadow: none;
     padding: 0;
-    font-size: clamp(0.72rem, 8%, 0.95rem) !important;
+    font-size: clamp(0.72rem, 8cqmin, 8rem);
     font-weight: 800;
     -webkit-line-clamp: 2;
 }
@@ -2033,42 +2546,59 @@
 
 .iot-board .resize-handle {
     position: absolute;
-    width: var(--iot-resize-size);
-    height: var(--iot-resize-size);
-    border-radius: var(--iot-radius-resize);
-    border: 1px solid var(--iot-color-resize-border);
-    background: var(--iot-color-resize-bg);
-    box-shadow: 0 0 0 1px var(--iot-color-resize-shadow);
+    width: var(--resize-hit-size, 2.75rem);
+    height: var(--resize-hit-size, 2.75rem);
+    border: 0;
+    background: transparent;
     opacity: 0;
+    pointer-events: none;
     transition: opacity 0.12s;
+    touch-action: none;
+    z-index: 30;
 }
 
-.iot-board .device-node:hover .resize-handle {
+.iot-board .resize-handle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: var(--resize-visual-size, var(--iot-resize-size));
+    height: var(--resize-visual-size, var(--iot-resize-size));
+    transform: translate(-50%, -50%);
+    border: 1px solid var(--iot-color-resize-border);
+    border-radius: var(--iot-radius-resize);
+    background: var(--iot-color-resize-bg);
+    box-shadow: 0 0 0 1px var(--iot-color-resize-shadow);
+}
+
+.iot-board .device-node:hover .resize-handle,
+.iot-board .device-node:focus .resize-handle {
     opacity: 1;
+    pointer-events: auto;
 }
 
 /* 四个方向的手柄位置 + 光标形状 */
 .iot-board .resize-handle.tl {
-    left: var(--iot-resize-offset);
-    top: var(--iot-resize-offset);
+    left: var(--resize-hit-offset, -1.375rem);
+    top: var(--resize-hit-offset, -1.375rem);
     cursor: nw-resize;
 }
 
 .iot-board .resize-handle.tr {
-    right: var(--iot-resize-offset);
-    top: var(--iot-resize-offset);
+    right: var(--resize-hit-offset, -1.375rem);
+    top: var(--resize-hit-offset, -1.375rem);
     cursor: ne-resize;
 }
 
 .iot-board .resize-handle.bl {
-    left: var(--iot-resize-offset);
-    bottom: var(--iot-resize-offset);
+    left: var(--resize-hit-offset, -1.375rem);
+    bottom: var(--resize-hit-offset, -1.375rem);
     cursor: sw-resize;
 }
 
 .iot-board .resize-handle.br {
-    right: var(--iot-resize-offset);
-    bottom: var(--iot-resize-offset);
+    right: var(--resize-hit-offset, -1.375rem);
+    bottom: var(--resize-hit-offset, -1.375rem);
     cursor: se-resize;
 }
 

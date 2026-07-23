@@ -31,13 +31,13 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.BoardReplacementStaleException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
-import cn.edu.nju.Iot_Verify.exception.ForbiddenException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
@@ -280,20 +280,39 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
-    public DeviceMutationResultDto renameNode(Long userId, String nodeId, String newLabel) {
+    public DeviceMutationResultDto renameNode(
+            Long userId, String nodeId, String newLabel, String expectedLabel) {
         synchronized (getUserWriteLock(userId)) {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
                 String targetId = trimToNull(nodeId);
                 String label = trimToNull(newLabel);
-                if (targetId == null || label == null) {
-                    throw new BadRequestException("Device id and name are required");
+                if (targetId == null || label == null || trimToNull(expectedLabel) == null) {
+                    throw new BadRequestException(
+                            "Device id, name, and expected current name are required");
                 }
 
                 List<DeviceNodeDto> currentNodes = new ArrayList<>(getNodesInternal(userId));
                 List<BoardEnvironmentVariableDto> previousEnvironment = getEnvironmentVariablesInternal(userId);
                 DeviceNodeDto target = requireNode(currentNodes, targetId);
                 String previousLabel = target.getLabel();
+                if (!Objects.equals(expectedLabel, previousLabel)) {
+                    throw new ConflictException(
+                            "The device name changed after the rename dialog was opened. "
+                                    + "Review the current device name before renaming it.");
+                }
+                boolean labelClaimedByAnotherNode = currentNodes.stream()
+                        .filter(Objects::nonNull)
+                        .filter(node -> !targetId.equals(trimToNull(node.getId())))
+                        .map(DeviceNodeDto::getLabel)
+                        .map(this::trimToNull)
+                        .filter(Objects::nonNull)
+                        .anyMatch(label::equalsIgnoreCase);
+                if (labelClaimedByAnotherNode) {
+                    throw new ConflictException(
+                            "The requested device name is now used by another device. "
+                                    + "Refresh the Board and choose a different name.");
+                }
                 target.setLabel(label);
 
                 List<RuleDto> currentRules = getRulesInternal(userId);
@@ -3656,11 +3675,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         if (templateId == null || templateId <= 0) {
             throw new BadRequestException("Template id must be a positive integer");
         }
-        DeviceTemplatePo po = deviceTemplateRepo.findById(templateId)
+        DeviceTemplatePo po = deviceTemplateRepo.findByIdAndUserId(templateId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Template", templateId));
-        if (!Objects.equals(po.getUserId(), userId)) {
-            throw new ForbiddenException("Access denied to this template");
-        }
 
         DeviceTemplateDto target = deviceTemplateMapper.toDto(po);
         List<DeviceTemplateDeletionBlockerDto> blockers = nodeRepo.findByUserId(userId).stream()
@@ -3877,8 +3893,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         List<BoardEnvironmentVariableDto> previousEnvironment = getEnvironmentVariablesInternal(userId);
         List<BoardEnvironmentVariableDto> projectedEnvironment = projectEnvironmentVariablesForNodes(
                 userId, nodes, prospectiveManifests, true);
-        List<EnvironmentVariableChangeDto> environmentChanges =
-                diffEnvironmentVariables(previousEnvironment, projectedEnvironment);
+        List<EnvironmentVariableChangeDto> environmentChanges = withEnvironmentModelTokenSources(
+                diffEnvironmentVariables(previousEnvironment, projectedEnvironment),
+                environmentModelTokenSources(nodes, currentTemplates),
+                environmentModelTokenSources(nodes, prospectiveTemplates));
 
         List<DefaultTemplateAffectedDeviceDto> affectedDevices = nodes.stream()
                 .filter(Objects::nonNull)
@@ -3922,6 +3940,89 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return new DefaultTemplateResetPlan(
                 preview, List.copyOf(defaultDefinitions), projectedEnvironment,
                 Map.copyOf(validationErrors));
+    }
+
+    Map<String, ModelTokenSource> environmentModelTokenSources(
+            List<DeviceNodeDto> nodes,
+            List<DeviceTemplateDto> templates) {
+        Map<String, DeviceTemplateDto> templatesByName = new HashMap<>();
+        for (DeviceTemplateDto template : safeList(templates)) {
+            if (template == null || template.getManifest() == null) continue;
+            registerTemplateAlias(templatesByName, template.getName(), template);
+            registerTemplateAlias(templatesByName, template.getManifest().getName(), template);
+        }
+
+        Map<String, ModelTokenSource> sources = new TreeMap<>();
+        for (DeviceNodeDto node : safeList(nodes)) {
+            if (node == null || !hasText(node.getTemplateName())) continue;
+            DeviceTemplateDto template = templatesByName.get(
+                    node.getTemplateName().trim().toLowerCase(Locale.ROOT));
+            if (template == null) continue;
+            ModelTokenSource providerSource = ModelTokenSource.fromDefaultTemplate(
+                    template.getDefaultTemplate());
+            for (String name : templateEnvironmentVariableNames(template.getManifest())) {
+                sources.merge(name, providerSource, this::mergeEnvironmentModelTokenSources);
+            }
+        }
+        return Map.copyOf(sources);
+    }
+
+    private void registerTemplateAlias(
+            Map<String, DeviceTemplateDto> templatesByName,
+            String name,
+            DeviceTemplateDto template) {
+        if (!hasText(name)) return;
+        templatesByName.putIfAbsent(name.trim().toLowerCase(Locale.ROOT), template);
+    }
+
+    private Set<String> templateEnvironmentVariableNames(DeviceManifest manifest) {
+        Set<String> names = new TreeSet<>();
+        if (manifest == null) return names;
+        for (DeviceManifest.InternalVariable variable : safeList(manifest.getInternalVariables())) {
+            if (variable != null && hasText(variable.getName()) && isEnvironmentVariable(variable)) {
+                names.add(variable.getName().trim());
+            }
+        }
+        for (String impacted : safeList(manifest.getImpactedVariables())) {
+            if (hasText(impacted)
+                    && EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted) != null) {
+                names.add(impacted.trim());
+            }
+        }
+        return names;
+    }
+
+    private ModelTokenSource mergeEnvironmentModelTokenSources(
+            ModelTokenSource first,
+            ModelTokenSource second) {
+        if (first == ModelTokenSource.BUNDLED && second == ModelTokenSource.BUNDLED) {
+            return ModelTokenSource.BUNDLED;
+        }
+        if (first == ModelTokenSource.UNKNOWN || second == ModelTokenSource.UNKNOWN) {
+            return ModelTokenSource.UNKNOWN;
+        }
+        return ModelTokenSource.CUSTOM;
+    }
+
+    private List<EnvironmentVariableChangeDto> withEnvironmentModelTokenSources(
+            List<EnvironmentVariableChangeDto> changes,
+            Map<String, ModelTokenSource> previousSources,
+            Map<String, ModelTokenSource> currentSources) {
+        return safeList(changes).stream()
+                .filter(Objects::nonNull)
+                .map(change -> EnvironmentVariableChangeDto.builder()
+                        .changeType(change.getChangeType())
+                        .name(change.getName())
+                        .previousValue(change.getPreviousValue())
+                        .currentValue(change.getCurrentValue())
+                        .previousModelTokenSource(change.getPreviousValue() == null
+                                ? ModelTokenSource.UNKNOWN
+                                : previousSources.getOrDefault(change.getName(), ModelTokenSource.UNKNOWN))
+                        .currentModelTokenSource(change.getCurrentValue() == null
+                                ? ModelTokenSource.UNKNOWN
+                                : currentSources.getOrDefault(change.getName(), ModelTokenSource.UNKNOWN))
+                        .build())
+                .toList();
     }
 
     private Map<String, DeviceManifest> templateManifestMap(List<DeviceTemplateDto> templates) {

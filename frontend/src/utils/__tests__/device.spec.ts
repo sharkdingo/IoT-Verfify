@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { getDeviceIconUrl, resolveImpactEnvironmentDefinition, validateManifest } from '../device'
+import { i18n } from '@/assets/i18n'
+import {
+  getDeviceIconUrl,
+  MANIFEST_VALIDATION_MESSAGE_KEYS,
+  resolveImpactEnvironmentDefinition,
+  validateManifest
+} from '../device'
 import type { DeviceManifest } from '@/types/device'
 
 describe('device icon resolution', () => {
@@ -42,6 +48,20 @@ describe('device icon resolution', () => {
 })
 
 describe('device environment-domain semantics', () => {
+  it('exposes structured validation reasons that resolve in every supported locale', () => {
+    for (const key of Object.values(MANIFEST_VALIDATION_MESSAGE_KEYS)) {
+      expect(i18n.global.te(key, 'zh-CN'), `missing zh-CN translation for ${key}`).toBe(true)
+      expect(i18n.global.te(key, 'en'), `missing en translation for ${key}`).toBe(true)
+    }
+
+    expect(validateManifest({ Name: 'Lamp', Modes: 'Power' })).toMatchObject({
+      valid: false,
+      code: 'fieldMustBeArray',
+      params: { field: 'Modes' },
+      msg: expect.stringContaining('must be an array')
+    })
+  })
+
   it('resolves an impact-only domain without adding a readable InternalVariable', () => {
     const manifest: DeviceManifest = {
       Name: 'Light',

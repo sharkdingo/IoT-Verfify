@@ -10,9 +10,11 @@ import { useI18n } from 'vue-i18n'
 import { buildSpecFormula } from '@/utils/spec'
 import { ElMessage } from 'element-plus'
 import { resolveImpactEnvironmentDefinition } from '@/utils/device'
+import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
+import { hasModeledStateMachine, resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 // Props
 interface Props {
@@ -130,13 +132,18 @@ const displayDevices = computed(() => {
           || String(candidate.manifest?.Name || '').trim().toLowerCase() === expected
         )
       })
-      const hasStateMachine = Array.isArray(template?.manifest?.Modes)
-        && template.manifest.Modes.length > 0
+      const hasStateMachine = hasModeledStateMachine(template?.manifest)
+      const canonicalState = hasStateMachine
+        ? resolveEffectiveNodeState(device.state, template?.manifest)
+        : ''
       return {
         id: device.id,
         name: device.label,
         type: device.templateName || t('app.device'),
-        state: hasStateMachine ? (device.state || '') : ''
+        state: template?.defaultTemplate === true
+          ? formatModelToken(canonicalState)
+          : canonicalState,
+        canonicalState
       }
     })
 })
@@ -164,6 +171,17 @@ const templateMatchesDevice = (template: DeviceTemplate, device: DeviceNode) => 
 
 const findTemplateForDevice = (device: DeviceNode) =>
   props.deviceTemplates.find(template => templateMatchesDevice(template, device)) || null
+
+const isBundledTemplate = (template?: DeviceTemplate | null) =>
+  template?.defaultTemplate === true
+
+const formatModelToken = (value: unknown) => formatBuiltInModelToken(
+  value,
+  key => te(key) ? t(key) : key
+)
+
+const isBundledDevice = (device?: DeviceNode) =>
+  Boolean(device && isBundledTemplate(findTemplateForDevice(device)))
 
 const getVariableRange = (variable: InternalVariable) => {
   if (Array.isArray(variable.Values) && variable.Values.length > 0) {
@@ -214,6 +232,7 @@ interface EnvironmentSource {
 interface EnvironmentGroup {
   name: string
   definition: InternalVariable
+  bundled: boolean
   ranges: string[]
   sources: EnvironmentSource[]
 }
@@ -239,17 +258,21 @@ const addEnvironmentGroup = (
   grouped: Map<string, EnvironmentGroup>,
   name: string,
   definition: InternalVariable,
-  source?: EnvironmentSource
+  source?: EnvironmentSource,
+  bundled = false
 ) => {
-  const current = grouped.get(name) || {
+  const existing = grouped.get(name)
+  const current = existing || {
     name,
     definition,
+    bundled,
     ranges: [],
     sources: []
   }
   if (!current.definition || current.definition.Name === name && !current.definition.Values && current.definition.LowerBound === undefined) {
     current.definition = definition
   }
+  if (existing) current.bundled = current.bundled && bundled
   current.ranges.push(getVariableRange(definition))
   if (source && !current.sources.some(item => item.deviceId === source.deviceId && item.role === source.role)) {
     current.sources.push(source)
@@ -270,7 +293,7 @@ const environmentVariables = computed(() => {
         deviceId: device.id,
         label: device.label,
         role: 'read'
-      })
+      }, isBundledTemplate(template))
     }
 
     for (const impacted of template?.manifest?.ImpactedVariables || []) {
@@ -280,7 +303,7 @@ const environmentVariables = computed(() => {
         deviceId: device.id,
         label: device.label,
         role: 'impact'
-      })
+      }, isBundledTemplate(template))
     }
   }
 
@@ -292,7 +315,9 @@ const environmentVariables = computed(() => {
 
   return Array.from(grouped.values())
     .map(variable => {
-      const ranges = uniqueNonEmpty(variable.ranges)
+      const ranges = uniqueNonEmpty(variable.ranges).map(range => variable.bundled
+        ? range.split(' / ').map(formatModelToken).join(' / ')
+        : range)
       const saved = environmentPoolByName.value.get(variable.name)
       const value = saved?.value !== null && saved?.value !== undefined && String(saved.value).trim() !== ''
         ? String(saved.value)
@@ -301,10 +326,15 @@ const environmentVariables = computed(() => {
       const privacy = normalizePrivacy(saved?.privacy || variable.definition.Privacy)
       return {
         ...variable,
+        displayName: variable.bundled ? formatModelToken(variable.name) : variable.name,
         rangeLabel: ranges.length === 1 ? ranges[0] : t('app.mixedRanges'),
         value,
-        valueLabel: value || t('app.modelControlled'),
-        valueTitle: value || t('app.modelControlled'),
+        valueLabel: value
+          ? (variable.bundled ? formatModelToken(value) : value)
+          : t('app.modelControlled'),
+        valueTitle: value
+          ? (variable.bundled ? formatModelToken(value) : value)
+          : t('app.modelControlled'),
         trust,
         privacy,
         trustLabel: t(`app.${trust}`),
@@ -344,6 +374,9 @@ const updateEnvironmentVariable = (
 const eventValue = (event: Event) =>
   (event.target as HTMLInputElement | HTMLSelectElement | null)?.value || ''
 
+const formatEnvironmentValue = (variable: EnvironmentGroup, value: string) =>
+  variable.bundled ? formatModelToken(value) : value
+
 // 关系代码转可读标签
 const getRelationLabel = (relation: string): string => {
   const relationMap: Record<string, string> = {
@@ -377,20 +410,23 @@ const displayRules = computed(() => {
     // 构建更详细的源设备描述
     const sourceDescriptions = rule.sources.map(s => {
       const sourceNode = resolveDevice(s.fromId)
+      const localizeSource = isBundledDevice(sourceNode)
+      const sourceProperty = localizeSource ? formatModelToken(s.fromApi) : s.fromApi
+      const sourceValue = localizeSource ? formatModelToken(s.value) : s.value
       let desc = `${sourceNode?.label || t('app.unknown')}`
       
       // 如果有 itemType、relation、value 信息，显示更完整
       const sourceType = s.itemType
       if (isValueBasedRuleSource(sourceType) && s.relation && hasConditionValue(s.value)) {
-        desc += ` ${s.fromApi} ${getRelationLabel(s.relation)} ${s.value}`
+        desc += ` ${sourceProperty} ${getRelationLabel(s.relation)} ${sourceValue}`
       } else if (sourceType === 'api') {
-        desc += ` ${t('app.triggers')} ${s.fromApi}`
+        desc += ` ${t('app.triggers')} ${sourceProperty}`
       } else {
         // 如果有 relation 和 value，也显示
         if (s.relation && hasConditionValue(s.value)) {
-          desc += ` ${s.fromApi} ${getRelationLabel(s.relation)} ${s.value}`
+          desc += ` ${sourceProperty} ${getRelationLabel(s.relation)} ${sourceValue}`
         } else {
-          desc += ` ${s.fromApi}`
+          desc += ` ${sourceProperty}`
         }
       }
       return desc
@@ -406,7 +442,9 @@ const displayRules = computed(() => {
       description: t('app.ifThenDescription', {
         source: sourceDescriptions.join(` ${t('app.and')} `),
         target: targetNode?.label || t('app.unknown'),
-        action: rule.toApi || 'N/A'
+        action: isBundledDevice(targetNode)
+          ? formatModelToken(rule.toApi || t('app.notAvailableShort'))
+          : rule.toApi || t('app.notAvailableShort')
       }),
       status: t('app.active'),
       color: 'blue' as const,
@@ -482,7 +520,10 @@ const displaySpecs = computed(() => {
 
 const filteredDevices = computed(() =>
   displayDevices.value.filter(device =>
-    matchesEntitySearch([device.id, device.name, device.type, device.state], sectionSearch.devices)
+    matchesEntitySearch(
+      [device.id, device.name, device.type, device.state, device.canonicalState],
+      sectionSearch.devices
+    )
   )
 )
 
@@ -532,6 +573,23 @@ const inspectorTabs = computed(() => [
     count: sectionCounts.value.specs.total
   }
 ])
+
+const handleInspectorTabKeydown = (event: KeyboardEvent, section: InspectorSection) => {
+  const currentIndex = inspectorTabs.value.findIndex(tab => tab.id === section)
+  let nextIndex: number | null = null
+  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % inspectorTabs.value.length
+  if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + inspectorTabs.value.length) % inspectorTabs.value.length
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = inspectorTabs.value.length - 1
+  if (nextIndex === null) return
+
+  event.preventDefault()
+  const nextTab = inspectorTabs.value[nextIndex]
+  if (!nextTab) return
+  activeSection.value = nextTab.id
+  const tablist = (event.currentTarget as HTMLElement).closest('[role="tablist"]')
+  tablist?.querySelector<HTMLElement>(`#inspector-tab-${nextTab.id}`)?.focus()
+}
 
 // Methods
 const handleDeleteDevice = (deviceId: string) => {
@@ -658,12 +716,15 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
         <button
           v-for="tab in inspectorTabs"
           :key="tab.id"
+          :id="`inspector-tab-${tab.id}`"
           type="button"
           role="tab"
           :data-testid="`inspector-tab-${tab.id}`"
           :aria-selected="activeSection === tab.id"
-          :aria-pressed="activeSection === tab.id"
+          :aria-controls="activeSection === tab.id ? `inspector-panel-${tab.id}` : undefined"
+          :tabindex="activeSection === tab.id ? 0 : -1"
           @click="activeSection = tab.id"
+          @keydown="handleInspectorTabKeydown($event, tab.id)"
           :class="[
             'min-w-0 rounded-lg px-2 py-2 text-[11px] font-bold transition-all flex items-center justify-start gap-1.5',
             activeSection === tab.id
@@ -709,14 +770,14 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <div
               v-else-if="environmentVariables.length > 0"
               class="mt-1 flex max-w-full flex-wrap gap-1"
-              :title="environmentVariables.map(variable => variable.name).join(', ')"
+              :title="environmentVariables.map(variable => variable.displayName).join(', ')"
             >
               <span
                 v-for="variable in environmentVariables.slice(0, 3)"
                 :key="variable.name"
                 class="max-w-[6.5rem] truncate rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-slate-950/40 dark:text-amber-100"
               >
-                {{ variable.name }}
+                {{ variable.displayName }}
               </span>
               <span
                 v-if="environmentVariables.length > 3"
@@ -759,8 +820,8 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                   {{ isEnvironmentVariableExpanded(variable.name) ? 'expand_less' : 'expand_more' }}
                 </span>
                 <span class="min-w-0">
-                  <span class="block truncate text-sm font-extrabold text-slate-800 dark:text-slate-100" :data-full-text="variable.name">
-                    {{ variable.name }}
+                  <span class="block truncate text-sm font-extrabold text-slate-800 dark:text-slate-100" :data-full-text="variable.displayName">
+                    {{ variable.displayName }}
                   </span>
                 </span>
               </span>
@@ -783,10 +844,12 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     :data-testid="`environment-value-${variable.name}`"
                     class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     :value="variable.value"
-                    :aria-label="`${variable.name} ${t('app.value')}`"
+                    :aria-label="`${variable.displayName} ${t('app.value')}`"
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   >
-                    <option v-for="option in variable.enumValues" :key="option" :value="option">{{ option }}</option>
+                    <option v-for="option in variable.enumValues" :key="option" :value="option">
+                      {{ formatEnvironmentValue(variable, option) }}
+                    </option>
                   </select>
                   <input
                     v-else
@@ -797,7 +860,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     :max="variable.upperBound"
                     :value="variable.value"
                     :title="variable.valueTitle"
-                    :aria-label="`${variable.name} ${t('app.value')}`"
+                    :aria-label="`${variable.displayName} ${t('app.value')}`"
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   />
                 </label>
@@ -811,7 +874,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                       :data-testid="`environment-trust-${variable.name}`"
                       class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       :value="variable.trust"
-                      :aria-label="`${variable.name} ${t('app.trust')}`"
+                      :aria-label="`${variable.displayName} ${t('app.trust')}`"
                       @change="updateEnvironmentVariable(variable.name, { trust: eventValue($event) })"
                     >
                       <option value="trusted">{{ t('app.trusted') }}</option>
@@ -824,7 +887,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                       :data-testid="`environment-privacy-${variable.name}`"
                       class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       :value="variable.privacy"
-                      :aria-label="`${variable.name} ${t('app.privacy')}`"
+                      :aria-label="`${variable.displayName} ${t('app.privacy')}`"
                       @change="updateEnvironmentVariable(variable.name, { privacy: eventValue($event) })"
                     >
                       <option value="public">{{ t('app.public') }}</option>
@@ -857,7 +920,13 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
       </section>
 
       <!-- Device List Section -->
-      <div v-if="activeSection === 'devices'" data-testid="inspector-section-devices">
+      <div
+        v-if="activeSection === 'devices'"
+        id="inspector-panel-devices"
+        role="tabpanel"
+        aria-labelledby="inspector-tab-devices"
+        data-testid="inspector-section-devices"
+      >
         <div class="mb-3 flex items-center justify-between gap-2">
           <button
             type="button"
@@ -975,7 +1044,13 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
       </div>
 
       <!-- Active Global Rules Section -->
-      <div v-if="activeSection === 'rules'" data-testid="inspector-section-rules">
+      <div
+        v-if="activeSection === 'rules'"
+        id="inspector-panel-rules"
+        role="tabpanel"
+        aria-labelledby="inspector-tab-rules"
+        data-testid="inspector-section-rules"
+      >
         <div class="mb-3 flex items-center justify-between gap-2">
           <button
             type="button"
@@ -1043,7 +1118,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             v-for="rule in filteredRules"
             :key="rule.id"
             :data-rule-id="rule.originalId"
-            tabindex="0"
+            tabindex="-1"
             class="p-3 rounded-lg border relative transition-all hover:shadow-md group bg-blue-50 border-blue-200 hover:border-blue-400"
             :class="rule.originalId && rule.originalId === props.focusedRuleId ? 'ring-2 ring-blue-400 border-blue-400 shadow-md' : ''"
           >
@@ -1126,7 +1201,13 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
       </div>
 
       <!-- Specifications Section -->
-      <div v-if="activeSection === 'specs'" data-testid="inspector-section-specs">
+      <div
+        v-if="activeSection === 'specs'"
+        id="inspector-panel-specs"
+        role="tabpanel"
+        aria-labelledby="inspector-tab-specs"
+        data-testid="inspector-section-specs"
+      >
         <div class="mb-3 flex items-center justify-between gap-2">
           <button
             type="button"
@@ -1185,7 +1266,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             v-for="spec in filteredSpecs"
             :key="spec.id"
             :data-spec-id="spec.id"
-            tabindex="0"
+            tabindex="-1"
             class="p-3 rounded-lg border border-cyan-100 relative transition-all hover:shadow-md bg-white group"
             :class="spec.id === props.focusedSpecId ? 'ring-2 ring-cyan-300 border-cyan-300 shadow-md' : ''"
           >

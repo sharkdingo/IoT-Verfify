@@ -158,6 +158,54 @@ class BoardStorageServiceImplBatchTest {
     }
 
     @Test
+    void renameNode_rejectsAStaleDialogBeforeWriting() {
+        DeviceNodePo stored = DeviceNodePo.builder()
+                .id("device-1")
+                .userId(1L)
+                .label("Renamed elsewhere")
+                .build();
+        DeviceNodeDto current = boardNode("device-1", "Sensor", "Renamed elsewhere");
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(stored));
+        when(deviceNodeMapper.toDto(stored)).thenReturn(current);
+
+        ConflictException error = assertThrows(ConflictException.class,
+                () -> service.renameNode(1L, "device-1", "My new name", "Original name"));
+
+        assertTrue(error.getMessage().contains("changed after the rename dialog was opened"));
+        verify(nodeRepo, never()).deleteByUserId(anyLong());
+        verify(nodeRepo, never()).save(any());
+    }
+
+    @Test
+    void renameNode_returnsConflictWhenAnotherTabClaimedTheRequestedLabel() {
+        DeviceNodePo targetStored = DeviceNodePo.builder()
+                .id("device-1")
+                .userId(1L)
+                .label("Original name")
+                .build();
+        DeviceNodePo competingStored = DeviceNodePo.builder()
+                .id("device-2")
+                .userId(1L)
+                .label("Claimed name")
+                .build();
+        DeviceNodeDto target = boardNode("device-1", "Sensor", "Original name");
+        DeviceNodeDto competing = boardNode("device-2", "Sensor", "Claimed name");
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(targetStored, competingStored));
+        when(deviceNodeMapper.toDto(targetStored)).thenReturn(target);
+        when(deviceNodeMapper.toDto(competingStored)).thenReturn(competing);
+
+        ConflictException error = assertThrows(ConflictException.class,
+                () -> service.renameNode(1L, "device-1", "claimed NAME", "Original name"));
+
+        assertTrue(error.getMessage().contains("now used by another device"));
+        verify(nodeRepo, never()).deleteByUserId(anyLong());
+        verify(nodeRepo, never()).save(any());
+        verify(nodeRepo, never()).saveAll(any());
+        verify(specRepo, never()).deleteByUserId(anyLong());
+        verify(specRepo, never()).saveAll(any());
+    }
+
+    @Test
     void addRule_rejectsWhenThePersistedBoardIsAlreadyAtCapacity() {
         when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L))
                 .thenReturn(java.util.Collections.nCopies(100, new RulePo()));

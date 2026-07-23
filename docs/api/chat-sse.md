@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-22. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-23. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -52,7 +52,11 @@ its local response when authoritative history has no terminal row with the same 
 When saved, the row stores
 the exact bounded execution record, elapsed time, and explicit terminal status; `PARTIAL`
 means tool work began before a later failure, an execution guard, or an uncertain result.
-`AWAITING_CONFIRMATION` means a no-write preview is waiting for the user's decision.
+`COMPLETED` means the visible response stream and terminal persistence completed; it does
+not prove that a requested platform objective completed. When planning executes no tool,
+the server prefixes the visible response with an authoritative notice that no current
+Board data was read and no platform operation was confirmed, even if model prose claims
+otherwise. `AWAITING_CONFIRMATION` means a no-write preview is waiting for the user's decision.
 `STOPPED` means the user explicitly requested the response to stop, while `DISCONNECTED`
 means transport loss ended it. Neither status implies rollback. Older rows without this metadata
 are reconstructed from persisted internal tool-call/result blocks. Raw tool JSON, internal
@@ -66,18 +70,24 @@ cannot admit a second request. The active request id, expiry, and stop flags are
 the locked `chat_session` row. Activity checks and stop requests therefore remain
 authoritative without load-balancer affinity. A scheduled heartbeat renews the short-lived
 lease while the owning worker is registered; timing keys and defaults are owned by the
-[configuration reference](../getting-started/configuration.md#ai-assistant). Renewal is an
-atomic conditional update over session, user, execution id, and an unexpired current lease,
-so a stale worker cannot revive or overwrite a replacement lease.
+[configuration reference](../getting-started/configuration.md#ai-assistant). Renewal uses a
+short transaction that locks the matching session row and recomputes the effective current
+time after any lock wait from both the database clock and monotonic elapsed time. It extends
+only the same still-unexpired execution id, so a delayed or stale worker cannot revive an
+expired lease or overwrite a replacement lease.
+Transient database failures are retried, but the local worker is cancelled once ownership
+has remained unconfirmed for one complete database-lease TTL.
 Lease creation, activity checks, renewal, release, and expiry cleanup all compare against
 the database clock rather than a JVM clock. The execution id acquired before dispatch is
 also carried through the queued worker and controller cleanup: a worker whose local
 registration was replaced cannot start, and an older request's `finally` cannot remove or
 release the replacement execution.
 The execution id also fences persisted user/tool/terminal messages and the shared
-confirmation, scenario-draft, and task-continuation state. Each such write locks and rechecks
-the session row in the same transaction, so a replaced or expired worker cannot append audit
-rows or overwrite follow-up state after losing ownership.
+confirmation, scenario-draft, and task-continuation state. Ordinary AI writes perform a
+non-locking ownership precheck, then briefly lock and recheck the session row immediately
+before commit. Long tool transactions therefore do not block the heartbeat, while a replaced,
+stopped, or expired worker still rolls back instead of appending audit rows or overwriting
+follow-up state.
 The same scheduled pass clears expired lease ids and stop flags. A crashed or restarted
 worker therefore releases its session after at most one TTL instead of leaving it busy for
 hours, while a healthy execution can run past any single lease window. Normal completion
@@ -133,6 +143,10 @@ Structured progress frames expose the verifiable execution state and outcome of 
 step while it runs. After planning completes, the final assistant reply is generated
 through the streaming LLM path so tool-backed answers also arrive as incremental text
 chunks.
+If planning chooses no tool, the streamed and persisted answer begins with a deterministic
+server notice that the turn did not confirm current Board data or a completed platform
+operation. The backend does not infer platform intent from keywords; ordinary conversation
+may still finish as `COMPLETED`, whose meaning is response completion only.
 
 Planning is objective-oriented rather than a rigid domain workflow. A delegated task may
 combine targeted deletion, creation, environment, rule, specification, simulation, and
@@ -158,11 +172,12 @@ stored-draft and expiration contract.
 Tool execution is not one transaction across an entire user request. Each mutating tool
 commits or rejects independently. AI-originated Board writes, verification/simulation task
 creation and cancellation, synchronous verification-history persistence, and trace deletion
-lock the chat session inside their own write transaction and require the same unexpired
-execution id with no committed stop request. Long NuSMV computation does not hold that chat
-row lock; only its eventual write boundary is fenced. A replacement or stop committed before
-that transaction begins therefore rejects the mutation; if the write transaction already holds
-the row lock, the control request waits and the already-started write may commit. There is no five-round product budget: planning
+require the same unexpired execution id with no committed stop request. Ordinary write
+transactions acquire the session-row lock only at their commit fence, so a replacement or
+stop committed before that fence rejects and rolls back the mutation. Verification and
+simulation cancellation are the exception: because they trigger an irreversible local process
+stop before database commit, their short transactions lock and verify the session immediately.
+Long NuSMV computation never holds the chat row lock. There is no five-round product budget: planning
 continues while calls or results are changing. Two guards prevent runaway execution:
 consecutive rounds that repeat the exact same calls and results stop after
 `CHAT_MAX_STAGNANT_ROUNDS`, and `CHAT_MAX_TOOL_ROUNDS` is a high emergency ceiling rather
@@ -294,7 +309,7 @@ Progress stages and outcomes:
 | `PLANNING` | The model is choosing the next tool step for `round` | — |
 | `REASONING` | Before tool execution, `detail` carries the model's bounded, sanitized user-visible summary of the current goal, observed facts, next action, and remaining work | — |
 | `TOOL_EXECUTION` | `toolName` has started | — |
-| `TOOL_RESULT` | The tool returned and cumulative counters were updated | `USABLE`, `FAILED`, `RESULT_UNAVAILABLE`, or `CONFIRMATION_REQUIRED` |
+| `TOOL_RESULT` | The tool returned and cumulative counters were updated | `USABLE`, `PARTIAL`, `FAILED`, `RESULT_UNAVAILABLE`, or `CONFIRMATION_REQUIRED` |
 | `EXECUTION_GUARD` | Duplicate no-progress execution or the emergency runaway ceiling stopped further calls | `NO_PROGRESS` or `EMERGENCY_LIMIT` |
 | `WRITING_RESPONSE` | Tool work ended and the visible final answer is streaming | — |
 
@@ -307,6 +322,9 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   then sent before the final streamed assistant text. If a later planning or reply step
   throws, pending refresh commands are sent before the SSE error when the connection is
   still usable.
+- A `recommend_scenario` result whose deterministic `objectiveStatus` is `PARTIAL` remains
+  reviewable, but the final assistant row is `PARTIAL` and carries a server notice that
+  missing core scene parts were not completed.
 - Progress frames arrive before and between potentially slow model/tool calls. They let the UI
   show a full-width ReAct-style record of sanitized reasoning summaries, localized actions,
   observations, confirmation points, cumulative outcomes, and elapsed time. `REASONING` is an

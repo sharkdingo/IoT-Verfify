@@ -13,7 +13,8 @@ const faultRule = {
   targetActionLabel: 'Turn on',
   conflicting: false,
   reasonCode: 'TRIGGERED',
-  reason: 'This automation fired before the violated state.'
+  reason: 'This automation fired before the violated state.',
+  modelTokenSource: 'BUNDLED'
 }
 
 const parameterSuggestion = {
@@ -28,7 +29,8 @@ const parameterSuggestion = {
     newValue: '25',
     lowerBound: 10,
     upperBound: 40,
-    description: 'Living room temperature threshold in the cooling rule'
+    description: 'Living room temperature threshold in the cooling rule',
+    modelTokenSource: 'BUNDLED'
   }],
   conditionAdjustments: [],
   removedRuleDescriptions: [],
@@ -48,7 +50,8 @@ const conditionSuggestion = {
     ruleDescription: 'When it is cold, heat the room',
     deviceLabel: 'Living-room Occupancy Sensor',
     relation: '=',
-    value: 'present'
+    value: 'present',
+    modelTokenSource: 'CUSTOM'
   }],
   removedRuleDescriptions: [],
   verified: true
@@ -95,7 +98,8 @@ const fixResult = () => ({
     originalValue: '30',
     lowerBound: 10,
     upperBound: 40,
-    description: 'Living room temperature threshold in the cooling rule'
+    description: 'Living room temperature threshold in the cooling rule',
+    modelTokenSource: 'BUNDLED'
   }],
   unusedPreferredRangeSelections: []
 })
@@ -137,6 +141,16 @@ describe('automatic-fix response contracts', () => {
     expect(() => validateFixResult(incomplete, 12, ['parameter'])).toThrow(
       expect.objectContaining({ code: FIX_RESPONSE_INCOMPLETE_CODE })
     )
+  })
+
+  it('requires explicit model-token provenance for user-visible fix rows', () => {
+    const { modelTokenSource: _source, ...targetWithoutSource } = fixResult().parameterTargets[0]
+    expect(() => validateFixResult({
+      ...fixResult(),
+      parameterTargets: [targetWithoutSource]
+    }, 12, ['parameter'])).toThrow(expect.objectContaining({
+      code: FIX_RESPONSE_INCOMPLETE_CODE
+    }))
   })
 
   it.each([

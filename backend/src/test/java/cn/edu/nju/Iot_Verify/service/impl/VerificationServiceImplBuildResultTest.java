@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
+import cn.edu.nju.Iot_Verify.configure.AsyncTaskAdmissionConfig;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
@@ -16,12 +17,16 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.SpecResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
@@ -33,6 +38,8 @@ import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
@@ -46,6 +53,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -64,6 +72,7 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.CountDownLatch;
@@ -195,6 +204,51 @@ class VerificationServiceImplBuildResultTest {
         buildVerificationResult.setAccessible(true);
     }
 
+    @Test
+    void templateSnapshotEnvelopeFreezesPerDeviceTokenProvenance() throws Exception {
+        DeviceSmvData bundled = new DeviceSmvData();
+        bundled.setVarName("bundled_device");
+        bundled.setModelTokenSource(ModelTokenSource.BUNDLED);
+        DeviceSmvData custom = new DeviceSmvData();
+        custom.setVarName("custom_device");
+        custom.setModelTokenSource(ModelTokenSource.CUSTOM);
+        Method method = VerificationServiceImpl.class.getDeclaredMethod(
+                "buildTemplateSnapshotsJson", Map.class, Map.class);
+        method.setAccessible(true);
+
+        String json = (String) method.invoke(service,
+                Map.of("template", DeviceManifest.builder().name("template").build()),
+                Map.of("bundled_device", bundled, "custom_device", custom));
+        JsonNode root = new ObjectMapper().readTree(json);
+
+        assertEquals(1, root.path("schemaVersion").asInt());
+        assertTrue(root.path("manifests").has("template"));
+        assertEquals("BUNDLED", root.path("modelTokenSourcesByDeviceId")
+                .path("bundled_device").asText());
+        assertEquals("CUSTOM", root.path("modelTokenSourcesByDeviceId")
+                .path("custom_device").asText());
+    }
+
+    @Test
+    void requestSnapshotPreservesServerCapturedTokenProvenance() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("custom_device");
+        device.setTemplateName("custom-template");
+        device.setModelTokenSource(ModelTokenSource.CUSTOM);
+        VerificationRequestDto request = new VerificationRequestDto();
+        request.setDevices(List.of(device));
+        Method method = VerificationServiceImpl.class.getDeclaredMethod(
+                "snapshotRequest", VerificationRequestDto.class, AttackScenarioDto.class);
+        method.setAccessible(true);
+
+        VerificationRequestDto snapshot = (VerificationRequestDto) method.invoke(
+                service, request, AttackScenarioDto.none());
+
+        assertNotSame(device, snapshot.getDevices().get(0));
+        assertEquals(ModelTokenSource.CUSTOM,
+                snapshot.getDevices().get(0).getModelTokenSource());
+    }
+
     private VerificationServiceImpl serviceWithVerificationExecutor(ThreadPoolTaskExecutor executor) {
         return new VerificationServiceImpl(
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
@@ -211,6 +265,15 @@ class VerificationServiceImplBuildResultTest {
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
                 chatExecutionLeaseGuard, formalOperationAdmission);
+    }
+
+    private VerificationServiceImpl serviceWithAdmissionConfig(AsyncTaskAdmissionConfig admissionConfig) {
+        return new VerificationServiceImpl(
+                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                taskRepository, traceRepository, traceMapper, userRepository,
+                specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
+                verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
+                chatExecutionLeaseGuard, formalOperationAdmission, admissionConfig);
     }
 
     private TransactionTemplate inlineTransactionTemplate() {
@@ -542,6 +605,7 @@ class VerificationServiceImplBuildResultTest {
         assertFalse(request.path("attack").asBoolean());
         assertEquals(0, request.path("attackBudget").asInt());
         assertEquals(1, request.path("specs").size());
+        verify(formalOperationAdmission, never()).registerCurrentLeaseCommitFence();
     }
 
     @Test
@@ -915,15 +979,47 @@ class VerificationServiceImplBuildResultTest {
         capturingService.maintainTaskLeases();
         capturingExecutor.capturedTask().run();
 
-        verify(taskRepository).renewOwnedActiveLease(
-                eq(141L), anyString(), any(LocalDateTime.class), any(LocalDateTime.class),
-                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)));
+        verify(taskRepository).findByIdForUpdate(141L);
         verify(taskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generateWithResolvedDeviceModel(
                 anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
                 anyBoolean(), any(), any(), anyMap());
+    }
+
+    @Test
+    void queuedVerificationStopsAfterDatabaseCannotConfirmItsLeaseForFullTtl() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        VerificationServiceImpl capturingService = serviceWithVerificationExecutor(capturingExecutor);
+        VerificationRequestDto request = makeRequest(
+                singleDevice(), List.of(makeRule()), List.of(makeEffectiveSpec("lease-spec")),
+                false, 0, false);
+        capturingService.verifyAsync(1L, 142L, request);
+        LeaseConfirmationTestSupport.ageExecutionLease(
+                capturingService, "localExecutions", 142L, Duration.ofMinutes(3));
+        when(taskRepository.currentDatabaseTime()).thenThrow(new RuntimeException("database unavailable"));
+
+        capturingService.maintainTaskLeases();
+
+        assertTrue(((Future<?>) capturingExecutor.capturedTask()).isCancelled());
+        verify(taskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
+    }
+
+    @Test
+    void queuedVerificationToleratesTransientLeaseDatabaseFailure() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        VerificationServiceImpl capturingService = serviceWithVerificationExecutor(capturingExecutor);
+        capturingService.verifyAsync(
+                1L, 143L, makeRequest(singleDevice(), List.of(makeRule()),
+                        List.of(makeEffectiveSpec("lease-spec")), false, 0, false));
+        when(taskRepository.currentDatabaseTime()).thenThrow(new RuntimeException("database unavailable"));
+
+        capturingService.maintainTaskLeases();
+
+        assertFalse(((Future<?>) capturingExecutor.capturedTask()).isCancelled());
     }
 
     @Test
@@ -1007,6 +1103,7 @@ class VerificationServiceImplBuildResultTest {
                 result.getHistoryPersistence().getStatus());
         assertEquals(1000L, result.getHistoryPersistence().getRunId());
         verify(formalOperationAdmission).execute(eq(1L), any());
+        verify(formalOperationAdmission).registerCurrentLeaseCommitFence();
     }
 
     @Test
@@ -1053,15 +1150,16 @@ class VerificationServiceImplBuildResultTest {
 
     @Test
     void runHistory_keepsCorruptRunAsUnavailablePlaceholder() {
-        VerificationTaskPo good = VerificationTaskPo.builder()
-                .id(21L).userId(1L).status(VerificationTaskPo.TaskStatus.COMPLETED)
-                .createdAt(LocalDateTime.now()).completedAt(LocalDateTime.now()).build();
-        VerificationTaskPo corrupt = VerificationTaskPo.builder()
-                .id(22L).userId(1L).status(VerificationTaskPo.TaskStatus.COMPLETED)
-                .createdAt(LocalDateTime.now()).completedAt(LocalDateTime.now()).build();
-        when(traceRepository.findByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of());
-        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDesc(
-                1L, VerificationTaskPo.TaskStatus.COMPLETED)).thenReturn(List.of(good, corrupt));
+        VerificationRunSummaryProjection good = mock(VerificationRunSummaryProjection.class);
+        VerificationRunSummaryProjection corrupt = mock(VerificationRunSummaryProjection.class);
+        when(good.getId()).thenReturn(21L);
+        when(corrupt.getId()).thenReturn(22L);
+        when(corrupt.getCreatedAt()).thenReturn(LocalDateTime.now());
+        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
+                .thenReturn(List.of(good, corrupt));
+        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+                1L, List.of(21L, 22L))).thenReturn(List.of());
         when(verificationTaskMapper.toRunSummaryDto(good, 0))
                 .thenReturn(VerificationRunSummaryDto.builder().id(21L).build());
         when(verificationTaskMapper.toRunSummaryDto(corrupt, 0))
@@ -1075,6 +1173,94 @@ class VerificationServiceImplBuildResultTest {
         assertFalse(runs.get(1).getDataAvailable());
         assertEquals(22L, runs.get(1).getId());
         assertEquals("PERSISTED_SEMANTIC_DATA_INVALID", runs.get(1).getUnavailableReasonCode());
+    }
+
+    @Test
+    void runHistory_keepsCorruptTracePlaceholderWithoutCountingItAsReplayable() {
+        VerificationRunSummaryProjection run = mock(VerificationRunSummaryProjection.class);
+        TraceSummaryProjection corruptTrace = mock(TraceSummaryProjection.class);
+        when(run.getId()).thenReturn(31L);
+        when(corruptTrace.getId()).thenReturn(41L);
+        when(corruptTrace.getVerificationTaskId()).thenReturn(31L);
+        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
+                .thenReturn(List.of(run));
+        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+                1L, List.of(31L))).thenReturn(List.of(corruptTrace));
+        when(traceMapper.toSummaryDto(corruptTrace)).thenThrow(new PersistedDataIntegrityException(
+                "verification trace", 41L, "violatedSpecJson", "malformed JSON"));
+        when(verificationTaskMapper.toRunSummaryDto(run, 0)).thenReturn(
+                VerificationRunSummaryDto.builder().id(31L).counterexampleCount(0).build());
+
+        VerificationRunSummaryDto result = service.getRuns(1L).get(0);
+
+        assertEquals(0, result.getCounterexampleCount());
+        assertEquals(1, result.getCounterexamples().size());
+        assertFalse(result.getCounterexamples().get(0).getDataAvailable());
+        verify(verificationTaskMapper).toRunSummaryDto(run, 0);
+    }
+
+    @Test
+    void runDetailUsesTheSameReplayableCounterexampleCountAsHistory() {
+        VerificationTaskPo run = VerificationTaskPo.builder()
+                .id(32L)
+                .userId(1L)
+                .status(VerificationTaskPo.TaskStatus.COMPLETED)
+                .checkLogsJson("[]")
+                .build();
+        TraceSummaryProjection availableTrace = mock(TraceSummaryProjection.class);
+        TraceSummaryProjection corruptTrace = mock(TraceSummaryProjection.class);
+        TraceSummaryDto availableSummary = TraceSummaryDto.builder()
+                .id(51L)
+                .verificationTaskId(32L)
+                .dataAvailable(true)
+                .build();
+        when(taskRepository.findByIdAndUserId(32L, 1L)).thenReturn(Optional.of(run));
+        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+                1L, List.of(32L))).thenReturn(List.of(availableTrace, corruptTrace));
+        when(traceMapper.toSummaryDto(availableTrace)).thenReturn(availableSummary);
+        when(traceMapper.toSummaryDto(corruptTrace)).thenThrow(new PersistedDataIntegrityException(
+                "verification trace", 52L, "stateCount", "trace has no states"));
+        VerificationRunDto expected = VerificationRunDto.builder().id(32L).counterexampleCount(1).build();
+        when(verificationTaskMapper.toRunDto(run, 1)).thenReturn(expected);
+
+        VerificationRunDto result = service.getRun(1L, 32L);
+
+        assertSame(expected, result);
+        verify(verificationTaskMapper).toRunDto(run, 1);
+    }
+
+    @Test
+    void runHistory_usesConfiguredStoredTaskLimitAsQueryBound() {
+        AsyncTaskAdmissionConfig admissionConfig = new AsyncTaskAdmissionConfig();
+        admissionConfig.getVerification().setMaxStoredTasksPerUser(137);
+        VerificationServiceImpl configuredService = serviceWithAdmissionConfig(admissionConfig);
+        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        assertTrue(configuredService.getRuns(1L).isEmpty());
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(taskRepository).findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), pageable.capture());
+        assertEquals(0, pageable.getValue().getPageNumber());
+        assertEquals(137, pageable.getValue().getPageSize());
+    }
+
+    @Test
+    void synchronousVerificationRejectsKnownFullHistoryBeforeStartingNusmv() throws Exception {
+        when(taskRepository.countByUserId(1L)).thenReturn(100L);
+
+        AsyncTaskQuotaExceededException error = assertThrows(
+                AsyncTaskQuotaExceededException.class,
+                () -> service.verify(1L, makeRequest(
+                        singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertEquals("VERIFICATION_STORED_TASK_LIMIT_REACHED", error.getReasonCode());
+        verify(smvGenerator, never()).generateWithEnvironment(
+                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
+                anyBoolean(), any(), any());
     }
 
     @Test
@@ -1279,7 +1465,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(result.isCancellationAccepted());
         assertEquals("CANCELLED", result.getTaskStatus());
-        verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
+        verify(chatExecutionLeaseGuard).requireCurrentExecutionLeaseAndLock();
         verify(taskRepository).cancelTaskIfStillActive(
                 eq(60L), eq(VerificationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class),
                 eq(VerificationOutcome.INCONCLUSIVE), anyList());

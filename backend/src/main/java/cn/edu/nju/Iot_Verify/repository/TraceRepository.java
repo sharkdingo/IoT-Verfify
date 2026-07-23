@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.po.TracePo;
+import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -25,7 +26,8 @@ public interface TraceRepository extends JpaRepository<TracePo, Long> {
      */
     List<TracePo> findByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
 
-    long countByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
+    List<TraceSummaryProjection> findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+            Long userId, List<Long> verificationTaskIds);
 
     void deleteByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
     

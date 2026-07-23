@@ -40,13 +40,16 @@ import {
 import boardApi, {
   BOARD_RESPONSE_INCOMPLETE_CODE,
   type DefaultTemplateResetResult,
-  type DeviceTemplateDeletionResult
+  type DeviceTemplateDeletionResult,
+  type EnvironmentVariableChange
 } from '@/api/board'
 import type { ModelEnvironmentVariable } from '@/types/model'
+import type { ModelTokenSource } from '@/types/modelToken'
 import { deviceLabelKey, reserveUniqueDeviceLabel } from '@/utils/canvas/nodeCreate'
 import { localizedErrorMessage } from '@/utils/userMessage'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
+import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 
 defineOptions({ inheritAttrs: false })
 const attrs = useAttrs()
@@ -544,7 +547,12 @@ const filteredTemplates = computed(() => {
   return templates
 })
 
-const isDefaultTemplate = (template: any) => template?.defaultTemplate !== false
+const isDefaultTemplate = (template: any) => template?.defaultTemplate === true
+
+const formatTemplateModelToken = (template: any, value: unknown) => {
+  const raw = value === null || value === undefined ? '' : String(value)
+  return isDefaultTemplate(template) ? formatBuiltInModelToken(raw, t) : raw
+}
 
 const defaultTemplates = computed(() =>
   filteredTemplates.value.filter((template: any) => isDefaultTemplate(template))
@@ -595,17 +603,19 @@ const getTemplateList = (template: any, field: string, nameField = 'Name') => {
 
 const previewItems = (items: string[], limit = 5) => items.slice(0, limit)
 
-const getTemplateInitState = (template: any) =>
-  template?.manifest?.InitState || t('app.none')
+const getTemplateInitState = (template: any) => {
+  const initState = template?.manifest?.InitState
+  return initState ? formatTemplateModelToken(template, initState) : t('app.none')
+}
 
 const getTemplateTransitionCount = (template: any) =>
   Array.isArray(template?.manifest?.Transitions) ? template.manifest.Transitions.length : 0
 
 const getTemplatePreviewSections = (template: any) => [
-  { key: 'modes', label: t('app.modes'), items: getTemplateList(template, 'Modes') },
-  { key: 'states', label: t('app.workingStates'), items: getTemplateList(template, 'WorkingStates') },
-  { key: 'variables', label: t('app.variables'), items: getTemplateList(template, 'InternalVariables') },
-  { key: 'apis', label: t('app.deviceApis'), items: getTemplateList(template, 'APIs') }
+  { key: 'modes', label: t('app.modes'), items: getTemplateList(template, 'Modes').map(item => formatTemplateModelToken(template, item)) },
+  { key: 'states', label: t('app.workingStates'), items: getTemplateList(template, 'WorkingStates').map(item => formatTemplateModelToken(template, item)) },
+  { key: 'variables', label: t('app.variables'), items: getTemplateList(template, 'InternalVariables').map(item => formatTemplateModelToken(template, item)) },
+  { key: 'apis', label: t('app.deviceApis'), items: getTemplateList(template, 'APIs').map(item => formatTemplateModelToken(template, item)) }
 ]
 
 const activeTemplatePreview = computed(() => {
@@ -1189,19 +1199,19 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
   // Template InternalVariables includes both device-local and shared environment variables.
   if (targetType === 'variable' && template.manifest.InternalVariables) {
     template.manifest.InternalVariables.forEach((v: any) => {
-      keys.push({ label: `${v.Name} (${variableScopeLabel(v)})`, value: v.Name })
+      keys.push({ label: `${formatTemplateModelToken(template, v.Name)} (${variableScopeLabel(v)})`, value: v.Name })
     })
   }
 
   if (targetType === 'state' && template.manifest.WorkingStates) {
     template.manifest.WorkingStates.forEach((s: any) => {
-      keys.push({ label: s.Name, value: s.Name })
+      keys.push({ label: formatTemplateModelToken(template, s.Name), value: s.Name })
     })
   }
 
   if (targetType === 'mode' && template.manifest.Modes) {
     template.manifest.Modes.forEach((mode: string) => {
-      keys.push({ label: mode, value: mode })
+      keys.push({ label: formatTemplateModelToken(template, mode), value: mode })
     })
   }
 
@@ -1214,7 +1224,7 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
         return Boolean(String(api.EndState ?? api.endState ?? '').trim())
       })
       .forEach((api: any) => {
-      keys.push({ label: api.Name, value: api.Name })
+      keys.push({ label: formatTemplateModelToken(template, api.Name), value: api.Name })
     })
   }
 
@@ -1232,13 +1242,13 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
     modes.forEach((mode: string) => addPropertyKey(
       modes.length === 1
         ? t('app.currentStateProperty')
-        : t('app.currentModeStateProperty', { mode }),
+        : t('app.currentModeStateProperty', { mode: formatTemplateModelToken(template, mode) }),
       'state',
       mode
     ))
     if (template.manifest.InternalVariables) {
       template.manifest.InternalVariables.forEach((v: any) => {
-        addPropertyKey(`${v.Name} (${variableScopeLabel(v)})`, 'variable', v.Name)
+        addPropertyKey(`${formatTemplateModelToken(template, v.Name)} (${variableScopeLabel(v)})`, 'variable', v.Name)
       })
     }
   }
@@ -1247,14 +1257,16 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
 }
 
 const formatConditionPropertyLabel = (condition: Pick<SpecCondition, 'deviceId' | 'targetType' | 'key' | 'propertyScope'>) => {
+  const template = getDeviceTemplate(condition.deviceId)
+  if (condition.targetType === 'state') return t('app.state')
   if ((condition.targetType === 'trust' || condition.targetType === 'privacy')
     && condition.propertyScope === 'state') {
     const modes = getDeviceManifestForCondition(condition.deviceId)?.Modes || []
     return modes.length === 1
       ? t('app.currentStateProperty')
-      : t('app.currentModeStateProperty', { mode: condition.key })
+      : t('app.currentModeStateProperty', { mode: formatTemplateModelToken(template, condition.key) })
   }
-  return condition.key || t('app.value')
+  return condition.key ? formatTemplateModelToken(template, condition.key) : t('app.value')
 }
 
 // Computed available keys for current editing condition
@@ -1298,27 +1310,40 @@ const isSelectedSpecVariableEnum = () => {
   return Array.isArray(variable?.Values) && variable.Values.length > 0
 }
 
+// Preserve canonical operator values while localizing the user-facing set-membership labels.
+const getRelationLabel = (relation: string) => {
+  if (relation === 'in') return t('app.relationIn')
+  if (relation === 'not in') return t('app.relationNotIn')
+  return relationOperators.find(item => item.value === relation)?.label || relation
+}
+
+const localizedRelationOperators = computed(() => relationOperators.map(operator => ({
+  ...operator,
+  label: getRelationLabel(operator.value)
+})))
+
 // Filter relation operators based on target type
 const filteredRelationOperators = computed(() => {
+  const operators = localizedRelationOperators.value
   if (specForm.templateId === '7'
     && (editingConditionData.targetType === 'state' || editingConditionData.targetType === 'mode')) {
-    return relationOperators.filter(op => op.value === '=')
+    return operators.filter(op => op.value === '=')
   }
   if (editingConditionData.targetType === 'state') {
-    return relationOperators.filter(op => enumRelationValues.includes(op.value))
+    return operators.filter(op => enumRelationValues.includes(op.value))
   }
   if (editingConditionData.targetType === 'mode') {
-    return relationOperators.filter(op => enumRelationValues.includes(op.value))
+    return operators.filter(op => enumRelationValues.includes(op.value))
   }
   if (editingConditionData.targetType === 'variable' && isSelectedSpecVariableEnum()) {
-    return relationOperators.filter(op => enumRelationValues.includes(op.value))
+    return operators.filter(op => enumRelationValues.includes(op.value))
   }
   // trust/privacy are enum-valued — only equality / set membership make sense.
   // Ordering comparisons (> >= < <=) would generate meaningless NuSMV conditions.
   if (editingConditionData.targetType === 'trust' || editingConditionData.targetType === 'privacy') {
-    return relationOperators.filter(op => enumRelationValues.includes(op.value))
+    return operators.filter(op => enumRelationValues.includes(op.value))
   }
-  return relationOperators
+  return operators
 })
 
 // Computed available states for the selected device (for equality and set-membership selection)
@@ -1412,16 +1437,16 @@ watch(() => editingConditionData.relation, () => {
   }
 })
 
-// Get relation label (accepts string for flexibility)
-const getRelationLabel = (relation: string) => {
-  return relationOperators.find(r => r.value === relation)?.label || relation
-}
-
 const hasConditionValue = (value: unknown) =>
   value !== null && value !== undefined && value !== ''
 
-const formatConditionValue = (value: unknown) =>
-  hasConditionValue(value) ? String(value) : '*'
+const formatConditionValue = (value: unknown, deviceId?: string) =>
+  hasConditionValue(value)
+    ? formatTemplateModelToken(getDeviceTemplate(deviceId || ''), value)
+    : '*'
+
+const formatEditingConditionModelToken = (value: unknown) =>
+  formatTemplateModelToken(getDeviceTemplate(editingConditionData.deviceId || ''), value)
 
 const specFormulaKind = computed(() => {
   const formula = specForm.formula.trim().toUpperCase()
@@ -1485,7 +1510,7 @@ const naturalLanguageRule = computed(() => {
 
     return conditions.map(c => {
       const relationText = getRelationLabel(c.relation || '=')
-      const valueText = hasConditionValue(c.value) ? ` ${relationText} "${c.value}"` : ''
+      const valueText = hasConditionValue(c.value) ? ` ${relationText} "${formatConditionValue(c.value, c.deviceId)}"` : ''
       return `${conditionSubject(c)}${valueText}`
     }).join(` ${t('app.specPreviewAnd')} `)
   }
@@ -2020,8 +2045,11 @@ const confirmResetDefaultTemplates = async () => {
           templates: result.currentTemplates,
           environmentVariables: result.environmentVariables
         })
+        const successMessageKey = defaultTemplateResetChangesBoardModel(result)
+          ? 'app.defaultTemplatesResetSuccessReverificationRequired'
+          : 'app.defaultTemplatesResetSuccess'
         ElMessage.success({
-          message: t('app.defaultTemplatesResetSuccess', {
+          message: t(successMessageKey, {
             types: result.templateChanges.length,
             devices: result.affectedDevices.length,
             variables: result.environmentChanges.length
@@ -2085,6 +2113,59 @@ const defaultTemplateResetBlockerReason = (reasonCode: string): string => {
     BOARD_MODEL_INCOMPATIBLE: 'app.defaultTemplateBlockerBoard'
   }
   return t(keyByCode[reasonCode] || 'app.defaultTemplateBlockerBoard')
+}
+
+const defaultTemplateResetChangesBoardModel = (result: DefaultTemplateResetResult): boolean =>
+  result.affectedDevices.length > 0 || result.environmentChanges.length > 0
+
+const formatDefaultTemplateResetEnvironmentSnapshot = (
+  value: ModelEnvironmentVariable | null | undefined,
+  fallbackName: string,
+  source: ModelTokenSource | undefined
+): string => {
+  const formatToken = (token: unknown) => source === 'BUNDLED'
+    ? formatBuiltInModelToken(token, t)
+    : String(token ?? '')
+  const name = formatToken(value?.name?.trim() || fallbackName)
+  const details = [
+    formatToken(value?.value),
+    value?.trust ? t(`app.${value.trust}`) : '',
+    value?.privacy ? t(`app.${value.privacy}`) : ''
+  ].filter(detail => detail !== null && detail !== undefined && String(detail).trim() !== '')
+  return details.length > 0 ? `${name}: ${details.join(' · ')}` : name
+}
+
+const formatDefaultTemplateResetEnvironmentChange = (change: EnvironmentVariableChange): string => {
+  if (change.changeType === 'ADDED') {
+    return t('app.environmentChangeAdded', {
+      item: formatDefaultTemplateResetEnvironmentSnapshot(
+        change.currentValue,
+        change.name,
+        change.currentModelTokenSource
+      )
+    })
+  }
+  if (change.changeType === 'UPDATED') {
+    return t('app.environmentChangeUpdated', {
+      before: formatDefaultTemplateResetEnvironmentSnapshot(
+        change.previousValue,
+        change.name,
+        change.previousModelTokenSource
+      ),
+      after: formatDefaultTemplateResetEnvironmentSnapshot(
+        change.currentValue,
+        change.name,
+        change.currentModelTokenSource
+      )
+    })
+  }
+  return t('app.environmentChangeRemoved', {
+    item: formatDefaultTemplateResetEnvironmentSnapshot(
+      change.previousValue,
+      change.name,
+      change.previousModelTokenSource
+    )
+  })
 }
 
 const confirmDeleteTemplate = async () => {
@@ -2408,7 +2489,7 @@ const exportTemplate = (template: any) => {
                     data-testid="single-device-state"
                     class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50"
                   >
-                    <option v-for="state in selectedWorkingStates" :key="state.Name" :value="state.Name">{{ state.Name }}</option>
+                    <option v-for="state in selectedWorkingStates" :key="state.Name" :value="state.Name">{{ formatTemplateModelToken(selectedDeviceTemplate, state.Name) }}</option>
                   </select>
                 </label>
 
@@ -2444,7 +2525,7 @@ const exportTemplate = (template: any) => {
                   class="rounded-lg border border-slate-200 bg-slate-50/80 p-2"
                 >
                   <div class="mb-2 flex items-center justify-between gap-2">
-                    <span class="truncate text-[11px] font-bold text-slate-700" :title="variable.Name">{{ variable.Name }}</span>
+                    <span class="truncate text-[11px] font-bold text-slate-700" :title="formatTemplateModelToken(selectedDeviceTemplate, variable.Name)">{{ formatTemplateModelToken(selectedDeviceTemplate, variable.Name) }}</span>
                     <span v-if="templateVariableUsesNumericBounds(variable)" class="text-[10px] font-semibold text-slate-400">
                       {{ variableInputPlaceholder(variable) }}
                     </span>
@@ -2460,7 +2541,7 @@ const exportTemplate = (template: any) => {
                         class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
                       >
                         <option value="">{{ t('app.useTemplateDefault') }}</option>
-                        <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ value }}</option>
+                        <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatTemplateModelToken(selectedDeviceTemplate, value) }}</option>
                       </select>
                       <input
                         v-else
@@ -2722,7 +2803,7 @@ const exportTemplate = (template: any) => {
             </div>
 
             <div class="relative">
-              <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">search</span>
+              <span aria-hidden="true" class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">search</span>
               <input
                 v-model="templateSearchQuery"
                 class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-orange-400 focus:ring-2 focus:ring-orange-100/50 placeholder:text-slate-400 transition-all shadow-sm"
@@ -2731,10 +2812,13 @@ const exportTemplate = (template: any) => {
               />
               <button
                 v-if="templateSearchQuery"
+                type="button"
+                :aria-label="t('app.clearSearch')"
+                :title="t('app.clearSearch')"
                 @click="templateSearchQuery = ''"
                 class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
               >
-                <span class="material-symbols-outlined text-xs">close</span>
+                <span aria-hidden="true" class="material-symbols-outlined text-xs">close</span>
               </button>
             </div>
 
@@ -3019,8 +3103,8 @@ const exportTemplate = (template: any) => {
                         <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
-                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0" :title="formatConditionValue(condition.value)">
-                          {{ formatConditionValue(condition.value) }}
+                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
+                          {{ formatConditionValue(condition.value, condition.deviceId) }}
                         </span>
                       </div>
                     </div>
@@ -3086,8 +3170,8 @@ const exportTemplate = (template: any) => {
                         <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
-                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0" :title="formatConditionValue(condition.value)">
-                          {{ formatConditionValue(condition.value) }}
+                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
+                          {{ formatConditionValue(condition.value, condition.deviceId) }}
                         </span>
                       </div>
                     </div>
@@ -3153,8 +3237,8 @@ const exportTemplate = (template: any) => {
                         <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
-                        <span class="text-[10px] bg-yellow-50 text-yellow-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-yellow-200 flex-shrink-0" :title="formatConditionValue(condition.value)">
-                          {{ formatConditionValue(condition.value) }}
+                        <span class="text-[10px] bg-yellow-50 text-yellow-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-yellow-200 flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
+                          {{ formatConditionValue(condition.value, condition.deviceId) }}
                         </span>
                       </div>
                     </div>
@@ -3227,24 +3311,21 @@ const exportTemplate = (template: any) => {
   <div
     v-if="showSpecDialog"
     data-testid="spec-condition-dialog"
-    class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50"
+    class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4"
     @click="closeSpecDialog"
     @keydown="handleSpecDialogKeydown"
   >
     <div
       :ref="setSpecDialogRef"
-      class="bg-white rounded-2xl w-full max-w-md shadow-2xl transform transition-all overflow-hidden"
+      class="control-center-dialog-surface control-center-spec-dialog flex w-full max-w-md flex-col overflow-hidden rounded-2xl border shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="spec-condition-dialog-title"
       tabindex="-1"
       @click.stop
     >
-      <!-- Header with light background -->
-      <div class="relative bg-slate-100 border-b border-slate-200 p-6">
-        <div class="absolute top-0 right-0 w-32 h-32 bg-slate-200/50 rounded-full -translate-y-1/2 translate-x-1/2"></div>
-        <div class="absolute bottom-0 left-0 w-24 h-24 bg-slate-200/50 rounded-full translate-y-1/2 -translate-x-1/2"></div>
-        
+      <!-- Header -->
+      <div class="control-center-dialog-header relative shrink-0 border-b p-6">
         <div class="relative flex items-center justify-between">
           <div class="flex items-center gap-4">
             <div class="w-12 h-12 bg-white shadow-sm rounded-xl flex items-center justify-center">
@@ -3273,7 +3354,7 @@ const exportTemplate = (template: any) => {
       </div>
 
       <!-- Content Body -->
-      <div class="p-6 space-y-6">
+      <div class="control-center-dialog-body min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain p-6">
         <!-- Device Selection -->
         <div class="space-y-2">
           <div class="flex items-center gap-2">
@@ -3386,7 +3467,7 @@ const exportTemplate = (template: any) => {
                 class="w-full min-h-[7.5rem] bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none cursor-pointer"
               >
                 <option v-for="val in conditionValueOptions" :key="val" :value="val">
-                  {{ val }}
+                  {{ formatEditingConditionModelToken(val) }}
                 </option>
               </select>
               <select
@@ -3397,7 +3478,7 @@ const exportTemplate = (template: any) => {
               >
                 <option value="" hidden>{{ t('app.value') }}</option>
                 <option v-for="val in conditionValueOptions" :key="val" :value="val">
-                  {{ val }}
+                  {{ formatEditingConditionModelToken(val) }}
                 </option>
               </select>
               <input
@@ -3424,18 +3505,18 @@ const exportTemplate = (template: any) => {
             <span class="text-red-600 font-bold">{{ getDeviceLabel(editingConditionData.deviceId || t('app.device')) }}</span>
             <template v-if="editingConditionData.targetType !== 'state' && editingConditionData.key">
               <span class="text-slate-400">.</span>
-              <span class="text-red-600 font-bold">{{ editingConditionData.key }}</span>
+              <span class="text-red-600 font-bold">{{ formatEditingConditionModelToken(editingConditionData.key) }}</span>
             </template>
             <template v-if="showRelationAndValue">
               <span class="text-slate-500 mx-1">{{ getRelationLabel(editingConditionData.relation || '=') }}</span>
-              <span class="text-black">"{{ editingConditionData.value || t('app.value') }}"</span>
+              <span class="text-black">"{{ editingConditionData.value ? formatEditingConditionModelToken(editingConditionData.value) : t('app.value') }}"</span>
             </template>
           </div>
         </div>
       </div>
 
       <!-- Footer Actions -->
-      <div class="bg-slate-100 px-6 py-4 flex justify-end gap-3 border-t border-slate-200">
+      <div class="control-center-dialog-footer flex shrink-0 justify-end gap-3 border-t px-6 py-4">
         <button
           @click="closeSpecDialog"
           class="px-5 py-2.5 text-sm font-bold text-black bg-white border-2 border-slate-300 rounded-lg hover:bg-slate-50 hover:border-slate-400 transition-all"
@@ -3527,13 +3608,13 @@ const exportTemplate = (template: any) => {
   <!-- Delete Confirmation Dialog -->
   <div
     v-if="showDeleteConfirmDialog"
-    class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50"
+    class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
     @click="closeTemplateDeleteConfirm()"
     @keydown="handleTemplateDeleteDialogKeydown"
   >
     <div
       :ref="setTemplateDeleteDialogRef"
-      class="bg-white rounded-lg p-6 w-full max-w-md shadow-2xl border border-slate-200 transform transition-all"
+      class="control-center-dialog-surface control-center-delete-dialog w-full max-w-md overflow-y-auto rounded-lg border p-6 shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-template-dialog-title"
@@ -3603,13 +3684,13 @@ const exportTemplate = (template: any) => {
   <!-- Reset Default Templates Confirmation Dialog -->
   <div
     v-if="showResetDefaultsConfirmDialog"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+    class="fixed inset-0 z-[2400] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
     @click="closeResetDefaultsConfirm()"
     @keydown="handleResetDefaultsDialogKeydown"
   >
     <div
       :ref="setResetDefaultsDialogRef"
-      class="template-reset-dialog w-full max-w-md rounded-2xl border p-5 shadow-2xl"
+      class="template-reset-dialog max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border p-5 shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="reset-default-templates-title"
@@ -3666,13 +3747,23 @@ const exportTemplate = (template: any) => {
           </div>
         </div>
 
-        <div v-if="defaultTemplateResetPreview.environmentChanges.length" class="mt-3 text-xs">
-          <span class="font-bold">{{ t('app.environmentVariablesWillChange', {
+        <div
+          v-if="defaultTemplateResetPreview.environmentChanges.length"
+          data-testid="default-template-reset-environment-changes"
+          class="mt-3 text-xs"
+        >
+          <div class="font-bold">{{ t('app.environmentVariablesWillChange', {
             count: defaultTemplateResetPreview.environmentChanges.length
-          }) }}</span>
-          <span class="ml-1 break-words text-slate-600 dark:text-slate-300">
-            {{ defaultTemplateResetPreview.environmentChanges.map(change => change.name).join(', ') }}
-          </span>
+          }) }}</div>
+          <ul class="mt-1 max-h-28 list-disc space-y-1 overflow-y-auto pl-5 text-slate-600 dark:text-slate-300">
+            <li
+              v-for="change in defaultTemplateResetPreview.environmentChanges"
+              :key="`${change.changeType}:${change.name}`"
+              class="break-words"
+            >
+              {{ formatDefaultTemplateResetEnvironmentChange(change) }}
+            </li>
+          </ul>
         </div>
 
         <div
@@ -3698,6 +3789,14 @@ const exportTemplate = (template: any) => {
 
         <p class="mt-3 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
           {{ t('app.resetDefaultTemplatesNotice') }}
+        </p>
+        <p
+          v-if="defaultTemplateResetChangesBoardModel(defaultTemplateResetPreview)"
+          data-testid="default-template-reset-reverification-warning"
+          class="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+          role="alert"
+        >
+          {{ t('app.defaultTemplateResetReverificationRequired') }}
         </p>
       </template>
 
@@ -4051,6 +4150,62 @@ details > summary::-webkit-details-marker {
   background: var(--board-panel-bg, #ffffff);
   border-color: var(--board-border, rgba(226, 232, 240, 0.9));
   color: var(--board-text, #0f172a);
+}
+
+.control-center-dialog-surface {
+  background: var(--board-panel-bg, var(--surface-panel, #ffffff));
+  border-color: var(--board-border, var(--border, #e2e8f0));
+  color: var(--board-text, var(--text, #0f172a));
+}
+
+.control-center-spec-dialog {
+  max-height: calc(100vh - 1.5rem);
+  max-height: calc(100dvh - 1.5rem);
+}
+
+.control-center-delete-dialog {
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+}
+
+.control-center-dialog-header,
+.control-center-dialog-footer {
+  background: var(--board-control-bg, var(--surface-control, #f1f5f9));
+  border-color: var(--board-border, var(--border, #e2e8f0));
+}
+
+.control-center-dialog-body {
+  background: var(--board-panel-bg, var(--surface-panel, #ffffff));
+}
+
+.control-center-dialog-surface :is(input, select, textarea) {
+  background: var(--board-card-bg, var(--field-bg, #ffffff)) !important;
+  border-color: var(--board-border, var(--field-border, #cbd5e1)) !important;
+  color: var(--board-text, var(--text, #0f172a)) !important;
+}
+
+.control-center-dialog-surface :is(.bg-white, .bg-slate-50, .bg-slate-100, .bg-slate-200) {
+  background-color: var(--board-card-bg, var(--surface-elevated, #ffffff)) !important;
+}
+
+.control-center-dialog-surface .bg-red-50 {
+  background-color: color-mix(in srgb, #ef4444 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
+}
+
+.control-center-dialog-surface .bg-amber-50 {
+  background-color: color-mix(in srgb, #f59e0b 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
+}
+
+.control-center-dialog-surface :is(.text-black, .text-slate-700, .text-slate-800, .text-slate-900) {
+  color: var(--board-text, var(--text, #0f172a)) !important;
+}
+
+.control-center-dialog-surface :is(.text-slate-400, .text-slate-500, .text-slate-600) {
+  color: var(--board-text-muted, var(--text-muted, #64748b)) !important;
+}
+
+.control-center-dialog-surface :is(.border-slate-100, .border-slate-200, .border-slate-300, .border-slate-400) {
+  border-color: var(--board-border, var(--border, #e2e8f0)) !important;
 }
 
 .template-reset-dialog__icon {

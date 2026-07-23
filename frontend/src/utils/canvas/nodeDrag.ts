@@ -41,3 +41,13 @@ export const endNodeDrag = (dragState: NodeDragState): DeviceNode | null => {
     dragState.node = null
     return node
 }
+
+export const cancelNodeDrag = (dragState: NodeDragState): DeviceNode | null => {
+    const node = dragState.node
+    if (!node) return null
+
+    node.position.x = dragState.origin.x
+    node.position.y = dragState.origin.y
+    dragState.node = null
+    return node
+}

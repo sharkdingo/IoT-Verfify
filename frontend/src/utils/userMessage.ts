@@ -6,11 +6,15 @@ export const textMatchesLocale = (value: unknown, locale: string): value is stri
   const text = value.trim()
   const hanCount = text.match(HAN_CHARACTER)?.length || 0
   const englishWordCount = text.match(ENGLISH_WORD)?.length || 0
+  const hasHan = hanCount > 0
+  const hasEnglishWords = englishWordCount > 0
+
+  // User-defined device and state labels commonly use a different script from the UI.
+  // Without structured metadata, mixed-script text cannot be classified safely.
+  if (hasHan && hasEnglishWords) return true
+
   const chineseLocale = locale.toLowerCase().startsWith('zh')
-  if (chineseLocale) {
-    return hanCount > 0 && englishWordCount <= Math.max(2, Math.floor(hanCount / 2))
-  }
-  return hanCount === 0
+  return chineseLocale ? hasHan : !hasHan
 }
 
 export const localizedTextOrFallback = (

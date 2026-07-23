@@ -4,6 +4,8 @@ import { createI18n } from 'vue-i18n'
 import { describe, expect, it } from 'vitest'
 import FuzzingPanel from '../FuzzingPanel.vue'
 import type { Specification } from '@/types/spec'
+import type { FuzzPaperDomainPreview } from '@/types/fuzzing'
+import { i18n as appI18n } from '@/assets/i18n'
 
 const i18n = createI18n({
   legacy: false,
@@ -621,6 +623,116 @@ describe('FuzzingPanel', () => {
     expect(wrapper.text()).toContain('Input ranges are temporarily unavailable.')
     await wrapper.get('[data-testid="refresh-paper-domain"]').trigger('click')
     expect(wrapper.emitted('refreshPaperDomain')).toHaveLength(1)
+  })
+
+  it('localizes bundled domain tokens without rewriting the authoritative preview', () => {
+    appI18n.global.locale.value = 'zh-CN'
+    const paperDomainPreview: FuzzPaperDomainPreview = {
+      pathLength: 20,
+      modelFingerprint: 'b'.repeat(64),
+      initializationPolicy: 'RANDOM_LEGAL_PER_SEED',
+      paperSemanticsCodes: ['PAPER_RANDOM_INITIAL_STATE_ENABLED'],
+      deviceDomains: [{
+        targetId: 'door-1',
+        label: '前门',
+        property: 'workingState',
+        legalValues: ['off', 'locked']
+      }],
+      localVariableDomains: [{
+        targetId: 'door-1',
+        label: '前门',
+        property: 'customMetric',
+        legalValues: ['ecoBoost']
+      }],
+      environmentDomains: [{
+        name: 'temperature',
+        targetId: 'environment',
+        property: 'temperature',
+        eventValueKind: 'DIRECT_VALUE_EXTENSION',
+        initialValues: ['20'],
+        eventValues: ['21']
+      }]
+    }
+    const canonicalSnapshot = JSON.parse(JSON.stringify(paperDomainPreview))
+    const wrapper = mount(FuzzingPanel, {
+      props: {
+        form: {
+          explorationMode: 'PAPER_COMPATIBLE',
+          targetSpecIds: [],
+          maxIterations: 500,
+          pathLength: 20,
+          populationSize: 10,
+          seed: null
+        },
+        specifications: [specification],
+        running: false,
+        progress: 0,
+        status: 'Initializing',
+        taskId: null,
+        cancelling: false,
+        paperDomainPreview,
+        bundledDeviceIds: ['door-1'],
+        bundledEnvironmentNames: ['temperature']
+      },
+      global: { plugins: [appI18n] }
+    })
+
+    const preview = wrapper.get('[data-testid="paper-domain-preview"]').text()
+    expect(preview).toContain('前门.工作状态')
+    expect(preview).toContain('关闭, 已锁定')
+    expect(preview).toContain('温度')
+    expect(preview).toContain('customMetric')
+    expect(preview).toContain('ecoBoost')
+    expect(paperDomainPreview).toEqual(canonicalSnapshot)
+  })
+
+  it('does not localize custom domain identifiers that collide with bundled tokens', () => {
+    appI18n.global.locale.value = 'zh-CN'
+    const wrapper = mount(FuzzingPanel, {
+      props: {
+        form: {
+          explorationMode: 'PAPER_COMPATIBLE',
+          targetSpecIds: [],
+          maxIterations: 500,
+          pathLength: 20,
+          populationSize: 10,
+          seed: null
+        },
+        specifications: [specification],
+        running: false,
+        progress: 0,
+        status: 'Initializing',
+        taskId: null,
+        cancelling: false,
+        paperDomainPreview: {
+          pathLength: 20,
+          modelFingerprint: 'c'.repeat(64),
+          initializationPolicy: 'RANDOM_LEGAL_PER_SEED',
+          paperSemanticsCodes: ['PAPER_RANDOM_INITIAL_STATE_ENABLED'],
+          deviceDomains: [],
+          localVariableDomains: [{
+            targetId: 'custom-1',
+            label: '自定义设备',
+            property: 'workingState',
+            legalValues: ['off', 'active']
+          }],
+          environmentDomains: [{
+            name: 'weather',
+            targetId: 'environment',
+            property: 'weather',
+            eventValueKind: 'DIRECT_VALUE_EXTENSION',
+            initialValues: ['off'],
+            eventValues: ['active']
+          }]
+        }
+      },
+      global: { plugins: [appI18n] }
+    })
+
+    const preview = wrapper.get('[data-testid="paper-domain-preview"]').text()
+    expect(preview).toContain('自定义设备.workingState: off, active')
+    expect(preview).toContain('weather')
+    expect(preview).not.toContain('自定义设备.工作状态')
   })
 
   it('shows a running task from its frozen summary instead of the current editable form', () => {

@@ -80,9 +80,6 @@ class FuzzRepositoryTest {
                         .leaseExpiresAt(activeUntil)
                         .build());
 
-        assertEquals(0, verificationTaskRepository.renewOwnedActiveLease(
-                expiredVerification.getId(), "old-verification-worker", now,
-                activeUntil, verificationActive));
         assertEquals(1, verificationTaskRepository.failExpiredActiveTasks(
                 VerificationTaskPo.TaskStatus.FAILED,
                 now,
@@ -127,9 +124,6 @@ class FuzzRepositoryTest {
                         .leaseExpiresAt(activeUntil)
                         .build());
 
-        assertEquals(0, simulationTaskRepository.renewOwnedActiveLease(
-                expiredSimulation.getId(), "old-simulation-worker", now,
-                activeUntil, simulationActive));
         assertEquals(1, simulationTaskRepository.failExpiredActiveTasks(
                 SimulationTaskPo.TaskStatus.FAILED,
                 now,
@@ -371,18 +365,12 @@ class FuzzRepositoryTest {
     }
 
     @Test
-    void leaseMaintenanceRenewsOnlyItsOwnTasksAndRecoversOnlyExpiredTasks() {
+    void leaseRecoveryOnlyFailsExpiredTasks() {
         LocalDateTime now = LocalDateTime.now();
         FuzzTaskPo owned = taskRepository.save(taskForLease("worker-a", now.plusMinutes(1)));
         FuzzTaskPo otherLive = taskRepository.save(taskForLease("worker-b", now.plusMinutes(1)));
         FuzzTaskPo expired = taskRepository.save(taskForLease("worker-dead", now.minusSeconds(1)));
 
-        assertEquals(1, taskRepository.renewOwnedActiveLease(
-                owned.getId(), "worker-a", now, now.plusMinutes(2),
-                List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING)));
-        assertEquals(0, taskRepository.renewOwnedActiveLease(
-                expired.getId(), "worker-dead", now, now.plusMinutes(2),
-                List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING)));
         assertEquals(1, taskRepository.failExpiredActiveTasks(
                 FuzzTaskPo.TaskStatus.FAILED,
                 now,

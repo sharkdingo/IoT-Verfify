@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.fix;
 
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,19 @@ class FixDtoSerializationTest {
                 .lowerBound(0)
                 .upperBound(50)
                 .description("Adjust the kitchen temperature threshold")
+                .modelTokenSource(ModelTokenSource.BUNDLED)
+                .build();
+        ParameterTarget parameterTarget = ParameterTarget.builder()
+                .targetId("param_zyxwvutsrqponmlkjihgfedc")
+                .ruleIndex(11)
+                .conditionIndex(12)
+                .attribute("workingState")
+                .relation("=")
+                .originalValue("off")
+                .lowerBound(0)
+                .upperBound(1)
+                .description("Frozen parameter target")
+                .modelTokenSource(ModelTokenSource.CUSTOM)
                 .build();
         ConditionAdjustment condition = ConditionAdjustment.builder()
                 .ruleIndex(5)
@@ -60,6 +74,7 @@ class FixDtoSerializationTest {
         String json = objectMapper.writeValueAsString(FixResultDto.builder()
                 .faultRules(List.of(faultRule))
                 .suggestions(List.of(suggestion))
+                .parameterTargets(List.of(parameterTarget))
                 .build());
 
         assertFalse(json.contains("ruleIndex"));
@@ -74,6 +89,8 @@ class FixDtoSerializationTest {
         assertTrue(json.contains("Kitchen light"));
         assertTrue(json.contains("removedRuleDescriptions"));
         assertTrue(json.contains("Adjust the kitchen temperature threshold"));
+        assertTrue(json.contains("\"modelTokenSource\":\"BUNDLED\""));
+        assertTrue(json.contains("\"modelTokenSource\":\"CUSTOM\""));
     }
 
     @Test

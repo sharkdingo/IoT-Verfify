@@ -2,11 +2,13 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.RuleFixer;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.fix.ConditionAdjustment;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultLocalizationResultDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixApplyResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
@@ -15,6 +17,8 @@ import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.fix.TemplateSnapshotComparison;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import cn.edu.nju.Iot_Verify.dto.model.TemplateSnapshotBundleDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
@@ -32,13 +36,16 @@ import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
+import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -123,6 +130,17 @@ class FixServiceImplTest {
         currentEnvironment = List.of();
     }
 
+    @Test
+    void compatibilityApplyMethods_doNotHoldTransactionAcrossFormalRecomputation() throws Exception {
+        Method recomputingApply = FixServiceImpl.class.getDeclaredMethod(
+                "applyFix", Long.class, Long.class, String.class, Map.class);
+        Method legacyRecomputingApply = FixServiceImpl.class.getDeclaredMethod(
+                "applyFix", Long.class, Long.class, String.class, FixSuggestionDto.class, Map.class);
+
+        assertNull(recomputingApply.getAnnotation(Transactional.class));
+        assertNull(legacyRecomputingApply.getAnnotation(Transactional.class));
+    }
+
     /**
      * Stub updateRules to run the mutator against the given current rules inside the "transaction",
      * mirroring the real read→mutate→save. Returns the mutator's output (what would be persisted).
@@ -165,6 +183,68 @@ class FixServiceImplTest {
         when(ruleFixer.fix(anyLong(), any(), any(), anyList(), anyList(), anyList(), anyList(),
                 anyMap(), anyLong(), anyBoolean(), anyInt(), anyBoolean(), any(), anyInt(), any()))
                 .thenReturn(FixResultDto.builder().fixable(false).build());
+    }
+
+    @Test
+    void localizeFault_restoresBundledTokenSourceFromFrozenSnapshot() {
+        FaultRuleDto fault = localizeFaultWithSnapshot(ModelTokenSource.BUNDLED, false);
+        assertEquals(ModelTokenSource.BUNDLED, fault.getModelTokenSource());
+        assertEquals("off", fault.getTargetActionLabel());
+    }
+
+    @Test
+    void localizeFault_preservesCustomTokenSourceFromFrozenSnapshot() {
+        FaultRuleDto fault = localizeFaultWithSnapshot(ModelTokenSource.CUSTOM, false);
+        assertEquals(ModelTokenSource.CUSTOM, fault.getModelTokenSource());
+        assertEquals("Turn power off", fault.getTargetActionLabel());
+    }
+
+    @Test
+    void localizeFault_treatsLegacySnapshotTokenSourceAsUnknown() {
+        FaultRuleDto fault = localizeFaultWithSnapshot(ModelTokenSource.BUNDLED, true);
+        assertEquals(ModelTokenSource.UNKNOWN, fault.getModelTokenSource());
+        assertEquals("Turn power off", fault.getTargetActionLabel());
+    }
+
+    private FaultRuleDto localizeFaultWithSnapshot(ModelTokenSource source, boolean legacySnapshot) {
+        TracePo po = new TracePo();
+        po.setId(1L);
+        po.setUserId(1L);
+        DeviceManifest manifest = DeviceManifest.builder().name("t1").build();
+        po.setTemplateSnapshotsJson(legacySnapshot
+                ? JsonUtils.toJson(Map.of("t1", manifest))
+                : JsonUtils.toJson(TemplateSnapshotBundleDto.captured(
+                        Map.of("t1", manifest), Map.of("sensor", source))));
+        po.setRequestJson("{\"devices\":[{\"varName\":\"sensor\",\"templateName\":\"t1\"}],"
+                + "\"rules\":[],\"specs\":[],\"isAttack\":false,\"attackBudget\":0,\"enablePrivacy\":false}");
+        when(traceRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(po));
+
+        TraceDto trace = new TraceDto();
+        trace.setViolatedSpecId("s0");
+        trace.setModelComplete(true);
+        when(traceMapper.toDto(po)).thenReturn(trace);
+        when(smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(anyList(), anyMap()))
+                .thenAnswer(invocation -> {
+                    List<DeviceVerificationDto> devices = invocation.getArgument(0);
+                    DeviceVerificationDto input = devices.get(0);
+                    DeviceSmvData smv = new DeviceSmvData();
+                    smv.setVarName(input.getVarName());
+                    smv.setModelTokenSource(input.getModelTokenSource());
+                    return Map.of(smv.getVarName(), smv);
+                });
+        when(ruleFixer.localizeFaults(any(), anyList(), anyMap()))
+                .thenReturn(List.of(FaultRuleDto.builder()
+                        .ruleString("Rule")
+                        .transitionNumber(1)
+                        .targetDeviceId("sensor")
+                        .targetDeviceLabel("Sensor")
+                        .targetActionId("off")
+                        .targetActionLabel("Turn power off")
+                        .reasonCode("TRIGGERED")
+                        .reason("Triggered")
+                        .build()));
+
+        return fixService.localizeFault(1L, 1L).getFaultRules().get(0);
     }
 
     @Test

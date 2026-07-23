@@ -7,8 +7,19 @@ export const PRIVACY_OPTIONS = ['public', 'private'] as const
 export type TrustValue = typeof TRUST_OPTIONS[number]
 export type PrivacyValue = typeof PRIVACY_OPTIONS[number]
 
-export type DeviceRuntimeConfig = Partial<Pick<DeviceNode,
-  'state' | 'currentStateTrust' | 'currentStatePrivacy' | 'variables' | 'privacies'>>
+export interface DeviceRuntimeConfig {
+  state?: string
+  currentStateTrust?: string
+  currentStatePrivacy?: string
+  variables?: DeviceNode['variables']
+  privacies?: DeviceNode['privacies']
+}
+
+type DeviceRuntimeSource = Omit<DeviceRuntimeConfig,
+  'currentStateTrust' | 'currentStatePrivacy'> & {
+    currentStateTrust?: string | null
+    currentStatePrivacy?: string | null
+  }
 
 export interface DeviceRuntimeDraft {
   state: string
@@ -174,7 +185,7 @@ export const buildDeviceRuntimeConfig = (
 
 export const materializeDeviceRuntimeConfig = (
   template: DeviceTemplate,
-  runtime?: DeviceRuntimeConfig,
+  runtime?: DeviceRuntimeSource,
   options: BuildDeviceRuntimeConfigOptions = {}
 ): DeviceRuntimeConfig | undefined => {
   const draft = createDeviceRuntimeDraft()
@@ -199,6 +210,14 @@ export const materializeDeviceRuntimeConfig = (
 
   return buildDeviceRuntimeConfig(template, draft, options)
 }
+
+export const deviceRuntimeConfigsEqual = (
+  template: DeviceTemplate,
+  left: DeviceRuntimeSource | undefined,
+  right: DeviceRuntimeSource | undefined,
+  options: BuildDeviceRuntimeConfigOptions = {}
+) => JSON.stringify(materializeDeviceRuntimeConfig(template, left, options))
+  === JSON.stringify(materializeDeviceRuntimeConfig(template, right, options))
 
 export const validateDeviceRuntimeConfig = (
   template: DeviceTemplate,

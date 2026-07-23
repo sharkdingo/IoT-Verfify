@@ -100,6 +100,23 @@ const requireIntegerInRange = (
   return result
 }
 
+const validateOptionalModelTokenSource = (
+  value: Record<string, any>,
+  context: string
+) => {
+  if (value.modelTokenSource !== undefined
+    && !['BUNDLED', 'CUSTOM', 'UNKNOWN'].includes(value.modelTokenSource)) {
+    throw new RunResponseContractError(context, 'modelTokenSource is invalid')
+  }
+}
+
+const validateTraceVariable = (value: unknown, context: string) => {
+  const variable = requireRecord(value, context)
+  requireString(variable, 'name', context, false)
+  requireString(variable, 'value', context)
+  validateOptionalModelTokenSource(variable, context)
+}
+
 const requireOptionalTimestamp = (value: Record<string, any>, field: string, context: string) => {
   if (value[field] !== undefined && value[field] !== null) {
     requireString(value, field, context, false)
@@ -197,7 +214,13 @@ const validateStateList = (states: unknown, context: string): TraceState[] => {
   }
   states.forEach((state, stateIndex) => {
     const row = requireRecord(state, context, `states[${stateIndex}]`)
-    requireInteger(row, 'stateIndex', context)
+    const persistedStateIndex = requireInteger(row, 'stateIndex', context)
+    if (persistedStateIndex !== stateIndex + 1) {
+      throw new RunResponseContractError(
+        context,
+        `states[${stateIndex}].stateIndex must equal ${stateIndex + 1}`
+      )
+    }
     const devices = requireArray(row, 'devices', context)
     requireArray(row, 'triggeredRules', context)
     requireArray(row, 'compromisedAutomationLinks', context)
@@ -206,13 +229,19 @@ const validateStateList = (states: unknown, context: string): TraceState[] => {
       requireString(deviceRow, 'deviceId', context, false)
       requireString(deviceRow, 'deviceLabel', context, false)
       requireString(deviceRow, 'templateName', context, false)
-      requireArray(deviceRow, 'variables', context)
+      validateOptionalModelTokenSource(deviceRow, context)
+      requireArray(deviceRow, 'variables', context).forEach((variable, variableIndex) =>
+        validateTraceVariable(variable, `${context} device variable[${variableIndex}]`))
     })
     for (const optionalArray of ['trustPrivacies', 'envVariables', 'globalVariables']) {
       if (row[optionalArray] !== undefined && !Array.isArray(row[optionalArray])) {
         throw new RunResponseContractError(context, `${optionalArray} must be an array when present`)
       }
     }
+    ;['envVariables', 'globalVariables'].forEach(field => {
+      ;(row[field] || []).forEach((variable: unknown, variableIndex: number) =>
+        validateTraceVariable(variable, `${context} ${field}[${variableIndex}]`))
+    })
   })
   return states as TraceState[]
 }
@@ -609,6 +638,7 @@ const validateTraceSummary = (value: unknown, context: string): TraceSummary => 
   requireString(trace, 'violatedSpecId', context, false)
   requireRecord(trace.violatedSpec, context, 'violatedSpec')
   requireInteger(trace, 'stateCount', context, 1)
+  requireString(trace, 'createdAt', context, false)
   return trace as TraceSummary
 }
 
@@ -623,8 +653,13 @@ export const validateVerificationRunSummary = (value: unknown): VerificationRunS
   const counterexamples = requireArray(candidate, 'counterexamples', context)
     .map((trace, index) => validateTraceSummary(trace, `${context} counterexamples[${index}]`))
   const counterexampleCount = requireInteger(candidate, 'counterexampleCount', context)
-  if (counterexampleCount !== counterexamples.length) {
-    throw new RunResponseContractError(context, 'counterexampleCount must match counterexamples')
+  const availableCounterexampleCount = counterexamples
+    .filter(trace => trace.dataAvailable !== false).length
+  if (counterexampleCount !== availableCounterexampleCount) {
+    throw new RunResponseContractError(
+      context,
+      'counterexampleCount must match available counterexamples'
+    )
   }
   if (!dataAvailable) {
     requireString(candidate, 'unavailableReasonCode', context, false)

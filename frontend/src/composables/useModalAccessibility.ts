@@ -6,13 +6,34 @@ const FOCUSABLE_SELECTOR = [
   'textarea:not([disabled])',
   'input:not([disabled])',
   'select:not([disabled])',
+  'summary',
   '[tabindex]:not([tabindex="-1"])'
 ].join(',')
+
+const isActuallyFocusable = (element: HTMLElement): boolean => {
+  if (element.matches(':disabled') || element.tabIndex < 0) return false
+  if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
+
+  const closedDetails = element.closest('details:not([open])')
+  if (closedDetails) {
+    const summary = Array.from(closedDetails.children)
+      .find(child => child.tagName === 'SUMMARY')
+    if (!summary?.contains(element)) return false
+  }
+
+  const style = getComputedStyle(element)
+  const layoutBoxesAvailable = document.documentElement.getClientRects().length > 0
+  return (!layoutBoxesAvailable || element.getClientRects().length > 0)
+    && style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && style.visibility !== 'collapse'
+}
 
 export const useModalAccessibility = (
   isOpen: Ref<boolean>,
   close: () => void,
-  fallbackFocus?: () => HTMLElement | null
+  fallbackFocus?: () => HTMLElement | null,
+  options: { trapFocus?: boolean; shouldRestoreFocus?: () => boolean } = {}
 ) => {
   const dialogRef = ref<HTMLElement | null>(null)
   let previousActiveElement: HTMLElement | null = null
@@ -21,7 +42,7 @@ export const useModalAccessibility = (
     const dialog = dialogRef.value
     if (!dialog) return []
     return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-      .filter(element => !element.hasAttribute('disabled') && !element.getAttribute('aria-hidden'))
+      .filter(isActuallyFocusable)
   }
 
   const setDialogRef = (element: unknown) => {
@@ -36,11 +57,22 @@ export const useModalAccessibility = (
   }
 
   const restoreFocus = () => {
-    const previousCanReceiveFocus = previousActiveElement
-      && previousActiveElement !== document.body
-      && document.contains(previousActiveElement)
-    const target = previousCanReceiveFocus ? previousActiveElement : fallbackFocus?.()
-    target?.focus()
+    if (!previousActiveElement) return
+    if (options.shouldRestoreFocus?.() === false) {
+      previousActiveElement = null
+      return
+    }
+    const focusIfAvailable = (target: HTMLElement | null | undefined) => {
+      if (!target
+        || target === document.body
+        || !document.contains(target)
+        || !isActuallyFocusable(target)) return false
+      target.focus()
+      return document.activeElement === target
+    }
+    if (!focusIfAvailable(previousActiveElement)) {
+      focusIfAvailable(fallbackFocus?.())
+    }
     previousActiveElement = null
   }
 
@@ -53,7 +85,7 @@ export const useModalAccessibility = (
       return
     }
 
-    if (event.key !== 'Tab') return
+    if (event.key !== 'Tab' || options.trapFocus === false) return
 
     const focusableElements = getFocusableElements()
     if (focusableElements.length === 0) {

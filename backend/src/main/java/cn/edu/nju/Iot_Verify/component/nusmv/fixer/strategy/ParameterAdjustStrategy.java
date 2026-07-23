@@ -117,6 +117,8 @@ public class ParameterAdjustStrategy implements FixStrategy {
                 eligibleTargetCount++;
                 ctx.registerParameterTarget(ParameterTarget.builder()
                         .targetId(targetId)
+                        .ruleIndex(ruleIdx)
+                        .conditionIndex(condIdx)
                         .attribute(cond.getAttribute())
                         .relation(normalizedRel)
                         .originalValue(cond.getValue().trim())

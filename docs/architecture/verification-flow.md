@@ -5,7 +5,7 @@ counterexample, and optional fix attempt. Field-level contracts live in
 [../api/verification.md](../api/verification.md); model construction lives in
 [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-20. Primary sources:
+Verified against code on 2026-07-23. Primary sources:
 `VerificationController`, `SimulationController`, `VerificationServiceImpl`,
 `SimulationServiceImpl`, `SmvGenerator`, `NusmvExecutor`, and `SmvTraceParser`.
 
@@ -123,17 +123,28 @@ without depending on worker ownership.
 
 Accepted async verification and simulation tasks receive a renewable instance lease
 before executor dispatch. Lease timestamps come from the database clock and cover both
-queued and running work. Atomic start and heartbeat updates require the persisted worker
-id plus an unexpired lease. Worker success/failure uses that same ownership predicate,
-lease/start/terminal timestamps come from the database clock, and terminal transitions
-clear ownership. Maintenance on every instance renews only its local work and marks only expired active rows failed; it
-does not scan and fail all `PENDING`/`RUNNING` rows at process startup. This preserves
+queued and running work. Renewal runs in a short transaction that first obtains the task
+row's pessimistic write lock and only then samples the database clock, checks the persisted
+worker/status/unexpired lease, and flushes the extension. A time sampled before the lock,
+including SQL statement-start `CURRENT_TIMESTAMP`, must never confirm a heartbeat because
+the lease may expire while that statement waits. Atomic start and progress updates require
+the persisted worker id plus an unexpired lease. Worker success/failure uses that same
+ownership predicate, lease/start/terminal timestamps come from the database clock, and
+terminal transitions clear ownership. Maintenance on every instance renews only its local
+work and marks only expired active rows failed; it does not scan and fail all
+`PENDING`/`RUNNING` rows at process startup. This preserves
 healthy work during rolling deployments and prevents a delayed queued worker from starting
-after ownership has been lost.
+after ownership has been lost. Each local worker also tracks its last successful lease
+confirmation with a monotonic clock: transient database errors are retried, but a worker
+that cannot confirm ownership for the complete two-minute task TTL is interrupted.
 Progress updates use the same worker-id and lease predicate. Terminal transactions acquire
 the task row lock before sampling the microsecond database time and before writing linked
 counterexamples or simulation traces, so a worker waiting behind cancellation/recovery cannot
 publish stale evidence and a sub-second task cannot have `completedAt` before `createdAt`.
+Synchronous verification and saved simulation use the distributed admission lease rather
+than a task-row lease. Their final persistence transaction registers a commit callback
+that revalidates that lease; losing ownership while waiting for a lock rolls the write
+back instead of publishing stale history.
 
 Run history separates execution lifecycle from completed evidence. Task-list endpoints
 exclude `COMPLETED`; completed verification rows are exposed through `/api/verify/runs`,
@@ -203,6 +214,11 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
 
 - NuSMV delta states are materialized into independent complete snapshots. An omitted
   value means unchanged, not unknown.
+- Formal and simulation snapshots start at `stateIndex=1` and remain exactly contiguous;
+  persisted detail reads fail closed on a missing, duplicate, zero, or gap.
+- Each device and environment variable carries frozen `BUNDLED`, `CUSTOM`, or `UNKNOWN`
+  token provenance. Mixed environment providers and parser-global values are `UNKNOWN`;
+  legacy absent provenance is interpreted as unknown rather than inferred by name.
 - Internal rule probes are converted to `{ ruleId, ruleLabel }`. Probe names and list
   indexes are not serialized.
 - Internal automation-link attack choices are converted to

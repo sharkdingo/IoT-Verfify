@@ -112,6 +112,15 @@
     --iot-color-node-border: rgba(59, 130, 246, 0.9);
     --iot-color-node-highlight: rgba(30, 64, 175, 0.6);
     --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.9);
+    --iot-color-accent: #60a5fa;
+    --iot-node-accent-0: #60a5fa;
+    --iot-node-accent-1: #2dd4bf;
+    --iot-node-accent-2: #a78bfa;
+    --iot-node-accent-3: #22d3ee;
+    --iot-node-accent-4: #818cf8;
+    --iot-node-accent-5: #4ade80;
+    --iot-node-accent-6: #e879f9;
+    --iot-node-accent-7: #94a3b8;
 
     /* 表格与文字 */
     --iot-color-table-border: rgba(30, 64, 175, 0.75);
@@ -207,6 +216,15 @@
     --iot-color-node-border: rgba(129, 140, 248, 0.7);
     --iot-color-node-highlight: rgba(129, 140, 248, 0.55);
     --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.08);
+    --iot-color-accent: #2563eb;
+    --iot-node-accent-0: #1d4ed8;
+    --iot-node-accent-1: #0f766e;
+    --iot-node-accent-2: #6d28d9;
+    --iot-node-accent-3: #0e7490;
+    --iot-node-accent-4: #4338ca;
+    --iot-node-accent-5: #15803d;
+    --iot-node-accent-6: #a21caf;
+    --iot-node-accent-7: #475569;
 
     /* 表格与文字 */
     --iot-color-table-border: rgba(148, 163, 184, 0.65);

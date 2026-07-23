@@ -9,7 +9,8 @@ import {
   playbackDeviceChangeDetails,
   playbackEnvironmentChangeDetails,
   playbackDeviceSecurityFacts,
-  playbackDeviceSummaryParts
+  playbackDeviceSummaryParts,
+  formatPlaybackSecurityLabel
 } from '../traceView'
 
 describe('canOpenTracePlayback', () => {
@@ -138,6 +139,28 @@ describe('playback device facts', () => {
   it('keeps user-facing state, values, and compromise status separate', () => {
     expect(playbackDeviceSummaryParts(idle)).toEqual(['idle', 'temperature=20'])
     expect(isPlaybackDeviceAttacked(idle)).toBe(false)
+  })
+
+  it('formats playback summaries and structured security labels without mutating trace data', () => {
+    const device = {
+      deviceId: 'camera_1',
+      state: 'on',
+      mode: 'MachineState',
+      variables: [{ name: 'weather', value: 'sunny' }]
+    }
+    const snapshot = structuredClone(device)
+    const labels: Record<string, string> = {
+      on: '开启',
+      MachineState: '设备状态',
+      weather: '天气',
+      sunny: '晴朗'
+    }
+    const format = (value: string) => labels[value] || value
+
+    expect(playbackDeviceSummaryParts(device, format))
+      .toEqual(['开启', '设备状态', '天气=晴朗'])
+    expect(formatPlaybackSecurityLabel('MachineState: on', format)).toBe('设备状态: 开启')
+    expect(device).toEqual(snapshot)
   })
 
   it('distinguishes current Board devices that were not represented in the saved trace', () => {

@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.springframework.stereotype.Component;
 
@@ -113,31 +114,36 @@ public class VerificationTaskMapper {
                 .build();
     }
 
-    public VerificationRunSummaryDto toRunSummaryDto(VerificationTaskPo po, int counterexampleCount) {
-        if (po == null) {
-            return null;
-        }
-        VerificationOutcome outcome = taskOutcome(po);
+    public VerificationRunSummaryDto toRunSummaryDto(
+            VerificationRunSummaryProjection projection, int counterexampleCount) {
+        if (projection == null) return null;
+        VerificationOutcome outcome = projection.getOutcome() != null
+                ? projection.getOutcome() : VerificationOutcome.INCONCLUSIVE;
+        int disabledRuleCount = pointCount(projection.getDisabledRuleCount());
+        int skippedSpecCount = pointCount(projection.getSkippedSpecCount());
         return VerificationRunSummaryDto.builder()
-                .id(po.getId())
-                .createdAt(po.getCreatedAt())
-                .startedAt(po.getStartedAt())
-                .completedAt(po.getCompletedAt())
-                .processingTimeMs(po.getProcessingTimeMs())
-                .isAttack(Boolean.TRUE.equals(po.getIsAttack()))
-                .attackBudget(po.getAttackBudget() != null ? po.getAttackBudget() : 0)
-                .enablePrivacy(Boolean.TRUE.equals(po.getEnablePrivacy()))
-                .modelSemantics(modelSemantics(po, "verification run"))
-                .modelSnapshot(JsonUtils.readPersistedRequired("verification run", po.getId(),
+                .id(projection.getId())
+                .createdAt(projection.getCreatedAt())
+                .startedAt(projection.getStartedAt())
+                .completedAt(projection.getCompletedAt())
+                .processingTimeMs(projection.getProcessingTimeMs())
+                .isAttack(Boolean.TRUE.equals(projection.getIsAttack()))
+                .attackBudget(projection.getAttackBudget() != null ? projection.getAttackBudget() : 0)
+                .enablePrivacy(Boolean.TRUE.equals(projection.getEnablePrivacy()))
+                .modelSemantics(modelSemantics(projection, "verification run"))
+                .modelSnapshot(JsonUtils.readPersistedRequired("verification run", projection.getId(),
                         "modelSnapshotJson", () -> JsonUtils.fromJson(
-                                po.getModelSnapshotJson(), ModelRunSnapshotDto.class)))
+                                projection.getModelSnapshotJson(), ModelRunSnapshotDto.class)))
                 .outcome(outcome)
-                .modelComplete(taskModelComplete(po, outcome))
-                .violatedSpecCount(po.getViolatedSpecCount() != null ? po.getViolatedSpecCount() : 0)
+                .modelComplete(outcome.isModelComplete(disabledRuleCount, skippedSpecCount))
+                .violatedSpecCount(pointCount(projection.getViolatedSpecCount()))
                 .counterexampleCount(Math.max(0, counterexampleCount))
-                .disabledRuleCount(po.getDisabledRuleCount() != null ? po.getDisabledRuleCount() : 0)
-                .skippedSpecCount(po.getSkippedSpecCount() != null ? po.getSkippedSpecCount() : 0)
-                .generationIssues(readGenerationIssues(po))
+                .disabledRuleCount(disabledRuleCount)
+                .skippedSpecCount(skippedSpecCount)
+                .generationIssues(JsonUtils.readPersisted(
+                        "verification run", projection.getId(), "generationIssuesJson",
+                        () -> JsonUtils.fromJsonList(
+                                projection.getGenerationIssuesJson(), ModelGenerationIssueDto.class)))
                 .dataAvailable(true)
                 .build();
     }
@@ -230,5 +236,21 @@ public class VerificationTaskMapper {
                 pointCount(po.getModeledDeviceAttackPointCount()),
                 pointCount(po.getModeledAutomationLinkAttackPointCount()),
                 pointCount(po.getModeledFalsifiableReadingDeviceCount()));
+    }
+
+    private ModelSemanticsDto modelSemantics(
+            VerificationRunSummaryProjection projection, String recordType) {
+        if (projection.getModelSemanticsJson() != null
+                && !projection.getModelSemanticsJson().isBlank()) {
+            return JsonUtils.readPersistedRequired(recordType, projection.getId(), "modelSemanticsJson",
+                    () -> JsonUtils.fromJson(
+                            projection.getModelSemanticsJson(), ModelSemanticsDto.class));
+        }
+        return ModelSemanticsDto.forRun(
+                Boolean.TRUE.equals(projection.getIsAttack()),
+                Boolean.TRUE.equals(projection.getEnablePrivacy()),
+                pointCount(projection.getModeledDeviceAttackPointCount()),
+                pointCount(projection.getModeledAutomationLinkAttackPointCount()),
+                pointCount(projection.getModeledFalsifiableReadingDeviceCount()));
     }
 }

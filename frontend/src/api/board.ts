@@ -13,6 +13,7 @@ import type {
 } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
 import type { ModelEnvironmentVariable } from '@/types/model'
+import type { ModelTokenSource } from '@/types/modelToken'
 import type { InteractiveOperationStatus, TaskCancellationResult } from '@/types/task'
 import type { PortableSceneFile } from '@/types/scene'
 import type {
@@ -136,10 +137,17 @@ export interface ScenarioRecommendationResponse {
     truncatedCount: number
     scenarioName: string
     rationale: string
+    objectiveStatus: 'COMPLETE' | 'PARTIAL'
+    objectiveIssues: ScenarioObjectiveIssue[]
     verificationReady: boolean
     readinessIssues: ScenarioReadinessIssue[]
     semanticWarnings: ScenarioSemanticWarning[]
     scene: PortableSceneFile
+}
+
+export interface ScenarioObjectiveIssue {
+    code: 'NO_DEVICES' | 'NO_AUTOMATION_RULES' | 'NO_SPECIFICATIONS'
+    message: string
 }
 
 export interface ScenarioReadinessIssue {
@@ -367,11 +375,15 @@ const RULE_SIMILARITY_REASON_CODES = new Set<RuleSimilarityReasonCode>([
     'AI_NO_SIGNIFICANT_SIMILARITY'
 ])
 
+const MODEL_TOKEN_SOURCES = new Set<ModelTokenSource>(['BUNDLED', 'CUSTOM', 'UNKNOWN'])
+
 export interface EnvironmentVariableChange {
     changeType: 'ADDED' | 'UPDATED' | 'REMOVED';
     name: string;
     previousValue?: ModelEnvironmentVariable | null;
     currentValue?: ModelEnvironmentVariable | null;
+    previousModelTokenSource?: ModelTokenSource;
+    currentModelTokenSource?: ModelTokenSource;
 }
 
 export type EnvironmentVariableField = 'value' | 'trust' | 'privacy';
@@ -678,16 +690,63 @@ const validateDeviceMutationResult = (
     return result as DeviceMutationResult
 }
 
+const validateDeviceRenameResult = (
+    value: unknown,
+    nodeId: string,
+    label: string,
+    expectedLabel: string
+): DeviceMutationResult => {
+    const context = 'Device rename'
+    const result = validateDeviceMutationResult(value, 'renamed', [nodeId], context)
+    const affected = result.affectedDevices.find(device => device.id === nodeId)
+    const authoritative = result.currentNodes.find(device => device.id === nodeId)
+    if (affected?.label !== label || authoritative?.label !== label) {
+        throw new BoardResponseContractError(
+            context,
+            'affectedDevices and currentNodes must contain the requested label'
+        )
+    }
+    if (result.previousLabel !== expectedLabel) {
+        throw new BoardResponseContractError(context, 'previousLabel must match expectedLabel')
+    }
+    if (!Number.isSafeInteger(result.updatedSpecificationCount)
+        || result.updatedSpecificationCount < 0) {
+        throw new BoardResponseContractError(
+            context,
+            'updatedSpecificationCount must be a non-negative integer'
+        )
+    }
+    return result
+}
+
 const DEVICE_LAYOUT_FIELDS: DeviceUpdateField[] = ['position.x', 'position.y', 'width', 'height']
 const DEVICE_RUNTIME_FIELDS: DeviceUpdateField[] = [
     'state', 'currentStateTrust', 'currentStatePrivacy', 'variables', 'privacies'
 ]
 
+const normalizedDeviceRuntimeCollection = (
+    field: 'variables' | 'privacies',
+    value: DeviceNode[typeof field]
+): string => {
+    const normalized = field === 'variables'
+        ? ((value as DeviceNode['variables']) ?? []).map(item => ({
+            name: item.name ?? null,
+            value: item.value ?? null,
+            trust: item.trust ?? null
+        }))
+        : ((value as DeviceNode['privacies']) ?? []).map(item => ({
+            name: item.name ?? null,
+            privacy: item.privacy ?? null
+        }))
+    normalized.sort((left, right) => String(left.name).localeCompare(String(right.name)))
+    return JSON.stringify(normalized)
+}
+
 const deviceUpdateFieldValue = (device: DeviceNode, field: DeviceUpdateField): unknown => {
     if (field === 'position.x') return device.position?.x ?? null
     if (field === 'position.y') return device.position?.y ?? null
     if (field === 'variables' || field === 'privacies') {
-        return JSON.stringify(device[field] ?? [])
+        return normalizedDeviceRuntimeCollection(field, device[field])
     }
     return device[field] ?? null
 }
@@ -781,7 +840,8 @@ const validateDeviceUpdateResult = (
             throw new BoardResponseContractError(context, 'currentDevice does not contain the requested state')
         }
         for (const field of ['variables', 'privacies'] as const) {
-            if (JSON.stringify(result.currentDevice[field] ?? []) !== JSON.stringify(runtime[field] ?? [])) {
+            if (normalizedDeviceRuntimeCollection(field, result.currentDevice[field])
+                !== normalizedDeviceRuntimeCollection(field, runtime[field])) {
                 throw new BoardResponseContractError(context, `currentDevice does not contain requested ${field}`)
             }
         }
@@ -1147,6 +1207,14 @@ const validateDefaultTemplateResetResult = (
         if (typeof row.name !== 'string' || !row.name.trim()) {
             throw new BoardResponseContractError(context, `environmentChanges[${index}].name is required`)
         }
+        for (const field of ['previousModelTokenSource', 'currentModelTokenSource'] as const) {
+            if (row[field] !== undefined && !MODEL_TOKEN_SOURCES.has(row[field])) {
+                throw new BoardResponseContractError(
+                    context,
+                    `environmentChanges[${index}].${field} is invalid`
+                )
+            }
+        }
         if (expectedOperation === 'reset') {
             const current = environmentByName.get(row.name)
             if (row.changeType === 'REMOVED' ? current !== undefined : current === undefined) {
@@ -1281,11 +1349,18 @@ export default {
             runtime
         )
     },
-    renameNode: async (nodeId: string, label: string): Promise<DeviceMutationResult> => {
+    renameNode: async (
+        nodeId: string,
+        label: string,
+        expectedLabel: string
+    ): Promise<DeviceMutationResult> => {
         const result = unpack<unknown>(
-            await api.patch(`/board/nodes/${encodeURIComponent(nodeId)}/label`, { label })
+            await api.patch(`/board/nodes/${encodeURIComponent(nodeId)}/label`, {
+                label,
+                expectedLabel
+            })
         );
-        return validateDeviceMutationResult(result, 'renamed', [nodeId], 'Device rename')
+        return validateDeviceRenameResult(result, nodeId, label, expectedLabel)
     },
     previewNodeDeletion: async (nodeId: string): Promise<DeviceDeletionResult> => {
         const result = validateDeviceDeletionResult(

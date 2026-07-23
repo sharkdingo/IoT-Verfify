@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.dto.device;
 
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -22,6 +23,7 @@ public class VariableStateDto {
     private String name;
     @Size(max = RequestLimits.MAX_VALUE_LENGTH, message = "Variable value must be at most 1000 characters")
     private String value;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     @Size(max = 20, message = "Variable trust must be at most 20 characters")
     private String trust;
 }

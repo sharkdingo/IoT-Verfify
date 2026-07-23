@@ -39,7 +39,7 @@ The replacement commits or rolls back as one transaction.
 | POST | `/api/board/nodes` | `DeviceBatchCreateRequestDto` → `DeviceMutationResultDto` | Atomically append one or more device instances; every `templateName` must exist. Optional environment patches commit with the devices. |
 | PUT | `/api/board/nodes/{nodeId}/layout` | `DeviceLayoutDto` → `DeviceUpdateResultDto` | Replace only the complete canvas layout subresource (`position`, `width`, `height`); device identity and modeled runtime are preserved |
 | PUT | `/api/board/nodes/{nodeId}/runtime` | `DeviceRuntimeUpdateDto` → `DeviceUpdateResultDto` | Replace only the complete device-local modeled runtime subresource; identity, type, display name, and canvas layout are preserved |
-| PATCH | `/api/board/nodes/{nodeId}/label` | `{ label }` → `DeviceMutationResultDto` | Rename one instance and update specification display labels atomically; stable references remain `nodeId` |
+| PATCH | `/api/board/nodes/{nodeId}/label` | `{ label, expectedLabel }` → `DeviceMutationResultDto` | Rename one instance and update specification display labels atomically; stable references remain `nodeId`. `expectedLabel` must equal the label originally edited or stale submission returns `409` without writing. |
 | GET | `/api/board/nodes/{nodeId}/deletion-preview` | → `DeviceDeletionResultDto` | Read-only authoritative preview of the device, every referencing rule/spec, and each Environment Pool item that would be removed |
 | POST | `/api/board/nodes/{nodeId}/delete` | `DeviceDeleteRequestDto` → `DeviceDeletionResultDto` | Delete one instance plus every previewed consequence atomically. The opaque `impactToken` from the latest preview must still match the complete server-calculated impact or the server returns `409` before writing. |
 | GET | `/api/board/environment` | → `BoardEnvironmentVariableDto[]` | Board-level environment pool; self-heals from current nodes/templates |
@@ -86,7 +86,7 @@ flags so later narrow/wide viewport restoration still works.
 | `width` / `height` | `Integer` | Required; width is `80..2000`, height is `60..2000`; UI and AI creation paths default to `176` / `128` when the creator omits explicit dimensions |
 | `currentStateTrust` | `String` | Optional only for templates with a state machine (`Modes` plus non-empty `WorkingStates`); `trusted` / `untrusted` |
 | `currentStatePrivacy` | `String` | Optional only for templates with a state machine; `public` / `private`. This is the selected initial state's data-sensitivity label, not access control |
-| `variables` | `VariableStateDto[]` | Optional; `{ name, value, trust? }` for device-local template variables (`InternalVariables[].IsInside=true`) only. `value` is the instance's initial value; omitted `trust` inherits the active template default, while an explicit value is an advanced instance override |
+| `variables` | `VariableStateDto[]` | Optional; `{ name, value, trust? }` for device-local template variables (`InternalVariables[].IsInside=true`) only. `value` is the instance's initial value; omitted `trust` inherits the active template default and is omitted from responses rather than serialized as `null`, while an explicit value is an advanced instance override |
 | `privacies` | `PrivacyStateDto[]` | Optional; `{ name, privacy }` for device-local variables or generated state privacy keys only |
 
 > `DeviceNodeDto` is the canvas-CRUD shape (includes UI layout). The verification path
@@ -108,8 +108,11 @@ must contain 1–100 items, must keep the resulting Board at no more than 100 de
 `previousLabel`, `updatedSpecificationCount`, and `currentCount`. Callers should use the
 returned current collections rather than assuming their local optimistic state won.
 `environmentChanges[]` is structured as `{ changeType: ADDED|UPDATED|REMOVED, name,
-previousValue, currentValue }` and explains automatic Environment Pool synchronization
-caused by the device operation, including explicit create-time environment patches.
+previousValue, currentValue, previousModelTokenSource, currentModelTokenSource }` and
+explains automatic Environment Pool synchronization caused by the device operation,
+including explicit create-time environment patches. Token sources are
+`BUNDLED|CUSTOM|UNKNOWN`; only `BUNDLED` authorizes display-time localization of the
+corresponding machine-facing name/value, and missing or `UNKNOWN` provenance stays raw.
 The frontend treats these mutation snapshots as required authority, not optional legacy
 metadata. A successful HTTP response with a missing collection, wrong `operation`,
 missing affected item, or inconsistent `currentCount` is an unconfirmed outcome: the
@@ -128,6 +131,13 @@ is the complete `{ position: { x, y }, width, height }` layout representation. C
 must be finite and within `-1000000..1000000`; dimensions use the bounds in the table
 above. The canvas rounds dimensions while resizing, so it never displays a shape the
 integer storage contract cannot save.
+
+`DeviceRenameRequestDto` is `{ label, expectedLabel }`. Both values are required strings
+of at most 255 characters. The service compares `expectedLabel` with the current persisted
+label while holding the Board write lock; a second dialog opened before another rename
+therefore receives `409 Conflict` instead of silently overwriting the newer label. The same
+locked check rejects a case-insensitive collision with any other current device as `409`,
+including when another browser tab claimed the requested name after the dialog opened.
 
 `DeviceRuntimeUpdateDto` is the complete device-local runtime representation:
 `{ state, currentStateTrust, currentStatePrivacy, variables, privacies }`. It is a `PUT`,
@@ -560,6 +570,12 @@ Environment Pool changes, and blockers caused by device/rule/spec incompatibilit
 Each blocker carries a user-facing `itemLabel`, stable `reasonCode`, and English
 technical `reason`; ordinary UI localizes the reason code and keeps the diagnostic in a
 technical disclosure. `canApply=false` exactly when blockers are present.
+For each reset Environment Pool change, the backend derives previous and current token
+provenance separately from the templates actually referenced by canvas devices. A shared
+variable is `BUNDLED` only when every provider on that side is a bundled type; a custom
+provider or unresolved source prevents localization. This matters when a custom
+name-collision is replaced by a bundled definition: the old and new snapshots can have
+different provenance even though the variable name is unchanged.
 
 The POST accepts only the opaque `impactToken` from that preview. Under the per-user
 write lock it recomputes the preview; board/type drift returns `409` and performs no
@@ -603,6 +619,9 @@ token returns `409` with `reasonCode=TEMPLATE_DELETION_PREVIEW_STALE` and
 `currentPreview`; a still-in-use template returns `TEMPLATE_DELETION_BLOCKED`. Neither
 case writes. A successful result includes `deletedTemplate` and authoritative
 `currentTemplates`, which the client uses directly instead of guessing local state.
+Both preview and commit scope lookup by `templateId + userId`. A missing id and a
+template owned by another account therefore return the same `404`, without revealing
+whether another user's resource exists.
 
 `DeviceManifest` uses **PascalCase** JSON keys (`@JsonProperty`): `Name`,
 `Description`, `Icon`, `Modes`, `InternalVariables`, `EnvironmentDomains`,
@@ -769,7 +788,7 @@ paths, and cancellation paths.
 | POST | `/api/board/rules/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
 | POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (`all`, `safety`, `response`, `consistency`, or `privacy`; default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
 | POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
-| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, a deterministic post-validation `rationale`, validation counters, structural readiness, semantic warnings, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
+| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, a deterministic post-validation `rationale`, objective completeness, validation counters, structural readiness, semantic warnings, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
 | GET | `/api/board/recommendations/{requestId}` | Reads the authenticated user's matching active or just-finished request | Returns `InteractiveOperationStatusDto`; terminal status is retained briefly for the final polling tick, while unknown requests return 404 |
 | DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means the durable stop signal was accepted for the matching local or remote execution. The callable may still be unwinding, so status remains authoritative until `FINISHED` |
 | POST | `/api/board/rules/check-duplicate` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Deterministic duplicate-rule check used by `RuleBuilderDialog` before saving. It does not call the external LLM and returns a typed `DuplicateRuleCheckResultDto`: required `isDuplicate`, `requiresReview`, `similarity` (`0..1`), `matchType`, stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Clients localize the ordinary explanation from `reasonCode`. |
@@ -887,6 +906,12 @@ conflict freedom.
 > raw AI output, scenario `count` is not required to equal `validatedCount`; clients
 > verify `count` against `scene.devices + scene.environmentVariables + scene.rules +
 > scene.specs` instead. The raw-candidate identities still use `validatedCount`.
+> The response carries authoritative `objectiveStatus=COMPLETE|PARTIAL` and ordered
+> `objectiveIssues[]` (`{ code, message }`). The controller and frontend recompute these
+> fields from the canonical scene: missing devices, automation rules, or specifications
+> produce `NO_DEVICES`, `NO_AUTOMATION_RULES`, and `NO_SPECIFICATIONS`, respectively.
+> `COMPLETE` means only that all three core item classes are present; it is not a claim that
+> the user's prose was satisfied or that formal verification passed.
 > The response also carries authoritative `verificationReady` and ordered
 > `readinessIssues[]` (`{ code, message }`). The REST controller and frontend recompute
 > readiness from the canonical returned scene and reject a mismatch; currently

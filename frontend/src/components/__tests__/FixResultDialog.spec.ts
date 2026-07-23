@@ -45,6 +45,36 @@ const i18n = createI18n({
   fallbackWarn: false
 })
 
+const provenanceI18n = createI18n({
+  legacy: false,
+  locale: 'zh',
+  messages: {
+    zh: {
+      app: {
+        preferredRangeTargetLabel: '{description}',
+        parameterTargetFallback: '调整 {attribute} {relation} {original}',
+        relationEquals: '等于',
+        relationNotEquals: '不等于',
+        relationGreater: '大于',
+        relationLess: '小于',
+        relationGreaterEqual: '大于等于',
+        relationLessEqual: '小于等于',
+        relationIn: '属于',
+        relationNotIn: '不属于',
+        addConditionAdjustment: '向 {rule} 添加 {condition}',
+        removeConditionAdjustment: '从 {rule} 删除 {condition}',
+        keepConditionAdjustment: '在 {rule} 保留 {condition}',
+        modelTokens: {
+          workingState: '工作状态',
+          off: '关闭'
+        }
+      }
+    }
+  },
+  missingWarn: false,
+  fallbackWarn: false
+})
+
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 const deferred = <T>() => {
@@ -97,7 +127,8 @@ const parameterResult = (): FixResult => ({
       newValue: '85',
       lowerBound: 71,
       upperBound: 100,
-      description: 'Gas threshold in the exit-unlock rule'
+      description: 'Gas threshold in the exit-unlock rule',
+      modelTokenSource: 'BUNDLED'
     }],
     conditionAdjustments: [],
     removedRuleDescriptions: [],
@@ -115,7 +146,8 @@ const parameterResult = (): FixResult => ({
     originalValue: '70',
     lowerBound: 0,
     upperBound: 100,
-    description: 'Gas threshold in the exit-unlock rule'
+    description: 'Gas threshold in the exit-unlock rule',
+    modelTokenSource: 'BUNDLED'
   }]
 })
 
@@ -134,7 +166,8 @@ const conditionResult = (): FixResult => ({
       ruleDescription: 'When it is cold, heat the room',
       deviceLabel: 'Living-room Occupancy Sensor',
       relation: '=',
-      value: 'present'
+      value: 'present',
+      modelTokenSource: 'CUSTOM'
     }],
     removedRuleDescriptions: [],
     verified: true
@@ -265,10 +298,10 @@ const parameterBudgetExhaustedResult = (): FixResult => ({
 
 const mountedDialogs: VueWrapper[] = []
 
-const mountDialog = () => {
+const mountDialog = (i18nPlugin: any = i18n) => {
   const wrapper = mount(FixResultDialog, {
     props: { visible: true, traceId: 7, violatedSpecId: 'spec-1' },
-    global: { plugins: [i18n] }
+    global: { plugins: [i18nPlugin] }
   })
   mountedDialogs.push(wrapper)
   return wrapper
@@ -312,13 +345,90 @@ describe('FixResultDialog strategy workflow', () => {
     expect(boardApi.getFaultRules).toHaveBeenCalledWith(7)
     expect(boardApi.fixTrace).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toContain('flex-shrink-0')
+    expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toEqual(expect.arrayContaining([
+      'dark:border-blue-800',
+      'dark:bg-blue-950/50'
+    ]))
     expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('min-h-0')
+    expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('fix-result-scroll')
+    expect(wrapper.get('[role="dialog"]').classes()).toEqual(expect.arrayContaining([
+      'dark:border-slate-700',
+      'dark:bg-slate-900'
+    ]))
     expect(wrapper.text()).toContain('faultLocalizationNoRuleCaveat')
     expect(wrapper.text()).not.toContain('No user-defined automation rule was localized.')
     expect(wrapper.get('[data-testid="fix-result-dialog"]').classes()).toContain('z-[2500]')
     expect(wrapper.find('[data-testid="fix-strategy-remove"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-try-current"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-apply-current"]').exists()).toBe(false)
+  })
+
+  it('localizes bundled fault actions while preserving custom and legacy collisions', async () => {
+    boardApi.getFaultRules.mockResolvedValueOnce({
+      traceId: 7,
+      violatedSpecId: 'spec-1',
+      sourceModelComplete: true,
+      sourceDisabledRuleCount: 0,
+      sourceSkippedSpecCount: 0,
+      sourceGenerationIssues: [],
+      faultRules: [
+        {
+          ruleString: 'Bundled action', transitionNumber: 1, targetDeviceLabel: 'Bundled',
+          targetActionLabel: 'off', conflicting: false, reasonCode: 'TRIGGERED',
+          reason: 'Triggered', modelTokenSource: 'BUNDLED'
+        },
+        {
+          ruleString: 'Custom collision', transitionNumber: 2, targetDeviceLabel: 'Custom',
+          targetActionLabel: 'off', conflicting: false, reasonCode: 'TRIGGERED',
+          reason: 'Triggered', modelTokenSource: 'CUSTOM'
+        },
+        {
+          ruleString: 'Legacy collision', transitionNumber: 3, targetDeviceLabel: 'Legacy',
+          targetActionLabel: 'workingState', conflicting: false, reasonCode: 'TRIGGERED',
+          reason: 'Triggered', modelTokenSource: 'UNKNOWN'
+        }
+      ],
+      summary: 'Three actions.',
+      warnings: []
+    })
+    const wrapper = mountDialog(provenanceI18n)
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('[data-testid="fix-fault-action"]').map(row => row.text()))
+      .toEqual(['关闭', 'off', 'workingState'])
+  })
+
+  it('localizes condition relations without translating custom model tokens', async () => {
+    const result = conditionResult()
+    const base = result.suggestions[0]!.conditionAdjustments[0]!
+    result.suggestions[0]!.conditionAdjustments = [
+      {
+        ...base,
+        attribute: 'workingState',
+        relation: 'not_in',
+        value: 'off',
+        modelTokenSource: 'BUNDLED'
+      },
+      {
+        ...base,
+        deviceLabel: 'Custom device',
+        attribute: 'workingState',
+        relation: 'not in',
+        value: 'off',
+        modelTokenSource: 'CUSTOM'
+      }
+    ]
+    boardApi.fixTrace.mockResolvedValueOnce(result)
+    const wrapper = mountDialog(provenanceI18n)
+    await flush()
+    await wrapper.get('[data-testid="fix-strategy-condition"]').trigger('click')
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('工作状态 不属于 关闭')
+    expect(wrapper.text()).toContain('workingState 不属于 off')
   })
 
   it('runs only the selected strategy and keeps apply hidden until a verified response arrives', async () => {
@@ -656,6 +766,28 @@ describe('FixResultDialog strategy workflow', () => {
     await seedButton.trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.find('select').exists()).toBe(true)
+  })
+
+  it('builds a localized bundled parameter label without exposing the backend English description', async () => {
+    const result = parameterWithoutSuggestionResult()
+    result.parameterTargets = result.parameterTargets.map(target => ({
+      ...target,
+      attribute: 'workingState',
+      description: 'SERVER_FIXED_ENGLISH_DESCRIPTION',
+      modelTokenSource: 'BUNDLED'
+    }))
+    boardApi.fixTrace.mockResolvedValueOnce(result)
+    const wrapper = mountDialog(provenanceI18n)
+    await flush()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    await wrapper.get('[data-testid="fix-use-current-preferences"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('调整 工作状态 大于 70')
+    expect(wrapper.text()).not.toContain('SERVER_FIXED_ENGLISH_DESCRIPTION')
   })
 
   it('does not present an exhausted search budget as a complete no-result conclusion', async () => {

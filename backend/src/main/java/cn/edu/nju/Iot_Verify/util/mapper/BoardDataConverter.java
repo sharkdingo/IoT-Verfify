@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -46,7 +47,9 @@ public class BoardDataConverter {
         List<DeviceNodeDto> nodes = snapshot != null ? snapshot.nodes() : List.of();
         List<DeviceTemplateDto> templates = snapshot != null ? snapshot.deviceTemplates() : List.of();
         Map<String, DeviceManifest> manifestsByTemplate = manifestsByTemplate(templates);
-        List<DeviceVerificationDto> devices = devicesForVerification(nodes, manifestsByTemplate);
+        Map<String, ModelTokenSource> tokenSourcesByTemplate = tokenSourcesByTemplate(templates);
+        List<DeviceVerificationDto> devices = devicesForVerification(
+                nodes, manifestsByTemplate, tokenSourcesByTemplate);
         return new ModelInputSnapshot(
                 nodes,
                 devices,
@@ -58,7 +61,8 @@ public class BoardDataConverter {
 
     private List<DeviceVerificationDto> devicesForVerification(
             List<DeviceNodeDto> nodes,
-            Map<String, DeviceManifest> manifestsByTemplate) {
+            Map<String, DeviceManifest> manifestsByTemplate,
+            Map<String, ModelTokenSource> tokenSourcesByTemplate) {
         List<DeviceNodeDto> safeNodes = nodes == null ? List.of() : nodes;
         return safeNodes.stream()
                 .filter(n -> n != null)
@@ -73,6 +77,8 @@ public class BoardDataConverter {
                     String label = trimToNull(n.getLabel());
                     dv.setDeviceLabel(label != null ? label : varName);
                     dv.setTemplateName(n.getTemplateName());
+                    dv.setModelTokenSource(modelTokenSourceForTemplate(
+                            n.getTemplateName(), tokenSourcesByTemplate));
                     if (templateHasModes(n.getTemplateName(), manifestsByTemplate)) {
                         dv.setState(n.getState());
                         dv.setCurrentStateTrust(n.getCurrentStateTrust());
@@ -216,6 +222,35 @@ public class BoardDataConverter {
         return result;
     }
 
+    private Map<String, ModelTokenSource> tokenSourcesByTemplate(List<DeviceTemplateDto> templates) {
+        if (templates == null || templates.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, ModelTokenSource> result = new HashMap<>();
+        for (DeviceTemplateDto template : templates) {
+            if (template == null) {
+                continue;
+            }
+            ModelTokenSource source = ModelTokenSource.fromDefaultTemplate(template.getDefaultTemplate());
+            putModelTokenSourceAlias(result, template.getName(), source);
+            if (template.getManifest() != null) {
+                putModelTokenSourceAlias(result, template.getManifest().getName(), source);
+            }
+        }
+        return result;
+    }
+
+    private ModelTokenSource modelTokenSourceForTemplate(
+            String templateName,
+            Map<String, ModelTokenSource> tokenSourcesByTemplate) {
+        String key = trimToNull(templateName);
+        if (key == null || tokenSourcesByTemplate == null) {
+            return ModelTokenSource.UNKNOWN;
+        }
+        return tokenSourcesByTemplate.getOrDefault(
+                key.toLowerCase(Locale.ROOT), ModelTokenSource.UNKNOWN);
+    }
+
     private Map<String, DeviceManifest> referencedTemplateManifests(
             List<DeviceVerificationDto> devices,
             Map<String, DeviceManifest> manifestsByTemplate) {
@@ -237,6 +272,16 @@ public class BoardDataConverter {
         String name = trimToNull(rawName);
         if (name != null) {
             result.putIfAbsent(name.toLowerCase(Locale.ROOT), manifest);
+        }
+    }
+
+    private void putModelTokenSourceAlias(
+            Map<String, ModelTokenSource> result,
+            String rawName,
+            ModelTokenSource source) {
+        String name = trimToNull(rawName);
+        if (name != null) {
+            result.putIfAbsent(name.toLowerCase(Locale.ROOT), source);
         }
     }
 

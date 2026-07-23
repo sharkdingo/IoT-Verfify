@@ -100,6 +100,9 @@ class RecommendScenarioToolTest {
 
         assertEquals(0, json.path("rawCandidateCount").asInt());
         assertEquals(0, json.path("filteredCount").asInt());
+        assertEquals("PARTIAL", json.path("objectiveStatus").asText());
+        assertEquals(List.of("NO_DEVICES", "NO_AUTOMATION_RULES", "NO_SPECIFICATIONS"),
+                json.path("objectiveIssues").findValuesAsText("code"));
         assertFalse(json.path("verificationReady").asBoolean());
         assertEquals("NO_DEVICES", json.path("readinessIssues").get(0).path("code").asText());
         assertEquals("NO_SPECIFICATIONS", json.path("readinessIssues").get(1).path("code").asText());
@@ -186,6 +189,8 @@ class RecommendScenarioToolTest {
         assertFalse(scene.path("devices").get(0).has("state"));
         assertEquals(1, scene.path("rules").size());
         assertEquals(1, scene.path("specs").size());
+        assertEquals("COMPLETE", json.path("objectiveStatus").asText());
+        assertTrue(json.path("objectiveIssues").isEmpty());
         assertTrue(json.path("verificationReady").asBoolean());
         assertTrue(json.path("draftStored").asBoolean());
         assertFalse(json.path("previousDraftRetained").asBoolean());
