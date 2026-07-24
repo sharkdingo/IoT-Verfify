@@ -104,6 +104,10 @@ still expose derived `isAttack` and `attackBudget` summary fields for convenient
 Every synchronous verification attempts to persist its completed result as one run.
 The response keeps the model-checking conclusion even when that separate persistence
 step fails. `historyPersistence.status=SAVED` includes the authoritative `runId`.
+Only that status may expose trace `id` and `verificationTaskId`, and every returned
+counterexample must identify the same owning `runId`. `FAILED` and `OUTCOME_UNKNOWN`
+responses omit both trace identity fields, including when an exception occurred after
+the transaction callback assigned provisional database ids in memory.
 `OUTCOME_UNKNOWN` with `reasonCode=RUN_HISTORY_SAVE_OUTCOME_UNKNOWN` means the formal
 result is still usable, but the client must refresh history before deciding whether a
 row exists; it must not retry the verification automatically or claim that the result
@@ -646,7 +650,7 @@ recorded as skipped generation warnings rather than being silently accepted.
 
 | Field | Type | Notes |
 | :--- | :--- | :--- |
-| `id` / `verificationTaskId` | `Long` | Persisted trace identity and owning completed verification-run identity. Both are required on history/detail reads; an immediate result whose history persistence failed may contain an unpersisted trace without them. Ownership is enforced server-side and `userId` is not serialized |
+| `id` / `verificationTaskId` | `Long` | Persisted trace identity and owning completed verification-run identity. Both are required on history/detail reads and must match the enclosing saved run. An immediate result whose history persistence failed or remains unknown contains an unpersisted trace without either field. Such a trace remains locally replayable, but the client does not offer automatic fix because the fix endpoint requires confirmed persisted evidence. Ownership is enforced server-side and `userId` is not serialized |
 | `violatedSpecId` | `String` | |
 | `violatedSpec` | `SpecificationDto` | Structured verification-time specification snapshot used for user-facing labels and conditions |
 | `checkedExpression` | `String` | Exact generated CTL/LTL expression checked by NuSMV; distinct from `violatedSpec.formula`, which is only a preview/cache |

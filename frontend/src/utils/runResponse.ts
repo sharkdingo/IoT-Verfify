@@ -13,7 +13,9 @@ import type {
   TaskCancellationResult
 } from '@/types/task'
 import type {
+  ImmediateTrace,
   ModelGenerationIssue,
+  PersistedTrace,
   SpecResult,
   Trace,
   TraceSummary,
@@ -438,13 +440,11 @@ export const validateTaskCancellationResult = (
   return result as TaskCancellationResult
 }
 
-export const validateVerificationTrace = (
+const validateVerificationTraceShape = (
   value: unknown,
-  context = 'Verification trace',
-  requirePersistedId = true
-): Trace => {
+  context: string
+): Record<string, any> => {
   const trace = requireRecord(value, context)
-  if (requirePersistedId) requireInteger(trace, 'id', context, 1)
   requireString(trace, 'violatedSpecId', context, false)
   requireString(trace, 'checkedExpression', context, false)
   validateStateList(trace.states, context)
@@ -460,20 +460,67 @@ export const validateVerificationTrace = (
     throw new RunResponseContractError(context, 'modelSnapshot must include at least one specification')
   }
   requireString(trace, 'createdAt', context, false)
-  return trace as Trace
+  return trace
 }
 
-export const validateVerificationTraceList = (value: unknown): Trace[] => {
+export const validateVerificationTrace = (
+  value: unknown,
+  context = 'Verification trace',
+  expectedVerificationTaskId?: number
+): PersistedTrace => {
+  const trace = validateVerificationTraceShape(value, context)
+  requireInteger(trace, 'id', context, 1)
+  const verificationTaskId = requireInteger(trace, 'verificationTaskId', context, 1)
+  if (expectedVerificationTaskId !== undefined && verificationTaskId !== expectedVerificationTaskId) {
+    throw new RunResponseContractError(context, 'verificationTaskId does not match the owning run')
+  }
+  return trace as PersistedTrace
+}
+
+const validateImmediateVerificationTrace = (
+  value: unknown,
+  context: string
+): ImmediateTrace => {
+  const trace = validateVerificationTraceShape(value, context)
+  if (trace.id !== undefined || trace.verificationTaskId !== undefined) {
+    throw new RunResponseContractError(context, 'unconfirmed history cannot expose trace persistence identity')
+  }
+  return trace as ImmediateTrace
+}
+
+export const hasPersistedVerificationTrace = (
+  result: Pick<VerificationResult, 'historyPersistence'> | null | undefined,
+  trace: Trace | null | undefined
+): trace is PersistedTrace => {
+  const runId = result?.historyPersistence.status === 'SAVED'
+    ? result.historyPersistence.runId
+    : undefined
+  return Number.isSafeInteger(runId)
+    && Number(runId) >= 1
+    && Number.isSafeInteger(trace?.id)
+    && Number(trace?.id) >= 1
+    && Number.isSafeInteger(trace?.verificationTaskId)
+    && trace?.verificationTaskId === runId
+}
+
+export const validateVerificationTraceList = (
+  value: unknown,
+  expectedVerificationTaskId?: number
+): PersistedTrace[] => {
   if (!Array.isArray(value)) {
     throw new RunResponseContractError('Verification trace history', 'result must be an array')
   }
-  return value.map(trace => validateVerificationTrace(trace))
+  return value.map(trace => validateVerificationTrace(
+    trace,
+    'Verification trace history',
+    expectedVerificationTaskId
+  ))
 }
 
 export const validateVerificationResult = (value: unknown): VerificationResult => {
   const context = 'Verification'
   const result = requireRecord(value, context)
-  validateRunPersistence(result.historyPersistence, context,
+  const persistence = validateRunPersistence(result.historyPersistence, context,
     new Set<RunPersistenceStatus>(['SAVED', 'FAILED', 'OUTCOME_UNKNOWN']))
   requireAttackContext(result, context)
   if (result.modelSnapshot.specificationCount < 1) {
@@ -493,7 +540,11 @@ export const validateVerificationResult = (value: unknown): VerificationResult =
     throw new RunResponseContractError(context, 'modelComplete contradicts the conclusion or omissions')
   }
   const traces = requireArray(result, 'traces', context)
-  traces.forEach(trace => validateVerificationTrace(trace, context, false))
+  if (persistence.status === 'SAVED') {
+    traces.forEach(trace => validateVerificationTrace(trace, context, persistence.runId))
+  } else {
+    traces.forEach(trace => validateImmediateVerificationTrace(trace, context))
+  }
   const specResults = validateSpecResults(result, context)
   validateVerificationOutcomeAgainstResults(result.outcome, specResults, context)
   validateStringArray(result, 'checkLogs', context)

@@ -2,13 +2,17 @@
 import api from '@/api/http'
 import type {
     ChatConfirmationCommand,
+    ChatConfirmationKind,
+    ChatExecutionStatus,
     ChatHistoryPage,
     ChatMessage,
+    PersistedChatMessage,
     ChatPendingConfirmation,
     ChatSession,
     ChatSessionActivity,
     StreamCommand,
-    StreamProgress
+    StreamProgress,
+    StreamTerminal
 } from "@/types/chat"
 import { useAuth } from '@/stores/auth'
 import { router } from '@/router'
@@ -19,7 +23,7 @@ export type ChatStreamErrorKind =
     | 'HTTP_ERROR'
     | 'SERVER_FRAME'
     | 'MISSING_BODY'
-    | 'EMPTY_STREAM'
+    | 'INCOMPLETE_STREAM'
     | 'INVALID_FRAME'
     | 'UNKNOWN'
 
@@ -51,14 +55,19 @@ const unpack = <T>(response: any): T => {
   return response.data.data;
 };
 
-const CHAT_EXECUTION_STATUSES = new Set<string>([
+const CHAT_EXECUTION_STATUSES: ReadonlySet<ChatExecutionStatus> = new Set([
   'COMPLETED',
   'AWAITING_CONFIRMATION',
   'PARTIAL',
   'STOPPED',
   'DISCONNECTED',
   'FAILED'
-] satisfies Array<NonNullable<ChatMessage['executionStatus']>>);
+]);
+const CHAT_CONFIRMATION_KINDS: ReadonlySet<ChatConfirmationKind> = new Set([
+  'DESTRUCTIVE',
+  'DEFAULT_TEMPLATE_RESET',
+  'SCENE_REPLACEMENT'
+]);
 
 const CHAT_ROLES = new Set<ChatMessage['role']>(['user', 'assistant']);
 const STREAM_PROGRESS_STAGES = new Set<StreamProgress['stage']>([
@@ -141,17 +150,39 @@ const isStreamProgress = (value: unknown): value is StreamProgress => {
   return outcome === undefined || outcome === null;
 };
 
-const hasCompletedToolEvidence = (trace: unknown): boolean => {
+export const hasCompletedToolEvidence = (trace: unknown): boolean => {
   if (!Array.isArray(trace) || trace.length === 0) return false;
   let hasUsableResult = false;
+  let pendingExecution: { toolName: string; round: number } | null = null;
+  const unresolvedPartialTools = new Set<string>();
   for (const progress of trace) {
     if (!isStreamProgress(progress) || progress.stage === 'EXECUTION_GUARD') return false;
+    if (progress.stage === 'TOOL_EXECUTION') {
+      if (pendingExecution
+          || typeof progress.toolName !== 'string'
+          || !progress.toolName.trim()
+          || !Number.isSafeInteger(progress.round)
+          || Number(progress.round) < 1) return false;
+      pendingExecution = { toolName: progress.toolName, round: Number(progress.round) };
+      continue;
+    }
     if (progress.stage === 'TOOL_RESULT') {
-      if (progress.outcome !== 'USABLE') return false;
-      hasUsableResult = true;
+      if (!pendingExecution
+          || progress.toolName !== pendingExecution.toolName
+          || progress.round !== pendingExecution.round) return false;
+      const toolName = pendingExecution.toolName;
+      pendingExecution = null;
+      if (progress.outcome === 'USABLE') {
+        unresolvedPartialTools.delete(toolName);
+        hasUsableResult = true;
+      } else if (progress.outcome === 'PARTIAL') {
+        unresolvedPartialTools.add(toolName);
+      } else {
+        return false;
+      }
     }
   }
-  return hasUsableResult;
+  return hasUsableResult && pendingExecution === null && unresolvedPartialTools.size === 0;
 };
 
 const validateStreamProgress = (value: unknown, context: string): StreamProgress => {
@@ -171,7 +202,22 @@ const validateStreamCommand = (value: unknown): StreamCommand => {
   return value as unknown as StreamCommand;
 };
 
-const validateChatHistoryMessages = (value: unknown, expectedSessionId: string): ChatMessage[] => {
+const validateStreamTerminal = (value: unknown, expectedTurnId: string): StreamTerminal => {
+  if (!isRecord(value)
+      || Object.keys(value).length !== 2
+      || typeof value.turnId !== 'string'
+      || value.turnId !== expectedTurnId
+      || typeof value.executionStatus !== 'string'
+      || !CHAT_EXECUTION_STATUSES.has(value.executionStatus as ChatExecutionStatus)) {
+    throw new Error('Chat stream terminal is incomplete');
+  }
+  return value as unknown as StreamTerminal;
+};
+
+const validateChatHistoryMessages = (
+    value: unknown,
+    expectedSessionId: string
+): PersistedChatMessage[] => {
   if (!Array.isArray(value)) throw new Error('Chat history messages are incomplete');
   value.forEach((candidate, index) => {
     if (!isRecord(candidate)
@@ -181,9 +227,10 @@ const validateChatHistoryMessages = (value: unknown, expectedSessionId: string):
         || candidate.sessionId !== expectedSessionId
         || typeof candidate.turnId !== 'string'
         || !candidate.turnId.trim()
-        || !isOptionalString(candidate.createdAt)
-        || (candidate.id !== undefined && candidate.id !== null
-          && (!Number.isSafeInteger(candidate.id) || Number(candidate.id) <= 0))
+        || typeof candidate.createdAt !== 'string'
+        || !candidate.createdAt.trim()
+        || !Number.isSafeInteger(candidate.id)
+        || Number(candidate.id) <= 0
         || !isOptionalNonNegativeInteger(candidate.executionElapsedSeconds)
         || (candidate.executionTrace !== undefined && candidate.executionTrace !== null
           && (!Array.isArray(candidate.executionTrace)
@@ -193,14 +240,14 @@ const validateChatHistoryMessages = (value: unknown, expectedSessionId: string):
     const status = candidate.executionStatus;
     if (status !== undefined && status !== null
         && (typeof status !== 'string'
-            || !CHAT_EXECUTION_STATUSES.has(status))) {
+            || !CHAT_EXECUTION_STATUSES.has(status as ChatExecutionStatus))) {
       throw new Error(`Chat history message ${index} has an unknown execution status`);
     }
     if (status === 'COMPLETED' && !hasCompletedToolEvidence(candidate.executionTrace)) {
       throw new Error(`Chat history message ${index} has unproven completed status`);
     }
   });
-  return value as ChatMessage[];
+  return value as PersistedChatMessage[];
 };
 
 export const getSessionList = async (): Promise<ChatSession[]> => {
@@ -245,8 +292,12 @@ export const getSessionHistory = async (
   };
 }
 
-export const requestSessionStop = async (sessionId: string): Promise<void> => {
-  await api.post(`/chat/sessions/${sessionId}/stop`, null, { timeout: CHAT_ACTIVITY_TIMEOUT_MS });
+export const requestSessionStop = async (sessionId: string, turnId?: string): Promise<void> => {
+  await api.post(
+    `/chat/sessions/${sessionId}/stop`,
+    { turnId: turnId?.trim() || null },
+    { timeout: CHAT_ACTIVITY_TIMEOUT_MS }
+  );
 }
 
 export const deleteSession = async (sessionId: string): Promise<void> => {
@@ -274,7 +325,11 @@ export const getPendingConfirmation = async (
 ): Promise<ChatPendingConfirmation> => {
   const response = await api.get<any>(`/chat/sessions/${sessionId}/confirmation`, { signal });
   const pending = unpack<ChatPendingConfirmation>(response);
-  if (!pending || pending.sessionId !== sessionId || !Array.isArray(pending.kinds)) {
+  if (!pending
+      || pending.sessionId !== sessionId
+      || !Array.isArray(pending.kinds)
+      || pending.kinds.some(kind => typeof kind !== 'string'
+        || !CHAT_CONFIRMATION_KINDS.has(kind as ChatConfirmationKind))) {
     throw new Error('Chat pending-confirmation response is incomplete');
   }
   return pending;
@@ -289,7 +344,7 @@ export const sendStreamChat = async (
         onProgress?: (progress: StreamProgress) => void;
         onAccepted?: () => void;
         onError?: (err: any) => void
-        onFinish?: () => void
+        onFinish?: (terminal: StreamTerminal) => void
     },
     controller?: AbortController,
     turnId?: string,
@@ -343,8 +398,8 @@ export const sendStreamChat = async (
             });
         }
 
-        // A successful HTTP response means the backend claimed the chat slot and
-        // persisted the request, even if a proxy/browser cannot expose the body.
+        // A 2xx response crosses the synchronous rejection boundary. It can still carry
+        // an outcome-unknown warning when admission cleanup could not be confirmed.
         callbacks.onAccepted?.();
 
         if (!response.body) {
@@ -354,15 +409,16 @@ export const sendStreamChat = async (
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
         let buffer = '';
-        let hasReceivedFrame = false;
-
-        const serverErrorMessage = (content: string) => {
-            const trimmed = content.trimStart();
-            if (!trimmed.startsWith('[ERROR]')) return '';
-            return trimmed.replace(/^\[ERROR\]\s*/, '').trim() || trimmed;
-        };
+        let terminal: StreamTerminal | null = null;
+        let serverFrameError: ChatStreamError | null = null;
+        const receivedProgress: StreamProgress[] = [];
 
         const handlePayload = (dataStr: string) => {
+            if (terminal) {
+                throw new ChatStreamError('Chat stream continued after its terminal frame', {
+                    kind: 'INVALID_FRAME'
+                });
+            }
             const trimmed = dataStr.trim();
             if (!trimmed) {
                 throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
@@ -378,41 +434,82 @@ export const sendStreamChat = async (
                 throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
             }
 
-            const allowedKeys = new Set(['content', 'command', 'progress']);
+            const allowedKeys = new Set(['content', 'error', 'command', 'progress', 'terminal']);
             if (Object.keys(json).some(key => !allowedKeys.has(key))) {
                 throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
             }
-            if (json.content !== undefined && json.content !== null
-                && typeof json.content !== 'string') {
+            if (json.content !== undefined && typeof json.content !== 'string') {
+                throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
+            }
+            if (json.error !== undefined
+                && (typeof json.error !== 'string' || !json.error.trim())) {
                 throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
             }
 
             const content = typeof json.content === 'string' ? json.content : '';
+            const errorMessage = typeof json.error === 'string' ? json.error.trim() : '';
             let command: StreamCommand | undefined;
             let progress: StreamProgress | undefined;
+            let terminalFrame: StreamTerminal | undefined;
             try {
-                if (json.command !== undefined && json.command !== null) {
+                if (json.command !== undefined) {
                     command = validateStreamCommand(json.command);
                 }
-                if (json.progress !== undefined && json.progress !== null) {
+                if (json.progress !== undefined) {
                     progress = validateStreamProgress(json.progress, 'Chat stream progress');
+                }
+                if (json.terminal !== undefined) {
+                    terminalFrame = validateStreamTerminal(json.terminal, effectiveTurnId);
                 }
             } catch {
                 throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
             }
 
-            if (!content && !command && !progress) {
+            const payloadCount = Number(Boolean(content))
+                + Number(Boolean(errorMessage))
+                + Number(Boolean(command))
+                + Number(Boolean(progress))
+                + Number(Boolean(terminalFrame));
+            if (payloadCount !== 1) {
                 throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
             }
-            const errorMessage = content ? serverErrorMessage(content) : '';
-            if (errorMessage) {
-                throw new ChatStreamError(errorMessage, { kind: 'SERVER_FRAME', serverFrame: true });
+            if (serverFrameError && !terminalFrame) {
+                throw new ChatStreamError('Chat stream continued after its error frame', {
+                    kind: 'INVALID_FRAME'
+                });
             }
 
-            // Only semantically valid StreamResponseDto objects count as progress.
-            hasReceivedFrame = true;
+            if (errorMessage) {
+                serverFrameError = new ChatStreamError(errorMessage, {
+                    kind: 'SERVER_FRAME',
+                    serverFrame: true
+                });
+                return;
+            }
+
+            if (terminalFrame) {
+                if (serverFrameError
+                    && terminalFrame.executionStatus !== 'FAILED'
+                    && terminalFrame.executionStatus !== 'PARTIAL') {
+                    throw new ChatStreamError('Chat error frame has a contradictory terminal status', {
+                        kind: 'INVALID_FRAME'
+                    });
+                }
+                if (terminalFrame.executionStatus === 'COMPLETED'
+                    && !hasCompletedToolEvidence(receivedProgress)) {
+                    throw new ChatStreamError('Completed chat terminal lacks usable tool evidence', {
+                        kind: 'INVALID_FRAME'
+                    });
+                }
+                terminal = terminalFrame;
+                return;
+            }
+
             if (command) callbacks.onCommand?.(command);
-            if (progress) callbacks.onProgress?.(progress);
+            if (progress) {
+                receivedProgress.push(progress);
+                callbacks.onProgress?.(progress);
+            }
             if (content) callbacks.onMessage(content);
         };
 
@@ -438,14 +535,25 @@ export const sendStreamChat = async (
             }
         };
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-                buffer += decoder.decode();
-                break;
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    buffer += decoder.decode();
+                    break;
+                }
+                buffer += decoder.decode(value, { stream: true });
+                drainEvents();
             }
-            buffer += decoder.decode(value, { stream: true });
-            drainEvents();
+        } catch (readError) {
+            if (readError instanceof ChatStreamError) throw readError;
+            if (!terminal) {
+                if (serverFrameError) throw serverFrameError;
+                throw readError;
+            }
+            // The persisted terminal frame is the completion proof. A proxy reset while
+            // closing the transport must not turn that committed success into a failure.
+            buffer += decoder.decode();
         }
 
         drainEvents();
@@ -453,11 +561,15 @@ export const sendStreamChat = async (
             handleEvent(buffer);
         }
 
-        if (!hasReceivedFrame) {
-            throw new ChatStreamError('No content received from server', { kind: 'EMPTY_STREAM' });
+        if (!terminal) {
+            if (serverFrameError) throw serverFrameError;
+            throw new ChatStreamError('Chat stream ended before its terminal frame', {
+                kind: 'INCOMPLETE_STREAM'
+            });
         }
 
-        if (callbacks.onFinish) callbacks.onFinish();
+        callbacks.onFinish?.(terminal);
+        if (serverFrameError) throw serverFrameError;
 
     } catch (error: any) {
         if (error.name === 'AbortError') {

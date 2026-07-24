@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRelatedDevicesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckRuleSimilarityTool;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.RecommendScenarioTool;
+import cn.edu.nju.Iot_Verify.component.aitool.scenario.ScenarioObjectiveTargets;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.ScenarioVerificationReadiness;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.component.board.BoardBatchRequestParser;
@@ -45,6 +46,7 @@ import cn.edu.nju.Iot_Verify.dto.recommendation.RuleRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioObjectiveIssueDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioObjectiveTargetsDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioReadinessIssueDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioSemanticWarningDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.StandaloneRecommendationRequestDto;
@@ -538,7 +540,7 @@ public class BoardStorageController {
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
             throwIfToolError(resultMap);
 
-            return Result.success(parseScenarioRecommendationResponse(resultMap));
+            return Result.success(parseScenarioRecommendationResponse(resultMap, requestBody));
         } catch (BaseException e) {
             throw e;
         } catch (Exception e) {
@@ -671,13 +673,14 @@ public class BoardStorageController {
     }
 
     private ScenarioRecommendationResponseDto parseScenarioRecommendationResponse(
-            Map<String, Object> result) {
+            Map<String, Object> result,
+            ScenarioRecommendationRequestDto request) {
         String context = "AI scenario recommendation";
         requireOnlyRecommendationFields(result, Set.of(
                 "message", "count", "requestedCount", "validatedCount",
                 "filteredCount", "filteredItems", "adjustedCount", "adjustedItems",
                 "rawCandidateCount", "inspectedCount", "truncatedCount",
-                "scenarioName", "rationale", "objectiveStatus", "objectiveIssues",
+                "scenarioName", "rationale", "objectiveTargets", "objectiveStatus", "objectiveIssues",
                 "verificationReady", "readinessIssues",
                 "semanticWarnings", "scene"), context);
         RecommendationAudit audit = parseRecommendationAudit(result, true, context);
@@ -699,6 +702,17 @@ public class BoardStorageController {
         if (audit.count() != finalCount) {
             throw invalidRecommendationResult(context, "count must match final scene items");
         }
+        ScenarioObjectiveTargetsDto objectiveTargetsDto = convertRecommendationItem(
+                result.get("objectiveTargets"),
+                ScenarioObjectiveTargetsDto.class,
+                context,
+                "objectiveTargets");
+        ScenarioObjectiveTargets objectiveTargets = parseScenarioObjectiveTargets(
+                objectiveTargetsDto, request, context);
+        if (audit.requestedCount() != objectiveTargets.requestedCount()) {
+            throw invalidRecommendationResult(
+                    context, "requestedCount must equal the sum of objectiveTargets");
+        }
 
         ScenarioRecommendationResponseDto response = new ScenarioRecommendationResponseDto();
         response.setMessage(audit.message());
@@ -714,6 +728,7 @@ public class BoardStorageController {
         response.setTruncatedCount(audit.truncatedCount());
         response.setScenarioName(requireRecommendationString(result, "scenarioName", context));
         response.setRationale(requireRecommendationString(result, "rationale", context));
+        response.setObjectiveTargets(objectiveTargetsDto);
         String objectiveStatus = requireRecommendationString(result, "objectiveStatus", context);
         List<ScenarioObjectiveIssueDto> objectiveIssues = convertRecommendationItems(
                 requireRecommendationList(result, "objectiveIssues", context),
@@ -728,6 +743,7 @@ public class BoardStorageController {
         validateScenarioAnalysis(
                 scene,
                 audit.filteredCount(),
+                objectiveTargets,
                 objectiveStatus,
                 objectiveIssues,
                 verificationReady,
@@ -745,6 +761,7 @@ public class BoardStorageController {
 
     private void validateScenarioAnalysis(PortableSceneDto scene,
                                           int filteredCount,
+                                          ScenarioObjectiveTargets objectiveTargets,
                                           String objectiveStatus,
                                           List<ScenarioObjectiveIssueDto> objectiveIssues,
                                           boolean verificationReady,
@@ -752,7 +769,7 @@ public class BoardStorageController {
                                           List<ScenarioSemanticWarningDto> semanticWarnings,
                                           String context) {
         ScenarioVerificationReadiness.Status expected = ScenarioVerificationReadiness.assess(
-                objectMapper.valueToTree(scene), filteredCount, "en");
+                objectMapper.valueToTree(scene), filteredCount, "en", objectiveTargets);
         List<String> actualObjectiveCodes = new ArrayList<>();
         for (int index = 0; index < objectiveIssues.size(); index++) {
             ScenarioObjectiveIssueDto issue = objectiveIssues.get(index);
@@ -804,6 +821,35 @@ public class BoardStorageController {
             throw invalidRecommendationResult(
                     context, "semanticWarnings must match the returned scene and filtered candidates");
         }
+    }
+
+    private ScenarioObjectiveTargets parseScenarioObjectiveTargets(
+            ScenarioObjectiveTargetsDto targets,
+            ScenarioRecommendationRequestDto request,
+            String context) {
+        if (targets.getMinDevices() == null
+                || targets.getMinRules() == null
+                || targets.getMinSpecs() == null) {
+            throw invalidRecommendationResult(
+                    context, "objectiveTargets must contain all minimum counts");
+        }
+        ScenarioObjectiveTargets parsed;
+        try {
+            parsed = new ScenarioObjectiveTargets(
+                    targets.getMinDevices(), targets.getMinRules(), targets.getMinSpecs());
+        } catch (IllegalArgumentException e) {
+            throw invalidRecommendationResult(context, e.getMessage());
+        }
+        if (request.getMinDevices() == null
+                || request.getMinRules() == null
+                || request.getMinSpecs() == null
+                || parsed.minDevices() != request.getMinDevices()
+                || parsed.minRules() != request.getMinRules()
+                || parsed.minSpecs() != request.getMinSpecs()) {
+            throw invalidRecommendationResult(
+                    context, "objectiveTargets must match the submitted minimum counts");
+        }
+        return parsed;
     }
 
     private RecommendationAudit parseRecommendationAudit(

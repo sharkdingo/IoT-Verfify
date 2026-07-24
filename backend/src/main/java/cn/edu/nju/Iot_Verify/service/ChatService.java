@@ -16,9 +16,10 @@ public interface ChatService {
     List<ChatMessageResponseDto> getHistory(Long userId, String sessionId);
     ChatHistoryPageDto getHistoryPage(Long userId, String sessionId, Long beforeId, int limit);
     void deleteSession(Long userId, String sessionId);
-    String beginStreamRequest(Long userId, String sessionId);
+    String beginStreamRequest(Long userId, String sessionId, String turnId, String content);
+    void abortUndispatched(Long userId, String sessionId, String executionId, String turnId);
     void endStreamRequest(Long userId, String sessionId, String executionId);
-    void requestStreamStop(Long userId, String sessionId);
+    void requestStreamStop(Long userId, String sessionId, String turnId);
     ChatSessionActivityDto getSessionActivity(Long userId, String sessionId);
     ChatPendingConfirmationDto getPendingConfirmation(Long userId, String sessionId);
     default void processStreamChat(Long userId, String sessionId, String executionId,

@@ -7,6 +7,9 @@ import cn.edu.nju.Iot_Verify.dto.chat.ChatRequestDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatPendingConfirmationDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatStopRequestDto;
+import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
+import cn.edu.nju.Iot_Verify.exception.ChatAdmissionOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.ChatService;
@@ -19,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -81,35 +85,98 @@ public class ChatController {
         String executionId;
         try {
             userLease.requireActive();
-            executionId = chatService.beginStreamRequest(userId, request.getSessionId());
+            executionId = chatService.beginStreamRequest(
+                    userId, request.getSessionId(), turnId, request.getContent());
+        } catch (ChatAdmissionOutcomeUnknownException e) {
+            userLease.close();
+            log.error("Chat admission rollback outcome is unknown: userId={}, sessionId={}",
+                    userId, request.getSessionId(), e);
+            completeAdmissionOutcomeUnknown(emitter, request.getContent());
+            return emitter;
         } catch (RuntimeException e) {
             userLease.close();
             throw e;
         }
         try {
             executor.execute(() -> {
+                boolean userLeaseAttached = false;
                 try {
                     userLease.attachCurrentThread();
+                    userLeaseAttached = true;
                     chatService.processStreamChat(
                             userId, request.getSessionId(), executionId, turnId, request.getContent(),
                             request.getConfirmation(), emitter);
                     userLease.requireActive();
                 } catch (Exception e) {
+                    if (!userLeaseAttached) {
+                        if (!abortUndispatchedRequest(
+                                userId, request.getSessionId(), executionId, turnId, userLease)) {
+                            completeAdmissionOutcomeUnknown(emitter, request.getContent());
+                        } else {
+                            emitter.completeWithError(e);
+                        }
+                        return;
+                    }
                     log.error("Error processing chat request for userId={}", userId, e);
                     emitter.completeWithError(e);
                 } finally {
-                    cleanupStreamRequest(userId, request.getSessionId(), executionId, userLease);
+                    if (userLeaseAttached) {
+                        cleanupStreamRequest(userId, request.getSessionId(), executionId, userLease);
+                    }
                 }
             });
         } catch (RejectedExecutionException e) {
-            cleanupStreamRequest(userId, request.getSessionId(), executionId, userLease);
+            if (!abortUndispatchedRequest(
+                    userId, request.getSessionId(), executionId, turnId, userLease)) {
+                completeAdmissionOutcomeUnknown(emitter, request.getContent());
+                return emitter;
+            }
             log.warn("Chat request rejected: executor is saturated, userId={}, sessionId={}", userId, request.getSessionId());
             throw new ServiceUnavailableException("Chat service is busy, please retry later", e);
         } catch (RuntimeException e) {
-            cleanupStreamRequest(userId, request.getSessionId(), executionId, userLease);
+            if (!abortUndispatchedRequest(
+                    userId, request.getSessionId(), executionId, turnId, userLease)) {
+                completeAdmissionOutcomeUnknown(emitter, request.getContent());
+                return emitter;
+            }
             throw e;
         }
         return emitter;
+    }
+
+    private boolean abortUndispatchedRequest(Long userId,
+                                             String sessionId,
+                                             String executionId,
+                                             String turnId,
+                                             UserOperationGuard.Lease userLease) {
+        try {
+            chatService.abortUndispatched(userId, sessionId, executionId, turnId);
+            return true;
+        } catch (RuntimeException rollbackFailure) {
+            log.error("Could not confirm rollback of an undispatched chat request: "
+                            + "userId={}, sessionId={}, executionId={}",
+                    userId, sessionId, executionId, rollbackFailure);
+            return false;
+        } finally {
+            userLease.close();
+        }
+    }
+
+    void completeAdmissionOutcomeUnknown(SseEmitter emitter, String content) {
+        String message = content != null && content.codePoints().anyMatch(codePoint ->
+                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)
+                ? "请求未能确认开始执行，且已保存请求的回滚结果无法确认。"
+                    + "请等待会话空闲后刷新历史和画布，不要立即重试。"
+                : "The request was not confirmed as started, and rollback of its saved "
+                    + "admission could not be confirmed. Wait for the session to become idle, then refresh "
+                    + "history and the Board before retrying.";
+        try {
+            emitter.send(SseEmitter.event().data(StreamResponseDto.error(message), MediaType.APPLICATION_JSON));
+        } catch (Exception sendFailure) {
+            log.warn("Could not send the chat admission-outcome warning: {}", sendFailure.toString());
+        } finally {
+            emitter.complete();
+        }
     }
 
     private void cleanupStreamRequest(Long userId,
@@ -143,8 +210,9 @@ public class ChatController {
     @PostMapping("/sessions/{sessionId}/stop")
     public Result<Void> stopSession(
             @CurrentUser Long userId,
-            @PathVariable @Size(max = 64, message = "Session ID must not exceed 64 characters") String sessionId) {
-        chatService.requestStreamStop(userId, sessionId);
+            @PathVariable @Size(max = 64, message = "Session ID must not exceed 64 characters") String sessionId,
+            @Valid @RequestBody ChatStopRequestDto request) {
+        chatService.requestStreamStop(userId, sessionId, request.getTurnId());
         return Result.success();
     }
 

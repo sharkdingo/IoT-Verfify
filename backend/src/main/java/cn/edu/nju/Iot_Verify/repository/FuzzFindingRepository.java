@@ -34,6 +34,8 @@ public interface FuzzFindingRepository extends JpaRepository<FuzzFindingPo, Long
 
     Optional<FuzzFindingPo> findByIdAndUserId(Long id, Long userId);
 
+    long countByUserIdAndFuzzTaskId(Long userId, Long fuzzTaskId);
+
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("DELETE FROM FuzzFindingPo f WHERE f.userId = :userId AND f.fuzzTaskId = :fuzzTaskId")

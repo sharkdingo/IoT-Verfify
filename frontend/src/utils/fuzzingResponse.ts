@@ -144,6 +144,23 @@ export const assertFuzzingFindingBelongsToRun = (
   }
 }
 
+export const resolveFuzzingRunFinding = (
+  run: Pick<FuzzingRun, 'id' | 'findings'>,
+  findingId: number,
+  context = 'Fuzz finding replay'
+): FuzzingFinding => {
+  const expectedFindingId = integer(findingId, 'findingId', context, 1)
+  const finding = run.findings.find(candidate => candidate.id === expectedFindingId)
+  if (!finding) {
+    throw new FuzzResponseContractError(
+      context,
+      'the owning run does not contain the requested finding evidence'
+    )
+  }
+  assertFuzzingFindingBelongsToRun(finding, run.id, context)
+  return finding
+}
+
 const text = (value: unknown, field: string, context: string, allowEmpty = false): string => {
   if (typeof value !== 'string' || (!allowEmpty && !value.trim())) {
     throw new FuzzResponseContractError(context, `${field} must be text`)

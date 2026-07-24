@@ -3,6 +3,7 @@ import type { ModelSemantics } from '@/types/modelSemantics'
 import {
   RUN_RESPONSE_INCOMPLETE_CODE,
   activeTaskProgressStage,
+  hasPersistedVerificationTrace,
   validateInteractiveOperationStatus,
   validateSimulationResult,
   validateSimulationTask,
@@ -85,6 +86,35 @@ const validVerification = () => ({
   skippedSpecCount: 0,
   generationIssues: [],
   nusmvOutput: '-- specification is true'
+})
+
+const unpersistedViolation = () => ({
+  ...validVerification(),
+  historyPersistence: {
+    status: 'FAILED',
+    reasonCode: 'RUN_HISTORY_SAVE_FAILED'
+  },
+  outcome: 'VIOLATED',
+  traces: [{
+    violatedSpecId: 'spec_1',
+    checkedExpression: 'CTLSPEC AG motion',
+    modelComplete: true,
+    disabledRuleCount: 0,
+    skippedSpecCount: 0,
+    generationIssues: [],
+    states: [state(1)],
+    isAttack: false,
+    attackBudget: 0,
+    enablePrivacy: false,
+    modelSemantics,
+    modelSnapshot: modelSnapshot(1),
+    createdAt: '2026-07-12T00:00:02'
+  }],
+  specResults: validVerification().specResults.map(result => ({
+    ...result,
+    outcome: 'VIOLATED'
+  })),
+  nusmvOutput: '-- specification is false'
 })
 
 const validSimulation = () => ({
@@ -176,6 +206,47 @@ const validCompletedSimulationTask = () => ({
 describe('verification and simulation response contracts', () => {
   it('accepts an explicitly complete verification result', () => {
     expect(validateVerificationResult(validVerification())).toEqual(validVerification())
+  })
+
+  it('keeps an unpersisted counterexample replayable without treating it as fixable', () => {
+    const result = validateVerificationResult(unpersistedViolation())
+    expect(result.traces[0].id).toBeUndefined()
+    expect(hasPersistedVerificationTrace(result, result.traces[0])).toBe(false)
+    expect(() => validateVerificationResult({
+      ...unpersistedViolation(),
+      traces: [{
+        ...unpersistedViolation().traces[0],
+        id: 17,
+        verificationTaskId: 7
+      }]
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+  })
+
+  it('requires a saved trace identity to belong to the reported history run', () => {
+    const savedViolation = {
+      ...unpersistedViolation(),
+      historyPersistence: { status: 'SAVED', runId: 7 },
+      traces: [{
+        ...unpersistedViolation().traces[0],
+        id: 17,
+        verificationTaskId: 7
+      }]
+    }
+    const result = validateVerificationResult(savedViolation)
+
+    expect(hasPersistedVerificationTrace(result, result.traces[0])).toBe(true)
+    expect(() => validateVerificationResult({
+      ...savedViolation,
+      traces: [{ ...savedViolation.traces[0], verificationTaskId: 8 }]
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+    expect(() => validateVerificationResult({
+      ...savedViolation,
+      traces: [{
+        ...savedViolation.traces[0],
+        id: undefined,
+        verificationTaskId: undefined
+      }]
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
   })
 
   it('does not infer verification completeness from missing fields', () => {

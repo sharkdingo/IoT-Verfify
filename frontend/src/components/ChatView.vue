@@ -24,7 +24,8 @@ import type {
   ChatHistoryPage,
   ChatSession,
   StreamCommand,
-  StreamProgress
+  StreamProgress,
+  StreamTerminal
 } from '@/types/chat';
 import {
   ChatStreamError,
@@ -34,6 +35,7 @@ import {
   getPendingConfirmation,
   getSessionHistory,
   getSessionList,
+  hasCompletedToolEvidence,
   requestSessionStop,
   sendStreamChat
 } from '@/api/chat';
@@ -239,14 +241,19 @@ const reconciliationRequired = ref(false);
 const isRetryingReconciliation = ref(false);
 const activeStreamSessionId = ref('');
 const activeStreamTurnId = ref('');
+const historyReplacementWithoutTerminalAllowed = ref(false);
+const explicitStopRegistrationPending = ref(false);
+const activeStreamRetryDraft = ref('');
 const isLoadingHistory = ref(false);
 const historyLoadFailed = ref(false);
 const isLoadingOlderHistory = ref(false);
 const historyHasMore = ref(false);
 const historyNextBeforeId = ref<number | null>(null);
+const hasAuthoritativeActiveSession = computed(() =>
+    sessions.value.some(session => session.active));
 const isAssistantBusy = computed(() =>
     isStreaming.value || isSettlingStream.value || isMonitoringRemoteExecution.value
-    || reconciliationRequired.value);
+    || reconciliationRequired.value || hasAuthoritativeActiveSession.value);
 const isLoading = computed(() => isAssistantBusy.value || isLoadingHistory.value);
 const TOOL_LABEL_KEYS: Record<string, string> = {
   add_device: 'app.chat.toolLabels.addDevice',
@@ -372,17 +379,6 @@ const traceHasToolResults = (trace: StreamProgress[]) =>
     trace.some(progress => progress.stage === 'TOOL_RESULT');
 const traceHasToolActivity = (trace: StreamProgress[]) =>
     trace.some(progress => progress.stage === 'TOOL_EXECUTION' || progress.stage === 'TOOL_RESULT');
-const traceHasCompletedToolEvidence = (trace: StreamProgress[]) => {
-  let hasUsableResult = false;
-  for (const progress of trace) {
-    if (progress.stage === 'EXECUTION_GUARD') return false;
-    if (progress.stage === 'TOOL_RESULT') {
-      if (progress.outcome !== 'USABLE') return false;
-      hasUsableResult = true;
-    }
-  }
-  return hasUsableResult;
-};
 const executionTraceStatus = (
     trace: StreamProgress[],
     active: boolean,
@@ -410,7 +406,7 @@ const executionTraceStatus = (
       : t('app.chat.executionTracePartial');
   }
   if (status === 'FAILED') return t('app.chat.executionTraceFailed');
-  if (status !== 'COMPLETED' || !traceHasCompletedToolEvidence(trace)) {
+  if (status !== 'COMPLETED' || !hasCompletedToolEvidence(trace)) {
     return t('app.chat.executionTraceUnverified');
   }
   const lastResult = [...trace].reverse().find(progress => progress.stage === 'TOOL_RESULT');
@@ -724,8 +720,8 @@ const formatStreamError = (error: unknown) => {
     switch (error.kind) {
       case 'MISSING_BODY':
         return t('app.chat.missingResponseBody');
-      case 'EMPTY_STREAM':
-        return t('app.chat.emptyResponseStream');
+      case 'INCOMPLETE_STREAM':
+        return t('app.chat.incompleteResponseStream');
       case 'INVALID_FRAME':
         return t('app.chat.invalidResponseStream');
       case 'HTTP_ERROR':
@@ -820,13 +816,16 @@ const reconcileAuthoritativeState = async (
     notifySuccess = false
 ): Promise<boolean> => {
   if (reconciliationPromise) return reconciliationPromise;
+  const reconciliationAuthEpoch = chatAuthEpoch;
   isRetryingReconciliation.value = true;
-  reconciliationPromise = (async () => {
+  let ownedReconciliation!: Promise<boolean>;
+  ownedReconciliation = (async () => {
     try {
       const refreshed = await invokeSystemCommand({
         type: 'REFRESH_DATA',
         payload: { target: 'board_state' }
       });
+      if (reconciliationAuthEpoch !== chatAuthEpoch) return false;
       if (!refreshed) {
         markReconciliationRequired();
         return false;
@@ -835,11 +834,16 @@ const reconcileAuthoritativeState = async (
       if (notifySuccess) ElMessage.success(t('app.chat.reconciliationSucceeded'));
       return true;
     } finally {
-      isRetryingReconciliation.value = false;
-      reconciliationPromise = null;
+      if (reconciliationPromise === ownedReconciliation) {
+        if (reconciliationAuthEpoch === chatAuthEpoch) {
+          isRetryingReconciliation.value = false;
+        }
+        reconciliationPromise = null;
+      }
     }
   })();
-  return reconciliationPromise;
+  reconciliationPromise = ownedReconciliation;
+  return ownedReconciliation;
 };
 
 const executeStreamCommand = async (command: StreamCommand): Promise<boolean> => {
@@ -869,6 +873,41 @@ const retryAuthoritativeReconciliation = async () => {
 const updateSessionActivity = (sessionId: string, active: boolean) => {
   const session = sessions.value.find(item => item.id === sessionId);
   if (session) session.active = active;
+};
+
+const isHttpNotFound = (error: any) => error?.response?.status === 404;
+
+const clearAuthoritativelyDeletedSession = (sessionId: string) => {
+  sessionListRequestEpoch += 1;
+  sessions.value = sessions.value.filter(session => session.id !== sessionId);
+
+  if (activeStreamSessionId.value === sessionId) {
+    stopSessionActivityMonitor();
+    activeStreamSessionId.value = '';
+    activeStreamTurnId.value = '';
+    historyReplacementWithoutTerminalAllowed.value = false;
+    explicitStopRegistrationPending.value = false;
+    activeStreamRetryDraft.value = '';
+  }
+
+  if (currentSessionId.value !== sessionId) return;
+  historyRequestEpoch += 1;
+  historyAbortController.value?.abort();
+  historyAbortController.value = null;
+  confirmationRequestEpoch += 1;
+  isLoadingHistory.value = false;
+  historyLoadFailed.value = false;
+  currentSessionId.value = '';
+  messages.value = [];
+  historyHasMore.value = false;
+  historyNextBeforeId.value = null;
+  pendingConfirmationKinds.value = [];
+  pendingConfirmationLoadFailed.value = false;
+};
+
+const reportAuthoritativeSessionDeletion = (sessionId: string) => {
+  clearAuthoritativelyDeletedSession(sessionId);
+  ElMessage.warning(t('app.chat.sessionRemovedExternally'));
 };
 
 const refreshPendingConfirmation = async (sessionId = currentSessionId.value, signal?: AbortSignal) => {
@@ -924,6 +963,8 @@ const monitorSessionActivity = (sessionId: string, knownActive = false) => {
   if (knownActive) {
     activeStreamSessionId.value = sessionId;
     activeStreamTurnId.value = '';
+    historyReplacementWithoutTerminalAllowed.value = true;
+    activeStreamRetryDraft.value = '';
     isMonitoringRemoteExecution.value = true;
     updateSessionActivity(sessionId, true);
   }
@@ -946,6 +987,8 @@ const monitorSessionActivity = (sessionId: string, knownActive = false) => {
         remoteActivityCheckFailed.value = false;
         activeStreamSessionId.value = sessionId;
         activeStreamTurnId.value = '';
+        historyReplacementWithoutTerminalAllowed.value = true;
+        activeStreamRetryDraft.value = '';
         isMonitoringRemoteExecution.value = true;
       } catch (error: any) {
         if (controller.signal.aborted || monitorEpoch !== activityMonitorEpoch) return;
@@ -963,6 +1006,19 @@ const monitorSessionActivity = (sessionId: string, knownActive = false) => {
   })();
 };
 
+const reattachAuthoritativeActiveSession = (availableSessions: ChatSession[]) => {
+  const activeSession = availableSessions.find(session =>
+    session.id === currentSessionId.value && session.active)
+      ?? availableSessions.find(session => session.active);
+  if (!activeSession) return;
+
+  if (currentSessionId.value === activeSession.id) {
+    monitorSessionActivity(activeSession.id, true);
+    return;
+  }
+  void handleSelectSession(activeSession.id, true);
+};
+
 const initSessions = async (reattachActive = true) => {
   const requestEpoch = ++sessionListRequestEpoch;
   isLoadingSessions.value = true;
@@ -973,14 +1029,7 @@ const initSessions = async (reattachActive = true) => {
     if (requestEpoch === sessionListRequestEpoch) {
       sessions.value = res;
       if (reattachActive && !isStreaming.value && !activeStreamSessionId.value) {
-        const activeSession = res.find(session => session.active);
-        if (activeSession) {
-          if (!currentSessionId.value) {
-            void handleSelectSession(activeSession.id, true);
-          } else if (currentSessionId.value === activeSession.id) {
-            monitorSessionActivity(activeSession.id, true);
-          }
-        }
+        reattachAuthoritativeActiveSession(res);
       }
     }
   } catch (e) {
@@ -1044,21 +1093,7 @@ const handleDelete = async (sessionId: string) => {
       if (await settleActiveRequest(false) !== 'ready') return;
     }
     await deleteSession(sessionId);
-    sessionListRequestEpoch += 1;
-    sessions.value = sessions.value.filter(s => s.id !== sessionId);
-    if (currentSessionId.value === sessionId) {
-      historyRequestEpoch += 1;
-      historyAbortController.value?.abort();
-      historyAbortController.value = null;
-      isLoadingHistory.value = false;
-      historyLoadFailed.value = false;
-      currentSessionId.value = '';
-      messages.value = [];
-      historyHasMore.value = false;
-      historyNextBeforeId.value = null;
-      pendingConfirmationKinds.value = [];
-      pendingConfirmationLoadFailed.value = false;
-    }
+    clearAuthoritativelyDeletedSession(sessionId);
     ElMessage.success(t('app.chat.sessionDeleted'));
   } catch (error: any) {
     if (error !== 'cancel') {
@@ -1123,15 +1158,7 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
   }
 };
 
-const normalizeHistoryPage = (value: ChatHistoryPage | ChatMessage[]): ChatHistoryPage => {
-  if (Array.isArray(value)) return { messages: value, nextBeforeId: null, hasMore: false };
-  return value && Array.isArray(value.messages)
-      ? value
-      : { messages: [], nextBeforeId: null, hasMore: false };
-};
-
-const applyHistoryPage = (value: ChatHistoryPage | ChatMessage[], prepend: boolean) => {
-  const page = normalizeHistoryPage(value);
+const applyHistoryPage = (page: ChatHistoryPage, prepend: boolean) => {
   const cleaned = page.messages.map(m => ({
       ...m,
       content: m.content ? m.content.replace('CallEnd|>', '') : ''
@@ -1196,6 +1223,15 @@ const hasTerminalAssistantRecord = (history: ChatMessage[], turnId?: string) => 
   return false;
 };
 
+const restoreRetryDraftIfTurnWasNotAdmitted = (history: ChatMessage[], turnId: string) => {
+  if (!activeStreamRetryDraft.value || !turnId) return;
+  const userTurnWasPersisted = history.some(message =>
+    message.role === 'user' && message.turnId === turnId);
+  if (!userTurnWasPersisted && !inputValue.value) {
+    inputValue.value = activeStreamRetryDraft.value;
+  }
+};
+
 const detachActiveTransport = (showCancelledMessage = false) => {
   if (streamElapsedTimer) {
     clearInterval(streamElapsedTimer);
@@ -1239,6 +1275,9 @@ const resetChatForAuthSubjectChange = () => {
   pendingConfirmationLoadFailed.value = false;
   activeStreamSessionId.value = '';
   activeStreamTurnId.value = '';
+  historyReplacementWithoutTerminalAllowed.value = false;
+  explicitStopRegistrationPending.value = false;
+  activeStreamRetryDraft.value = '';
   isStreaming.value = false;
   isSettlingStream.value = false;
   isMonitoringRemoteExecution.value = false;
@@ -1285,6 +1324,13 @@ const settleActiveRequest = (
   const turnId = activeStreamTurnId.value;
   const wasMonitoringRemoteExecution = isMonitoringRemoteExecution.value
       && activeStreamSessionId.value === sessionId;
+  const stopRequested = showCancelledMessage && Boolean(activeStreamSessionId.value || currentSessionId.value);
+  if (stopRequested) explicitStopRegistrationPending.value = true;
+  const mustRegisterExplicitStop = explicitStopRegistrationPending.value;
+  if (stopRequested || wasMonitoringRemoteExecution) {
+    historyReplacementWithoutTerminalAllowed.value = true;
+  }
+  const replaceHistoryWithoutTerminal = historyReplacementWithoutTerminalAllowed.value;
   if (!abortController.value && !activeStreamSessionId.value) {
     if (!reconciliationRequired.value) return Promise.resolve('ready');
     return reconcileAuthoritativeState().then(
@@ -1292,32 +1338,62 @@ const settleActiveRequest = (
   }
   if (wasMonitoringRemoteExecution) stopSessionActivityMonitor();
 
-  const stopRequested = showCancelledMessage && Boolean(activeStreamSessionId.value || currentSessionId.value);
+  let detachedController: AbortController | null = null;
   if (stopRequested && sessionId) {
     // Invalidate the original send flow before the stop endpoint closes SSE; otherwise it
     // can race into its normal-completion reconciliation path.
-    const activeController = detachActiveTransport(showCancelledMessage);
-    void requestSessionStop(sessionId)
-        .catch(error => {
-          console.warn('[Chat] Failed to register explicit stop before aborting transport:', error);
-        })
-        .finally(() => activeController?.abort());
+    detachedController = detachActiveTransport(showCancelledMessage);
   } else {
-    abortActiveTransport(showCancelledMessage);
+    abortActiveTransport(showCancelledMessage && Boolean(sessionId));
   }
   if (!sessionId) {
-    return reconcileAuthoritativeState().then(
-        reconciled => reconciled ? 'ready' : 'reconciliation-failed');
+    if (turnId) {
+      messages.value = messages.value.filter(message => message.turnId !== turnId);
+      if (activeStreamRetryDraft.value && !inputValue.value) {
+        inputValue.value = activeStreamRetryDraft.value;
+      }
+      activeStreamTurnId.value = '';
+      historyReplacementWithoutTerminalAllowed.value = false;
+      explicitStopRegistrationPending.value = false;
+      activeStreamRetryDraft.value = '';
+    }
+    return initSessions(false).then(() => 'ready');
   }
   isSettlingStream.value = true;
+  const settlementAuthEpoch = chatAuthEpoch;
+  const settlementContextIsCurrent = () => settlementAuthEpoch === chatAuthEpoch;
   const controller = new AbortController();
   settlementAbortController = controller;
-  settlementPromise = (async () => {
+  let ownedSettlement!: Promise<ChatLogoutPreparation>;
+  ownedSettlement = (async () => {
     let outcome: ChatLogoutPreparation = 'ready';
     let retainActiveSession = false;
     try {
+      if (mustRegisterExplicitStop) {
+        try {
+          await requestSessionStop(sessionId, turnId || undefined);
+          if (!settlementContextIsCurrent()) return 'ready';
+          explicitStopRegistrationPending.value = false;
+        } catch (error) {
+          if (!settlementContextIsCurrent()) return 'ready';
+          if (isHttpNotFound(error)) {
+            explicitStopRegistrationPending.value = false;
+            reportAuthoritativeSessionDeletion(sessionId);
+            return 'ready';
+          }
+          outcome = 'outcome-unknown';
+          retainActiveSession = true;
+          reconciliationRequired.value = true;
+          console.warn('[Chat] Failed to register explicit stop before aborting transport:', error);
+          ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
+          return outcome;
+        } finally {
+          detachedController?.abort();
+        }
+      }
       try {
         const idle = await waitForSessionIdle(sessionId, controller.signal);
+        if (!settlementContextIsCurrent()) return 'ready';
         if (!idle) {
           retainActiveSession = true;
           if (wasMonitoringRemoteExecution) {
@@ -1330,6 +1406,7 @@ const settleActiveRequest = (
           return 'reconciliation-failed';
         }
       } catch (error) {
+        if (!settlementContextIsCurrent()) return 'ready';
         if (controller.signal.aborted) return 'reconciliation-failed';
         outcome = 'outcome-unknown';
         retainActiveSession = true;
@@ -1338,39 +1415,82 @@ const settleActiveRequest = (
       }
 
       const reconciled = await reconcileAuthoritativeState();
+      if (!settlementContextIsCurrent()) return 'ready';
 
       try {
         if (currentSessionId.value === sessionId) {
-          const history = normalizeHistoryPage(await getSessionHistory(sessionId));
-          if (hasTerminalAssistantRecord(history.messages, turnId)) {
+          historyRequestEpoch += 1;
+          historyAbortController.value?.abort();
+          historyAbortController.value = null;
+          isLoadingHistory.value = false;
+          const settlementHistoryEpoch = historyRequestEpoch;
+          const history = await getSessionHistory(sessionId, controller.signal);
+          if (!settlementContextIsCurrent()) return 'ready';
+          if (settlementHistoryEpoch !== historyRequestEpoch
+              || currentSessionId.value !== sessionId) {
+            return reconciled ? outcome : 'reconciliation-failed';
+          }
+          const hasTerminal = hasTerminalAssistantRecord(history.messages, turnId);
+          if (hasTerminal || replaceHistoryWithoutTerminal) {
             applyHistoryPage(history, false);
+            historyLoadFailed.value = false;
+            if (replaceHistoryWithoutTerminal && !hasTerminal) {
+              restoreRetryDraftIfTurnWasNotAdmitted(history.messages, turnId);
+              ElMessage.warning(t('app.chat.incompleteStreamHistoryRestored'));
+            }
           } else {
             ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+            retainActiveSession = true;
+            reconciliationRequired.value = true;
+            return 'reconciliation-failed';
           }
         }
         await initSessions(false);
+        if (!settlementContextIsCurrent()) return 'ready';
         await refreshPendingConfirmation(sessionId);
+        if (!settlementContextIsCurrent()) return 'ready';
       } catch (error) {
+        if (!settlementContextIsCurrent()) return 'ready';
+        if (isHttpNotFound(error)) {
+          reportAuthoritativeSessionDeletion(sessionId);
+          return reconciled ? 'ready' : 'reconciliation-failed';
+        }
         console.error('[Chat] Failed to reload chat history after settlement:', error);
         ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
+        retainActiveSession = true;
+        reconciliationRequired.value = true;
+        return 'reconciliation-failed';
       }
       if (!reconciled) return 'reconciliation-failed';
       if (outcome === 'outcome-unknown') {
+        reconciliationRequired.value = true;
         ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
       }
       return outcome;
     } finally {
-      if (!retainActiveSession && activeStreamSessionId.value === sessionId) {
-        activeStreamSessionId.value = '';
-        activeStreamTurnId.value = '';
-        updateSessionActivity(sessionId, false);
+      const ownsSettlement = settlementPromise === ownedSettlement;
+      const contextIsCurrent = settlementContextIsCurrent();
+      if (ownsSettlement && contextIsCurrent) {
+        if (!retainActiveSession && activeStreamSessionId.value === sessionId) {
+          activeStreamSessionId.value = '';
+          activeStreamTurnId.value = '';
+          historyReplacementWithoutTerminalAllowed.value = false;
+          explicitStopRegistrationPending.value = false;
+          activeStreamRetryDraft.value = '';
+          updateSessionActivity(sessionId, false);
+        }
+        isSettlingStream.value = false;
       }
-      isSettlingStream.value = false;
       if (settlementAbortController === controller) settlementAbortController = null;
-      settlementPromise = null;
+      if (ownsSettlement) settlementPromise = null;
+      if (ownsSettlement && contextIsCurrent
+          && !retainActiveSession && !activeStreamSessionId.value) {
+        reattachAuthoritativeActiveSession(sessions.value);
+      }
     }
   })();
-  return settlementPromise;
+  settlementPromise = ownedSettlement;
+  return ownedSettlement;
 };
 
 const handleStop = async () => {
@@ -1435,6 +1555,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
     }));
     return;
   }
+  const requestAuthEpoch = chatAuthEpoch;
   const turnId = typeof globalThis.crypto?.randomUUID === 'function'
       ? globalThis.crypto.randomUUID()
       : `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -1445,13 +1566,21 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
 
   isStreaming.value = true;
   const requestEpoch = ++streamRequestEpoch;
+  const requestContextIsCurrent = () =>
+      requestAuthEpoch === chatAuthEpoch && requestEpoch === streamRequestEpoch;
   const controller = new AbortController();
   abortController.value = controller;
+  activeStreamTurnId.value = turnId;
+  historyReplacementWithoutTerminalAllowed.value = false;
+  explicitStopRegistrationPending.value = false;
+  activeStreamRetryDraft.value = confirmation ? '' : content;
 
   // 用于跟踪是否收到了任何内容
   let hasReceivedContent = false;
   let streamErrorHandled = false;
   let requestAccepted = false;
+  let requestDispatched = false;
+  let acceptedStreamFailed = false;
   let aiMsgIndex = -1;
   streamProgressEvents.value = [];
   appendStreamProgress({ stage: 'CONTEXT_READY' });
@@ -1479,7 +1608,6 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
       currentSessionId.value = targetSessionId;
     }
     activeStreamSessionId.value = targetSessionId;
-    activeStreamTurnId.value = turnId;
 
     // 先插入一条空的 AI 消息占位
     aiMsgIndex = messages.value.push({
@@ -1509,6 +1637,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
       scrollToBottom(false);
     };
 
+    requestDispatched = true;
     await sendStreamChat(
         targetSessionId,
         content,
@@ -1542,12 +1671,17 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
           },
           onError: (err: any) => {
             if (requestEpoch !== streamRequestEpoch) return;
+            if (requestAccepted) {
+              acceptedStreamFailed = true;
+              historyReplacementWithoutTerminalAllowed.value = true;
+            }
             renderStreamError(err);
-            queueCommandExecution({ type: 'REFRESH_DATA', payload: { target: 'board_state' } });
             console.error('[Chat] 流式错误:', err);
           },
-          onFinish: () => {
+          onFinish: (terminal: StreamTerminal) => {
             if (requestEpoch !== streamRequestEpoch) return;
+            const msg = messages.value[aiMsgIndex];
+            if (msg) msg.executionStatus = terminal.executionStatus;
             // Refresh title/time only after the server stream actually completed.
             void initSessions();
           }
@@ -1559,10 +1693,24 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
     requestAccepted = true;
   } catch (error) {
     if (requestEpoch !== streamRequestEpoch) return;
+    const definitelyRejected = error instanceof ChatStreamError && error.kind === 'HTTP_ERROR';
+    if (requestDispatched && !requestAccepted && !definitelyRejected) {
+      requestAccepted = true;
+    }
+    if (requestAccepted) {
+      acceptedStreamFailed = true;
+      historyReplacementWithoutTerminalAllowed.value = true;
+    }
     console.error('[Chat] 发送消息失败:', error);
     if (!requestAccepted) {
       messages.value = messages.value.filter(message => message.turnId !== turnId);
       if (!confirmation && !inputValue.value) inputValue.value = content;
+      if (activeStreamTurnId.value === turnId) {
+        activeStreamTurnId.value = '';
+        historyReplacementWithoutTerminalAllowed.value = false;
+        explicitStopRegistrationPending.value = false;
+        activeStreamRetryDraft.value = '';
+      }
       ElMessage.error(t('app.chat.sendFailedWithReason', { reason: formatStreamError(error) }));
     } else if (!streamErrorHandled && !hasReceivedContent) {
       ElMessage.error(t('app.chat.sendFailedWithReason', {
@@ -1572,6 +1720,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
   } finally {
     if (requestEpoch === streamRequestEpoch) {
       await commandExecutionChain;
+      if (requestEpoch !== streamRequestEpoch || !requestContextIsCurrent()) return;
       isStreaming.value = false;
       streamProgress.value = null;
       const completedMessage = messages.value[aiMsgIndex];
@@ -1592,42 +1741,84 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
         try {
           if (!requestAccepted) {
             await initSessions();
+            if (!requestContextIsCurrent()) return;
             await refreshPendingConfirmation(completedSessionId);
+            if (!requestContextIsCurrent()) return;
           } else {
             const idle = await waitForSessionIdle(completedSessionId);
+            if (!requestContextIsCurrent()) return;
             if (!idle) {
               retainActiveSession = true;
               reconciliationRequired.value = true;
               ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
-            } else if (currentSessionId.value === completedSessionId) {
-              try {
-                const history = normalizeHistoryPage(await getSessionHistory(completedSessionId));
-                if (hasTerminalAssistantRecord(history.messages, completedTurnId)) {
-                  applyHistoryPage(history, false);
-                } else {
-                  ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+            } else {
+              if (acceptedStreamFailed) {
+                await reconcileAuthoritativeState();
+                if (!requestContextIsCurrent()) return;
+              }
+              if (currentSessionId.value === completedSessionId) {
+                try {
+                  const history = await getSessionHistory(completedSessionId);
+                  if (!requestContextIsCurrent()) return;
+                  const hasTerminal = hasTerminalAssistantRecord(history.messages, completedTurnId);
+                  if (acceptedStreamFailed || hasTerminal) {
+                    applyHistoryPage(history, false);
+                    if (acceptedStreamFailed && !hasTerminal) {
+                      restoreRetryDraftIfTurnWasNotAdmitted(history.messages, completedTurnId);
+                      ElMessage.warning(t('app.chat.incompleteStreamHistoryRestored'));
+                    }
+                  } else {
+                    ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+                    retainActiveSession = true;
+                    reconciliationRequired.value = true;
+                  }
+                  await initSessions();
+                  if (!requestContextIsCurrent()) return;
+                  await refreshPendingConfirmation(completedSessionId);
+                  if (!requestContextIsCurrent()) return;
+                } catch (error) {
+                  if (!requestContextIsCurrent()) return;
+                  if (isHttpNotFound(error)) {
+                    const reconciledDeletedSession = await reconcileAuthoritativeState();
+                    if (!requestContextIsCurrent()) return;
+                    reportAuthoritativeSessionDeletion(completedSessionId);
+                    if (!reconciledDeletedSession) reconciliationRequired.value = true;
+                  } else {
+                    console.error('[Chat] Failed to reload authoritative history after stream completion:', error);
+                    ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
+                    retainActiveSession = true;
+                    reconciliationRequired.value = true;
+                  }
                 }
-                await initSessions();
-                await refreshPendingConfirmation(completedSessionId);
-              } catch (error) {
-                console.error('[Chat] Failed to reload authoritative history after stream completion:', error);
-                ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
               }
             }
           }
         } catch (error) {
+          if (!requestContextIsCurrent()) return;
           console.error('[Chat] Failed to confirm normal stream completion:', error);
           retainActiveSession = true;
           reconciliationRequired.value = true;
-          if (await reconcileAuthoritativeState()) {
+          const reconciled = await reconcileAuthoritativeState();
+          if (!requestContextIsCurrent()) return;
+          reconciliationRequired.value = true;
+          if (reconciled) {
             ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
           }
         } finally {
-          if (!retainActiveSession && activeStreamSessionId.value === completedSessionId) {
+          if (requestContextIsCurrent()
+              && !retainActiveSession && activeStreamSessionId.value === completedSessionId) {
             activeStreamSessionId.value = '';
             activeStreamTurnId.value = '';
+            historyReplacementWithoutTerminalAllowed.value = false;
+            explicitStopRegistrationPending.value = false;
+            activeStreamRetryDraft.value = '';
+            updateSessionActivity(completedSessionId, false);
           }
-          isSettlingStream.value = false;
+          if (requestContextIsCurrent()) isSettlingStream.value = false;
+          if (requestContextIsCurrent()
+              && !retainActiveSession && !activeStreamSessionId.value) {
+            reattachAuthoritativeActiveSession(sessions.value);
+          }
         }
       }
     }

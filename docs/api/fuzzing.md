@@ -352,10 +352,11 @@ frozen `specificationLabel`, and `stateCount`, and validates run
 metadata, finding ownership/counts, seed, timestamps, and bounded state-count/violation-step
 metadata, including `stateCount <= pathLength`. A finding summary intentionally has no
 `dataAvailable` field: the list projection has not loaded enough evidence to make that
-claim. Replay loads the owned finding and its full frozen run on demand; full run or finding
-detail validates the complete frozen specification and state/event prefix before returning
-it. Corruption inside full evidence therefore fails closed at that detail boundary even when
-the preceding list metadata was valid.
+claim. Replay loads the full owned run on demand and selects the finding from that run's
+validated embedded evidence; it never combines a separately returned finding with another
+response's model snapshot. Full run or finding detail validates the complete frozen
+specification and state/event prefix before returning it. Corruption inside full evidence
+therefore fails closed at that detail boundary even when the preceding list metadata was valid.
 
 Detail decoding treats the persisted, versioned `modelInputSnapshotJson` envelope as the
 integrity root. The public model counts must exactly match
@@ -368,7 +369,9 @@ prefix whose state count does not exceed the run's captured `pathLength`. Any co
 makes the complete run unavailable rather than presenting
 partial heuristic evidence as trustworthy. One finding is read directly by ID and is still
 checked against its owning run's frozen specification, eligibility, effective seed, and
-timestamps; the endpoint does not load every sibling finding.
+timestamps. The single-finding endpoint also compares the run's declared `findingCount`
+with the actual number of owned finding rows before returning detail, so a partially missing
+finding set cannot make one surviving row appear trustworthy.
 
 ### Eligibility and outcomes
 

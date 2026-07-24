@@ -305,13 +305,14 @@ class BoardStorageControllerThrowIfToolErrorTest {
     @Test
     void scenarioFinalCountMayIncludeSynthesizedEnvironmentItem() throws Exception {
         when(recommendScenarioTool.execute(anyString())).thenReturn("""
-                {"message":"Scenario generated.","count":3,"requestedCount":16,
+                {"message":"Scenario generated.","count":3,"requestedCount":3,
                  "validatedCount":2,"filteredCount":0,"filteredItems":[],
                  "adjustedCount":1,"adjustedItems":[{"type":"environment",
                  "reasonCode":"missingEnvironmentAdded","reason":"Required value added",
                  "label":"temperature","appliedValues":{"value":"20"}}],
                  "rawCandidateCount":2,"inspectedCount":2,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Exercise a shared reading",
+                 "objectiveTargets":{"minDevices":1,"minRules":1,"minSpecs":1},
                  "objectiveStatus":"PARTIAL","objectiveIssues":[
                    {"code":"NO_AUTOMATION_RULES","message":"No automation rule."}],
                  "verificationReady":true,"readinessIssues":[],
@@ -329,7 +330,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         ScenarioRecommendationResponseDto response = controller.recommendScenario(
-                1L, "request-123", new ScenarioRecommendationRequestDto()).getData();
+                1L, "request-123", validScenarioRequest()).getData();
         JsonNode scene = objectMapper.valueToTree(response.getScene());
 
         assertEquals(List.of("manifest", "name"),
@@ -357,6 +358,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "adjustedCount":0,"adjustedItems":[],
                  "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Missing a specification",
+                 "objectiveTargets":{"minDevices":1,"minRules":1,"minSpecs":1},
                  "objectiveStatus":"PARTIAL","objectiveIssues":[
                    {"code":"NO_AUTOMATION_RULES","message":"No automation rule."},
                    {"code":"NO_SPECIFICATIONS","message":"No formal specification."}],
@@ -373,7 +375,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
 
         assertThrows(BadGatewayException.class,
                 () -> controller.recommendScenario(
-                        1L, "request-123", new ScenarioRecommendationRequestDto()));
+                        1L, "request-123", validScenarioRequest()));
     }
 
     @Test
@@ -384,6 +386,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "adjustedCount":0,"adjustedItems":[],
                  "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Missing core content",
+                 "objectiveTargets":{"minDevices":1,"minRules":1,"minSpecs":1},
                  "objectiveStatus":"COMPLETE","objectiveIssues":[],
                  "verificationReady":false,"readinessIssues":[
                    {"code":"NO_SPECIFICATIONS","message":"Add a specification."}],
@@ -399,7 +402,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
 
         assertThrows(BadGatewayException.class,
                 () -> controller.recommendScenario(
-                        1L, "request-123", new ScenarioRecommendationRequestDto()));
+                        1L, "request-123", validScenarioRequest()));
     }
 
     private static List<String> iterableFieldNames(JsonNode node) {
@@ -407,5 +410,16 @@ class BoardStorageControllerThrowIfToolErrorTest {
         node.fieldNames().forEachRemaining(names::add);
         names.sort(String::compareTo);
         return names;
+    }
+
+    private static ScenarioRecommendationRequestDto validScenarioRequest() {
+        ScenarioRecommendationRequestDto request = new ScenarioRecommendationRequestDto();
+        request.setMinDevices(1);
+        request.setMinRules(1);
+        request.setMinSpecs(1);
+        request.setMaxDevices(6);
+        request.setMaxRules(5);
+        request.setMaxSpecs(5);
+        return request;
     }
 }

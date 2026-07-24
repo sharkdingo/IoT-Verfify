@@ -1160,56 +1160,6 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(ruleResponse.ok(), await ruleResponse.text()).toBeTruthy()
     await expect(rulePanel).toContainText(/No devices found|Add more devices|先添加设备|暂无推荐/i)
 
-    const normalizedRuleRoute = async (route: Route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          code: 200,
-          message: 'Success',
-          data: {
-            message: 'Found one validated rule recommendation.',
-            count: 1,
-            requestedCount: 3,
-            validatedCount: 1,
-            filteredCount: 0,
-            filteredItems: [],
-            adjustedCount: 1,
-            adjustedItems: [{
-              type: 'rule',
-              index: 1,
-              reasonCode: 'apiEventSyntaxNormalized',
-              reason: "The AI expressed the API event as '= TRUE'; it was normalized to event-trigger semantics.",
-              label: 'Motion starts the alarm',
-              appliedValues: { sourceApi: 'motionDetected' }
-            }],
-            rawCandidateCount: 1,
-            inspectedCount: 1,
-            truncatedCount: 0,
-            recommendations: [{
-              category: 'security',
-              name: 'Motion starts the alarm',
-              conditions: [{
-                deviceId: 'motion-device',
-                deviceName: 'Hall motion sensor',
-                attribute: 'motionDetected',
-                targetType: 'api'
-              }],
-              command: {
-                deviceId: 'alarm-device',
-                deviceName: 'Hall alarm',
-                action: 'turnOn'
-              }
-            }]
-          }
-        })
-      })
-    }
-    await page.route('**/api/board/rules/recommend**', normalizedRuleRoute)
-    await page.getByTestId('generate-rule-recommendations').click()
-    await expect(page.getByTestId('rule-adjusted-items')).toContainText(/normalized|规范化/i)
-    await page.unroute('**/api/board/rules/recommend**', normalizedRuleRoute)
-
     await page.getByTestId('open-spec-recommendations').click()
     await expect(page.getByTestId('rule-recommendation-panel')).toBeHidden({ timeout: 5_000 })
     const specPanel = page.getByTestId('spec-recommendation-panel')
@@ -1236,6 +1186,207 @@ test.describe('board full-stack NuSMV user flow', () => {
     const specResponse = await specResponsePromise
     expect(specResponse.ok(), await specResponse.text()).toBeTruthy()
     await expect(specPanel).toContainText(/No devices found|Add more devices|先添加设备|暂无推荐/i)
+
+    await page.getByTestId('close-spec-recommendations').click()
+    const camera = await addDeviceViaLeftPanel(
+      page, request, auth, 'Camera', 'recommendation_hall_camera')
+    const alarm = await addDeviceViaLeftPanel(
+      page, request, auth, 'Alarm', 'recommendation_hall_alarm')
+    await page.getByTestId('open-rule-recommendations').click()
+    await expect(rulePanel).toBeVisible()
+
+    const normalizedRuleRoute = async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 200,
+          message: 'Success',
+          data: {
+            message: 'Found one validated rule recommendation.',
+            count: 1,
+            requestedCount: 3,
+            validatedCount: 1,
+            filteredCount: 0,
+            filteredItems: [],
+            adjustedCount: 1,
+            adjustedItems: [{
+              type: 'rule',
+              index: 1,
+              reasonCode: 'apiEventSyntaxNormalized',
+              reason: "The AI expressed the API event as '= TRUE'; it was normalized to event-trigger semantics.",
+              label: 'Camera activity starts the alarm',
+              appliedValues: {
+                sourceDevice: camera.label,
+                sourceApi: 'take photo',
+                removedRelation: '=',
+                removedValue: 'TRUE'
+              }
+            }],
+            rawCandidateCount: 1,
+            inspectedCount: 1,
+            truncatedCount: 0,
+            recommendations: [{
+              category: 'security',
+              name: 'Camera activity starts the alarm',
+              conditions: [{
+                deviceId: camera.id,
+                deviceName: camera.label,
+                attribute: 'take photo',
+                targetType: 'api'
+              }],
+              command: {
+                deviceId: alarm.id,
+                deviceName: alarm.label,
+                action: 'siren'
+              }
+            }]
+          }
+        })
+      })
+    }
+    await page.route('**/api/board/rules/recommend**', normalizedRuleRoute)
+    await page.getByTestId('generate-rule-recommendations').click()
+    await expect(page.getByTestId('rule-adjusted-items')).toContainText(/normalized|规范化/i)
+    await rulePanel.getByRole('button', { name: /Add This Rule/i }).click()
+    const savedRules = await waitForApi<any[]>(request, auth, '/api/board/rules', rules =>
+      rules.some(rule => rule.ruleString === 'Camera activity starts the alarm'))
+    expect(savedRules).toHaveLength(1)
+    expect(savedRules[0]).toMatchObject({
+      ruleString: 'Camera activity starts the alarm',
+      conditions: [{
+        deviceName: camera.id,
+        attribute: 'take photo',
+        targetType: 'api'
+      }],
+      command: {
+        deviceName: alarm.id,
+        action: 'siren'
+      }
+    })
+    await expect(rulePanel.getByRole('button', { name: /Added to board/i })).toBeDisabled()
+    await page.unroute('**/api/board/rules/recommend**', normalizedRuleRoute)
+  })
+
+  test('applies a reviewed scenario recommendation through atomic board replacement', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    const scenePath = path.resolve(
+      process.cwd(), '..', 'docs', 'examples', 'default-rfid-access-scene.json')
+    const scene = JSON.parse(fs.readFileSync(scenePath, 'utf8'))
+    const finalCount = scene.devices.length
+      + scene.environmentVariables.length
+      + scene.rules.length
+      + scene.specs.length
+    let scenarioPostCount = 0
+    const scenarioRoute = async (route: Route) => {
+      scenarioPostCount += 1
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 200,
+          message: 'Success',
+          data: {
+            message: 'Generated a validated RFID access scene draft.',
+            count: finalCount,
+            requestedCount: 10,
+            validatedCount: finalCount,
+            filteredCount: 0,
+            filteredItems: [],
+            adjustedCount: 0,
+            adjustedItems: [],
+            rawCandidateCount: finalCount,
+            inspectedCount: finalCount,
+            truncatedCount: 0,
+            scenarioName: 'RFID access control',
+            rationale: 'The final canonical draft contains retained devices, rules, and specifications.',
+            objectiveTargets: { minDevices: 3, minRules: 2, minSpecs: 5 },
+            objectiveStatus: 'COMPLETE',
+            objectiveIssues: [],
+            verificationReady: true,
+            readinessIssues: [],
+            semanticWarnings: [],
+            scene
+          }
+        })
+      })
+    }
+    await page.route('**/api/board/scenario/recommend**', scenarioRoute)
+
+    await page.getByTestId('open-scenario-recommendations').click()
+    await page.getByTestId('scenario-min-devices').fill('7')
+    await page.getByTestId('generate-scenario-recommendation').click()
+    await expect(page.locator('.el-message').filter({
+      hasText: /minimum.*must not exceed.*maximum/i
+    })).toBeVisible()
+    await page.waitForTimeout(200)
+    expect(scenarioPostCount).toBe(0)
+
+    await page.getByTestId('scenario-min-devices').fill('3')
+    await page.getByTestId('scenario-min-rules').fill('2')
+    await page.getByTestId('scenario-min-specs').fill('5')
+    await page.getByTestId('scenario-max-devices').fill('4')
+    await page.getByTestId('scenario-max-rules').fill('3')
+    await page.getByTestId('scenario-max-specs').fill('6')
+    const recommendationRequest = page.waitForRequest(req => {
+      if (req.method() !== 'POST'
+        || new URL(req.url()).pathname !== '/api/board/scenario/recommend') return false
+      const body = req.postDataJSON() as Record<string, unknown> | null
+      return body?.minDevices === 3
+        && body?.minRules === 2
+        && body?.minSpecs === 5
+        && body?.maxDevices === 4
+        && body?.maxRules === 3
+        && body?.maxSpecs === 6
+    })
+    await page.getByTestId('generate-scenario-recommendation').click()
+    await recommendationRequest
+    expect(scenarioPostCount).toBe(1)
+    await expect(page.getByTestId('apply-recommended-scenario')).toBeVisible()
+
+    await page.getByTestId('scenario-min-devices').fill('2')
+    await expect(page.getByTestId('apply-recommended-scenario')).toHaveCount(0)
+    await page.getByTestId('scenario-min-devices').fill('3')
+    const refreshedRecommendationRequest = page.waitForRequest(req => {
+      if (req.method() !== 'POST'
+        || new URL(req.url()).pathname !== '/api/board/scenario/recommend') return false
+      const body = req.postDataJSON() as Record<string, unknown> | null
+      return body?.minDevices === 3
+        && body?.minRules === 2
+        && body?.minSpecs === 5
+        && body?.maxDevices === 4
+        && body?.maxRules === 3
+        && body?.maxSpecs === 6
+    })
+    await page.getByTestId('generate-scenario-recommendation').click()
+    await refreshedRecommendationRequest
+    expect(scenarioPostCount).toBe(2)
+    await expect(page.getByTestId('apply-recommended-scenario')).toBeVisible()
+    await page.unroute('**/api/board/scenario/recommend**', scenarioRoute)
+
+    await page.getByTestId('apply-recommended-scenario').click()
+    const confirmation = page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+    await expect(confirmation).toBeVisible()
+    const batchResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/board/batch')
+    await confirmation.getByRole('button', { name: 'Replace in full' }).click()
+    const batchResponse = await batchResponsePromise
+    expect(batchResponse.ok(), await batchResponse.text()).toBeTruthy()
+
+    const devices = await waitForApi<any[]>(request, auth, '/api/board/nodes',
+      rows => rows.length === scene.devices.length)
+    const rules = await waitForApi<any[]>(request, auth, '/api/board/rules',
+      rows => rows.length === scene.rules.length)
+    const specs = await waitForApi<any[]>(request, auth, '/api/board/specs',
+      rows => rows.length === scene.specs.length)
+    expect(devices.map(device => device.label)).toContain('Front-door Badge Reader')
+    expect(rules.map(rule => rule.ruleString)).toContain(
+      'When the badge is authorized, unlock the front door')
+    expect(specs).toHaveLength(scene.specs.length)
   })
 
   test('exports scene JSON that imports and exports byte-identically', async ({ page, request }, testInfo) => {

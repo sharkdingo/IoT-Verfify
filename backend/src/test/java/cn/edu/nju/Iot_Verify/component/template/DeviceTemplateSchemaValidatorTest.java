@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -95,6 +96,55 @@ class DeviceTemplateSchemaValidatorTest {
         org.assertj.core.api.Assertions.assertThat(ex.getMessage())
                 .contains("backend/device-template-schema.json")
                 .contains("Unexpected");
+    }
+
+    @Test
+    void securityLabelsRejectUppercaseInsteadOfSilentlyNormalizing() throws Exception {
+        JsonNode manifest = objectMapper.readTree("""
+                {
+                  "Name": "Security Labels",
+                  "Modes": ["Power"],
+                  "InitState": "off",
+                  "WorkingStates": [{
+                    "Name": "off",
+                    "Trust": "trusted",
+                    "Privacy": "public"
+                  }],
+                  "InternalVariables": [{
+                    "Name": "reading",
+                    "IsInside": true,
+                    "FalsifiableWhenCompromised": false,
+                    "Trust": "trusted",
+                    "Privacy": "public",
+                    "Values": ["ready", "busy"]
+                  }],
+                  "Contents": [{"Name": "status", "Privacy": "public"}]
+                }
+                """);
+        assertDoesNotThrow(() -> validator.validateRawManifest("Security Labels", manifest));
+
+        JsonNode uppercaseStateTrust = manifest.deepCopy();
+        ((ObjectNode) uppercaseStateTrust.path("WorkingStates").get(0)).put("Trust", "Trusted");
+        JsonNode uppercaseStatePrivacy = manifest.deepCopy();
+        ((ObjectNode) uppercaseStatePrivacy.path("WorkingStates").get(0)).put("Privacy", "Public");
+        JsonNode uppercaseVariableTrust = manifest.deepCopy();
+        ((ObjectNode) uppercaseVariableTrust.path("InternalVariables").get(0)).put("Trust", "Untrusted");
+        JsonNode uppercaseVariablePrivacy = manifest.deepCopy();
+        ((ObjectNode) uppercaseVariablePrivacy.path("InternalVariables").get(0)).put("Privacy", "Private");
+        JsonNode uppercaseContentPrivacy = manifest.deepCopy();
+        ((ObjectNode) uppercaseContentPrivacy.path("Contents").get(0)).put("Privacy", "Private");
+
+        for (JsonNode uppercaseManifest : List.of(
+                uppercaseStateTrust,
+                uppercaseStatePrivacy,
+                uppercaseVariableTrust,
+                uppercaseVariablePrivacy,
+                uppercaseContentPrivacy)) {
+            BadRequestException exception = assertThrows(BadRequestException.class,
+                    () -> validator.validateRawManifest("Security Labels", uppercaseManifest));
+            org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                    .contains("backend/device-template-schema.json");
+        }
     }
 
     @Test

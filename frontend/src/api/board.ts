@@ -17,7 +17,7 @@ import type { ModelTokenSource } from '@/types/modelToken'
 import type { InteractiveOperationStatus, TaskCancellationResult } from '@/types/task'
 import type { PortableSceneFile } from '@/types/scene'
 import type {
-    Trace,
+    PersistedTrace,
     VerificationRequest,
     VerificationResult,
     VerificationRun,
@@ -142,6 +142,7 @@ export interface ScenarioRecommendationResponse {
     truncatedCount: number
     scenarioName: string
     rationale: string
+    objectiveTargets: ScenarioObjectiveTargets
     objectiveStatus: 'COMPLETE' | 'PARTIAL'
     objectiveIssues: ScenarioObjectiveIssue[]
     verificationReady: boolean
@@ -150,8 +151,28 @@ export interface ScenarioRecommendationResponse {
     scene: PortableSceneFile
 }
 
+export interface ScenarioObjectiveTargets {
+    minDevices: number
+    minRules: number
+    minSpecs: number
+}
+
+export interface ScenarioRecommendationRequest extends ScenarioObjectiveTargets {
+    maxDevices: number
+    maxRules: number
+    maxSpecs: number
+    language?: string
+    userRequirement?: string
+}
+
 export interface ScenarioObjectiveIssue {
-    code: 'NO_DEVICES' | 'NO_AUTOMATION_RULES' | 'NO_SPECIFICATIONS'
+    code:
+        | 'NO_DEVICES'
+        | 'INSUFFICIENT_DEVICES'
+        | 'NO_AUTOMATION_RULES'
+        | 'INSUFFICIENT_AUTOMATION_RULES'
+        | 'NO_SPECIFICATIONS'
+        | 'INSUFFICIENT_SPECIFICATIONS'
     message: string
 }
 
@@ -1971,9 +1992,10 @@ export default {
             unpack<unknown>(await api.get(`/verify/runs/${runId}`))
         );
     },
-    getVerificationRunTraces: async (runId: number): Promise<Trace[]> => {
+    getVerificationRunTraces: async (runId: number): Promise<PersistedTrace[]> => {
         return validateVerificationTraceList(
-            unpack<unknown>(await api.get(`/verify/runs/${runId}/traces`))
+            unpack<unknown>(await api.get(`/verify/runs/${runId}/traces`)),
+            runId
         );
     },
     deleteVerificationRun: async (runId: number): Promise<void> => {
@@ -1995,19 +2017,20 @@ export default {
 
     // ==== 验证 Trace（反例） ====
     // 获取用户所有验证 Trace
-    getVerificationTraces: async (): Promise<Trace[]> => {
+    getVerificationTraces: async (): Promise<PersistedTrace[]> => {
         return validateVerificationTraceList(
             unpack<unknown>(await api.get('/verify/traces'))
         );
     },
     // 获取某个验证任务产生的反例 Trace（按 task 维度过滤，避免拿到旧任务/并发任务的反例）
-    getTaskTraces: async (taskId: number): Promise<Trace[]> => {
+    getTaskTraces: async (taskId: number): Promise<PersistedTrace[]> => {
         return validateVerificationTraceList(
-            unpack<unknown>(await api.get(`/verify/tasks/${taskId}/traces`))
+            unpack<unknown>(await api.get(`/verify/tasks/${taskId}/traces`)),
+            taskId
         );
     },
     // 获取单个 Trace
-    getVerificationTrace: async (id: number): Promise<Trace> => {
+    getVerificationTrace: async (id: number): Promise<PersistedTrace> => {
         return validateVerificationTrace(
             unpack<unknown>(await api.get(`/verify/traces/${id}`))
         );
@@ -2068,13 +2091,7 @@ export default {
 
     // ==== 可导入、未验证的场景草案推荐 ====
     recommendScenario: async (
-        request: {
-            maxDevices?: number,
-            maxRules?: number,
-            maxSpecs?: number,
-            language?: string,
-            userRequirement?: string
-        },
+        request: ScenarioRecommendationRequest,
         requestId: string = crypto.randomUUID(),
         signal?: AbortSignal
     ): Promise<ScenarioRecommendationResponse> => {
@@ -2084,7 +2101,8 @@ export default {
                 request,
                 { signal, ...SERVER_BOUNDED_REQUEST }
             )),
-            'Scenario recommendation'
+            'Scenario recommendation',
+            request
         );
     },
 

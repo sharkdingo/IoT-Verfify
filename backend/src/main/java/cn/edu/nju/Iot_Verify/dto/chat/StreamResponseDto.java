@@ -1,25 +1,33 @@
 package cn.edu.nju.Iot_Verify.dto.chat;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
+
 import java.util.Map;
 
 @Data
 @NoArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class StreamResponseDto {
     @ToString.Exclude
-    private String content;      // 正常的聊天文本
-    private CommandDto command;  // <--- 改为对象，支持携带参数
+    private String content;
+    @ToString.Exclude
+    private String error;
+    private CommandDto command;
     private ProgressDto progress;
+    private TerminalDto terminal;
 
     public StreamResponseDto(String content) {
         this.content = content;
     }
 
-    public StreamResponseDto(String content, CommandDto command) {
-        this.content = content;
-        this.command = command;
+    public static StreamResponseDto error(String message) {
+        StreamResponseDto response = new StreamResponseDto();
+        response.setError(message);
+        return response;
     }
 
     public static StreamResponseDto progress(String stage, String toolName, Integer round) {
@@ -58,6 +66,18 @@ public class StreamResponseDto {
         return response;
     }
 
+    public static StreamResponseDto terminal(String turnId, ChatExecutionStatus executionStatus) {
+        StreamResponseDto response = new StreamResponseDto();
+        response.setTerminal(new TerminalDto(turnId, executionStatus));
+        return response;
+    }
+
+    public static StreamResponseDto command(CommandDto command) {
+        StreamResponseDto response = new StreamResponseDto();
+        response.setCommand(command);
+        return response;
+    }
+
     @Data
     @NoArgsConstructor
     public static class ProgressDto {
@@ -90,17 +110,28 @@ public class StreamResponseDto {
         }
     }
 
-    // 内部静态类或独立文件定义 CommandDto
     @Data
     @NoArgsConstructor
     public static class CommandDto {
-        private String type;             // 指令类型，如 "REFRESH_DATA", "SHOW_TOAST", "NAVIGATE"
+        private String type;
         @ToString.Exclude
-        private Map<String, Object> payload; // 指令参数，如 {"target": "device_list"}, {"url": "/rules"}
+        private Map<String, Object> payload;
 
         public CommandDto(String type, Map<String, Object> payload) {
             this.type = type;
             this.payload = payload;
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    public static class TerminalDto {
+        private String turnId;
+        private ChatExecutionStatus executionStatus;
+
+        public TerminalDto(String turnId, ChatExecutionStatus executionStatus) {
+            this.turnId = turnId;
+            this.executionStatus = executionStatus;
         }
     }
 }

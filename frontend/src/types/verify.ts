@@ -71,9 +71,7 @@ export interface VerificationResult {
   generationIssues: ModelGenerationIssue[];
 }
 
-export interface Trace {
-  id: number;
-  verificationTaskId?: number;   // absent only on a result whose history persistence failed
+export interface TraceEvidence {
   violatedSpecId: string;
   violatedSpec?: Specification;
   checkedExpression: string;
@@ -90,6 +88,18 @@ export interface Trace {
   modelSnapshot: ModelRunSnapshot;
   createdAt: string;
 }
+
+export interface ImmediateTrace extends TraceEvidence {
+  id?: never;
+  verificationTaskId?: never;
+}
+
+export interface PersistedTrace extends TraceEvidence {
+  id: number;
+  verificationTaskId: number;
+}
+
+export type Trace = ImmediateTrace | PersistedTrace;
 
 export interface AvailableTraceSummary {
   id: number

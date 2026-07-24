@@ -1,10 +1,15 @@
 // src/main/java/cn/edu/nju/Iot_Verify/po/ChatSessionPo.java
 package cn.edu.nju.Iot_Verify.po;
 
+import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import java.time.LocalDateTime;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 
 @Data
 @Entity
@@ -28,6 +33,9 @@ public class ChatSessionPo {
     @Column(name = "active_execution_id", length = 36)
     private String activeExecutionId;
 
+    @Column(name = "active_execution_turn_id", length = 64)
+    private String activeExecutionTurnId;
+
     @Column(name = "active_execution_expires_at")
     private LocalDateTime activeExecutionExpiresAt;
 
@@ -37,9 +45,23 @@ public class ChatSessionPo {
     @Column(name = "execution_user_stop_requested")
     private Boolean executionUserStopRequested;
 
+    @ElementCollection
+    @CollectionTable(
+            name = "chat_session_pre_admission_stop",
+            joinColumns = @JoinColumn(name = "session_id"),
+            foreignKey = @ForeignKey(name = "fk_chat_pre_admission_stop_session"),
+            uniqueConstraints = @UniqueConstraint(
+                    name = "uk_chat_pre_admission_stop_session_turn",
+                    columnNames = {"session_id", "turn_id"}))
+    @Column(name = "turn_id", nullable = false, length = 64)
+    @OnDelete(action = OnDeleteAction.CASCADE)
+    private Set<String> preAdmissionStopTurnIds = new LinkedHashSet<>();
+
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
+        if (createdAt != null && updatedAt != null) return;
+        LocalDateTime now = LocalDateTime.now();
+        if (createdAt == null) createdAt = now;
+        if (updatedAt == null) updatedAt = now;
     }
 }

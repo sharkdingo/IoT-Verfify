@@ -18,6 +18,7 @@ import cn.edu.nju.Iot_Verify.configure.FuzzAdmissionConfig;
 import cn.edu.nju.Iot_Verify.configure.ThreadPoolConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzInputEventDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewRequestDto;
@@ -1127,6 +1128,31 @@ class FuzzServiceImplTest {
 
         verify(findingRepository).findByIdAndUserId(81L, 7L);
         verifyNoInteractions(taskRepository);
+    }
+
+    @Test
+    void findingLookupPassesTheActualOwnedRunFindingCountToTheMapper() {
+        FuzzFindingPo finding = FuzzFindingPo.builder()
+                .id(81L)
+                .userId(7L)
+                .fuzzTaskId(91L)
+                .build();
+        FuzzTaskPo run = FuzzTaskPo.builder()
+                .id(91L)
+                .userId(7L)
+                .status(FuzzTaskPo.TaskStatus.COMPLETED)
+                .build();
+        FuzzFindingDto expected = FuzzFindingDto.builder().id(81L).fuzzTaskId(91L).build();
+        when(findingRepository.findByIdAndUserId(81L, 7L)).thenReturn(Optional.of(finding));
+        when(taskRepository.findByIdAndUserIdAndStatus(
+                91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED)).thenReturn(Optional.of(run));
+        when(findingRepository.countByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(2L);
+        when(fuzzMapper.toFindingDto(run, finding, 2L)).thenReturn(expected);
+
+        assertSame(expected, service.getFinding(7L, 81L));
+
+        verify(findingRepository).countByUserIdAndFuzzTaskId(7L, 91L);
+        verify(fuzzMapper).toFindingDto(run, finding, 2L);
     }
 
     @Test

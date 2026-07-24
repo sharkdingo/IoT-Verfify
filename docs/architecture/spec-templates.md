@@ -177,6 +177,10 @@ it includes every modeled selection from zero through the budget.
 | P4 | trust values ∈ {`trusted`,`untrusted`}, privacy ∈ {`public`,`private`} (case-insensitive, normalized); applies to instance-, template-, and content-level | `SmvGenerationException` (`[INVALID_PROPERTY_VALUE]`) |
 | P5 | A shared environment variable (`IsInside=false`) has consistent range/enum values across templates | `envVarConflict` |
 
+P4 describes defense in depth at the low-level generator boundary. External template imports
+first pass the canonical JSON Schema, which requires lowercase manifest literals and performs
+no case normalization.
+
 ### Generator input behavior
 
 The low-level generator follows the same fail-fast semantic contract as board, REST, AI,

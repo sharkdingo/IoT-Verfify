@@ -201,66 +201,66 @@ class FuzzMapperTest {
         FuzzFindingPo finding = finding(run, specification);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
 
-        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding));
+        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding, 1L));
 
         device.setDeviceLabel(" ");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         device.setDeviceLabel("Switch one");
         local.setValue(null);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         local.setValue("0");
         trust.setMode(" ");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         trust.setMode(null);
         trust.setPrivacy("private");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         trust.setPrivacy(null);
         privacy.setPrivacy("secret");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         privacy.setPrivacy("public");
         global.setModelTokenSource(ModelTokenSource.BUNDLED);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         global.setModelTokenSource(ModelTokenSource.UNKNOWN);
         device.setModelTokenSource(null);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         device.setModelTokenSource(ModelTokenSource.BUNDLED);
         local.setModelTokenSource(null);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         local.setModelTokenSource(ModelTokenSource.BUNDLED);
         environment.setModelTokenSource(null);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         environment.setModelTokenSource(ModelTokenSource.BUNDLED);
         device.setModelTokenSource(ModelTokenSource.CUSTOM);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         device.setModelTokenSource(ModelTokenSource.BUNDLED);
         local.setModelTokenSource(ModelTokenSource.CUSTOM);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
 
         local.setModelTokenSource(ModelTokenSource.BUNDLED);
         environment.setModelTokenSource(ModelTokenSource.CUSTOM);
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding));
+        assertThrows(PersistedDataIntegrityException.class, () -> mapper.toFindingDto(run, finding, 1L));
     }
 
     @Test
@@ -703,11 +703,34 @@ class FuzzMapperTest {
                 1);
         FuzzFindingPo finding = finding(run, specification);
 
-        assertEquals(finding.getId(), mapper.toFindingDto(run, finding).getId());
+        assertEquals(finding.getId(), mapper.toFindingDto(run, finding, 1L).getId());
 
         finding.setSeed(43L);
         assertThrows(PersistedDataIntegrityException.class,
-                () -> mapper.toFindingDto(run, finding));
+                () -> mapper.toFindingDto(run, finding, 1L));
+    }
+
+    @Test
+    void singleFindingDetailRejectsAStoredCountThatDoesNotMatchActualRows() {
+        SpecificationDto specification = supportedSpecification("spec-1");
+        FuzzTaskPo run = completedRun(
+                List.of(specification),
+                List.of("spec-1"),
+                FuzzEligibilityDto.builder()
+                        .eligibleSpecIds(List.of("spec-1"))
+                        .requestedSpecCount(1)
+                        .eligibleSpecCount(1)
+                        .build(),
+                FuzzOutcome.FOUND_VIOLATION,
+                1);
+        FuzzFindingPo finding = finding(run, specification);
+
+        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding, 1L));
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> mapper.toFindingDto(run, finding, 2L));
+
+        assertEquals("findingCount", error.getField());
     }
 
     @Test
@@ -728,7 +751,7 @@ class FuzzMapperTest {
 
         PersistedDataIntegrityException error = assertThrows(
                 PersistedDataIntegrityException.class,
-                () -> mapper.toFindingDto(run, finding));
+                () -> mapper.toFindingDto(run, finding, 1L));
 
         assertEquals("progress", error.getField());
     }
@@ -804,34 +827,34 @@ class FuzzMapperTest {
 
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
         assertThrows(PersistedDataIntegrityException.class,
-                () -> mapper.toFindingDto(run, finding));
+                () -> mapper.toFindingDto(run, finding, 1L));
 
         evidence.setRuleIndex(0);
         evidence.setRuleId("8");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
         assertThrows(PersistedDataIntegrityException.class,
-                () -> mapper.toFindingDto(run, finding));
+                () -> mapper.toFindingDto(run, finding, 1L));
 
         evidence.setRuleId("7");
         evidence.setRuleLabel("Altered rule");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
         assertThrows(PersistedDataIntegrityException.class,
-                () -> mapper.toFindingDto(run, finding));
+                () -> mapper.toFindingDto(run, finding, 1L));
 
         evidence.setRuleLabel("Frozen rule");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding));
+        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding, 1L));
 
         state.setTriggeredRules(List.of());
         state.setCompromisedAutomationLinks(List.of(evidence));
         evidence.setRuleLabel("Altered compromised link");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
         assertThrows(PersistedDataIntegrityException.class,
-                () -> mapper.toFindingDto(run, finding));
+                () -> mapper.toFindingDto(run, finding, 1L));
 
         evidence.setRuleLabel("Frozen rule");
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
-        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding));
+        assertDoesNotThrow(() -> mapper.toFindingDto(run, finding, 1L));
     }
 
     @Test
@@ -866,7 +889,7 @@ class FuzzMapperTest {
         finding.setFirstViolationStep(1);
 
         assertThrows(PersistedDataIntegrityException.class,
-                () -> mapper.toFindingDto(run, finding));
+                () -> mapper.toFindingDto(run, finding, 1L));
     }
 
     @Test

@@ -30,6 +30,7 @@ import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.exception.ChatHistoryQuotaExceededException;
+import cn.edu.nju.Iot_Verify.exception.ChatAdmissionOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
@@ -65,6 +66,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -84,6 +86,7 @@ import java.util.regex.Pattern;
 @Service
 @RequiredArgsConstructor
 public class ChatServiceImpl implements ChatService, ChatExecutionControl {
+    private static final int MAX_PRE_ADMISSION_STOP_TURNS = 64;
 
     private static final int HISTORY_CHAR_LIMIT = 4000;
     private static final int SESSION_LOCK_STRIPES = 256;
@@ -164,11 +167,16 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     + "(?:设备|规则|规约|画布|场景|轨迹|模板|环境变量|模型))");
     private static final Pattern UNSUPPORTED_PLATFORM_READ_CLAIM = Pattern.compile(
             "(?is)(?:\\b(?:your(?:\\s+current)?|the\\s+current|current)\\s+"
-                    + "(?:board|scene)\\s+(?:currently\\s+)?(?:contains?|has|includes?|shows?)\\b"
+                    + "(?:board|scene)\\s+(?:currently\\s+)?(?:contains?|has|includes?|shows?|lists?)\\b"
                     + "|\\b(?:I|we)(?:'ve|\\s+have)?\\s+"
                     + "(?:checked|inspected|read|reviewed|examined|looked\\s+at)\\s+"
                     + "(?:your(?:\\s+current)?|the(?:\\s+current)?|current)\\s+"
                     + "(?:board|scene|devices?|rules?|specs?|specifications?|model)\\b"
+                    + "|\\b(?:I|we)(?:'ve|\\s+have)?\\s+(?:(?:can|could)\\s+)?"
+                    + "(?:see|saw|seen|found|observ(?:e|ed)|list(?:ed)?)\\b[^.!?。！？]{0,96}"
+                    + "\\b(?:devices?|rules?|specs?|specifications?)\\b[^.!?。！？]{0,48}"
+                    + "\\b(?:on|in)\\s+(?:your(?:\\s+current)?|the(?:\\s+current)?|current)\\s+"
+                    + "(?:board|scene)\\b"
                     + "|\\bthere\\s+(?:is|are)\\s+[^.!?。！？]{0,80}"
                     + "\\b(?:devices?|rules?|specs?|specifications?)\\b[^.!?。！？]{0,40}"
                     + "\\b(?:on|in)\\s+(?:your(?:\\s+current)?|the\\s+current|current)\\s+"
@@ -188,8 +196,15 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             "(?is)(?:\\b(?:current|now|this\\s+turn)\\b"
                     + "|\\byour(?:\\s+current)?\\s+(?:board|scene)\\b"
                     + "|(?:当前|本轮|现在|你的画布|您的画布))");
+    private static final Pattern LEADING_HISTORICAL_CLAIM_CONTEXT = Pattern.compile(
+            "(?is)^\\s*(?:previously|historically"
+                    + "|(?:during|in|from)\\s+(?:the\\s+)?"
+                    + "(?:previous|prior|earlier|last|historical)\\b[^,，.!?。！？]{0,48}"
+                    + "|(?:在|于)?(?:上次|先前|此前|之前|过去)(?:迁移|运行|记录|会话)?(?:中|期间)?)"
+                    + "\\s*[,，]\\s*(?:(?:the|all|every|your|these|those|our)\\s+"
+                    + "|(?:全部|所有|你的|您的|这些|该)\\s*)*$");
     private static final Pattern CLAIM_CLAUSE_BOUNDARY = Pattern.compile(
-            "(?is)[,;:\\n]|\\b(?:but|however|yet|then|and)\\b|(?:但是|不过|然而|然后|并且|而且|但)");
+            "(?is)[,，;；:：\\n]|\\b(?:but|however|yet|then|and)\\b|(?:但是|不过|然而|然后|并且|而且|但)");
     private static final Set<String> TOOL_RESULT_OUTCOMES = Set.of(
             "USABLE", "PARTIAL", "FAILED", "RESULT_UNAVAILABLE", "CONFIRMATION_REQUIRED");
     private static final Set<String> EXECUTION_GUARD_OUTCOMES = Set.of(
@@ -234,7 +249,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         session.setId(UUID.randomUUID().toString());
         session.setUserId(userId);
         session.setTitle(null);
-        session.setUpdatedAt(LocalDateTime.now());
+        LocalDateTime now = databaseNow();
+        session.setCreatedAt(now);
+        session.setUpdatedAt(now);
         return chatMapper.toChatSessionDto(sessionRepo.save(session));
     }
 
@@ -337,58 +354,180 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     @Override
-    public String beginStreamRequest(Long userId, String sessionId) {
+    public String beginStreamRequest(Long userId, String sessionId, String turnId, String content) {
+        String effectiveTurnId = requireTurnId(turnId);
+        String effectiveContent = requireTurnContent(content);
         synchronized (sessionLock(sessionId)) {
             AtomicReference<ActiveStreamRequest> claimed = new AtomicReference<>();
             AtomicLong confirmationStartedNanos = new AtomicLong(Long.MIN_VALUE);
-            transactionTemplate.executeWithoutResult(status -> {
-                ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
-                        .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-                confirmationStartedNanos.set(System.nanoTime());
-                LocalDateTime now = databaseNow();
-                if (hasActiveExecutionLease(session, now)) {
-                    throw new ChatSessionBusyException(sessionId);
+            AtomicBoolean stoppedBeforeAdmission = new AtomicBoolean();
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    requireActiveUserForWrite(userId);
+                    ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
+                            .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+                    if (session.getPreAdmissionStopTurnIds().remove(effectiveTurnId)) {
+                        sessionRepo.saveAndFlush(session);
+                        stoppedBeforeAdmission.set(true);
+                        return;
+                    }
+                    confirmationStartedNanos.set(System.nanoTime());
+                    LocalDateTime now = databaseNow();
+                    if (hasActiveExecutionLease(session, now)) {
+                        throw new ChatSessionBusyException(sessionId);
+                    }
+                    long messageCount = messageRepo.countBySessionId(sessionId);
+                    long requiredTurnCapacity = requiredMessageCapacityForTurn();
+                    if (messageCount + requiredTurnCapacity > chatExecutionConfig.getMaxMessagesPerSession()) {
+                        throw new ChatHistoryQuotaExceededException(
+                                messageCount,
+                                chatExecutionConfig.getMaxMessagesPerSession(),
+                                requiredTurnCapacity);
+                    }
+                    if (messageRepo.existsBySessionIdAndTurnId(sessionId, effectiveTurnId)) {
+                        throw new ConflictException("Turn id has already been used in this chat session.");
+                    }
+                    String requestId = UUID.randomUUID().toString();
+                    session.setActiveExecutionId(requestId);
+                    session.setActiveExecutionTurnId(effectiveTurnId);
+                    session.setActiveExecutionExpiresAt(now.plus(executionLeaseTtl()));
+                    session.setExecutionStopRequested(false);
+                    session.setExecutionUserStopRequested(false);
+                    sessionRepo.saveAndFlush(session);
+                    saveUserTurn(sessionId, effectiveTurnId, requestId, effectiveContent);
+                    claimed.set(new ActiveStreamRequest(
+                            userId, requestId, effectiveTurnId, effectiveContent,
+                            confirmationStartedNanos.get()));
+                });
+            } catch (RuntimeException admissionFailure) {
+                ActiveStreamRequest ambiguousRequest = claimed.get();
+                if (ambiguousRequest == null) throw admissionFailure;
+                try {
+                    compensateAmbiguousAdmission(userId, sessionId, ambiguousRequest);
+                } catch (RuntimeException compensationFailure) {
+                    ChatAdmissionOutcomeUnknownException unknown =
+                            new ChatAdmissionOutcomeUnknownException(
+                                    "Could not confirm the outcome of the chat admission transaction.",
+                                    admissionFailure);
+                    unknown.addSuppressed(compensationFailure);
+                    throw unknown;
                 }
-                long messageCount = messageRepo.countBySessionId(sessionId);
-                long requiredTurnCapacity = requiredMessageCapacityForTurn();
-                if (messageCount + requiredTurnCapacity > chatExecutionConfig.getMaxMessagesPerSession()) {
-                    throw new ChatHistoryQuotaExceededException(
-                            messageCount,
-                            chatExecutionConfig.getMaxMessagesPerSession(),
-                            requiredTurnCapacity);
-                }
-                String requestId = UUID.randomUUID().toString();
-                session.setActiveExecutionId(requestId);
-                session.setActiveExecutionExpiresAt(now.plus(executionLeaseTtl()));
-                session.setExecutionStopRequested(false);
-                session.setExecutionUserStopRequested(false);
-                sessionRepo.saveAndFlush(session);
-                claimed.set(new ActiveStreamRequest(
-                        userId, requestId, confirmationStartedNanos.get()));
-            });
+                throw new ServiceUnavailableException(
+                        "Chat admission could not be committed; retry", admissionFailure);
+            }
+            if (stoppedBeforeAdmission.get()) {
+                throw new ConflictException("This chat turn was stopped before execution began.");
+            }
             ActiveStreamRequest request = claimed.get();
             if (request == null) {
                 throw new IllegalStateException("Could not claim the chat execution lease.");
             }
-            if (!leaseRoundTripCompletedBeforeTtl(
+            if (!leaseRoundTripLeavesHeartbeatWindow(
                     confirmationStartedNanos.get(), executionLeaseTtl())) {
-                releaseExecutionLease(userId, sessionId, request.requestId());
+                abortClaimedStreamRequest(userId, sessionId, request);
                 throw new ServiceUnavailableException(
                         "Chat execution lease expired before the request was accepted; retry");
             }
             ActiveStreamRequest existing = activeStreamRequests.putIfAbsent(sessionId, request);
             if (existing != null) {
-                releaseExecutionLease(userId, sessionId, request.requestId());
+                abortClaimedStreamRequest(userId, sessionId, request);
                 throw new ChatSessionBusyException(sessionId);
             }
-            if (!leaseRoundTripCompletedBeforeTtl(
+            if (!leaseRoundTripLeavesHeartbeatWindow(
                     confirmationStartedNanos.get(), executionLeaseTtl())) {
-                activeStreamRequests.remove(sessionId, request);
-                releaseExecutionLease(userId, sessionId, request.requestId());
+                abortClaimedStreamRequest(userId, sessionId, request);
                 throw new ServiceUnavailableException(
                         "Chat execution lease expired before the request was accepted; retry");
             }
             return request.requestId();
+        }
+    }
+
+    @Override
+    public void abortUndispatched(
+            Long userId, String sessionId, String executionId, String turnId) {
+        String effectiveTurnId = requireTurnId(turnId);
+        if (executionId == null || executionId.isBlank()) {
+            throw new IllegalArgumentException("Execution id is required to abort an undispatched chat turn.");
+        }
+        synchronized (sessionLock(sessionId)) {
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
+                            .orElse(null);
+                    if (session == null) {
+                        requireAdmittedUserTurnAbsent(sessionId, effectiveTurnId, executionId);
+                        return;
+                    }
+                    int deleted = messageRepo.deleteBySessionIdAndTurnIdAndExecutionIdAndRole(
+                            sessionId, effectiveTurnId, executionId, "user");
+                    if (deleted != 1) {
+                        throw new IllegalStateException(
+                                "The admitted user turn could not be identified uniquely for rollback.");
+                    }
+                    if (Objects.equals(executionId, session.getActiveExecutionId())) {
+                        clearExecutionLease(session);
+                        sessionRepo.saveAndFlush(session);
+                    }
+                });
+            } finally {
+                activeStreamRequests.computeIfPresent(sessionId, (ignored, request) ->
+                        Objects.equals(request.userId(), userId)
+                                && Objects.equals(request.requestId(), executionId)
+                                && Objects.equals(request.turnId(), effectiveTurnId)
+                                ? null : request);
+            }
+        }
+    }
+
+    private void abortClaimedStreamRequest(
+            Long userId, String sessionId, ActiveStreamRequest request) {
+        try {
+            abortUndispatched(userId, sessionId, request.requestId(), request.turnId());
+        } catch (RuntimeException rollbackFailure) {
+            throw new ChatAdmissionOutcomeUnknownException(
+                    "Could not confirm rollback of the persisted chat admission.", rollbackFailure);
+        }
+    }
+
+    private void compensateAmbiguousAdmission(
+            Long userId, String sessionId, ActiveStreamRequest request) {
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
+                        .orElse(null);
+                if (session == null) {
+                    requireAdmittedUserTurnAbsent(
+                            sessionId, request.turnId(), request.requestId());
+                    return;
+                }
+                int deleted = messageRepo.deleteBySessionIdAndTurnIdAndExecutionIdAndRole(
+                        sessionId, request.turnId(), request.requestId(), "user");
+                if (deleted == 0 && messageRepo.existsBySessionIdAndTurnId(
+                        sessionId, request.turnId())) {
+                    throw new IllegalStateException(
+                            "The ambiguous admission turn belongs to a different execution.");
+                }
+                if (deleted > 1) {
+                    throw new IllegalStateException(
+                            "The ambiguous admission matched multiple user turns.");
+                }
+                if (Objects.equals(request.requestId(), session.getActiveExecutionId())) {
+                    clearExecutionLease(session);
+                    sessionRepo.saveAndFlush(session);
+                }
+            });
+        } finally {
+            activeStreamRequests.remove(sessionId, request);
+        }
+    }
+
+    private void requireAdmittedUserTurnAbsent(
+            String sessionId, String turnId, String executionId) {
+        if (messageRepo.existsBySessionIdAndTurnIdAndExecutionIdAndRole(
+                sessionId, turnId, executionId, "user")) {
+            throw new IllegalStateException(
+                    "The chat session disappeared while its admitted user turn still exists.");
         }
     }
 
@@ -404,14 +543,26 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     @Override
-    public void requestStreamStop(Long userId, String sessionId) {
+    public void requestStreamStop(Long userId, String sessionId, String turnId) {
+        String effectiveTurnId = turnId == null ? null : requireTurnId(turnId);
         synchronized (sessionLock(sessionId)) {
             AtomicReference<String> requestIdRef = new AtomicReference<>();
             transactionTemplate.executeWithoutResult(status -> {
                 ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
                         .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
                 if (!hasActiveExecutionLease(session, databaseNow())) {
+                    if (effectiveTurnId == null
+                            || Objects.equals(effectiveTurnId, session.getActiveExecutionTurnId())) {
+                        requestIdRef.set(session.getActiveExecutionId());
+                    }
                     clearExecutionLease(session);
+                    recordPreAdmissionStopIfNeeded(session, effectiveTurnId);
+                    sessionRepo.saveAndFlush(session);
+                    return;
+                }
+                if (effectiveTurnId != null
+                        && !Objects.equals(effectiveTurnId, session.getActiveExecutionTurnId())) {
+                    recordPreAdmissionStopIfNeeded(session, effectiveTurnId);
                     sessionRepo.saveAndFlush(session);
                     return;
                 }
@@ -427,6 +578,16 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 stopActiveRequest(sessionId, request, true);
             }
         }
+    }
+
+    private void recordPreAdmissionStopIfNeeded(ChatSessionPo session, String turnId) {
+        if (turnId == null || messageRepo.existsBySessionIdAndTurnId(session.getId(), turnId)) return;
+        Set<String> stoppedTurns = session.getPreAdmissionStopTurnIds();
+        if (!stoppedTurns.contains(turnId) && stoppedTurns.size() >= MAX_PRE_ADMISSION_STOP_TURNS) {
+            throw new ConflictException(
+                    "Too many chat turns are waiting for pre-admission stop acknowledgement.");
+        }
+        stoppedTurns.add(turnId);
     }
 
     @Override
@@ -517,6 +678,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private void clearExecutionLease(ChatSessionPo session) {
         session.setActiveExecutionId(null);
+        session.setActiveExecutionTurnId(null);
         session.setActiveExecutionExpiresAt(null);
         session.setExecutionStopRequested(false);
         session.setExecutionUserStopRequested(false);
@@ -530,21 +692,37 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             stopChatExecutionsWithExpiredConfirmation(e);
             return;
         }
-        activeStreamRequests.forEach((sessionId, request) -> {
-            try {
-                ExecutionLeaseRenewal renewal = renewActiveExecutionLease(sessionId, request);
-                if (!renewal.renewed() && activeStreamRequests.remove(sessionId, request)) {
-                    stopActiveRequest(sessionId, request, false);
-                    log.warn("Stopped local chat execution after losing its lease: sessionId={}, executionId={}",
-                            sessionId, request.requestId());
-                } else if (renewal.renewed()) {
-                    request.leaseConfirmation().confirmAt(renewal.confirmationStartedNanos());
-                    sessionRepo.findByIdAndUserId(sessionId, request.userId())
-                            .filter(session -> Boolean.TRUE.equals(session.getExecutionStopRequested()))
-                            .ifPresent(session -> stopActiveRequest(
-                                    sessionId, request, Boolean.TRUE.equals(session.getExecutionUserStopRequested())));
+        try {
+            int cleared = sessionRepo.clearExpiredExecutionLeases(databaseNow());
+            if (cleared > 0) {
+                log.debug("Cleared {} expired chat execution lease(s)", cleared);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Could not clear expired chat execution leases: {}", e.toString());
+        }
+        Map<String, ActiveStreamRequest> requests = Map.copyOf(activeStreamRequests);
+        ExecutionLeaseRenewalBatch renewal = ExecutionLeaseRenewalBatch.none();
+        try {
+            renewal = renewActiveExecutionLeases(requests);
+            ExecutionLeaseRenewalBatch confirmedRenewal = renewal;
+            requests.forEach((sessionId, request) -> {
+                if (activeStreamRequests.get(sessionId) != request) return;
+                ExecutionLeaseState state = confirmedRenewal.renewedLeases().get(sessionId);
+                if (state == null || !Objects.equals(state.requestId(), request.requestId())) {
+                    if (activeStreamRequests.remove(sessionId, request)) {
+                        stopActiveRequest(sessionId, request, false);
+                        log.warn("Stopped local chat execution after losing its lease: sessionId={}, executionId={}",
+                                sessionId, request.requestId());
+                    }
+                    return;
                 }
-            } catch (RuntimeException e) {
+                request.leaseConfirmation().confirmAt(confirmedRenewal.confirmationStartedNanos());
+                if (state.stopRequested()) {
+                    stopActiveRequest(sessionId, request, state.userStopRequested());
+                }
+            });
+        } catch (RuntimeException e) {
+            requests.forEach((sessionId, request) -> {
                 if (request.leaseConfirmation().isUnconfirmedFor(executionLeaseTtl())
                         && activeStreamRequests.remove(sessionId, request)) {
                     stopActiveRequest(sessionId, request, false);
@@ -554,68 +732,92 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 } else {
                     log.warn("Could not renew chat execution lease for session {}: {}", sessionId, e.toString());
                 }
-            }
-        });
-        try {
-            int cleared = sessionRepo.clearExpiredExecutionLeases(databaseNow());
-            if (cleared > 0) {
-                log.debug("Cleared {} expired chat execution lease(s)", cleared);
-            }
-        } catch (RuntimeException e) {
-            log.warn("Could not clear expired chat execution leases: {}", e.toString());
+            });
+        }
+        if (!renewal.renewedLeases().isEmpty()
+                && !leaseRoundTripLeavesHeartbeatWindow(
+                        renewal.confirmationStartedNanos(), executionLeaseTtl())) {
+            renewal.renewedLeases().forEach((sessionId, state) -> {
+                ActiveStreamRequest request = requests.get(sessionId);
+                if (request != null && Objects.equals(state.requestId(), request.requestId())
+                        && activeStreamRequests.remove(sessionId, request)) {
+                    stopActiveRequest(sessionId, request, false);
+                    log.warn("Stopped local chat execution because lease maintenance consumed its heartbeat window: "
+                                    + "sessionId={}, executionId={}",
+                            sessionId, request.requestId());
+                }
+            });
         }
     }
 
-    private ExecutionLeaseRenewal renewActiveExecutionLease(
-            String sessionId, ActiveStreamRequest request) {
-        long checkedAtNanos = System.nanoTime();
-        LocalDateTime checkedAt = databaseNow();
-        AtomicLong confirmationStartedNanos = new AtomicLong(Long.MIN_VALUE);
-        Integer renewed = transactionTemplate.execute(status -> {
-            ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, request.userId())
-                    .orElse(null);
-            if (session == null || !Objects.equals(request.requestId(), session.getActiveExecutionId())) {
-                return 0;
-            }
+    private ExecutionLeaseRenewalBatch renewActiveExecutionLeases(
+            Map<String, ActiveStreamRequest> requests) {
+        if (requests.isEmpty()) return ExecutionLeaseRenewalBatch.none();
 
+        Set<String> sessionIds = new LinkedHashSet<>(requests.keySet());
+        long confirmationStartedNanos = System.nanoTime();
+        long checkedAtNanos = confirmationStartedNanos;
+        LocalDateTime checkedAt = databaseNow();
+        Map<String, ExecutionLeaseState> renewedLeases = transactionTemplate.execute(status -> {
+            List<ChatSessionPo> sessions = sessionRepo.findByIdInForUpdate(sessionIds);
             LocalDateTime databaseNow = databaseNow();
             long elapsedNanos = Math.max(0L, System.nanoTime() - checkedAtNanos);
             LocalDateTime monotonicNow = checkedAt.plusNanos(elapsedNanos);
             LocalDateTime effectiveNow = databaseNow.isAfter(monotonicNow) ? databaseNow : monotonicNow;
-            if (session.getActiveExecutionExpiresAt() == null
-                    || !session.getActiveExecutionExpiresAt().isAfter(effectiveNow)) {
-                return 0;
+            List<ChatSessionPo> renewableSessions = new ArrayList<>();
+            Map<String, ExecutionLeaseState> states = new HashMap<>();
+            for (ChatSessionPo session : sessions) {
+                ActiveStreamRequest request = requests.get(session.getId());
+                if (request == null
+                        || !Objects.equals(request.userId(), session.getUserId())
+                        || !Objects.equals(request.requestId(), session.getActiveExecutionId())
+                        || session.getActiveExecutionExpiresAt() == null
+                        || !session.getActiveExecutionExpiresAt().isAfter(effectiveNow)) {
+                    continue;
+                }
+                renewableSessions.add(session);
+                states.put(session.getId(), new ExecutionLeaseState(
+                        request.requestId(),
+                        Boolean.TRUE.equals(session.getExecutionStopRequested()),
+                        Boolean.TRUE.equals(session.getExecutionUserStopRequested())));
             }
-            confirmationStartedNanos.set(System.nanoTime());
-            session.setActiveExecutionExpiresAt(effectiveNow.plus(executionLeaseTtl()));
-            sessionRepo.saveAndFlush(session);
-            return 1;
+            if (renewableSessions.isEmpty()) return Map.of();
+
+            LocalDateTime renewedExpiry = effectiveNow.plus(executionLeaseTtl());
+            renewableSessions.forEach(session -> session.setActiveExecutionExpiresAt(renewedExpiry));
+            sessionRepo.flush();
+            return Map.copyOf(states);
         });
-        if (renewed == null || renewed == 0) return ExecutionLeaseRenewal.notRenewed();
-        return leaseRoundTripCompletedBeforeTtl(
-                confirmationStartedNanos.get(), executionLeaseTtl())
-                ? new ExecutionLeaseRenewal(true, confirmationStartedNanos.get())
-                : ExecutionLeaseRenewal.notRenewed();
+        if (renewedLeases == null || renewedLeases.isEmpty()
+                || !leaseRoundTripLeavesHeartbeatWindow(
+                        confirmationStartedNanos, executionLeaseTtl())) {
+            return ExecutionLeaseRenewalBatch.none();
+        }
+        return new ExecutionLeaseRenewalBatch(
+                renewedLeases, confirmationStartedNanos);
     }
 
-    private boolean leaseRoundTripCompletedBeforeTtl(long startedNanos, Duration ttl) {
+    private boolean leaseRoundTripLeavesHeartbeatWindow(long startedNanos, Duration ttl) {
         if (startedNanos == Long.MIN_VALUE || ttl == null || ttl.isZero() || ttl.isNegative()) {
             return false;
         }
+        Duration heartbeat = Duration.ofMillis(chatExecutionConfig.getLeaseHeartbeatMs());
+        if (heartbeat.isZero() || heartbeat.isNegative() || ttl.compareTo(heartbeat) <= 0) {
+            return false;
+        }
         long elapsedNanos = System.nanoTime() - startedNanos;
-        return elapsedNanos >= 0 && elapsedNanos < ttl.toNanos();
+        return elapsedNanos >= 0 && elapsedNanos < ttl.minus(heartbeat).toNanos();
     }
 
     private void stopChatExecutionsWithExpiredConfirmation(RuntimeException cause) {
         activeStreamRequests.forEach((sessionId, request) -> {
-            if (!request.leaseConfirmation().isUnconfirmedFor(executionLeaseTtl())
-                    || !activeStreamRequests.remove(sessionId, request)) {
-                return;
+            if (request.leaseConfirmation().isUnconfirmedFor(executionLeaseTtl())
+                    && activeStreamRequests.remove(sessionId, request)) {
+                stopActiveRequest(sessionId, request, false);
+                log.warn("Stopped local chat execution after the database could not confirm its lease for a full TTL: "
+                                + "sessionId={}, executionId={}",
+                        sessionId, request.requestId());
             }
-            stopActiveRequest(sessionId, request, false);
-            log.warn("Stopped local chat execution after the database could not confirm its lease for a full TTL: "
-                            + "sessionId={}, executionId={}",
-                    sessionId, request.requestId());
         });
         log.warn("Could not read database time while maintaining chat execution leases: {}", cause.toString());
     }
@@ -668,30 +870,22 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
             return;
         }
-        AiDestructiveActionGuard.PendingActionContext destructivePending = destructiveActionGuard
-                .pendingContext(userId, sessionId)
-                .orElse(null);
-        AiScenarioDraftStore.PendingApplication scenarioPending = scenarioDraftStore
-                .pendingApplication(userId, sessionId)
-                .orElse(null);
-        AiTaskContinuationStore.ContinuationContext continuationContext = taskContinuationStore
-                .pendingContext(userId, sessionId)
-                .orElse(null);
-        EnumSet<ConfirmationKind> pendingKinds = EnumSet.noneOf(ConfirmationKind.class);
-        if (destructivePending != null) {
-            pendingKinds.add("reset_default_templates".equals(destructivePending.toolName())
-                    ? ConfirmationKind.DEFAULT_TEMPLATE_RESET
-                    : ConfirmationKind.DESTRUCTIVE);
+        if (!activeRequest.matches(effectiveTurnId, content)) {
+            log.error("Rejected chat worker whose turn payload differs from its admitted request: "
+                            + "sessionId={}, executionId={}, turnId={}",
+                    sessionId, executionId, effectiveTurnId);
+            try {
+                emitter.completeWithError(new IllegalStateException(
+                        "The dispatched chat turn does not match its persisted admission."));
+            } catch (IllegalStateException e) {
+                log.debug("Chat emitter was already complete for mismatched execution {}", executionId);
+            }
+            return;
         }
-        if (scenarioPending != null) pendingKinds.add(ConfirmationKind.SCENE_REPLACEMENT);
-        if (pendingKinds.isEmpty() && continuationContext != null
-                && continuationContext.pendingToolName() != null) {
-            pendingKinds.add(ConfirmationKind.CHOICE);
-        }
-        ConfirmationDecision confirmationDecision = resolveConfirmation(content, confirmation, pendingKinds);
-        if (confirmationDecision.cancelled()) {
-            clearCancelledPendingAction(userId, sessionId, confirmationDecision.kind());
-        }
+        AiDestructiveActionGuard.PendingActionContext destructivePending;
+        AiScenarioDraftStore.PendingApplication scenarioPending;
+        AiTaskContinuationStore.ContinuationContext continuationContext;
+        ConfirmationDecision confirmationDecision;
         boolean preferChinese = prefersChinese(content);
         StringBuilder finalAnswer = new StringBuilder();
         List<StreamResponseDto.ProgressDto> executionTrace = new ArrayList<>();
@@ -705,7 +899,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         activeRequest.emitter().compareAndSet(null, emitter);
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         ToolLoopResult loopResult = ToolLoopResult.empty();
-        boolean userMessagePersisted = false;
         TerminalPersistenceState terminalPersistence = TerminalPersistenceState.NOT_ATTEMPTED;
         AtomicBoolean serverCompletion = new AtomicBoolean(false);
         emitter.onCompletion(() -> {
@@ -722,39 +915,35 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             isDisconnect.set(true);
             activeRequest.requestControl().cancel();
         });
-        if (isUserStop.get()) {
-            try {
-                emitter.complete();
-            } catch (IllegalStateException e) {
-                log.debug("Chat emitter was already complete for stopped session {}", sessionId);
-            }
-        }
-
         try {
             UserContextHolder.setUserId(userId);
             UserContextHolder.setChatSessionId(sessionId);
             UserContextHolder.setChatExecutionId(executionId);
+            LlmRequestControlHolder.set(activeRequest.requestControl());
+            destructivePending = destructiveActionGuard.pendingContext(userId, sessionId).orElse(null);
+            scenarioPending = scenarioDraftStore.pendingApplication(userId, sessionId).orElse(null);
+            continuationContext = taskContinuationStore.pendingContext(userId, sessionId).orElse(null);
+            EnumSet<ConfirmationKind> pendingKinds = EnumSet.noneOf(ConfirmationKind.class);
+            if (destructivePending != null) {
+                pendingKinds.add("reset_default_templates".equals(destructivePending.toolName())
+                        ? ConfirmationKind.DEFAULT_TEMPLATE_RESET
+                        : ConfirmationKind.DESTRUCTIVE);
+            }
+            if (scenarioPending != null) pendingKinds.add(ConfirmationKind.SCENE_REPLACEMENT);
+            if (pendingKinds.isEmpty() && continuationContext != null
+                    && continuationContext.pendingToolName() != null) {
+                pendingKinds.add(ConfirmationKind.CHOICE);
+            }
+            confirmationDecision = resolveConfirmation(content, confirmation, pendingKinds);
+            if (confirmationDecision.cancelled()) {
+                clearCancelledPendingAction(userId, sessionId, confirmationDecision.kind());
+            }
             UserContextHolder.setConfirmedProtectedActionKind(
                     confirmationDecision.confirmed() && confirmationDecision.kind() != ConfirmationKind.CHOICE
                             ? confirmationDecision.kind().name()
                             : null);
-            LlmRequestControlHolder.set(activeRequest.requestControl());
-            if (shouldStop.getAsBoolean() && !isUserStop.get()) {
-                try {
-                    emitter.complete();
-                } catch (IllegalStateException e) {
-                    log.debug("Chat emitter was already complete before session {} started", sessionId);
-                }
-                return;
-            }
-            sessionRepo.findByIdAndUserId(sessionId, userId)
-                    .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-
-            executeOwnedSessionWrite(userId, sessionId, executionId, () -> {
-                saveSimpleMsg(sessionId, "user", content, effectiveTurnId);
-                touchSessionTitle(sessionId, userId, content);
-            });
-            userMessagePersisted = true;
+            executeOwnedSessionWrite(userId, sessionId, executionId,
+                    () -> touchSessionTitle(sessionId, userId, content));
             if (shouldStop.getAsBoolean()) {
                 return;
             }
@@ -850,7 +1039,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 return;
             }
             List<LlmMessage> visibleReplyMessages = withVisibleReplyPrompt(messages, loopResult);
-            boolean replySuppressed = streamGuardedAssistantReply(
+            ReplyGuardOutcome replyGuardOutcome = streamGuardedAssistantReply(
                     visibleReplyMessages, finalAnswer, emitter, isDisconnect, shouldStop,
                     preferChinese, executionTrace);
             boolean finalResponseProduced = finalAnswer.length() > replyStart;
@@ -866,7 +1055,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 return;
             }
 
-            terminalPersistence = persistAssistantTerminal(
+            ChatExecutionStatus finalStatus = terminalStatus(loopResult, replyGuardOutcome);
+            String userStoppedNotice = interruptedAuditNotice(loopResult, preferChinese, true);
+            TerminalPersistenceResult persistedTerminal = persistAssistantTerminal(
                     userId,
                     sessionId,
                     executionId,
@@ -874,15 +1065,28 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     finalAnswer.toString(),
                     executionTrace,
                     elapsedSeconds(executionStartedNanos),
-                    terminalStatus(loopResult, replySuppressed))
+                    finalStatus,
+                    userStoppedNotice);
+            terminalPersistence = persistedTerminal.persisted()
                     ? TerminalPersistenceState.PERSISTED
                     : TerminalPersistenceState.FAILED;
-            serverCompletion.set(true);
             if (terminalPersistence == TerminalPersistenceState.FAILED) {
+                serverCompletion.set(true);
                 sendSseErrorMessage(
                         emitter, terminalPersistenceFailureMessage(preferChinese), isDisconnect);
                 return;
             }
+            ChatExecutionStatus persistedStatus = persistedTerminal.executionStatus();
+            if (persistedStatus == ChatExecutionStatus.STOPPED
+                    && !sendSseChunk(emitter, userStoppedNotice)) {
+                isDisconnect.set(true);
+                return;
+            }
+            if (!sendSseTerminal(emitter, effectiveTurnId, persistedStatus)) {
+                isDisconnect.set(true);
+                return;
+            }
+            serverCompletion.set(true);
             completeEmitter(emitter, isDisconnect);
         } catch (Exception e) {
             if (isDisconnect.get() || isClientDisconnect(e)) {
@@ -906,40 +1110,75 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     || !commandSet.isEmpty()
                     ? ChatExecutionStatus.PARTIAL
                     : ChatExecutionStatus.FAILED;
-            if (userMessagePersisted) {
-                terminalPersistence = persistAssistantTerminal(
-                        userId,
-                        sessionId,
-                        executionId,
-                        effectiveTurnId,
-                        errorMessage,
-                        executionTrace,
-                        elapsedSeconds(executionStartedNanos),
-                        status)
-                        ? TerminalPersistenceState.PERSISTED
-                        : TerminalPersistenceState.FAILED;
-                if (terminalPersistence == TerminalPersistenceState.FAILED) {
-                    errorMessage += terminalPersistenceFailureSuffix(preferChinese);
+            String userStoppedNotice = interruptedAuditNotice(loopResult, preferChinese, true);
+            TerminalPersistenceResult persistedTerminal = persistAssistantTerminal(
+                    userId,
+                    sessionId,
+                    executionId,
+                    effectiveTurnId,
+                    errorMessage,
+                    executionTrace,
+                    elapsedSeconds(executionStartedNanos),
+                    status,
+                    userStoppedNotice);
+            terminalPersistence = persistedTerminal.persisted()
+                    ? TerminalPersistenceState.PERSISTED
+                    : TerminalPersistenceState.FAILED;
+            if (terminalPersistence == TerminalPersistenceState.FAILED) {
+                errorMessage += terminalPersistenceFailureSuffix(preferChinese);
+                serverCompletion.set(true);
+                sendSseErrorMessage(emitter, errorMessage, isDisconnect);
+                return;
+            }
+            ChatExecutionStatus persistedStatus = persistedTerminal.executionStatus();
+            if (persistedStatus == ChatExecutionStatus.STOPPED) {
+                if (!sendSseChunk(emitter, userStoppedNotice)) {
+                    isDisconnect.set(true);
+                    return;
                 }
+            } else if (!sendSseError(emitter, errorMessage)) {
+                isDisconnect.set(true);
+                return;
+            }
+            if (!sendSseTerminal(emitter, effectiveTurnId, persistedStatus)) {
+                isDisconnect.set(true);
+                return;
             }
             serverCompletion.set(true);
-            sendSseErrorMessage(emitter, errorMessage, isDisconnect);
+            completeEmitter(emitter, isDisconnect);
         } finally {
-            if (userMessagePersisted
-                    && terminalPersistence == TerminalPersistenceState.NOT_ATTEMPTED
+            if (terminalPersistence == TerminalPersistenceState.NOT_ATTEMPTED
                     && isDisconnect.get()) {
-                ChatExecutionStatus interruptedStatus = isUserStop.get()
-                        ? ChatExecutionStatus.STOPPED
-                        : ChatExecutionStatus.DISCONNECTED;
-                persistAssistantTerminal(
-                        userId,
-                        sessionId,
-                        executionId,
-                        effectiveTurnId,
-                        interruptedAuditNotice(loopResult, preferChinese, isUserStop.get()),
-                        executionTrace,
-                        elapsedSeconds(executionStartedNanos),
-                        interruptedStatus);
+                try {
+                    ChatExecutionStatus interruptedStatus = isUserStop.get()
+                            ? ChatExecutionStatus.STOPPED
+                            : ChatExecutionStatus.DISCONNECTED;
+                    String userStoppedNotice = interruptedAuditNotice(loopResult, preferChinese, true);
+                    TerminalPersistenceResult persistedTerminal = persistAssistantTerminal(
+                            userId,
+                            sessionId,
+                            executionId,
+                            effectiveTurnId,
+                            interruptedAuditNotice(loopResult, preferChinese, isUserStop.get()),
+                            executionTrace,
+                            elapsedSeconds(executionStartedNanos),
+                            interruptedStatus,
+                            userStoppedNotice);
+                    if (persistedTerminal.persisted()) {
+                        ChatExecutionStatus persistedStatus = persistedTerminal.executionStatus();
+                        boolean streamWritable = persistedStatus != ChatExecutionStatus.STOPPED
+                                || sendSseChunk(emitter, userStoppedNotice);
+                        if (streamWritable) {
+                            sendSseTerminal(emitter, effectiveTurnId, persistedStatus);
+                        }
+                    }
+                } catch (RuntimeException e) {
+                    log.warn("Could not settle interrupted chat stream for session {}: {}",
+                            sessionId, e.toString());
+                } finally {
+                    serverCompletion.set(true);
+                    completeInterruptedEmitter(emitter);
+                }
             }
             UserContextHolder.clear();
             LlmRequestControlHolder.clear();
@@ -1047,15 +1286,40 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return isDisconnect.get();
     }
 
+    private String requireTurnId(String turnId) {
+        if (turnId == null || turnId.isBlank()) {
+            throw new BadRequestException("Turn id is required");
+        }
+        String effectiveTurnId = turnId.trim();
+        if (effectiveTurnId.length() > 64) {
+            throw new BadRequestException("Turn id must not exceed 64 characters");
+        }
+        return effectiveTurnId;
+    }
+
+    private String requireTurnContent(String content) {
+        if (content == null || content.isBlank()) {
+            throw new BadRequestException("Content is required");
+        }
+        if (content.length() > RequestLimits.MAX_CHAT_CONTENT_LENGTH) {
+            throw new BadRequestException("Content must not exceed 10000 characters");
+        }
+        return content;
+    }
+
+    private String titleFromContent(String content) {
+        String newTitle = content.length() > 12 ? content.substring(0, 12) + "..." : content;
+        return newTitle.replace("\n", " ").trim();
+    }
+
     private void touchSessionTitle(String sessionId, Long userId, String content) {
-        sessionRepo.findByIdAndUserId(Objects.requireNonNull(sessionId, "sessionId must not be null"), userId).ifPresent(s -> {
-            s.setUpdatedAt(LocalDateTime.now());
-            if (isUntitledSessionTitle(s.getTitle())) {
-                String newTitle = content.length() > 12 ? content.substring(0, 12) + "..." : content;
-                newTitle = newTitle.replace("\n", " ").trim();
-                s.setTitle(newTitle);
+        sessionRepo.findByIdAndUserId(
+                Objects.requireNonNull(sessionId, "sessionId must not be null"), userId).ifPresent(session -> {
+            session.setUpdatedAt(databaseNow());
+            if (isUntitledSessionTitle(session.getTitle())) {
+                session.setTitle(titleFromContent(content));
             }
-            sessionRepo.save(s);
+            sessionRepo.save(session);
         });
     }
 
@@ -1789,38 +2053,44 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
     }
 
-    private boolean streamGuardedAssistantReply(List<LlmMessage> messages,
-                                                StringBuilder finalAnswer,
-                                                SseEmitter emitter,
-                                                AtomicBoolean isDisconnect,
-                                                BooleanSupplier shouldStop,
-                                                boolean preferChinese,
-                                                List<StreamResponseDto.ProgressDto> executionTrace) {
+    private ReplyGuardOutcome streamGuardedAssistantReply(
+            List<LlmMessage> messages,
+            StringBuilder finalAnswer,
+            SseEmitter emitter,
+            AtomicBoolean isDisconnect,
+            BooleanSupplier shouldStop,
+            boolean preferChinese,
+            List<StreamResponseDto.ProgressDto> executionTrace) {
         StringBuilder pending = new StringBuilder();
-        AtomicBoolean suppressed = new AtomicBoolean(false);
+        AtomicReference<ReplyGuardOutcome> guardOutcome =
+                new AtomicReference<>(ReplyGuardOutcome.NONE);
         BooleanSupplier replyShouldStop = () -> shouldStop.getAsBoolean()
-                || isDisconnect.get() || suppressed.get();
+                || isDisconnect.get()
+                || guardOutcome.get() == ReplyGuardOutcome.HIDDEN_WITHOUT_EVIDENCE;
         llmChatService.streamReply(messages, delta -> {
             if (replyShouldStop.getAsBoolean() || delta == null || delta.isEmpty()) return;
             pending.append(delta);
             int boundary;
-            while (!suppressed.get() && (boundary = firstReplySegmentBoundary(pending)) >= 0) {
+            while (guardOutcome.get() != ReplyGuardOutcome.HIDDEN_WITHOUT_EVIDENCE
+                    && (boundary = firstReplySegmentBoundary(pending)) >= 0) {
                 String segment = pending.substring(0, boundary + 1);
                 pending.delete(0, boundary + 1);
-                sendGuardedReplySegment(segment, finalAnswer, emitter, isDisconnect, suppressed,
+                sendGuardedReplySegment(segment, finalAnswer, emitter, isDisconnect, guardOutcome,
                         preferChinese, executionTrace);
             }
         }, replyShouldStop);
         if (!replyShouldStop.getAsBoolean() && !pending.isEmpty()) {
-            sendGuardedReplySegment(pending.toString(), finalAnswer, emitter, isDisconnect, suppressed,
+            sendGuardedReplySegment(pending.toString(), finalAnswer, emitter, isDisconnect, guardOutcome,
                     preferChinese, executionTrace);
         }
-        return suppressed.get();
+        return guardOutcome.get();
     }
 
     private int firstReplySegmentBoundary(CharSequence text) {
+        boolean[] literalCharacters = literalCharacterMask(text, true);
         for (int index = 0; index < text.length(); index++) {
-            if (".!?。！？".indexOf(text.charAt(index)) >= 0) return index;
+            if (!literalCharacters[index]
+                    && ".!?。！？".indexOf(text.charAt(index)) >= 0) return index;
         }
         return -1;
     }
@@ -1829,43 +2099,230 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                          StringBuilder finalAnswer,
                                          SseEmitter emitter,
                                          AtomicBoolean isDisconnect,
-                                         AtomicBoolean suppressed,
+                                         AtomicReference<ReplyGuardOutcome> guardOutcome,
                                          boolean preferChinese,
                                          List<StreamResponseDto.ProgressDto> executionTrace) {
-        String visible = containsUnsupportedPlatformClaim(segment)
+        GuardedClaimReplacement replacement = containsUnsupportedPlatformClaim(segment)
                 ? authoritativeClaimReplacement(preferChinese, executionTrace)
-                : segment;
+                : new GuardedClaimReplacement(segment, ReplyGuardOutcome.NONE);
+        String visible = replacement.content();
         if (sendSseChunk(emitter, visible)) {
             finalAnswer.append(visible);
-            if (!visible.equals(segment)) suppressed.set(true);
+            guardOutcome.updateAndGet(current -> mergeReplyGuardOutcome(
+                    current, replacement.outcome()));
         } else {
             log.info("SSE connection interrupted, stopping AI response");
             isDisconnect.set(true);
         }
     }
 
+    private ReplyGuardOutcome mergeReplyGuardOutcome(
+            ReplyGuardOutcome current, ReplyGuardOutcome next) {
+        if (current == ReplyGuardOutcome.HIDDEN_WITHOUT_EVIDENCE
+                || next == ReplyGuardOutcome.HIDDEN_WITHOUT_EVIDENCE) {
+            return ReplyGuardOutcome.HIDDEN_WITHOUT_EVIDENCE;
+        }
+        if (current == ReplyGuardOutcome.REPLACED_WITH_AUTHORITATIVE_EVIDENCE
+                || next == ReplyGuardOutcome.REPLACED_WITH_AUTHORITATIVE_EVIDENCE) {
+            return ReplyGuardOutcome.REPLACED_WITH_AUTHORITATIVE_EVIDENCE;
+        }
+        return ReplyGuardOutcome.NONE;
+    }
+
     static boolean containsUnsupportedPlatformClaim(String reply) {
         if (reply == null || reply.isBlank()) return false;
-        if (hasUnsupportedClaim(reply, UNSUPPORTED_TOOL_EVIDENCE_CLAIM, false)) return true;
-        if (hasUnsupportedClaim(reply, UNSUPPORTED_PLATFORM_READ_CLAIM, false)) return true;
-        return hasUnsupportedClaim(reply, UNSUPPORTED_PLATFORM_MUTATION_CLAIM, true);
+        String checkableReply = maskLiteralContent(reply);
+        if (hasUnsupportedClaim(checkableReply, UNSUPPORTED_TOOL_EVIDENCE_CLAIM, false, false)) return true;
+        if (hasUnsupportedClaim(checkableReply, UNSUPPORTED_PLATFORM_READ_CLAIM, false, true)) return true;
+        return hasUnsupportedClaim(checkableReply, UNSUPPORTED_PLATFORM_MUTATION_CLAIM, true, false);
+    }
+
+    private static String maskLiteralContent(String text) {
+        boolean[] literalCharacters = literalCharacterMask(text, false);
+        char[] checkable = text.toCharArray();
+        for (int index = 0; index < checkable.length; index++) {
+            if (literalCharacters[index]) checkable[index] = ' ';
+        }
+        return new String(checkable);
+    }
+
+    private static boolean[] literalCharacterMask(CharSequence text, boolean maskUnclosedLiteral) {
+        boolean[] masked = new boolean[text.length()];
+        int literalStart = -1;
+        char quoteEnd = 0;
+        char codeDelimiter = 0;
+        int codeDelimiterLength = 0;
+        boolean fencedCode = false;
+        for (int index = 0; index < text.length(); index++) {
+            char current = text.charAt(index);
+            if (codeDelimiterLength > 0) {
+                if (current != codeDelimiter) {
+                    masked[index] = true;
+                    continue;
+                }
+                int runLength = delimiterRunLength(text, index, codeDelimiter);
+                markLiteralRun(masked, index, runLength);
+                boolean closes = fencedCode
+                        ? runLength >= codeDelimiterLength
+                            && isFenceDelimiterLine(text, index, runLength, true)
+                        : runLength == codeDelimiterLength;
+                if (closes) {
+                    literalStart = -1;
+                    codeDelimiter = 0;
+                    codeDelimiterLength = 0;
+                    fencedCode = false;
+                }
+                index += runLength - 1;
+                continue;
+            }
+            if (quoteEnd != 0) {
+                masked[index] = true;
+                if (current == quoteEnd && !isEscaped(text, index)
+                        && (quoteEnd != '\'' || isAsciiSingleQuoteClosing(text, index))) {
+                    literalStart = -1;
+                    quoteEnd = 0;
+                }
+                continue;
+            }
+            if (current == '`') {
+                int runLength = delimiterRunLength(text, index, current);
+                markLiteralRun(masked, index, runLength);
+                literalStart = index;
+                codeDelimiter = current;
+                codeDelimiterLength = runLength;
+                fencedCode = runLength >= 3 && isFenceDelimiterLine(text, index, runLength, false);
+                index += runLength - 1;
+                continue;
+            }
+            if (current == '~') {
+                int runLength = delimiterRunLength(text, index, current);
+                if (runLength >= 3 && isFenceDelimiterLine(text, index, runLength, false)) {
+                    markLiteralRun(masked, index, runLength);
+                    literalStart = index;
+                    codeDelimiter = current;
+                    codeDelimiterLength = runLength;
+                    fencedCode = true;
+                    index += runLength - 1;
+                    continue;
+                }
+            }
+            char matchingQuote = matchingQuote(current);
+            if (matchingQuote != 0 && !isEscaped(text, index)
+                    && (current != '\'' || isAsciiSingleQuoteOpening(text, index))) {
+                masked[index] = true;
+                literalStart = index;
+                quoteEnd = matchingQuote;
+            }
+        }
+        if (!maskUnclosedLiteral && literalStart >= 0) {
+            Arrays.fill(masked, literalStart, masked.length, false);
+        }
+        return masked;
+    }
+
+    private static int delimiterRunLength(CharSequence text, int start, char delimiter) {
+        int end = start;
+        while (end < text.length() && text.charAt(end) == delimiter) end++;
+        return end - start;
+    }
+
+    private static boolean isFenceDelimiterLine(
+            CharSequence text, int delimiterStart, int delimiterLength, boolean closing) {
+        int lineStart = delimiterStart;
+        while (lineStart > 0
+                && text.charAt(lineStart - 1) != '\n'
+                && text.charAt(lineStart - 1) != '\r') {
+            lineStart--;
+        }
+        if (delimiterStart - lineStart > 3) return false;
+        for (int index = lineStart; index < delimiterStart; index++) {
+            if (text.charAt(index) != ' ') return false;
+        }
+        if (!closing) return true;
+        for (int index = delimiterStart + delimiterLength; index < text.length(); index++) {
+            char current = text.charAt(index);
+            if (current == '\n' || current == '\r') return true;
+            if (!Character.isWhitespace(current)) return false;
+        }
+        return true;
+    }
+
+    private static void markLiteralRun(boolean[] masked, int start, int length) {
+        for (int index = start; index < start + length; index++) masked[index] = true;
+    }
+
+    private static char matchingQuote(char opening) {
+        return switch (opening) {
+            case '"' -> '"';
+            case '\'' -> '\'';
+            case '“' -> '”';
+            case '‘' -> '’';
+            case '「' -> '」';
+            case '『' -> '』';
+            case '«' -> '»';
+            case '‹' -> '›';
+            default -> 0;
+        };
+    }
+
+    private static boolean isAsciiSingleQuoteOpening(CharSequence text, int index) {
+        if (index + 1 >= text.length() || Character.isWhitespace(text.charAt(index + 1))) {
+            return false;
+        }
+        return index == 0 || !isWordCharacter(text.charAt(index - 1));
+    }
+
+    private static boolean isAsciiSingleQuoteClosing(CharSequence text, int index) {
+        if (index == 0 || Character.isWhitespace(text.charAt(index - 1))) return false;
+        return index + 1 >= text.length() || !isWordCharacter(text.charAt(index + 1));
+    }
+
+    private static boolean isWordCharacter(char value) {
+        return Character.isLetterOrDigit(value) || value == '_';
+    }
+
+    private static boolean isEscaped(CharSequence text, int index) {
+        int backslashes = 0;
+        for (int cursor = index - 1; cursor >= 0 && text.charAt(cursor) == '\\'; cursor--) {
+            backslashes++;
+        }
+        return backslashes % 2 == 1;
     }
 
     private static boolean hasUnsupportedClaim(
-            String reply, Pattern pattern, boolean allowNonOperationalContent) {
+            String reply,
+            Pattern pattern,
+            boolean allowNonOperationalContent,
+            boolean leadingHistoryOverridesCurrentContext) {
         Matcher matcher = pattern.matcher(reply);
         while (matcher.find()) {
             String claimClause = claimClause(reply, matcher.start(), matcher.end());
             String trimmedClause = claimClause.trim();
+            boolean leadingHistoricalContext = hasLeadingHistoricalClaimContext(reply, matcher.start());
             if (trimmedClause.endsWith("?") || trimmedClause.endsWith("？")
                     || NON_ASSERTIVE_CLAIM_CONTEXT.matcher(claimClause).find()
-                    || (HISTORICAL_CLAIM_CONTEXT.matcher(claimClause).find()
+                    || (leadingHistoryOverridesCurrentContext && leadingHistoricalContext)
+                    || ((HISTORICAL_CLAIM_CONTEXT.matcher(claimClause).find()
+                            || leadingHistoricalContext)
                         && !CURRENT_CLAIM_CONTEXT.matcher(claimClause).find())) continue;
             if (allowNonOperationalContent
                     && NON_OPERATIONAL_PLATFORM_CONTENT.matcher(matcher.group()).find()) continue;
             return true;
         }
         return false;
+    }
+
+    private static boolean hasLeadingHistoricalClaimContext(String reply, int claimStart) {
+        int sentenceStart = 0;
+        for (int index = Math.min(claimStart, reply.length()) - 1; index >= 0; index--) {
+            if (".!?。！？".indexOf(reply.charAt(index)) >= 0) {
+                sentenceStart = index + 1;
+                break;
+            }
+        }
+        return LEADING_HISTORICAL_CLAIM_CONTEXT
+                .matcher(reply.substring(sentenceStart, Math.max(sentenceStart, claimStart)))
+                .matches();
     }
 
     private static String claimClause(String reply, int claimStart, int claimEnd) {
@@ -1883,7 +2340,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return reply.substring(clauseStart, clauseEnd);
     }
 
-    private String authoritativeClaimReplacement(
+    private GuardedClaimReplacement authoritativeClaimReplacement(
             boolean preferChinese, List<StreamResponseDto.ProgressDto> executionTrace) {
         List<String> authoritativeDetails = executionTrace == null ? List.of() : executionTrace.stream()
                 .filter(progress -> progress != null
@@ -1896,18 +2353,20 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 .limit(4)
                 .toList();
         if (!authoritativeDetails.isEmpty()) {
-            return preferChinese
+            return new GuardedClaimReplacement(preferChinese
                     ? "系统已用权威工具记录替换一段未经证据支持的模型说法："
                         + String.join("；", authoritativeDetails)
                     : "The system replaced an unsupported model claim with the authoritative tool record: "
-                        + String.join("; ", authoritativeDetails);
+                        + String.join("; ", authoritativeDetails),
+                    ReplyGuardOutcome.REPLACED_WITH_AUTHORITATIVE_EVIDENCE);
         }
-        return preferChinese
+        return new GuardedClaimReplacement(preferChinese
                 ? "系统已隐藏一段声称读取或修改当前画布的未验证回复。"
                     + "本轮没有支持该说法的完整权威工具结果；请重试，并在看到明确的成功记录前不要假定数据已经改变。"
                 : "The system hid an unverified reply that claimed to read or change the current Board. "
                     + "This turn has no complete authoritative tool result supporting that claim; retry, and "
-                    + "do not assume data changed until an explicit successful record is shown.";
+                    + "do not assume data changed until an explicit successful record is shown.",
+                ReplyGuardOutcome.HIDDEN_WITHOUT_EVIDENCE);
     }
 
     private ToolExecutionOutcome classifyToolExecution(String functionName, String toolResult) {
@@ -2007,7 +2466,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private boolean sendFrontendCommands(SseEmitter emitter, Set<StreamResponseDto.CommandDto> commandSet) {
         for (StreamResponseDto.CommandDto cmd : commandSet) {
             try {
-                StreamResponseDto packet = new StreamResponseDto("", cmd);
+                StreamResponseDto packet = StreamResponseDto.command(cmd);
                 emitter.send(SseEmitter.event().data(packet, MediaType.APPLICATION_JSON));
                 log.info("Sent frontend command: type={}, payload={}", cmd.getType(), cmd.getPayload());
             } catch (IOException | IllegalStateException e) {
@@ -2016,6 +2475,19 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
         }
         return true;
+    }
+
+    private boolean sendSseTerminal(
+            SseEmitter emitter, String turnId, ChatExecutionStatus executionStatus) {
+        try {
+            emitter.send(SseEmitter.event().data(
+                    StreamResponseDto.terminal(turnId, executionStatus),
+                    MediaType.APPLICATION_JSON));
+            return true;
+        } catch (IOException | IllegalStateException e) {
+            log.debug("Failed to send chat terminal frame for turn {}: {}", turnId, e.toString());
+            return false;
+        }
     }
 
     private boolean sendSseProgress(SseEmitter emitter, String stage, String toolName, Integer round) {
@@ -2432,12 +2904,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 : "I could not generate a response. Please try again.";
     }
 
-    private void saveSimpleMsg(String sid, String role, String content, String turnId) {
+    private void saveUserTurn(String sid, String turnId, String executionId, String content) {
         ChatMessagePo po = new ChatMessagePo();
         po.setSessionId(sid);
-        po.setRole(role);
+        po.setRole("user");
         po.setContent(content);
         po.setTurnId(turnId);
+        po.setExecutionId(executionId);
         messageRepo.saveAndFlush(po);
     }
 
@@ -2452,6 +2925,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         po.setRole("assistant");
         po.setContent(content);
         po.setTurnId(turnId);
+        po.setExecutionId(UserContextHolder.getChatExecutionId());
         po.setExecutionElapsedSeconds(elapsedSeconds);
         po.setExecutionStatus(executionStatus);
         if (executionStatus == ChatExecutionStatus.COMPLETED
@@ -2470,22 +2944,43 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         messageRepo.saveAndFlush(po);
     }
 
-    private boolean persistAssistantTerminal(Long userId,
-                                             String sessionId,
-                                             String executionId,
-                                             String turnId,
-                                             String content,
-                                             List<StreamResponseDto.ProgressDto> executionTrace,
-                                             Integer elapsedSeconds,
-                                             ChatExecutionStatus executionStatus) {
+    private TerminalPersistenceResult persistAssistantTerminal(
+            Long userId,
+            String sessionId,
+            String executionId,
+            String turnId,
+            String content,
+            List<StreamResponseDto.ProgressDto> executionTrace,
+            Integer elapsedSeconds,
+            ChatExecutionStatus executionStatus,
+            String userStoppedContent) {
+        AtomicReference<ChatExecutionStatus> persistedStatus = new AtomicReference<>();
         try {
-            executeOwnedSessionWrite(userId, sessionId, executionId, () -> saveAssistantMsg(
-                    sessionId, turnId, content, executionTrace, elapsedSeconds, executionStatus));
-            return true;
+            transactionTemplate.executeWithoutResult(status -> {
+                ChatSessionPo session = requireOwnedSessionForWrite(userId, sessionId, executionId);
+                boolean explicitlyStopped = Boolean.TRUE.equals(session.getExecutionStopRequested())
+                        && Boolean.TRUE.equals(session.getExecutionUserStopRequested());
+                ChatExecutionStatus authoritativeStatus = explicitlyStopped
+                        ? ChatExecutionStatus.STOPPED
+                        : executionStatus;
+                String authoritativeContent = explicitlyStopped ? userStoppedContent : content;
+                saveAssistantMsg(
+                        sessionId,
+                        turnId,
+                        authoritativeContent,
+                        executionTrace,
+                        elapsedSeconds,
+                        authoritativeStatus);
+                persistedStatus.set(authoritativeStatus);
+            });
+            if (persistedStatus.get() == null) {
+                throw new IllegalStateException("Terminal transaction completed without a status.");
+            }
+            return new TerminalPersistenceResult(true, persistedStatus.get());
         } catch (RuntimeException e) {
             log.warn("Could not persist {} chat terminal record for session {}: {}",
                     executionStatus, sessionId, e.toString());
-            return false;
+            return new TerminalPersistenceResult(false, executionStatus);
         }
     }
 
@@ -2509,7 +3004,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     + "refresh the conversation history and current Board state before retrying.";
     }
 
-    private ChatExecutionStatus terminalStatus(ToolLoopResult result, boolean replySuppressed) {
+    private ChatExecutionStatus terminalStatus(
+            ToolLoopResult result, ReplyGuardOutcome replyGuardOutcome) {
         if (result == null) return ChatExecutionStatus.FAILED;
         if (result.confirmationPending()) return ChatExecutionStatus.AWAITING_CONFIRMATION;
         if (result.resultUnavailableToolCalls() > 0) return ChatExecutionStatus.PARTIAL;
@@ -2533,7 +3029,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         ChatExecutionStatus status = result.hadToolCalls()
                 ? ChatExecutionStatus.COMPLETED
                 : ChatExecutionStatus.PARTIAL;
-        return replySuppressed && status == ChatExecutionStatus.COMPLETED
+        return replyGuardOutcome == ReplyGuardOutcome.HIDDEN_WITHOUT_EVIDENCE
+                && status == ChatExecutionStatus.COMPLETED
                 ? ChatExecutionStatus.PARTIAL : status;
     }
 
@@ -2596,13 +3093,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         });
     }
 
-    private void requireOwnedSessionForWrite(Long userId, String sessionId, String executionId) {
+    private ChatSessionPo requireOwnedSessionForWrite(
+            Long userId, String sessionId, String executionId) {
         requireActiveUserForWrite(userId);
         String requiredSessionId = Objects.requireNonNull(sessionId, "sessionId must not be null");
         if (executionId == null || executionId.isBlank()) {
-            sessionRepo.findByIdAndUserId(requiredSessionId, userId)
+            return sessionRepo.findByIdAndUserId(requiredSessionId, userId)
                     .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-            return;
         }
         ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(requiredSessionId, userId)
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
@@ -2613,6 +3110,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             throw new ConflictException(
                     "The assistant execution no longer owns this session. No new message was committed.");
         }
+        return session;
     }
 
     private void requireActiveUserForWrite(Long userId) {
@@ -2634,6 +3132,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private record ActiveStreamRequest(
             Long userId,
             String requestId,
+            String turnId,
+            String content,
             AtomicBoolean stopRequested,
             AtomicBoolean userStopRequested,
             AtomicReference<SseEmitter> emitter,
@@ -2642,23 +3142,42 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             LlmRequestControl requestControl) {
 
         private ActiveStreamRequest(
-                Long userId, String requestId, long confirmationStartedNanos) {
-            this(userId, requestId, new AtomicBoolean(false), new AtomicBoolean(false),
+                Long userId,
+                String requestId,
+                String turnId,
+                String content,
+                long confirmationStartedNanos) {
+            this(userId, requestId, turnId, content,
+                    new AtomicBoolean(false), new AtomicBoolean(false),
                     new AtomicReference<>(),
                     new AtomicLong(System.nanoTime() + EXECUTION_CONTROL_POLL_NANOS),
                     new LeaseConfirmation(confirmationStartedNanos),
                     new LlmRequestControl());
         }
+
+        private boolean matches(String candidateTurnId, String candidateContent) {
+            return Objects.equals(turnId, candidateTurnId)
+                    && Objects.equals(content, candidateContent);
+        }
     }
 
-    private record ExecutionLeaseRenewal(boolean renewed, long confirmationStartedNanos) {
-        private static ExecutionLeaseRenewal notRenewed() {
-            return new ExecutionLeaseRenewal(false, Long.MIN_VALUE);
+    private record ExecutionLeaseState(
+            String requestId,
+            boolean stopRequested,
+            boolean userStopRequested) {
+    }
+
+    private record ExecutionLeaseRenewalBatch(
+            Map<String, ExecutionLeaseState> renewedLeases,
+            long confirmationStartedNanos) {
+
+        private static ExecutionLeaseRenewalBatch none() {
+            return new ExecutionLeaseRenewalBatch(Map.of(), Long.MIN_VALUE);
         }
     }
 
     private List<ChatMessagePo> getSmartHistory(String sessionId, int limitCharCount) {
-        List<ChatMessagePo> allMessages = new ArrayList<>(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc(sessionId));
+        List<ChatMessagePo> allMessages = new ArrayList<>(messageRepo.findTop80BySessionIdOrderByIdDesc(sessionId));
         java.util.Collections.reverse(allMessages);
         Deque<ChatMessagePo> safeHistory = new ArrayDeque<>();
         int currentLength = 0;
@@ -2814,7 +3333,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                         && !hasCompletedToolEvidence(persistedTrace)) {
                     dto.setExecutionStatus(null);
                     log.warn("Cleared unproven COMPLETED status for chat message {} because its persisted "
-                            + "execution trace is missing, malformed, or has no successful tool result",
+                            + "execution trace is missing, malformed, unpaired, or has no successful tool result",
                             message.getId());
                 }
             }
@@ -2890,6 +3409,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             return false;
         }
         boolean hasUsableResult = false;
+        StreamResponseDto.ProgressDto pendingExecution = null;
+        Set<String> unresolvedPartialTools = new LinkedHashSet<>();
         for (StreamResponseDto.ProgressDto progress : trace) {
             if (progress == null) {
                 return false;
@@ -2897,14 +3418,34 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             if ("EXECUTION_GUARD".equals(progress.getStage())) {
                 return false;
             }
-            if ("TOOL_RESULT".equals(progress.getStage())) {
-                if (!"USABLE".equals(progress.getOutcome())) {
+            if ("TOOL_EXECUTION".equals(progress.getStage())) {
+                if (pendingExecution != null
+                        || progress.getToolName() == null || progress.getToolName().isBlank()
+                        || progress.getRound() == null || progress.getRound() < 1) {
                     return false;
                 }
-                hasUsableResult = true;
+                pendingExecution = progress;
+                continue;
+            }
+            if ("TOOL_RESULT".equals(progress.getStage())) {
+                if (pendingExecution == null
+                        || !Objects.equals(pendingExecution.getToolName(), progress.getToolName())
+                        || !Objects.equals(pendingExecution.getRound(), progress.getRound())) {
+                    return false;
+                }
+                String toolName = pendingExecution.getToolName();
+                pendingExecution = null;
+                if ("USABLE".equals(progress.getOutcome())) {
+                    unresolvedPartialTools.remove(toolName);
+                    hasUsableResult = true;
+                } else if ("PARTIAL".equals(progress.getOutcome())) {
+                    unresolvedPartialTools.add(toolName);
+                } else {
+                    return false;
+                }
             }
         }
-        return hasUsableResult;
+        return hasUsableResult && pendingExecution == null && unresolvedPartialTools.isEmpty();
     }
 
     private boolean isAssistantToolPlaceholderAdjacentToTool(List<ChatMessagePo> messages, int index) {
@@ -2951,7 +3492,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private void sendSseErrorMessage(
             SseEmitter emitter, String msg, AtomicBoolean isDisconnect) {
-        if (sendSseChunk(emitter, "[ERROR] " + msg)) {
+        if (sendSseError(emitter, msg)) {
             completeEmitter(emitter, isDisconnect);
             return;
         }
@@ -2960,6 +3501,16 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             emitter.completeWithError(new IllegalStateException(msg));
         } catch (IllegalStateException e) {
             log.debug("SSE emitter was already unusable while reporting a terminal error: {}", e.getMessage());
+        }
+    }
+
+    private boolean sendSseError(SseEmitter emitter, String message) {
+        try {
+            emitter.send(SseEmitter.event()
+                    .data(StreamResponseDto.error(message), MediaType.APPLICATION_JSON));
+            return true;
+        } catch (IOException | IllegalStateException e) {
+            return false;
         }
     }
 
@@ -2986,6 +3537,14 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         } catch (IllegalStateException e) {
             isDisconnect.set(true);
             log.debug("SSE emitter was already unusable during completion: {}", e.getMessage());
+        }
+    }
+
+    private void completeInterruptedEmitter(SseEmitter emitter) {
+        try {
+            emitter.complete();
+        } catch (IllegalStateException e) {
+            log.debug("SSE emitter was already unusable during interrupted completion: {}", e.getMessage());
         }
     }
 
@@ -3038,10 +3597,24 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         RESULT_UNAVAILABLE
     }
 
+    private enum ReplyGuardOutcome {
+        NONE,
+        REPLACED_WITH_AUTHORITATIVE_EVIDENCE,
+        HIDDEN_WITHOUT_EVIDENCE
+    }
+
+    private record GuardedClaimReplacement(String content, ReplyGuardOutcome outcome) {
+    }
+
     private enum TerminalPersistenceState {
         NOT_ATTEMPTED,
         PERSISTED,
         FAILED
+    }
+
+    private record TerminalPersistenceResult(
+            boolean persisted,
+            ChatExecutionStatus executionStatus) {
     }
 
     private enum ToolLoopStopReason {

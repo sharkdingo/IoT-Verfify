@@ -264,7 +264,8 @@ public class FuzzMapper {
         return toFindingDto(finding, readAndValidateFinding(finding));
     }
 
-    public FuzzFindingDto toFindingDto(FuzzTaskPo task, FuzzFindingPo finding) {
+    public FuzzFindingDto toFindingDto(
+            FuzzTaskPo task, FuzzFindingPo finding, long actualFindingCount) {
         if (finding == null) return null;
         validateTaskLifecycle(task);
         if (task == null
@@ -275,8 +276,7 @@ public class FuzzMapper {
                     "FuzzTask", task == null ? null : task.getId(), "findings",
                     "finding ownership does not match the run");
         }
-        int persistedFindingCount = task.getFindingCount() == null ? -1 : task.getFindingCount();
-        PersistedRunContext context = readAndValidateRunContext(task, persistedFindingCount);
+        PersistedRunContext context = readAndValidateRunContext(task, actualFindingCount);
         PersistedFindingData data = readAndValidateFinding(finding);
         validateFindingAgainstRun(
                 task,
@@ -649,7 +649,7 @@ public class FuzzMapper {
         }
     }
 
-    private void validateRunFindingCount(FuzzTaskPo task, int actualFindingCount) {
+    private void validateRunFindingCount(FuzzTaskPo task, long actualFindingCount) {
         if (task == null) {
             throw new PersistedDataIntegrityException("FuzzTask", null, "task", "run is missing");
         }
@@ -936,7 +936,7 @@ public class FuzzMapper {
                 "FuzzTask", task == null ? null : task.getId(), field, detail);
     }
 
-    private PersistedRunContext readAndValidateRunContext(FuzzTaskPo task, int actualFindingCount) {
+    private PersistedRunContext readAndValidateRunContext(FuzzTaskPo task, long actualFindingCount) {
         validateRunFindingCount(task, actualFindingCount);
         validateRequiredRunScalars(task);
         ModelInputSnapshot inputSnapshot = readModelInputSnapshot(task);

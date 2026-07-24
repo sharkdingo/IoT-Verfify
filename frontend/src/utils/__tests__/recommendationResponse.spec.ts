@@ -24,6 +24,7 @@ const validStandalone = () => ({
 })
 
 const partialScenarioObjective = {
+  objectiveTargets: { minDevices: 1, minRules: 1, minSpecs: 1 },
   objectiveStatus: 'PARTIAL',
   objectiveIssues: [
     { code: 'NO_AUTOMATION_RULES', message: 'Add an automation rule.' },
@@ -135,6 +136,29 @@ describe('recommendation candidate accounting', () => {
       objectiveStatus: 'COMPLETE',
       objectiveIssues: []
     }, 'Scenario')).toThrow(expect.objectContaining({
+      code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE
+    }))
+
+    const belowExplicitTargets = {
+      ...result,
+      requestedCount: 5,
+      objectiveTargets: { minDevices: 2, minRules: 2, minSpecs: 1 },
+      objectiveIssues: [
+        { code: 'INSUFFICIENT_DEVICES', message: 'At least two devices are required.' },
+        { code: 'NO_AUTOMATION_RULES', message: 'At least two rules are required.' },
+        { code: 'NO_SPECIFICATIONS', message: 'At least one specification is required.' }
+      ]
+    }
+    expect(validateScenarioRecommendationResponse(
+      belowExplicitTargets,
+      'Scenario',
+      belowExplicitTargets.objectiveTargets
+    )).toEqual(belowExplicitTargets)
+    expect(() => validateScenarioRecommendationResponse(
+      belowExplicitTargets,
+      'Scenario',
+      { minDevices: 1, minRules: 1, minSpecs: 1 }
+    )).toThrow(expect.objectContaining({
       code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE
     }))
   })

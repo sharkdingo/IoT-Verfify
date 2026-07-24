@@ -33,6 +33,14 @@ export const createLatestBoardRequestGuard = () => {
   }
 }
 
+export const invalidateFuzzingResultRequests = (
+  currentRequestEpoch: number,
+  invalidateHistoryDetailRequests: () => void
+): number => {
+  invalidateHistoryDetailRequests()
+  return currentRequestEpoch + 1
+}
+
 export const createScopedBoardInvalidationBinding = <Message,>(
   subscribe: (
     userId: number | null | undefined,
@@ -185,6 +193,44 @@ export const hasFrozenBundledTokenSource = (
   value: { modelTokenSource?: string | null }
 ): boolean => value.modelTokenSource === 'BUNDLED'
 
+export type ScenarioRecommendationCountField =
+  | 'minDevices'
+  | 'minRules'
+  | 'minSpecs'
+  | 'maxDevices'
+  | 'maxRules'
+  | 'maxSpecs'
+
+export type ScenarioRecommendationTargetRequest = Record<ScenarioRecommendationCountField, number> & {
+  language: string
+  userRequirement: string
+}
+
+export const requestScenarioRecommendationWithTargets = <T,>(
+  input: Record<ScenarioRecommendationCountField, unknown> & {
+    language: string
+    userRequirement: string
+  },
+  validateCount: (value: unknown, field: ScenarioRecommendationCountField) => number,
+  rangeError: (field: 'devices' | 'rules' | 'specifications') => Error,
+  recommend: (request: ScenarioRecommendationTargetRequest) => Promise<T>
+): Promise<T> => {
+  const request: ScenarioRecommendationTargetRequest = {
+    minDevices: validateCount(input.minDevices, 'minDevices'),
+    minRules: validateCount(input.minRules, 'minRules'),
+    minSpecs: validateCount(input.minSpecs, 'minSpecs'),
+    maxDevices: validateCount(input.maxDevices, 'maxDevices'),
+    maxRules: validateCount(input.maxRules, 'maxRules'),
+    maxSpecs: validateCount(input.maxSpecs, 'maxSpecs'),
+    language: input.language,
+    userRequirement: input.userRequirement
+  }
+  if (request.minDevices > request.maxDevices) throw rangeError('devices')
+  if (request.minRules > request.maxRules) throw rangeError('rules')
+  if (request.minSpecs > request.maxSpecs) throw rangeError('specifications')
+  return recommend(request)
+}
+
 </script>
 
 <script setup lang="ts">
@@ -312,9 +358,9 @@ import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { RECOMMENDATION_RESPONSE_INCOMPLETE_CODE } from '@/utils/recommendationResponse'
 import {
   FUZZ_RESPONSE_INCOMPLETE_CODE,
-  assertFuzzingFindingBelongsToRun,
   getFuzzActiveTaskLimit,
-  getFuzzStoredTaskLimit
+  getFuzzStoredTaskLimit,
+  resolveFuzzingRunFinding
 } from '@/utils/fuzzingResponse'
 import {
   FUZZ_INLINE_RESULT_RECOVERY_MAX_FAILURES,
@@ -347,6 +393,7 @@ import {
 import {
   RUN_RESPONSE_INCOMPLETE_CODE,
   activeTaskProgressStage,
+  hasPersistedVerificationTrace,
   validateCompletedVerificationTask
 } from '@/utils/runResponse'
 import {
@@ -403,6 +450,7 @@ import SystemInspector from '../components/SystemInspector.vue'
 import LanguageToggle from '@/components/common/LanguageToggle.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
+import ScenarioObjectiveIssues from '@/components/ScenarioObjectiveIssues.vue'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { useTheme } from '@/composables/useTheme'
 
@@ -707,6 +755,9 @@ type ScenarioRecommendationResult = {
   truncatedCount: number
   scenarioName: string
   rationale: string
+  objectiveTargets: ScenarioRecommendationResponse['objectiveTargets']
+  objectiveStatus: ScenarioRecommendationResponse['objectiveStatus']
+  objectiveIssues: ScenarioRecommendationResponse['objectiveIssues']
   verificationReady: boolean
   readinessIssues: ScenarioRecommendationResponse['readinessIssues']
   semanticWarnings: ScenarioRecommendationResponse['semanticWarnings']
@@ -6250,6 +6301,12 @@ const ruleRecommendations = ref<RuleRecommendation[]>([])
 const ruleRecommendationMessage = ref('')
 const localizedRecommendationText = (value: unknown, fallback = ''): string =>
   localizedTextOrFallback(value, fallback, locale.value)
+const formatScenarioObjectiveIssue = (
+  issue: ScenarioRecommendationResponse['objectiveIssues'][number]
+): string => localizedRecommendationText(
+  issue.message,
+  t(`app.scenarioObjectiveIssues.${issue.code}`)
+)
 const ruleRecommendationFilteredCount = ref(0)
 const ruleRecommendationFilteredItems = ref<RecommendationFilteredItem[]>([])
 const ruleRecommendationAdjustedItems = ref<RecommendationAdjustmentItem[]>([])
@@ -6906,13 +6963,34 @@ const scenarioRecommendationRequested = ref(false)
 const scenarioRecommendationMessage = ref('')
 const scenarioRecommendationResult = ref<ScenarioRecommendationResult | null>(null)
 const scenarioRecommendationFilters = reactive({
+  minDevices: 2,
+  minRules: 1,
+  minSpecs: 1,
   maxDevices: 6,
   maxRules: 5,
   maxSpecs: 5,
   userRequirement: ''
 })
 let scenarioRecommendationRequestEpoch = 0
+let scenarioRecommendationCriteriaVersion = 0
 const recommendedScenarioScene = computed(() => scenarioRecommendationResult.value?.scene || null)
+
+watch(
+  () => [
+    scenarioRecommendationFilters.minDevices,
+    scenarioRecommendationFilters.minRules,
+    scenarioRecommendationFilters.minSpecs,
+    scenarioRecommendationFilters.maxDevices,
+    scenarioRecommendationFilters.maxRules,
+    scenarioRecommendationFilters.maxSpecs,
+    scenarioRecommendationFilters.userRequirement
+  ],
+  () => {
+    scenarioRecommendationCriteriaVersion += 1
+    resetScenarioRecommendationResults()
+  },
+  { flush: 'sync' }
+)
 
 const fetchDeviceRecommendations = async () => {
   if (isRecommendingDevices.value) {
@@ -7123,6 +7201,7 @@ const fetchScenarioRecommendation = async () => {
   scenarioRecommendationResult.value = null
   scenarioRecommendationMessage.value = ''
   const requestEpoch = ++scenarioRecommendationRequestEpoch
+  const requestCriteriaVersion = scenarioRecommendationCriteriaVersion
   const controller = new AbortController()
   const requestId = crypto.randomUUID()
   scenarioRecommendationAbortController.value = controller
@@ -7130,14 +7209,30 @@ const fetchScenarioRecommendation = async () => {
   recommendationProgressRequestId.value = requestId
 
   try {
-    const response = await boardApi.recommendScenario({
-      maxDevices: validateRecommendationCount(scenarioRecommendationFilters.maxDevices, t('app.maxDevicesField')),
-      maxRules: validateRecommendationCount(scenarioRecommendationFilters.maxRules, t('app.maxRulesField')),
-      maxSpecs: validateRecommendationCount(scenarioRecommendationFilters.maxSpecs, t('app.maxSpecsField')),
-      language: locale.value,
-      userRequirement: scenarioRecommendationFilters.userRequirement
-    }, requestId, controller.signal)
-    if (requestEpoch !== scenarioRecommendationRequestEpoch) return
+    const countLabels: Record<ScenarioRecommendationCountField, string> = {
+      minDevices: t('app.minDevicesField'),
+      minRules: t('app.minRulesField'),
+      minSpecs: t('app.minSpecsField'),
+      maxDevices: t('app.maxDevicesField'),
+      maxRules: t('app.maxRulesField'),
+      maxSpecs: t('app.maxSpecsField')
+    }
+    const rangeLabels = {
+      devices: t('app.devicesTool'),
+      rules: t('app.rulesTool'),
+      specifications: t('app.specificationsTool')
+    }
+    const response = await requestScenarioRecommendationWithTargets(
+      {
+        ...scenarioRecommendationFilters,
+        language: locale.value
+      },
+      (value, field) => requireIntegerInRange(value, countLabels[field], 1, 10),
+      field => new Error(t('app.scenarioMinimumExceedsMaximum', { field: rangeLabels[field] })),
+      request => boardApi.recommendScenario(request, requestId, controller.signal)
+    )
+    if (requestEpoch !== scenarioRecommendationRequestEpoch
+      || requestCriteriaVersion !== scenarioRecommendationCriteriaVersion) return
 
     const rawScene = response.scene
     const scene = rawScene && Array.isArray(rawScene.devices) && rawScene.devices.length > 0
@@ -7160,6 +7255,9 @@ const fetchScenarioRecommendation = async () => {
       truncatedCount: response.truncatedCount,
       scenarioName: response.scenarioName,
       rationale: response.rationale,
+      objectiveTargets: response.objectiveTargets,
+      objectiveStatus: response.objectiveStatus,
+      objectiveIssues: response.objectiveIssues,
       verificationReady: response.verificationReady,
       readinessIssues: response.readinessIssues,
       semanticWarnings: response.semanticWarnings,
@@ -9817,7 +9915,10 @@ const openFuzzingRun = async (runId: number) => {
 }
 
 const closeFuzzingResult = () => {
-  fuzzingResultRequestEpoch += 1
+  fuzzingResultRequestEpoch = invalidateFuzzingResultRequests(
+    fuzzingResultRequestEpoch,
+    historyDetailRequests.invalidate
+  )
   showFuzzingResultDialog.value = false
   fuzzingResult.value = null
   fuzzingError.value = null
@@ -9887,22 +9988,18 @@ const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) =>
   const requestToken = historyDetailRequests.beginReplace()
   try {
     if (!runId) throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
-    const [finding, resolvedRun] = await Promise.all([
-      fuzzingApi.getFinding(findingId),
-      fuzzingApi.getRun(runId)
-    ])
+    const resolvedRun = await fuzzingApi.getRun(runId)
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    if (!resolvedRun || resolvedRun.dataAvailable === false || !resolvedRun.modelSnapshot) {
+      throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
+    }
+    const finding = resolveFuzzingRunFinding(resolvedRun, findingId)
     if (!finding.states.length) {
       ElMessage.warning({ message: t('app.fuzzFindingHasNoStates'), type: 'warning' })
       return
     }
-    if (!resolvedRun || resolvedRun.dataAvailable === false || !resolvedRun.modelSnapshot) {
-      throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
-    }
-    assertFuzzingFindingBelongsToRun(finding, resolvedRun.id, 'Fuzz finding replay')
 
     const trace: Trace = {
-      id: finding.id,
       violatedSpecId: finding.violatedSpecId,
       violatedSpec: finding.violatedSpec,
       checkedExpression: '',
@@ -10153,6 +10250,15 @@ const openFixDialog = (traceId: number, violatedSpecId: string) => {
   fixTraceId.value = traceId
   fixViolatedSpecId.value = violatedSpecId
   showFixDialog.value = true
+}
+
+const canFixVerificationResultTrace = (trace: Trace): boolean => (
+  hasPersistedVerificationTrace(verificationResult.value, trace)
+)
+
+const openFixForVerificationResultTrace = (trace: Trace) => {
+  if (!hasPersistedVerificationTrace(verificationResult.value, trace)) return
+  openFixDialog(trace.id, trace.violatedSpecId)
 }
 
 const cancelAsyncVerification = async () => {
@@ -13525,40 +13631,94 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <div class="p-3 space-y-3 bg-gradient-to-b from-white to-teal-50/30 max-h-[560px] overflow-y-auto">
-        <div class="grid grid-cols-3 gap-2 rounded-lg border border-teal-100 bg-white p-2">
-          <label class="text-xs font-medium text-slate-600">
-            {{ t('app.devicesTool') }}
-            <input
-              v-model.number="scenarioRecommendationFilters.maxDevices"
-              :disabled="isRecommendingScenario"
-              type="number"
-              min="1"
-              max="10"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
-            />
-          </label>
-          <label class="text-xs font-medium text-slate-600">
-            {{ t('app.rulesTool') }}
-            <input
-              v-model.number="scenarioRecommendationFilters.maxRules"
-              :disabled="isRecommendingScenario"
-              type="number"
-              min="1"
-              max="10"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
-            />
-          </label>
-          <label class="text-xs font-medium text-slate-600">
-            {{ t('app.specificationsTool') }}
-            <input
-              v-model.number="scenarioRecommendationFilters.maxSpecs"
-              :disabled="isRecommendingScenario"
-              type="number"
-              min="1"
-              max="10"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
-            />
-          </label>
+        <div class="grid grid-cols-1 gap-2 rounded-lg border border-teal-100 bg-white p-2 sm:grid-cols-3">
+          <fieldset class="min-w-0">
+            <legend class="text-xs font-semibold text-slate-700">{{ t('app.devicesTool') }}</legend>
+            <div class="mt-1 grid grid-cols-2 gap-1">
+              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+                {{ t('app.scenarioMinimum') }}
+                <input
+                  v-model.number="scenarioRecommendationFilters.minDevices"
+                  :disabled="isRecommendingScenario"
+                  data-testid="scenario-min-devices"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                />
+              </label>
+              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+                {{ t('app.scenarioMaximum') }}
+                <input
+                  v-model.number="scenarioRecommendationFilters.maxDevices"
+                  :disabled="isRecommendingScenario"
+                  data-testid="scenario-max-devices"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                />
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="min-w-0">
+            <legend class="text-xs font-semibold text-slate-700">{{ t('app.rulesTool') }}</legend>
+            <div class="mt-1 grid grid-cols-2 gap-1">
+              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+                {{ t('app.scenarioMinimum') }}
+                <input
+                  v-model.number="scenarioRecommendationFilters.minRules"
+                  :disabled="isRecommendingScenario"
+                  data-testid="scenario-min-rules"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                />
+              </label>
+              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+                {{ t('app.scenarioMaximum') }}
+                <input
+                  v-model.number="scenarioRecommendationFilters.maxRules"
+                  :disabled="isRecommendingScenario"
+                  data-testid="scenario-max-rules"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                />
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="min-w-0">
+            <legend class="text-xs font-semibold text-slate-700">{{ t('app.specificationsTool') }}</legend>
+            <div class="mt-1 grid grid-cols-2 gap-1">
+              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+                {{ t('app.scenarioMinimum') }}
+                <input
+                  v-model.number="scenarioRecommendationFilters.minSpecs"
+                  :disabled="isRecommendingScenario"
+                  data-testid="scenario-min-specs"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                />
+              </label>
+              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+                {{ t('app.scenarioMaximum') }}
+                <input
+                  v-model.number="scenarioRecommendationFilters.maxSpecs"
+                  :disabled="isRecommendingScenario"
+                  data-testid="scenario-max-specs"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                />
+              </label>
+            </div>
+          </fieldset>
         </div>
 
         <label class="block rounded-lg border border-teal-100 bg-white p-2 text-xs font-medium text-slate-600">
@@ -13582,7 +13742,7 @@ const counterexampleTraceHelpText = computed(() => {
           @click="fetchScenarioRecommendation"
           :disabled="isRecommendationRunningForAnother('scenario')"
           :class="[
-            'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
+            'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
             isRecommendingScenario ? 'bg-red-500 hover:bg-red-600' : 'bg-teal-600 hover:bg-teal-700'
           ]"
         >
@@ -13681,6 +13841,13 @@ const counterexampleTraceHelpText = computed(() => {
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
           <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
+          <ScenarioObjectiveIssues
+            v-if="scenarioRecommendationResult"
+            :status="scenarioRecommendationResult.objectiveStatus"
+            :issues="scenarioRecommendationResult.objectiveIssues"
+            :title="t('app.scenarioObjectiveIncompleteTitle')"
+            :format-issue="formatScenarioObjectiveIssue"
+          />
         </div>
 
         <div v-else class="space-y-3">
@@ -13717,6 +13884,14 @@ const counterexampleTraceHelpText = computed(() => {
                 <div class="text-[10px] text-slate-500">{{ t('app.specificationsTool') }}</div>
               </div>
             </div>
+
+            <ScenarioObjectiveIssues
+              v-if="scenarioRecommendationResult"
+              :status="scenarioRecommendationResult.objectiveStatus"
+              :issues="scenarioRecommendationResult.objectiveIssues"
+              :title="t('app.scenarioObjectiveIncompleteTitle')"
+              :format-issue="formatScenarioObjectiveIssue"
+            />
 
             <div
               class="mt-3 flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs"
@@ -15885,7 +16060,9 @@ const counterexampleTraceHelpText = computed(() => {
                 <div class="text-xs font-bold text-red-600">{{ t('app.violationNumber', { index: Number(i) + 1 }) }}</div>
                 <div class="flex gap-1">
                   <button
-                    @click="openFixDialog(trace.id, trace.violatedSpecId)"
+                    v-if="canFixVerificationResultTrace(trace)"
+                    @click="openFixForVerificationResultTrace(trace)"
+                    data-testid="verification-trace-fix"
                     class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
                     :disabled="simulationAnimationState.visible"
                     :class="simulationAnimationState.visible ? 'bg-slate-300 cursor-not-allowed' : ''"
@@ -15909,6 +16086,15 @@ const counterexampleTraceHelpText = computed(() => {
                   </button>
                 </div>
               </div>
+              <p
+                v-if="!canFixVerificationResultTrace(trace)"
+                data-testid="verification-trace-fix-unavailable"
+                class="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+              >
+                {{ t(verificationResult.historyPersistence.status === 'OUTCOME_UNKNOWN'
+                  ? 'app.verificationTracePersistenceUnknownFixUnavailable'
+                  : 'app.verificationTraceNotPersistedFixUnavailable') }}
+              </p>
               <div class="text-xs font-bold text-slate-600 mb-1">
                 {{ t('app.traceVisualization.violatedSpecification') }}: {{ getTraceSpecDisplayTitle(trace) }}
               </div>

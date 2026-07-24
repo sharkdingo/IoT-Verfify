@@ -169,17 +169,29 @@ public class RecommendScenarioTool extends AbstractAiTool {
     @Override
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new LinkedHashMap<>();
+        props.put("minDevices", Map.of(
+                "type", "integer",
+                "description", "Required minimum number of devices in the final canonical scene (1-10)."
+        ));
+        props.put("minRules", Map.of(
+                "type", "integer",
+                "description", "Required minimum number of automation rules in the final canonical scene (1-10)."
+        ));
+        props.put("minSpecs", Map.of(
+                "type", "integer",
+                "description", "Required minimum number of formal specifications in the final canonical scene (1-10)."
+        ));
         props.put("maxDevices", Map.of(
                 "type", "integer",
-                "description", "Maximum number of devices in the importable scene draft (1-10). Default 6."
+                "description", "Maximum number of devices in the importable scene draft (1-10)."
         ));
         props.put("maxRules", Map.of(
                 "type", "integer",
-                "description", "Maximum number of automation rules in the scenario (1-10). Default 5."
+                "description", "Maximum number of automation rules in the scenario (1-10)."
         ));
         props.put("maxSpecs", Map.of(
                 "type", "integer",
-                "description", "Maximum number of formal specifications in the scenario (1-10). Default 5."
+                "description", "Maximum number of formal specifications in the scenario (1-10)."
         ));
         props.put("language", Map.of(
                 "type", "string",
@@ -191,7 +203,10 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 "maxLength", RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH,
                 "description", "Scenario goal or user pain point. Example: nighttime elder safety with conflicting privacy constraints."
         ));
-        FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
+        FunctionParameterSchema schema = new FunctionParameterSchema(
+                "object",
+                props,
+                List.of("minDevices", "minRules", "minSpecs", "maxDevices", "maxRules", "maxSpecs"));
         return LlmToolSpec.of(getName(),
                 "Generate one coupled, importable IoT-Verify scene draft with devices, environment variables, automation rules, and formal specifications. The draft is capability-validated but not formally verified and does not mutate the board.",
                 schema);
@@ -208,11 +223,20 @@ public class RecommendScenarioTool extends AbstractAiTool {
             }
 
             requireOnlyFields(args, "$", Set.of(
+                    "minDevices", "minRules", "minSpecs",
                     "maxDevices", "maxRules", "maxSpecs", "language", "userRequirement"));
 
-            int maxDevices = intArgInRange(args, "maxDevices", 6, 1, 10);
-            int maxRules = intArgInRange(args, "maxRules", 5, 1, 10);
-            int maxSpecs = intArgInRange(args, "maxSpecs", 5, 1, 10);
+            int minDevices = requiredCountArg(args, "minDevices");
+            int minRules = requiredCountArg(args, "minRules");
+            int minSpecs = requiredCountArg(args, "minSpecs");
+            int maxDevices = requiredCountArg(args, "maxDevices");
+            int maxRules = requiredCountArg(args, "maxRules");
+            int maxSpecs = requiredCountArg(args, "maxSpecs");
+            requireOrderedRange("devices", minDevices, maxDevices);
+            requireOrderedRange("rules", minRules, maxRules);
+            requireOrderedRange("specs", minSpecs, maxSpecs);
+            ScenarioObjectiveTargets objectiveTargets =
+                    new ScenarioObjectiveTargets(minDevices, minRules, minSpecs);
             String language = languageArg(args, "language");
             String userRequirement = optionalTextArg(
                     args, "userRequirement", "", RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH);
@@ -223,7 +247,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("message", message(language, "noTemplates", 0, 0, 0));
                 result.put("count", 0);
-                result.put("requestedCount", maxDevices + maxRules + maxSpecs);
+                result.put("requestedCount", objectiveTargets.requestedCount());
                 result.put("validatedCount", 0);
                 result.put("filteredCount", 0);
                 result.put("filteredItems", Collections.emptyList());
@@ -236,7 +260,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 Map<String, Object> scene = emptyScene();
                 result.put("scene", scene);
                 ScenarioVerificationReadiness.Status analysis = putScenarioAnalysis(
-                        result, objectMapper.valueToTree(scene), 0, language);
+                        result, objectMapper.valueToTree(scene), 0, language, objectiveTargets);
                 result.put("rationale", validatedRationale(language, 0, 0, 0, analysis.semanticWarnings().size()));
                 if (chatSessionId != null && !chatSessionId.isBlank()) {
                     attachDraftStatus(
@@ -248,13 +272,17 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 return objectMapper.writeValueAsString(result);
             }
 
-            String prompt = buildPrompt(userId, templates, maxDevices, maxRules, maxSpecs, language, userRequirement);
+            String prompt = buildPrompt(
+                    userId, templates, objectiveTargets,
+                    maxDevices, maxRules, maxSpecs, language, userRequirement);
             String aiResponse = promptCompletionService.completeRecommendation(
                     SYSTEM_PROMPT, prompt, TEMPERATURE, MAX_TOKENS);
 
             Map<String, Object> result;
             try {
-                result = parseAndValidate(aiResponse, templates, language, maxDevices, maxRules, maxSpecs);
+                result = parseAndValidate(
+                        aiResponse, templates, language, objectiveTargets,
+                        maxDevices, maxRules, maxSpecs);
             } catch (Exception e) {
                 log.warn("recommend_scenario received an unusable AI response: exception={}",
                         e.getClass().getName());
@@ -293,8 +321,33 @@ public class RecommendScenarioTool extends AbstractAiTool {
         }
     }
 
+    private int requiredCountArg(JsonNode args, String field) throws ArgValidationException {
+        if (args == null || !args.has(field) || args.get(field).isNull()) {
+            throw new ArgValidationException(errorJson(
+                    field + " is required.", "VALIDATION_ERROR", 400));
+        }
+        return intArgInRange(
+                args,
+                field,
+                ScenarioObjectiveTargets.MIN_COUNT,
+                ScenarioObjectiveTargets.MIN_COUNT,
+                ScenarioObjectiveTargets.MAX_COUNT);
+    }
+
+    private void requireOrderedRange(String itemType, int minimum, int maximum)
+            throws ArgValidationException {
+        if (minimum <= maximum) {
+            return;
+        }
+        throw new ArgValidationException(errorJson(
+                "Minimum " + itemType + " must not exceed maximum " + itemType + ".",
+                "VALIDATION_ERROR",
+                400));
+    }
+
     private String buildPrompt(Long userId,
                                List<DeviceTemplateDto> templates,
+                               ScenarioObjectiveTargets objectiveTargets,
                                int maxDevices,
                                int maxRules,
                                int maxSpecs,
@@ -322,9 +375,13 @@ public class RecommendScenarioTool extends AbstractAiTool {
         prompt.append("\n\n## 可用设备模板（只能使用这些模板）\n");
         prompt.append(objectMapper.writeValueAsString(templateContext));
         prompt.append("\n\n## 场景要求\n");
-        prompt.append("- 设备数量上限: ").append(maxDevices).append("\n");
-        prompt.append("- 规则数量上限: ").append(maxRules).append("\n");
-        prompt.append("- 规约数量上限: ").append(maxSpecs).append("\n");
+        prompt.append("- 设备数量: 至少 ").append(objectiveTargets.minDevices())
+                .append(" 个，最多 ").append(maxDevices).append(" 个\n");
+        prompt.append("- 规则数量: 至少 ").append(objectiveTargets.minRules())
+                .append(" 条，最多 ").append(maxRules).append(" 条\n");
+        prompt.append("- 规约数量: 至少 ").append(objectiveTargets.minSpecs())
+                .append(" 条，最多 ").append(maxSpecs).append(" 条\n");
+        prompt.append("- 上述最小数量是明确完成目标；若最终校验后低于任一最小值，结果会标记为 PARTIAL。\n");
         prompt.append(languageInstruction(language)).append("\n");
         if (!userRequirement.isBlank()) {
             prompt.append("- 用户需求/痛点: ").append(userRequirement).append("\n");
@@ -345,6 +402,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
     private Map<String, Object> parseAndValidate(String aiResponse,
                                                  List<DeviceTemplateDto> templates,
                                                  String language,
+                                                 ScenarioObjectiveTargets objectiveTargets,
                                                  int maxDevices,
                                                  int maxRules,
                                                  int maxSpecs) throws Exception {
@@ -398,7 +456,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 : "found";
         result.put("message", message(language, messageKey, devices.size(), rules.size(), specs.size()));
         result.put("count", count);
-        result.put("requestedCount", maxDevices + maxRules + maxSpecs);
+        result.put("requestedCount", objectiveTargets.requestedCount());
         result.put("validatedCount", stats.validatedCount);
         result.put("filteredCount", filteredItems.size());
         result.put("filteredItems", filteredItems);
@@ -410,7 +468,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
         result.put("scenarioName", text(root.path("scenarioName"), language.equals("zh-CN") ? "AI 推荐场景" : "AI Scenario"));
         result.put("scene", scene);
         ScenarioVerificationReadiness.Status analysis = putScenarioAnalysis(
-                result, objectMapper.valueToTree(scene), filteredItems.size(), language);
+                result, objectMapper.valueToTree(scene), filteredItems.size(), language, objectiveTargets);
         result.put("rationale", validatedRationale(
                 language, devices.size(), rules.size(), specs.size(), analysis.semanticWarnings().size()));
         return result;
@@ -420,9 +478,11 @@ public class RecommendScenarioTool extends AbstractAiTool {
             Map<String, Object> result,
             JsonNode scene,
             int filteredCount,
-            String language) {
+            String language,
+            ScenarioObjectiveTargets objectiveTargets) {
         ScenarioVerificationReadiness.Status analysis =
-                ScenarioVerificationReadiness.assess(scene, filteredCount, language);
+                ScenarioVerificationReadiness.assess(scene, filteredCount, language, objectiveTargets);
+        result.put("objectiveTargets", objectiveTargets);
         result.put("objectiveStatus", analysis.objectiveStatus());
         result.put("objectiveIssues", analysis.objectiveIssues());
         result.put("verificationReady", analysis.verificationReady());

@@ -40,9 +40,10 @@ class UserOwnedOrphanCleanupTest {
         createSchemaAndRows(dataSource);
         UserOwnedOrphanCleanup migration = new UserOwnedOrphanCleanup(dataSource);
 
-        assertEquals(19, migration.migrate());
+        assertEquals(21, migration.migrate());
         assertEquals(0, migration.migrate());
 
+        assertEquals(1, count(dataSource, "chat_session_pre_admission_stop"));
         assertEquals(1, count(dataSource, "chat_message"));
         assertEquals(1, count(dataSource, "chat_session"));
         assertEquals(1, count(dataSource, "ai_session_state"));
@@ -59,6 +60,7 @@ class UserOwnedOrphanCleanupTest {
             statement.executeUpdate("DELETE FROM app_user WHERE id = 2");
         }
 
+        assertEquals(1, count(dataSource, "chat_session_pre_admission_stop"));
         assertEquals(1, count(dataSource, "chat_message"));
         assertEquals(1, count(dataSource, "chat_session"));
         assertEquals(1, count(dataSource, "ai_session_state"));
@@ -72,6 +74,10 @@ class UserOwnedOrphanCleanupTest {
              Statement statement = connection.createStatement()) {
             assertThrows(SQLException.class,
                     () -> statement.executeUpdate("INSERT INTO rules (id, user_id) VALUES (99, 99)"));
+            assertThrows(SQLException.class,
+                    () -> statement.executeUpdate(
+                            "INSERT INTO chat_session_pre_admission_stop (session_id, turn_id) "
+                                    + "VALUES ('missing', 'turn-missing')"));
             assertThrows(SQLException.class,
                     () -> statement.executeUpdate(
                             "INSERT INTO chat_message (id, session_id) VALUES (99, 'missing')"));
@@ -100,6 +106,9 @@ class UserOwnedOrphanCleanupTest {
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("CREATE TABLE app_user (id BIGINT PRIMARY KEY)");
             statement.executeUpdate("CREATE TABLE chat_session (id VARCHAR(100) PRIMARY KEY, user_id BIGINT NOT NULL)");
+            statement.executeUpdate("CREATE TABLE chat_session_pre_admission_stop ("
+                    + "session_id VARCHAR(100) NOT NULL, turn_id VARCHAR(64) NOT NULL, "
+                    + "PRIMARY KEY (session_id, turn_id))");
             statement.executeUpdate("CREATE TABLE chat_message (id BIGINT PRIMARY KEY, session_id VARCHAR(100) NOT NULL)");
             statement.executeUpdate("CREATE TABLE ai_session_state ("
                     + "state_key VARCHAR(200) PRIMARY KEY, user_id BIGINT NOT NULL, session_id VARCHAR(100) NOT NULL)");
@@ -112,6 +121,8 @@ class UserOwnedOrphanCleanupTest {
 
             statement.executeUpdate("INSERT INTO app_user (id) VALUES (1)");
             statement.executeUpdate("INSERT INTO chat_session (id, user_id) VALUES ('valid', 1), ('orphan', 99)");
+            statement.executeUpdate("INSERT INTO chat_session_pre_admission_stop (session_id, turn_id) VALUES "
+                    + "('valid', 'turn-valid'), ('orphan', 'turn-orphan'), ('missing', 'turn-missing')");
             statement.executeUpdate("INSERT INTO chat_message (id, session_id) VALUES "
                     + "(1, 'valid'), (2, 'orphan'), (3, 'missing')");
             statement.executeUpdate("INSERT INTO ai_session_state (state_key, user_id, session_id) VALUES "
@@ -131,6 +142,8 @@ class UserOwnedOrphanCleanupTest {
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("INSERT INTO app_user (id) VALUES (2)");
             statement.executeUpdate("INSERT INTO chat_session (id, user_id) VALUES ('cascade', 2)");
+            statement.executeUpdate("INSERT INTO chat_session_pre_admission_stop (session_id, turn_id) "
+                    + "VALUES ('cascade', 'turn-cascade')");
             statement.executeUpdate("INSERT INTO chat_message (id, session_id) VALUES (20, 'cascade')");
             statement.executeUpdate("INSERT INTO ai_session_state (state_key, user_id, session_id) "
                     + "VALUES ('cascade-state', 2, 'cascade')");
@@ -143,6 +156,9 @@ class UserOwnedOrphanCleanupTest {
     }
 
     private void assertCascadeForeignKeys(DataSource dataSource) throws Exception {
+        assertCascadeForeignKey(dataSource, "chat_session_pre_admission_stop",
+                "fk_chat_pre_admission_stop_session",
+                List.of("session_id"), "chat_session", List.of("id"));
         assertCascadeForeignKey(dataSource, "chat_message", "fk_chat_message_session",
                 List.of("session_id"), "chat_session", List.of("id"));
         assertCascadeForeignKey(dataSource, "ai_session_state", "fk_ai_session_state_session_owner",

@@ -14,10 +14,17 @@ public final class ScenarioVerificationReadiness {
     }
 
     public static Status assess(JsonNode scene) {
-        return assess(scene, 0, "en");
+        return assess(scene, 0, "en", ScenarioObjectiveTargets.baseline());
     }
 
     public static Status assess(JsonNode scene, int filteredCount, String language) {
+        return assess(scene, filteredCount, language, ScenarioObjectiveTargets.baseline());
+    }
+
+    public static Status assess(JsonNode scene,
+                                int filteredCount,
+                                String language,
+                                ScenarioObjectiveTargets objectiveTargets) {
         boolean chinese = "zh-CN".equals(language);
         List<Issue> issues = new ArrayList<>();
         if (scene == null || !scene.path("devices").isArray() || scene.path("devices").isEmpty()) {
@@ -26,7 +33,7 @@ public final class ScenarioVerificationReadiness {
         if (scene == null || !scene.path("specs").isArray() || scene.path("specs").isEmpty()) {
             issues.add(new Issue("NO_SPECIFICATIONS", "Add at least one valid specification before verification."));
         }
-        List<Issue> objectiveIssues = objectiveIssues(scene, chinese);
+        List<Issue> objectiveIssues = objectiveIssues(scene, objectiveTargets, chinese);
         return new Status(
                 objectiveIssues.isEmpty() ? "COMPLETE" : "PARTIAL",
                 objectiveIssues,
@@ -35,21 +42,53 @@ public final class ScenarioVerificationReadiness {
                 semanticWarnings(scene, Math.max(0, filteredCount), chinese));
     }
 
-    private static List<Issue> objectiveIssues(JsonNode scene, boolean chinese) {
+    private static List<Issue> objectiveIssues(JsonNode scene,
+                                               ScenarioObjectiveTargets targets,
+                                               boolean chinese) {
         List<Issue> issues = new ArrayList<>();
-        if (scene == null || !scene.path("devices").isArray() || scene.path("devices").isEmpty()) {
-            issues.add(new Issue("NO_DEVICES",
-                    chinese ? "草案中没有设备。" : "The draft contains no device."));
-        }
-        if (scene == null || !scene.path("rules").isArray() || scene.path("rules").isEmpty()) {
-            issues.add(new Issue("NO_AUTOMATION_RULES",
-                    chinese ? "草案中没有自动化规则。" : "The draft contains no automation rule."));
-        }
-        if (scene == null || !scene.path("specs").isArray() || scene.path("specs").isEmpty()) {
-            issues.add(new Issue("NO_SPECIFICATIONS",
-                    chinese ? "草案中没有形式化规约。" : "The draft contains no formal specification."));
-        }
+        int deviceCount = arraySize(scene, "devices");
+        int ruleCount = arraySize(scene, "rules");
+        int specCount = arraySize(scene, "specs");
+        addMinimumIssue(
+                issues, deviceCount, targets.minDevices(), "NO_DEVICES", "INSUFFICIENT_DEVICES",
+                chinese ? "设备" : "device", chinese);
+        addMinimumIssue(
+                issues, ruleCount, targets.minRules(), "NO_AUTOMATION_RULES",
+                "INSUFFICIENT_AUTOMATION_RULES", chinese ? "自动化规则" : "automation rule", chinese);
+        addMinimumIssue(
+                issues, specCount, targets.minSpecs(), "NO_SPECIFICATIONS",
+                "INSUFFICIENT_SPECIFICATIONS", chinese ? "形式化规约" : "formal specification", chinese);
         return List.copyOf(issues);
+    }
+
+    private static int arraySize(JsonNode scene, String field) {
+        if (scene == null || !scene.path(field).isArray()) {
+            return 0;
+        }
+        return scene.path(field).size();
+    }
+
+    private static void addMinimumIssue(List<Issue> issues,
+                                        int actual,
+                                        int minimum,
+                                        String missingCode,
+                                        String insufficientCode,
+                                        String itemName,
+                                        boolean chinese) {
+        if (actual >= minimum) {
+            return;
+        }
+        String code = actual == 0 ? missingCode : insufficientCode;
+        String message;
+        if (chinese) {
+            message = String.format("草案包含 %d 个%s，低于明确要求的至少 %d 个。", actual, itemName, minimum);
+        } else {
+            String displayedItemName = actual == 1 ? itemName : itemName + "s";
+            message = String.format(
+                    "The draft contains %d %s, below the explicit minimum of %d.",
+                    actual, displayedItemName, minimum);
+        }
+        issues.add(new Issue(code, message));
     }
 
     private static List<Issue> semanticWarnings(JsonNode scene, int filteredCount, boolean chinese) {

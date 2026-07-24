@@ -333,6 +333,172 @@ describe('DeviceDialog template authority', () => {
     wrapper.unmount()
   })
 
+  it('keeps state, trust, and privacy together when a snapshot races a local edit', async () => {
+    const manifest: DeviceManifest = {
+      Name: 'Stateful Controller',
+      Modes: ['OperatingMode'],
+      InitState: 'idle',
+      WorkingStates: [
+        { Name: 'idle', Trust: 'trusted', Privacy: 'public' },
+        { Name: 'active', Trust: 'untrusted', Privacy: 'private' }
+      ],
+      APIs: []
+    }
+    const template: DeviceTemplate = {
+      name: manifest.Name,
+      manifest,
+      defaultTemplate: false
+    }
+    const node = {
+      id: 'stateful-1',
+      templateName: template.name,
+      label: 'Stateful controller',
+      position: { x: 0, y: 0 },
+      state: 'idle',
+      currentStateTrust: 'trusted',
+      currentStatePrivacy: 'public',
+      width: 176,
+      height: 128
+    }
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        deviceName: template.name,
+        description: '',
+        label: node.label,
+        nodeId: node.id,
+        manifest,
+        nodes: [node],
+        deviceTemplates: [template],
+        specs: []
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const state = () => document.querySelector<HTMLSelectElement>('[data-testid="device-runtime-state"]')!
+    const trust = () => document.querySelector<HTMLSelectElement>('[data-testid="device-runtime-state-trust"]')!
+    const privacy = () => document.querySelector<HTMLSelectElement>('[data-testid="device-runtime-state-privacy"]')!
+
+    trust().value = 'untrusted'
+    trust().dispatchEvent(new Event('change', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.setProps({
+      nodes: [{
+        ...node,
+        state: 'active',
+        currentStateTrust: 'untrusted',
+        currentStatePrivacy: 'private'
+      }]
+    })
+
+    expect(state().value).toBe('idle')
+    expect(trust().value).toBe('untrusted')
+    expect(privacy().value).toBe('public')
+    expect(document.querySelector('[data-testid="device-runtime-conflict"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="device-runtime-conflict"]')?.textContent)
+      .toContain(i18n.global.t('app.deviceRuntimeConflict', { count: 1 }))
+    const adoptLatest = document.querySelector<HTMLButtonElement>(
+      '[data-testid="device-runtime-adopt-latest"]'
+    )!
+    expect(adoptLatest.classList).toContain('device-runtime-adopt-latest')
+
+    adoptLatest.click()
+    await wrapper.vm.$nextTick()
+    expect(state().value).toBe('active')
+    expect(trust().value).toBe('untrusted')
+    expect(privacy().value).toBe('private')
+    expect(document.querySelector('[data-testid="device-runtime-conflict"]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('rebases the complete state context atomically when the device schema changes', async () => {
+    const originalManifest: DeviceManifest = {
+      Name: 'Schema Controller',
+      Modes: ['OperatingMode'],
+      InitState: 'idle',
+      WorkingStates: [
+        { Name: 'idle', Trust: 'trusted', Privacy: 'public' },
+        { Name: 'active', Trust: 'untrusted', Privacy: 'private' }
+      ],
+      APIs: []
+    }
+    const revisedManifest: DeviceManifest = {
+      ...originalManifest,
+      WorkingStates: [
+        ...originalManifest.WorkingStates!,
+        { Name: 'standby', Trust: 'trusted', Privacy: 'private' }
+      ]
+    }
+    const originalTemplate: DeviceTemplate = {
+      name: originalManifest.Name,
+      manifest: originalManifest,
+      defaultTemplate: false
+    }
+    const revisedTemplate: DeviceTemplate = {
+      ...originalTemplate,
+      manifest: revisedManifest
+    }
+    const node = {
+      id: 'schema-stateful-1',
+      templateName: originalTemplate.name,
+      label: 'Schema controller',
+      position: { x: 0, y: 0 },
+      state: 'idle',
+      currentStateTrust: 'trusted',
+      currentStatePrivacy: 'public',
+      width: 176,
+      height: 128
+    }
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        deviceName: originalTemplate.name,
+        description: '',
+        label: node.label,
+        nodeId: node.id,
+        manifest: originalManifest,
+        nodes: [node],
+        deviceTemplates: [originalTemplate],
+        specs: []
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const state = () => document.querySelector<HTMLSelectElement>('[data-testid="device-runtime-state"]')!
+    const trust = () => document.querySelector<HTMLSelectElement>('[data-testid="device-runtime-state-trust"]')!
+    const privacy = () => document.querySelector<HTMLSelectElement>('[data-testid="device-runtime-state-privacy"]')!
+    privacy().value = 'private'
+    privacy().dispatchEvent(new Event('change', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.setProps({
+      manifest: revisedManifest,
+      deviceTemplates: [revisedTemplate],
+      nodes: [{
+        ...node,
+        state: 'active',
+        currentStateTrust: 'untrusted',
+        currentStatePrivacy: 'private'
+      }]
+    })
+
+    expect(state().value).toBe('idle')
+    expect(trust().value).toBe('trusted')
+    expect(privacy().value).toBe('private')
+    expect(document.querySelector('[data-testid="device-runtime-schema-conflict"]')).not.toBeNull()
+
+    document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-adopt-latest"]')!.click()
+    await wrapper.vm.$nextTick()
+    expect(state().value).toBe('active')
+    expect(trust().value).toBe('untrusted')
+    expect(privacy().value).toBe('private')
+    expect(document.querySelector('[data-testid="device-runtime-schema-conflict"]')).toBeNull()
+    wrapper.unmount()
+  })
+
   it('does not overwrite an edit that returns to the old value while a save is in flight', async () => {
     const manifest: DeviceManifest = {
       Name: 'Custom Controller',
@@ -416,24 +582,97 @@ describe('DeviceDialog template authority', () => {
     wrapper.unmount()
   })
 
-  it('resets the runtime edit session when a same-id device changes template schema', async () => {
-    const manifestWithVariable = (name: string): DeviceManifest => ({
-      Name: `${name} Controller`,
+  it('adopts a new runtime schema without prompting when the draft was not edited', async () => {
+    const manifest = (upperBound: number): DeviceManifest => ({
+      Name: 'Controller',
       Modes: [],
       WorkingStates: [],
       InternalVariables: [{
-        Name: name,
+        Name: 'threshold',
         IsInside: true,
         FalsifiableWhenCompromised: false,
         LowerBound: 0,
-        UpperBound: 100,
+        UpperBound: upperBound,
         Trust: 'trusted',
         Privacy: 'public'
       }],
       APIs: []
     })
-    const originalManifest = manifestWithVariable('alpha')
-    const replacementManifest = manifestWithVariable('beta')
+    const originalManifest = manifest(100)
+    const revisedManifest = manifest(50)
+    const node = {
+      id: 'controller-1',
+      templateName: 'Controller',
+      label: 'Controller',
+      position: { x: 0, y: 0 },
+      state: 'Working',
+      width: 176,
+      height: 128,
+      variables: [{ name: 'threshold', value: '10' }]
+    }
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        deviceName: 'Controller',
+        description: '',
+        label: node.label,
+        nodeId: node.id,
+        manifest: originalManifest,
+        nodes: [node],
+        deviceTemplates: [{
+          name: 'Controller',
+          manifest: originalManifest,
+          defaultTemplate: false
+        }],
+        specs: []
+      },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.setProps({
+      manifest: revisedManifest,
+      nodes: [{ ...node, variables: [{ name: 'threshold', value: '7' }] }],
+      deviceTemplates: [{
+        name: 'Controller',
+        manifest: revisedManifest,
+        defaultTemplate: false
+      }]
+    })
+
+    expect(document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-threshold"]'
+    )?.value).toBe('7')
+    expect(document.querySelector('[data-testid="device-runtime-schema-conflict"]')).toBeNull()
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-save"]')?.disabled)
+      .toBe(false)
+    wrapper.unmount()
+  })
+
+  it('preserves compatible edits and requires a choice when a same-id device schema changes', async () => {
+    const variable = (name: string, upperBound = 100) => ({
+      Name: name,
+      IsInside: true,
+      FalsifiableWhenCompromised: false,
+      LowerBound: 0,
+      UpperBound: upperBound,
+      Trust: 'trusted',
+      Privacy: 'public'
+    })
+    const originalManifest: DeviceManifest = {
+      Name: 'Original Controller',
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [variable('shared'), variable('alpha')],
+      APIs: []
+    }
+    const replacementManifest: DeviceManifest = {
+      Name: 'Replacement Controller',
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [variable('shared', 30), variable('beta')],
+      APIs: []
+    }
     const originalTemplate: DeviceTemplate = {
       name: originalManifest.Name,
       manifest: originalManifest,
@@ -452,7 +691,10 @@ describe('DeviceDialog template authority', () => {
       state: 'Working',
       width: 176,
       height: 128,
-      variables: [{ name: 'alpha', value: '10' }]
+      variables: [
+        { name: 'shared', value: '10' },
+        { name: 'alpha', value: '15' }
+      ]
     }
     const wrapper = mount(DeviceDialog, {
       attachTo: document.body,
@@ -470,10 +712,15 @@ describe('DeviceDialog template authority', () => {
       global: { plugins: [i18n] }
     })
 
+    const sharedInput = () => document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-shared"]'
+    )!
     const originalInput = document.querySelector<HTMLInputElement>(
       '[data-testid="device-runtime-variable-alpha"]'
     )!
-    originalInput.value = '25'
+    sharedInput().value = '25'
+    sharedInput().dispatchEvent(new Event('input', { bubbles: true }))
+    originalInput.value = '35'
     originalInput.dispatchEvent(new Event('input', { bubbles: true }))
     await wrapper.vm.$nextTick()
 
@@ -484,14 +731,71 @@ describe('DeviceDialog template authority', () => {
       nodes: [{
         ...originalNode,
         templateName: replacementTemplate.name,
-        variables: [{ name: 'beta', value: '7' }]
+        variables: [
+          { name: 'shared', value: '7' },
+          { name: 'beta', value: '9' }
+        ]
       }]
     })
 
     expect(document.querySelector('[data-testid="device-runtime-variable-alpha"]')).toBeNull()
+    expect(sharedInput().value).toBe('25')
     expect(document.querySelector<HTMLInputElement>(
       '[data-testid="device-runtime-variable-beta"]'
-    )?.value).toBe('7')
+    )?.value).toBe('9')
+    expect(document.querySelector('[data-testid="device-runtime-schema-conflict"]')?.textContent)
+      .toContain(i18n.global.t('app.deviceRuntimeSchemaConflict'))
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-save"]')?.disabled)
+      .toBe(true)
+    expect(document.querySelector('[data-testid="device-runtime-keep-local"]')?.textContent)
+      .toContain(i18n.global.t('app.deviceRuntimeContinueCompatible'))
+
+    document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-keep-local"]')!.click()
+    await wrapper.vm.$nextTick()
+    expect(document.querySelector('[data-testid="device-runtime-schema-conflict"]')).toBeNull()
+    expect(sharedInput().value).toBe('25')
+    document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-save"]')!.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('save-runtime')?.[0]?.[1]).toMatchObject({
+      variables: [
+        { name: 'shared', value: '25' },
+        { name: 'beta', value: '9' }
+      ]
+    })
+
+    sharedInput().value = '20'
+    sharedInput().dispatchEvent(new Event('input', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    const revisedManifest: DeviceManifest = {
+      ...replacementManifest,
+      InternalVariables: [variable('shared', 40), variable('beta')]
+    }
+    const revisedTemplate: DeviceTemplate = {
+      ...replacementTemplate,
+      manifest: revisedManifest
+    }
+    await wrapper.setProps({
+      manifest: revisedManifest,
+      deviceTemplates: [revisedTemplate],
+      nodes: [{
+        ...originalNode,
+        templateName: revisedTemplate.name,
+        variables: [
+          { name: 'shared', value: '11' },
+          { name: 'beta', value: '12' }
+        ]
+      }]
+    })
+    expect(sharedInput().value).toBe('20')
+    expect(document.querySelector('[data-testid="device-runtime-schema-conflict"]')).not.toBeNull()
+
+    document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-adopt-latest"]')!.click()
+    await wrapper.vm.$nextTick()
+    expect(sharedInput().value).toBe('11')
+    expect(document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-beta"]'
+    )?.value).toBe('12')
+    expect(document.querySelector('[data-testid="device-runtime-schema-conflict"]')).toBeNull()
     wrapper.unmount()
   })
 

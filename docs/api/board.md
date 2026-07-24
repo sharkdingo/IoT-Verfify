@@ -171,15 +171,23 @@ one representation instead of preserving whitespace or label-case drift.
 The device-details form performs a field-level three-way merge between its last accepted
 server baseline, the local draft, and each incoming Board snapshot. An untouched local field
 adopts the incoming value; a locally edited field is preserved when the server-side field did
-not change; and disjoint local/server edits merge automatically. If the same scalar, variable,
-or privacy entry changed differently on both sides, the dialog lists the conflict and blocks
-Save until the user explicitly keeps the local value or uses the latest server value. It also
-records a monotonic edit revision when Save begins, so edits made while the request is in
+not change; and disjoint local/server edits merge automatically. If the same state context,
+variable, or privacy entry changed differently on both sides, the dialog lists the conflict
+and blocks Save until the user explicitly keeps the local value or uses the latest server value.
+It also records a monotonic edit revision when Save begins, so edits made while the request is in
 flight remain local even when the user deliberately returns a field to its pre-save value;
-the matching response still advances the authoritative baseline. A same-id snapshot whose
-template/runtime schema changes starts a new edit session, because retaining fields from the
-old manifest would create an invalid mixed draft. Closing the dialog remains authoritative;
-a late response updates the Board snapshot but does not reopen the details surface.
+the matching response still advances the authoritative baseline. The state, current-state
+trust, and current-state privacy fields form one state context: reconciliation preserves or
+adopts that complete context rather than combining one state's trust/privacy overrides with
+another state.
+When the same node receives a different runtime schema, an untouched draft immediately adopts
+the authoritative runtime. A dirty draft is rebased onto that runtime: a locally changed state
+context is retained only when the complete context remains legal, while compatible local-variable
+edits are retained independently. Removed or incompatible fields are discarded. Save remains
+blocked behind an explicit schema-conflict decision. **Use latest** discards the draft, while
+**Continue with compatible edits** accepts the new baseline and keeps only the retained
+compatible changes. Closing the dialog remains authoritative; a late response updates the Board
+snapshot but does not reopen the details surface.
 
 Both update commands return `DeviceUpdateResultDto`: `{ operation: updated|unchanged,
 mutationType: layout|runtime, changedFields, previousDevice, currentDevice, currentNodes,
@@ -812,13 +820,14 @@ backend stores and returns it as the authoritative semantic type for UI, AI, NuS
 generation, and fix logic. Device references use canonical board node ids; labels are
 display-only. See [../architecture/device-identity.md](../architecture/device-identity.md).
 
-After schema validation, the NuSMV-specific constraints (identifier legality,
-StartState/EndState format, trust/privacy values) are enforced by runtime validation —
+After schema validation, the NuSMV-specific constraints (identifier legality and
+StartState/EndState format) are enforced by runtime validation —
 see
 [../architecture/nusmv-model.md](../architecture/nusmv-model.md) and the P1–P5 rules in
 [../architecture/spec-templates.md](../architecture/spec-templates.md). In particular,
-`Trust` must be `trusted` or `untrusted` and `Privacy` must be `public` or `private`
-(case-insensitive; P4) — other values are rejected at generation time. Default template
+`Trust` must be exactly `trusted` or `untrusted` and `Privacy` must be exactly `public`
+or `private` (lowercase; P4). The canonical JSON Schema rejects other casing at import
+instead of storing a value that the typed scene contract cannot re-import. Default template
 JSON lives in `backend/src/main/resources/deviceTemplate/` and is also checked against
 the canonical schema when imported.
 
@@ -841,7 +850,7 @@ paths, and cancellation paths.
 | POST | `/api/board/rules/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
 | POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (`all`, `safety`, `response`, `consistency`, or `privacy`; default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
 | POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
-| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, a deterministic post-validation `rationale`, objective completeness, validation counters, structural readiness, semantic warnings, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
+| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: required integer `minDevices`, `minRules`, `minSpecs`, `maxDevices`, `maxRules`, and `maxSpecs` in `1..10` (each minimum no greater than its maximum), plus optional `language` and `userRequirement` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, a deterministic post-validation `rationale`, echoed `objectiveTargets`, objective completeness, validation counters, structural readiness, semantic warnings, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
 | GET | `/api/board/recommendations/{requestId}` | Reads the authenticated user's matching active or just-finished request | Returns `InteractiveOperationStatusDto`; terminal status is retained briefly for the final polling tick, while unknown requests return 404 |
 | DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means the durable stop signal was accepted for the matching local or remote execution. The callable may still be unwinding, so status remains authoritative until `FINISHED` |
 | POST | `/api/board/rules/check-duplicate` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Deterministic duplicate-rule check used by `RuleBuilderDialog` before saving. It does not call the external LLM and returns a typed `DuplicateRuleCheckResultDto`: required `isDuplicate`, `requiresReview`, `similarity` (`0..1`), `matchType`, stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Clients localize the ordinary explanation from `reasonCode`. |
@@ -949,8 +958,8 @@ conflict freedom.
 > `requestedCount`, `validatedCount`, `filteredCount`, `filteredItems`, `adjustedCount`, `adjustedItems`,
 > `rawCandidateCount`, `inspectedCount`, and `truncatedCount` feedback for generated
 > devices/environment entries/rules/specs. `count` is the number of items in the final
-> scene, including required environment variables; `requestedCount` is only the sum of
-> the requested device/rule/specification limits. `validatedCount` counts inspected raw
+> scene, including required environment variables; `requestedCount` is the sum of the
+> three explicit minimum targets, not the maximum caps. `validatedCount` counts inspected raw
 > candidates that were kept, while `adjustedItems[]` reports deterministic defaults or
 > missing required environment entries added to make the scene complete as
 > `{ type, index?, reasonCode, reason, label?, appliedValues }`. These adjustments are
@@ -959,12 +968,15 @@ conflict freedom.
 > raw AI output, scenario `count` is not required to equal `validatedCount`; clients
 > verify `count` against `scene.devices + scene.environmentVariables + scene.rules +
 > scene.specs` instead. The raw-candidate identities still use `validatedCount`.
-> The response carries authoritative `objectiveStatus=COMPLETE|PARTIAL` and ordered
-> `objectiveIssues[]` (`{ code, message }`). The controller and frontend recompute these
-> fields from the canonical scene: missing devices, automation rules, or specifications
-> produce `NO_DEVICES`, `NO_AUTOMATION_RULES`, and `NO_SPECIFICATIONS`, respectively.
-> `COMPLETE` means only that all three core item classes are present; it is not a claim that
-> the user's prose was satisfied or that formal verification passed.
+> The response carries authoritative `objectiveTargets` (`{ minDevices, minRules,
+> minSpecs }`), `objectiveStatus=COMPLETE|PARTIAL`, and ordered `objectiveIssues[]`
+> (`{ code, message }`). The controller requires the echoed targets to match the submitted
+> minimums, and both the controller and frontend recompute status from the canonical scene.
+> A missing category produces `NO_DEVICES`, `NO_AUTOMATION_RULES`, or `NO_SPECIFICATIONS`;
+> a positive count below its explicit minimum produces `INSUFFICIENT_DEVICES`,
+> `INSUFFICIENT_AUTOMATION_RULES`, or `INSUFFICIENT_SPECIFICATIONS`. `COMPLETE` means only
+> that all three explicit count targets were reached; it is not a claim that the rest of the
+> user's prose was satisfied or that formal verification passed.
 > The response also carries authoritative `verificationReady` and ordered
 > `readinessIssues[]` (`{ code, message }`). The REST controller and frontend recompute
 > readiness from the canonical returned scene and reject a mismatch; currently

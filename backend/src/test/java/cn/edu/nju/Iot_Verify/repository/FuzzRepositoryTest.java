@@ -357,6 +357,8 @@ class FuzzRepositoryTest {
                 .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(11L, task.getId()).size());
         assertTrue(findingRepository
                 .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(12L, task.getId()).isEmpty());
+        assertEquals(1L, findingRepository.countByUserIdAndFuzzTaskId(11L, task.getId()));
+        assertEquals(0L, findingRepository.countByUserIdAndFuzzTaskId(12L, task.getId()));
         List<FuzzTaskPo> completedRuns = taskRepository.findByUserIdAndStatusOrderByCreatedAtDescIdDesc(
                 11L, FuzzTaskPo.TaskStatus.COMPLETED, PageRequest.of(0, 25));
         assertEquals(1, completedRuns.size());

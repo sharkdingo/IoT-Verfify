@@ -31,6 +31,21 @@ const requireCount = (result: Record<string, any>, field: string, context: strin
   return value
 }
 
+const requireObjectiveTarget = (
+  result: Record<string, any>,
+  field: string,
+  context: string
+): number => {
+  const value = result[field]
+  if (!Number.isSafeInteger(value) || value < 1 || value > 10) {
+    throw new RecommendationResponseContractError(
+      context,
+      `${field} must be an integer between 1 and 10`
+    )
+  }
+  return value
+}
+
 const requireNonBlankText = (value: unknown, field: string, context: string): string => {
   if (typeof value !== 'string' || !value.trim()) {
     throw new RecommendationResponseContractError(context, `${field} must be non-blank text`)
@@ -135,9 +150,16 @@ export const validateStandaloneRecommendationResponse = <T>(
   return result as T
 }
 
+export interface ScenarioObjectiveTargetsContract {
+  minDevices: number
+  minRules: number
+  minSpecs: number
+}
+
 export const validateScenarioRecommendationResponse = <T>(
   value: unknown,
-  context: string
+  context: string,
+  expectedTargets?: ScenarioObjectiveTargetsContract
 ): T => {
   const result = requireRecord(value, context)
   if (!result.scene || typeof result.scene !== 'object' || Array.isArray(result.scene)) {
@@ -154,12 +176,42 @@ export const validateScenarioRecommendationResponse = <T>(
   if (typeof result.scenarioName !== 'string' || typeof result.rationale !== 'string') {
     throw new RecommendationResponseContractError(context, 'scenarioName and rationale are required')
   }
+  const objectiveTargets = requireRecord(result.objectiveTargets, context)
+  const minDevices = requireObjectiveTarget(objectiveTargets, 'minDevices', context)
+  const minRules = requireObjectiveTarget(objectiveTargets, 'minRules', context)
+  const minSpecs = requireObjectiveTarget(objectiveTargets, 'minSpecs', context)
+  if (result.requestedCount !== minDevices + minRules + minSpecs) {
+    throw new RecommendationResponseContractError(
+      context,
+      'requestedCount must equal the sum of objectiveTargets'
+    )
+  }
+  if (expectedTargets && (
+    minDevices !== expectedTargets.minDevices
+    || minRules !== expectedTargets.minRules
+    || minSpecs !== expectedTargets.minSpecs
+  )) {
+    throw new RecommendationResponseContractError(
+      context,
+      'objectiveTargets must match the submitted minimum counts'
+    )
+  }
   const objectiveStatus = requireNonBlankText(result.objectiveStatus, 'objectiveStatus', context)
   const objectiveIssues = requireArray(result, 'objectiveIssues', context)
   const expectedObjectiveCodes: string[] = []
-  if (devices.length === 0) expectedObjectiveCodes.push('NO_DEVICES')
-  if (rules.length === 0) expectedObjectiveCodes.push('NO_AUTOMATION_RULES')
-  if (specs.length === 0) expectedObjectiveCodes.push('NO_SPECIFICATIONS')
+  if (devices.length < minDevices) {
+    expectedObjectiveCodes.push(devices.length === 0 ? 'NO_DEVICES' : 'INSUFFICIENT_DEVICES')
+  }
+  if (rules.length < minRules) {
+    expectedObjectiveCodes.push(rules.length === 0
+      ? 'NO_AUTOMATION_RULES'
+      : 'INSUFFICIENT_AUTOMATION_RULES')
+  }
+  if (specs.length < minSpecs) {
+    expectedObjectiveCodes.push(specs.length === 0
+      ? 'NO_SPECIFICATIONS'
+      : 'INSUFFICIENT_SPECIFICATIONS')
+  }
   const actualObjectiveCodes = objectiveIssues.map((item, index) => {
     const issue = requireRecord(item, context)
     const code = requireNonBlankText(issue.code, `objectiveIssues[${index}].code`, context)

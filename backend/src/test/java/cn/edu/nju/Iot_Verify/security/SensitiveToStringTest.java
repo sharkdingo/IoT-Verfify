@@ -52,6 +52,7 @@ class SensitiveToStringTest {
         ChatRequestDto chatRequest = new ChatRequestDto();
         chatRequest.setContent(SECRET);
         StreamResponseDto streamResponse = new StreamResponseDto(SECRET);
+        StreamResponseDto streamError = StreamResponseDto.error(SECRET);
 
         assertRedacted(List.of(
                 register,
@@ -65,7 +66,8 @@ class SensitiveToStringTest {
                 chatMessage,
                 chatRequest,
                 ChatMessageResponseDto.builder().content(SECRET).build(),
-                streamResponse));
+                streamResponse,
+                streamError));
     }
 
     @Test

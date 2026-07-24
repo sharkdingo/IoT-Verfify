@@ -28,6 +28,14 @@ export interface ChatPendingConfirmation {
     kinds: ChatConfirmationKind[]
 }
 
+export type ChatExecutionStatus =
+    | 'COMPLETED'
+    | 'AWAITING_CONFIRMATION'
+    | 'PARTIAL'
+    | 'STOPPED'
+    | 'DISCONNECTED'
+    | 'FAILED'
+
 // Matches backend ChatMessageResponseDto.
 export interface ChatMessage {
     id?: number
@@ -39,11 +47,18 @@ export interface ChatMessage {
     // Persisted by the backend for history and populated live while streaming.
     executionTrace?: StreamProgress[]
     executionElapsedSeconds?: number
-    executionStatus?: 'COMPLETED' | 'AWAITING_CONFIRMATION' | 'PARTIAL' | 'STOPPED' | 'DISCONNECTED' | 'FAILED'
+    executionStatus?: ChatExecutionStatus
+}
+
+export interface PersistedChatMessage extends ChatMessage {
+    id: number
+    sessionId: string
+    turnId: string
+    createdAt: string
 }
 
 export interface ChatHistoryPage {
-    messages: ChatMessage[]
+    messages: PersistedChatMessage[]
     nextBeforeId: number | null
     hasMore: boolean
 }
@@ -60,6 +75,11 @@ export type StreamRefreshTarget =
 export interface StreamCommand {
     type: 'REFRESH_DATA'
     payload: { target: StreamRefreshTarget }
+}
+
+export interface StreamTerminal {
+    turnId: string
+    executionStatus: ChatExecutionStatus
 }
 
 type StreamProgressBase = {

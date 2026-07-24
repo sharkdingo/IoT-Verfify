@@ -34,10 +34,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -62,7 +65,12 @@ class ChatExecutionLeaseHeartbeatIntegrationTest {
     void heartbeatDoesNotRenewWithStaleTimeAfterRowLockWaitExceedsTtl() throws Exception {
         ChatSessionRepository observedRepository = mock(
                 ChatSessionRepository.class, delegatesTo(repository));
-        ChatServiceImpl service = service(observedRepository);
+        ChatExecutionConfig config = new ChatExecutionConfig();
+        config.setLeaseTtlMs(5_000);
+        config.setLeaseHeartbeatMs(1_000);
+        doReturn(0).when(observedRepository)
+                .clearExpiredExecutionLeases(any(java.time.LocalDateTime.class));
+        ChatServiceImpl service = service(observedRepository, config);
         ChatSessionPo session = new ChatSessionPo();
         session.setId("locked-session");
         session.setUserId(1L);
@@ -70,7 +78,17 @@ class ChatExecutionLeaseHeartbeatIntegrationTest {
         session.setExecutionUserStopRequested(false);
         new TransactionTemplate(transactionManager).executeWithoutResult(
                 status -> repository.saveAndFlush(session));
-        service.beginStreamRequest(1L, "locked-session");
+        String executionId = service.beginStreamRequest(
+                1L, "locked-session", "turn-locked", "hello");
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            ChatSessionPo admitted = repository.findByIdAndUserIdForUpdate(
+                    "locked-session", 1L).orElseThrow();
+            admitted.setActiveExecutionExpiresAt(
+                    repository.currentDatabaseTime().plusNanos(Duration.ofMillis(50).toNanos()));
+            repository.saveAndFlush(admitted);
+        });
+        config.setLeaseTtlMs(50);
+        config.setLeaseHeartbeatMs(10);
 
         CountDownLatch rowLocked = new CountDownLatch(1);
         CountDownLatch heartbeatWaitingForLock = new CountDownLatch(1);
@@ -87,8 +105,8 @@ class ChatExecutionLeaseHeartbeatIntegrationTest {
             assertTrue(rowLocked.await(2, TimeUnit.SECONDS));
             doAnswer(invocation -> {
                 heartbeatWaitingForLock.countDown();
-                return repository.findByIdAndUserIdForUpdate("locked-session", 1L);
-            }).when(observedRepository).findByIdAndUserIdForUpdate("locked-session", 1L);
+                return repository.findByIdInForUpdate(invocation.getArgument(0));
+            }).when(observedRepository).findByIdInForUpdate(anySet());
             Future<?> heartbeat = executor.submit(service::maintainExecutionLeases);
 
             assertTrue(heartbeatWaitingForLock.await(2, TimeUnit.SECONDS));
@@ -99,8 +117,8 @@ class ChatExecutionLeaseHeartbeatIntegrationTest {
             verify(observedRepository, times(1)).saveAndFlush(session);
             assertFalse(service.getSessionActivity(1L, "locked-session").isActive());
             ChatSessionPo expired = repository.findById("locked-session").orElseThrow();
-            assertNull(expired.getActiveExecutionId());
-            assertNull(expired.getActiveExecutionExpiresAt());
+            assertEquals(executionId, expired.getActiveExecutionId());
+            assertTrue(expired.getActiveExecutionExpiresAt().isBefore(repository.currentDatabaseTime()));
         } finally {
             releaseRow.countDown();
             lockHolder.get(2, TimeUnit.SECONDS);
@@ -108,14 +126,13 @@ class ChatExecutionLeaseHeartbeatIntegrationTest {
         }
     }
 
-    private ChatServiceImpl service(ChatSessionRepository observedRepository) {
+    private ChatServiceImpl service(
+            ChatSessionRepository observedRepository,
+            ChatExecutionConfig config) {
         UserRepository userRepository = mock(UserRepository.class);
         when(userRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(UserPo.builder().id(1L).build()));
         ObjectMapper objectMapper = new ObjectMapper();
-        ChatExecutionConfig config = new ChatExecutionConfig();
-        config.setLeaseTtlMs(50);
-        config.setLeaseHeartbeatMs(10);
         return new ChatServiceImpl(
                 observedRepository,
                 mock(ChatMessageRepository.class),

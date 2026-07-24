@@ -1420,7 +1420,9 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Counterexample search finding", findingId));
         FuzzTaskPo run = requireOwnedRun(userId, finding.getFuzzTaskId());
-        return fuzzMapper.toFindingDto(run, finding);
+        long actualFindingCount = findingRepository.countByUserIdAndFuzzTaskId(
+                userId, finding.getFuzzTaskId());
+        return fuzzMapper.toFindingDto(run, finding, actualFindingCount);
     }
 
     private FuzzTaskPo requireOwnedTask(Long userId, Long taskId) {

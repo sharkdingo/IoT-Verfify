@@ -15,6 +15,9 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "chat_message", indexes = {
         @Index(name = "idx_chat_message_session_id", columnList = "session_id")
+}, uniqueConstraints = {
+        @UniqueConstraint(name = "uk_chat_message_session_turn_role",
+                columnNames = {"session_id", "turn_id", "role"})
 })
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class ChatMessagePo {
@@ -35,6 +38,9 @@ public class ChatMessagePo {
 
     @Column(name = "turn_id", length = 64)
     private String turnId;
+
+    @Column(name = "execution_id", length = 36)
+    private String executionId;
 
     @Lob
     @Column(name = "execution_trace_json", columnDefinition = "LONGTEXT")

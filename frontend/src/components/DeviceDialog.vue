@@ -173,6 +173,7 @@ const runtimeSchemaIdentity = computed(() => {
 const runtimeDraft = ref(createDeviceRuntimeDraft())
 const runtimeDraftBaseline = ref(createDeviceRuntimeDraft())
 const runtimeDraftConflictFields = ref<string[]>([])
+const runtimeSchemaConflict = ref(false)
 let runtimeSaveDraft: DeviceRuntimeDraft | null = null
 
 const cloneRuntimeDraft = (draft: DeviceRuntimeDraft): DeviceRuntimeDraft => ({
@@ -183,6 +184,51 @@ const cloneRuntimeDraft = (draft: DeviceRuntimeDraft): DeviceRuntimeDraft => ({
   variableTrusts: { ...draft.variableTrusts },
   privacies: { ...draft.privacies }
 })
+
+type RuntimeStateContext = Pick<
+  DeviceRuntimeDraft,
+  'state' | 'currentStateTrust' | 'currentStatePrivacy'
+>
+
+const RUNTIME_STATE_CONTEXT_CONFLICT = 'stateContext'
+
+const runtimeStateContext = (draft: DeviceRuntimeDraft): RuntimeStateContext => ({
+  state: draft.state,
+  currentStateTrust: draft.currentStateTrust,
+  currentStatePrivacy: draft.currentStatePrivacy
+})
+
+const runtimeStateContextsEqual = (
+  left: RuntimeStateContext,
+  right: RuntimeStateContext
+) => left.state === right.state
+  && left.currentStateTrust === right.currentStateTrust
+  && left.currentStatePrivacy === right.currentStatePrivacy
+
+const applyRuntimeStateContext = (
+  draft: DeviceRuntimeDraft,
+  context: RuntimeStateContext
+) => {
+  draft.state = context.state
+  draft.currentStateTrust = context.currentStateTrust
+  draft.currentStatePrivacy = context.currentStatePrivacy
+}
+
+const runtimeDraftRecordsEqual = (
+  left: Record<string, string>,
+  right: Record<string, string>
+) => {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  return [...keys].every(key => (left[key] ?? '') === (right[key] ?? ''))
+}
+
+const runtimeDraftsEqual = (left: DeviceRuntimeDraft, right: DeviceRuntimeDraft) =>
+  left.state === right.state
+  && left.currentStateTrust === right.currentStateTrust
+  && left.currentStatePrivacy === right.currentStatePrivacy
+  && runtimeDraftRecordsEqual(left.variables, right.variables)
+  && runtimeDraftRecordsEqual(left.variableTrusts, right.variableTrusts)
+  && runtimeDraftRecordsEqual(left.privacies, right.privacies)
 
 const runtimeWorkingStates = computed(() =>
   getTemplateWorkingStates(currentTemplate.value)
@@ -209,6 +255,10 @@ const runtimeHasModes = computed(() => {
 
 const hasRuntimeFields = computed(() =>
   Boolean(currentTemplate.value && (runtimeHasModes.value || runtimeInternalVariables.value.length > 0))
+)
+
+const hasRuntimeDraftConflict = computed(() =>
+  runtimeSchemaConflict.value || runtimeDraftConflictFields.value.length > 0
 )
 
 const variableInputPlaceholder = (variable: InternalVariable) => {
@@ -252,11 +302,72 @@ const replaceRuntimeDraft = (draft: DeviceRuntimeDraft) => {
   runtimeDraft.value = cloneRuntimeDraft(draft)
   runtimeDraftBaseline.value = cloneRuntimeDraft(draft)
   runtimeDraftConflictFields.value = []
+  runtimeSchemaConflict.value = false
 }
 
 const syncRuntimeDraftFromNode = () => {
   runtimeSaveDraft = null
   replaceRuntimeDraft(createRuntimeDraftFromNode())
+}
+
+const runtimeVariableValueFitsCurrentSchema = (variable: InternalVariable, value: string) => {
+  const normalizedValue = value.trim()
+  if (!normalizedValue) return true
+  if (templateVariableHasEnumValues(variable)) {
+    return variable.Values!.map(String).includes(normalizedValue)
+  }
+  if (!templateVariableUsesNumericBounds(variable)) return true
+  const numericValue = Number(normalizedValue)
+  return Number.isFinite(numericValue)
+    && (variable.LowerBound === undefined || numericValue >= variable.LowerBound)
+    && (variable.UpperBound === undefined || numericValue <= variable.UpperBound)
+}
+
+const reconcileRuntimeDraftForSchemaChange = () => {
+  runtimeSaveDraft = null
+  const incomingDraft = createRuntimeDraftFromNode()
+  const baselineDraft = runtimeDraftBaseline.value
+  const currentDraft = runtimeDraft.value
+  const mergedDraft = cloneRuntimeDraft(incomingDraft)
+  const preserveChanged = (currentValue = '', baselineValue = '') => currentValue !== baselineValue
+
+  const currentStateContext = runtimeStateContext(currentDraft)
+  const baselineStateContext = runtimeStateContext(baselineDraft)
+  const supportedStates = new Set(runtimeWorkingStates.value.map(state => state.Name))
+  const stateContextFitsCurrentSchema = runtimeHasModes.value
+    && supportedStates.has(currentStateContext.state)
+    && (!currentStateContext.currentStateTrust
+      || TRUST_OPTIONS.some(option => option === currentStateContext.currentStateTrust))
+    && (!currentStateContext.currentStatePrivacy
+      || PRIVACY_OPTIONS.some(option => option === currentStateContext.currentStatePrivacy))
+  if (!runtimeStateContextsEqual(currentStateContext, baselineStateContext)
+    && stateContextFitsCurrentSchema) {
+    applyRuntimeStateContext(mergedDraft, currentStateContext)
+  }
+
+  for (const variable of runtimeInternalVariables.value) {
+    const name = variable.Name
+    const currentValue = currentDraft.variables[name] ?? ''
+    if (preserveChanged(currentValue, baselineDraft.variables[name] ?? '')
+      && runtimeVariableValueFitsCurrentSchema(variable, currentValue)) {
+      mergedDraft.variables[name] = currentValue
+    }
+    const currentTrust = currentDraft.variableTrusts[name] ?? ''
+    if (preserveChanged(currentTrust, baselineDraft.variableTrusts[name] ?? '')
+      && (!currentTrust || TRUST_OPTIONS.some(option => option === currentTrust))) {
+      mergedDraft.variableTrusts[name] = currentTrust
+    }
+    const currentPrivacy = currentDraft.privacies[name] ?? ''
+    if (preserveChanged(currentPrivacy, baselineDraft.privacies[name] ?? '')
+      && (!currentPrivacy || PRIVACY_OPTIONS.some(option => option === currentPrivacy))) {
+      mergedDraft.privacies[name] = currentPrivacy
+    }
+  }
+
+  runtimeDraft.value = mergedDraft
+  runtimeDraftBaseline.value = cloneRuntimeDraft(incomingDraft)
+  runtimeDraftConflictFields.value = []
+  runtimeSchemaConflict.value = true
 }
 
 const reconcileRuntimeDraftFromNode = () => {
@@ -290,15 +401,33 @@ const reconcileRuntimeDraftFromNode = () => {
   }
 
   const mergedDraft = createDeviceRuntimeDraft()
-  for (const field of ['state', 'currentStateTrust', 'currentStatePrivacy'] as const) {
-    mergedDraft[field] = mergeValue(
-      field,
-      baselineDraft[field],
-      currentDraft[field],
-      incomingDraft[field],
-      runtimeSaveDraft?.[field]
-    )
+  const baselineStateContext = runtimeStateContext(baselineDraft)
+  const currentStateContext = runtimeStateContext(currentDraft)
+  const incomingStateContext = runtimeStateContext(incomingDraft)
+  const savedStateContext = runtimeSaveDraft
+    ? runtimeStateContext(runtimeSaveDraft)
+    : null
+  let mergedStateContext = currentStateContext
+  if (existingConflicts.has(RUNTIME_STATE_CONTEXT_CONFLICT)) {
+    if (runtimeStateContextsEqual(currentStateContext, incomingStateContext)) {
+      mergedStateContext = incomingStateContext
+    } else {
+      nextConflicts.add(RUNTIME_STATE_CONTEXT_CONFLICT)
+    }
+  } else if (savedStateContext
+    && runtimeStateContextsEqual(incomingStateContext, savedStateContext)
+    && !runtimeStateContextsEqual(currentStateContext, incomingStateContext)) {
+    mergedStateContext = currentStateContext
+  } else if (runtimeStateContextsEqual(currentStateContext, baselineStateContext)) {
+    mergedStateContext = incomingStateContext
+  } else if (runtimeStateContextsEqual(incomingStateContext, baselineStateContext)
+    || runtimeStateContextsEqual(currentStateContext, incomingStateContext)) {
+    mergedStateContext = currentStateContext
+  } else {
+    nextConflicts.add(RUNTIME_STATE_CONTEXT_CONFLICT)
   }
+  applyRuntimeStateContext(mergedDraft, mergedStateContext)
+
   for (const field of ['variables', 'variableTrusts', 'privacies'] as const) {
     const names = new Set([
       ...Object.keys(baselineDraft[field]),
@@ -323,10 +452,14 @@ const reconcileRuntimeDraftFromNode = () => {
 
 const adoptLatestRuntimeDraft = () => {
   const incomingDraft = createRuntimeDraftFromNode()
+  if (runtimeSchemaConflict.value) {
+    replaceRuntimeDraft(incomingDraft)
+    return
+  }
   const resolvedDraft = cloneRuntimeDraft(runtimeDraft.value)
   for (const path of runtimeDraftConflictFields.value) {
-    if (path === 'state' || path === 'currentStateTrust' || path === 'currentStatePrivacy') {
-      resolvedDraft[path] = incomingDraft[path]
+    if (path === RUNTIME_STATE_CONTEXT_CONFLICT) {
+      applyRuntimeStateContext(resolvedDraft, runtimeStateContext(incomingDraft))
       continue
     }
     const separator = path.indexOf('.')
@@ -344,6 +477,7 @@ const adoptLatestRuntimeDraft = () => {
 const keepLocalRuntimeDraft = () => {
   runtimeDraftBaseline.value = cloneRuntimeDraft(createRuntimeDraftFromNode())
   runtimeDraftConflictFields.value = []
+  runtimeSchemaConflict.value = false
 }
 
 watch(
@@ -351,8 +485,14 @@ watch(
   ([visible, nodeId, schemaIdentity], previous) => {
     if (!visible) return
     const [wasVisible, previousNodeId, previousSchemaIdentity] = previous || []
-    if (!wasVisible || nodeId !== previousNodeId || schemaIdentity !== previousSchemaIdentity) {
+    if (!wasVisible || nodeId !== previousNodeId) {
       syncRuntimeDraftFromNode()
+    } else if (schemaIdentity !== previousSchemaIdentity) {
+      if (runtimeDraftsEqual(runtimeDraft.value, runtimeDraftBaseline.value)) {
+        syncRuntimeDraftFromNode()
+      } else {
+        reconcileRuntimeDraftForSchemaChange()
+      }
     }
   },
   { immediate: true }
@@ -377,7 +517,7 @@ const saveRuntime = () => {
   const template = currentTemplate.value
   const node = currentNode.value
   if (!template || !node || !props.nodeId) return
-  if (runtimeDraftConflictFields.value.length > 0) {
+  if (hasRuntimeDraftConflict.value) {
     ElMessage.warning(t('app.deviceRuntimeConflictUnresolved'))
     return
   }
@@ -890,7 +1030,7 @@ const deviceSpecs = computed(() => {
                     type="button"
                     data-testid="device-runtime-save"
                     @click="saveRuntime"
-                    :disabled="runtimeSaving || runtimeDraftConflictFields.length > 0"
+                    :disabled="runtimeSaving || hasRuntimeDraftConflict"
                     class="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-purple-300"
                   >
                     <span v-if="runtimeSaving" class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
@@ -900,17 +1040,25 @@ const deviceSpecs = computed(() => {
                 </div>
 
                 <div
-                  v-if="runtimeDraftConflictFields.length > 0"
+                  v-if="hasRuntimeDraftConflict"
                   data-testid="device-runtime-conflict"
                   class="device-runtime-conflict mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-950"
                   role="alert"
                 >
-                  <p>{{ t('app.deviceRuntimeConflict', { count: runtimeDraftConflictFields.length }) }}</p>
+                  <p
+                    v-if="runtimeSchemaConflict"
+                    data-testid="device-runtime-schema-conflict"
+                  >
+                    {{ t('app.deviceRuntimeSchemaConflict') }}
+                  </p>
+                  <p v-if="runtimeDraftConflictFields.length > 0">
+                    {{ t('app.deviceRuntimeConflict', { count: runtimeDraftConflictFields.length }) }}
+                  </p>
                   <div class="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
                       data-testid="device-runtime-adopt-latest"
-                      class="min-h-11 rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-100"
+                      class="device-runtime-adopt-latest min-h-11 rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-100"
                       @click="adoptLatestRuntimeDraft"
                     >
                       {{ t('app.deviceRuntimeUseLatest') }}
@@ -921,7 +1069,9 @@ const deviceSpecs = computed(() => {
                       class="min-h-11 rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
                       @click="keepLocalRuntimeDraft"
                     >
-                      {{ t('app.deviceRuntimeKeepMine') }}
+                      {{ runtimeSchemaConflict
+                        ? t('app.deviceRuntimeContinueCompatible')
+                        : t('app.deviceRuntimeKeepMine') }}
                     </button>
                   </div>
                 </div>
@@ -1412,6 +1562,22 @@ const deviceSpecs = computed(() => {
 
 :global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-conflict button) {
   border-color: color-mix(in srgb, #f59e0b 58%, var(--border)) !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-conflict .device-runtime-adopt-latest) {
+  border-color: #fbbf24 !important;
+  background-color: #451a03 !important;
+  color: #fef3c7 !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-conflict .device-runtime-adopt-latest:hover) {
+  background-color: #78350f !important;
+  color: #fffbeb !important;
+}
+
+:global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-conflict .device-runtime-adopt-latest:focus-visible) {
+  outline: 2px solid #fbbf24;
+  outline-offset: 2px;
 }
 
 /* Modal Transitions */

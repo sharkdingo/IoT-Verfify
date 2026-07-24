@@ -18,7 +18,7 @@ Verified against code on 2026-07-24. Source: `controller/ChatController.java`,
 | GET | `/api/chat/sessions/{sessionId}/messages?beforeId=&limit=50` | → `ChatHistoryPageDto` | Bounded message history, newest page first |
 | GET | `/api/chat/sessions/{sessionId}/activity` | → `ChatSessionActivityDto { sessionId, active }` | Authoritative cross-instance check for whether a request is still active for the session |
 | GET | `/api/chat/sessions/{sessionId}/confirmation` | → `ChatPendingConfirmationDto { sessionId, kinds }` | Server-authoritative protected-action kinds waiting for an explicit UI decision |
-| POST | `/api/chat/sessions/{sessionId}/stop` | → `null` | Idempotently request that the active response stop; already-started writes are not rolled back |
+| POST | `/api/chat/sessions/{sessionId}/stop` | `{ turnId: String \| null }` → `null` | Stop the named local turn, or the reattached active response when its turn id is unavailable; already-started writes are not rolled back |
 | DELETE | `/api/chat/sessions/{sessionId}` | → `null` | Delete a session |
 
 `ChatSessionResponseDto`: `{ id: String, userId: Long, title: String | null, createdAt,
@@ -51,13 +51,14 @@ internal `tool` rows are rejected. It treats this as an untrusted boundary: `rol
 history cursors, execution-status values, and every nested progress stage/outcome must have
 the documented shape. A malformed page is rejected and remains unavailable rather than being
 rendered as a completed or verified turn.
-Every started user turn that reaches message persistence attempts to save a visible
-terminal assistant record, including provider failure and client-disconnect paths. A
-terminal write, including execution-trace serialization, is attempted at most once. If it
-fails, the server sends a terminal `[ERROR]` frame instead of completing the SSE stream as a
-successful response; it does not retry the write as a misleading disconnect row. The client
-retains its local response when authoritative history has no terminal row with the same `turnId`.
-When saved, the row stores
+Once a worker owns its admitted turn, normal, provider-failure, and client-disconnect paths
+attempt to save one visible terminal assistant record. Admission cleanup, pre-execution
+ownership loss, or a terminal write failure can honestly leave no assistant row. A terminal
+write, including execution-trace serialization, is attempted at most once. If it fails, the
+ server sends a structured `error` frame and closes without a terminal acknowledgement; it does
+not retry the write as a misleading disconnect row. After any accepted-stream failure, the
+client waits for the session to become idle and replaces optimistic state with authoritative
+history, including the valid user-only outcome. When saved, the terminal row stores
 the exact bounded execution record, elapsed time, and explicit terminal status; `PARTIAL`
 means no platform tool ran, or tool work began before a later failure, an execution guard,
 or an uncertain result. The UI distinguishes a non-empty trace with no tool execution or
@@ -68,8 +69,12 @@ may be unknown; an absent trace is never used to infer that no tool ran.
 persistence completed; it does not prove that every requested platform objective completed.
 History restores only a non-empty, structurally valid trace stored on that terminal row. It
 never rebuilds a trace from hidden historical tool-call/result rows. If a row says
-`COMPLETED` but its stored trace is missing, malformed, guarded, or lacks a usable tool result,
-the response omits that status rather than presenting unproven success. The frontend history
+`COMPLETED` but its stored trace is missing, malformed, guarded, lacks a usable tool result,
+or does not pair every tool execution with the same tool and round's result in order,
+the response omits that status rather than presenting unproven success. An intermediate
+`PARTIAL` result remains unresolved until a later paired `USABLE` result from the same tool;
+another tool's success cannot recover it. `FAILED`, `RESULT_UNAVAILABLE`, and
+`CONFIRMATION_REQUIRED` results cannot support `COMPLETED`. The frontend history
 validator independently rejects a `COMPLETED` message without the same persisted usable-tool
 evidence, and the component renders such directly supplied data as unconfirmed rather than
 completed.
@@ -89,12 +94,17 @@ request. Registration happens before the worker is queued, so the short enqueue 
 cannot admit a second request. The active request id, expiry, and stop flags are stored on
 the locked `chat_session` row. Activity checks and stop requests therefore remain
 authoritative without load-balancer affinity. A scheduled heartbeat renews the short-lived
-lease while the owning worker is registered; timing keys and defaults are owned by the
-[configuration reference](../getting-started/configuration.md#llm-ai). Renewal uses a
-short transaction that locks the matching session row and recomputes the effective current
-time after any lock wait from both the database clock and monotonic elapsed time. It extends
-only the same still-unexpired execution id, so a delayed or stale worker cannot revive an
-expired lease or overwrite a replacement lease.
+leases while their owning workers are registered; timing keys and defaults are owned by the
+[configuration reference](../getting-started/configuration.md#llm-ai). Each pass snapshots the
+local executions and renews every matching row in one transaction, locking rows in stable
+session-id order and then checking the complete user/session/execution ownership tuple. After
+all locks are held it recomputes the effective current time from both the database clock and
+monotonic elapsed time. The batch extends only the same still-unexpired execution ids, so a
+delayed or stale worker cannot revive an expired lease or overwrite a replacement lease.
+Admission and the complete renewal batch also reject a commit whose round trip would leave less
+than one configured heartbeat interval before expiry. Expired-row cleanup runs before renewal,
+and the pass checks the margin again immediately before returning, so later sessions or cleanup
+work cannot consume an earlier session's heartbeat safety margin.
 Transient database failures are retried, but the local worker is cancelled once ownership
 has remained unconfirmed for one complete database-lease TTL.
 Lease creation, activity checks, renewal, release, and expiry cleanup all compare against
@@ -112,6 +122,16 @@ The same scheduled pass clears expired lease ids and stop flags. A crashed or re
 worker therefore releases its session after at most one TTL instead of leaving it busy for
 hours, while a healthy execution can run past any single lease window. Normal completion
 and queue rejection still clear the lease immediately.
+
+Before dispatch, the backend locks the session, verifies capacity and per-session `turnId`
+uniqueness, claims the execution lease, and persists the user message in one transaction.
+Reusing a `turnId` in the same session returns `409`. If dispatch fails, or a queued worker
+cannot confirm that it acquired the admitted execution, the exact admitted user row and lease
+are removed before an HTTP rejection is returned. A `503` queue-saturation response is returned
+only after that cleanup is confirmed. If cleanup cannot be confirmed, the endpoint instead
+returns a `2xx` SSE response containing a localized structured `error` frame, closes
+without a terminal acknowledgement, and requires the client to wait for the session to become
+idle and reconcile history and Board state before retrying.
 
 Across sessions, each user may run at most two assistant streams at once. Redis
 coordinates this admission across backend instances; if Redis is unavailable, the same
@@ -168,11 +188,18 @@ server notice that the turn did not confirm current Board data or a completed pl
 operation. For every turn, the backend buffers each complete sentence before exposing it.
 Explicit tool-result or current-platform completion/mutation claims are replaced with the
 exact successful `TOOL_RESULT` progress details recorded by the server, or with a deterministic
-warning when no such result exists. The unsupported segment and all later provider prose are
-neither streamed nor persisted; earlier safe segments remain visible. A suppressed claim
-downgrades an otherwise `COMPLETED` turn to `PARTIAL`. This deliberately narrow check does not
-classify API documentation, historical descriptions, or sample/draft content as a platform
-operation.
+warning when no such result exists. With successful evidence, only the unsupported segment is
+replaced and later safe provider prose continues normally. Without successful evidence, the
+warning is emitted and all later provider prose is neither streamed nor persisted; earlier safe
+segments remain visible. A claim hidden without evidence downgrades an otherwise `COMPLETED`
+turn to `PARTIAL`, while an evidence-backed replacement retains the tool-derived status. This
+deliberately narrow check does not classify API documentation, historical descriptions, or
+sample/draft content as a platform operation. Closed ASCII/typographic quoted spans, inline
+backtick code, and backtick or tilde code fences are preserved, so explanations and translations
+can discuss a claim without presenting it as an executed action. Fence closers may be longer than
+their opener. While streaming, an unfinished literal delays sentence release; at end of stream,
+an unclosed quote or fence is inspected as ordinary text so it cannot hide a later unsupported
+claim.
 Ordinary conversation finishes as `PARTIAL`, while its answer content remains available to the
 user and is labelled as a zero-tool response rather than a partially completed operation.
 
@@ -249,6 +276,8 @@ failed executions.
 
 History reconstruction also validates that every persisted assistant tool-call id has
 exactly one matching tool-result id before sending that block back to a provider.
+The bounded model-context window is selected by descending database message id and then
+restored to ascending id order; per-instance JVM timestamps never determine protocol order.
 Incomplete, duplicate, malformed, or isolated internal tool blocks are omitted from the
 model context, while surrounding user-visible conversation remains available. This keeps
 corrupt internal protocol records from being represented as executed work. During the active
@@ -277,7 +306,9 @@ each returned kind, and sends the selected `kind` plus `CONFIRM` or `CANCEL` in 
 stream request's structured `confirmation` field. The accepted kinds are `DESTRUCTIVE`,
 `DEFAULT_TEMPLATE_RESET`, and `SCENE_REPLACEMENT`. The backend requires that exact kind to
 still be pending for the authenticated session; an invented, stale, or mismatched command
-authorizes no write. Natural-language classification remains available only for
+authorizes no write. The client rejects a confirmation response with a mismatched session or
+any value outside this enum instead of rendering unknown authority. Natural-language
+classification remains available only for
 non-destructive choice prompts and cannot create or consume protected authority.
 The token is valid for 15 minutes and is consumed once
 before mutation; a second tool call in the same model response cannot reuse it. Wrong,
@@ -305,17 +336,19 @@ retrying. With `mutationMayHaveCommitted=false`, no mutation refresh is sent.
 | `turnId` | `String` | Required non-blank value, ≤64 characters. The client generates a unique value used to associate the user message and terminal assistant record; omission is rejected with HTTP `400`. |
 | `confirmation` | `ChatConfirmationCommandDto` | Optional explicit protected-action decision: `{ action: "CONFIRM" | "CANCEL", kind: "DESTRUCTIVE" | "DEFAULT_TEMPLATE_RESET" | "SCENE_REPLACEMENT" }`. It is accepted only when that kind is currently pending for the session. |
 
-If the chat thread pool is saturated the request is rejected with `503`
-(`ServiceUnavailableException`) before streaming starts. Errors that happen after the
-emitter is created, including an inaccessible session or LLM provider failure, are
-reported as an SSE content frame prefixed with `[ERROR] ` and then the stream completes.
-After the user message has been saved, the same error path also persists a visible
-`FAILED` or `PARTIAL` terminal assistant row. A detected disconnect persists
+An unknown session, a reused `turnId`, and other admission failures remain synchronous JSON
+errors with their documented HTTP status. If the chat thread pool is saturated, the request
+is rejected with `503` (`ServiceUnavailableException`) only after its admitted row and lease
+have been removed. Provider and processing failures after dispatch are reported as an SSE
+frame with an `error` field. The backend first persists the visible `FAILED` or
+`PARTIAL` terminal assistant row, sends the error frame, then sends its terminal
+acknowledgement as the final data frame. A detected disconnect persists
 `DISCONNECTED`; the client reloads authoritative history after the backend reports the
 session idle, so that record remains visible even when its SSE frame could not arrive.
-If the terminal row itself cannot be saved, the `[ERROR]` frame explicitly says history is
+If the terminal row itself cannot be saved, the `error` frame explicitly says history is
 incomplete and asks the client to reconcile current history and Board state; no second
-terminal insert is attempted.
+terminal insert is attempted and no terminal acknowledgement is sent. Admission rollback
+whose outcome cannot be confirmed follows the same no-terminal reconciliation rule.
 
 ### Stream frames
 
@@ -328,8 +361,10 @@ Each SSE `data:` frame carries a JSON-serialized `StreamResponseDto`:
 | Field | Type | Meaning |
 | :--- | :--- | :--- |
 | `content` | `String` | A chunk of assistant text (streamed incrementally) |
+| `error` | `String` | A non-blank server error message. It is structurally distinct from model-authored `content` |
 | `command` | `CommandDto` | Optional front-end refresh command: `{ type: "REFRESH_DATA", payload: { target } }`, where `target` is `device_list`, `environment_list`, `rule_list`, `spec_list`, `template_list`, `run_history`, or `board_state` |
 | `progress` | `ProgressDto` | Optional live status `{ stage, toolName?, round?, outcome?, successfulSteps?, failedSteps?, unconfirmedSteps?, detail? }`; `detail` is a bounded task-resumption summary, model-authored reasoning summary, or operation-aware tool-result summary |
+| `terminal` | `TerminalDto` | Persistence acknowledgement `{ turnId, executionStatus }` for the final assistant row. It must match the request `turnId`, use a documented execution status, occur exactly once, and be the final data frame |
 
 Progress stages and outcomes:
 
@@ -383,15 +418,22 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   `template_list`, and `run_history`. A tool emits every target it may have changed;
   device mutations therefore also refresh the shared Environment Pool, while async task
   creation/cancellation, sync verification, and saved-trace deletion refresh run history.
-- Errors are emitted as a `content` frame prefixed with `[ERROR] ` and then the stream
-  completes.
-- The frontend validates structured `command` and `progress` objects before invoking any
+- A persisted processing error is emitted as a structured `error` frame,
+  followed by its terminal acknowledgement. Admission-outcome and terminal-persistence
+  errors close without a terminal frame and require authoritative reconciliation.
+- Model-authored `content` is never classified by a text prefix. Literal text beginning with
+  `[ERROR]` remains ordinary assistant content.
+- The frontend validates structured `command`, `progress`, and `terminal` objects before invoking any
   UI callback. Unknown stages, outcomes, negative counters, or malformed payloads terminate
   the stream as an invalid frame; they are never treated as ordinary assistant text.
-- The client accepts only a JSON object with at least one valid `content`, `command`, or
-  `progress` field. Empty objects, arrays, raw text, unknown fields, invalid field types,
-  and stage/outcome mismatches terminate the stream as `INVALID_FRAME`; they are never
-  treated as assistant content or normal completion.
+- The client accepts only a JSON object with exactly one non-null, valid `content`, `error`,
+  `command`, `progress`, or `terminal` payload. Empty objects, arrays, raw text, unknown or null fields,
+  multiple semantic payloads, invalid field types, and stage/outcome mismatches terminate the
+  stream as `INVALID_FRAME`; they are never treated as assistant content or normal completion.
+- A stream is complete only after a valid terminal frame. Clean EOF after content, command,
+  or progress frames is `INCOMPLETE_STREAM`, not successful completion. The backend emits
+  `terminal` only after the matching assistant row has been persisted. A transport reset after
+  a valid terminal frame does not revoke that persisted outcome.
 
 ### Consuming the stream (frontend)
 
@@ -400,8 +442,10 @@ API and reads `response.body.getReader()`, so the `Authorization: Bearer <token>
 header is set manually. See
 [../guides/frontend-integration.md](../guides/frontend-integration.md) for the
 `sendStreamChat(...)` wrapper (with `onMessage` / `onCommand` / `onError` / `onFinish`
-callbacks and `AbortController` support). `onFinish` means the response stream reached
-normal completion; a client abort does not masquerade as completion.
+callbacks and `AbortController` support). `onFinish(terminal)` means the matching terminal
+assistant row was acknowledged, not merely that the reader reached EOF. For a persisted
+server error, `onFinish` receives that acknowledgement before `onError` receives the
+`SERVER_FRAME` error. A client abort does not masquerade as completion.
 
 `REFRESH_DATA` commands use a promise-returning component callback rather than a
 fire-and-forget event. The assistant remains interaction-locked until the owning Board
@@ -410,22 +454,40 @@ attempts the client-only `board_state` reconciliation. A second failure leaves a
 localized retry panel open and keeps assistant requests, scene replacement, and trace
 playback locked until a later full reconciliation succeeds.
 
-The Stop control first sends `POST /api/chat/sessions/{sessionId}/stop`, then aborts the
-browser stream. This distinguishes an explicit user stop from an unexpected transport
-loss. The owning backend immediately closes a blocked provider stream or cancels a pending
+The Stop control first sends `POST /api/chat/sessions/{sessionId}/stop` with the local
+turn id and waits for that durable stop fence before aborting the browser stream or polling
+activity. A reattached response whose turn id is unavailable sends `turnId: null` and stops
+the current session execution. This distinguishes an explicit user stop from an unexpected
+transport loss and prevents a quick Stop from missing a request that has not entered stream
+admission yet. Concurrent quick Stops retain independent pre-admission turn fences instead of
+overwriting one another; those bounded fence rows are removed with their owning session through
+the same database-level cascade used by the rest of chat history. The owning backend immediately
+closes a blocked provider stream or cancels a pending
 planning future; another backend instance observes the durable stop flag during lease
 maintenance and closes its local provider request. Stop still cannot cancel or roll back a
 tool transaction already running on the server. A tool that has already returned is still classified and persisted before the
 worker stops when the same execution still owns the lease, so committed writes and
 confirmation previews do not lose their audit result. A worker replaced by a newer execution
-cannot persist that result or a terminal assistant row.
+cannot persist that result or a terminal assistant row. The terminal-message transaction locks
+the session and rechecks both durable stop flags; an explicit stop committed first is persisted
+as `STOPPED` even if the browser abort reaches the worker first or the worker had already
+computed `COMPLETED`, `PARTIAL`, or `FAILED`. If the transport is still writable when a worker
+observes a cross-instance stop, it sends that persisted `STOPPED` terminal frame and completes
+the emitter; an already-broken transport is still completed server-side instead of remaining
+allocated until the SSE timeout.
 After an explicit stop or a session-switch/new-session request, the Board polls
 the session activity endpoint until `active=false`, keeps assistant mutations locked
 during that settling period, and only then reloads message history, board collections,
-and run history. Normal stream completion also waits for `active=false` and reloads
+and run history. Once explicit-stop or reattached remote work is confirmed idle, authoritative
+history may legitimately contain only its user turn when admission rollback or terminal
+persistence did not complete; the client replaces optimistic state, restores a draft only when
+that user turn is absent, and unlocks instead of waiting forever for a nonexistent terminal row.
+Terminal-confirmed completion also waits for `active=false` and reloads
 authoritative message history so persisted terminal status wins over locally inferred
-progress. History replaces the local response only when the terminal row carries the same
-`turnId`; an older terminal reply cannot erase the current request. Closing the floating
+progress. That normal path replaces the local response only when the terminal row carries
+the same `turnId`; an older terminal reply cannot erase the current request. An accepted
+protocol or transport failure instead replaces optimistic state with the complete
+authoritative history after idle settlement, even when the valid result is user-only. Closing the floating
 panel only hides it and does not abort the request. If three consecutive activity checks
 fail, each check uses a dedicated 2.5-second timeout instead of the general 100-second
 REST timeout, so the client reaches an outcome-unknown warning and authoritative
@@ -462,13 +524,23 @@ and failed states and offers an explicit retry after a failed list request. Befo
 first response chunk arrives, the assistant's pending status is rendered inside one
 compact assistant bubble rather than as an empty message followed by detached status
 text.
-The client treats any successful HTTP response as transport acceptance because the backend
-has already claimed the execution slot and persisted the request before returning the SSE
-response. A missing or unreadable response body remains a localized stream error, but it
-does not roll back a request that may still be running. A pre-stream `400`, `409`, `429`, or
-`503` removes optimistic user and assistant placeholders, restores an ordinary text draft,
-and leaves protected-action confirmation state intact; a rejected request therefore never
-appears as persisted history.
+The client treats any successful HTTP response as crossing the synchronous rejection
+boundary. This is not proof of dispatch or persistence: a `2xx` stream can carry the
+admission-outcome-unknown warning when cleanup could not be confirmed. A missing or unreadable
+response body remains a localized stream error, but the client does not remove a turn whose
+admission outcome may be unknown. It waits for idle settlement and reloads authoritative
+history and Board state. The same rule applies when a dispatched request loses transport before
+any HTTP response arrives, because the server may already have admitted it. Only an explicit
+pre-stream `400`, `409`, `429`, or `503` proves rejection: the client then removes optimistic
+user and assistant placeholders, restores an ordinary text draft, and leaves protected-action
+confirmation state intact. A proven rejected request therefore never appears as persisted
+history. If authoritative history later proves that an ambiguous ordinary-text turn was not
+admitted, the client restores its draft at that point.
+
+Reloading authoritative conversation history is part of settlement, not a best-effort display
+refresh. A failed reload or a terminal-confirmed turn whose matching terminal row is absent keeps
+assistant mutations locked and exposes the same reconciliation retry action; the client unlocks
+only after history replacement succeeds.
 
 Backend-supplied safety notices and fallback explanations follow the language of the
 current user message for Chinese and English conversations. This applies to no-write
@@ -478,7 +550,7 @@ visible and are persisted with the assistant reply; raw English control text is 
 prepended to an otherwise Chinese answer.
 
 Client-detected stream protocol failures use stable error kinds (`HTTP_ERROR`,
-`MISSING_BODY`, `EMPTY_STREAM`, `INVALID_FRAME`, `SERVER_FRAME`) and are localized by
+`MISSING_BODY`, `INCOMPLETE_STREAM`, `INVALID_FRAME`, `SERVER_FRAME`) and are localized by
 the frontend. Internal parser messages such as `No response body` remain diagnostic
 details and are not displayed verbatim in a localized conversation.
 

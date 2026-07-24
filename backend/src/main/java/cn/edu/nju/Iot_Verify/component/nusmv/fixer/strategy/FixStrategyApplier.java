@@ -11,8 +11,10 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Applies a verified {@link FixSuggestionDto} onto a set of rules, producing the modified rule list.
@@ -61,13 +63,15 @@ public final class FixStrategyApplier {
         List<RuleDto> working = FixStrategyUtils.deepCopyRules(rules);
         switch (strategy) {
             case "parameter":
-                applyParameter(suggestion.getParameterAdjustments(), working);
-                refreshRuleStrings(working, displayDeviceNames);
+                Set<Integer> parameterRuleIndices = applyParameter(
+                        suggestion.getParameterAdjustments(), working);
+                refreshRuleStrings(working, parameterRuleIndices, displayDeviceNames);
                 return working;
             case "condition":
-                List<RuleDto> adjusted = applyCondition(suggestion.getConditionAdjustments(), working, persistenceDeviceRefs);
-                refreshRuleStrings(adjusted, displayDeviceNames);
-                return adjusted;
+                Set<Integer> conditionRuleIndices = applyCondition(
+                        suggestion.getConditionAdjustments(), working, persistenceDeviceRefs);
+                refreshRuleStrings(working, conditionRuleIndices, displayDeviceNames);
+                return working;
             case "remove":
                 return applyRemove(suggestion.getRemovedRuleIndices(), working);
             default:
@@ -77,10 +81,12 @@ public final class FixStrategyApplier {
 
     // ---- parameter: overwrite the threshold value of an existing condition ----
 
-    private static void applyParameter(List<ParameterAdjustment> adjustments, List<RuleDto> rules) {
+    private static Set<Integer> applyParameter(
+            List<ParameterAdjustment> adjustments, List<RuleDto> rules) {
         if (adjustments == null || adjustments.isEmpty()) {
             throw new BadRequestException("Parameter fix has no adjustments to apply.");
         }
+        Set<Integer> adjustedRuleIndices = new LinkedHashSet<>();
         for (ParameterAdjustment adj : adjustments) {
             RuleDto.Condition cond = conditionAt(rules, adj.getRuleIndex(), adj.getConditionIndex());
             // Sanity check: the condition we are about to edit should be the one the fix targeted.
@@ -95,19 +101,23 @@ public final class FixStrategyApplier {
             if (adj.getRelation() != null && !adj.getRelation().isBlank()) {
                 cond.setRelation(adj.getRelation());
             }
+            adjustedRuleIndices.add(adj.getRuleIndex());
         }
+        return adjustedRuleIndices;
     }
 
     // ---- condition: add candidate conditions and remove disabled ones ----
 
-    private static List<RuleDto> applyCondition(List<ConditionAdjustment> adjustments, List<RuleDto> rules,
-                                                Map<String, String> persistenceDeviceRefs) {
+    private static Set<Integer> applyCondition(
+            List<ConditionAdjustment> adjustments, List<RuleDto> rules,
+            Map<String, String> persistenceDeviceRefs) {
         if (adjustments == null || adjustments.isEmpty()) {
             throw new BadRequestException("Condition fix has no adjustments to apply.");
         }
         // Group by rule so we can remove by descending index safely and add afterwards.
         Map<Integer, List<Integer>> toRemove = new LinkedHashMap<>();
         Map<Integer, List<RuleDto.Condition>> toAdd = new LinkedHashMap<>();
+        Set<Integer> adjustedRuleIndices = new LinkedHashSet<>();
 
         for (ConditionAdjustment adj : adjustments) {
             String action = adj.getAction();
@@ -139,6 +149,7 @@ public final class FixStrategyApplier {
             for (int idx : indices) {
                 if (idx >= 0 && idx < conds.size()) {
                     conds.remove(idx);
+                    adjustedRuleIndices.add(e.getKey());
                 }
             }
         }
@@ -149,6 +160,7 @@ public final class FixStrategyApplier {
                 rule.setConditions(new ArrayList<>());
             }
             rule.getConditions().addAll(e.getValue());
+            adjustedRuleIndices.add(e.getKey());
         }
 
         // A rule with no conditions is fail-closed during SMV generation and is invalid in the
@@ -159,14 +171,17 @@ public final class FixStrategyApplier {
                         + "trigger conditions. Please review the suggestion manually.");
             }
         }
-        return rules;
+        return adjustedRuleIndices;
     }
 
-    private static void refreshRuleStrings(List<RuleDto> rules, Map<String, String> displayDeviceNames) {
-        if (rules == null) {
+    private static void refreshRuleStrings(
+            List<RuleDto> rules, Set<Integer> adjustedRuleIndices,
+            Map<String, String> displayDeviceNames) {
+        if (rules == null || adjustedRuleIndices == null) {
             return;
         }
-        for (RuleDto rule : rules) {
+        for (int ruleIndex : adjustedRuleIndices) {
+            RuleDto rule = rules.get(ruleIndex);
             if (rule != null) {
                 rule.setRuleString(buildRuleString(rule, displayDeviceNames));
             }

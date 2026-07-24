@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { APIRequestContext } from '@playwright/test'
 import {
   apiBaseURL,
   createAuthenticatedUser,
@@ -7,6 +8,19 @@ import {
 } from './support/auth'
 
 const liveAiEnabled = process.env.RUN_LIVE_AI_E2E === '1'
+
+const readBoardCollection = async (
+  request: APIRequestContext,
+  headers: Record<string, string>,
+  path: 'nodes' | 'rules' | 'specs'
+): Promise<unknown[]> => {
+  const response = await request.get(`${apiBaseURL}/api/board/${path}`, { headers })
+  expect(response.ok(), await response.text()).toBeTruthy()
+  const body = await response.json()
+  expect(body.code, JSON.stringify(body)).toBe(200)
+  expect(Array.isArray(body.data), JSON.stringify(body)).toBeTruthy()
+  return body.data
+}
 
 test.describe('live AI full-stack audit', () => {
   test.skip(!liveAiEnabled, 'Set RUN_LIVE_AI_E2E=1 to call the configured external model endpoint.')
@@ -22,6 +36,9 @@ test.describe('live AI full-stack audit', () => {
         headers,
         timeout: 240_000,
         data: {
+          minDevices: 2,
+          minRules: 1,
+          minSpecs: 1,
           maxDevices: 3,
           maxRules: 2,
           maxSpecs: 2,
@@ -40,8 +57,31 @@ test.describe('live AI full-stack audit', () => {
     expect(Array.isArray(recommendationBody.data.scene.devices)).toBeTruthy()
     expect(Array.isArray(recommendationBody.data.scene.rules)).toBeTruthy()
     expect(Array.isArray(recommendationBody.data.scene.specs)).toBeTruthy()
-    expect(['COMPLETE', 'PARTIAL']).toContain(recommendationBody.data.objectiveStatus)
+    const sceneCounts = {
+      devices: recommendationBody.data.scene.devices.length,
+      rules: recommendationBody.data.scene.rules.length,
+      specs: recommendationBody.data.scene.specs.length
+    }
+    expect(sceneCounts.devices + sceneCounts.rules + sceneCounts.specs).toBeGreaterThan(0)
+    expect(recommendationBody.data.objectiveTargets).toEqual({
+      minDevices: 2,
+      minRules: 1,
+      minSpecs: 1
+    })
     expect(Array.isArray(recommendationBody.data.objectiveIssues)).toBeTruthy()
+    const expectedObjectiveIssueCodes = [
+      ...(sceneCounts.devices < 2
+        ? [sceneCounts.devices === 0 ? 'NO_DEVICES' : 'INSUFFICIENT_DEVICES']
+        : []),
+      ...(sceneCounts.rules < 1 ? ['NO_AUTOMATION_RULES'] : []),
+      ...(sceneCounts.specs < 1 ? ['NO_SPECIFICATIONS'] : [])
+    ]
+    expect(recommendationBody.data.objectiveStatus).toBe(
+      expectedObjectiveIssueCodes.length === 0 ? 'COMPLETE' : 'PARTIAL'
+    )
+    expect(recommendationBody.data.objectiveIssues.map((issue: any) => issue.code)).toEqual(
+      expectedObjectiveIssueCodes
+    )
     expect(recommendationBody.data.rawCandidateCount).toBeGreaterThanOrEqual(
       recommendationBody.data.inspectedCount)
 
@@ -53,6 +93,7 @@ test.describe('live AI full-stack audit', () => {
     const sessionBody = await sessionResponse.json()
     const sessionId = sessionBody.data.id as string
 
+    const turnId = randomUUID()
     const streamResponse = await request.post(`${apiBaseURL}/api/chat/completions`, {
       headers: {
         ...headers,
@@ -62,7 +103,7 @@ test.describe('live AI full-stack audit', () => {
       timeout: 240_000,
       data: {
         sessionId,
-        turnId: randomUUID(),
+        turnId,
         content: 'Inspect my current board and report its device, rule, and specification counts. Do not change anything.'
       }
     })
@@ -75,29 +116,30 @@ test.describe('live AI full-stack audit', () => {
     expect(streamText).toContain('WRITING_RESPONSE')
     const streamFrames = streamText
       .split(/\r?\n/)
-      .filter(line => line.startsWith('data:{'))
-      .map(line => JSON.parse(line.slice('data:'.length)))
-    expect(streamFrames.filter(frame =>
-      frame.progress?.stage === 'PLANNING' && frame.progress?.round === 1)).toHaveLength(1)
+      .map(line => line.match(/^\s*data:\s*(.+)\s*$/)?.[1])
+      .filter((data): data is string => Boolean(data))
+      .map(data => JSON.parse(data))
+    expect(streamFrames.some(frame =>
+      frame.progress?.stage === 'PLANNING' &&
+      Number.isSafeInteger(frame.progress?.round) &&
+      frame.progress.round >= 1)).toBeTruthy()
     const boardResults = streamFrames.filter(frame =>
       frame.progress?.stage === 'TOOL_RESULT' &&
-      frame.progress?.toolName === 'board_overview')
-    expect(boardResults).toHaveLength(1)
-    expect(boardResults[0].progress).toMatchObject({
-      outcome: 'USABLE',
-      detail: 'Read the board: 0 devices, 0 rules, 0 specifications, and 0 shared environment variables.'
+      frame.progress?.toolName === 'board_overview' &&
+      frame.progress?.outcome === 'USABLE')
+    expect(boardResults.length).toBeGreaterThanOrEqual(1)
+    const terminalFrames = streamFrames.filter(frame => frame.terminal)
+    expect(terminalFrames).toHaveLength(1)
+    expect(terminalFrames[0].terminal).toEqual({
+      turnId,
+      executionStatus: 'COMPLETED'
     })
-    expect(streamFrames.filter(frame =>
-      frame.progress?.stage === 'TOOL_EXECUTION' &&
-      frame.progress?.toolName !== 'board_overview')).toHaveLength(0)
+    expect(streamFrames.at(-1)).toEqual(terminalFrames[0])
     const assistantReply = streamFrames
       .map(frame => typeof frame.content === 'string' ? frame.content : '')
       .join('')
       .trim()
     expect(assistantReply).not.toBe('')
-    if (assistantReply.includes('authoritative tool record')) {
-      expect(assistantReply).toContain(boardResults[0].progress.detail)
-    }
 
     const historyResponse = await request.get(
       `${apiBaseURL}/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
@@ -107,8 +149,19 @@ test.describe('live AI full-stack audit', () => {
     const historyBody = await historyResponse.json()
     expect(historyBody.code, JSON.stringify(historyBody)).toBe(200)
     expect(Array.isArray(historyBody.data?.messages), JSON.stringify(historyBody)).toBeTruthy()
-    expect(historyBody.data.messages.some((message: any) => message.role === 'user')).toBeTruthy()
     expect(historyBody.data.messages.some((message: any) =>
-      message.role === 'assistant' && String(message.content || '').trim().length > 0)).toBeTruthy()
+      message.role === 'user' && message.turnId === turnId)).toBeTruthy()
+    const terminalHistory = historyBody.data.messages.find((message: any) =>
+      message.role === 'assistant' && message.turnId === turnId)
+    expect(terminalHistory).toMatchObject({ executionStatus: 'COMPLETED' })
+    expect(String(terminalHistory.content || '').trim()).not.toBe('')
+    expect(terminalHistory.executionTrace.some((progress: any) =>
+      progress.stage === 'TOOL_RESULT' &&
+      progress.toolName === 'board_overview' &&
+      progress.outcome === 'USABLE')).toBeTruthy()
+
+    expect(await readBoardCollection(request, headers, 'nodes')).toHaveLength(0)
+    expect(await readBoardCollection(request, headers, 'rules')).toHaveLength(0)
+    expect(await readBoardCollection(request, headers, 'specs')).toHaveLength(0)
   })
 })

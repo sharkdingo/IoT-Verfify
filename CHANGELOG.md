@@ -18,6 +18,10 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-07-24
 
 #### Changed
+- Made scene-recommendation completion use explicit minimum device, automation-rule,
+  and specification targets instead of treating any non-empty category as complete.
+  The backend and Board now validate the same target counts, report missing versus
+  insufficient content deterministically, and show unmet targets before scene application.
 - Removed the development-only login collision reader. Registration keeps phone-shaped
   usernames invalid, and login now classifies an identifier once and queries only the
   phone or username namespace instead of probing both for obsolete conflicting rows.
@@ -29,8 +33,62 @@ history into a technical spec. The spec content itself now lives under
   service's actual lifecycle state machine: identity, progress, timestamp ordering,
   processing duration, terminal metadata, failure diagnostics, saved-trace ownership,
   and result fields must agree with the persisted status.
+- Made chat-stream completion a persisted protocol fact. The backend now emits a unique final
+  `{ turnId, executionStatus }` terminal frame only after saving the matching assistant row;
+  clean EOF without it is incomplete, while accepted failures settle to authoritative history
+  even when the durable result is a user-only turn. Transport loss before response headers is
+  treated as an unknown admission outcome, and failed or inconsistent history reloads keep the
+  assistant locked until authoritative reconciliation succeeds.
+- Made Device Details retain only still-legal dirty runtime edits when a same-node template
+  schema changes. Save remains blocked until the user explicitly adopts the latest runtime or
+  continues with the compatible subset; untouched drafts adopt the new schema immediately. State,
+  current-state trust, and current-state privacy now reconcile as one context so a refresh cannot
+  combine one state's trust/privacy overrides with a different state.
 
 #### Fixed
+- Separated chat SSE failures from model-authored text with a structured `error` frame. A
+  valid assistant response beginning with the literal text `[ERROR]` is no longer mistaken
+  for a server failure by the frontend, and a parsed server error is retained if the transport
+  resets before its terminal frame arrives.
+- Preserved quoted and code-formatted platform-action text in assistant explanations and
+  translations. Sentence buffering now recognizes ASCII and typographic quote pairs, inline
+  backticks, and backtick/tilde fences with longer closing delimiters. It ignores punctuation
+  inside closed literal spans while final claim checking fails closed on unfinished spans, so
+  an unclosed quote or fence cannot hide a later unsupported execution claim.
+- Released the assistant interaction lock after an explicit early Stop or reattached remote
+  execution is confirmed idle with authoritative user-only history. The frontend now removes
+  optimistic output and restores the draft only when the corresponding user turn was not admitted.
+- Made local chat Stop requests turn-aware and durable before transport abort. A quick Stop now
+  fences a request that has not entered admission yet, cannot target a newer turn, and does not
+  begin idle polling until the backend acknowledges the fence. Multiple pre-admission turns retain
+  independent bounded fences, with orphan cleanup and database-level session deletion cascades.
+  Remote settlement also invalidates stale initial-history reads and clears a recovered
+  history-load error.
+- Invalidated a coupled-scene recommendation whenever its minimums, maximums, or requirement
+  text changes, so a draft generated for earlier criteria can no longer be exported or applied
+  as though it satisfied the edited request.
+- Made an acknowledged cross-instance chat Stop authoritative inside the terminal-message
+  transaction, so the following browser abort cannot downgrade it to `DISCONNECTED` or let a
+  previously computed completion/error status win. Server-observed stops now close the SSE after
+  the persisted terminal frame instead of leaving the stream allocated until timeout. An explicit
+  Stop also cancels the matching same-instance provider request when its database lease has just
+  expired. Chat lease
+  admission and renewal now also reject slow commits that leave less than one heartbeat interval
+  before expiry, and each instance renews all of its active chat leases in one commit so later
+  sessions cannot consume an earlier session's remaining heartbeat window. Expired-row cleanup
+  now precedes renewal, with a final margin check before the scheduled pass returns.
+- Ordered bounded LLM chat context by database message id and used the database clock for
+  session-list timestamps, so skewed backend instance clocks cannot reorder later turns.
+  A `COMPLETED` chat trace now also requires each tool execution to pair in order with the
+  same tool and round's result at both backend persistence and frontend boundaries. A later
+  usable result from the same tool may explicitly recover an intermediate partial result;
+  unresolved partial, failed, unavailable, or confirmation-required results remain incomplete.
+- Kept cross-tab assistant coordination locked when more than one chat session is active.
+  Foreground refresh now prioritizes the selected active session regardless of list order,
+  switches from an idle selection to authoritative active work, and hands monitoring to any
+  remaining active session before Board interactions are released.
+- Invalidated pending history-detail and finding-replay requests when the fuzzing-result dialog
+  closes, so a delayed response cannot reopen playback after the user dismissed the result.
 - Kept every Device Details action at least 44 pixels high (and the icon-only close
   action 44 pixels wide) for touch use, and restored the dedicated Door and Garage Door
   icons that were previously shadowed by the generic sensor-name classifier.
@@ -43,9 +101,11 @@ history into a technical spec. The spec content itself now lives under
   and verification, simulation, and counterexample-search history now rejects missing,
   duplicate, out-of-range, or forged rule snapshots before returning full replay evidence.
   Lightweight fuzz finding summaries no longer claim `dataAvailable` before their LONGTEXT
-  evidence and frozen run are loaded and validated. Finding replay now loads both the full
-  selected finding and its owning full run instead of reusing a history summary; unavailable
-  run summaries carrying findings are rejected. Canvas playback associates validated
+  evidence and frozen run are loaded and validated. Finding replay now loads the full owning
+  run once and selects the requested finding from its validated embedded evidence instead of
+  joining independent finding and run responses. The single-finding endpoint verifies the
+  run's declared `findingCount` against the actual owned-row count before returning surviving
+  detail, and unavailable run summaries carrying findings are rejected. Canvas playback associates validated
   historical evidence with current
   edges only when the persisted rule id identifies one current rule; ambiguous or id-less
   evidence is left unhighlighted instead of guessing from a current list position.
@@ -64,6 +124,17 @@ history into a technical spec. The spec content itself now lives under
   `counterexampleCount`.
 - Made internal verification/simulation request cloning reject device-count, null-element,
   or token-provenance drift instead of silently returning or substituting `UNKNOWN`.
+- Persisted the user turn and session execution lease atomically before chat dispatch, rejected
+  reused per-session turn ids, and made queue rejection remove that exact turn before returning
+  `503`. Ambiguous commit or cleanup outcomes now return an explicit no-terminal reconciliation
+  stream instead of pretending either rejection or execution was confirmed.
+- Required lowercase `trusted`/`untrusted` and `public`/`private` literals at the canonical
+  device-template JSON boundary, matching the typed scene contract.
+- Preserved custom `ruleString` text on rules untouched by an automatic fix; only changed rules
+  are regenerated from their updated conditions/actions.
+- Kept immediate verification traces replayable when history persistence fails or remains
+  unknown, but removed provisional persistence identities after an unconfirmed commit and
+  exposed automatic Fix only when the trace belongs to the response's confirmed saved run.
 
 ### 2026-07-23
 

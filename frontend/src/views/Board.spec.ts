@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
 import {
   collectBundledEnvironmentNames,
   clampFloatingMenuPosition,
@@ -6,13 +7,103 @@ import {
   createScopedBoardInvalidationBinding,
   focusCollapsedNarrowPanelToggle,
   hasFrozenBundledTokenSource,
+  invalidateFuzzingResultRequests,
   isAccountDeletionOutcomeUncertain,
   loadBoardResultWithRetry,
   reconcileBoardNodeSnapshot,
   reconcileRenameDialogSnapshot,
+  requestScenarioRecommendationWithTargets,
   resolveCurrentBoardNode,
   shouldRedirectNarrowPanelFocus
 } from './Board.vue'
+import { createPagedRequestCoordinator } from '@/utils/pagedRequestCoordinator'
+import ScenarioObjectiveIssues from '@/components/ScenarioObjectiveIssues.vue'
+
+describe('Board empty scenario objective feedback', () => {
+  it('shows every explicit problem for a 0/0/0 partial result', () => {
+    const issues = [
+      { code: 'NO_DEVICES' as const, message: 'No devices were generated.' },
+      { code: 'NO_AUTOMATION_RULES' as const, message: 'No rules were generated.' },
+      { code: 'NO_SPECIFICATIONS' as const, message: 'No specifications were generated.' }
+    ]
+    const wrapper = mount(ScenarioObjectiveIssues, {
+      props: {
+        status: 'PARTIAL',
+        issues,
+        title: 'Minimum targets were not met',
+        formatIssue: (issue: { message: string }) => issue.message
+      }
+    })
+
+    expect(wrapper.get('[data-testid="scenario-objective-issues"]').text())
+      .toContain('Minimum targets were not met')
+    expect(wrapper.text()).toContain('No devices were generated.')
+    expect(wrapper.text()).toContain('No rules were generated.')
+    expect(wrapper.text()).toContain('No specifications were generated.')
+  })
+})
+
+describe('Board scenario recommendation targets', () => {
+  const validateCount = (value: unknown): number => {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 10) {
+      throw new Error('invalid count')
+    }
+    return value
+  }
+
+  it('sends every explicit minimum and maximum target to the recommendation API', async () => {
+    const recommend = vi.fn().mockResolvedValue({ objectiveStatus: 'COMPLETE' })
+
+    await requestScenarioRecommendationWithTargets(
+      {
+        minDevices: 2,
+        minRules: 1,
+        minSpecs: 1,
+        maxDevices: 6,
+        maxRules: 4,
+        maxSpecs: 3,
+        language: 'en',
+        userRequirement: 'Night safety'
+      },
+      validateCount,
+      field => new Error(`invalid ${field} range`),
+      recommend
+    )
+
+    expect(recommend).toHaveBeenCalledOnce()
+    expect(recommend).toHaveBeenCalledWith({
+      minDevices: 2,
+      minRules: 1,
+      minSpecs: 1,
+      maxDevices: 6,
+      maxRules: 4,
+      maxSpecs: 3,
+      language: 'en',
+      userRequirement: 'Night safety'
+    })
+  })
+
+  it('rejects a minimum above its maximum before calling the API', () => {
+    const recommend = vi.fn().mockResolvedValue({})
+
+    expect(() => requestScenarioRecommendationWithTargets(
+      {
+        minDevices: 7,
+        minRules: 1,
+        minSpecs: 1,
+        maxDevices: 6,
+        maxRules: 4,
+        maxSpecs: 3,
+        language: 'zh-CN',
+        userRequirement: ''
+      },
+      validateCount,
+      field => new Error(`invalid ${field} range`),
+      recommend
+    )).toThrow('invalid devices range')
+    expect(recommend).not.toHaveBeenCalled()
+  })
+})
 
 describe('Board node snapshot reconciliation', () => {
   it('preserves object identity and every pending or active layout while merging server fields', () => {
@@ -176,6 +267,18 @@ describe('Board model-fingerprint request ordering', () => {
 
     guard.invalidate()
     expect(guard.isCurrent(newer)).toBe(false)
+  })
+})
+
+describe('Board fuzzing-result request ownership', () => {
+  it('invalidates a pending detail response when the result surface closes', () => {
+    const coordinator = createPagedRequestCoordinator()
+    const pendingDetail = coordinator.beginReplace()
+
+    const nextEpoch = invalidateFuzzingResultRequests(7, coordinator.invalidate)
+
+    expect(nextEpoch).toBe(8)
+    expect(coordinator.isCurrent(pendingDetail)).toBe(false)
   })
 })
 

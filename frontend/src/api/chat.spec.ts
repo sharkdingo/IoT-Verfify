@@ -44,6 +44,29 @@ const successfulStreamResponse = (payload: string) => {
   return { ok: true, body: { getReader: () => reader } }
 }
 
+const chunkedStreamResponse = (payload: string) => {
+  const bytes = new TextEncoder().encode(payload)
+  const chunks: Uint8Array[] = []
+  const widths = [1, 2, 5, 3, 7]
+  for (let offset = 0, index = 0; offset < bytes.length; index += 1) {
+    const end = Math.min(bytes.length, offset + widths[index % widths.length])
+    chunks.push(bytes.slice(offset, end))
+    offset = end
+  }
+  let index = 0
+  const reader = {
+    read: vi.fn(async () => index < chunks.length
+      ? { done: false, value: chunks[index++] }
+      : { done: true, value: undefined })
+  }
+  return { ok: true, body: { getReader: () => reader } }
+}
+
+const terminalFrame = (
+  turnId = 'turn-1',
+  executionStatus = 'PARTIAL'
+) => `data: ${JSON.stringify({ terminal: { turnId, executionStatus } })}\n\n`
+
 describe('chat stream lifecycle semantics', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -74,6 +97,34 @@ describe('chat stream lifecycle semantics', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
+  it('decodes UTF-8 and SSE event boundaries split across network chunks exactly once', async () => {
+    const content = '当前画布需要再检查。'
+    const payload = [
+      `data: ${JSON.stringify({ progress: { stage: 'CONTEXT_READY' } })}\r\n\r\n`,
+      `data: ${JSON.stringify({ content })}\n\n`,
+      terminalFrame('turn-1', 'PARTIAL')
+    ].join('')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(chunkedStreamResponse(payload)))
+    const onMessage = vi.fn()
+    const onProgress = vi.fn()
+    const onFinish = vi.fn()
+
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage, onProgress, onFinish },
+      new AbortController(),
+      'turn-1'
+    )
+
+    expect(onMessage).toHaveBeenCalledTimes(1)
+    expect(onMessage).toHaveBeenCalledWith(content)
+    expect(onProgress).toHaveBeenCalledTimes(1)
+    expect(onProgress).toHaveBeenCalledWith({ stage: 'CONTEXT_READY' })
+    expect(onFinish).toHaveBeenCalledTimes(1)
+    expect(onFinish).toHaveBeenCalledWith({ turnId: 'turn-1', executionStatus: 'PARTIAL' })
+  })
+
   it('binds a conversation-history load to its caller abort signal', async () => {
     vi.mocked(http.get).mockResolvedValue({
       data: { data: { messages: [], nextBeforeId: null, hasMore: false } }
@@ -88,15 +139,40 @@ describe('chat stream lifecycle semantics', () => {
     )
   })
 
+  it.each(['id', 'sessionId', 'turnId', 'createdAt'])(
+    'rejects persisted history without required %s identity',
+    async field => {
+      const message: Record<string, unknown> = {
+        id: 1,
+        sessionId: 'session-1',
+        role: 'assistant',
+        content: 'Saved response.',
+        turnId: 'turn-1',
+        createdAt: '2026-07-24T12:00:00Z',
+        executionStatus: 'PARTIAL'
+      }
+      delete message[field]
+      vi.mocked(http.get).mockResolvedValue({
+        data: { data: { messages: [message], nextBeforeId: null, hasMore: false } }
+      })
+
+      await expect(getSessionHistory('session-1')).rejects.toThrow(
+        'Chat history message 0 is incomplete'
+      )
+    }
+  )
+
   it('rejects an unknown persisted execution status at the history boundary', async () => {
     vi.mocked(http.get).mockResolvedValue({
       data: {
         data: {
           messages: [{
+            id: 1,
             sessionId: 'session-1',
             role: 'assistant',
             content: 'A future server response.',
             turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z',
             executionStatus: 'FUTURE_STATUS'
           }],
           nextBeforeId: null,
@@ -115,11 +191,41 @@ describe('chat stream lifecycle semantics', () => {
       data: {
         data: {
           messages: [{
+            id: 1,
             sessionId: 'session-1',
             role: 'assistant',
             content: 'Unproven completion.',
             turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z',
             executionStatus: 'COMPLETED'
+          }],
+          nextBeforeId: null,
+          hasMore: false
+        }
+      }
+    })
+
+    await expect(getSessionHistory('session-1')).rejects.toThrow(
+      'Chat history message 0 has unproven completed status'
+    )
+  })
+
+  it('rejects completed history with an unpaired tool execution and another usable result', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: {
+        data: {
+          messages: [{
+            id: 1,
+            sessionId: 'session-1',
+            role: 'assistant',
+            content: 'Mismatched completion.',
+            turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z',
+            executionStatus: 'COMPLETED',
+            executionTrace: [
+              { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+              { stage: 'TOOL_RESULT', toolName: 'list_rules', round: 1, outcome: 'USABLE' }
+            ]
           }],
           nextBeforeId: null,
           hasMore: false
@@ -137,9 +243,12 @@ describe('chat stream lifecycle semantics', () => {
       data: {
         data: {
           messages: [{
+            id: 1,
             sessionId: 'session-1',
             role: 'assistant',
-            content: { text: 'not a string' }
+            content: { text: 'not a string' },
+            turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z'
           }],
           nextBeforeId: null,
           hasMore: false
@@ -155,9 +264,12 @@ describe('chat stream lifecycle semantics', () => {
       data: {
         data: {
           messages: [{
+            id: 1,
             sessionId: 'session-1',
             role: 'assistant',
             content: 'Saved response',
+            turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z',
             executionTrace: [{ stage: 'FUTURE_STAGE' }]
           }],
           nextBeforeId: null,
@@ -176,9 +288,12 @@ describe('chat stream lifecycle semantics', () => {
       data: {
         data: {
           messages: [{
+            id: 1,
             sessionId: 'session-2',
             role: 'assistant',
-            content: 'Do not render this in session 1.'
+            content: 'Do not render this in session 1.',
+            turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z'
           }],
           nextBeforeId: null,
           hasMore: false
@@ -195,7 +310,14 @@ describe('chat stream lifecycle semantics', () => {
     vi.mocked(http.get).mockResolvedValue({
       data: {
         data: {
-          messages: [{ sessionId: 'session-1', role: 'assistant', content: 'Saved response' }],
+          messages: [{
+            id: 1,
+            sessionId: 'session-1',
+            role: 'assistant',
+            content: 'Saved response',
+            turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z'
+          }],
           nextBeforeId: null,
           hasMore: true
         }
@@ -216,7 +338,14 @@ describe('chat stream lifecycle semantics', () => {
     vi.mocked(http.get).mockResolvedValueOnce({
       data: {
         data: {
-          messages: [{ sessionId: 'session-1', role: 'tool', content: '{"secret":true}' }],
+          messages: [{
+            id: 1,
+            sessionId: 'session-1',
+            role: 'tool',
+            content: '{"secret":true}',
+            turnId: 'turn-1',
+            createdAt: '2026-07-24T12:00:00Z'
+          }],
           nextBeforeId: null,
           hasMore: false
         }
@@ -257,14 +386,40 @@ describe('chat stream lifecycle semantics', () => {
     )
   })
 
-  it('sends an explicit idempotent stop request for the active session', async () => {
+  it.each([
+    ['FUTURE_KIND'],
+    [null],
+    'DESTRUCTIVE'
+  ])('rejects malformed pending protected-action kinds: %j', async kinds => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: { data: { sessionId: 'session-1', kinds } }
+    })
+
+    await expect(getPendingConfirmation('session-1')).rejects.toThrow(
+      'Chat pending-confirmation response is incomplete'
+    )
+  })
+
+  it('sends the client turn id with an explicit stop request', async () => {
+    vi.mocked(http.post).mockResolvedValue({ data: { data: null } })
+
+    await requestSessionStop('session-1', 'turn-1')
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/chat/sessions/session-1/stop',
+      { turnId: 'turn-1' },
+      { timeout: 2500 }
+    )
+  })
+
+  it('uses a null turn id only when stopping a reattached remote execution', async () => {
     vi.mocked(http.post).mockResolvedValue({ data: { data: null } })
 
     await requestSessionStop('session-1')
 
     expect(http.post).toHaveBeenCalledWith(
       '/chat/sessions/session-1/stop',
-      null,
+      { turnId: null },
       { timeout: 2500 }
     )
   })
@@ -408,7 +563,7 @@ describe('chat stream lifecycle semantics', () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'MISSING_BODY' }))
   })
 
-  it('classifies a completed stream with no frames', async () => {
+  it('rejects a completed stream without its persisted terminal acknowledgement', async () => {
     const reader = { read: vi.fn().mockResolvedValue({ done: true, value: undefined }) }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
@@ -419,7 +574,7 @@ describe('chat stream lifecycle semantics', () => {
       'session-1',
       'hello',
       { onMessage: vi.fn() }
-    )).rejects.toMatchObject({ kind: 'EMPTY_STREAM' })
+    )).rejects.toMatchObject({ kind: 'INCOMPLETE_STREAM' })
   })
 
   it('rejects malformed structured progress before it reaches the UI', async () => {
@@ -508,9 +663,16 @@ describe('chat stream lifecycle semantics', () => {
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
       'data: {"command":{"type":"REFRESH_DATA","payload":{"target":"board_state"}}}\n\n'
+      + terminalFrame()
     )))
     const onCommand = vi.fn()
-    await sendStreamChat('session-1', 'hello', { onMessage: vi.fn(), onCommand })
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onCommand },
+      undefined,
+      'turn-1'
+    )
     expect(onCommand).toHaveBeenCalledWith({
       type: 'REFRESH_DATA',
       payload: { target: 'board_state' }
@@ -519,7 +681,9 @@ describe('chat stream lifecycle semantics', () => {
 
   it('accepts a complete structured progress frame', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
-      'data: {"progress":{"stage":"TOOL_RESULT","toolName":"get_board","round":1,"outcome":"USABLE","successfulSteps":1,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      'data: {"progress":{"stage":"TOOL_EXECUTION","toolName":"get_board","round":1,"successfulSteps":0,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      + 'data: {"progress":{"stage":"TOOL_RESULT","toolName":"get_board","round":1,"outcome":"USABLE","successfulSteps":1,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      + terminalFrame('turn-1', 'COMPLETED')
     )))
     const onProgress = vi.fn()
     const onFinish = vi.fn()
@@ -527,7 +691,9 @@ describe('chat stream lifecycle semantics', () => {
     await sendStreamChat(
       'session-1',
       'hello',
-      { onMessage: vi.fn(), onProgress, onFinish }
+      { onMessage: vi.fn(), onProgress, onFinish },
+      undefined,
+      'turn-1'
     )
 
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
@@ -535,18 +701,393 @@ describe('chat stream lifecycle semantics', () => {
       outcome: 'USABLE',
       successfulSteps: 1
     }))
-    expect(onFinish).toHaveBeenCalledOnce()
+    expect(onFinish).toHaveBeenCalledWith({
+      turnId: 'turn-1',
+      executionStatus: 'COMPLETED'
+    })
   })
 
   it('accepts the documented partial tool-result outcome', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
       'data: {"progress":{"stage":"TOOL_RESULT","outcome":"PARTIAL","successfulSteps":1,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      + terminalFrame()
     )))
     const onProgress = vi.fn()
 
-    await sendStreamChat('session-1', 'hello', { onMessage: vi.fn(), onProgress })
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onProgress },
+      undefined,
+      'turn-1'
+    )
 
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'PARTIAL' }))
+  })
+
+  it('treats clean EOF after ordinary frames as an incomplete accepted turn', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"content":"partial reply"}\n\n'
+    )))
+    const onMessage = vi.fn()
+    const onFinish = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage, onFinish },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'INCOMPLETE_STREAM' })
+
+    expect(onMessage).toHaveBeenCalledWith('partial reply')
+    expect(onFinish).not.toHaveBeenCalled()
+  })
+
+  it('reads a persisted failed terminal before reporting the server error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"error":"provider unavailable"}\n\n'
+      + terminalFrame('turn-1', 'FAILED')
+    )))
+    const onMessage = vi.fn()
+    const onError = vi.fn()
+    const onFinish = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage, onError, onFinish },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'SERVER_FRAME', serverFrame: true })
+
+    expect(onMessage).not.toHaveBeenCalled()
+    expect(onFinish).toHaveBeenCalledWith({ turnId: 'turn-1', executionStatus: 'FAILED' })
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'SERVER_FRAME' }))
+  })
+
+  it('rejects a completed terminal that contradicts a preceding server error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"progress":{"stage":"TOOL_EXECUTION","toolName":"board_overview","round":1,"successfulSteps":0,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      + 'data: {"progress":{"stage":"TOOL_RESULT","toolName":"board_overview","round":1,"outcome":"USABLE","successfulSteps":1,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      + 'data: {"error":"final response failed"}\n\n'
+      + terminalFrame('turn-1', 'COMPLETED')
+    )))
+    const onError = vi.fn()
+    const onFinish = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onError, onFinish },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+
+    expect(onFinish).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'INVALID_FRAME' }))
+  })
+
+  it('does not invent a terminal acknowledgement for an unpersisted server error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"error":"terminal record could not be saved"}\n\n'
+    )))
+    const onFinish = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onFinish },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'SERVER_FRAME', serverFrame: true })
+
+    expect(onFinish).not.toHaveBeenCalled()
+  })
+
+  it('preserves a parsed server error when the connection resets before its terminal frame', async () => {
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: new TextEncoder().encode('data: {"error":"provider unavailable"}\n\n')
+        })
+        .mockRejectedValueOnce(new TypeError('connection reset'))
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => reader }
+    }))
+    const onError = vi.fn()
+    const onFinish = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onError, onFinish },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({
+      kind: 'SERVER_FRAME',
+      serverFrame: true,
+      message: 'provider unavailable'
+    })
+
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'SERVER_FRAME' }))
+    expect(onFinish).not.toHaveBeenCalled()
+  })
+
+  it('rejects ordinary data after a server error frame', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"error":"provider unavailable"}\n\n'
+      + 'data: {"content":"late reply"}\n\n'
+      + terminalFrame('turn-1', 'FAILED')
+    )))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+  })
+
+  it('treats model text beginning with the former error marker as ordinary content', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"progress":{"stage":"TOOL_EXECUTION","toolName":"board_overview","round":1,"successfulSteps":0,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      + 'data: {"progress":{"stage":"TOOL_RESULT","toolName":"board_overview","round":1,"outcome":"USABLE","successfulSteps":1,"failedSteps":0,"unconfirmedSteps":0}}\n\n'
+      + 'data: {"content":"[ERROR] is a literal marker in this explanation"}\n\n'
+      + terminalFrame('turn-1', 'COMPLETED')
+    )))
+    const onMessage = vi.fn()
+    const onError = vi.fn()
+    const onFinish = vi.fn()
+
+    await sendStreamChat(
+      'session-1',
+      'explain the marker',
+      { onMessage, onError, onFinish },
+      undefined,
+      'turn-1'
+    )
+
+    expect(onMessage).toHaveBeenCalledWith('[ERROR] is a literal marker in this explanation')
+    expect(onError).not.toHaveBeenCalled()
+    expect(onFinish).toHaveBeenCalledWith({ turnId: 'turn-1', executionStatus: 'COMPLETED' })
+  })
+
+  it('rejects terminal frames with the wrong turn, status, or shape', async () => {
+    const invalidTerminals = [
+      { turnId: 'other-turn', executionStatus: 'PARTIAL' },
+      { turnId: 'turn-1', executionStatus: 'FUTURE_STATUS' },
+      { turnId: 'turn-1' },
+      { turnId: 'turn-1', executionStatus: 'PARTIAL', extra: true }
+    ]
+
+    for (const terminal of invalidTerminals) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+        `data: ${JSON.stringify({ terminal })}\n\n`
+      )))
+      await expect(sendStreamChat(
+        'session-1',
+        'hello',
+        { onMessage: vi.fn() },
+        undefined,
+        'turn-1'
+      )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+    }
+  })
+
+  it('requires one unique terminal payload as the final data frame', async () => {
+    const invalidStreams = [
+      `data: ${JSON.stringify({
+        content: 'mixed',
+        terminal: { turnId: 'turn-1', executionStatus: 'PARTIAL' }
+      })}\n\n`,
+      terminalFrame() + 'data: {"content":"late"}\n\n',
+      terminalFrame() + terminalFrame()
+    ]
+
+    for (const payload of invalidStreams) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(payload)))
+      await expect(sendStreamChat(
+        'session-1',
+        'hello',
+        { onMessage: vi.fn() },
+        undefined,
+        'turn-1'
+      )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+    }
+  })
+
+  it('does not accept completed terminal status without observed usable tool evidence', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"progress":{"stage":"PLANNING","round":1}}\n\n'
+      + terminalFrame('turn-1', 'COMPLETED')
+    )))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+  })
+
+  it('accepts completed evidence when a later round explicitly corrects the same partial tool', async () => {
+    const trace = [
+      { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 1 },
+      { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 1, outcome: 'PARTIAL' },
+      { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 2 },
+      { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 2, outcome: 'USABLE' }
+    ]
+    const progressFrames = trace
+      .map(progress => `data: ${JSON.stringify({ progress })}\n\n`)
+      .join('')
+    const onFinish = vi.fn()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      progressFrames + terminalFrame('turn-1', 'COMPLETED')
+    )))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'create a complete scene',
+      { onMessage: vi.fn(), onFinish },
+      undefined,
+      'turn-1'
+    )).resolves.toBeUndefined()
+
+    expect(onFinish).toHaveBeenCalledWith({ turnId: 'turn-1', executionStatus: 'COMPLETED' })
+  })
+
+  it('rejects completed evidence with unresolved partial, failed, or unavailable tool results', async () => {
+    const unresolvedTraces = [
+      [
+        { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 1 },
+        { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 1, outcome: 'PARTIAL' },
+        { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 2 },
+        { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 2, outcome: 'USABLE' }
+      ],
+      [
+        { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+        { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 1, outcome: 'FAILED' },
+        { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 2 },
+        { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 2, outcome: 'USABLE' }
+      ],
+      [
+        { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+        { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 1, outcome: 'RESULT_UNAVAILABLE' },
+        { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 2 },
+        { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 2, outcome: 'USABLE' }
+      ],
+      [
+        { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 1 },
+        { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 1, outcome: 'PARTIAL' },
+        { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 2 },
+        { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 2, outcome: 'USABLE' },
+        { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 3 },
+        { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 3, outcome: 'PARTIAL' }
+      ]
+    ]
+
+    for (const trace of unresolvedTraces) {
+      const progressFrames = trace
+        .map(progress => `data: ${JSON.stringify({ progress })}\n\n`)
+        .join('')
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+        progressFrames + terminalFrame('turn-1', 'COMPLETED')
+      )))
+
+      await expect(sendStreamChat(
+        'session-1',
+        'hello',
+        { onMessage: vi.fn() },
+        undefined,
+        'turn-1'
+      )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+    }
+  })
+
+  it('rejects completed terminal status when execution and result evidence do not pair', async () => {
+    const malformedTraces = [
+      [
+        { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+        { stage: 'TOOL_RESULT', toolName: 'list_rules', round: 1, outcome: 'USABLE' }
+      ],
+      [
+        { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+        { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 2, outcome: 'USABLE' }
+      ],
+      [
+        { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 1, outcome: 'USABLE' }
+      ]
+    ]
+
+    for (const trace of malformedTraces) {
+      const progressFrames = trace
+        .map(progress => `data: ${JSON.stringify({ progress })}\n\n`)
+        .join('')
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+        progressFrames + terminalFrame('turn-1', 'COMPLETED')
+      )))
+
+      await expect(sendStreamChat(
+        'session-1',
+        'hello',
+        { onMessage: vi.fn() },
+        undefined,
+        'turn-1'
+      )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+    }
+  })
+
+  it('rejects null sibling payload fields instead of treating them as absent', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      `data: ${JSON.stringify({
+        content: null,
+        command: null,
+        progress: null,
+        terminal: { turnId: 'turn-1', executionStatus: 'PARTIAL' }
+      })}\n\n`
+    )))
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'INVALID_FRAME' })
+  })
+
+  it('keeps a persisted terminal success when the transport resets during close', async () => {
+    const closeError = new TypeError('connection reset')
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: new TextEncoder().encode(terminalFrame())
+        })
+        .mockRejectedValueOnce(closeError)
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => reader }
+    }))
+    const onError = vi.fn()
+    const onFinish = vi.fn()
+
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onError, onFinish },
+      undefined,
+      'turn-1'
+    )
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(onFinish).toHaveBeenCalledWith({ turnId: 'turn-1', executionStatus: 'PARTIAL' })
   })
 
   it('reports transport acceptance before parsing a successful stream', async () => {
@@ -561,7 +1102,7 @@ describe('chat stream lifecycle semantics', () => {
       'session-1',
       'hello',
       { onMessage: vi.fn(), onAccepted }
-    )).rejects.toMatchObject({ kind: 'EMPTY_STREAM' })
+    )).rejects.toMatchObject({ kind: 'INCOMPLETE_STREAM' })
 
     expect(onAccepted).toHaveBeenCalledOnce()
   })

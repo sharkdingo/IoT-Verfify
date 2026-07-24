@@ -30,6 +30,11 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class RecommendScenarioToolTest {
 
+    private static final String DEFAULT_ARGS = """
+            {"minDevices":1,"minRules":1,"minSpecs":1,
+             "maxDevices":6,"maxRules":5,"maxSpecs":5}
+            """;
+
     @Mock
     private PromptCompletionService promptCompletionService;
 
@@ -54,6 +59,13 @@ class RecommendScenarioToolTest {
     }
 
     @Test
+    void definition_requiresExplicitObjectiveTargetsAndCaps() {
+        assertEquals(
+                List.of("minDevices", "minRules", "minSpecs", "maxDevices", "maxRules", "maxSpecs"),
+                tool.getDefinition().parameters().required);
+    }
+
+    @Test
     void execute_rejectsUnknownRequestFieldBeforeReadingBoardOrCallingAi() throws Exception {
         JsonNode json = objectMapper.readTree(tool.execute("{\"maxSpecification\":3}"));
 
@@ -73,7 +85,7 @@ class RecommendScenarioToolTest {
         when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("not-json");
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
 
         assertEquals("AI_RESPONSE_INVALID", json.path("errorCode").asText());
         assertEquals(502, json.path("status").asInt());
@@ -96,7 +108,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
 
         assertEquals(0, json.path("rawCandidateCount").asInt());
         assertEquals(0, json.path("filteredCount").asInt());
@@ -118,7 +130,10 @@ class RecommendScenarioToolTest {
                 "{\"devices\":[{\"id\":\"device_1\"}],\"rules\":[],\"specs\":[]}"));
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of());
 
-        JsonNode json = objectMapper.readTree(tool.execute("{\"language\":\"en\"}"));
+        JsonNode json = objectMapper.readTree(tool.execute("""
+                {"minDevices":1,"minRules":1,"minSpecs":1,
+                 "maxDevices":6,"maxRules":5,"maxSpecs":5,"language":"en"}
+                """));
 
         assertFalse(json.path("draftStored").asBoolean());
         assertTrue(json.path("previousDraftRetained").asBoolean());
@@ -175,6 +190,12 @@ class RecommendScenarioToolTest {
 
         String result = tool.execute("""
                 {
+                  "minDevices": 2,
+                  "minRules": 1,
+                  "minSpecs": 1,
+                  "maxDevices": 6,
+                  "maxRules": 5,
+                  "maxSpecs": 5,
                   "language": "en",
                   "userRequirement": "a_noise is a real environment variable name"
                 }
@@ -191,6 +212,8 @@ class RecommendScenarioToolTest {
         assertEquals(1, scene.path("specs").size());
         assertEquals("COMPLETE", json.path("objectiveStatus").asText());
         assertTrue(json.path("objectiveIssues").isEmpty());
+        assertEquals(2, json.path("objectiveTargets").path("minDevices").asInt());
+        assertEquals(4, json.path("requestedCount").asInt());
         assertTrue(json.path("verificationReady").asBoolean());
         assertTrue(json.path("draftStored").asBoolean());
         assertFalse(json.path("previousDraftRetained").asBoolean());
@@ -222,7 +245,8 @@ class RecommendScenarioToolTest {
                         && system.contains("不要把规约中 API 条件的 = TRUE 写法套到规则 API 事件源")
                         && system.contains("\"itemType\": \"api\"")),
                 argThat(prompt -> prompt.contains("尚未形式化验证")
-                        && prompt.contains("不会自动应用")),
+                        && prompt.contains("不会自动应用")
+                        && prompt.contains("设备数量: 至少 2 个，最多 6 个")),
                 anyDouble(),
                 anyInt());
         assertTrue(json.path("message").asText().contains("not been formally verified"));
@@ -273,7 +297,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
         JsonNode rules = json.path("scene").path("rules");
 
         assertEquals(1, rules.size());
@@ -334,7 +358,10 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        String result = tool.execute("{\"maxDevices\":5,\"maxRules\":5,\"maxSpecs\":5}");
+        String result = tool.execute("""
+                {"minDevices":1,"minRules":1,"minSpecs":1,
+                 "maxDevices":5,"maxRules":5,"maxSpecs":5}
+                """);
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals(4, json.path("count").asInt(),
@@ -394,7 +421,10 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        String result = tool.execute("{\"maxDevices\":5,\"maxRules\":5,\"maxSpecs\":5}");
+        String result = tool.execute("""
+                {"minDevices":1,"minRules":1,"minSpecs":1,
+                 "maxDevices":5,"maxRules":5,"maxSpecs":5}
+                """);
         JsonNode json = objectMapper.readTree(result);
         JsonNode scene = json.path("scene");
 
@@ -434,7 +464,10 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        String result = tool.execute("{\"maxDevices\":5,\"maxRules\":5,\"maxSpecs\":5}");
+        String result = tool.execute("""
+                {"minDevices":1,"minRules":1,"minSpecs":1,
+                 "maxDevices":5,"maxRules":5,"maxSpecs":5}
+                """);
         JsonNode json = objectMapper.readTree(result);
         JsonNode scene = json.path("scene");
 
@@ -471,7 +504,10 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        String result = tool.execute("{\"maxDevices\":5,\"maxRules\":5,\"maxSpecs\":5}");
+        String result = tool.execute("""
+                {"minDevices":1,"minRules":1,"minSpecs":1,
+                 "maxDevices":5,"maxRules":5,"maxSpecs":5}
+                """);
         JsonNode json = objectMapper.readTree(result);
         JsonNode scene = json.path("scene");
 
@@ -514,7 +550,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
 
         assertEquals(2, json.path("scene").path("devices").size());
         assertTrue(json.path("scene").path("rules").isEmpty());
@@ -572,7 +608,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
         JsonNode devices = json.path("scene").path("devices");
 
         assertEquals(1, devices.size());
@@ -617,7 +653,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
 
         assertEquals(1, json.path("scene").path("devices").size());
         assertEquals("device_1", json.path("scene").path("devices").get(0).path("id").asText());
@@ -662,7 +698,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
         JsonNode scene = json.path("scene");
 
         assertEquals("device_1", scene.path("devices").get(0).path("id").asText());
@@ -706,7 +742,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
 
         JsonNode rule = json.path("scene").path("rules").get(0);
         assertFalse(rule.has("name"));
@@ -735,7 +771,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
 
         assertEquals(2, json.path("scene").path("devices").size());
         assertEquals("device_1", json.path("scene").path("devices").get(0).path("id").asText());
@@ -787,7 +823,7 @@ class RecommendScenarioToolTest {
                         }
                         """);
 
-        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
 
         assertEquals(1, json.path("scene").path("specs").size());
         assertEquals("device_1", json.path("scene").path("specs").get(0)
@@ -800,8 +836,35 @@ class RecommendScenarioToolTest {
     }
 
     @Test
+    void execute_rejectsMissingExplicitTargetBeforeLoadingBoard() throws Exception {
+        JsonNode json = objectMapper.readTree(tool.execute("""
+                {"minRules":1,"minSpecs":1,
+                 "maxDevices":6,"maxRules":5,"maxSpecs":5}
+                """));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals("minDevices is required.", json.path("error").asText());
+        verify(boardStorageService, never()).getDeviceTemplates(1L);
+    }
+
+    @Test
+    void execute_rejectsMinimumAboveMaximumBeforeLoadingBoard() throws Exception {
+        JsonNode json = objectMapper.readTree(tool.execute("""
+                {"minDevices":4,"minRules":1,"minSpecs":1,
+                 "maxDevices":3,"maxRules":5,"maxSpecs":5}
+                """));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals("Minimum devices must not exceed maximum devices.", json.path("error").asText());
+        verify(boardStorageService, never()).getDeviceTemplates(1L);
+    }
+
+    @Test
     void execute_rejectsDecimalMaxDevicesBeforeLoadingBoard() throws Exception {
-        String result = tool.execute("{\"maxDevices\":2.5}");
+        String result = tool.execute("""
+                {"minDevices":1,"minRules":1,"minSpecs":1,
+                 "maxDevices":2.5,"maxRules":5,"maxSpecs":5}
+                """);
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
@@ -813,7 +876,10 @@ class RecommendScenarioToolTest {
 
     @Test
     void execute_rejectsNonStringRequirementInsteadOfCoercingIt() throws Exception {
-        JsonNode json = objectMapper.readTree(tool.execute("{\"userRequirement\":123}"));
+        JsonNode json = objectMapper.readTree(tool.execute("""
+                {"minDevices":1,"minRules":1,"minSpecs":1,
+                 "maxDevices":6,"maxRules":5,"maxSpecs":5,"userRequirement":123}
+                """));
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals("userRequirement must be a string.", json.path("error").asText());

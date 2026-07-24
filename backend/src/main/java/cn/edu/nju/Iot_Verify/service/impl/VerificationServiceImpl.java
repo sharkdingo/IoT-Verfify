@@ -330,11 +330,13 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             result.setHistoryPersistence(RunPersistenceDto.saved(runId));
         } catch (AsyncTaskQuotaExceededException e) {
             log.info("Verification completed but run history is full for user {}", userId);
+            clearUnconfirmedTracePersistenceIdentity(result);
             result.setHistoryPersistence(RunPersistenceDto.failed(e.getReasonCode()));
         } catch (ServiceUnavailableException e) {
             throw e;
         } catch (RuntimeException e) {
             log.error("Verification completed but could not be added to run history for user {}", userId, e);
+            clearUnconfirmedTracePersistenceIdentity(result);
             result.setHistoryPersistence(RunPersistenceDto.outcomeUnknown("RUN_HISTORY_SAVE_OUTCOME_UNKNOWN"));
             List<String> logs = result.getCheckLogs() != null
                     ? new ArrayList<>(result.getCheckLogs()) : new ArrayList<>();
@@ -342,6 +344,20 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             result.setCheckLogs(logs);
         }
         return result;
+    }
+
+    private void clearUnconfirmedTracePersistenceIdentity(VerificationResultDto result) {
+        if (result == null || result.getTraces() == null) {
+            return;
+        }
+        for (TraceDto trace : result.getTraces()) {
+            if (trace == null) {
+                continue;
+            }
+            trace.setId(null);
+            trace.setVerificationTaskId(null);
+            trace.setUserId(null);
+        }
     }
 
     private VerificationResultDto doVerify(Long userId,
@@ -1745,14 +1761,14 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             if (!traces.isEmpty()) {
                 saveTracesWithoutTransaction(traces, userId, savedRun.getId());
             }
-            log.info("Saved synchronous verification run: id={}, userId={}, outcome={}, counterexamples={}",
-                    savedRun.getId(), userId, outcome, traces.size());
             return savedRun.getId();
         });
         if (runId == null) {
             throw new InternalServerException("Verification result could not be added to run history");
         }
         result.setCheckLogs(persistedCheckLogs);
+        log.info("Saved synchronous verification run: id={}, userId={}, outcome={}, counterexamples={}",
+                runId, userId, result.getOutcome(), traces.size());
         return runId;
     }
 

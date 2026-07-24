@@ -58,6 +58,9 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
                     "chat_message", List.of("session_id"),
                     "chat_session", List.of("id"), "fk_chat_message_session"),
             new ForeignKeySpec(
+                    "chat_session_pre_admission_stop", List.of("session_id"),
+                    "chat_session", List.of("id"), "fk_chat_pre_admission_stop_session"),
+            new ForeignKeySpec(
                     "ai_session_state", List.of("user_id", "session_id"),
                     "chat_session", List.of("user_id", "id"), "fk_ai_session_state_session_owner"),
             new ForeignKeySpec(
@@ -94,6 +97,10 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
         try {
             Integer deleted = transactionTemplate.execute(status -> {
                 int count = jdbcTemplate.update(
+                        "DELETE FROM chat_session_pre_admission_stop WHERE NOT EXISTS ("
+                                + "SELECT 1 FROM chat_session s JOIN app_user u ON u.id = s.user_id "
+                                + "WHERE s.id = chat_session_pre_admission_stop.session_id)");
+                count += jdbcTemplate.update(
                         "DELETE FROM chat_message WHERE NOT EXISTS ("
                                 + "SELECT 1 FROM chat_session s JOIN app_user u ON u.id = s.user_id "
                                 + "WHERE s.id = chat_message.session_id)");

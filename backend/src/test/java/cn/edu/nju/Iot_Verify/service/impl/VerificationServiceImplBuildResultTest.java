@@ -78,6 +78,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -269,6 +270,26 @@ class VerificationServiceImplBuildResultTest {
 
             @Override
             public void commit(TransactionStatus status) {
+            }
+
+            @Override
+            public void rollback(TransactionStatus status) {
+            }
+        });
+    }
+
+    private TransactionTemplate commitFailingTransactionTemplate(AtomicBoolean failCommit) {
+        return new TransactionTemplate(new PlatformTransactionManager() {
+            @Override
+            public TransactionStatus getTransaction(TransactionDefinition definition) {
+                return new SimpleTransactionStatus();
+            }
+
+            @Override
+            public void commit(TransactionStatus status) {
+                if (failCommit.getAndSet(false)) {
+                    throw new RuntimeException("commit outcome unknown");
+                }
             }
 
             @Override
@@ -1130,6 +1151,49 @@ class VerificationServiceImplBuildResultTest {
         assertNull(result.getHistoryPersistence().getRunId());
         assertTrue(result.getCheckLogs().stream()
                 .anyMatch(log -> log.contains("[history-save-unknown]")));
+    }
+
+    @Test
+    void synchronousVerification_commitFailureClearsTracePersistenceIdentity() throws Exception {
+        AtomicBoolean failTraceTransactionCommit = new AtomicBoolean();
+        service = serviceWithTransactionTemplate(commitFailingTransactionTemplate(failTraceTransactionCommit));
+        File smv = createTempModelFile();
+        when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
+        SpecificationDto spec = makeEffectiveSpec("history-commit-failure-spec");
+        when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(),
+                any(), anyBoolean(), any(), any()))
+                .thenReturn(generateResult(smv, List.of(spec)));
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(NusmvResult.success("output", List.of(
+                new SpecCheckResult("expr", false, "counterexample"))));
+        when(smvTraceParser.parseCounterexampleStates(eq("counterexample"), anyMap(), anyList()))
+                .thenReturn(List.of(TraceStateDto.builder().stateIndex(1).devices(List.of()).build()));
+        when(specificationMapper.toJson(spec)).thenReturn("{\"id\":\"history-commit-failure-spec\"}");
+        TracePo savedTrace = TracePo.builder()
+                .id(2000L)
+                .userId(1L)
+                .verificationTaskId(1000L)
+                .violatedSpecId(spec.getId())
+                .statesJson("[]")
+                .createdAt(LocalDateTime.now())
+                .build();
+        when(traceMapper.toEntity(any(TraceDto.class))).thenReturn(savedTrace);
+        when(traceRepository.save(savedTrace)).thenAnswer(invocation -> {
+            failTraceTransactionCommit.set(true);
+            return savedTrace;
+        });
+
+        VerificationResultDto result = service.verify(
+                1L, makeRequest(singleDevice(), List.of(), List.of(spec), false, 0, false));
+
+        assertEquals(VerificationOutcome.VIOLATED, result.getOutcome());
+        assertEquals(cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto.Status.OUTCOME_UNKNOWN,
+                result.getHistoryPersistence().getStatus());
+        assertEquals(1, result.getTraces().size());
+        TraceDto trace = result.getTraces().get(0);
+        assertNull(trace.getId());
+        assertNull(trace.getVerificationTaskId());
+        assertNull(trace.getUserId());
+        verify(traceRepository).save(savedTrace);
     }
 
     @Test

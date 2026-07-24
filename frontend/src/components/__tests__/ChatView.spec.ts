@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { i18n } from '@/assets/i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
+import type { ChatHistoryPage, ChatMessage } from '@/types/chat'
 
 const chatApi = vi.hoisted(() => ({
   createSession: vi.fn(),
@@ -21,23 +22,27 @@ const chatApi = vi.hoisted(() => ({
 vi.mock('element-plus/es/components/message/style/css', () => ({}))
 vi.mock('element-plus/es/components/message-box/style/css', () => ({}))
 
-vi.mock('@/api/chat', () => ({
-  ChatStreamError: class ChatStreamError extends Error {
-    readonly serverFrame: boolean
-    readonly kind: string
-    readonly status?: number
-    readonly reasonCode?: string
+vi.mock('@/api/chat', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/api/chat')>()
+  return {
+    ChatStreamError: class ChatStreamError extends Error {
+      readonly serverFrame: boolean
+      readonly kind: string
+      readonly status?: number
+      readonly reasonCode?: string
 
-    constructor(message: string, options: Record<string, any> = {}) {
-      super(message)
-      this.serverFrame = options.serverFrame ?? false
-      this.kind = options.kind ?? 'UNKNOWN'
-      this.status = options.status
-      this.reasonCode = options.reasonCode
-    }
-  },
-  ...chatApi
-}))
+      constructor(message: string, options: Record<string, any> = {}) {
+        super(message)
+        this.serverFrame = options.serverFrame ?? false
+        this.kind = options.kind ?? 'UNKNOWN'
+        this.status = options.status
+        this.reasonCode = options.reasonCode
+      }
+    },
+    hasCompletedToolEvidence: actual.hasCompletedToolEvidence,
+    ...chatApi
+  }
+})
 
 import { ChatStreamError } from '@/api/chat'
 import ChatView from '../ChatView.vue'
@@ -55,6 +60,34 @@ const session = {
   title: '玄关场景检查',
   updatedAt: '2026-07-13T12:00:00Z',
   active: false
+}
+
+const historyPage = (
+    messages: ChatMessage[] = [],
+    sessionId = session.id
+): ChatHistoryPage => ({
+  messages: messages.map((message, index) => ({
+    ...message,
+    id: message.id ?? index + 1,
+    sessionId,
+    turnId: message.turnId ?? `fixture-turn-${Math.floor(index / 2) + 1}`,
+    createdAt: message.createdAt ?? '2026-07-13T12:00:00Z'
+  })),
+  nextBeforeId: null,
+  hasMore: false
+})
+
+const notFoundError = () => Object.assign(new Error('session not found'), {
+  response: { status: 404 }
+})
+
+const acceptAndFinishStream = (
+    args: any[],
+    executionStatus: 'COMPLETED' | 'PARTIAL' = 'PARTIAL'
+) => {
+  const callbacks = args[2]
+  callbacks.onAccepted?.()
+  callbacks.onFinish?.({ turnId: args[4], executionStatus })
 }
 
 const mountChat = (props: Record<string, unknown> = {}) => mount(ChatView, {
@@ -76,7 +109,7 @@ describe('ChatView', () => {
     i18n.global.locale.value = 'zh-CN'
     chatApi.getSessionList.mockResolvedValue([])
     chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-1', active: false })
-    chatApi.getSessionHistory.mockResolvedValue([])
+    chatApi.getSessionHistory.mockResolvedValue(historyPage())
     chatApi.getPendingConfirmation.mockResolvedValue({ sessionId: 'session-1', kinds: [] })
     chatApi.deleteSession.mockResolvedValue(undefined)
     chatApi.requestSessionStop.mockResolvedValue(undefined)
@@ -111,9 +144,9 @@ describe('ChatView', () => {
     chatApi.getSessionList
       .mockResolvedValueOnce([session])
       .mockResolvedValueOnce([bobSession])
-    chatApi.getSessionHistory.mockResolvedValue([
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
       { role: 'assistant', content: 'Alice 的私密消息' }
-    ])
+    ]))
     authStore.login(validToken('alice'), {
       userId: 1,
       phone: '13800138000',
@@ -172,6 +205,273 @@ describe('ChatView', () => {
     expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
     wrapper.unmount()
+  })
+
+  it('ignores a delayed Alice stop failure after switching to Bob', async () => {
+    const bobSession = {
+      ...session,
+      id: 'session-2',
+      userId: 2,
+      title: 'Bob 的会话'
+    }
+    let rejectStop!: (reason: Error) => void
+    let streamSignal: AbortSignal | undefined
+    chatApi.getSessionList
+      .mockResolvedValueOnce([session])
+      .mockResolvedValueOnce([bobSession])
+    chatApi.getSessionHistory.mockResolvedValue(historyPage())
+    chatApi.requestSessionStop.mockImplementation(() => new Promise<void>((_, reject) => {
+      rejectStop = reject
+    }))
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      streamSignal = args[3]?.signal
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-input"]').setValue('Alice 的停止请求')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+      await flushPromises()
+
+      authStore.login(validToken('bob'), {
+        userId: 2,
+        phone: '13900139000',
+        username: 'bob'
+      })
+      await flushPromises()
+      rejectStop(new Error('late Alice stop failure'))
+      await flushPromises()
+
+      expect(streamSignal?.aborted).toBe(true)
+      expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+      expect(chatStore.state.streaming).toBe(false)
+      expect(warning).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      warning.mockRestore()
+    }
+  })
+
+  it('ignores a delayed Alice settlement-history failure after switching to Bob', async () => {
+    const bobSession = {
+      ...session,
+      id: 'session-2',
+      userId: 2,
+      title: 'Bob 的会话'
+    }
+    let rejectSettlementHistory!: (reason: Error) => void
+    let streamSignal: AbortSignal | undefined
+    chatApi.getSessionList
+      .mockResolvedValueOnce([session])
+      .mockResolvedValueOnce([bobSession])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockImplementationOnce(() => new Promise<ChatHistoryPage>((_, reject) => {
+        rejectSettlementHistory = reject
+      }))
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      streamSignal = args[3]?.signal
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-input"]').setValue('等待 Alice 的历史结算')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+      await flushPromises()
+      expect(chatApi.getSessionHistory).toHaveBeenCalledTimes(2)
+
+      authStore.login(validToken('bob'), {
+        userId: 2,
+        phone: '13900139000',
+        username: 'bob'
+      })
+      await flushPromises()
+      rejectSettlementHistory(new Error('late Alice history failure'))
+      await flushPromises()
+
+      expect(streamSignal?.aborted).toBe(true)
+      expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+      expect(chatStore.state.streaming).toBe(false)
+      expect(warning).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      warning.mockRestore()
+    }
+  })
+
+  it('ignores delayed idle confirmation from a completed Alice stream after switching to Bob', async () => {
+    const bobSession = {
+      ...session,
+      id: 'session-2',
+      userId: 2,
+      title: 'Bob 的会话'
+    }
+    let resolveAliceActivity!: (activity: { sessionId: string; active: boolean }) => void
+    chatApi.getSessionList
+      .mockResolvedValueOnce([session])
+      .mockResolvedValueOnce([session])
+      .mockResolvedValue([bobSession])
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-1', active: false })
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveAliceActivity = resolve
+      }))
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      args[2].onAccepted?.()
+      args[2].onMessage('Alice 的临时回复')
+      args[2].onFinish?.({ turnId: args[4], executionStatus: 'PARTIAL' })
+    })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-input"]').setValue('等待 Alice 的 idle 确认')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+      expect(chatApi.getSessionActivity).toHaveBeenCalledTimes(2)
+
+      authStore.login(validToken('bob'), {
+        userId: 2,
+        phone: '13900139000',
+        username: 'bob'
+      })
+      await flushPromises()
+      resolveAliceActivity({ sessionId: 'session-1', active: false })
+      await flushPromises()
+
+      expect(wrapper.text()).not.toContain('Alice 的临时回复')
+      expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+      expect(chatStore.state.streaming).toBe(false)
+      expect(chatApi.getSessionHistory).toHaveBeenCalledTimes(1)
+      expect(warning).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      warning.mockRestore()
+    }
+  })
+
+  it('ignores delayed terminal history from a completed Alice stream after switching to Bob', async () => {
+    const bobSession = {
+      ...session,
+      id: 'session-2',
+      userId: 2,
+      title: 'Bob 的会话'
+    }
+    let resolveAliceHistory!: (history: ChatHistoryPage) => void
+    let aliceTurnId = ''
+    chatApi.getSessionList
+      .mockResolvedValueOnce([session])
+      .mockResolvedValueOnce([session])
+      .mockResolvedValue([bobSession])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveAliceHistory = resolve
+      }))
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      aliceTurnId = args[4]
+      args[2].onAccepted?.()
+      args[2].onMessage('Alice 的临时回复')
+      args[2].onFinish?.({ turnId: aliceTurnId, executionStatus: 'PARTIAL' })
+    })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-input"]').setValue('等待 Alice 的历史确认')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+      expect(chatApi.getSessionHistory).toHaveBeenCalledTimes(2)
+
+      authStore.login(validToken('bob'), {
+        userId: 2,
+        phone: '13900139000',
+        username: 'bob'
+      })
+      await flushPromises()
+      resolveAliceHistory(historyPage([
+        { role: 'user', content: 'Alice 的旧问题', turnId: aliceTurnId },
+        {
+          role: 'assistant',
+          content: 'Alice 的延迟终态',
+          turnId: aliceTurnId,
+          executionStatus: 'PARTIAL'
+        }
+      ]))
+      await flushPromises()
+
+      expect(wrapper.text()).not.toContain('Alice 的临时回复')
+      expect(wrapper.text()).not.toContain('Alice 的延迟终态')
+      expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+      expect(chatStore.state.streaming).toBe(false)
+      expect(warning).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      warning.mockRestore()
+    }
   })
 
   it('renders an untitled backend session with the localized new-chat label', async () => {
@@ -247,7 +547,7 @@ describe('ChatView', () => {
     chatApi.getSessionList.mockResolvedValue([session])
     chatApi.getSessionHistory
       .mockRejectedValueOnce(new Error('history unavailable'))
-      .mockResolvedValueOnce([{ role: 'assistant', content: '已恢复的历史消息' }])
+      .mockResolvedValueOnce(historyPage([{ role: 'assistant', content: '已恢复的历史消息' }]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -274,7 +574,9 @@ describe('ChatView', () => {
       sessionId: 'session-1',
       kinds: ['DESTRUCTIVE']
     })
-    chatApi.sendStreamChat.mockResolvedValue(undefined)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      acceptAndFinishStream(args)
+    })
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -353,6 +655,89 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
+  it('prioritizes the selected active session when another active session appears first', async () => {
+    const sessionA = { ...session, id: 'session-a', title: '会话 A', active: false }
+    const sessionB = { ...session, id: 'session-b', title: '会话 B', active: false }
+    chatApi.getSessionList
+      .mockResolvedValueOnce([sessionA, sessionB])
+      .mockResolvedValue([
+        { ...sessionA, active: true },
+        { ...sessionB, active: true }
+      ])
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.getPendingConfirmation.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      kinds: []
+    }))
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-b', active: false })
+      .mockImplementation(async (sessionId: string) => ({ sessionId, active: true }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-b"]').trigger('click')
+    await flushPromises()
+
+    chatStore.closeChat()
+    await flushPromises()
+    chatStore.openChat()
+    await flushPromises()
+
+    expect(chatApi.getSessionActivity.mock.calls.at(-1)?.[0]).toBe('session-b')
+    expect(wrapper.get('[data-testid="chat-session-session-b"]')
+      .element.parentElement?.classList.contains('active')).toBe(true)
+    expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(true)
+    expect(chatStore.state.streaming).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('switches from an idle selection to authoritative active work and keeps the Board locked', async () => {
+    const sessionA = { ...session, id: 'session-a', title: '会话 A', active: false }
+    const sessionB = { ...session, id: 'session-b', title: '会话 B', active: false }
+    chatApi.getSessionList
+      .mockResolvedValueOnce([sessionA, sessionB])
+      .mockResolvedValue([
+        { ...sessionA, active: true },
+        sessionB
+      ])
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.getPendingConfirmation.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      kinds: []
+    }))
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-b', active: false })
+      .mockImplementation(async (sessionId: string) => ({
+        sessionId,
+        active: sessionId === 'session-a'
+      }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-b"]').trigger('click')
+    await flushPromises()
+
+    chatStore.closeChat()
+    await flushPromises()
+    chatStore.openChat()
+    await flushPromises()
+
+    expect(chatApi.getSessionActivity.mock.calls.at(-1)?.[0]).toBe('session-a')
+    expect(chatApi.getSessionHistory.mock.calls.at(-1)?.[0]).toBe('session-a')
+    expect(wrapper.get('[data-testid="chat-session-session-a"]')
+      .element.parentElement?.classList.contains('active')).toBe(true)
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(true)
+    expect(chatStore.state.streaming).toBe(true)
+
+    wrapper.unmount()
+  })
+
   it('keeps a known active session locked when history loading fails', async () => {
     chatApi.getSessionList.mockResolvedValue([{ ...session, active: true }])
     chatApi.getSessionHistory.mockRejectedValue(new Error('history unavailable'))
@@ -370,7 +755,7 @@ describe('ChatView', () => {
   })
 
   it('stops a reattached execution and reloads its persisted terminal result', async () => {
-    const terminalHistory = [
+    const terminalHistory = historyPage([
       { role: 'user', content: '运行验证', turnId: 'remote-turn' },
       {
         role: 'assistant',
@@ -378,7 +763,7 @@ describe('ChatView', () => {
         turnId: 'remote-turn',
         executionStatus: 'STOPPED'
       }
-    ]
+    ])
     chatApi.getSessionList
       .mockResolvedValueOnce([{ ...session, active: true }])
       .mockResolvedValue([{ ...session, active: false }])
@@ -386,7 +771,7 @@ describe('ChatView', () => {
       .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
       .mockResolvedValue({ sessionId: 'session-1', active: false })
     chatApi.getSessionHistory
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(historyPage())
       .mockResolvedValue(terminalHistory)
     const executeCommand = vi.fn().mockResolvedValue(true)
     chatStore.openChat()
@@ -396,7 +781,7 @@ describe('ChatView', () => {
     await wrapper.get('[data-testid="chat-stop"]').trigger('click')
     await flushPromises()
 
-    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1')
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1', undefined)
     expect(executeCommand).toHaveBeenCalledWith({
       type: 'REFRESH_DATA',
       payload: { target: 'board_state' }
@@ -410,15 +795,19 @@ describe('ChatView', () => {
 
   it('automatically reloads a reattached execution when it finishes remotely', async () => {
     vi.useFakeTimers()
-    const terminalHistory = [
+    const terminalHistory = historyPage([
       { role: 'user', content: '检查场景', turnId: 'remote-turn' },
       {
         role: 'assistant',
         content: '后台检查已完成。',
         turnId: 'remote-turn',
-        executionStatus: 'COMPLETED'
+        executionStatus: 'COMPLETED',
+        executionTrace: [
+          { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+          { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 1, outcome: 'USABLE' }
+        ]
       }
-    ]
+    ])
     chatApi.getSessionList
       .mockResolvedValueOnce([{ ...session, active: true }])
       .mockResolvedValue([{ ...session, active: false }])
@@ -426,7 +815,7 @@ describe('ChatView', () => {
       .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
       .mockResolvedValue({ sessionId: 'session-1', active: false })
     chatApi.getSessionHistory
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(historyPage())
       .mockResolvedValue(terminalHistory)
     const executeCommand = vi.fn().mockResolvedValue(true)
     chatStore.openChat()
@@ -451,17 +840,60 @@ describe('ChatView', () => {
     }
   })
 
-  it('reloads terminal history even when Board reconciliation must be retried', async () => {
+  it('unlocks after a reattached execution ends with authoritative user-only history', async () => {
     vi.useFakeTimers()
-    const terminalHistory = [
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const userOnlyHistory = historyPage([
+      { role: 'user', content: '检查后台状态', turnId: 'remote-turn' }
+    ])
+    chatApi.getSessionList
+      .mockResolvedValueOnce([{ ...session, active: true }])
+      .mockResolvedValue([{ ...session, active: false }])
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
+      .mockResolvedValue({ sessionId: 'session-1', active: false })
+    chatApi.getSessionHistory.mockResolvedValue(userOnlyHistory)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('检查后台状态')
+      expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+      expect(chatStore.state.streaming).toBe(false)
+      expect(warning).toHaveBeenCalledWith(
+        '回复流不完整，已恢复服务端保存的会话历史；未保存的临时回复已移除。'
+      )
+    } finally {
+      wrapper.unmount()
+      warning.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not let a stale initial history response overwrite remote settlement history', async () => {
+    vi.useFakeTimers()
+    let resolveInitialHistory!: (page: ChatHistoryPage) => void
+    const initialHistory = new Promise<ChatHistoryPage>(resolve => {
+      resolveInitialHistory = resolve
+    })
+    const terminalHistory = historyPage([
       { role: 'user', content: '检查场景', turnId: 'remote-turn' },
       {
         role: 'assistant',
-        content: '后台结果已持久化。',
+        content: '最新的后台终态。',
         turnId: 'remote-turn',
-        executionStatus: 'COMPLETED'
+        executionStatus: 'PARTIAL'
       }
-    ]
+    ])
     chatApi.getSessionList
       .mockResolvedValueOnce([{ ...session, active: true }])
       .mockResolvedValue([{ ...session, active: false }])
@@ -469,7 +901,95 @@ describe('ChatView', () => {
       .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
       .mockResolvedValue({ sessionId: 'session-1', active: false })
     chatApi.getSessionHistory
-      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => initialHistory)
+      .mockResolvedValue(terminalHistory)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('最新的后台终态。')
+
+      resolveInitialHistory(historyPage([
+        { role: 'assistant', content: '过期的初始历史。', executionStatus: 'PARTIAL' }
+      ]))
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('最新的后台终态。')
+      expect(wrapper.text()).not.toContain('过期的初始历史。')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears an initial history failure after remote settlement reloads authoritative history', async () => {
+    vi.useFakeTimers()
+    const terminalHistory = historyPage([
+      { role: 'user', content: '检查场景', turnId: 'remote-turn' },
+      {
+        role: 'assistant',
+        content: '后台恢复后的结果。',
+        turnId: 'remote-turn',
+        executionStatus: 'PARTIAL'
+      }
+    ])
+    chatApi.getSessionList
+      .mockResolvedValueOnce([{ ...session, active: true }])
+      .mockResolvedValue([{ ...session, active: false }])
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
+      .mockResolvedValue({ sessionId: 'session-1', active: false })
+    chatApi.getSessionHistory
+      .mockRejectedValueOnce(new Error('initial history unavailable'))
+      .mockResolvedValue(terminalHistory)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      expect(wrapper.find('[data-testid="chat-history-retry"]').exists()).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('后台恢复后的结果。')
+      expect(wrapper.find('[data-testid="chat-history-retry"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('reloads terminal history even when Board reconciliation must be retried', async () => {
+    vi.useFakeTimers()
+    const terminalHistory = historyPage([
+      { role: 'user', content: '检查场景', turnId: 'remote-turn' },
+      {
+        role: 'assistant',
+        content: '后台结果已持久化。',
+        turnId: 'remote-turn',
+        executionStatus: 'COMPLETED',
+        executionTrace: [
+          { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+          { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 1, outcome: 'USABLE' }
+        ]
+      }
+    ])
+    chatApi.getSessionList
+      .mockResolvedValueOnce([{ ...session, active: true }])
+      .mockResolvedValue([{ ...session, active: false }])
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
+      .mockResolvedValue({ sessionId: 'session-1', active: false })
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
       .mockResolvedValue(terminalHistory)
     const executeCommand = vi.fn().mockResolvedValue(false)
     chatStore.openChat()
@@ -491,7 +1011,7 @@ describe('ChatView', () => {
 
   it('shows a persisted disconnect status even when no progress frame reached the client', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
-    chatApi.getSessionHistory.mockResolvedValue([
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
       { role: 'user', content: '运行验证' },
       {
         role: 'assistant',
@@ -499,7 +1019,7 @@ describe('ChatView', () => {
         executionStatus: 'DISCONNECTED',
         executionElapsedSeconds: 4
       }
-    ])
+    ]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -514,9 +1034,38 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
-  it('distinguishes no-tool replies and refuses unproven completed history', async () => {
+  it('shows a completed status after the same AI tool corrects its earlier partial result', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
-    chatApi.getSessionHistory.mockResolvedValue([
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
+      { role: 'user', content: '生成完整场景', turnId: 'turn-recovered' },
+      {
+        role: 'assistant',
+        content: '场景已补全。',
+        turnId: 'turn-recovered',
+        executionStatus: 'COMPLETED',
+        executionTrace: [
+          { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 1 },
+          { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 1, outcome: 'PARTIAL' },
+          { stage: 'TOOL_EXECUTION', toolName: 'recommend_scenario', round: 2 },
+          { stage: 'TOOL_RESULT', toolName: 'recommend_scenario', round: 2, outcome: 'USABLE' }
+        ]
+      }
+    ]))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.chat-execution-state').text()).toBe('已完成')
+
+    wrapper.unmount()
+  })
+
+  it('distinguishes no-tool replies and treats a missing terminal status as unconfirmed', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
       { role: 'user', content: '解释一下 LTL' },
       {
         role: 'assistant',
@@ -545,8 +1094,7 @@ describe('ChatView', () => {
       { role: 'user', content: '检查画布' },
       {
         role: 'assistant',
-        content: '缺少工具证据的损坏完成记录。',
-        executionStatus: 'COMPLETED',
+        content: '服务端已移除无法证明的完成状态。',
         executionElapsedSeconds: 3
       },
       { role: 'user', content: '读取当前完成记录' },
@@ -555,9 +1103,12 @@ describe('ChatView', () => {
         content: '已有可验证的完成记录。',
         executionStatus: 'COMPLETED',
         executionElapsedSeconds: 3,
-        executionTrace: [{ stage: 'TOOL_RESULT', outcome: 'USABLE' }]
+        executionTrace: [
+          { stage: 'TOOL_EXECUTION', toolName: 'board_overview', round: 1 },
+          { stage: 'TOOL_RESULT', toolName: 'board_overview', round: 1, outcome: 'USABLE' }
+        ]
       }
-    ])
+    ]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -566,23 +1117,22 @@ describe('ChatView', () => {
     await flushPromises()
 
     const statuses = wrapper.findAll('.chat-execution-state')
-    expect(statuses).toHaveLength(5)
+    expect(statuses).toHaveLength(4)
     expect(statuses[0].text()).toContain('未执行平台工具')
     expect(statuses[0].text()).not.toContain('已完成')
     expect(statuses[1].text()).toContain('部分完成')
     expect(statuses[1].text()).not.toContain('未执行平台工具')
     expect(statuses[2].text()).toContain('部分完成')
     expect(statuses[2].text()).not.toContain('未执行平台工具')
-    expect(statuses[3].text()).toContain('终态未确认')
-    expect(statuses[3].text()).not.toContain('已完成')
-    expect(statuses[4].text()).toContain('已完成')
+    expect(wrapper.findAll('.ai-row')[3].text()).not.toContain('已完成')
+    expect(statuses[3].text()).toContain('已完成')
 
     wrapper.unmount()
   })
 
   it('labels a reviewable incomplete tool result as partial rather than successful', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
-    chatApi.getSessionHistory.mockResolvedValue([
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
       { role: 'user', content: '生成完整场景' },
       {
         role: 'assistant',
@@ -598,7 +1148,7 @@ describe('ChatView', () => {
           unconfirmedSteps: 0
         }]
       }
-    ])
+    ]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -614,16 +1164,15 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
-  it('never renders an unknown terminal status as completed', async () => {
+  it('never renders a missing terminal status as completed', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
-    chatApi.getSessionHistory.mockResolvedValue([
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
       { role: 'user', content: '检查未来状态' },
       {
         role: 'assistant',
-        content: '该状态来自更新后的服务端。',
-        executionStatus: 'FUTURE_STATUS'
+        content: '该记录没有可确认的终态。'
       }
-    ])
+    ]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -631,15 +1180,16 @@ describe('ChatView', () => {
     await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="chat-terminal-status"]').text()).toContain('终态未确认')
-    expect(wrapper.get('[data-testid="chat-terminal-status"]').text()).not.toContain('已完成')
+    expect(wrapper.text()).toContain('该记录没有可确认的终态。')
+    expect(wrapper.find('[data-testid="chat-terminal-status"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('已完成')
 
     wrapper.unmount()
   })
 
   it('shows user stop and confirmation-pending outcomes as distinct states', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
-    chatApi.getSessionHistory.mockResolvedValue([
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
       { role: 'user', content: '运行验证' },
       { role: 'assistant', content: '已停止。', executionStatus: 'STOPPED' },
       { role: 'user', content: '删除设备' },
@@ -651,7 +1201,7 @@ describe('ChatView', () => {
           { stage: 'TOOL_RESULT', outcome: 'USABLE', successfulSteps: 1 }
         ]
       }
-    ])
+    ]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -668,7 +1218,7 @@ describe('ChatView', () => {
 
   it('prefers an explicit stopped outcome over an earlier execution guard', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
-    chatApi.getSessionHistory.mockResolvedValue([
+    chatApi.getSessionHistory.mockResolvedValue(historyPage([
       { role: 'user', content: '运行验证' },
       {
         role: 'assistant',
@@ -676,7 +1226,7 @@ describe('ChatView', () => {
         executionStatus: 'STOPPED',
         executionTrace: [{ stage: 'EXECUTION_GUARD', outcome: 'NO_PROGRESS' }]
       }
-    ])
+    ]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -693,12 +1243,15 @@ describe('ChatView', () => {
     const clearIntervalSpy = vi.spyOn(window, 'clearInterval')
     let streamSignal: AbortSignal | undefined
     let activeTurnId = ''
+    let resolveStop!: () => void
     const stopOrder: string[] = []
     chatApi.createSession.mockResolvedValue(session)
-    chatApi.requestSessionStop.mockImplementation(async () => {
+    chatApi.requestSessionStop.mockImplementation(() => new Promise<void>(resolve => {
       stopOrder.push('stop-request')
-    })
+      resolveStop = resolve
+    }))
     chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
       streamSignal = args[3]?.signal
       activeTurnId = args[4]
       return new Promise<void>(resolve => {
@@ -708,7 +1261,7 @@ describe('ChatView', () => {
         }, { once: true })
       })
     })
-    chatApi.getSessionHistory.mockImplementation(async () => [
+    chatApi.getSessionHistory.mockImplementation(async () => historyPage([
       { role: 'user', content: '运行验证', turnId: activeTurnId },
       {
         role: 'assistant',
@@ -716,7 +1269,7 @@ describe('ChatView', () => {
         turnId: activeTurnId,
         executionStatus: 'STOPPED'
       }
-    ])
+    ]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -727,7 +1280,13 @@ describe('ChatView', () => {
     await wrapper.get('[data-testid="chat-stop"]').trigger('click')
     await flushPromises()
 
-    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1')
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1', activeTurnId)
+    expect(streamSignal?.aborted).toBe(false)
+    expect(chatApi.getSessionActivity).not.toHaveBeenCalled()
+
+    resolveStop()
+    await flushPromises()
+
     expect(streamSignal?.aborted).toBe(true)
     expect(stopOrder).toEqual(['stop-request', 'transport-abort'])
     expect(clearIntervalSpy).toHaveBeenCalled()
@@ -736,20 +1295,259 @@ describe('ChatView', () => {
     clearIntervalSpy.mockRestore()
   })
 
+  it('treats a stop 404 as an authoritative external deletion and unlocks', async () => {
+    let streamSignal: AbortSignal | undefined
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue(historyPage())
+    chatApi.requestSessionStop.mockRejectedValueOnce(notFoundError())
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      streamSignal = args[3]?.signal
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-input"]').setValue('停止已删除的会话')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+      await flushPromises()
+
+      expect(streamSignal?.aborted).toBe(true)
+      expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+      expect(wrapper.findAll('.msg-row')).toHaveLength(0)
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+      expect(chatStore.state.streaming).toBe(false)
+      expect(warning).toHaveBeenCalledWith(i18n.global.t('app.chat.sessionRemovedExternally'))
+    } finally {
+      wrapper.unmount()
+      warning.mockRestore()
+    }
+  })
+
+  it('keeps a failed stop locked and registers it again before retry recovery', async () => {
+    let streamSignal: AbortSignal | undefined
+    let activeTurnId = ''
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockImplementation(async () => historyPage([
+        { role: 'user', content: '需要重试停止', turnId: activeTurnId },
+        {
+          role: 'assistant',
+          content: '服务端已确认停止。',
+          turnId: activeTurnId,
+          executionStatus: 'STOPPED'
+        }
+      ]))
+    chatApi.requestSessionStop
+      .mockRejectedValueOnce(new Error('temporary stop failure'))
+      .mockResolvedValueOnce(undefined)
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      activeTurnId = args[4]
+      streamSignal = args[3]?.signal
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('需要重试停止')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+    await flushPromises()
+
+    expect(streamSignal?.aborted).toBe(true)
+    expect(chatApi.requestSessionStop).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeDefined()
+    expect(chatStore.state.streaming).toBe(true)
+
+    await wrapper.get('[data-testid="chat-reconciliation-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.requestSessionStop).toHaveBeenCalledTimes(2)
+    expect(chatApi.requestSessionStop).toHaveBeenNthCalledWith(2, 'session-1', activeTurnId)
+    expect(wrapper.text()).toContain('服务端已确认停止。')
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+    expect(chatStore.state.streaming).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('restores the draft when stopped before stream acceptance leaves no admitted turn', async () => {
+    let streamSignal: AbortSignal | undefined
+    let activeTurnId = ''
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue(historyPage())
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      streamSignal = args[3]?.signal
+      activeTurnId = args[4]
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('停止前请保留这段草稿')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1', activeTurnId)
+    expect(streamSignal?.aborted).toBe(true)
+    expect(wrapper.findAll('.msg-row')).toHaveLength(0)
+    expect((wrapper.get('[data-testid="chat-input"]').element as HTMLTextAreaElement).value)
+      .toBe('停止前请保留这段草稿')
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+    expect(chatStore.state.streaming).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('cancels a send during initial session creation without leaving optimistic messages', async () => {
+    let creationSignal: AbortSignal | undefined
+    chatApi.createSession.mockImplementation((signal?: AbortSignal) => {
+      creationSignal = signal
+      return new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), {
+          name: 'CanceledError'
+        })), { once: true })
+      })
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('保留这条尚未发送的请求')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+    await flushPromises()
+
+    expect(creationSignal?.aborted).toBe(true)
+    expect(chatApi.sendStreamChat).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.msg-row')).toHaveLength(0)
+    expect((wrapper.get('[data-testid="chat-input"]').element as HTMLTextAreaElement).value)
+      .toBe('保留这条尚未发送的请求')
+    expect(wrapper.text()).not.toContain('响应已停止')
+    expect(chatStore.state.streaming).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('releases a completed turn when another window deletes its session before history reload', async () => {
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockRejectedValueOnce(notFoundError())
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      acceptAndFinishStream(args)
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('检查跨标签删除')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+    expect(wrapper.findAll('.msg-row')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+    expect(chatStore.state.streaming).toBe(false)
+    expect(warning).toHaveBeenCalledWith(i18n.global.t('app.chat.sessionRemovedExternally'))
+
+    wrapper.unmount()
+    warning.mockRestore()
+  })
+
+  it('releases a stopped turn when another window deletes its session before settlement history', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    let streamSignal: AbortSignal | undefined
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockRejectedValueOnce(notFoundError())
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      streamSignal = args[3]?.signal
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('停止后同步删除')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+    await flushPromises()
+
+    expect(streamSignal?.aborted).toBe(true)
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+    expect(wrapper.findAll('.msg-row')).toHaveLength(0)
+    expect(chatStore.state.streaming).toBe(false)
+
+    wrapper.unmount()
+  })
+
   it('keeps the current local turn when history only contains an older terminal reply', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
     chatApi.getSessionHistory
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
+      .mockResolvedValueOnce(historyPage())
+      .mockResolvedValueOnce(historyPage([
         { role: 'user', content: '旧问题', turnId: 'old-turn' },
         {
           role: 'assistant',
           content: '旧回答',
           turnId: 'old-turn',
-          executionStatus: 'COMPLETED'
+          executionStatus: 'PARTIAL'
         }
-      ])
-    chatApi.sendStreamChat.mockResolvedValue(undefined)
+      ]))
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      acceptAndFinishStream(args)
+    })
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -767,9 +1565,253 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
+  it('waits for idle, reconciles the Board, and replaces an incomplete accepted stream with server history', async () => {
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    let activeTurnId = ''
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockImplementationOnce(async () => historyPage([{
+        role: 'user',
+        content: '检查服务端状态',
+        turnId: activeTurnId
+      }]))
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      activeTurnId = args[4]
+      callbacks.onAccepted?.()
+      callbacks.onMessage('未持久化的临时回答')
+      const error = new ChatStreamError('missing terminal', { kind: 'INCOMPLETE_STREAM' })
+      callbacks.onError?.(error)
+      throw error
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('检查服务端状态')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.getSessionActivity).toHaveBeenCalledWith('session-1', {})
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(chatApi.getSessionActivity.mock.invocationCallOrder[0])
+      .toBeLessThan(executeCommand.mock.invocationCallOrder[0])
+    expect(wrapper.text()).toContain('检查服务端状态')
+    expect(wrapper.text()).not.toContain('未持久化的临时回答')
+    expect(wrapper.text()).not.toContain('missing terminal')
+    expect(warning).toHaveBeenCalledWith(
+      '回复流不完整，已恢复服务端保存的会话历史；未保存的临时回复已移除。'
+    )
+
+    wrapper.unmount()
+    warning.mockRestore()
+  })
+
+  it('treats a transport failure before response headers as an unknown admission outcome', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    let activeTurnId = ''
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockImplementationOnce(async () => historyPage([{
+        role: 'user',
+        content: '不要重复提交',
+        turnId: activeTurnId
+      }]))
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      activeTurnId = args[4]
+      const error = new TypeError('connection reset before headers')
+      args[2].onError?.(error)
+      throw error
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('不要重复提交')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.getSessionActivity).toHaveBeenCalledWith('session-1', {})
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(wrapper.text()).toContain('不要重复提交')
+    expect(wrapper.text()).not.toContain('connection reset before headers')
+    expect((wrapper.get('[data-testid="chat-input"]').element as HTMLTextAreaElement).value).toBe('')
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('restores the draft only after history proves an ambiguous turn was not admitted', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockResolvedValueOnce(historyPage())
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const error = new TypeError('connection reset before headers')
+      args[2].onError?.(error)
+      throw error
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('请保留这段草稿')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.msg-row')).toHaveLength(0)
+    expect((wrapper.get('[data-testid="chat-input"]').element as HTMLTextAreaElement).value)
+      .toBe('请保留这段草稿')
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+  })
+
+  it('keeps interactions locked until terminal history can be reloaded', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    let activeTurnId = ''
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockRejectedValueOnce(new Error('history temporarily unavailable'))
+      .mockImplementationOnce(async () => historyPage([
+        { role: 'user', content: '检查最终状态', turnId: activeTurnId },
+        {
+          role: 'assistant',
+          content: '已保存的最终回答',
+          turnId: activeTurnId,
+          executionStatus: 'PARTIAL'
+        }
+      ]))
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      activeTurnId = args[4]
+      acceptAndFinishStream(args)
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('检查最终状态')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="chat-send"]').attributes('disabled')).toBeDefined()
+    expect(chatStore.state.streaming).toBe(true)
+
+    await wrapper.get('[data-testid="chat-reconciliation-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(wrapper.text()).toContain('已保存的最终回答')
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+    expect(chatStore.state.streaming).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('keeps the settlement lock when history reload fails and replaces the draft on retry', async () => {
+    vi.useFakeTimers()
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    let activeTurnId = ''
+    let sessionActive = false
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionActivity.mockImplementation(async () => ({
+      sessionId: 'session-1',
+      active: sessionActive
+    }))
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce(historyPage())
+      .mockRejectedValueOnce(new Error('history temporarily unavailable'))
+      .mockImplementationOnce(async () => historyPage([{
+        role: 'user',
+        content: '检查延迟结算状态',
+        turnId: activeTurnId
+      }]))
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      activeTurnId = args[4]
+      callbacks.onAccepted?.()
+      callbacks.onMessage('稍后必须移除的临时回答')
+      const error = new ChatStreamError('missing terminal', { kind: 'INCOMPLETE_STREAM' })
+      callbacks.onError?.(error)
+      throw error
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+      await flushPromises()
+      sessionActive = true
+      await wrapper.get('[data-testid="chat-input"]').setValue('检查延迟结算状态')
+      const sendPromise = wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(10_500)
+      await sendPromise
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('稍后必须移除的临时回答')
+
+      sessionActive = false
+      await wrapper.get('[data-testid="chat-reconciliation-retry"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('稍后必须移除的临时回答')
+      expect(chatStore.state.streaming).toBe(true)
+
+      await wrapper.get('[data-testid="chat-reconciliation-retry"]').trigger('click')
+      await flushPromises()
+
+      expect(executeCommand).toHaveBeenCalledWith({
+        type: 'REFRESH_DATA',
+        payload: { target: 'board_state' }
+      })
+      expect(wrapper.text()).toContain('检查延迟结算状态')
+      expect(wrapper.text()).not.toContain('稍后必须移除的临时回答')
+      expect(wrapper.text()).not.toContain('missing terminal')
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+      expect(warning).toHaveBeenCalledWith(
+        '回复流不完整，已恢复服务端保存的会话历史；未保存的临时回复已移除。'
+      )
+    } finally {
+      wrapper.unmount()
+      warning.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('removes an optimistic turn and restores the draft when the server rejects before streaming', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
-    chatApi.sendStreamChat.mockRejectedValue(new Error('busy'))
+    chatApi.sendStreamChat.mockRejectedValue(new ChatStreamError('busy', {
+      kind: 'HTTP_ERROR',
+      status: 409
+    }))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -815,18 +1857,14 @@ describe('ChatView', () => {
     chatApi.getSessionList.mockResolvedValue([session])
     chatApi.getSessionHistory
       .mockResolvedValueOnce({
-        messages: [
+        ...historyPage([
           { id: 2, role: 'user', content: '较新的问题' },
           { id: 3, role: 'assistant', content: '较新的回答' }
-        ],
+        ]),
         nextBeforeId: 2,
         hasMore: true
       })
-      .mockResolvedValueOnce({
-        messages: [{ id: 1, role: 'user', content: '最早的问题' }],
-        nextBeforeId: null,
-        hasMore: false
-      })
+      .mockResolvedValueOnce(historyPage([{ id: 1, role: 'user', content: '最早的问题' }]))
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -846,9 +1884,15 @@ describe('ChatView', () => {
   it('renders the pending response inside one full-width assistant activity bubble', async () => {
     let finishStream!: () => void
     chatApi.createSession.mockResolvedValue(session)
-    chatApi.sendStreamChat.mockImplementation(() => new Promise<void>(resolve => {
-      finishStream = resolve
-    }))
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      return new Promise<void>(resolve => {
+        finishStream = () => {
+          args[2].onFinish?.({ turnId: args[4], executionStatus: 'PARTIAL' })
+          resolve()
+        }
+      })
+    })
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -874,6 +1918,7 @@ describe('ChatView', () => {
     chatApi.createSession.mockResolvedValue(session)
     chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
       const callbacks = args[2]
+      callbacks.onAccepted?.()
       callbacks.onProgress({
         stage: 'CONTEXT_READY',
         toolName: null,
@@ -913,7 +1958,7 @@ describe('ChatView', () => {
         unconfirmedSteps: 0
       })
       callbacks.onMessage('设备已创建。')
-      callbacks.onFinish?.()
+      callbacks.onFinish?.({ turnId: args[4], executionStatus: 'COMPLETED' })
     })
     chatStore.openChat()
 
@@ -933,8 +1978,7 @@ describe('ChatView', () => {
     expect(trace.text()).toContain('整理最终答复')
     expect(wrapper.text()).toContain('1 成功')
     expect(wrapper.text()).toContain('设备已创建。')
-    expect(wrapper.get('.chat-execution-state').text()).toContain('终态未确认')
-    expect(wrapper.get('.chat-execution-state').text()).not.toContain('已完成')
+    expect(wrapper.get('.chat-execution-state').text()).toContain('已完成')
     const completedDetails = wrapper.get('details.chat-execution-trace')
     expect(completedDetails.attributes('open')).toBeUndefined()
 
@@ -953,11 +1997,12 @@ describe('ChatView', () => {
     chatApi.createSession.mockResolvedValue(session)
     chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
       const callbacks = args[2]
+      callbacks.onAccepted?.()
       callbacks.onProgress({ stage: 'CONTEXT_READY' })
       callbacks.onProgress({ stage: 'PLANNING', round: 1 })
       callbacks.onProgress({ stage: 'EXECUTION_GUARD', round: 3, outcome: 'NO_PROGRESS' })
       callbacks.onMessage('重复调用已停止。')
-      callbacks.onFinish?.()
+      callbacks.onFinish?.({ turnId: args[4], executionStatus: 'PARTIAL' })
     })
     chatStore.openChat()
 
@@ -979,6 +2024,7 @@ describe('ChatView', () => {
     chatApi.createSession.mockResolvedValue(session)
     chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
       const callbacks = args[2]
+      callbacks.onAccepted?.()
       callbacks.onProgress({ stage: 'CONTEXT_READY' })
       callbacks.onProgress({
         stage: 'TASK_RESUMED',
@@ -986,7 +2032,7 @@ describe('ChatView', () => {
       })
       callbacks.onProgress({ stage: 'WRITING_RESPONSE' })
       callbacks.onMessage('正在继续。')
-      callbacks.onFinish?.()
+      callbacks.onFinish?.({ turnId: args[4], executionStatus: 'PARTIAL' })
     })
     chatStore.openChat()
 
@@ -1004,17 +2050,29 @@ describe('ChatView', () => {
 
   it('awaits command confirmation and falls back to a full reconciliation', async () => {
     let resolveReconciliation!: (value: boolean) => void
+    let activeTurnId = ''
     const executeCommand = vi.fn()
       .mockResolvedValueOnce(false)
       .mockImplementationOnce(() => new Promise<boolean>(resolve => {
         resolveReconciliation = resolve
       }))
     chatApi.createSession.mockResolvedValue(session)
+    chatApi.getSessionHistory.mockImplementation(async () => historyPage([
+      { role: 'user', content: '添加设备', turnId: activeTurnId },
+      {
+        role: 'assistant',
+        content: '完成',
+        turnId: activeTurnId,
+        executionStatus: 'PARTIAL'
+      }
+    ]))
     chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
       const callbacks = args[2]
+      activeTurnId = args[4]
+      callbacks.onAccepted?.()
       callbacks.onCommand({ type: 'REFRESH_DATA', payload: { target: 'device_list' } })
       callbacks.onMessage('完成')
-      callbacks.onFinish?.()
+      callbacks.onFinish?.({ turnId: args[4], executionStatus: 'PARTIAL' })
     })
     chatStore.openChat()
 
@@ -1043,15 +2101,28 @@ describe('ChatView', () => {
   })
 
   it('keeps interactions locked until a failed reconciliation is retried successfully', async () => {
+    let activeTurnId = ''
     const executeCommand = vi.fn()
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true)
     chatApi.createSession.mockResolvedValue(session)
+    chatApi.getSessionHistory.mockImplementation(async () => historyPage([
+      { role: 'user', content: '修改规则', turnId: activeTurnId },
+      {
+        role: 'assistant',
+        content: '已处理',
+        turnId: activeTurnId,
+        executionStatus: 'PARTIAL'
+      }
+    ]))
     chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
       const callbacks = args[2]
+      activeTurnId = args[4]
+      callbacks.onAccepted?.()
       callbacks.onCommand({ type: 'REFRESH_DATA', payload: { target: 'rule_list' } })
       callbacks.onMessage('已处理')
+      callbacks.onFinish?.({ turnId: args[4], executionStatus: 'PARTIAL' })
     })
     chatStore.openChat()
 
@@ -1076,8 +2147,20 @@ describe('ChatView', () => {
 
   it('settles the active backend request before allowing logout', async () => {
     const executeCommand = vi.fn().mockResolvedValue(true)
+    let activeTurnId = ''
     chatApi.createSession.mockResolvedValue(session)
+    chatApi.getSessionHistory.mockImplementation(async () => historyPage([
+      { role: 'user', content: '运行工具', turnId: activeTurnId },
+      {
+        role: 'assistant',
+        content: '请求已停止。',
+        turnId: activeTurnId,
+        executionStatus: 'STOPPED'
+      }
+    ]))
     chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      activeTurnId = args[4]
+      args[2].onAccepted?.()
       const controller = args[3] as AbortController
       return new Promise<void>(resolve => {
         controller.signal.addEventListener('abort', () => resolve(), { once: true })

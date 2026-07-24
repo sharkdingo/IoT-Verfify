@@ -167,10 +167,11 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 
 ## Data model
 
-16 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
+17 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
 `board_environment_variable`, `rules`, `specification`, `board_layout`,
 `device_templates`, `verification_task`, `simulation_task`, `fuzz_task`, `trace`,
-`simulation_trace`, `fuzz_finding`, `chat_session`, `chat_message`, `ai_session_state`. Notable: `device_node` has a
+`simulation_trace`, `fuzz_finding`, `chat_session`, `chat_session_pre_admission_stop`,
+`chat_message`, `ai_session_state`. Notable: `device_node` has a
 composite PK `(id, user_id)` for user isolation; `board_environment_variable` has a
 composite PK `(name, user_id)` for per-user shared environment state;
 `device_templates` has a unique constraint on `(user_id, name)`; `specification` has a
@@ -188,7 +189,8 @@ trace, elapsed time, and terminal status on the final assistant row; absent or m
 evidence is not reconstructed from internal tool blocks. `ai_session_state` durably stores expiring task continuation, scenario draft,
 and protected-action confirmation state shared by backend instances;
 `chat_session` stores the expiring cross-instance execution lease and stop flags so only one
-assistant request can mutate a session at a time;
+assistant request can mutate a session at a time; `chat_session_pre_admission_stop` stores the
+bounded set of turn-specific Stop fences and cascades when its owning session is deleted;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
 Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
 `fuzz_finding` rows are heuristic candidate evidence, not formal traces.

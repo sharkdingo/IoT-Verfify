@@ -4,6 +4,7 @@ import {
   assertFuzzingFindingBelongsToRun,
   getFuzzActiveTaskLimit,
   getFuzzStoredTaskLimit,
+  resolveFuzzingRunFinding,
   validateFuzzingFinding,
   validateFuzzPaperDomainPreview,
   validateFuzzWorkloadPreview,
@@ -423,12 +424,17 @@ describe('fuzzing response contracts', () => {
       inputEvents: [],
       createdAt: '2026-07-14T10:00:01'
     }
-    expect(validateFuzzingRun({
+    const validatedRun = validateFuzzingRun({
       ...run,
       outcome: 'FOUND_VIOLATION',
       findingCount: 1,
       findings: [detailFinding]
-    }).findings[0].states).toHaveLength(1)
+    })
+    expect(validatedRun.findings[0].states).toHaveLength(1)
+    expect(resolveFuzzingRunFinding(validatedRun, detailFinding.id))
+      .toBe(validatedRun.findings[0])
+    expect(() => resolveFuzzingRunFinding(validatedRun, 999))
+      .toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
     expect(() => validateFuzzingRun({
       ...run,
       outcome: 'FOUND_VIOLATION',

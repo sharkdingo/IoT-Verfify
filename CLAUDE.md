@@ -129,8 +129,11 @@ cd backend && mvn compile        # or: mvn test
 cd frontend && npm run build     # runs vue-tsc type-check + build
 ```
 
-Do not commit unless explicitly asked. Push feature work to a branch, never directly to
-`main`. Flag any file that may contain secrets (`.env`, credentials) before committing.
+Do not commit or push unless explicitly asked. Direct pushes to `main` are allowed when
+the user explicitly requests them, but only after reviewing the complete change set,
+running the proportional verification gates, and checking for secret-bearing files. After
+the push, follow the resulting CI runs to completion and address any failures before
+handing off.
 Full git/PR conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Safety / gotchas that bite across the stack

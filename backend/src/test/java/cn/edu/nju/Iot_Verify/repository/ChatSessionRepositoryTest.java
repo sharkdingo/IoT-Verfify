@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +16,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -46,6 +50,28 @@ class ChatSessionRepositoryTest {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Test
+    void directSessionDeletionCascadesPreAdmissionStopFences() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("cascade-session");
+        session.setUserId(1L);
+        session.setPreAdmissionStopTurnIds(new LinkedHashSet<>(List.of("turn-one", "turn-two")));
+        repository.saveAndFlush(session);
+
+        assertEquals(2, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM chat_session_pre_admission_stop WHERE session_id = ?",
+                Integer.class,
+                session.getId()));
+        assertEquals(1, jdbcTemplate.update("DELETE FROM chat_session WHERE id = ?", session.getId()));
+        assertEquals(0, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM chat_session_pre_admission_stop WHERE session_id = ?",
+                Integer.class,
+                session.getId()));
+    }
+
     @Test
     void leaseCleanupClearsOnlyExpiredRows() {
         LocalDateTime now = repository.currentDatabaseTime();
@@ -58,12 +84,27 @@ class ChatSessionRepositoryTest {
         ChatSessionPo live = repository.findById("live").orElseThrow();
         ChatSessionPo expired = repository.findById("expired").orElseThrow();
         assertEquals("live-execution", live.getActiveExecutionId());
+        assertEquals("turn-live", live.getActiveExecutionTurnId());
         assertTrue(live.getActiveExecutionExpiresAt().isAfter(now));
         assertTrue(Boolean.TRUE.equals(live.getExecutionStopRequested()));
         assertNull(expired.getActiveExecutionId());
+        assertNull(expired.getActiveExecutionTurnId());
         assertNull(expired.getActiveExecutionExpiresAt());
         assertFalse(Boolean.TRUE.equals(expired.getExecutionStopRequested()));
         assertFalse(Boolean.TRUE.equals(expired.getExecutionUserStopRequested()));
+    }
+
+    @Test
+    void batchLeaseLockSelectsOnlyRequestedExecutionIdsInStableOrder() {
+        LocalDateTime now = repository.currentDatabaseTime();
+        repository.saveAndFlush(activeSession("batch-b", "execution-b", now.plusMinutes(1)));
+        repository.saveAndFlush(activeSession("batch-a", "execution-a", now.plusMinutes(1)));
+        repository.saveAndFlush(activeSession("batch-other", "execution-other", now.plusMinutes(1)));
+
+        List<ChatSessionPo> selected = repository.findByIdInForUpdate(
+                Set.of("batch-a", "batch-b"));
+
+        assertEquals(List.of("batch-a", "batch-b"), selected.stream().map(ChatSessionPo::getId).toList());
     }
 
     @Test
@@ -259,6 +300,7 @@ class ChatSessionRepositoryTest {
         session.setId(id);
         session.setUserId(1L);
         session.setActiveExecutionId(executionId);
+        session.setActiveExecutionTurnId("turn-" + id);
         session.setActiveExecutionExpiresAt(expiresAt);
         session.setExecutionStopRequested(true);
         session.setExecutionUserStopRequested(true);

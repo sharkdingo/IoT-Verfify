@@ -152,9 +152,10 @@ is treated as a definite rejection and leaves the deletion form available for co
 - Every chat-session or chat-message write locks the active user row and rechecks session
   ownership in the same transaction. A stream that reaches a persistence point after account
   deletion therefore stops instead of recreating chat rows.
-- `chat_message.session_id` cascades from `chat_session`, and exploration findings use a
-  composite `(user_id, fuzz_task_id)` ownership constraint against their task. A late child row
-  therefore cannot attach to a missing parent or to another user's task.
+- `chat_message.session_id` and `chat_session_pre_admission_stop.session_id` cascade from
+  `chat_session`; the latter stores bounded turn-specific Stop fences. Exploration findings use
+  a composite `(user_id, fuzz_task_id)` ownership constraint against their task. A late child
+  row therefore cannot attach to a missing parent or to another user's task.
 - Durable AI continuation, confirmation, and scenario-draft rows use a composite
   `(user_id, session_id)` constraint against their chat session. They cannot be attached to
   another user's session and cascade when that session is deleted.

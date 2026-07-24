@@ -344,9 +344,11 @@ Its methods return already-unwrapped values. Non-exhaustive:
 - Verification: `verify(req)`, `verifyAsync(req): Promise<VerificationTask>`, `getTasks`,
   `getTask`, `getTaskProgress`, `cancelTask`, and trace list/detail/delete.
 - Counterexample exploration: `fuzzingApi.getCurrentModelFingerprint()`,
-  `startAsync(req)`, task polling/cancellation, run list/detail/delete, and lazy finding
-  detail. The accepted task is authoritative; the client never sends a Board/model
-  payload or fabricates a task ID.
+  `startAsync(req)`, task polling/cancellation, and run list/detail/delete. Replay lazily
+  loads the owning full `FuzzRunDto` once and resolves the requested finding id from that
+  run's validated embedded findings; it never joins an independently returned finding with
+  another response's model snapshot. The accepted task is authoritative; the client never
+  sends a Board/model payload or fabricates a task ID.
 - Fix: `getFaultRules(traceId)`, `fixTrace(traceId, request?, { requestId, signal })`,
   `getFixRequestStatus(requestId)`, `cancelFixRequest(requestId)`, and signed apply.
   `FixResultDialog` uses a fresh id for each search, retries backend cancellation before
@@ -546,7 +548,10 @@ Board layout and visual shell rules:
   localized `reason`, optional `label`) instead of making the smaller result count look
   like an unexplained failure. When `truncatedCount > 0`, also surface that raw AI
   candidates were not inspected because the requested result limit had already been
-  reached.
+  reached. A coupled-scene recommendation belongs to the exact minimums, maximums, and
+  requirement text submitted for that attempt. Editing any of those fields invalidates the
+  displayed result immediately; export and full-scene replacement remain unavailable until a
+  fresh response for the edited criteria arrives.
 - Device images should degrade to an inline SVG fallback when a template asset is
   missing or fails to load, so long-running trace animation remains understandable.
 - Timeline state chips stay compact for short traces and become horizontally scrollable
@@ -594,7 +599,9 @@ history has two user layers, not three peer artifact tabs:
    history item.
 
 Completed work is excluded from the task-status lists. Verification counterexamples are
-nested evidence under their owning verification result and keep replay/fix actions;
+nested evidence under their owning verification result and keep replay/fix actions when
+`historyPersistence.status` is `SAVED`, both persistence identity fields are present, and
+the trace's `verificationTaskId` equals that result's `runId`;
 they are not presented as independent runs. Show `violatedSpecCount` separately from
 `counterexampleCount`, because a violated property is not guaranteed to have a
 parseable/replayable trace. Failed and cancelled task rows can be dismissed through the
@@ -606,7 +613,11 @@ may become readable a moment later than the task row. The Board retries transien
 failures for up to three attempts. A permanent client/auth/not-found error fails fast; after
 transient recovery is exhausted, the UI preserves the task as completed, refreshes history,
 and reports that the result is unavailable instead of reverting to a running spinner or
-inventing an empty result.
+inventing an empty result. An immediate synchronous verification whose separate history
+write failed or remains outcome-unknown can still replay its in-memory counterexample, but
+must not expose automatic fix because `/api/verify/traces/{id}/fix` has no confirmed
+persisted trace identity to address. For an unknown outcome, refresh history instead of
+automatically rerunning verification.
 
 Exploration findings are likewise nested under their run, but they are candidate
 finite paths rather than NuSMV counterexamples. `FOUND_VIOLATION` is shown as candidate
@@ -786,7 +797,8 @@ returns `NOT_REQUESTED`. `simulateAndSave` may return playable states with
 `OUTCOME_UNKNOWN`; refresh saved-run history and warn that persistence could not be
 confirmed, but do not discard the trajectory, claim it was saved, or retry automatically.
 Synchronous verification uses the same contract: preserve the formal conclusion while
-presenting its separate run-history persistence status.
+presenting its separate run-history persistence status. Offer automatic Fix only when the
+status is `SAVED` and the trace's `verificationTaskId` matches that status's `runId`.
 For users, present simulation modes as "preview now" versus "save in background": plain
 `simulate` previews immediately and does not persist a trace, `simulateAndSave` previews
 and stores the synchronous trace, and `simulateAsync` stores the trace automatically when
@@ -842,16 +854,23 @@ the bounded original user objective supplied by the backend; it does not expose 
 reasoning. The record remains attached to that message and is persisted with the terminal
 assistant row. History reload replaces the local response only when that row has the same
 `turnId`, so an older completed turn cannot erase the current request.
-The wrapper invokes `onAccepted` as soon as the HTTP response succeeds, because the backend
-has already persisted and admitted the request at that point. A later missing-body or SSE
-parse failure is treated as an accepted-stream failure: local state is retained until
-authoritative history settlement decides whether a terminal row exists. An HTTP rejection
-before acceptance removes optimistic placeholders and restores the ordinary text draft.
+The wrapper invokes `onAccepted` after successful HTTP `2xx` response headers, before body
+parsing. This means the request crossed the synchronous HTTP-rejection boundary, so optimistic
+local state must not be removed as though admission had definitely failed. It is not proof
+that worker dispatch succeeded: a `2xx` stream may carry the admission-outcome-unknown warning
+when compensating cleanup could not be confirmed. A later missing-body, invalid-frame, or
+incomplete-stream failure waits for idle settlement, reconciles Board state, and replaces the
+optimistic turn with authoritative history, including a valid user-only result. An HTTP
+rejection before acceptance removes optimistic placeholders and restores the ordinary text draft.
 
 `getSessionList` also returns `ChatSession.active`. `ChatView` refreshes this list whenever
-the panel becomes visible and whenever the document returns to the foreground. With no
-selected conversation it automatically opens the first active session. Selecting a row
-already marked active starts activity polling and locks mutations before history loading,
+the panel becomes visible and whenever the document returns to the foreground. It reconnects
+the selected conversation first when that session is active; otherwise it opens and monitors
+one authoritative active session. Every active flag in the refreshed list participates in the
+global Board coordination lock, so a second concurrent session cannot be hidden by list order
+or briefly unlock Board mutations while the monitored session settles. When one monitored
+session becomes idle, the client hands monitoring to another active session before releasing
+the lock. Selecting a row already marked active starts activity polling before history loading,
 so a slow or failed history request cannot briefly unlock known-running work; rows without
 that signal perform the dedicated activity check. This is an authoritative activity
 reattachment rather than an SSE replay: the UI shows that server work is still running,
@@ -862,11 +881,19 @@ fails; the reconciliation retry remains visible and locked, but the completed as
 record is not hidden behind an unrelated Board refresh failure. Session-list activity dots
 make runs started in another tab visible without waiting for a conflicting action to fail.
 
-The chat stop control first calls `requestSessionStop`, then aborts the SSE response. It
-cannot undo a backend tool call that already started, but the backend still persists a
+The chat stop control first calls `requestSessionStop(sessionId, turnId)` and waits for the
+durable stop fence before aborting the SSE response or polling activity. Reattached work
+without a locally known turn id sends `null`; an ordinary local request must send its opaque
+turn id so a quick Stop cannot miss pre-admission work or stop a newer turn. It cannot undo a backend tool call that already started, but the backend still persists a
 result that returns after the stop request before ending the workflow. `ChatView`
 therefore polls `getSessionActivity` until the cross-instance execution lease reports
 idle, keeps assistant mutations locked, then reloads conversation/board/history.
+The terminal transaction rechecks the durable stop flags while holding the session lock, so
+the acknowledged stop remains `STOPPED` even when the subsequent browser abort reaches the
+worker before its next control poll.
+The settlement history request invalidates any older in-flight initial history load, and a
+successful settlement clears the earlier history-error state. A delayed response therefore
+cannot replace a newer terminal row or leave the composer disabled after recovery.
 Session switching, new-conversation creation, and deletion wait for the same settling
 step. Activity checks have their own 2.5-second request timeout, so three consecutive
 query failures produce an outcome-unknown warning and an authoritative state refresh
@@ -891,8 +918,13 @@ queue. Read-only trace playback and a pending scene replacement disable new assi
 requests; starting either while an assistant stream is active is blocked until the stream
 stops and its authoritative refresh can complete.
 
-`onFinish` is emitted only when the response stream reaches normal completion, not on
-abort. `ChatView` assigns epochs to streams, session-history loads, and session-list
+`onFinish(terminal)` is emitted only after one valid persisted terminal acknowledgement,
+never merely because the reader reached EOF and never on abort. Server failures use a
+structured `error` frame, so model-authored `content` is never classified by a text prefix. A persisted server-error
+terminal reaches `onFinish` before the corresponding `SERVER_FRAME` reaches `onError`.
+Missing-body, invalid-frame, and incomplete-stream failures retain the accepted local turn
+until idle settlement reloads authoritative history and Board state. `ChatView` assigns
+epochs to streams, session-history loads, and session-list
 loads; callbacks from replaced requests cannot clear a newer controller or overwrite a
 newly selected conversation. Conversation-history loading is separate from response
 generation, so the Stop control is shown only for a response that can actually be

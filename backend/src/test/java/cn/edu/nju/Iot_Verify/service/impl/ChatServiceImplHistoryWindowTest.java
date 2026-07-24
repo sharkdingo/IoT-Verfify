@@ -114,17 +114,21 @@ class ChatServiceImplHistoryWindowTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    void getSmartHistory_shouldUseRecentWindowQuery() throws Exception {
+    void getSmartHistory_shouldUseIdOrderedRecentWindowDespiteClockSkew() throws Exception {
         ChatMessagePo newest = new ChatMessagePo();
+        newest.setId(2L);
         newest.setRole("assistant");
         newest.setContent("reply");
+        newest.setCreatedAt(LocalDateTime.of(2026, 7, 24, 8, 0));
 
         ChatMessagePo older = new ChatMessagePo();
+        older.setId(1L);
         older.setRole("user");
         older.setContent("hello");
+        older.setCreatedAt(LocalDateTime.of(2026, 7, 24, 12, 0));
 
-        // Repository returns DESC window.
-        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1"))
+        // The later id remains authoritative even when another JVM supplied an earlier timestamp.
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s1"))
                 .thenReturn(List.of(newest, older));
 
         Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
@@ -133,7 +137,8 @@ class ChatServiceImplHistoryWindowTest {
         List<ChatMessagePo> history = (List<ChatMessagePo>) method.invoke(service, "s1", 4000);
 
         assertEquals(2, history.size());
-        verify(messageRepo).findTop80BySessionIdOrderByCreatedAtDesc("s1");
+        assertEquals(List.of(1L, 2L), history.stream().map(ChatMessagePo::getId).toList());
+        verify(messageRepo).findTop80BySessionIdOrderByIdDesc("s1");
         verify(messageRepo, never()).findBySessionIdOrderByCreatedAtAsc("s1");
     }
 
@@ -153,7 +158,7 @@ class ChatServiceImplHistoryWindowTest {
         olderUser.setContent("hello");
 
         // Repository returns DESC window. The matching assistant tool_call is outside this window.
-        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s2"))
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s2"))
                 .thenReturn(List.of(newestAssistant, orphanTool, olderUser));
 
         Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
@@ -186,7 +191,7 @@ class ChatServiceImplHistoryWindowTest {
         user.setRole("user");
         user.setContent("inspect the board");
 
-        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("incomplete"))
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("incomplete"))
                 .thenReturn(List.of(finalReply, oneOfTwoResults, incompleteCalls, user));
 
         Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
@@ -211,7 +216,7 @@ class ChatServiceImplHistoryWindowTest {
         user.setRole("user");
         user.setContent("inspect the board");
 
-        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("missing-results"))
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("missing-results"))
                 .thenReturn(List.of(incompleteCalls, user));
 
         Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
@@ -229,7 +234,7 @@ class ChatServiceImplHistoryWindowTest {
         oversizedUser.setRole("user");
         oversizedUser.setContent("x".repeat(4500));
 
-        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s3"))
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s3"))
                 .thenReturn(List.of(oversizedUser));
 
         Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
@@ -451,6 +456,40 @@ class ChatServiceImplHistoryWindowTest {
     }
 
     @Test
+    void createSessionUsesOneDatabaseTimestampForOrderingFields() {
+        LocalDateTime databaseTime = LocalDateTime.of(2026, 7, 24, 10, 15, 30);
+        when(sessionRepo.currentDatabaseTime()).thenReturn(databaseTime);
+        when(sessionRepo.save(any(ChatSessionPo.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.createSession(1L);
+
+        ArgumentCaptor<ChatSessionPo> sessionCaptor = ArgumentCaptor.forClass(ChatSessionPo.class);
+        verify(sessionRepo).save(sessionCaptor.capture());
+        assertEquals(databaseTime, sessionCaptor.getValue().getCreatedAt());
+        assertEquals(databaseTime, sessionCaptor.getValue().getUpdatedAt());
+    }
+
+    @Test
+    void touchSessionTitleUsesDatabaseTimestamp() throws Exception {
+        LocalDateTime databaseTime = LocalDateTime.of(2026, 7, 24, 10, 16, 45);
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("clocked-session");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("clocked-session", 1L)).thenReturn(Optional.of(session));
+        when(sessionRepo.currentDatabaseTime()).thenReturn(databaseTime);
+
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "touchSessionTitle", String.class, Long.class, String.class);
+        method.setAccessible(true);
+        method.invoke(service, "clocked-session", 1L, "inspect the board");
+
+        assertEquals(databaseTime, session.getUpdatedAt());
+        assertEquals("inspect the ...", session.getTitle());
+        verify(sessionRepo).save(session);
+    }
+
+    @Test
     void createSessionRejectsAnUnboundedCatalog() {
         when(sessionRepo.countByUserId(1L)).thenReturn(100L);
 
@@ -487,11 +526,11 @@ class ChatServiceImplHistoryWindowTest {
         when(sessionRepo.findByIdAndUserId("busy-session", 1L)).thenReturn(Optional.of(session));
         when(sessionRepo.findByIdAndUserIdForUpdate("busy-session", 1L)).thenReturn(Optional.of(session));
 
-        String executionId = service.beginStreamRequest(1L, "busy-session");
+        String executionId = service.beginStreamRequest(1L, "busy-session", "turn-busy", "hello");
 
         assertTrue(service.getSessionActivity(1L, "busy-session").isActive());
         assertThrows(ChatSessionBusyException.class,
-                () -> service.beginStreamRequest(1L, "busy-session"));
+                () -> service.beginStreamRequest(1L, "busy-session", "turn-busy", "hello"));
         assertThrows(ChatSessionBusyException.class,
                 () -> service.deleteSession(1L, "busy-session"));
         verify(messageRepo, never()).deleteBySessionId("busy-session");
