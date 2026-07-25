@@ -18,6 +18,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceTemplateMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.RuleMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -77,6 +78,19 @@ class UserWriteFenceIntegrationTest {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    // This class runs with Propagation.NOT_SUPPORTED so its saveAndFlush calls COMMIT rather than
+    // roll back. All @DataJpaTest classes share one cached H2 context, so leftover committed rows
+    // would leak into sibling repository tests (order-dependent, CI-only). Delete what we commit.
+    @AfterEach
+    void clearCommittedRows() {
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            environment.deleteAllInBatch();
+            nodes.deleteAllInBatch();
+            templates.deleteAllInBatch();
+            users.deleteAllInBatch();
+        });
+    }
 
     @Test
     void independentBoardServicesSerializeThenRejectTheStaleCas() throws Exception {

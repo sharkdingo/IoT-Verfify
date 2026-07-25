@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -53,6 +54,16 @@ class ChatSessionRepositoryTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    // The Propagation.NOT_SUPPORTED tests below COMMIT their sessions instead of rolling back, and
+    // all @DataJpaTest classes share one cached H2 context. Clear committed rows after every test so
+    // leftover sessions cannot leak into sibling tests (order-dependent, CI-only). The child fence
+    // table is cleared first for its FK.
+    @AfterEach
+    void clearCommittedSessions() {
+        jdbcTemplate.update("DELETE FROM chat_session_pre_admission_stop");
+        jdbcTemplate.update("DELETE FROM chat_session");
+    }
 
     @Test
     void directSessionDeletionCascadesPreAdmissionStopFences() {

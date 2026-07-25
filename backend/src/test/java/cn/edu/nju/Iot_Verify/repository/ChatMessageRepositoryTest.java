@@ -2,11 +2,13 @@ package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +38,21 @@ class ChatMessageRepositoryTest {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    // The Propagation.NOT_SUPPORTED test below COMMITs its rows instead of rolling back, and all
+    // @DataJpaTest classes share one cached H2 context. Clear committed rows after every test so
+    // they cannot leak into sibling tests (order-dependent, CI-only). Raw SQL is used rather than
+    // deleteAllInBatch() so cleanup never autoflushes a persistence context left broken by a test
+    // that deliberately triggers a constraint violation. Messages first for their FK to sessions.
+    @AfterEach
+    void clearCommittedRows() {
+        jdbcTemplate.update("DELETE FROM chat_message");
+        jdbcTemplate.update("DELETE FROM chat_session_pre_admission_stop");
+        jdbcTemplate.update("DELETE FROM chat_session");
+    }
 
     @Test
     void turnRoleConstraintRejectsASecondVisibleMessage() {

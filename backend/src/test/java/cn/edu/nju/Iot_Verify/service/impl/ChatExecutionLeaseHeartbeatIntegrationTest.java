@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -60,6 +61,15 @@ class ChatExecutionLeaseHeartbeatIntegrationTest {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    // This class runs Propagation.NOT_SUPPORTED so its saveAndFlush COMMITs chat_session rows, and
+    // all @DataJpaTest classes share one cached H2 context. Clear committed rows after every test so
+    // they cannot leak into sibling tests (order-dependent, CI-only).
+    @AfterEach
+    void clearCommittedSessions() {
+        new TransactionTemplate(transactionManager).executeWithoutResult(
+                status -> repository.deleteAllInBatch());
+    }
 
     @Test
     void heartbeatDoesNotRenewWithStaleTimeAfterRowLockWaitExceedsTtl() throws Exception {

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.repository.AiSessionStateRepository;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -35,6 +36,14 @@ class JpaAiSessionStateStoreTest {
     private AiSessionStateRepository repository;
     @Autowired
     private TransactionTemplate transactionTemplate;
+
+    // The Propagation.NOT_SUPPORTED test below COMMITs state instead of rolling back, and all
+    // @DataJpaTest classes share one cached H2 context. Clear committed rows after every test so
+    // they cannot leak into sibling tests (order-dependent, CI-only).
+    @AfterEach
+    void clearCommittedState() {
+        transactionTemplate.executeWithoutResult(status -> repository.deleteAllInBatch());
+    }
 
     @Test
     void stateSurvivesStoreInstancesAndIsConsumedWithCompareAndDelete() {
