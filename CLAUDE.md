@@ -98,6 +98,37 @@ Judge the work by its evidence and maintainability, not by whether a human or mo
   public field, helper, catch block, and documentation claim; remove unnecessary volume; run
   the proportional checks; and report anything not verified.
 
+## Maintainability and Change Discipline
+
+- Before editing, search the repository for existing implementations,
+  utilities, components, types, and patterns that can be reused.
+- Prefer modifying, consolidating, or deleting existing code over adding
+  parallel implementations.
+- Do not introduce compatibility layers, fallback paths, wrappers,
+  duplicate state, new abstractions, or new files unless clearly necessary.
+- Never preserve obsolete code merely "for safety." Determine its callers,
+  tests, and runtime usage, then remove it when safe.
+- Address root causes. Do not suppress errors, bypass validations, duplicate
+  logic, or add special-case branches merely to make tests pass.
+- Keep each change within the requested scope. Do not perform unrelated
+  speculative improvements.
+- Before implementation, identify:
+  1. existing related code;
+  2. the intended modification point;
+  3. code that becomes redundant;
+  4. regression risks and verification commands.
+- After implementation, review the complete diff for:
+  duplicate logic, dead code, unnecessary abstractions, oversized files,
+  hidden fallbacks, obsolete comments, and avoidable complexity.
+- New production dependencies require explicit justification.
+- A change is not complete until tests, linting, type checking, and the
+  maintainability review all pass.
+
+These rules only work if they keep changing behavior. When any CLAUDE.md /
+AGENTS.md grows long enough that key rules get drowned out, treat the rule set
+like code: periodically prune redundant or dead guidance and verify the
+remaining rules still change what the agent does.
+
 ## Shared conventions
 
 - **Language**: all documentation is written in **English** (README, `docs/`,

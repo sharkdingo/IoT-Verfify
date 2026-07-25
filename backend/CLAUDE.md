@@ -46,9 +46,9 @@ component/
     generator/     SMV model generation: SmvGenerator + Device/Main/Specification builders + SmvModelValidator
     executor/      NusmvExecutor — subprocess exec, semaphore concurrency, timeout
     parser/        SmvTraceParser — counterexample parsing
-    fixer/         FaultLocalizer + parameter/condition/disable fix strategies
+    fixer/         FaultLocalizer + parameter/condition/permanent-removal fix strategies
   fuzz/            deterministic bounded path search + finite safety monitor
-  aitool/          35 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
+  aitool/          48 AI tools (board/node/rule/scenario/spec/template/simulation/verification/fuzz)
   ai/              LLM abstraction — domain model + LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, data access
 security/          JWT + Spring Security
@@ -128,9 +128,14 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   for identity. Display labels are readability snapshots only. Specification
   recommendation `templateId` values must stay constrained to `"1"` through `"7"`.
 - **Redis is fail-open**: logout revocation degrades silently if Redis is down; do not
-  make request flow hard-depend on it. A distributed operation lease that is explicitly
-  lost or remains unconfirmed for its full TTL must stop its old worker; do not reduce a
-  lease heartbeat failure to logging only.
+  make request flow hard-depend on it. Interactive recommendation/fix acquisition may use
+  process-local tracking only when Redis is known unavailable before any ownership write is
+  attempted. An uncertain or late distributed acquisition fails closed and performs
+  token-fenced cleanup. A distributed operation lease that is explicitly lost or remains
+  unconfirmed for its full TTL must stop its old worker; do not reduce a lease heartbeat
+  failure to logging only. Interactive recommendation/fix success must pass the atomic
+  ownership-and-stop completion fence before its result is delivered; best-effort cleanup is
+  not a successful settlement.
 - **NuSMV debug files use bounded retention**: `cleanupTempFile()` leaves a completed
   `nusmv_*` directory available for diagnosis, while the scheduled artifact cleaner caps
   both its age and the total retained directory count. Executors must hold the shared
@@ -189,8 +194,10 @@ trace, elapsed time, and terminal status on the final assistant row; absent or m
 evidence is not reconstructed from internal tool blocks. `ai_session_state` durably stores expiring task continuation, scenario draft,
 and protected-action confirmation state shared by backend instances;
 `chat_session` stores the expiring cross-instance execution lease and stop flags so only one
-assistant request can mutate a session at a time; `chat_session_pre_admission_stop` stores the
-bounded set of turn-specific Stop fences and cascades when its owning session is deleted;
+assistant request can mutate a session at a time; `chat_session_pre_admission_stop` stores a
+database-clock timestamp for each turn-specific Stop fence, keeps at most 64 live fences, and
+expires each one after two minutes before admission; the collection cascades when its owning
+session is deleted;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
 Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
 `fuzz_finding` rows are heuristic candidate evidence, not formal traces.

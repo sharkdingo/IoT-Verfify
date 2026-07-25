@@ -16,8 +16,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -58,8 +59,15 @@ class ChatSessionRepositoryTest {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("cascade-session");
         session.setUserId(1L);
-        session.setPreAdmissionStopTurnIds(new LinkedHashSet<>(List.of("turn-one", "turn-two")));
+        LocalDateTime stoppedAt = LocalDateTime.now();
+        session.setPreAdmissionStopTurns(new LinkedHashMap<>(Map.of(
+                "turn-one", stoppedAt,
+                "turn-two", stoppedAt)));
         repository.saveAndFlush(session);
+
+        ChatSessionPo persisted = repository.findById(session.getId()).orElseThrow();
+        assertEquals(stoppedAt, persisted.getPreAdmissionStopTurns().get("turn-one"));
+        assertEquals(stoppedAt, persisted.getPreAdmissionStopTurns().get("turn-two"));
 
         assertEquals(2, jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM chat_session_pre_admission_stop WHERE session_id = ?",

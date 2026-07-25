@@ -21,6 +21,7 @@ import cn.edu.nju.Iot_Verify.dto.recommendation.DeviceRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.InteractiveAiExecutionService;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -40,6 +41,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class BoardStorageControllerThrowIfToolErrorTest {
@@ -75,6 +77,25 @@ class BoardStorageControllerThrowIfToolErrorTest {
         dummyRule = new RuleDto();
         dummyRule.setConditions(List.of());
         dummyRule.setCommand(new RuleDto.Command("dev", "on", null, null));
+    }
+
+    @Test
+    void removeRule_passesTheConfirmedSnapshotToTheLockedServiceMutation() {
+        dummyRule.setId(7L);
+
+        controller.removeRule(1L, 7L, dummyRule);
+
+        verify(boardService).removeRuleIfUnchanged(1L, 7L, dummyRule);
+    }
+
+    @Test
+    void removeSpec_passesTheConfirmedSnapshotToTheLockedServiceMutation() {
+        SpecificationDto expected = new SpecificationDto();
+        expected.setId("spec-7");
+
+        controller.removeSpec(1L, "spec-7", expected);
+
+        verify(boardService).removeSpecIfUnchanged(1L, "spec-7", expected);
     }
 
     private void stubToolError(int status, String errorCode) throws Exception {

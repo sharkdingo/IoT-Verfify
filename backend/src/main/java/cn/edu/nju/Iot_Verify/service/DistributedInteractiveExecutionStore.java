@@ -2,15 +2,19 @@ package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.LongSupplier;
 
 /** Redis-backed ownership, status, and stop propagation for interactive HTTP operations. */
 @Slf4j
@@ -19,8 +23,18 @@ public class DistributedInteractiveExecutionStore {
 
     private static final Duration ACTIVE_TTL = Duration.ofSeconds(30);
     private static final Duration COMPLETED_TTL = Duration.ofSeconds(15);
-    private static final DefaultRedisScript<Long> RELEASE_SCRIPT = new DefaultRedisScript<>(
-            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+    private static final Duration USER_CANCELLATION_TTL = Duration.ofMinutes(10);
+    private static final String AVAILABILITY_PROBE_KEY = "iot-verify:interactive:availability";
+    private static final DefaultRedisScript<Long> ACQUIRE_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('exists', KEYS[1]) == 1 then return -1 end; "
+                    + "if ARGV[3] == '1' and redis.call('exists', KEYS[2]) == 1 then return -2 end; "
+                    + "redis.call('psetex', KEYS[1], ARGV[2], ARGV[1]); "
+                    + "if ARGV[3] == '1' then redis.call('psetex', KEYS[2], ARGV[2], ARGV[1]) end; "
+                    + "redis.call('hset', KEYS[3], 'state', 'WAITING'); "
+                    + "redis.call('hset', KEYS[3], 'stage', 'QUEUED'); "
+                    + "redis.call('hset', KEYS[3], 'startedAt', ARGV[4]); "
+                    + "redis.call('hset', KEYS[3], 'token', ARGV[1]); "
+                    + "redis.call('pexpire', KEYS[3], ARGV[2]); return 1",
             Long.class);
     private static final DefaultRedisScript<Long> STATUS_SCRIPT = new DefaultRedisScript<>(
             "if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end; "
@@ -45,7 +59,22 @@ public class DistributedInteractiveExecutionStore {
                     + "redis.call('pexpire', KEYS[1], ARGV[2]); "
                     + "if ARGV[3] == '1' then redis.call('pexpire', KEYS[2], ARGV[2]) end; "
                     + "redis.call('pexpire', KEYS[3], ARGV[2]); "
-                    + "if redis.call('get', KEYS[4]) == ARGV[1] then return 1 else return 0 end",
+                    + "if redis.call('get', KEYS[4]) == ARGV[1] or redis.call('exists', KEYS[5]) == 1 "
+                    + "then return 1 else return 0 end",
+            Long.class);
+    private static final DefaultRedisScript<Long> COMPLETE_SUCCESS_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) ~= ARGV[1] then return -1 end; "
+                    + "if ARGV[5] == '1' and redis.call('get', KEYS[2]) ~= ARGV[1] then return -1 end; "
+                    + "if redis.call('get', KEYS[4]) == ARGV[1] or redis.call('exists', KEYS[5]) == 1 "
+                    + "then return 0 end; "
+                    + "redis.call('hset', KEYS[3], 'state', 'FINISHED'); "
+                    + "redis.call('hset', KEYS[3], 'stage', ARGV[2]); "
+                    + "redis.call('hset', KEYS[3], 'startedAt', ARGV[3]); "
+                    + "redis.call('hset', KEYS[3], 'token', ARGV[1]); "
+                    + "redis.call('pexpire', KEYS[3], ARGV[4]); "
+                    + "if redis.call('get', KEYS[4]) == ARGV[1] then redis.call('del', KEYS[4]) end; "
+                    + "if ARGV[5] == '1' and redis.call('get', KEYS[2]) == ARGV[1] then redis.call('del', KEYS[2]) end; "
+                    + "redis.call('del', KEYS[1]); return 1",
             Long.class);
     private static final DefaultRedisScript<Long> FINISH_SCRIPT = new DefaultRedisScript<>(
             "if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end; "
@@ -79,39 +108,88 @@ public class DistributedInteractiveExecutionStore {
             String.class);
 
     private final StringRedisTemplate redisTemplate;
+    private final LongSupplier monotonicNanos;
 
+    @Autowired
     public DistributedInteractiveExecutionStore(StringRedisTemplate redisTemplate) {
-        this.redisTemplate = redisTemplate;
+        this(redisTemplate, System::nanoTime);
+    }
+
+    DistributedInteractiveExecutionStore(
+            StringRedisTemplate redisTemplate,
+            LongSupplier monotonicNanos) {
+        this.redisTemplate = Objects.requireNonNull(redisTemplate, "redisTemplate");
+        this.monotonicNanos = Objects.requireNonNull(monotonicNanos, "monotonicNanos");
     }
 
     public Lease acquire(String kind, Long userId, String requestId, boolean exclusivePerUser) {
         Lease lease = new Lease(kind, userId, requestId, UUID.randomUUID().toString(),
-                exclusivePerUser, System.currentTimeMillis());
-        boolean ownerAcquired = false;
-        boolean userAcquired = false;
+                exclusivePerUser, System.currentTimeMillis(), monotonicNanos.getAsLong());
+        if (!redisAvailableBeforeAcquire(kind)) {
+            return lease;
+        }
+
+        long confirmationStartedNanos = monotonicNanos.getAsLong();
+        Long acquired;
         try {
-            ownerAcquired = Boolean.TRUE.equals(redisTemplate.opsForValue()
-                    .setIfAbsent(lease.ownerKey(), lease.token, ACTIVE_TTL));
-            if (!ownerAcquired) throw new BusyException(BusyScope.REQUEST);
-            if (exclusivePerUser) {
-                userAcquired = Boolean.TRUE.equals(redisTemplate.opsForValue()
-                        .setIfAbsent(lease.userKey(), lease.token, ACTIVE_TTL));
-                if (!userAcquired) throw new BusyException(BusyScope.USER);
-            }
-            lease.redisBacked = true;
-            writeStatus(lease, "WAITING", InteractiveOperationStage.QUEUED, ACTIVE_TTL);
-            return lease;
-        } catch (BusyException e) {
-            if (ownerAcquired) releaseKey(lease.ownerKey(), lease.token);
-            if (userAcquired) releaseKey(lease.userKey(), lease.token);
-            throw e;
+            acquired = redisTemplate.execute(
+                    ACQUIRE_SCRIPT,
+                    List.of(lease.ownerKey(), lease.userKey(), lease.statusKey()),
+                    lease.token,
+                    Long.toString(ACTIVE_TTL.toMillis()),
+                    lease.exclusivePerUser ? "1" : "0",
+                    Long.toString(lease.startedAtMillis));
         } catch (RuntimeException e) {
-            if (ownerAcquired) releaseKey(lease.ownerKey(), lease.token);
-            if (userAcquired) releaseKey(lease.userKey(), lease.token);
-            lease.redisBacked = false;
-            log.warn("Redis interactive execution registry is unavailable; using local tracking for {}: {}",
-                    kind, e.toString());
-            return lease;
+            abandonUncertainAcquisition(lease);
+            throw new ServiceUnavailableException(
+                    "Distributed interactive execution ownership could not be confirmed. Try again.", e);
+        }
+
+        if (Long.valueOf(-1L).equals(acquired)) {
+            throw new BusyException(BusyScope.REQUEST);
+        }
+        if (Long.valueOf(-2L).equals(acquired)) {
+            throw new BusyException(BusyScope.USER);
+        }
+        if (!Long.valueOf(1L).equals(acquired)) {
+            abandonUncertainAcquisition(lease);
+            throw new ServiceUnavailableException(
+                    "Distributed interactive execution ownership could not be confirmed. Try again.");
+        }
+
+        lease.lastConfirmedAtNanos = confirmationStartedNanos;
+        if (confirmationExpired(confirmationStartedNanos)) {
+            abandonUncertainAcquisition(lease);
+            throw new ServiceUnavailableException(
+                    "Distributed interactive execution ownership expired before acquisition was confirmed. Try again.");
+        }
+        lease.redisBacked = true;
+        return lease;
+    }
+
+    private boolean redisAvailableBeforeAcquire(String kind) {
+        try {
+            Boolean probe = redisTemplate.hasKey(AVAILABILITY_PROBE_KEY);
+            if (probe != null) return true;
+            log.warn("Redis interactive execution registry returned no availability result; "
+                    + "using local tracking for {}", kind);
+        } catch (RuntimeException e) {
+            log.warn("Redis interactive execution registry is unavailable before ownership acquisition; "
+                    + "using local tracking for {}: {}", kind, e.toString());
+        }
+        return false;
+    }
+
+    private void abandonUncertainAcquisition(Lease lease) {
+        try {
+            redisTemplate.execute(
+                    ABANDON_SCRIPT,
+                    List.of(lease.ownerKey(), lease.userKey(), lease.statusKey(), lease.cancelKey()),
+                    lease.token,
+                    lease.exclusivePerUser ? "1" : "0");
+        } catch (RuntimeException cleanupFailure) {
+            log.warn("Could not clean up uncertain distributed interactive acquisition {}: {}",
+                    lease.ownerKey(), cleanupFailure.toString());
         }
     }
 
@@ -165,25 +243,74 @@ public class DistributedInteractiveExecutionStore {
         }
     }
 
+    /** Account deletion uses this fence to stop every interactive request on every instance. */
+    public boolean requestUserCancellation(String kind, Long userId) {
+        try {
+            redisTemplate.opsForValue().set(
+                    userCancellationKey(kind, userId),
+                    UUID.randomUUID().toString(),
+                    USER_CANCELLATION_TTL);
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("Could not publish distributed interactive user cancellation for {}/{}: {}",
+                    kind, userId, e.toString());
+            return false;
+        }
+    }
+
     /** Returns true when cancellation was requested or this worker no longer owns its lease. */
     public boolean shouldStop(Lease lease) {
         if (lease == null || !lease.redisBacked) return false;
+        long confirmationStartedNanos = monotonicNanos.getAsLong();
         try {
             Long result = redisTemplate.execute(
                     POLL_SCRIPT,
-                    List.of(lease.ownerKey(), lease.userKey(), lease.statusKey(), lease.cancelKey()),
+                    List.of(lease.ownerKey(), lease.userKey(), lease.statusKey(), lease.cancelKey(),
+                            userCancellationKey(lease.kind, lease.userId)),
                     lease.token,
                     Long.toString(ACTIVE_TTL.toMillis()),
                     lease.exclusivePerUser ? "1" : "0");
             if (result == null || result < 0) return true;
-            lease.lastConfirmedAtMillis = System.currentTimeMillis();
+            lease.lastConfirmedAtNanos = confirmationStartedNanos;
+            if (confirmationExpired(confirmationStartedNanos)) return true;
             return result == 1L;
         } catch (RuntimeException e) {
-            if (System.currentTimeMillis() - lease.lastConfirmedAtMillis >= ACTIVE_TTL.toMillis()) {
+            if (confirmationExpired(lease.lastConfirmedAtNanos)) {
                 return true;
             }
             log.warn("Could not poll distributed interactive execution {}: {}", lease.ownerKey(), e.toString());
             return false;
+        }
+    }
+
+    private boolean confirmationExpired(long confirmedAtNanos) {
+        return monotonicNanos.getAsLong() - confirmedAtNanos >= ACTIVE_TTL.toNanos();
+    }
+
+    /**
+     * Atomically establishes the point at which a successful result may be delivered.
+     * A stop ordered before this script wins; a later stop observes that ownership is gone.
+     */
+    public void completeSuccessfully(Lease lease, InteractiveOperationStage stage) {
+        if (lease == null || !lease.redisBacked) return;
+        Long completed;
+        try {
+            completed = redisTemplate.execute(
+                    COMPLETE_SUCCESS_SCRIPT,
+                    List.of(lease.ownerKey(), lease.userKey(), lease.statusKey(), lease.cancelKey(),
+                            userCancellationKey(lease.kind, lease.userId)),
+                    lease.token,
+                    stage.name(),
+                    Long.toString(lease.startedAtMillis),
+                    Long.toString(COMPLETED_TTL.toMillis()),
+                    lease.exclusivePerUser ? "1" : "0");
+        } catch (RuntimeException e) {
+            throw new ServiceUnavailableException(
+                    "Distributed interactive execution completion could not be confirmed. Try again.", e);
+        }
+        if (!Long.valueOf(1L).equals(completed)) {
+            throw new ServiceUnavailableException(
+                    "Distributed interactive execution ownership or stop state changed before completion. Try again.");
         }
     }
 
@@ -230,14 +357,6 @@ public class DistributedInteractiveExecutionStore {
         }
     }
 
-    private void releaseKey(String key, String token) {
-        try {
-            redisTemplate.execute(RELEASE_SCRIPT, List.of(key), token);
-        } catch (RuntimeException e) {
-            log.warn("Could not release distributed interactive lease {}: {}", key, e.toString());
-        }
-    }
-
     private static long parseLong(String value, long fallback) {
         try {
             return Long.parseLong(value);
@@ -266,6 +385,10 @@ public class DistributedInteractiveExecutionStore {
         return "iot-verify:interactive:" + kind + ":" + userId + ":active";
     }
 
+    private static String userCancellationKey(String kind, Long userId) {
+        return "iot-verify:interactive:" + kind + ":" + userId + ":cancel-all";
+    }
+
     public enum BusyScope {
         REQUEST,
         USER
@@ -291,16 +414,18 @@ public class DistributedInteractiveExecutionStore {
         private final boolean exclusivePerUser;
         private final long startedAtMillis;
         private volatile boolean redisBacked;
-        private volatile long lastConfirmedAtMillis = System.currentTimeMillis();
+        private volatile long lastConfirmedAtNanos;
 
         private Lease(String kind, Long userId, String requestId, String token,
-                      boolean exclusivePerUser, long startedAtMillis) {
+                      boolean exclusivePerUser, long startedAtMillis,
+                      long lastConfirmedAtNanos) {
             this.kind = kind;
             this.userId = userId;
             this.requestId = requestId;
             this.token = token;
             this.exclusivePerUser = exclusivePerUser;
             this.startedAtMillis = startedAtMillis;
+            this.lastConfirmedAtNanos = lastConfirmedAtNanos;
         }
 
         private String ownerKey() { return DistributedInteractiveExecutionStore.ownerKey(kind, userId, requestId); }

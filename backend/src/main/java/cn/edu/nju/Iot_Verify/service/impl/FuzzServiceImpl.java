@@ -34,11 +34,14 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzWorkloadPreviewRequestDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.FuzzTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.FuzzTaskStorageQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
@@ -50,6 +53,7 @@ import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
 import cn.edu.nju.Iot_Verify.repository.FuzzFindingRepository;
 import cn.edu.nju.Iot_Verify.repository.FuzzTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzFindingSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskProgressProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
@@ -355,8 +359,9 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             }
             return taskId;
         } catch (RuntimeException e) {
-            if (taskId != null && !executorAccepted) {
-                cleanupUndispatchedTask(userId, taskId, e);
+            if (taskId != null && !executorAccepted
+                    && !cleanupUndispatchedTask(userId, taskId, e)) {
+                throw new AsyncTaskDispatchOutcomeUnknownException("fuzz", taskId, e);
             }
             throw e;
         } finally {
@@ -438,21 +443,21 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         }
     }
 
-    private void cleanupUndispatchedTask(Long userId, Long taskId, RuntimeException failure) {
+    private boolean cleanupUndispatchedTask(Long userId, Long taskId, RuntimeException failure) {
         try {
             int deleted = taskRepository.deleteUndispatchedTask(
                     taskId, userId, workerId, FuzzTaskPo.TaskStatus.PENDING);
-            boolean pendingRowRemains = deleted == 0
-                    && taskRepository.findStatusById(taskId)
-                    .filter(status -> status == FuzzTaskPo.TaskStatus.PENDING)
-                    .isPresent();
-            if (pendingRowRemains) {
+            if (deleted == 1) return true;
+            boolean absent = taskRepository.findByIdAndUserId(taskId, userId).isEmpty();
+            if (!absent) {
                 log.error("Could not remove fuzz task {} after failure before dispatch", taskId);
             }
+            return absent;
         } catch (RuntimeException cleanupError) {
             failure.addSuppressed(cleanupError);
             log.error("Could not remove fuzz task {} after failure before dispatch",
                     taskId, cleanupError);
+            return false;
         }
     }
 
@@ -1397,11 +1402,61 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public RunDeletionImpactDto getRunDeletionImpact(Long userId, Long runId) {
+        CompletedRunDeletionProjection run = taskRepository.findDeletionProjection(
+                        runId, userId, FuzzTaskPo.TaskStatus.COMPLETED)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Counterexample search run", runId));
+        long findingCount = findingRepository.countByUserIdAndFuzzTaskId(userId, runId);
+        return RunDeletionImpactDto.builder()
+                .runId(run.getId())
+                .evidenceCount(findingCount)
+                .createdAt(run.getCreatedAt())
+                .completedAt(run.getCompletedAt())
+                .build();
+    }
+
+    @Override
     @Transactional
     public void deleteRun(Long userId, Long runId) {
-        FuzzTaskPo run = requireOwnedRun(userId, runId);
-        findingRepository.deleteByUserIdAndFuzzTaskId(userId, runId);
-        taskRepository.delete(run);
+        deleteRunInternal(userId, runId, null);
+    }
+
+    @Override
+    @Transactional
+    public long deleteRun(Long userId, Long runId, long expectedFindingCount) {
+        if (expectedFindingCount < 0) {
+            throw new IllegalArgumentException("Expected finding count must not be negative");
+        }
+        return deleteRunInternal(userId, runId, expectedFindingCount);
+    }
+
+    private long deleteRunInternal(Long userId, Long runId, Long expectedFindingCount) {
+        taskRepository.findCompletedRunForUpdate(
+                        runId, userId, FuzzTaskPo.TaskStatus.COMPLETED)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Counterexample search run", runId));
+        long actualFindingCount = findingRepository.countByUserIdAndFuzzTaskId(userId, runId);
+        if (expectedFindingCount != null && actualFindingCount != expectedFindingCount) {
+            throw staleDeletionImpact(expectedFindingCount, actualFindingCount);
+        }
+        int deletedFindingCount = findingRepository.deleteByUserIdAndFuzzTaskId(userId, runId);
+        if (deletedFindingCount != actualFindingCount) {
+            throw staleDeletionImpact(actualFindingCount, deletedFindingCount);
+        }
+        int deletedRunCount = taskRepository.deleteCompletedRun(
+                runId, userId, FuzzTaskPo.TaskStatus.COMPLETED);
+        if (deletedRunCount != 1) {
+            throw new ConflictException(
+                    "Counterexample search run changed during deletion; preview the deletion again before confirming");
+        }
+        return actualFindingCount;
+    }
+
+    private ConflictException staleDeletionImpact(long expected, long actual) {
+        return new ConflictException("Run deletion impact changed from " + expected + " to " + actual
+                + " finding rows; preview the deletion again before confirming");
     }
 
     @Override

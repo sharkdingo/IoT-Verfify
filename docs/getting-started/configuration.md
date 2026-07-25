@@ -9,7 +9,7 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-24. Source:
+Verified against code on 2026-07-25. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
 `configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
 `configure/ChatExecutionConfig`, `configure/NusmvConfig`, `configure/OperationAdmissionConfig`,
@@ -92,7 +92,12 @@ proxy or API gateway. New passwords contain 10–64 characters and must encode t
 Redis backs the JWT-token blacklist (logout revocation), per-user operation admission, and
 the short-lived interactive recommendation/fix execution registry. These paths run in
 **fail-open** mode: if Redis is unavailable the app still starts, but logout revocation and
-cross-instance coordination degrade to their documented process-local behavior.
+cross-instance coordination degrade to their documented process-local behavior. Interactive
+recommendation/fix acquisition uses that local fallback only when a read-only probe establishes
+that Redis is unavailable before any ownership write is attempted. Once its atomic acquisition
+command has been dispatched, an exception, unknown result, or confirmation arriving after the
+30-second lease TTL returns HTTP `503` and attempts token-fenced cleanup instead of starting a
+second process-local owner whose distributed state is uncertain.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
@@ -117,13 +122,17 @@ explicitly lost or cannot be confirmed for a complete TTL, the owning worker is 
 and the operation fails rather than overlapping a replacement worker.
 
 Standalone recommendation and interactive automatic-fix request ids are registered across
-instances with token-fenced owner, user, status, and cancellation keys. An active entry has
-a renewable 30-second lease, and its final `FINISHED` status remains readable for 15 seconds.
-Cancellation stays registered and renewed until the owning callable exits; an expired or
-reused request id cannot let an old worker publish status over its replacement. During a
-Redis outage, the worker remains controllable on the instance that accepted it, but a request
-routed to another instance cannot observe or cancel that process-local execution. Each new
-client attempt must therefore generate a fresh request id.
+instances with token-fenced owner, user, status, and cancellation keys. Owner, optional
+per-user exclusivity, and initial status are acquired in one Redis script, so a request cannot
+retain only a subset after an ordinary command result. The pre-acquisition fallback and
+uncertain-result `503` boundary are defined above. An active entry has a renewable 30-second
+lease, and its final `FINISHED` status remains readable for 15 seconds. A poll response confirms
+ownership from its monotonic call-start time; a response arriving only after the TTL stops the
+worker even when Redis reported success. Cancellation stays registered and renewed until the
+owning callable exits; an expired or reused request id cannot let an old worker publish status
+over its replacement. A locally accepted outage-mode worker remains controllable on that
+instance, but another instance cannot observe or cancel it. Each new client attempt must
+therefore generate a fresh request id.
 
 These coordination scripts operate in the single Redis keyspace configured above. Redis
 Cluster is not supported by the current single-host configuration and multi-key scripts.

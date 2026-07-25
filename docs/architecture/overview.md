@@ -3,7 +3,7 @@
 System topology, the front/back boundary, and the backend package layout. Deep dives
 link out to the focused architecture documents.
 
-Verified against code on 2026-07-14. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
+Verified against code on 2026-07-25. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
 `frontend/src/`.
 
 ---
@@ -59,7 +59,7 @@ component/
     parser/          SmvTraceParser — counterexample parsing
     fixer/           FaultLocalizer + parameter/condition/permanent-removal fix strategies
   fuzz/              deterministic bounded path search + finite specification monitor
-  aitool/            the 35 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
+  aitool/            the 48 AI tools (board/node/rule/scenario/spec/template/simulation/verification/fuzz)
   ai/                LLM abstraction: domain model + LlmProvider (OpenAiLlmProvider adapter)
                      + LlmChatService / PromptCompletionService / LlmMessageCodec facades
 dto/                 request/response DTOs

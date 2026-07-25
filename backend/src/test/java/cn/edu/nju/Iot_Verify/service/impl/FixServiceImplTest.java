@@ -634,6 +634,8 @@ class FixServiceImplTest {
         assertTrue(result.isVerificationEvidenceReused());
         verify(fixSuggestionTokenService).verify(
                 1L, 1L, "parameter", suggestion, "signed-token", null);
+        verify(formalOperationAdmission).execute(eq(1L), any());
+        verify(formalOperationAdmission).registerCurrentLeaseCommitFence();
         // applyFix returns exactly what was persisted (the mutator's output).
         assertEquals("40", result.getRules().get(0).getConditions().get(0).getValue());
         assertEquals("IF Kitchen Sensor.temperature > 40 THEN Kitchen Sensor.on",

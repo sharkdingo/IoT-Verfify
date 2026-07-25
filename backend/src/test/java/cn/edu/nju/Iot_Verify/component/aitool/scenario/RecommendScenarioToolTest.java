@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.aitool.scenario;
 
 import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -43,13 +44,16 @@ class RecommendScenarioToolTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private AiScenarioDraftStore draftStore;
+    private ChatExecutionConfig chatExecutionConfig;
     private RecommendScenarioTool tool;
 
     @BeforeEach
     void setUp() {
         draftStore = new AiScenarioDraftStore();
+        chatExecutionConfig = new ChatExecutionConfig();
         tool = new RecommendScenarioTool(
-                promptCompletionService, boardStorageService, draftStore, objectMapper);
+                promptCompletionService, boardStorageService, draftStore,
+                chatExecutionConfig, objectMapper);
         UserContextHolder.setUserId(1L);
     }
 
@@ -138,6 +142,44 @@ class RecommendScenarioToolTest {
         assertFalse(json.path("draftStored").asBoolean());
         assertTrue(json.path("previousDraftRetained").asBoolean());
         assertTrue(json.path("message").asText().contains("previous valid draft"));
+        assertEquals("Previous", draftStore.latestDraft(1L, "session-1").orElseThrow().scenarioName());
+    }
+
+    @Test
+    void execute_whenResultExceedsLimit_doesNotReplacePreviousDraft() throws Exception {
+        UserContextHolder.setChatSessionId("session-1");
+        draftStore.saveDraft(1L, "session-1", "Previous", objectMapper.readTree(
+                "{\"devices\":[{\"id\":\"device_1\"}],\"rules\":[],\"specs\":[]}"));
+        DeviceTemplateDto oversizedTemplate = sensorTemplate();
+        oversizedTemplate.getManifest().setIcon(
+                "data:image/svg+xml;base64," + "A".repeat(6_000));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(oversizedTemplate));
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of());
+        when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "scenarioName":"Oversized draft",
+                          "scene":{
+                            "devices":[{"id":"sensor","templateName":"Noise Sensor","label":"Sensor"}],
+                            "environmentVariables":[],
+                            "rules":[],
+                            "specs":[]
+                          }
+                        }
+                        """);
+        chatExecutionConfig.setMaxToolResultBytes(4_096);
+
+        JsonNode json = objectMapper.readTree(tool.execute(DEFAULT_ARGS));
+
+        assertEquals("TOOL_RESULT_TOO_LARGE", json.path("errorCode").asText());
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertFalse(json.path("mutationMayHaveCommitted").asBoolean());
+        assertFalse(json.path("draftStored").asBoolean());
+        assertTrue(json.path("previousDraftRetained").asBoolean());
+        assertTrue(json.path("resultBytes").asInt() > json.path("maxResultBytes").asInt());
         assertEquals("Previous", draftStore.latestDraft(1L, "session-1").orElseThrow().scenarioName());
     }
 

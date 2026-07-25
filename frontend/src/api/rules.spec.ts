@@ -8,6 +8,7 @@ vi.mock('./http', () => ({
 
 import http from './http'
 import { cancelRecommendRules, recommendRules } from './rules'
+import { isRecommendationPostOutcomeUnknown } from '@/utils/recommendationRequestRecovery'
 
 const resultEnvelope = (data: unknown) => ({ data: { data } })
 
@@ -39,10 +40,19 @@ describe('rule recommendation request ownership', () => {
       .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve }))
       .mockImplementationOnce(() => new Promise(resolve => { resolveSecond = resolve }))
 
-    const first = recommendRules()
+    const first = recommendRules({ authToken: 'alice-token', requestId: 'rule-request-1' })
     const firstSignal = vi.mocked(http.post).mock.calls[0][2]?.signal as AbortSignal
-    const second = recommendRules()
+    const second = recommendRules({ authToken: 'alice-token', requestId: 'rule-request-2' })
     const secondSignal = vi.mocked(http.post).mock.calls[1][2]?.signal as AbortSignal
+
+    expect(vi.mocked(http.post).mock.calls[0][1]).toMatchObject({ requestId: 'rule-request-1' })
+    expect(vi.mocked(http.post).mock.calls[0][2]).toMatchObject({
+      timeout: 0,
+      headers: { Authorization: 'Bearer alice-token' }
+    })
+    expect(vi.mocked(http.post).mock.calls[1][2]).toMatchObject({
+      headers: { Authorization: 'Bearer alice-token' }
+    })
 
     expect(firstSignal.aborted).toBe(true)
     expect(secondSignal.aborted).toBe(false)
@@ -55,5 +65,28 @@ describe('rule recommendation request ownership', () => {
 
     resolveSecond(resultEnvelope(emptyRecommendationResponse()))
     await second
+  })
+
+  it('distinguishes transport loss from a malformed body received over HTTP', async () => {
+    const transportError = new Error('connection reset')
+    vi.mocked(http.post).mockRejectedValueOnce(transportError)
+
+    await expect(recommendRules({
+      authToken: 'alice-token',
+      requestId: 'rule-transport-loss'
+    })).rejects.toSatisfy(isRecommendationPostOutcomeUnknown)
+
+    vi.mocked(http.post).mockResolvedValueOnce(resultEnvelope({ message: 'malformed response' }))
+    let validationError: unknown
+    try {
+      await recommendRules({
+        authToken: 'alice-token',
+        requestId: 'rule-malformed-response'
+      })
+    } catch (error) {
+      validationError = error
+    }
+    expect(validationError).toBeInstanceOf(Error)
+    expect(isRecommendationPostOutcomeUnknown(validationError)).toBe(false)
   })
 })

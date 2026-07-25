@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-24. Source: board/fuzz DTOs and services,
+Verified against code on 2026-07-25. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -139,14 +139,11 @@ Backend DTO: `BoardEnvironmentVariableDto`. Backend table:
 
 The environment pool is the only persisted source for environment values. `GET
 /api/board/environment` reads current devices/templates, inserts missing required rows,
-keeps existing values, and prunes variables no current device can read or affect. `POST
-/api/board/environment` applies only the non-null fields of each name-keyed patch and
-returns an authoritative full pool plus per-patch supplied/changed/preserved fields and
-before/after values. Omitted or null fields retain the materialized current value; a
-single-label edit therefore cannot reset the shared value or its other label. Complete
-scene replacement instead requires every field explicitly. Both paths validate against
-the same current-node domain and prune variables no device can read or affect. This
-write-on-read behavior is deliberate in the
+keeps existing values, and prunes variables no current device can read or affect. Public
+edits use the [Environment Pool compare-and-set contract](../api/board.md#boardenvironmentvariabledto),
+which prevents one browser tab from silently overwriting another tab's edit. Complete
+scene replacement and targeted edits validate against the same current-node domain and
+prune variables no device can read or affect. This write-on-read behavior is deliberate in the
 single-board development model so a newly created device immediately exposes its
 required scenario variables without relying on frontend-only inference.
 

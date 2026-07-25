@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.LinkedHashMap;
@@ -16,6 +17,11 @@ public final class AiToolResponseHelper {
     private static final String READ_ONLY_FALLBACK_MESSAGE =
             "Result details are unavailable because response serialization failed. "
                     + "No mutation was requested by this operation; retrying will not duplicate a change.";
+    private static final String ACCEPTED_TASK_FALLBACK_WARNING =
+            "Task submission succeeded before its status response became unavailable.";
+    private static final String DISPATCH_UNKNOWN_WARNING =
+            "Task dispatch did not return successfully after persistence, and cleanup of the task record "
+                    + "is unconfirmed.";
 
     private AiToolResponseHelper() {
     }
@@ -69,6 +75,75 @@ public final class AiToolResponseHelper {
 
     public static String success(ObjectMapper objectMapper, String fallbackMessage) {
         return success(objectMapper, Map.of("message", defaultSuccessMessage(fallbackMessage)), fallbackMessage);
+    }
+
+    public static String acceptedAsyncTask(ObjectMapper objectMapper,
+                                           Map<String, Object> body,
+                                           long taskId,
+                                           String statusTool) {
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (Exception ex) {
+            return acceptedAsyncTaskResultUnavailable(objectMapper, taskId, statusTool);
+        }
+    }
+
+    public static String acceptedAsyncTaskResultUnavailable(ObjectMapper objectMapper,
+                                                            long taskId,
+                                                            String statusTool) {
+        String message = "The task was accepted, but its current status could not be confirmed. "
+                + "Poll " + statusTool + " with this taskId before retrying; "
+                + "do not submit a duplicate task.";
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("resultStatus", "RESULT_UNAVAILABLE");
+        body.put("resultAvailable", false);
+        body.put("mutationMayHaveCommitted", true);
+        body.put("taskAccepted", true);
+        body.put("taskId", taskId);
+        body.put("statusTool", statusTool);
+        body.put("errorCode", "ACCEPTED_TASK_STATUS_UNAVAILABLE");
+        body.put("message", message);
+        body.put("warning", ACCEPTED_TASK_FALLBACK_WARNING);
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (Exception ex) {
+            return "{\"resultStatus\":\"RESULT_UNAVAILABLE\","
+                    + "\"resultAvailable\":false,\"mutationMayHaveCommitted\":true,"
+                    + "\"taskAccepted\":true,\"taskId\":" + taskId + ","
+                    + "\"statusTool\":\"" + escapeJson(statusTool) + "\","
+                    + "\"errorCode\":\"ACCEPTED_TASK_STATUS_UNAVAILABLE\","
+                    + "\"message\":\"" + escapeJson(message) + "\","
+                    + "\"warning\":\"" + escapeJson(ACCEPTED_TASK_FALLBACK_WARNING) + "\"}";
+        }
+    }
+
+    public static String asyncTaskDispatchOutcomeUnknown(ObjectMapper objectMapper,
+                                                         long taskId,
+                                                         String statusTool) {
+        String message = "The task dispatch did not return successfully, and cleanup of its persisted "
+                + "task record could not be confirmed. Poll " + statusTool
+                + " with this taskId before retrying; "
+                + "the task may be recovered or may need cancellation and dismissal.";
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("resultStatus", "RESULT_UNAVAILABLE");
+        body.put("resultAvailable", false);
+        body.put("mutationMayHaveCommitted", true);
+        body.put("taskId", taskId);
+        body.put("statusTool", statusTool);
+        body.put("errorCode", AsyncTaskDispatchOutcomeUnknownException.REASON_CODE);
+        body.put("message", message);
+        body.put("warning", DISPATCH_UNKNOWN_WARNING);
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (Exception ex) {
+            return "{\"resultStatus\":\"RESULT_UNAVAILABLE\","
+                    + "\"resultAvailable\":false,\"mutationMayHaveCommitted\":true,"
+                    + "\"taskId\":" + taskId + ","
+                    + "\"statusTool\":\"" + escapeJson(statusTool) + "\","
+                    + "\"errorCode\":\"" + AsyncTaskDispatchOutcomeUnknownException.REASON_CODE + "\","
+                    + "\"message\":\"" + escapeJson(message) + "\","
+                    + "\"warning\":\"" + escapeJson(DISPATCH_UNKNOWN_WARNING) + "\"}";
+        }
     }
 
     private static String defaultSuccessMessage(String fallbackMessage) {

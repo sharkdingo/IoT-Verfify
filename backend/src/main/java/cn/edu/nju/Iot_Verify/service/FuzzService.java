@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzWorkloadPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzWorkloadPreviewRequestDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 
 import java.util.List;
@@ -41,7 +42,13 @@ public interface FuzzService {
 
     FuzzRunDto getRun(Long userId, Long runId);
 
+    /** Exact persisted-row impact for an AI deletion preview, without parsing finding payloads. */
+    RunDeletionImpactDto getRunDeletionImpact(Long userId, Long runId);
+
     void deleteRun(Long userId, Long runId);
+
+    /** Delete only when the exact persisted finding count still matches the confirmed preview. */
+    long deleteRun(Long userId, Long runId, long expectedFindingCount);
 
     List<FuzzFindingDto> getFindings(Long userId, Long runId);
 

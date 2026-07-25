@@ -626,6 +626,19 @@ const onPointerCancelResize = (e: PointerEvent) => {
   releaseResizePointer()
 }
 
+watch(
+  () => props.interactionLocked,
+  locked => {
+    if (!locked) return
+    const restoredDrag = cancelNodeDrag(dragState)
+    if (restoredDrag) updateEdgesForNode(restoredDrag.id, props.nodes, props.edges)
+    releaseDragPointer()
+    const restoredResize = cancelNodeResize(resizeState)
+    if (restoredResize) updateEdgesForNode(restoredResize.id, props.nodes, props.edges)
+    releaseResizePointer()
+  }
+)
+
 /* ====== 自环路径封装（调用 utils/canvas/geometry） ====== */
 
 const getSelfLoopPathD = (edge: DeviceEdge) => {
@@ -707,11 +720,22 @@ const getNodeVisualTier = (node: DeviceNode): NodeVisualTier => {
 const getNodeVisualTierClass = (node: DeviceNode) =>
   `device-node--${getNodeVisualTier(node)}`
 
+const getCompactNodeLabel = (node: DeviceNode) => {
+  const label = String(node.label || '').trim().replace(/\s+/g, ' ')
+  // Keep the beginning of the label. CSS ellipsis then preserves the
+  // differentiating prefix on touch screens instead of making similarly named
+  // devices all render the same trailing words.
+  return label || t('app.device')
+}
+
 const POINTER_RESIZE_TARGET_SIZE_PX = 44
+// Keep a small pointer-free center around compact nodes. A full 44px corner hit
+// target is useful only when each screen dimension leaves a safe gap around it.
+const POINTER_RESIZE_MIN_NODE_SIZE_PX = POINTER_RESIZE_TARGET_SIZE_PX + 8
 const POINTER_RESIZE_ALL_HANDLES_SIZE_PX = POINTER_RESIZE_TARGET_SIZE_PX * 2
 const canPointerResizeNode = (node: DeviceNode) =>
-  node.width * props.zoom > POINTER_RESIZE_TARGET_SIZE_PX
-  && node.height * props.zoom > POINTER_RESIZE_TARGET_SIZE_PX
+  node.width * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX
+  && node.height * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX
 const canShowAllPointerResizeHandles = (node: DeviceNode) =>
   node.width * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
   && node.height * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
@@ -1354,6 +1378,7 @@ onMounted(() => {
           top: node.position.y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
+          '--canvas-zoom': props.zoom,
           '--node-accent-color': getNodeAccentColor(node.id),
           backgroundColor: getNodeSurfaceColor(node.id),
           borderColor: isDeviceAttacked(node.id) ? '#EF4444' : getNodeBorderColor(node.id),
@@ -1389,7 +1414,7 @@ onMounted(() => {
           <!-- 名字 -->
           <div class="device-label-wrapper">
             <div class="device-label" :title="node.label">
-              {{ node.label }}
+              {{ getNodeVisualTier(node) === 'compact' ? getCompactNodeLabel(node) : node.label }}
             </div>
           </div>
           <!-- 下部分：设备状态显示 -->

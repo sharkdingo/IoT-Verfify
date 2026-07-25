@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableUpdateRequestDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeUpdateDto;
@@ -73,6 +74,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -189,10 +191,13 @@ public class BoardStorageController {
     @PostMapping("/environment")
     public Result<EnvironmentMutationResultDto> saveEnvironment(
             @CurrentUser Long userId,
-            @NotNull @Size(max = RequestLimits.MAX_ENVIRONMENT_VARIABLES,
+            @NotNull @NotEmpty(message = "At least one environment variable update is required")
+            @Size(max = RequestLimits.MAX_ENVIRONMENT_VARIABLES,
                     message = "At most 200 environment variables can be updated at once")
-            @Valid @RequestBody List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> variables) {
-        return Result.success(boardService.saveEnvironmentVariables(userId, variables));
+            @Valid @RequestBody
+            List<@Valid @NotNull(message = "Environment variable update cannot be null")
+                    EnvironmentVariableUpdateRequestDto> updates) {
+        return Result.success(boardService.saveEnvironmentVariables(userId, updates));
     }
 
     @GetMapping("/specs")
@@ -210,8 +215,9 @@ public class BoardStorageController {
     @DeleteMapping("/specs/{specId}")
     public Result<CollectionMutationResultDto<SpecificationDto>> removeSpec(
             @CurrentUser Long userId,
-            @PathVariable String specId) {
-        return Result.success(boardService.removeSpec(userId, specId));
+            @PathVariable String specId,
+            @NotNull @Valid @RequestBody SpecificationDto expected) {
+        return Result.success(boardService.removeSpecIfUnchanged(userId, specId, expected));
     }
 
     @GetMapping("/rules")
@@ -230,14 +236,16 @@ public class BoardStorageController {
     public Result<List<RuleDto>> reorderRules(
             @CurrentUser Long userId,
             @NotNull @Valid @RequestBody RuleOrderRequestDto request) {
-        return Result.success(boardService.reorderRules(userId, request.getRuleIds()));
+        return Result.success(boardService.reorderRules(
+                userId, request.getExpectedRuleIds(), request.getRuleIds()));
     }
 
     @DeleteMapping("/rules/{ruleId}")
     public Result<CollectionMutationResultDto<RuleDto>> removeRule(
             @CurrentUser Long userId,
-            @PathVariable long ruleId) {
-        return Result.success(boardService.removeRule(userId, ruleId));
+            @PathVariable long ruleId,
+            @NotNull @Valid @RequestBody RuleDto expected) {
+        return Result.success(boardService.removeRuleIfUnchanged(userId, ruleId, expected));
     }
 
     /**

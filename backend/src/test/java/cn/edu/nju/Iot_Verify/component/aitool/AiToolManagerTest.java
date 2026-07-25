@@ -68,4 +68,37 @@ class AiToolManagerTest {
         assertEquals(false, result.path("mutationMayHaveCommitted").asBoolean());
         assertEquals(4096, result.path("maxResultBytes").asInt());
     }
+
+    @Test
+    void execute_oversizedAnalysisAndNonPersistentSimulationResultsRemainReadOnly() throws Exception {
+        chatExecutionConfig.setMaxToolResultBytes(4096);
+        for (String toolName : List.of("fix_violation", "simulate_model")) {
+            org.mockito.Mockito.reset(knownTool);
+            when(knownTool.getName()).thenReturn(toolName);
+            when(knownTool.execute("{}"))
+                    .thenReturn("{\"payload\":\"" + "x".repeat(5000) + "\"}");
+            manager = new AiToolManager(List.of(knownTool), objectMapper, chatExecutionConfig);
+            manager.init();
+
+            JsonNode result = objectMapper.readTree(manager.execute(toolName, "{}"));
+
+            assertEquals(false, result.path("mutationMayHaveCommitted").asBoolean(), toolName);
+        }
+    }
+
+    @Test
+    void execute_oversizedApplyFixResult_shouldReportThatMutationMayHaveCommitted() throws Exception {
+        chatExecutionConfig.setMaxToolResultBytes(4096);
+        when(knownTool.getName()).thenReturn("apply_fix");
+        manager = new AiToolManager(List.of(knownTool), objectMapper, chatExecutionConfig);
+        manager.init();
+        when(knownTool.execute("{}"))
+                .thenReturn("{\"payload\":\"" + "x".repeat(5000) + "\"}");
+
+        JsonNode result = objectMapper.readTree(manager.execute("apply_fix", "{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", result.path("resultStatus").asText());
+        assertEquals("TOOL_RESULT_TOO_LARGE", result.path("errorCode").asText());
+        assertTrue(result.path("mutationMayHaveCommitted").asBoolean());
+    }
 }

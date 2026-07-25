@@ -31,13 +31,16 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.FuzzTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.FuzzTaskStorageQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
@@ -51,6 +54,7 @@ import cn.edu.nju.Iot_Verify.repository.FuzzFindingRepository;
 import cn.edu.nju.Iot_Verify.repository.FuzzTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskProgressProjection;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzFindingSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
@@ -414,6 +418,77 @@ class FuzzServiceImplTest {
                 eq(41L), any(), any(), any(), anyString(), anyString(), anyList(),
                 anyString(), any(LocalDateTime.class));
         verify(fuzzTaskExecutor, org.mockito.Mockito.times(2)).execute(any(Runnable.class));
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void executorRejectionWithUnconfirmedCleanupPreservesTaskIdAndReleasesCapacity() {
+        threadPoolConfig.setFuzzTask(new ThreadPoolConfig.Pool(1, 1, 0, 60));
+        rebuildService();
+        when(boardDataConverter.getModelInputSnapshot(7L))
+                .thenReturn(snapshot(List.of(specification("spec-1"))));
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(
+                UserPo.builder().id(7L).phone("13900000000")
+                        .username("alice").password("encoded").build()));
+        runTransactionsInline();
+        AtomicLong nextTaskId = new AtomicLong(40L);
+        Map<Long, FuzzTaskPo> savedTasks = new LinkedHashMap<>();
+        when(taskRepository.save(any(FuzzTaskPo.class))).thenAnswer(invocation -> {
+            FuzzTaskPo task = invocation.getArgument(0);
+            task.setId(nextTaskId.incrementAndGet());
+            savedTasks.put(task.getId(), task);
+            return task;
+        });
+        when(taskRepository.deleteUndispatchedTask(
+                eq(41L), eq(7L), anyString(), eq(FuzzTaskPo.TaskStatus.PENDING)))
+                .thenReturn(0);
+        when(taskRepository.findByIdAndUserId(41L, 7L))
+                .thenAnswer(invocation -> Optional.of(savedTasks.get(41L)));
+        doThrow(new TaskRejectedException("full"))
+                .doNothing()
+                .when(fuzzTaskExecutor).execute(any(Runnable.class));
+
+        AsyncTaskDispatchOutcomeUnknownException error = assertThrows(
+                AsyncTaskDispatchOutcomeUnknownException.class,
+                () -> service.submit(7L, validRequest()));
+
+        assertEquals(41L, error.getTaskId());
+        assertEquals("fuzz", error.getTaskKind());
+        assertEquals(42L, service.submit(7L, validRequest()),
+                "unknown database cleanup must not leak the process-local capacity permit");
+        verify(taskRepository).findByIdAndUserId(41L, 7L);
+        verify(fuzzTaskExecutor, org.mockito.Mockito.times(2)).execute(any(Runnable.class));
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void executorRejectionWhenCleanupQueryFailsPreservesTaskIdAndCleanupCause() {
+        when(boardDataConverter.getModelInputSnapshot(7L))
+                .thenReturn(snapshot(List.of(specification("spec-1"))));
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(
+                UserPo.builder().id(7L).phone("13900000000")
+                        .username("alice").password("encoded").build()));
+        runTransactionsInline();
+        when(taskRepository.save(any(FuzzTaskPo.class))).thenAnswer(invocation -> {
+            FuzzTaskPo task = invocation.getArgument(0);
+            task.setId(41L);
+            return task;
+        });
+        DataAccessResourceFailureException cleanupFailure =
+                new DataAccessResourceFailureException("cleanup database unavailable");
+        when(taskRepository.deleteUndispatchedTask(
+                eq(41L), eq(7L), anyString(), eq(FuzzTaskPo.TaskStatus.PENDING)))
+                .thenThrow(cleanupFailure);
+        doThrow(new TaskRejectedException("full"))
+                .when(fuzzTaskExecutor).execute(any(Runnable.class));
+
+        AsyncTaskDispatchOutcomeUnknownException error = assertThrows(
+                AsyncTaskDispatchOutcomeUnknownException.class,
+                () -> service.submit(7L, validRequest()));
+
+        assertEquals(41L, error.getTaskId());
+        assertEquals(1, error.getCause().getSuppressed().length);
+        assertSame(cleanupFailure, error.getCause().getSuppressed()[0]);
     }
 
     @Test
@@ -1118,6 +1193,83 @@ class FuzzServiceImplTest {
         assertTrue(invalidTaskPage.getErrors().containsKey("page"));
         assertTrue(invalidRunSize.getErrors().containsKey("size"));
         verifyNoInteractions(taskRepository, findingRepository);
+    }
+
+    @Test
+    void deletionImpactCountsEveryPersistedFindingWithoutParsingPayloads() {
+        CompletedRunDeletionProjection projection = mock(CompletedRunDeletionProjection.class);
+        LocalDateTime createdAt = LocalDateTime.of(2026, 7, 25, 12, 0);
+        LocalDateTime completedAt = createdAt.plusSeconds(2);
+        when(projection.getId()).thenReturn(91L);
+        when(projection.getCreatedAt()).thenReturn(createdAt);
+        when(projection.getCompletedAt()).thenReturn(completedAt);
+        when(taskRepository.findDeletionProjection(91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(projection));
+        when(findingRepository.countByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(4L);
+
+        RunDeletionImpactDto impact = service.getRunDeletionImpact(7L, 91L);
+
+        assertEquals(91L, impact.getRunId());
+        assertEquals(4L, impact.getEvidenceCount());
+        assertEquals(createdAt, impact.getCreatedAt());
+        assertEquals(completedAt, impact.getCompletedAt());
+        verify(findingRepository, never())
+                .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(anyLong(), anyLong());
+        verifyNoInteractions(fuzzMapper);
+    }
+
+    @Test
+    void confirmedRunDeletionRemovesCorruptFindingPayloadsByOwnedRowCount() {
+        FuzzTaskPo run = FuzzTaskPo.builder()
+                .id(91L)
+                .userId(7L)
+                .status(FuzzTaskPo.TaskStatus.COMPLETED)
+                .eligibilityJson("not valid json")
+                .build();
+        when(taskRepository.findCompletedRunForUpdate(91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(run));
+        when(findingRepository.countByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(4L);
+        when(findingRepository.deleteByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(4);
+        when(taskRepository.deleteCompletedRun(
+                91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED)).thenReturn(1);
+
+        long deletedCount = service.deleteRun(7L, 91L, 4L);
+
+        assertEquals(4L, deletedCount);
+        verify(taskRepository).deleteCompletedRun(91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED);
+        verify(findingRepository, never())
+                .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(anyLong(), anyLong());
+        verifyNoInteractions(fuzzMapper);
+    }
+
+    @Test
+    void confirmedRunDeletionRejectsFindingCountChangedAfterPreview() {
+        FuzzTaskPo run = FuzzTaskPo.builder()
+                .id(91L).userId(7L).status(FuzzTaskPo.TaskStatus.COMPLETED).build();
+        when(taskRepository.findCompletedRunForUpdate(91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(run));
+        when(findingRepository.countByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(4L);
+
+        ConflictException error = assertThrows(
+                ConflictException.class, () -> service.deleteRun(7L, 91L, 3L));
+
+        assertTrue(error.getMessage().contains("preview the deletion again"));
+        verify(findingRepository, never()).deleteByUserIdAndFuzzTaskId(anyLong(), anyLong());
+        verify(taskRepository, never()).deleteCompletedRun(anyLong(), anyLong(), any());
+    }
+
+    @Test
+    void confirmedRunDeletionRejectsConcurrentFindingChangeDuringDelete() {
+        FuzzTaskPo run = FuzzTaskPo.builder()
+                .id(91L).userId(7L).status(FuzzTaskPo.TaskStatus.COMPLETED).build();
+        when(taskRepository.findCompletedRunForUpdate(91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(run));
+        when(findingRepository.countByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(4L);
+        when(findingRepository.deleteByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(5);
+
+        assertThrows(ConflictException.class, () -> service.deleteRun(7L, 91L, 4L));
+
+        verify(taskRepository, never()).deleteCompletedRun(anyLong(), anyLong(), any());
     }
 
     @Test

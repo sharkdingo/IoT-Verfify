@@ -386,6 +386,33 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(wrapper.findAll('button').some(button => button.text() === 'Replay')).toBe(false)
   })
 
+  it('disables a result delete action while that exact deletion is pending', async () => {
+    const unavailableRun: VerificationRunSummary = {
+      id: 99,
+      createdAt: '2026-07-13T10:00:00',
+      completedAt: '2026-07-13T10:00:02',
+      counterexampleCount: 0,
+      counterexamples: [],
+      dataAvailable: false,
+      unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+    }
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'results',
+        verificationRuns: [unavailableRun],
+        pendingResultDeleteKeys: new Set(['verification:99'])
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const deleteButton = wrapper.get('[data-testid="delete-verification-run-99"]')
+    expect(deleteButton.attributes('disabled')).toBeDefined()
+    expect(deleteButton.attributes('aria-busy')).toBe('true')
+    await deleteButton.trigger('click')
+    expect(wrapper.emitted('delete-verification-run')).toBeUndefined()
+  })
+
   it('keeps an unavailable fuzz run deletable without exposing result or finding actions', () => {
     const unavailableRun: FuzzingRunSummary = {
       id: 100,

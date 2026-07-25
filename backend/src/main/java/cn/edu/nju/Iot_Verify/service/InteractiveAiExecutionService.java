@@ -72,6 +72,9 @@ public class InteractiveAiExecutionService {
                     ? "Another AI recommendation is already running for this user. Stop it before starting a new one."
                     : "An AI recommendation with this requestId is already running.";
             throw new ServiceUnavailableException(message);
+        } catch (RuntimeException | Error e) {
+            activeByUser.remove(userId, id);
+            throw e;
         }
 
         ActiveExecution<T> execution = new ActiveExecution<>(key, operation, distributedLease);
@@ -112,6 +115,15 @@ public class InteractiveAiExecutionService {
         log.info("AI recommendation cancellation: userId={}, requestId={}, cancelled={}",
                 userId, id, cancelled || remotelySignalled);
         return cancelled || remotelySignalled;
+    }
+
+    public void requestUserExecutionStop(Long userId) {
+        if (distributedStore != null) {
+            distributedStore.requestUserCancellation("recommendation", userId);
+        }
+        active.forEach((key, execution) -> {
+            if (Objects.equals(key.userId(), userId)) execution.cancel(false);
+        });
     }
 
     public InteractiveOperationStatusDto getStatus(Long userId, String requestId) {
@@ -189,6 +201,7 @@ public class InteractiveAiExecutionService {
         private final AtomicReference<ExecutionState> state =
                 new AtomicReference<>(ExecutionState.WAITING);
         private final AtomicBoolean cleaned = new AtomicBoolean(false);
+        private final AtomicBoolean distributedCompletionPublished = new AtomicBoolean(false);
         private final AtomicReference<InteractiveOperationStage> stage =
                 new AtomicReference<>(InteractiveOperationStage.QUEUED);
         private final LlmRequestControl requestControl = new LlmRequestControl();
@@ -210,7 +223,12 @@ public class InteractiveAiExecutionService {
                 }
                 LlmRequestControlHolder.set(requestControl);
                 try {
-                    return operation.call();
+                    T result = operation.call();
+                    if (distributedStore != null) {
+                        distributedStore.completeSuccessfully(distributedLease, stage.get());
+                        distributedCompletionPublished.set(true);
+                    }
+                    return result;
                 } finally {
                     LlmRequestControlHolder.clear();
                     state.set(ExecutionState.FINISHED);
@@ -253,7 +271,9 @@ public class InteractiveAiExecutionService {
             if (!cleaned.compareAndSet(false, true)) return;
             recentlyCompleted.put(key, new RecentStatus(
                     status(), System.nanoTime() + COMPLETED_STATUS_TTL_NANOS));
-            if (distributedStore != null) distributedStore.finish(distributedLease, stage.get());
+            if (distributedStore != null && !distributedCompletionPublished.get()) {
+                distributedStore.finish(distributedLease, stage.get());
+            }
             active.remove(key, this);
             activeByUser.remove(key.userId(), key.requestId());
         }

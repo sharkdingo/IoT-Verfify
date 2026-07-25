@@ -1265,7 +1265,108 @@ test.describe('board full-stack NuSMV user flow', () => {
       }
     })
     await expect(rulePanel.getByRole('button', { name: /Added to board/i })).toBeDisabled()
+    await expect(rulePanel).toContainText(/Only the applied recommendation is kept/i)
+    await expect(page.getByTestId('rule-candidate-accounting')).toHaveCount(0)
     await page.unroute('**/api/board/rules/recommend**', normalizedRuleRoute)
+
+    const reconciledRuleName = 'Camera activity starts the strobe'
+    const reconciledRuleRoute = async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 200,
+          message: 'Success',
+          data: {
+            message: 'Found one validated rule recommendation.',
+            count: 1,
+            requestedCount: 3,
+            validatedCount: 1,
+            filteredCount: 0,
+            filteredItems: [],
+            adjustedCount: 0,
+            adjustedItems: [],
+            rawCandidateCount: 1,
+            inspectedCount: 1,
+            truncatedCount: 0,
+            recommendations: [{
+              category: 'security',
+              name: reconciledRuleName,
+              conditions: [{
+                deviceId: camera.id,
+                deviceName: camera.label,
+                attribute: 'take photo',
+                targetType: 'api'
+              }],
+              command: {
+                deviceId: alarm.id,
+                deviceName: alarm.label,
+                action: 'strobe'
+              }
+            }]
+          }
+        })
+      })
+    }
+    const distinctSimilarityRoute = async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 200,
+          message: 'Success',
+          data: {
+            isSimilar: false,
+            isDuplicate: false,
+            requiresReview: false,
+            matchedRule: null,
+            similarity: 0.1,
+            reasonCode: 'AI_NO_SIGNIFICANT_SIMILARITY',
+            reason: 'The automation has a distinct action.',
+            message: 'No significant similarity was found.'
+          }
+        })
+      })
+    }
+    await page.route('**/api/board/rules/recommend**', reconciledRuleRoute)
+    await page.route('**/api/board/rules/check-similarity', distinctSimilarityRoute)
+    await page.getByTestId('generate-rule-recommendations').click()
+    await expect(rulePanel).toContainText(reconciledRuleName)
+
+    let markBackendPersisted!: () => void
+    const backendPersisted = new Promise<void>(resolve => { markBackendPersisted = resolve })
+    let releaseUnknownResponse!: () => void
+    const unknownResponseGate = new Promise<void>(resolve => { releaseUnknownResponse = resolve })
+    const unknownRuleCreateRoute = async (route: Route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue()
+        return
+      }
+      const response = await route.fetch()
+      expect(response.ok(), await response.text()).toBeTruthy()
+      markBackendPersisted()
+      await unknownResponseGate
+      await route.abort('connectionreset')
+    }
+    await page.route('**/api/board/rules', unknownRuleCreateRoute)
+    await rulePanel.getByRole('button', { name: /Add This Rule/i }).click()
+    await backendPersisted
+    await page.getByTestId('close-rule-recommendations').click()
+    releaseUnknownResponse()
+    await expect(rulePanel).toBeHidden()
+
+    const reconciledRules = await waitForApi<any[]>(request, auth, '/api/board/rules', rules =>
+      rules.some(rule => rule.ruleString === reconciledRuleName))
+    const reconciledRule = reconciledRules.find(rule => rule.ruleString === reconciledRuleName)!
+    expect(reconciledRule).toBeTruthy()
+    await page.getByTestId('inspector-tab-rules').click()
+    await expect(page.getByTestId('inspector-section-rules')
+      .locator(`[data-rule-id="${reconciledRule.id}"]`))
+      .toContainText(reconciledRuleName)
+
+    await page.unroute('**/api/board/rules', unknownRuleCreateRoute)
+    await page.unroute('**/api/board/rules/check-similarity', distinctSimilarityRoute)
+    await page.unroute('**/api/board/rules/recommend**', reconciledRuleRoute)
   })
 
   test('applies a reviewed scenario recommendation through atomic board replacement', async ({ page, request }) => {
@@ -1493,9 +1594,15 @@ test.describe('board full-stack NuSMV user flow', () => {
     const emptyImportPath = testInfo.outputPath('scene-empty.json')
     fs.writeFileSync(emptyImportPath, emptyJson, 'utf8')
     await page.getByTestId('scene-import-file').setInputFiles(emptyImportPath)
+    const emptyImportResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/board/batch')
     await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
       .getByRole('button', { name: 'Replace in full' })
       .click()
+    const emptyImportResponse = await emptyImportResponsePromise
+    expect(emptyImportResponse.ok(), await emptyImportResponse.text()).toBeTruthy()
+    await expect(page.getByTestId('scene-import')).toBeEnabled()
     await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
 
     const futureScene = { ...firstScene, version: 5 }

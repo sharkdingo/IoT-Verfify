@@ -1,7 +1,7 @@
 # Installation
 
-> Verified against code on 2026-07-22. Source: root `README.md`, `backend/README.md`,
-> `backend/pom.xml`, `frontend/package.json`, `frontend/vite.config.ts`,
+> Verified against code on 2026-07-25. Source: root `README.md`, `backend/README.md`,
+> `backend/pom.xml`, `frontend/package.json`, `frontend/.npmrc`, `frontend/vite.config.ts`,
 > `frontend/playwright.config.ts`.
 
 This guide covers a local development setup of the IoT-Verify platform (Vue 3 frontend + Spring Boot backend + NuSMV model checker). For the complete list of environment variables and their defaults, see [configuration.md](./configuration.md) — it is the single source of truth. This page only names the variables you must set.
@@ -11,7 +11,7 @@ This guide covers a local development setup of the IoT-Verify platform (Vue 3 fr
 | Dependency | Version | Notes |
 | ---------- | ------- | ----- |
 | JDK        | 17+     | Backend runtime (Spring Boot 3.5.7 targets Java 17) |
-| Node.js    | 18+     | Frontend runtime |
+| Node.js    | 20.19+ on Node 20, or 22.12+ | Frontend runtime; enforced by `frontend/package.json` and `frontend/.npmrc` |
 | Maven      | 3.6+    | Backend build |
 | MySQL      | 8.0+    | Primary datastore |
 | Redis      | 6.0+    | Optional. Logout revocation and cross-instance operation coordination; failures fall back to documented process-local behavior |

@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
@@ -145,6 +146,7 @@ class SimulationAsyncToolsTest {
         assertEquals(false, json.path("enablePrivacy").asBoolean());
         assertEquals(1, json.path("modelSnapshot").path("deviceCount").asInt());
         assertTrue(json.path("modelSnapshot").path("templatesFrozen").asBoolean());
+        assertTrue(json.path("taskAccepted").asBoolean());
         assertTrue(json.path("message").asText().contains("completion is not implied"));
         verify(simulationService).submitSimulationWithTemplateSnapshot(eq(1L), any(), any());
         verify(simulationService).getTask(1L, 200L);
@@ -172,12 +174,54 @@ class SimulationAsyncToolsTest {
     }
 
     @Test
+    void simulateModelAsync_whenDispatchCleanupIsUnknown_shouldPreserveTaskId() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        when(boardDataConverter.getModelInputSnapshot(1L)).thenReturn(snapshot(device));
+        doThrow(new AsyncTaskDispatchOutcomeUnknownException(
+                "simulation", 202L, new IllegalStateException("cleanup failed")))
+                .when(simulationService)
+                .submitSimulationWithTemplateSnapshot(eq(1L), any(), any());
+
+        JsonNode json = objectMapper.readTree(simulateModelAsyncTool.execute("{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertEquals("TASK_DISPATCH_OUTCOME_UNKNOWN", json.path("errorCode").asText());
+        assertTrue(json.path("mutationMayHaveCommitted").asBoolean());
+        assertEquals(202L, json.path("taskId").asLong());
+        assertEquals("simulate_task_status", json.path("statusTool").asText());
+        assertTrue(json.path("message").asText().contains("before retrying"));
+        verify(simulationService).submitSimulationWithTemplateSnapshot(eq(1L), any(), any());
+        verifyNoMoreInteractions(simulationService);
+    }
+
+    @Test
     void simulateTaskStatus_missingTaskId_shouldReturnError() throws Exception {
         String result = simulateTaskStatusTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);
         assertTrue(result.contains("taskId"));
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
+    }
+
+    @Test
+    void simulateModelAsync_whenAcceptedTaskStatusCannotBeRead_shouldPreserveTaskId() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        when(boardDataConverter.getModelInputSnapshot(1L)).thenReturn(snapshot(device));
+        when(simulationService.submitSimulationWithTemplateSnapshot(eq(1L), any(), any()))
+                .thenReturn(201L);
+        when(simulationService.getTask(1L, 201L))
+                .thenThrow(new ServiceUnavailableException("status store unavailable"));
+
+        JsonNode json = objectMapper.readTree(simulateModelAsyncTool.execute("{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertEquals("ACCEPTED_TASK_STATUS_UNAVAILABLE", json.path("errorCode").asText());
+        assertTrue(json.path("taskAccepted").asBoolean());
+        assertEquals(201L, json.path("taskId").asLong());
+        assertEquals("simulate_task_status", json.path("statusTool").asText());
+        assertTrue(json.path("message").asText().contains("do not submit a duplicate"));
+        verify(simulationService).submitSimulationWithTemplateSnapshot(eq(1L), any(), any());
+        verify(simulationService).getTask(1L, 201L);
     }
 
     @Test

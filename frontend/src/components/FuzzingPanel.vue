@@ -85,7 +85,7 @@ const isBundledDevice = (targetId: string) => bundledDeviceIdSet.value.has(
   normalizeNuSmvDeviceName(targetId)
 )
 const formatDeviceStateProperty = (targetId: string, property: unknown) =>
-  property === 'workingState' || isBundledDevice(targetId)
+  isBundledDevice(targetId)
     ? formatBundledModelToken(property)
     : String(property ?? '')
 const formatDeviceVariableProperty = (targetId: string, property: unknown) =>

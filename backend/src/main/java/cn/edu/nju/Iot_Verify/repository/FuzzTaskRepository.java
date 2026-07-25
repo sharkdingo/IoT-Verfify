@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.repository;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskProgressProjection;
 import jakarta.persistence.LockModeType;
@@ -25,6 +26,31 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT t FROM FuzzTaskPo t WHERE t.id = :taskId")
     Optional<FuzzTaskPo> findByIdForUpdate(@Param("taskId") Long taskId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM FuzzTaskPo t WHERE t.id = :runId "
+         + "AND t.userId = :userId AND t.status = :status")
+    Optional<FuzzTaskPo> findCompletedRunForUpdate(
+            @Param("runId") Long runId,
+            @Param("userId") Long userId,
+            @Param("status") FuzzTaskPo.TaskStatus status);
+
+    @Query("SELECT t.id AS id, t.createdAt AS createdAt, t.completedAt AS completedAt "
+         + "FROM FuzzTaskPo t WHERE t.id = :runId "
+         + "AND t.userId = :userId AND t.status = :status")
+    Optional<CompletedRunDeletionProjection> findDeletionProjection(
+            @Param("runId") Long runId,
+            @Param("userId") Long userId,
+            @Param("status") FuzzTaskPo.TaskStatus status);
+
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM FuzzTaskPo t WHERE t.id = :runId "
+         + "AND t.userId = :userId AND t.status = :status")
+    int deleteCompletedRun(
+            @Param("runId") Long runId,
+            @Param("userId") Long userId,
+            @Param("status") FuzzTaskPo.TaskStatus status);
 
     Optional<FuzzTaskPo> findByIdAndUserId(Long id, Long userId);
 

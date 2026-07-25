@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-24. Source:
+Verified against code on 2026-07-25. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -126,6 +126,10 @@ fails with service-unavailable semantics. Ordinary persistence failures that do 
 ownership loss may still preserve the completed in-memory result with an explicit failed
 or outcome-unknown history-persistence status.
 
+The signed fix-application endpoint uses the same admission and commit fence as verification
+and simulation. Its atomic rule mutation registers that fence inside the board-write transaction,
+so an expired or superseded formal-operation lease cannot publish a stale repair.
+
 `RunPersistenceDto` is `{ status, runId?, reasonCode? }`. `status` is `SAVED`,
 `NOT_REQUESTED`, `FAILED`, or `OUTCOME_UNKNOWN`. `NOT_REQUESTED` is used by preview-only
 simulation; `FAILED` means the server knows no history row was created; and
@@ -201,10 +205,13 @@ state/mode/trust/privacy condition keys and enum values must be legal. Variable
 conditions are also checked against template domains: declared enum `Values` and
 numeric `LowerBound..UpperBound`. Validation failures are
 returned before task creation (`ValidationException`, HTTP/tool status 422), so no
-`taskId` is returned and clients must not start polling. If the task queue is saturated
-after task creation, the backend marks that task `FAILED` internally and returns
-`503 ServiceUnavailableException`; from the client perspective, a failed submit is
-still "no pollable task".
+`taskId` is returned and clients must not start polling. If dispatch fails after task
+creation, the backend conditionally removes the still-`PENDING` row owned by that worker
+before returning an error, so a definitive failed submit consumes no stored-task quota.
+Queue rejection maps to `503 ServiceUnavailableException`; another runtime dispatch
+failure keeps its normal error mapping. If removal cannot be confirmed, the `503` response
+contains `data={ reasonCode: "TASK_DISPATCH_OUTCOME_UNKNOWN", taskKind, taskId }` and
+clients must reconcile that task before retrying instead of creating a possible duplicate.
 
 Before insertion, the service atomically enforces the configured per-user stored-task
 and active-task limits. HTTP 429 returns structured quota data. The stable reason codes
@@ -814,9 +821,10 @@ such as non-signal API conditions, unknown target actions, unknown content keys,
 illegal state/mode values return `ValidationException` (422) before task creation.
 Rules that pass request validation but still cannot be emitted by NuSMV generation may
 be disabled fail-closed with warnings in `checkLogs`. Validation failure returns no
-`taskId`, and queue saturation marks the
-created task `FAILED` before returning `503`. Clients should start polling only after
-this endpoint successfully returns a task id.
+`taskId`. Dispatch failure uses the same conditional cleanup contract as verification:
+a confirmed still-`PENDING` row deletion consumes no quota, queue rejection returns
+`503`, and an unconfirmed cleanup identifies the task id for reconciliation before retry.
+Clients should start ordinary polling only after this endpoint successfully returns a task id.
 
 Before insertion, the service atomically enforces the configured per-user stored-task
 and active-task limits. HTTP 429 uses reason codes
@@ -984,19 +992,30 @@ unknown request returns 404. The fix workflow reports `QUEUED`, `RUNNING`,
 `CANCELLING` as applicable. These are server-observed operational phases, not inferred
 timers or hidden model reasoning.
 
-The request owner, user admission, status, and cancellation records are token-fenced in
-Redis. Status and cancellation therefore work when a poll is routed to another backend
-instance, while an expired worker cannot finish over a newer owner that reused the same id.
-The cancellation record is renewed until the callable actually exits. During a Redis outage
-the accepting process retains local tracking, but another instance cannot observe it; every
-new search must use a fresh random request id.
+The request owner, user admission, and initial status are acquired atomically and remain
+token-fenced with cancellation records in Redis. Status and cancellation therefore work when
+a poll is routed to another backend instance, while an expired worker cannot finish over a
+newer owner that reused the same id. The cancellation record is renewed until the callable
+actually exits. Redis unavailability detected before that atomic write uses process-local
+tracking, which another instance cannot observe. An unknown or post-TTL acquisition result
+instead returns `503` after token-fenced cleanup, because distributed ownership may already
+exist. Every new search must use a fresh random request id.
 
 The frontend makes five short cancellation attempts to cover POST-registration races and
-aborts the POST transport only after the server accepts cancellation. If cancellation cannot
-be confirmed, it keeps polling for `FINISHED`; after 30 consecutive unavailable status reads
-it releases the local busy state with an explicit outcome-unknown warning. Closing or
-unmounting the fix dialog also retries the server cancellation request before releasing the
-POST transport so an expensive search is not left running merely because its UI disappeared.
+aborts the POST transport only after the server accepts cancellation. It pins the initiating
+credential on the POST and retains it for owner-authenticated status and cancellation during account
+transitions. An error with an HTTP response is a terminal POST outcome; transport loss before
+any response is an unknown admission outcome and retains the request id, owner credential, and
+local busy guard while cancellation/status recovery continues. After 30 consecutive unavailable
+status reads the client stops automatic polling and aborts its transport, but it does not infer
+completion or allow a second search under a new id; logout remains outcome-unknown until
+cancellation is accepted or authoritative status reports `FINISHED`. Board keeps the request-owning
+fix component mounted while its surface is hidden, so closing retains logout reconciliation and
+cannot admit another local search or reuse its suggestions for another trace. A current `FINISHED`
+status is terminal even when the original POST transport remains hung; stale POST cleanup is fenced
+from a newer request. Fix status and cancellation calls use a 2.5-second client timeout so bounded
+retry and logout reconciliation cannot stall on the ordinary API timeout. Route teardown retries
+cancellation before aborting the POST transport.
 
 **Request body**: `FixRequestDto` — optional; omit or send `null` for defaults.
 
@@ -1082,6 +1101,10 @@ the REST or AI response contract.
 Applies the exact signed repair suggestion the user is viewing. The server verifies its
 short-lived signature and saves that same proposal only when the complete current model snapshot
 still matches the verification context.
+
+The conversational `apply_fix` adapter is documented with the other [AI tools](ai-tools.md).
+Its confirmation storage and security boundary are described in
+[Automatic Fix](../architecture/auto-fix.md#applying-a-suggestion-fixstrategyapplier).
 
 **Request body**: `FixApplyRequestDto`
 

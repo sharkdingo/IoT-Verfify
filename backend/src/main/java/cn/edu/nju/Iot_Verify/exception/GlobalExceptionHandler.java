@@ -135,6 +135,19 @@ public class GlobalExceptionHandler {
         return json(HttpStatus.CONFLICT).body(result);
     }
 
+    @ExceptionHandler(EnvironmentVariableConflictException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleEnvironmentVariableConflictException(
+            EnvironmentVariableConflictException e) {
+        log.warn("Environment variable compare-and-set conflict: variableName={}", e.getVariableName());
+        Result<Map<String, Object>> result = Result.error(HttpStatus.CONFLICT.value(), e.getMessage());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("reasonCode", EnvironmentVariableConflictException.REASON_CODE);
+        data.put("variableName", e.getVariableName());
+        data.put("currentVariable", e.getCurrentVariable());
+        result.setData(data);
+        return json(HttpStatus.CONFLICT).body(result);
+    }
+
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<Result<Void>> handleConflictException(ConflictException e) {
         log.warn("Conflict response [{}]", e.getCode());
@@ -251,6 +264,19 @@ public class GlobalExceptionHandler {
         log.error("Internal server error: {}", e.getMessage(), e);
         return json(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Result.error("Internal server error"));
+    }
+
+    @ExceptionHandler(AsyncTaskDispatchOutcomeUnknownException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleAsyncTaskDispatchOutcomeUnknownException(
+            AsyncTaskDispatchOutcomeUnknownException e) {
+        log.error("{} task {} dispatch outcome is unknown", e.getTaskKind(), e.getTaskId(), e);
+        Result<Map<String, Object>> result = Result.error(
+                HttpStatus.SERVICE_UNAVAILABLE.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", AsyncTaskDispatchOutcomeUnknownException.REASON_CODE,
+                "taskKind", e.getTaskKind(),
+                "taskId", e.getTaskId()));
+        return json(HttpStatus.SERVICE_UNAVAILABLE).body(result);
     }
 
     @ExceptionHandler(ServiceUnavailableException.class)

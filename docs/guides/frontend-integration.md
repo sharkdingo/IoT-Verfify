@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-24. Source: `frontend/src/api/`,
+Verified against code on 2026-07-25. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/components/ChatView.vue`,
 `frontend/src/views/Board.vue`, `frontend/src/App.vue`, and `frontend/src/router/index.ts`.
 
@@ -161,6 +161,12 @@ Its methods return already-unwrapped values. Non-exhaustive:
 - Control Center template UI is split into **Create Template** and **Template Repository**.
   Clicking a template card opens its detail preview; dragging a template card to the
   canvas opens a device-instance naming dialog and only saves after confirmation.
+  During trace playback or an atomic scene replacement, Control Center keeps read-only
+  inspection actions (template preview, search, export, and schema download) available but
+  disables device/template/rule/specification mutation entry points, including template
+  drag, import, delete, and bundled-default reset. If that read-only state begins while a
+  specification-condition editor or template confirmation is open, the local surface closes;
+  an asynchronous impact preview that finishes later must not reopen it.
 - Clicking a canvas device opens the device detail/runtime dialog. Its visible instance
   actions include rename and confirmed delete; rename must not depend on discovering a
   hidden mouse gesture. Mouse right-click opens the same device context actions, while
@@ -174,8 +180,9 @@ Its methods return already-unwrapped values. Non-exhaustive:
   `currentNodes` snapshots; a late response therefore cannot roll back a later device
   action. Environment
   variables are not device runtime fields; edit their shared value/trust/privacy through
-  `/board/environment`. Submit only the changed non-null fields; omitted/null fields are
-  preserved, not reset.
+  the documented [Environment Pool compare-and-set contract](../api/board.md#boardenvironmentvariabledto).
+  Keep the baseline from the latest authoritative read until the mutation settles, and
+  refresh a stale row before retrying rather than silently overwriting another tab.
 - Device creation supports single, batch, and JSON/CSV import modes in the Devices tab.
   Batch/import are frontend conveniences over the targeted `addNodes` contract: parse,
   preview, generate unique labels, then append the accepted devices once. Device create,
@@ -316,7 +323,16 @@ Its methods return already-unwrapped values. Non-exhaustive:
   one is accepted, then keeps the panel in a truthful stopping state until the status API
   reports `FINISHED`. An early `404` is treated as a possible registration race. Thirty
   consecutive unavailable status reads end recovery with a visible outcome-unknown warning
-  rather than claiming cancellation or spinning forever.
+  rather than claiming cancellation or spinning forever. Sign-out and component teardown retain
+  the request owner's identity and credential before retrying; same-user token renewal updates that
+  credential, while a later account switch cannot make POST, status, or cancellation calls use
+  another user's credential. A recommendation POST that receives no HTTP response retains its
+  request id, controller, owner credential, and busy state while the same bounded cancellation/status
+  recovery runs; it cannot allocate a second request id. A received HTTP response, including a
+  client-side validation failure of that response, is terminal only for its own request. Sign-out
+  accepts either acknowledged cancellation or owner-authenticated `FINISHED` status. Applying one
+  standalone recommendation retains only that applied item as a disabled confirmation; all other
+  candidates from the now-stale Board context are discarded.
 - Device creation: manual creation, device-list JSON import, standalone AI device
   recommendation, and assistant `add_device` all materialize the same template-local
   starting state/variable values. The shared `materializeDeviceRuntimeConfig` helper
@@ -335,7 +351,12 @@ Its methods return already-unwrapped values. Non-exhaustive:
   validation/similarity gate or persistence request is outstanding. It says "Added to
   board" only after the authoritative response, or after reconciliation proves the item
   exists. Application state is scoped to the recommendation response epoch, so a late
-  completion cannot mark the same array position in a regenerated list.
+  completion cannot mark the same array position in a regenerated list. Once application
+  changes the Board, the panel keeps only that committed candidate as confirmation, labels
+  the retained view explicitly, and removes candidate-accounting metadata from the obsolete
+  response. Closing the panel does not cancel reconciliation of an unknown write outcome;
+  the authoritative Board collection still refreshes if the original authentication subject
+  remains current.
 - Scene import/clear acquires an interaction lock before showing its destructive
   confirmation and after earlier Board writes drain. Confirmation counts therefore
   describe a stable Board; live edits, new assistant requests, verification, and
@@ -349,13 +370,25 @@ Its methods return already-unwrapped values. Non-exhaustive:
   run's validated embedded findings; it never joins an independently returned finding with
   another response's model snapshot. The accepted task is authoritative; the client never
   sends a Board/model payload or fabricates a task ID.
-- Fix: `getFaultRules(traceId)`, `fixTrace(traceId, request?, { requestId, signal })`,
-  `getFixRequestStatus(requestId)`, `cancelFixRequest(requestId)`, and signed apply.
-  `FixResultDialog` uses a fresh id for each search, retries backend cancellation before
-  aborting, and retains `CANCELLING` recovery after a failed stop call. Thirty consecutive
-  unavailable status reads release the local busy state with an explicit uncertainty
-  warning. Closing or unmounting the dialog also retries backend cancellation before
-  releasing the POST transport.
+- Fix: `getFaultRules(traceId)`,
+  `fixTrace(traceId, request?, { authToken, requestId?, signal? })`,
+  `getFixRequestStatus(requestId, authToken)`, `cancelFixRequest(requestId, authToken)`,
+  and signed apply. `FixResultDialog` uses a fresh id and pins the initiating credential on the
+  POST, status reads, and cancellation calls for each search; without that credential it does
+  not dispatch the search. An HTTP response, including a rejected response contract, is terminal for
+  local request tracking. A POST failure without any HTTP response is instead an unknown
+  admission outcome: the dialog retains the request id and owner credential, enters bounded
+  cancellation/status recovery, and prevents another fix search from starting under a fresh
+  id. Thirty consecutive unavailable status reads stop automatic polling and abort the POST
+  transport, but retain the unresolved guard and make logout report `outcome-unknown` until
+  cancellation is accepted or authoritative status reports `FINISHED`. Board keeps the dialog's
+  request owner mounted while the surface is hidden, so closing cannot lose logout reconciliation
+  or permit a new request id. It also keeps that owner bound to its trace, so opening another trace
+  cannot mix old suggestions with the new trace id. Any current `FINISHED` status terminates a POST
+  transport that never settled, and request-id fencing prevents its later `finally` block from
+  clearing a newer search. Status and cancellation transports use a 2.5-second timeout so retry and
+  logout loops cannot inherit the ordinary 100-second API timeout. Route teardown still retries
+  owner-authenticated cancellation before aborting the POST transport.
 
 > **`verifyAsync` signature**: `verifyAsync(req): Promise<VerificationTask>` — it takes
 > only the request and resolves to the authoritative accepted task. The client reads the
@@ -504,11 +537,11 @@ Board layout and visual shell rules:
   which devices read or affect each variable, and displays the user-facing variable name,
   range, shared value, trust, and privacy. Backend-only NuSMV names such as `a_<name>`
   stay out of this UI surface. The component receives the
-  persisted environment pool from `/board/environment` and saves each edit as a
-  name-keyed field patch. The response must explain every patch with
-  `suppliedFields`, `changedFields`, `preservedFields`, and before/after values, and must
-  include the authoritative full pool plus any self-heal changes. The UI reconciles from
-  that snapshot and says whether the selected field changed; it never rebuilds a whole
+  persisted environment pool from `/board/environment` and saves each edit through the
+  [name-keyed compare-and-set contract](../api/board.md#boardenvironmentvariabledto).
+  The UI retains the baseline used by the in-flight edit, reconciles from the returned
+  authoritative pool, and refreshes the affected row after the documented stale conflict.
+  It says whether the selected field changed and never rebuilds a whole
   row from possibly stale props. Device creation/deletion triggers a refresh so the backend can insert
   defaulted required variables and prune unneeded ones. The pool is collapsed by
   default to protect inspector scanability, but still shows the variable count and
@@ -884,7 +917,10 @@ make runs started in another tab visible without waiting for a conflicting actio
 The chat stop control first calls `requestSessionStop(sessionId, turnId)` and waits for the
 durable stop fence before aborting the SSE response or polling activity. Reattached work
 without a locally known turn id sends `null`; an ordinary local request must send its opaque
-turn id so a quick Stop cannot miss pre-admission work or stop a newer turn. It cannot undo a backend tool call that already started, but the backend still persists a
+turn id so a quick Stop cannot miss pre-admission work or stop a newer turn. A pre-admission
+fence is valid for two minutes and the backend retains at most 64 live fences per session;
+expired entries cannot stop a later request that reuses an old turn id. Stop cannot undo a
+backend tool call that already started, but the backend still persists a
 result that returns after the stop request before ending the workflow. `ChatView`
 therefore polls `getSessionActivity` until the cross-instance execution lease reports
 idle, keeps assistant mutations locked, then reloads conversation/board/history.

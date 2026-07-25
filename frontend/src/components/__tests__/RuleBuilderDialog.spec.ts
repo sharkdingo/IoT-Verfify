@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import { describe, expect, it, vi } from 'vitest'
 import RuleBuilderDialog from '../RuleBuilderDialog.vue'
 import type { DeviceNode } from '@/types/node'
+import boardApi, {
+  type DuplicateRuleCheckResult,
+  type RuleSimilarityResult
+} from '@/api/board'
 
 vi.mock('@/api/board', () => ({
   default: {
@@ -73,9 +78,14 @@ const i18n = createI18n({
         contentItemWithSensitivity: '{name}',
         completeRequiredFields: 'Complete fields',
         completeRequiredFieldsBeforeDuplicateCheck: 'Complete fields',
-        configureRuleSourceBeforeSubmit: 'Configure and add at least one IF condition.',
-        addConfiguredRuleSourceBeforeSubmit: 'Add the configured IF condition to the rule before continuing.',
-        selectRuleTargetBeforeSubmit: 'Select the THEN target device and action.',
+          configureRuleSourceBeforeSubmit: 'Configure and add at least one IF condition.',
+          addConfiguredRuleSourceBeforeSubmit: 'Add the configured IF condition to the rule before continuing.',
+          ruleSourceDeviceMissing: 'A source device referenced by this draft no longer exists. Remove the highlighted condition before saving.',
+          ruleTargetDeviceMissing: 'The target device referenced by this draft no longer exists. Select another target.',
+          ruleContentDeviceMissing: 'The content source device referenced by this draft no longer exists. Select another content source.',
+          missingDevice: 'Device removed',
+          ruleChangedDuringCheck: 'The rule draft or device list changed while it was being checked. Review the latest values before saving.',
+          selectRuleTargetBeforeSubmit: 'Select the THEN target device and action.',
         completeContentPayloadFields: 'Complete payload',
         close: 'Close',
         modelTokens: {
@@ -146,6 +156,15 @@ const customCollisionNodes: DeviceNode[] = [
   { id: 'custom-source', label: 'Custom source', templateName: 'CustomSwitch', position: { x: 0, y: 0 }, state: 'off', width: 176, height: 128 },
   { id: 'custom-target', label: 'Custom target', templateName: 'CustomSwitch', position: { x: 220, y: 0 }, state: 'off', width: 176, height: 128 }
 ]
+
+const completeRuleDraft = async (wrapper: VueWrapper) => {
+  await wrapper.get('#rule-source-device').setValue('source')
+  await wrapper.get('#rule-source-type').setValue('api')
+  await wrapper.get('#rule-source-api').setValue('turn_on')
+  await wrapper.get('[data-testid="rule-add-source"]').trigger('click')
+  await wrapper.get('#rule-target-device').setValue('target')
+  await wrapper.get('#rule-target-action').setValue('turn_off')
+}
 
 describe('RuleBuilderDialog action semantics', () => {
   it('localizes bundled model tokens for display while submitting canonical rule values', async () => {
@@ -320,5 +339,122 @@ describe('RuleBuilderDialog action semantics', () => {
 
     expect((saveButton.element as HTMLButtonElement).disabled).toBe(false)
     expect(wrapper.find('[data-testid="rule-draft-readiness"]').exists()).toBe(false)
+  })
+
+  it('blocks a stale draft when another Board refresh removes a referenced device', async () => {
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes, deviceTemplates: [template] },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('#rule-source-device').setValue('source')
+    await wrapper.get('#rule-source-type').setValue('api')
+    await wrapper.get('#rule-source-api').setValue('turn_on')
+    await wrapper.get('[data-testid="rule-add-source"]').trigger('click')
+    await wrapper.get('#rule-target-device').setValue('target')
+    await wrapper.get('#rule-target-action').setValue('turn_off')
+    expect((wrapper.get('[data-testid="rule-save"]').element as HTMLButtonElement).disabled).toBe(false)
+
+    await wrapper.setProps({ nodes: nodes.filter(node => node.id !== 'source') })
+
+    expect((wrapper.get('[data-testid="rule-save"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-testid="rule-draft-readiness"]').text())
+      .toContain('source device referenced by this draft no longer exists')
+    expect(wrapper.text()).toContain('Device removed')
+    expect(wrapper.emitted('save')).toBeUndefined()
+  })
+
+  it('revalidates the draft after an async duplicate check returns', async () => {
+    let resolveCheck!: (value: DuplicateRuleCheckResult) => void
+    vi.mocked(boardApi.checkDuplicateRule).mockReturnValueOnce(new Promise(resolve => {
+      resolveCheck = resolve
+    }))
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes, deviceTemplates: [template] },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('#rule-source-device').setValue('source')
+    await wrapper.get('#rule-source-type').setValue('api')
+    await wrapper.get('#rule-source-api').setValue('turn_on')
+    await wrapper.get('[data-testid="rule-add-source"]').trigger('click')
+    await wrapper.get('#rule-target-device').setValue('target')
+    await wrapper.get('#rule-target-action').setValue('turn_off')
+    const savePromise = wrapper.get('[data-testid="rule-save"]').trigger('click')
+    await wrapper.setProps({ nodes: nodes.filter(node => node.id !== 'source') })
+    resolveCheck({
+      isDuplicate: false,
+      requiresReview: false,
+      similarity: 0,
+      matchType: 'NONE',
+      reasonCode: 'NO_EXISTING_RULES',
+      reason: 'No matching rule',
+      message: 'No matching rule'
+    })
+    await savePromise
+    await flushPromises()
+
+    expect(wrapper.emitted('save-rule')).toBeUndefined()
+    expect(wrapper.get('[data-testid="rule-draft-readiness"]').text())
+      .toContain('source device referenced by this draft no longer exists')
+  })
+
+  it('does not save when the dialog closes during a duplicate check', async () => {
+    let resolveCheck!: (value: DuplicateRuleCheckResult) => void
+    vi.mocked(boardApi.checkDuplicateRule).mockReturnValueOnce(new Promise(resolve => {
+      resolveCheck = resolve
+    }))
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes, deviceTemplates: [template] },
+      global: { plugins: [i18n] }
+    })
+    await completeRuleDraft(wrapper)
+
+    await wrapper.get('[data-testid="rule-save"]').trigger('click')
+    await wrapper.get('button[aria-label="Close"]').trigger('click')
+    resolveCheck({
+      isDuplicate: false,
+      requiresReview: false,
+      similarity: 0,
+      matchType: 'NONE',
+      reasonCode: 'NO_EXISTING_RULES',
+      reason: 'No matching rule',
+      message: 'No matching rule'
+    })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([[false]])
+    expect(wrapper.emitted('save-rule')).toBeUndefined()
+  })
+
+  it('does not report or save a similarity result after the dialog closes', async () => {
+    const successMessage = vi.spyOn(ElMessage, 'success')
+    let resolveCheck!: (value: RuleSimilarityResult) => void
+    vi.mocked(boardApi.checkRuleSimilarity).mockReturnValueOnce(new Promise(resolve => {
+      resolveCheck = resolve
+    }))
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes, deviceTemplates: [template] },
+      global: { plugins: [i18n] }
+    })
+    await completeRuleDraft(wrapper)
+
+    await wrapper.get('[data-testid="rule-check-duplicate"]').trigger('click')
+    await wrapper.get('button[aria-label="Close"]').trigger('click')
+    resolveCheck({
+      isSimilar: false,
+      isDuplicate: false,
+      requiresReview: false,
+      similarity: 0,
+      reasonCode: 'NO_EXISTING_RULES',
+      reason: 'No matching rule',
+      message: 'No matching rule'
+    })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([[false]])
+    expect(wrapper.emitted('save-rule')).toBeUndefined()
+    expect(successMessage).not.toHaveBeenCalled()
+    successMessage.mockRestore()
   })
 })

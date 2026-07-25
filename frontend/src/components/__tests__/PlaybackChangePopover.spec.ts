@@ -93,6 +93,8 @@ describe('PlaybackChangePopover', () => {
     expect(wrapper.text()).toContain('illuminance')
     expect(wrapper.text()).toContain('Motion starts recording')
     expect(wrapper.text()).not.toContain('internal_camera_1')
+    expect(wrapper.get('[data-testid="playback-change-dismiss"]').classes()).toContain('h-11')
+    expect(wrapper.get('[data-testid="playback-change-dismiss"]').classes()).toContain('w-11')
 
     await wrapper.get('[data-testid="playback-change-dismiss"]').trigger('click')
     expect(wrapper.emitted('dismiss')).toHaveLength(1)
@@ -375,5 +377,37 @@ describe('PlaybackChangePopover', () => {
     expect(text).toContain('off')
     expect(text).toContain('active')
     expect(text).not.toContain('工作状态')
+  })
+
+  it('keeps a custom device-state property raw when its name collides with a bundled token', () => {
+    appI18n.global.locale.value = 'zh-CN'
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'fuzzing',
+        stateNumber: 1,
+        totalStates: 1,
+        position: { x: 0, y: 0 },
+        inputEvents: [{
+          step: 0,
+          kind: 'DEVICE_STATE',
+          targetId: 'custom-1',
+          targetLabel: '自定义设备',
+          property: 'workingState',
+          value: 'active',
+          source: 'MODEL_CHOICE'
+        }],
+        changes: [],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [appI18n] }
+    })
+
+    const text = wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()
+    expect(text).toContain('自定义设备.workingState')
+    expect(text).not.toContain('自定义设备.工作状态')
   })
 })

@@ -9,6 +9,7 @@ import { generationIssueReasonKey } from '@/utils/generationIssue'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { requestInteractiveCancellation } from '@/utils/interactiveCancellation'
 import { formatModelTokenBySource } from '@/utils/modelTokenDisplay'
+import { useAuth } from '@/stores/auth'
 import type {
   FaultLocalizationResult,
   FaultRule,
@@ -38,6 +39,7 @@ const emit = defineEmits<{
 }>()
 
 const { t, locale } = useI18n()
+const { getToken } = useAuth()
 
 const faultLoading = ref(false)
 const faultLoadFailed = ref(false)
@@ -45,13 +47,31 @@ const strategyLoading = ref<FixStrategyName | null>(null)
 const fixSearchElapsedSeconds = ref(0)
 const fixProgressStage = ref<InteractiveOperationStage>('QUEUED')
 const activeFixRequestId = ref<string | null>(null)
+const activeFixTraceId = ref<number | null>(null)
 const activeFixAbortController = ref<AbortController | null>(null)
+const activeFixAuthToken = ref<string | null>(null)
 const pendingFixCancellationId = ref<string | null>(null)
+const unresolvedFixRequestId = ref<string | null>(null)
 const FIX_CANCELLATION_STATUS_FAILURE_LIMIT = 30
 const FIX_CANCELLATION_RETRY_DELAY_MS = 50
+const FIX_RECOVERY_BACKOFF_MS = 10_000
+const FIX_PROGRESS_POLL_INTERVAL_MS = 1_000
+// FINISHED is published just before the authoritative POST result leaves the worker. Release is
+// deliberately a two-poll handshake: one poll records `observedAt`, a later poll releases only
+// once this grace has elapsed — giving the in-flight POST body a full extra interval to arrive
+// (and its own terminal evidence clears tracking the instant it does).
+const FIX_FINISHED_POST_GRACE_MS = FIX_PROGRESS_POLL_INTERVAL_MS
 let fixSearchTimer: ReturnType<typeof setInterval> | null = null
 let fixProgressRefreshInFlight = false
 let fixCancellationStatusFailures = 0
+let fixRecoveryRetryNotBefore = 0
+let fixFinishedObservation: { requestId: string, observedAt: number } | null = null
+let fixOutcomeUnknownWarningRequestId: string | null = null
+type FixRequestTerminalEvidence = 'post-terminal' | 'cancel-accepted' | 'status-finished'
+let lastResolvedFixRequest: {
+  requestId: string
+  evidence: FixRequestTerminalEvidence
+} | null = null
 const strategyErrors = ref<Partial<Record<FixStrategyName, string>>>({})
 const strategyWarnings = ref<Partial<Record<FixStrategyName, string[]>>>({})
 const fixResult = ref<FixResult | null>(null)
@@ -79,36 +99,63 @@ const waitForFixCancellationRetry = () => new Promise<void>(resolve => {
   setTimeout(resolve, FIX_CANCELLATION_RETRY_DELAY_MS)
 })
 
+const cancelOwnedFixRequest = (
+  requestId: string,
+  authToken: string | null = activeFixAuthToken.value
+): Promise<boolean> => authToken
+  ? boardApi.cancelFixRequest(requestId, authToken)
+  : Promise.reject(new Error('Automatic-fix owner credential is unavailable'))
+
+const readOwnedFixRequestStatus = (
+  requestId: string,
+  authToken: string | null = activeFixAuthToken.value
+) => authToken
+  ? boardApi.getFixRequestStatus(requestId, authToken)
+  : Promise.reject(new Error('Automatic-fix owner credential is unavailable'))
+
 const refreshFixProgress = async (requestId: string) => {
-  if (fixProgressRefreshInFlight) return
+  if (fixProgressRefreshInFlight || Date.now() < fixRecoveryRetryNotBefore) return
   fixProgressRefreshInFlight = true
   try {
     if (activeFixRequestId.value === requestId && pendingFixCancellationId.value === requestId) {
       try {
-        if (await boardApi.cancelFixRequest(requestId)) {
-          clearActiveFixTracking(requestId)
+        if (await cancelOwnedFixRequest(requestId)) {
+          clearActiveFixTracking(requestId, 'cancel-accepted')
           return
         }
       } catch {
         // Keep polling: the request can become cancellable after POST registration.
       }
     }
-    const status = await boardApi.getFixRequestStatus(requestId)
+    const status = await readOwnedFixRequestStatus(requestId)
     if (activeFixRequestId.value === requestId) {
       if (pendingFixCancellationId.value === requestId) fixCancellationStatusFailures = 0
       fixProgressStage.value = status.stage
-      if (status.state === 'FINISHED' && pendingFixCancellationId.value === requestId) {
-        clearActiveFixTracking(requestId)
+      if (status.state === 'FINISHED') {
+        const recoveringUnknownOutcome = pendingFixCancellationId.value === requestId
+          || unresolvedFixRequestId.value === requestId
+          || activeFixAbortController.value?.signal.aborted === true
+        if (recoveringUnknownOutcome) {
+          clearActiveFixTracking(requestId, 'status-finished')
+        } else if (fixFinishedObservation?.requestId !== requestId) {
+          // The backend publishes FINISHED immediately before the POST result leaves its worker.
+          // Give that authoritative response one polling interval to arrive before treating it as hung.
+          fixFinishedObservation = { requestId, observedAt: Date.now() }
+        } else if (Date.now() - fixFinishedObservation.observedAt >= FIX_FINISHED_POST_GRACE_MS) {
+          clearActiveFixTracking(requestId, 'status-finished')
+        }
+      } else if (fixFinishedObservation?.requestId === requestId) {
+        fixFinishedObservation = null
       }
     }
   } catch {
     if (activeFixRequestId.value === requestId && pendingFixCancellationId.value === requestId) {
       fixCancellationStatusFailures += 1
       if (fixCancellationStatusFailures >= FIX_CANCELLATION_STATUS_FAILURE_LIMIT) {
-        clearActiveFixTracking(requestId)
+        backOffFixCancellationRecovery(requestId)
       }
     }
-    // Registration and completion can race with this read; the fix response remains authoritative.
+    // Registration and completion can race with this read; only terminal evidence releases tracking.
   } finally {
     fixProgressRefreshInFlight = false
   }
@@ -466,7 +513,14 @@ const invalidateStrategyResult = (strategy: FixStrategyName) => {
 }
 
 const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.value) => {
-  if (!props.traceId || strategyLoading.value) return
+  if (!props.traceId || strategyLoading.value || activeFixRequestId.value || unresolvedFixRequestId.value) return
+
+  const authToken = getToken()
+  if (!authToken) {
+    strategyErrors.value[strategy] = t('app.fixAuthenticationRequired')
+    ElMessage.error(strategyErrors.value[strategy])
+    return
+  }
 
   const traceId = props.traceId
   const requestVersion = dialogRequestVersion
@@ -484,16 +538,24 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
   const controller = new AbortController()
   const startedAt = Date.now()
   activeFixRequestId.value = requestId
+  activeFixTraceId.value = traceId
   activeFixAbortController.value = controller
+  activeFixAuthToken.value = authToken
   pendingFixCancellationId.value = null
+  unresolvedFixRequestId.value = null
   fixCancellationStatusFailures = 0
+  fixRecoveryRetryNotBefore = 0
+  fixFinishedObservation = null
+  fixOutcomeUnknownWarningRequestId = null
+  lastResolvedFixRequest = null
   if (fixSearchTimer) clearInterval(fixSearchTimer)
   const requestProgressTimer = setInterval(() => {
     fixSearchElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
     void refreshFixProgress(requestId)
-  }, 1000)
+  }, FIX_PROGRESS_POLL_INTERVAL_MS)
   fixSearchTimer = requestProgressTimer
   delete strategyErrors.value[strategy]
+  let postSettledWithTerminalEvidence = false
   try {
     if (strategy === 'parameter') {
       lastPreferredRangeSelections.value = preferredRangeSelections
@@ -501,8 +563,9 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
     const result = await boardApi.fixTrace(
       traceId,
       { strategies: [strategy], preferredRangeSelections },
-      { requestId, signal: controller.signal }
+      { authToken, requestId, signal: controller.signal }
     )
+    postSettledWithTerminalEvidence = true
     if (requestVersion !== dialogRequestVersion || traceId !== props.traceId || !props.visible) return
     strategyWarnings.value[strategy] = result.warnings || []
     if (strategy === 'parameter') {
@@ -512,24 +575,33 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
     fixResult.value = mergeFixResult(fixResult.value, result)
     if (result.faultRules?.length) faultRules.value = result.faultRules
   } catch (error: any) {
+    postSettledWithTerminalEvidence = Boolean(error?.response)
+      || error?.code === FIX_RESPONSE_INCOMPLETE_CODE
+    if (!postSettledWithTerminalEvidence && activeFixRequestId.value === requestId) {
+      beginUnknownFixRecovery(requestId)
+    }
     if (requestVersion !== dialogRequestVersion || traceId !== props.traceId || !props.visible) return
     if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to fetch fix suggestions:', error)
     strategyErrors.value[strategy] = fixResponseErrorMessage(error, t('app.failedToLoadFixSuggestions'))
     ElMessage.error(strategyErrors.value[strategy])
   } finally {
-    if (requestVersion === dialogRequestVersion && traceId === props.traceId
-      && strategyLoading.value === strategy) {
-      strategyLoading.value = null
+    if (postSettledWithTerminalEvidence && activeFixRequestId.value === requestId) {
+      clearActiveFixTracking(requestId, 'post-terminal')
+    } else if (activeFixRequestId.value === requestId) {
+      beginUnknownFixRecovery(requestId)
     }
-    if (activeFixRequestId.value === requestId) {
-      activeFixRequestId.value = null
-      if (pendingFixCancellationId.value === requestId) pendingFixCancellationId.value = null
-    }
-    if (activeFixAbortController.value === controller) activeFixAbortController.value = null
-    if (fixSearchTimer === requestProgressTimer) {
-      clearInterval(requestProgressTimer)
-      fixSearchTimer = null
+    if (activeFixRequestId.value !== requestId) {
+      if (activeFixRequestId.value === null
+        && requestVersion === dialogRequestVersion && traceId === props.traceId
+        && strategyLoading.value === strategy) {
+        strategyLoading.value = null
+      }
+      if (activeFixAbortController.value === controller) activeFixAbortController.value = null
+      if (fixSearchTimer === requestProgressTimer) {
+        clearInterval(requestProgressTimer)
+        fixSearchTimer = null
+      }
     }
   }
 }
@@ -549,6 +621,15 @@ let dialogRequestVersion = 0
 // Handle dialog open
 const handleOpen = () => {
   dialogRequestVersion += 1
+  if (activeFixRequestId.value || unresolvedFixRequestId.value) {
+    if (activeFixTraceId.value !== props.traceId) {
+      ElMessage.warning(t('app.fixTraceSwitchBlockedByActiveSearch'))
+      emit('update:visible', false)
+      return
+    }
+    void fetchFaultRules()
+    return
+  }
   fixResult.value = null
   faultLocalization.value = null
   faultRules.value = []
@@ -763,18 +844,52 @@ const formatConditionAdjustment = (adjustment: NonNullable<FixSuggestion['condit
   return t('app.keepConditionAdjustment', { condition, rule })
 }
 
-const clearActiveFixTracking = (requestId: string) => {
+const clearActiveFixTracking = (
+  requestId: string,
+  evidence: FixRequestTerminalEvidence
+) => {
   if (activeFixRequestId.value !== requestId) return
+  lastResolvedFixRequest = { requestId, evidence }
   activeFixAbortController.value?.abort()
   activeFixAbortController.value = null
   activeFixRequestId.value = null
+  activeFixTraceId.value = null
+  activeFixAuthToken.value = null
   pendingFixCancellationId.value = null
+  if (unresolvedFixRequestId.value === requestId) unresolvedFixRequestId.value = null
   fixCancellationStatusFailures = 0
+  fixRecoveryRetryNotBefore = 0
+  if (fixFinishedObservation?.requestId === requestId) fixFinishedObservation = null
+  if (fixOutcomeUnknownWarningRequestId === requestId) fixOutcomeUnknownWarningRequestId = null
   strategyLoading.value = null
   if (fixSearchTimer) {
     clearInterval(fixSearchTimer)
     fixSearchTimer = null
   }
+}
+
+const warnFixOutcomeUnknown = (requestId: string) => {
+  if (fixOutcomeUnknownWarningRequestId === requestId) return
+  fixOutcomeUnknownWarningRequestId = requestId
+  ElMessage.warning(t('app.fixStopRequestMayStillBeRunning'))
+}
+
+const beginUnknownFixRecovery = (requestId: string) => {
+  if (activeFixRequestId.value !== requestId) return
+  unresolvedFixRequestId.value = requestId
+  warnFixOutcomeUnknown(requestId)
+  if (pendingFixCancellationId.value !== requestId) {
+    void cancelActiveFixSearch()
+  }
+}
+
+const backOffFixCancellationRecovery = (requestId: string) => {
+  if (activeFixRequestId.value !== requestId) return
+  unresolvedFixRequestId.value = requestId
+  activeFixAbortController.value?.abort()
+  fixCancellationStatusFailures = 0
+  fixRecoveryRetryNotBefore = Date.now() + FIX_RECOVERY_BACKOFF_MS
+  warnFixOutcomeUnknown(requestId)
 }
 
 const cancelActiveFixSearch = async () => {
@@ -785,20 +900,20 @@ const cancelActiveFixSearch = async () => {
   fixProgressStage.value = 'CANCELLING'
   try {
     const accepted = await requestInteractiveCancellation({
-      cancel: () => boardApi.cancelFixRequest(requestId),
+      cancel: () => cancelOwnedFixRequest(requestId),
       waitBeforeRetry: waitForFixCancellationRetry,
       shouldContinue: () => activeFixRequestId.value === requestId
     })
     if (accepted) {
-      clearActiveFixTracking(requestId)
+      clearActiveFixTracking(requestId, 'cancel-accepted')
       return
     }
-    ElMessage.warning(t('app.fixStopRequestMayStillBeRunning'))
+    warnFixOutcomeUnknown(requestId)
     await refreshFixProgress(requestId)
   } catch (error) {
     // Keep the request id and progress polling alive until its terminal state is observed.
     console.warn(`[Fix] Failed to cancel automatic-fix request ${requestId}:`, error)
-    ElMessage.warning(t('app.fixStopRequestMayStillBeRunning'))
+    warnFixOutcomeUnknown(requestId)
     await refreshFixProgress(requestId)
   }
 }
@@ -807,6 +922,7 @@ const disposeActiveFixSearch = () => {
   const requestId = activeFixRequestId.value
   if (!requestId) return
   const controller = activeFixAbortController.value
+  const authToken = activeFixAuthToken.value
   pendingFixCancellationId.value = requestId
   fixProgressStage.value = 'CANCELLING'
   if (fixSearchTimer) {
@@ -814,16 +930,55 @@ const disposeActiveFixSearch = () => {
     fixSearchTimer = null
   }
   void requestInteractiveCancellation({
-    cancel: () => boardApi.cancelFixRequest(requestId),
+    cancel: () => cancelOwnedFixRequest(requestId, authToken),
     waitBeforeRetry: () => new Promise<void>(resolve => setTimeout(resolve, 100)),
     shouldContinue: () => activeFixRequestId.value === requestId,
     maxAttempts: 20
+  }).then(accepted => {
+    if (accepted) clearActiveFixTracking(requestId, 'cancel-accepted')
+    else beginUnknownFixRecovery(requestId)
   }).catch(error => {
     console.warn(`[Fix] Failed to cancel automatic-fix request ${requestId} during teardown:`, error)
+    beginUnknownFixRecovery(requestId)
   }).finally(() => {
     controller?.abort()
-    if (activeFixRequestId.value === requestId) clearActiveFixTracking(requestId)
   })
+}
+
+const prepareForLogout = async (): Promise<'ready' | 'outcome-unknown'> => {
+  const requestId = activeFixRequestId.value
+  if (!requestId) return unresolvedFixRequestId.value ? 'outcome-unknown' : 'ready'
+  const authToken = activeFixAuthToken.value
+  pendingFixCancellationId.value = requestId
+  fixProgressStage.value = 'CANCELLING'
+  try {
+    const accepted = await requestInteractiveCancellation({
+      cancel: () => cancelOwnedFixRequest(requestId, authToken),
+      waitBeforeRetry: waitForFixCancellationRetry,
+      shouldContinue: () => activeFixRequestId.value === requestId,
+      maxAttempts: 20
+    })
+    if (accepted) {
+      clearActiveFixTracking(requestId, 'cancel-accepted')
+      return 'ready'
+    }
+    if (lastResolvedFixRequest?.requestId === requestId) return 'ready'
+    try {
+      const status = await readOwnedFixRequestStatus(requestId, authToken)
+      if (activeFixRequestId.value === requestId) fixProgressStage.value = status.stage
+      if (status.state === 'FINISHED') {
+        clearActiveFixTracking(requestId, 'status-finished')
+        return 'ready'
+      }
+    } catch {
+      // Missing status is not evidence that an admission-unknown request has finished.
+    }
+    if (lastResolvedFixRequest?.requestId === requestId) return 'ready'
+    return 'outcome-unknown'
+  } catch (error) {
+    console.warn(`[Fix] Failed to stop automatic-fix request ${requestId} before logout:`, error)
+    return 'outcome-unknown'
+  }
 }
 
 // Watch visible prop. Parent-driven hides and route teardown must cancel expensive searches too.
@@ -840,6 +995,13 @@ onBeforeUnmount(() => {
   disposeActiveFixSearch()
   dialogRequestVersion += 1
 })
+
+const canOpenTrace = (traceId: number): boolean => {
+  if (!activeFixRequestId.value && !unresolvedFixRequestId.value) return true
+  return activeFixTraceId.value === traceId
+}
+
+defineExpose({ canOpenTrace, prepareForLogout })
 
 // Close dialog
 const closeDialog = () => {

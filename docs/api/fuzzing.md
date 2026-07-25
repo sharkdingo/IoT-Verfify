@@ -5,7 +5,7 @@ module. The endpoint index lives in [rest-endpoints.md](rest-endpoints.md); glob
 authentication, `Result<T>`, and error conventions live in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-24. Source: `controller/FuzzController.java`,
+Verified against code on 2026-07-25. Source: `controller/FuzzController.java`,
 `service/impl/FuzzServiceImpl.java`, and `dto/fuzz/`.
 
 ---
@@ -205,9 +205,12 @@ checked before the frozen snapshot is serialized.
 The service rechecks task status before final executor acceptance. If that status read or
 executor acceptance fails after persistence but before dispatch, it deletes the just-created,
 still-`PENDING` row by task ID, user ID, worker ID, and status and releases its capacity
-permit. It does not retain an unreachable row containing the frozen snapshot. A row
-independently changed to `CANCELLED` during that race is retained as the cancellation record
-and is not reported as failed cleanup.
+permit. A confirmed deletion, or confirmation that the row is already absent, preserves the
+ordinary queue/runtime error and consumes no stored-task quota. If deletion cannot be confirmed,
+HTTP 503 returns `data={ reasonCode: "TASK_DISPATCH_OUTCOME_UNKNOWN", taskKind: "fuzz",
+taskId }`; clients must reconcile that task before retrying. A row independently observed as
+`CANCELLED` before executor submission is retained as the cancellation record and returned as
+the authoritative task rather than treated as dispatch failure.
 
 Response data: the accepted `FuzzTaskDto`. Acceptance is not completion. Its fields are
 `id`, `status`, `progress`, `progressStage`, lifecycle timestamps, `processingTimeMs`, optional

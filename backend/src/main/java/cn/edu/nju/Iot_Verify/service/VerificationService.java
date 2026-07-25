@@ -1,8 +1,9 @@
 package cn.edu.nju.Iot_Verify.service;
 
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
@@ -48,7 +49,7 @@ public interface VerificationService {
             Long userId,
             VerificationRequestDto request,
             Map<String, DeviceManifest> templateManifests);
-    
+
     /**
      * 获取任务状态
      *
@@ -75,13 +76,19 @@ public interface VerificationService {
 
     VerificationRunDto getRun(Long userId, Long runId);
 
+    /** Exact persisted-row impact for an AI deletion preview, without parsing run evidence. */
+    RunDeletionImpactDto getRunDeletionImpact(Long userId, Long runId);
+
     List<TraceDto> getRunTraces(Long userId, Long runId);
 
     void deleteRun(Long userId, Long runId);
-    
+
+    /** Delete only when the exact persisted trace count still matches the confirmed preview. */
+    long deleteRun(Long userId, Long runId, long expectedTraceCount);
+
     /**
      * 获取用户的所有 Trace
-     * 
+     *
      * @param userId 用户ID
      * @return Trace 列表
      */
@@ -98,13 +105,13 @@ public interface VerificationService {
 
     /**
      * 获取单个 Trace
-     * 
+     *
      * @param userId 用户ID
      * @param traceId Trace ID
      * @return Trace
      */
     TraceDto getTrace(Long userId, Long traceId);
-    
+
     /**
      * 删除 Trace
      *

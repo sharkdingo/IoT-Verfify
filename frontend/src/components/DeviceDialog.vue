@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {ref, watch, computed, nextTick} from 'vue'
 import {useI18n} from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 import type {DeviceManifest, DeviceTemplate, InternalVariable} from '../types/device'
@@ -58,16 +58,10 @@ const innerVisible = ref(props.visible)
 /* 同步 props -> local state */
 watch(() => props.visible, v => (innerVisible.value = v))
 
-const close = () => {
-  innerVisible.value = false
-  emit('update:visible', false)
-}
-
 const onDelete = () => emit('delete')
 const onRename = () => emit('rename')
 
 const isDialogOpen = computed(() => innerVisible.value && props.suspended !== true)
-const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, close)
 
 /* ---------- 核心展示数据提取 ---------- */
 
@@ -174,7 +168,10 @@ const runtimeDraft = ref(createDeviceRuntimeDraft())
 const runtimeDraftBaseline = ref(createDeviceRuntimeDraft())
 const runtimeDraftConflictFields = ref<string[]>([])
 const runtimeSchemaConflict = ref(false)
-let runtimeSaveDraft: DeviceRuntimeDraft | null = null
+let runtimeSaveSnapshot: {
+  submitted: DeviceRuntimeDraft
+  acknowledged: DeviceRuntimeDraft
+} | null = null
 
 const cloneRuntimeDraft = (draft: DeviceRuntimeDraft): DeviceRuntimeDraft => ({
   state: draft.state,
@@ -184,6 +181,65 @@ const cloneRuntimeDraft = (draft: DeviceRuntimeDraft): DeviceRuntimeDraft => ({
   variableTrusts: { ...draft.variableTrusts },
   privacies: { ...draft.privacies }
 })
+
+// The runtime endpoint canonicalizes whitespace and security labels before it
+// returns the authoritative node. Compare that canonical form so an own save
+// acknowledgement is not mistaken for a conflicting edit made in another tab.
+const normalizeRuntimeDraftValue = (value: unknown, securityLabel = false) => {
+  const normalized = String(value ?? '').trim()
+  return securityLabel ? normalized.toLowerCase() : normalized
+}
+
+const canonicalizeRuntimeDraft = (draft: DeviceRuntimeDraft): DeviceRuntimeDraft => {
+  const normalizeRecord = (record: Record<string, string>, securityLabel = false) =>
+    Object.fromEntries(Object.entries(record).map(([name, value]) => [
+      name,
+      normalizeRuntimeDraftValue(value, securityLabel)
+    ]))
+
+  return {
+    state: normalizeRuntimeDraftValue(draft.state),
+    currentStateTrust: normalizeRuntimeDraftValue(draft.currentStateTrust, true),
+    currentStatePrivacy: normalizeRuntimeDraftValue(draft.currentStatePrivacy, true),
+    variables: normalizeRecord(draft.variables),
+    variableTrusts: normalizeRecord(draft.variableTrusts, true),
+    privacies: normalizeRecord(draft.privacies, true)
+  }
+}
+
+const materializeSubmittedRuntimeDraft = (
+  template: DeviceTemplate,
+  runtime: DeviceRuntimeConfig
+): DeviceRuntimeDraft => {
+  const draft = createDeviceRuntimeDraft()
+  resetDeviceRuntimeDraft(draft, template)
+
+  if (runtime.state !== undefined) draft.state = normalizeRuntimeDraftValue(runtime.state)
+  if (runtime.currentStateTrust !== undefined) {
+    draft.currentStateTrust = normalizeRuntimeDraftValue(runtime.currentStateTrust, true)
+  }
+  if (runtime.currentStatePrivacy !== undefined) {
+    draft.currentStatePrivacy = normalizeRuntimeDraftValue(runtime.currentStatePrivacy, true)
+  }
+  for (const variable of runtime.variables || []) {
+    draft.variables[variable.name] = normalizeRuntimeDraftValue(variable.value)
+    if (variable.trust !== undefined) {
+      draft.variableTrusts[variable.name] = normalizeRuntimeDraftValue(variable.trust, true)
+    }
+  }
+  for (const privacy of runtime.privacies || []) {
+    draft.privacies[privacy.name] = normalizeRuntimeDraftValue(privacy.privacy, true)
+  }
+
+  return canonicalizeRuntimeDraft(draft)
+}
+
+const runtimeDraftValuesEqual = (
+  left: unknown,
+  right: unknown,
+  securityLabel = false
+) => normalizeRuntimeDraftValue(left, securityLabel)
+  === normalizeRuntimeDraftValue(right, securityLabel)
 
 type RuntimeStateContext = Pick<
   DeviceRuntimeDraft,
@@ -201,9 +257,9 @@ const runtimeStateContext = (draft: DeviceRuntimeDraft): RuntimeStateContext => 
 const runtimeStateContextsEqual = (
   left: RuntimeStateContext,
   right: RuntimeStateContext
-) => left.state === right.state
-  && left.currentStateTrust === right.currentStateTrust
-  && left.currentStatePrivacy === right.currentStatePrivacy
+) => runtimeDraftValuesEqual(left.state, right.state)
+  && runtimeDraftValuesEqual(left.currentStateTrust, right.currentStateTrust, true)
+  && runtimeDraftValuesEqual(left.currentStatePrivacy, right.currentStatePrivacy, true)
 
 const applyRuntimeStateContext = (
   draft: DeviceRuntimeDraft,
@@ -216,19 +272,24 @@ const applyRuntimeStateContext = (
 
 const runtimeDraftRecordsEqual = (
   left: Record<string, string>,
-  right: Record<string, string>
+  right: Record<string, string>,
+  securityLabel = false
 ) => {
   const keys = new Set([...Object.keys(left), ...Object.keys(right)])
-  return [...keys].every(key => (left[key] ?? '') === (right[key] ?? ''))
+  return [...keys].every(key => runtimeDraftValuesEqual(
+    left[key],
+    right[key],
+    securityLabel
+  ))
 }
 
 const runtimeDraftsEqual = (left: DeviceRuntimeDraft, right: DeviceRuntimeDraft) =>
-  left.state === right.state
-  && left.currentStateTrust === right.currentStateTrust
-  && left.currentStatePrivacy === right.currentStatePrivacy
+  runtimeDraftValuesEqual(left.state, right.state)
+  && runtimeDraftValuesEqual(left.currentStateTrust, right.currentStateTrust, true)
+  && runtimeDraftValuesEqual(left.currentStatePrivacy, right.currentStatePrivacy, true)
   && runtimeDraftRecordsEqual(left.variables, right.variables)
-  && runtimeDraftRecordsEqual(left.variableTrusts, right.variableTrusts)
-  && runtimeDraftRecordsEqual(left.privacies, right.privacies)
+  && runtimeDraftRecordsEqual(left.variableTrusts, right.variableTrusts, true)
+  && runtimeDraftRecordsEqual(left.privacies, right.privacies, true)
 
 const runtimeWorkingStates = computed(() =>
   getTemplateWorkingStates(currentTemplate.value)
@@ -259,6 +320,54 @@ const hasRuntimeFields = computed(() =>
 
 const hasRuntimeDraftConflict = computed(() =>
   runtimeSchemaConflict.value || runtimeDraftConflictFields.value.length > 0
+)
+
+const hasUnsavedRuntimeDraft = computed(() =>
+  hasRuntimeFields.value
+  && (hasRuntimeDraftConflict.value
+    || !runtimeDraftsEqual(runtimeDraft.value, runtimeDraftBaseline.value))
+)
+
+let closeConfirmation: Promise<boolean> | null = null
+
+const prepareClose = async (): Promise<boolean> => {
+  if (props.runtimeSaving) return false
+  if (!hasUnsavedRuntimeDraft.value) return true
+  if (closeConfirmation) return closeConfirmation
+
+  closeConfirmation = ElMessageBox.confirm(
+    t('app.deviceRuntimeDiscardMessage'),
+    t('app.deviceRuntimeDiscardTitle'),
+    {
+      confirmButtonText: t('app.discardChanges'),
+      cancelButtonText: t('app.cancel'),
+      type: 'warning',
+      appendTo: 'body',
+      lockScroll: false
+    }
+  ).then(() => true).catch(error => {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('Device runtime discard confirmation failed:', error)
+    }
+    return false
+  }).finally(() => {
+    closeConfirmation = null
+  })
+  return closeConfirmation
+}
+
+const requestClose = async (): Promise<boolean> => {
+  if (!innerVisible.value || !await prepareClose() || !innerVisible.value) return false
+  innerVisible.value = false
+  emit('update:visible', false)
+  return true
+}
+
+defineExpose({ prepareClose, requestClose })
+
+const { setDialogRef, handleModalKeydown } = useModalAccessibility(
+  isDialogOpen,
+  () => { void requestClose() }
 )
 
 const variableInputPlaceholder = (variable: InternalVariable) => {
@@ -295,7 +404,7 @@ const createRuntimeDraftFromNode = () => {
     }
   }
 
-  return draft
+  return canonicalizeRuntimeDraft(draft)
 }
 
 const replaceRuntimeDraft = (draft: DeviceRuntimeDraft) => {
@@ -306,7 +415,7 @@ const replaceRuntimeDraft = (draft: DeviceRuntimeDraft) => {
 }
 
 const syncRuntimeDraftFromNode = () => {
-  runtimeSaveDraft = null
+  runtimeSaveSnapshot = null
   replaceRuntimeDraft(createRuntimeDraftFromNode())
 }
 
@@ -324,12 +433,16 @@ const runtimeVariableValueFitsCurrentSchema = (variable: InternalVariable, value
 }
 
 const reconcileRuntimeDraftForSchemaChange = () => {
-  runtimeSaveDraft = null
+  runtimeSaveSnapshot = null
   const incomingDraft = createRuntimeDraftFromNode()
   const baselineDraft = runtimeDraftBaseline.value
   const currentDraft = runtimeDraft.value
   const mergedDraft = cloneRuntimeDraft(incomingDraft)
-  const preserveChanged = (currentValue = '', baselineValue = '') => currentValue !== baselineValue
+  const preserveChanged = (
+    currentValue = '',
+    baselineValue = '',
+    securityLabel = false
+  ) => !runtimeDraftValuesEqual(currentValue, baselineValue, securityLabel)
 
   const currentStateContext = runtimeStateContext(currentDraft)
   const baselineStateContext = runtimeStateContext(baselineDraft)
@@ -353,12 +466,12 @@ const reconcileRuntimeDraftForSchemaChange = () => {
       mergedDraft.variables[name] = currentValue
     }
     const currentTrust = currentDraft.variableTrusts[name] ?? ''
-    if (preserveChanged(currentTrust, baselineDraft.variableTrusts[name] ?? '')
+    if (preserveChanged(currentTrust, baselineDraft.variableTrusts[name] ?? '', true)
       && (!currentTrust || TRUST_OPTIONS.some(option => option === currentTrust))) {
       mergedDraft.variableTrusts[name] = currentTrust
     }
     const currentPrivacy = currentDraft.privacies[name] ?? ''
-    if (preserveChanged(currentPrivacy, baselineDraft.privacies[name] ?? '')
+    if (preserveChanged(currentPrivacy, baselineDraft.privacies[name] ?? '', true)
       && (!currentPrivacy || PRIVACY_OPTIONS.some(option => option === currentPrivacy))) {
       mergedDraft.privacies[name] = currentPrivacy
     }
@@ -382,20 +495,29 @@ const reconcileRuntimeDraftFromNode = () => {
     baselineValue = '',
     currentValue = '',
     incomingValue = '',
-    savedValue?: string
+    submittedValue?: string,
+    acknowledgedValue?: string
   ) => {
+    const securityLabel = path.startsWith('variableTrusts.') || path.startsWith('privacies.')
+    const valuesEqual = (left: unknown, right: unknown) => runtimeDraftValuesEqual(
+      left,
+      right,
+      securityLabel
+    )
     if (existingConflicts.has(path)) {
-      if (currentValue === incomingValue) return incomingValue
+      if (valuesEqual(currentValue, incomingValue)) return incomingValue
       nextConflicts.add(path)
       return currentValue
     }
-    // A matching save snapshot acknowledges the submitted value. Any difference in the
-    // current draft was typed after Save and remains a local edit, not an external conflict.
-    if (runtimeSaveDraft && incomingValue === savedValue && currentValue !== incomingValue) {
+    if (runtimeSaveSnapshot && valuesEqual(incomingValue, acknowledgedValue)) {
+      // Adopt the server's materialized value when the field is unchanged since Save.
+      // A difference from the submitted draft was typed while the request was in flight.
+      return valuesEqual(currentValue, submittedValue) ? incomingValue : currentValue
+    }
+    if (valuesEqual(currentValue, baselineValue)) return incomingValue
+    if (valuesEqual(incomingValue, baselineValue) || valuesEqual(currentValue, incomingValue)) {
       return currentValue
     }
-    if (currentValue === baselineValue) return incomingValue
-    if (incomingValue === baselineValue || currentValue === incomingValue) return currentValue
     nextConflicts.add(path)
     return currentValue
   }
@@ -404,8 +526,11 @@ const reconcileRuntimeDraftFromNode = () => {
   const baselineStateContext = runtimeStateContext(baselineDraft)
   const currentStateContext = runtimeStateContext(currentDraft)
   const incomingStateContext = runtimeStateContext(incomingDraft)
-  const savedStateContext = runtimeSaveDraft
-    ? runtimeStateContext(runtimeSaveDraft)
+  const submittedStateContext = runtimeSaveSnapshot
+    ? runtimeStateContext(runtimeSaveSnapshot.submitted)
+    : null
+  const acknowledgedStateContext = runtimeSaveSnapshot
+    ? runtimeStateContext(runtimeSaveSnapshot.acknowledged)
     : null
   let mergedStateContext = currentStateContext
   if (existingConflicts.has(RUNTIME_STATE_CONTEXT_CONFLICT)) {
@@ -414,10 +539,11 @@ const reconcileRuntimeDraftFromNode = () => {
     } else {
       nextConflicts.add(RUNTIME_STATE_CONTEXT_CONFLICT)
     }
-  } else if (savedStateContext
-    && runtimeStateContextsEqual(incomingStateContext, savedStateContext)
-    && !runtimeStateContextsEqual(currentStateContext, incomingStateContext)) {
-    mergedStateContext = currentStateContext
+  } else if (submittedStateContext && acknowledgedStateContext
+    && runtimeStateContextsEqual(incomingStateContext, acknowledgedStateContext)) {
+    mergedStateContext = runtimeStateContextsEqual(currentStateContext, submittedStateContext)
+      ? incomingStateContext
+      : currentStateContext
   } else if (runtimeStateContextsEqual(currentStateContext, baselineStateContext)) {
     mergedStateContext = incomingStateContext
   } else if (runtimeStateContextsEqual(incomingStateContext, baselineStateContext)
@@ -440,7 +566,8 @@ const reconcileRuntimeDraftFromNode = () => {
         baselineDraft[field][name],
         currentDraft[field][name],
         incomingDraft[field][name],
-        runtimeSaveDraft?.[field][name]
+        runtimeSaveSnapshot?.submitted[field][name],
+        runtimeSaveSnapshot?.acknowledged[field][name]
       )
     }
   }
@@ -508,7 +635,7 @@ watch(
 watch(
   () => props.runtimeSaving,
   saving => {
-    if (!saving) runtimeSaveDraft = null
+    if (!saving) runtimeSaveSnapshot = null
   },
   { flush: 'post' }
 )
@@ -532,12 +659,15 @@ const saveRuntime = () => {
     return
   }
 
-  runtimeSaveDraft = cloneRuntimeDraft(runtimeDraft.value)
+  runtimeSaveSnapshot = {
+    submitted: canonicalizeRuntimeDraft(runtimeDraft.value),
+    acknowledged: materializeSubmittedRuntimeDraft(template, runtime)
+  }
   emit('save-runtime', props.nodeId, runtime)
   void nextTick(() => {
     // The parent can reject the request before entering its saving state (for example when
     // playback locks mutations). Do not leave that non-request fencing later refreshes.
-    if (!props.runtimeSaving) runtimeSaveDraft = null
+    if (!props.runtimeSaving) runtimeSaveSnapshot = null
   })
 }
 
@@ -882,12 +1012,13 @@ const deviceSpecs = computed(() => {
         v-if="isDialogOpen"
         class="device-dialog-overlay"
         @keydown="handleModalKeydown"
+        @click.self="requestClose"
       >
         <transition name="modal-scale" appear>
           <div
             :ref="setDialogRef"
             data-testid="device-dialog"
-            class="device-dialog-surface bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]"
+            class="device-dialog-surface bg-white w-full min-w-0 max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]"
             role="dialog"
             aria-modal="true"
             aria-labelledby="device-dialog-title"
@@ -907,13 +1038,13 @@ const deviceSpecs = computed(() => {
                   </div>
                 </div>
               </div>
-              <button type="button" data-testid="device-dialog-close" @click="close" class="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600" :aria-label="t('app.close')">
+              <button type="button" data-testid="device-dialog-close" @click="requestClose" :disabled="runtimeSaving" class="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600 disabled:cursor-wait disabled:opacity-60" :aria-label="t('app.close')">
                 <span class="material-icons-round text-xl" aria-hidden="true">close</span>
               </button>
             </div>
 
             <!-- Body -->
-            <div class="device-dialog-body custom-scrollbar flex-1 space-y-6 overflow-y-auto px-4 py-5 sm:space-y-8 sm:px-8 sm:py-6">
+            <div class="device-dialog-body custom-scrollbar flex-1 min-w-0 space-y-6 overflow-x-hidden overflow-y-auto px-4 py-5 sm:space-y-8 sm:px-8 sm:py-6">
               <div
                 v-if="!manifest"
                 data-testid="device-template-details-unavailable"
@@ -931,7 +1062,7 @@ const deviceSpecs = computed(() => {
                 
                 <!-- 基本信息表格 -->
                 <div class="overflow-hidden border border-slate-200 rounded-xl bg-white shadow-sm">
-                  <table class="w-full text-left border-collapse">
+                  <table class="device-basic-table w-full table-fixed text-left border-collapse">
                     <thead>
                       <tr class="bg-slate-50 border-b border-slate-200">
                         <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-1/3">{{ t('app.property') }}</th>
@@ -942,13 +1073,13 @@ const deviceSpecs = computed(() => {
                       <!-- Template Name -->
                       <tr class="hover:bg-slate-50/50 transition-colors">
                         <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{{ t('app.name') }}</td>
-                        <td class="px-4 py-3 text-sm font-bold text-slate-800">{{ basicInfo.name || deviceName }}</td>
+                        <td class="device-basic-value break-words px-4 py-3 text-sm font-bold text-slate-800">{{ basicInfo.name || deviceName }}</td>
                       </tr>
                       
                       <!-- Instance Name -->
                       <tr class="hover:bg-slate-50/50 transition-colors">
                         <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{{ t('app.instanceName') }}</td>
-                        <td class="px-4 py-3 text-sm font-medium text-slate-700">{{ basicInfo.instanceName || label }}</td>
+                        <td class="device-basic-value break-words px-4 py-3 text-sm font-medium text-slate-700">{{ basicInfo.instanceName || label }}</td>
                       </tr>
 
                       <!-- Modes -->
@@ -960,7 +1091,7 @@ const deviceSpecs = computed(() => {
                               <span
                                 v-for="mode in basicInfo.modes"
                                 :key="mode"
-                                class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-md font-medium border border-slate-200"
+                                class="max-w-full break-all whitespace-normal px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-md font-medium border border-slate-200"
                               >
                                 {{ formatDeviceModelToken(mode) }}
                               </span>
@@ -979,9 +1110,9 @@ const deviceSpecs = computed(() => {
                       <tr v-if="manifest" class="hover:bg-slate-50/50 transition-colors">
                         <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{{ t('app.initState') }}</td>
                         <td class="px-4 py-3">
-                          <div class="flex items-center gap-2">
-                            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                    <span class="text-sm font-medium text-slate-700" :title="basicInfo.initStateLabel">{{ basicInfo.initStateLabel }}</span>
+                          <div class="flex min-w-0 items-center gap-2">
+                            <span class="h-2 w-2 shrink-0 rounded-full bg-green-500 animate-pulse"></span>
+                    <span class="device-basic-value min-w-0 break-words text-sm font-medium text-slate-700" :title="basicInfo.initStateLabel">{{ basicInfo.initStateLabel }}</span>
                   </div>
                         </td>
                       </tr>
@@ -989,7 +1120,7 @@ const deviceSpecs = computed(() => {
                       <!-- Description -->
                       <tr v-if="manifest" class="hover:bg-slate-50/50 transition-colors">
                         <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider align-top">{{ t('app.description') }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-600 leading-relaxed">{{ basicInfo.description || '-' }}</td>
+                        <td class="device-basic-value break-words px-4 py-3 text-sm text-slate-600 leading-relaxed">{{ basicInfo.description || '-' }}</td>
                       </tr>
 
                       <!-- Impacted Variables -->
@@ -998,7 +1129,7 @@ const deviceSpecs = computed(() => {
                         <td class="px-4 py-3">
                           <div class="flex flex-wrap gap-2">
                       <span v-for="variable in basicInfo.impactedVariables" :key="variable"
-                                  class="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded-md border border-blue-100">
+                                  class="max-w-full break-all whitespace-normal px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded-md border border-blue-100">
                         {{ variable }}
                       </span>
                     </div>
@@ -1327,7 +1458,7 @@ const deviceSpecs = computed(() => {
               </section>
 
               <!-- APIs Section -->
-              <section v-if="apis.length > 0" data-testid="device-dialog-apis">
+              <section v-if="apis.length > 0" data-testid="device-dialog-apis" class="min-w-0">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-emerald-500 rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') }}</h2>
@@ -1336,14 +1467,14 @@ const deviceSpecs = computed(() => {
                   <div
                     v-for="(api, idx) in apis"
                     :key="idx"
-                    class="bg-white border border-slate-200 rounded-xl p-4 hover:shadow-md transition-all hover:border-emerald-200 group"
+                    class="device-api-card min-w-0 bg-white border border-slate-200 rounded-xl p-4 hover:shadow-md transition-all hover:border-emerald-200 group"
                   >
-                    <div class="flex items-start justify-between mb-3">
-                      <div class="flex items-center gap-2">
+                    <div class="flex min-w-0 flex-wrap items-start justify-between gap-2 mb-3">
+                      <div class="flex min-w-0 items-center gap-2">
                         <div class="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center group-hover:bg-emerald-100 transition-colors">
                         <span class="material-icons-round text-emerald-600 text-lg">api</span>
                         </div>
-                        <span class="text-sm font-bold text-slate-800" :title="api.displayName">{{ api.displayName }}</span>
+                        <span class="min-w-0 break-words text-sm font-bold text-slate-800" :title="api.displayName">{{ api.displayName }}</span>
                       </div>
                       <div class="flex flex-wrap justify-end gap-1">
                         <span v-if="api.signal" class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-medium border border-amber-200">
@@ -1357,7 +1488,7 @@ const deviceSpecs = computed(() => {
                     <p v-if="api.description" class="text-xs text-slate-600 mb-4 line-clamp-2">
                       {{ api.description }}
                     </p>
-                    <div class="flex items-center gap-2 text-xs bg-slate-50 p-2 rounded-lg border border-slate-100 min-w-0">
+                    <div class="device-api-transition flex min-w-0 flex-wrap items-center gap-2 text-xs bg-slate-50 p-2 rounded-lg border border-slate-100">
                       <div class="flex items-center gap-1 text-slate-500 min-w-0">
                         <span class="material-icons-round text-sm font-bold">play_arrow</span>
                         <span class="font-medium text-slate-700 truncate max-w-[10rem]" :title="api.startStateLabel">{{ api.startStateLabel }}</span>
@@ -1368,14 +1499,14 @@ const deviceSpecs = computed(() => {
                         <span class="font-medium text-slate-700 truncate max-w-[12rem]" :title="api.endStateLabel">{{ api.endStateLabel }}</span>
                       </div>
                       <div class="flex-1"></div>
-                      <span class="text-[10px] text-slate-400 uppercase font-semibold tracking-wider shrink-0">{{ t('app.trigger') }}: {{ api.trigger }}</span>
+                      <span class="min-w-0 break-all text-[10px] font-semibold uppercase text-slate-400">{{ t('app.trigger') }}: {{ api.trigger }}</span>
                     </div>
                   </div>
                 </div>
               </section>
 
               <!-- Specifications Section -->
-              <section v-if="manifest && deviceSpecs.length > 0">
+              <section v-if="manifest && deviceSpecs.length > 0" class="min-w-0">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-rose-500 rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.specifications') }}</h2>
@@ -1388,11 +1519,11 @@ const deviceSpecs = computed(() => {
                   <div
                     v-for="spec in deviceSpecs"
                     :key="spec.id"
-                    class="bg-white border border-slate-200 rounded-xl p-4 transition-all hover:shadow-md hover:border-rose-200"
+                    class="device-spec-card min-w-0 bg-white border border-slate-200 rounded-xl p-4 transition-all hover:shadow-md hover:border-rose-200"
                   >
                     <div class="flex items-start justify-between mb-3">
-                      <div class="flex items-center gap-2 flex-1">
-                        <div class="w-8 h-8 bg-rose-50 rounded-lg flex items-center justify-center">
+                      <div class="flex min-w-0 flex-1 items-center gap-2">
+                        <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-50">
                           <span class="material-icons-round text-rose-500 text-lg">verified</span>
                         </div>
                         <div class="flex-1 min-w-0">
@@ -1431,19 +1562,20 @@ const deviceSpecs = computed(() => {
                 type="button"
                 data-testid="device-rename"
                 @click="onRename"
-                class="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-semibold text-blue-800 transition-all hover:bg-blue-100 sm:w-auto"
+                :disabled="runtimeSaving"
+                class="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-semibold text-blue-800 transition-all hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
               >
                 <span class="material-icons-round text-lg text-blue-600" aria-hidden="true">edit</span>
                 {{ t('app.rename') }}
               </button>
-                <button type="button" data-testid="device-dialog-footer-close" @click="close" class="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-200 hover:text-slate-900 sm:w-auto">
+                <button type="button" data-testid="device-dialog-footer-close" @click="requestClose" :disabled="runtimeSaving" class="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-200 hover:text-slate-900 disabled:cursor-wait disabled:opacity-60 sm:w-auto">
                   {{ t('app.close') }}
                 </button>
               <button
                 type="button"
                 data-testid="device-delete"
                 @click="onDelete"
-                :disabled="deleteLoading"
+                :disabled="deleteLoading || runtimeSaving"
                 :aria-busy="deleteLoading"
                 class="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-100 px-5 py-2.5 text-sm font-semibold text-rose-900 transition-all hover:bg-rose-200 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
               >
@@ -1460,6 +1592,22 @@ const deviceSpecs = computed(() => {
 </template>
 
 <style scoped>
+.device-dialog-surface,
+.device-dialog-body,
+.device-dialog-body > section,
+.device-dialog-body > section > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.device-api-transition > .flex-1 {
+  display: none;
+}
+
+.device-basic-value {
+  overflow-wrap: anywhere;
+}
+
 .device-dialog-overlay {
   position: fixed;
   inset: 0;

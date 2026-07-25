@@ -22,11 +22,13 @@ import java.util.stream.Collectors;
 public class AiToolManager {
 
     private static final Set<String> MUTATION_CAPABLE_TOOLS = Set.of(
-            "add_device", "delete_device", "manage_environment", "apply_scenario",
+            "add_device", "edit_device", "delete_device", "manage_environment", "apply_scenario",
             "reset_default_templates", "manage_spec", "add_template", "delete_template",
-            "delete_trace", "cancel_verify_task", "fix_violation", "manage_rule",
+            "delete_trace", "cancel_verify_task", "apply_fix", "manage_rule",
             "delete_simulation_trace", "cancel_simulate_task", "verify_model",
-            "verify_model_async", "simulate_model", "simulate_model_async");
+            "verify_model_async", "simulate_model_async",
+            "delete_verification_run", "dismiss_verify_task", "dismiss_simulate_task",
+            "fuzz_model_async", "cancel_fuzz_task", "delete_fuzz_run", "dismiss_fuzz_task");
 
     // Spring 会自动注入所有实现了 AiTool 接口的 Bean (例如 AddNodeTool)
     private final List<AiTool> allTools;

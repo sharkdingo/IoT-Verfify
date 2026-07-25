@@ -22,13 +22,14 @@ import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.*;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
-import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
-import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SimulationExecutionException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
@@ -535,9 +536,15 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     JsonUtils.toJson(ModelSemanticsDto.forRun(
                             input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
             enqueueSimulationTask(userId, requiredTaskId, input);
-        } catch (TaskRejectedException e) {
-            failTaskById(requiredTaskId, "Server busy, please try again later");
-            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        } catch (RuntimeException e) {
+            String message = e instanceof TaskRejectedException
+                    ? "Server busy, please try again later"
+                    : "Task dispatch failed before execution: " + e.getClass().getSimpleName();
+            failTaskById(requiredTaskId, message);
+            if (e instanceof TaskRejectedException) {
+                throw new ServiceUnavailableException("Server busy, please try again later", e);
+            }
+            throw e;
         }
     }
 
@@ -563,12 +570,35 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                         input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
         try {
             enqueueSimulationTask(userId, taskId, input);
-        } catch (TaskRejectedException e) {
-            log.warn("Simulation task {} rejected: thread pool full", taskId);
-            failTaskById(taskId, "Server busy, please try again later");
-            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        } catch (RuntimeException e) {
+            if (!cleanupUndispatchedTask(userId, taskId, e)) {
+                throw new AsyncTaskDispatchOutcomeUnknownException("simulation", taskId, e);
+            }
+            if (e instanceof TaskRejectedException) {
+                log.warn("Simulation task {} rejected before dispatch; task record removed", taskId);
+                throw new ServiceUnavailableException("Server busy, please try again later", e);
+            }
+            throw e;
         }
         return taskId;
+    }
+
+    private boolean cleanupUndispatchedTask(Long userId, Long taskId, RuntimeException failure) {
+        try {
+            int deleted = simulationTaskRepository.deleteUndispatchedTask(
+                    taskId, userId, workerId, SimulationTaskPo.TaskStatus.PENDING);
+            if (deleted == 1) return true;
+            boolean absent = simulationTaskRepository.findByIdAndUserId(taskId, userId).isEmpty();
+            if (!absent) {
+                log.error("Could not remove simulation task {} after failure before dispatch", taskId);
+            }
+            return absent;
+        } catch (RuntimeException cleanupError) {
+            failure.addSuppressed(cleanupError);
+            log.error("Could not remove simulation task {} after failure before dispatch",
+                    taskId, cleanupError);
+            return false;
+        }
     }
 
     private void enqueueSimulationTask(Long userId, Long taskId, SimulationInput input) {

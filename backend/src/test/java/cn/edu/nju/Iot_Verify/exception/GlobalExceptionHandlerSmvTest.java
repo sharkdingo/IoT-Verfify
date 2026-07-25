@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.exception;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonMappingException;
@@ -20,6 +21,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -116,6 +118,37 @@ class GlobalExceptionHandlerSmvTest {
     }
 
     @Test
+    void handleEnvironmentVariableConflict_shouldExposeCurrentVariable() {
+        BoardEnvironmentVariableDto current = new BoardEnvironmentVariableDto(
+                "temperature", "28", "trusted", "public");
+
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleEnvironmentVariableConflictException(
+                        new EnvironmentVariableConflictException("temperature", current));
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(409, body.getCode());
+        assertEquals(EnvironmentVariableConflictException.REASON_CODE,
+                body.getData().get("reasonCode"));
+        assertEquals("temperature", body.getData().get("variableName"));
+        assertEquals(current, body.getData().get("currentVariable"));
+    }
+
+    @Test
+    void handleEnvironmentVariableConflict_shouldKeepNullCurrentVariableForRemoval() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleEnvironmentVariableConflictException(
+                        new EnvironmentVariableConflictException("removedVariable", null));
+
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertTrue(body.getData().containsKey("currentVariable"));
+        assertNull(body.getData().get("currentVariable"));
+    }
+
+    @Test
     void handleFuzzTaskQuotaExceeded_shouldReturnStable429Details() {
         ResponseEntity<Result<Map<String, Object>>> response =
                 handler.handleFuzzTaskQuotaExceededException(
@@ -144,6 +177,25 @@ class GlobalExceptionHandlerSmvTest {
         assertEquals(4_000L, body.getData().get("messageCount"));
         assertEquals(5_000, body.getData().get("maxMessagesPerSession"));
         assertEquals(1_090L, body.getData().get("requiredTurnCapacity"));
+    }
+
+    @Test
+    void handleAsyncTaskDispatchOutcomeUnknown_shouldExposeTaskForReconciliation() {
+        AsyncTaskDispatchOutcomeUnknownException error =
+                new AsyncTaskDispatchOutcomeUnknownException(
+                        "verification", 47L, new IllegalStateException("executor failed"));
+
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleAsyncTaskDispatchOutcomeUnknownException(error);
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(503, body.getCode());
+        assertEquals(AsyncTaskDispatchOutcomeUnknownException.REASON_CODE,
+                body.getData().get("reasonCode"));
+        assertEquals("verification", body.getData().get("taskKind"));
+        assertEquals(47L, body.getData().get("taskId"));
     }
 
     @Test

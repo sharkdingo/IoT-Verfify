@@ -395,6 +395,22 @@ public abstract class AbstractAiTool implements AiTool {
         return AiToolResponseHelper.success(objectMapper, body, fallbackMessage, false);
     }
 
+    protected final String acceptedAsyncTaskJson(Map<String, Object> body,
+                                                 long taskId,
+                                                 String statusTool) {
+        return AiToolResponseHelper.acceptedAsyncTask(objectMapper, body, taskId, statusTool);
+    }
+
+    protected final String acceptedAsyncTaskResultUnavailable(long taskId, String statusTool) {
+        return AiToolResponseHelper.acceptedAsyncTaskResultUnavailable(
+                objectMapper, taskId, statusTool);
+    }
+
+    protected final String asyncTaskDispatchOutcomeUnknown(long taskId, String statusTool) {
+        return AiToolResponseHelper.asyncTaskDispatchOutcomeUnknown(
+                objectMapper, taskId, statusTool);
+    }
+
     protected final String successJson(String fallbackMessage) {
         return AiToolResponseHelper.success(objectMapper, fallbackMessage);
     }

@@ -47,8 +47,8 @@ const formatDeviceToken = (deviceId: string, value: unknown) =>
   bundledDeviceIdSet.value.has(deviceId)
     ? formatBundledModelToken(value)
     : String(value ?? '')
-const formatDeviceProperty = (deviceId: string, property: unknown, stateProperty = false) =>
-  (stateProperty && property === 'workingState') || bundledDeviceIdSet.value.has(deviceId)
+const formatDeviceProperty = (deviceId: string, property: unknown) =>
+  bundledDeviceIdSet.value.has(deviceId)
     ? formatBundledModelToken(property)
     : String(property ?? '')
 const formatEnvironmentToken = (name: string, value: unknown) =>
@@ -108,7 +108,7 @@ const inputEventValue = (event: FuzzingInputEvent) => {
 
 const inputEventProperty = (event: FuzzingInputEvent) =>
   event.kind === 'DEVICE_STATE' || event.kind === 'DEVICE_VARIABLE'
-    ? formatDeviceProperty(event.targetId, event.property, event.kind === 'DEVICE_STATE')
+    ? formatDeviceProperty(event.targetId, event.property)
     : formatEnvironmentToken(event.property, event.property)
 
 const popoverRef = ref<HTMLElement | null>(null)
@@ -272,7 +272,7 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
       <button
         type="button"
         data-testid="playback-change-dismiss"
-        class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-800"
+        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-800"
         :aria-label="t('app.traceVisualization.dismissChanges')"
         :title="t('app.traceVisualization.dismissChanges')"
         @pointerdown.stop

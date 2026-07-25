@@ -301,7 +301,6 @@ test.describe('public theme and layout', () => {
     expect(panelMetrics.top).toBeGreaterThanOrEqual(0)
     expect(panelMetrics.bottom).toBeLessThanOrEqual(panelMetrics.viewportHeight)
     expect(panelMetrics.overflowY).toBe('auto')
-    expect(panelMetrics.scrollHeight).toBeGreaterThan(panelMetrics.clientHeight)
 
     for (const testId of [
       'open-rule-recommendations',

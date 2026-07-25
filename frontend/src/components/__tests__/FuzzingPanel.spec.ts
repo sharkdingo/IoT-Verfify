@@ -735,6 +735,47 @@ describe('FuzzingPanel', () => {
     expect(preview).not.toContain('自定义设备.工作状态')
   })
 
+  it('keeps a custom device-state property raw even when its name is a bundled token', () => {
+    appI18n.global.locale.value = 'zh-CN'
+    const wrapper = mount(FuzzingPanel, {
+      props: {
+        form: {
+          explorationMode: 'PAPER_COMPATIBLE',
+          targetSpecIds: [],
+          maxIterations: 500,
+          pathLength: 20,
+          populationSize: 10,
+          seed: null
+        },
+        specifications: [specification],
+        running: false,
+        progress: 0,
+        status: 'Initializing',
+        taskId: null,
+        cancelling: false,
+        paperDomainPreview: {
+          pathLength: 20,
+          modelFingerprint: 'e'.repeat(64),
+          initializationPolicy: 'RANDOM_LEGAL_PER_SEED',
+          paperSemanticsCodes: ['PAPER_RANDOM_INITIAL_STATE_ENABLED'],
+          deviceDomains: [{
+            targetId: 'custom-1',
+            label: '自定义设备',
+            property: 'workingState',
+            legalValues: ['off', 'active']
+          }],
+          localVariableDomains: [],
+          environmentDomains: []
+        }
+      },
+      global: { plugins: [appI18n] }
+    })
+
+    const preview = wrapper.get('[data-testid="paper-domain-preview"]').text()
+    expect(preview).toContain('自定义设备.workingState')
+    expect(preview).not.toContain('自定义设备.工作状态')
+  })
+
   it('shows a running task from its frozen summary instead of the current editable form', () => {
     const wrapper = mount(FuzzingPanel, {
       props: {

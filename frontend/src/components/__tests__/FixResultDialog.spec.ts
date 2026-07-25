@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { defineComponent, ref } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FixResultDialog from '../FixResultDialog.vue'
 import type { FixResult } from '@/types/fix'
+import { useAuth } from '@/stores/auth'
+import { FIX_RESPONSE_INCOMPLETE_CODE } from '@/utils/fixResponse'
 
 const elementPlus = vi.hoisted(() => ({
   confirm: vi.fn(),
@@ -76,11 +79,22 @@ const provenanceI18n = createI18n({
 })
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+const authStore = useAuth()
+const validToken = (signature: string) => {
+  const payload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  return `header.${payload}.${signature}`
+}
+const defaultToken = validToken('default-fix-owner')
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(done => { resolve = done })
-  return { promise, resolve }
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
+  return { promise, resolve, reject }
 }
 
 const removeResult = (): FixResult => ({
@@ -307,10 +321,35 @@ const mountDialog = (i18nPlugin: any = i18n) => {
   return wrapper
 }
 
+const mountPersistentDialogHost = () => {
+  const Host = defineComponent({
+    components: { FixResultDialog },
+    setup: () => ({
+      dialogRef: ref<InstanceType<typeof FixResultDialog> | null>(null),
+      traceId: ref(7),
+      visible: ref(true)
+    }),
+    template: `
+      <FixResultDialog
+        ref="dialogRef"
+        :visible="visible"
+        :trace-id="traceId"
+        violated-spec-id="spec-1"
+        @update:visible="visible = $event"
+      />
+    `
+  })
+  const wrapper = mount(Host, { global: { plugins: [i18n] } })
+  mountedDialogs.push(wrapper)
+  return wrapper
+}
+
 describe('FixResultDialog strategy workflow', () => {
   beforeEach(() => {
     vi.useRealTimers()
     vi.clearAllMocks()
+    authStore.logout()
+    authStore.login(defaultToken, { userId: 1, phone: '13800138000', username: 'alice' })
     boardApi.getFaultRules.mockResolvedValue({
       traceId: 7,
       violatedSpecId: 'spec-1',
@@ -333,8 +372,15 @@ describe('FixResultDialog strategy workflow', () => {
   })
 
   afterEach(async () => {
-    mountedDialogs.splice(0).forEach(wrapper => wrapper.unmount())
+    boardApi.cancelFixRequest.mockReset().mockResolvedValue(true)
+    for (const wrapper of mountedDialogs.splice(0)) {
+      const dialog = wrapper.findComponent(FixResultDialog)
+      const exposed = dialog.exists() ? dialog.vm : wrapper.vm
+      await (exposed as any).prepareForLogout?.()
+      wrapper.unmount()
+    }
     vi.useRealTimers()
+    authStore.logout()
     await Promise.resolve()
   })
 
@@ -361,6 +407,17 @@ describe('FixResultDialog strategy workflow', () => {
     expect(wrapper.find('[data-testid="fix-strategy-remove"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-try-current"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-apply-current"]').exists()).toBe(false)
+  })
+
+  it('does not dispatch a fix search without an initiating credential', async () => {
+    authStore.logout()
+    const wrapper = mountDialog()
+    await flush()
+
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+
+    expect(boardApi.fixTrace).not.toHaveBeenCalled()
+    expect(elementPlus.error).toHaveBeenCalledWith('fixAuthenticationRequired')
   })
 
   it('localizes bundled fault actions while preserving custom and legacy collisions', async () => {
@@ -444,6 +501,7 @@ describe('FixResultDialog strategy workflow', () => {
       strategies: ['remove'],
       preferredRangeSelections: undefined
     }, expect.objectContaining({
+      authToken: defaultToken,
       requestId: expect.any(String),
       signal: expect.anything()
     }))
@@ -471,7 +529,7 @@ describe('FixResultDialog strategy workflow', () => {
     await wrapper.vm.$nextTick()
 
     expect(options.signal.aborted).toBe(true)
-    expect(boardApi.cancelFixRequest).toHaveBeenCalledWith(options.requestId)
+    expect(boardApi.cancelFixRequest).toHaveBeenCalledWith(options.requestId, defaultToken)
     expect(wrapper.find('[data-testid="fix-result-dialog"]').exists()).toBe(false)
   })
 
@@ -512,7 +570,7 @@ describe('FixResultDialog strategy workflow', () => {
     await vi.advanceTimersByTimeAsync(250)
 
     expect(options.signal.aborted).toBe(false)
-    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId)
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId, defaultToken)
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(`[Fix] Failed to cancel automatic-fix request ${options.requestId}`),
       cancellationError
@@ -545,10 +603,100 @@ describe('FixResultDialog strategy workflow', () => {
     await vi.advanceTimersByTimeAsync(250)
 
     expect(options.signal.aborted).toBe(true)
-    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId)
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId, defaultToken)
   })
 
-  it('bounds cancellation recovery when the status endpoint remains unavailable', async () => {
+  it('gives a normal POST one polling interval to return after FINISHED', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.getFixRequestStatus.mockResolvedValue({
+      requestId: 'request-123',
+      state: 'FINISHED',
+      stage: 'FINALIZING',
+      elapsedMs: 1000
+    })
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    await vi.advanceTimersByTimeAsync(1000)
+    await wrapper.vm.$nextTick()
+
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId, defaultToken)
+    expect(options.signal.aborted).toBe(false)
+    expect(wrapper.get('[data-testid="fix-try-current"]').attributes('disabled')).toBeDefined()
+
+    pending.resolve(parameterResult())
+    await Promise.resolve()
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+    vi.useRealTimers()
+    await flush()
+    expect(wrapper.find('[data-testid="fix-strategy-loading"]').exists()).toBe(false)
+  })
+
+  it('releases a visibly hung POST after FINISHED remains stable through the grace interval', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.getFixRequestStatus.mockResolvedValue({
+      requestId: 'request-123',
+      state: 'FINISHED',
+      stage: 'FINALIZING',
+      elapsedMs: 1000
+    })
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    await vi.advanceTimersByTimeAsync(2000)
+    await wrapper.vm.$nextTick()
+
+    expect(options.signal.aborted).toBe(true)
+    expect(wrapper.get('[data-testid="fix-try-current"]').attributes('disabled')).toBeUndefined()
+    await expect((wrapper.vm as any).prepareForLogout()).resolves.toBe('ready')
+  })
+
+  it('does not let a settled old POST clear a newer request for the same strategy', async () => {
+    const first = deferred<FixResult>()
+    const second = deferred<FixResult>()
+    boardApi.fixTrace
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    boardApi.getFixRequestStatus.mockResolvedValue({
+      requestId: 'request-123',
+      state: 'FINISHED',
+      stage: 'FINALIZING',
+      elapsedMs: 1000
+    })
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(2000)
+    await wrapper.vm.$nextTick()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const secondOptions = boardApi.fixTrace.mock.calls[1]![2]
+
+    first.reject(Object.assign(new Error('old transport aborted'), { name: 'CanceledError' }))
+    await Promise.resolve()
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    expect(secondOptions.signal.aborted).toBe(false)
+    expect(wrapper.find('[data-testid="fix-strategy-loading"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="fix-try-current"]').attributes('disabled')).toBeDefined()
+
+    vi.useRealTimers()
+    second.resolve(parameterResult())
+    await flush()
+  })
+
+  it('backs off but keeps recovering when the status endpoint remains unavailable', async () => {
     const pending = deferred<FixResult>()
     boardApi.fixTrace.mockReturnValueOnce(pending.promise)
     boardApi.cancelFixRequest.mockResolvedValue(false)
@@ -566,6 +714,8 @@ describe('FixResultDialog strategy workflow', () => {
     const readsAfterRecovery = boardApi.getFixRequestStatus.mock.calls.length
     await vi.advanceTimersByTimeAsync(3000)
     expect(boardApi.getFixRequestStatus).toHaveBeenCalledTimes(readsAfterRecovery)
+    await vi.advanceTimersByTimeAsync(8000)
+    expect(boardApi.getFixRequestStatus.mock.calls.length).toBeGreaterThan(readsAfterRecovery)
   })
 
   it('releases polling and the POST transport when the dialog component is destroyed', async () => {
@@ -585,7 +735,222 @@ describe('FixResultDialog strategy workflow', () => {
 
     expect(options.signal.aborted).toBe(true)
     expect(boardApi.cancelFixRequest).toHaveBeenCalledTimes(20)
-    expect(boardApi.cancelFixRequest).toHaveBeenCalledWith(options.requestId)
+    expect(boardApi.cancelFixRequest).toHaveBeenCalledWith(options.requestId, defaultToken)
+  })
+
+  it('uses the request owner token when another account replaces the current session', async () => {
+    const pending = deferred<FixResult>()
+    const aliceToken = validToken('alice-fix-owner')
+    const bobToken = validToken('bob-current')
+    authStore.login(aliceToken, { userId: 1, phone: '13800138000', username: 'alice' })
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    const wrapper = mountDialog()
+    await flush()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    expect(options.authToken).toBe(aliceToken)
+
+    authStore.login(bobToken, { userId: 2, phone: '13900139000', username: 'bob' })
+    wrapper.unmount()
+    mountedDialogs.splice(mountedDialogs.indexOf(wrapper), 1)
+    await flush()
+
+    expect(boardApi.cancelFixRequest).toHaveBeenCalledWith(options.requestId, aliceToken)
+    expect(authStore.getToken()).toBe(bobToken)
+    pending.reject(Object.assign(new Error('transport aborted'), { name: 'CanceledError' }))
+    await Promise.resolve()
+  })
+
+  it('keeps cancellation recovery after the fix POST loses transport following DELETE=false', async () => {
+    const pending = deferred<FixResult>()
+    const aliceToken = validToken('alice-fix-transport-owner')
+    authStore.login(aliceToken, { userId: 1, phone: '13800138000', username: 'alice' })
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.cancelFixRequest.mockResolvedValue(false)
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    await wrapper.setProps({ visible: false })
+    await vi.advanceTimersByTimeAsync(250)
+
+    pending.reject(new Error('transport lost'))
+    await Promise.resolve()
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    expect(options.signal.aborted).toBe(false)
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId, aliceToken)
+    const cancellationCallsBeforeRecoveryTick = boardApi.cancelFixRequest.mock.calls.length
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(boardApi.cancelFixRequest.mock.calls.length).toBeGreaterThan(cancellationCallsBeforeRecoveryTick)
+
+    await wrapper.setProps({ visible: true })
+    await wrapper.vm.$nextTick()
+    const retry = wrapper.get('[data-testid="fix-try-current"]')
+    expect(retry.attributes('disabled')).toBeDefined()
+    await retry.trigger('click')
+    expect(boardApi.fixTrace).toHaveBeenCalledTimes(1)
+
+    const logoutPreparation = (wrapper.vm as any).prepareForLogout()
+    await vi.advanceTimersByTimeAsync(1000)
+    await expect(logoutPreparation).resolves.toBe('outcome-unknown')
+    expect(boardApi.cancelFixRequest.mock.calls.every(
+      ([requestId, token]) => requestId === options.requestId && token === aliceToken
+    )).toBe(true)
+
+    boardApi.cancelFixRequest.mockResolvedValue(true)
+    await expect((wrapper.vm as any).prepareForLogout()).resolves.toBe('ready')
+  })
+
+  it('does not mistake POST transport loss during logout cancellation for completion', async () => {
+    const pendingPost = deferred<FixResult>()
+    const firstCancellation = deferred<boolean>()
+    const aliceToken = validToken('alice-fix-logout-owner')
+    authStore.login(aliceToken, { userId: 1, phone: '13800138000', username: 'alice' })
+    boardApi.fixTrace.mockReturnValueOnce(pendingPost.promise)
+    boardApi.cancelFixRequest
+      .mockReturnValueOnce(firstCancellation.promise)
+      .mockResolvedValue(false)
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    const logoutPreparation = (wrapper.vm as any).prepareForLogout()
+
+    pendingPost.reject(new Error('transport lost during logout'))
+    await Promise.resolve()
+    await Promise.resolve()
+    firstCancellation.resolve(false)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    await expect(logoutPreparation).resolves.toBe('outcome-unknown')
+    expect(options.signal.aborted).toBe(false)
+    expect(boardApi.cancelFixRequest.mock.calls.every(
+      ([requestId, token]) => requestId === options.requestId && token === aliceToken
+    )).toBe(true)
+
+    boardApi.cancelFixRequest.mockResolvedValue(true)
+    await expect((wrapper.vm as any).prepareForLogout()).resolves.toBe('ready')
+  })
+
+  it('blocks a second fix id while a visible transport-loss outcome is unresolved', async () => {
+    const pendingPost = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pendingPost.promise)
+    boardApi.cancelFixRequest.mockResolvedValue(false)
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const firstRequestId = boardApi.fixTrace.mock.calls[0]![2].requestId
+    pendingPost.reject(new Error('transport lost while visible'))
+    await Promise.resolve()
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    const retry = wrapper.get('[data-testid="fix-try-current"]')
+    expect(retry.attributes('disabled')).toBeDefined()
+    await retry.trigger('click')
+    expect(boardApi.fixTrace).toHaveBeenCalledTimes(1)
+    expect(boardApi.cancelFixRequest).toHaveBeenCalledWith(firstRequestId, defaultToken)
+
+    boardApi.cancelFixRequest.mockResolvedValue(true)
+    await expect((wrapper.vm as any).prepareForLogout()).resolves.toBe('ready')
+  })
+
+  it('keeps the hidden dialog owner available for logout and blocks a new id after reopen', async () => {
+    const pendingPost = deferred<FixResult>()
+    const aliceToken = validToken('alice-hidden-fix-owner')
+    authStore.login(aliceToken, { userId: 1, phone: '13800138000', username: 'alice' })
+    boardApi.fixTrace.mockReturnValueOnce(pendingPost.promise)
+    boardApi.cancelFixRequest.mockResolvedValue(false)
+    const wrapper = mountPersistentDialogHost()
+    await flush()
+
+    vi.useFakeTimers()
+    let dialog = wrapper.findComponent(FixResultDialog)
+    await dialog.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+
+    await dialog.get('button[aria-label="close"]').trigger('click')
+    expect((wrapper.vm as any).visible).toBe(false)
+    expect(wrapper.findComponent(FixResultDialog).exists()).toBe(true)
+    expect((wrapper.vm as any).dialogRef).toBeTruthy()
+
+    pendingPost.reject(new Error('transport lost after dialog close'))
+    await Promise.resolve()
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    const logoutPreparation = (wrapper.vm as any).dialogRef.prepareForLogout()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await expect(logoutPreparation).resolves.toBe('outcome-unknown')
+    expect(options.signal.aborted).toBe(false)
+    const ownedCancellationCalls = boardApi.cancelFixRequest.mock.calls
+      .filter(([requestId]) => requestId === options.requestId)
+    expect(ownedCancellationCalls.length).toBeGreaterThan(0)
+    expect(ownedCancellationCalls.every(([, token]) => token === aliceToken)).toBe(true)
+
+    ;(wrapper.vm as any).visible = true
+    await wrapper.vm.$nextTick()
+    dialog = wrapper.findComponent(FixResultDialog)
+    const retry = dialog.get('[data-testid="fix-try-current"]')
+    expect(retry.attributes('disabled')).toBeDefined()
+    await retry.trigger('click')
+    expect(boardApi.fixTrace).toHaveBeenCalledTimes(1)
+
+    boardApi.cancelFixRequest.mockResolvedValue(true)
+    await expect((wrapper.vm as any).dialogRef.prepareForLogout()).resolves.toBe('ready')
+  })
+
+  it('rejects a different trace while a hidden request still owns the dialog', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.cancelFixRequest.mockResolvedValue(false)
+    const wrapper = mountPersistentDialogHost()
+    await flush()
+
+    vi.useFakeTimers()
+    const dialog = wrapper.findComponent(FixResultDialog)
+    await dialog.get('[data-testid="fix-try-current"]').trigger('click')
+    await dialog.get('button[aria-label="close"]').trigger('click')
+    expect((wrapper.vm as any).visible).toBe(false)
+    expect((wrapper.vm as any).dialogRef.canOpenTrace(7)).toBe(true)
+    expect((wrapper.vm as any).dialogRef.canOpenTrace(8)).toBe(false)
+
+    ;(wrapper.vm as any).traceId = 8
+    ;(wrapper.vm as any).visible = true
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect((wrapper.vm as any).visible).toBe(false)
+    expect(elementPlus.warning).toHaveBeenCalledWith('fixTraceSwitchBlockedByActiveSearch')
+    expect(boardApi.getFaultRules).not.toHaveBeenCalledWith(8)
+
+    boardApi.cancelFixRequest.mockResolvedValue(true)
+    await expect((wrapper.vm as any).dialogRef.prepareForLogout()).resolves.toBe('ready')
+  })
+
+  it.each([
+    ['an HTTP rejection', { response: { status: 503, data: { message: 'Unavailable' } } }],
+    ['an invalid authoritative response', { code: FIX_RESPONSE_INCOMPLETE_CODE }]
+  ])('releases request tracking after %s', async (_label, rejection) => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    boardApi.fixTrace.mockRejectedValueOnce(rejection)
+    const wrapper = mountDialog()
+    await flush()
+
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await flush()
+
+    expect(wrapper.get('[data-testid="fix-try-current"]').attributes('disabled')).toBeUndefined()
+    await expect((wrapper.vm as any).prepareForLogout()).resolves.toBe('ready')
+    errorSpy.mockRestore()
   })
 
   it('shows the server-observed automatic-fix phase while the strategy is running', async () => {
@@ -599,7 +964,7 @@ describe('FixResultDialog strategy workflow', () => {
     await vi.advanceTimersByTimeAsync(1000)
     await wrapper.vm.$nextTick()
 
-    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(expect.any(String))
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(expect.any(String), defaultToken)
     expect(wrapper.text()).toContain('fixProgressStage_SEARCHING_AND_VERIFYING')
 
     vi.useRealTimers()

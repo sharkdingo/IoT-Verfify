@@ -19,7 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class InteractiveFixExecutionServiceTest {
@@ -83,6 +86,77 @@ class InteractiveFixExecutionServiceTest {
         } finally {
             releaseSearch.countDown();
         }
+    }
+
+    @Test
+    void accountDeletionStopsLocalWorkAndPublishesDistributedCancellation() throws Exception {
+        DistributedInteractiveExecutionStore store = mock(DistributedInteractiveExecutionStore.class);
+        InteractiveFixExecutionService instance = new InteractiveFixExecutionService(executor, store);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        CompletableFuture<Void> request = CompletableFuture.runAsync(() -> {
+            try {
+                instance.execute(1L, "request-123", () -> {
+                    started.countDown();
+                    try {
+                        Thread.sleep(30_000);
+                    } catch (InterruptedException e) {
+                        interrupted.countDown();
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (ServiceUnavailableException expected) {
+                // Account deletion releases the waiting HTTP request.
+            }
+        });
+
+        assertTrue(started.await(2, TimeUnit.SECONDS));
+        instance.requestUserExecutionStop(1L);
+        request.get(2, TimeUnit.SECONDS);
+
+        assertTrue(interrupted.await(2, TimeUnit.SECONDS));
+        verify(store).requestUserCancellation("fix", 1L);
+    }
+
+    @Test
+    void successfulFixIsSettledBeforeItsResultIsReturned() {
+        DistributedInteractiveExecutionStore store = mock(DistributedInteractiveExecutionStore.class);
+        DistributedInteractiveExecutionStore.Lease lease =
+                mock(DistributedInteractiveExecutionStore.Lease.class);
+        when(store.acquire("fix", 1L, "request-123", false)).thenReturn(lease);
+        InteractiveFixExecutionService instance = new InteractiveFixExecutionService(executor, store);
+
+        String result = instance.execute(1L, "request-123", () -> {
+            instance.markStage(1L, "request-123", InteractiveOperationStage.FINALIZING);
+            return "fix";
+        });
+
+        assertEquals("fix", result);
+        verify(store).completeSuccessfully(lease, InteractiveOperationStage.FINALIZING);
+        verify(store, never()).finish(lease, InteractiveOperationStage.FINALIZING);
+    }
+
+    @Test
+    void lostDistributedOwnershipDoesNotDeliverACompletedFix() {
+        DistributedInteractiveExecutionStore store = mock(DistributedInteractiveExecutionStore.class);
+        DistributedInteractiveExecutionStore.Lease lease =
+                mock(DistributedInteractiveExecutionStore.Lease.class);
+        when(store.acquire("fix", 1L, "request-123", false)).thenReturn(lease);
+        ServiceUnavailableException ownershipLost =
+                new ServiceUnavailableException("Distributed ownership was lost.");
+        doThrow(ownershipLost).when(store)
+                .completeSuccessfully(lease, InteractiveOperationStage.FINALIZING);
+        InteractiveFixExecutionService instance = new InteractiveFixExecutionService(executor, store);
+
+        ServiceUnavailableException error = assertThrows(ServiceUnavailableException.class,
+                () -> instance.execute(1L, "request-123", () -> {
+                    instance.markStage(1L, "request-123", InteractiveOperationStage.FINALIZING);
+                    return "stale fix";
+                }));
+
+        assertEquals(ownershipLost, error);
+        verify(store).finish(lease, InteractiveOperationStage.FINALIZING);
     }
 
     @Test

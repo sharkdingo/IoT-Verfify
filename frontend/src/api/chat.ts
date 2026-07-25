@@ -292,11 +292,18 @@ export const getSessionHistory = async (
   };
 }
 
-export const requestSessionStop = async (sessionId: string, turnId?: string): Promise<void> => {
+export const requestSessionStop = async (
+    sessionId: string,
+    turnId?: string,
+    authToken?: string | null
+): Promise<void> => {
   await api.post(
     `/chat/sessions/${sessionId}/stop`,
     { turnId: turnId?.trim() || null },
-    { timeout: CHAT_ACTIVITY_TIMEOUT_MS }
+    {
+      timeout: CHAT_ACTIVITY_TIMEOUT_MS,
+      ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {})
+    }
   );
 }
 

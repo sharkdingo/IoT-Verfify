@@ -2178,6 +2178,7 @@ describe('ChatView', () => {
     await flushPromises()
 
     expect(result).toBe('ready')
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1', activeTurnId)
     expect(chatApi.getSessionActivity).toHaveBeenCalledWith(
       'session-1',
       expect.objectContaining({ signal: expect.any(AbortSignal) })
@@ -2186,6 +2187,111 @@ describe('ChatView', () => {
       type: 'REFRESH_DATA',
       payload: { target: 'board_state' }
     })
+    wrapper.unmount()
+  })
+
+  it('stops an active stream with its owner token when another account takes over', async () => {
+    const aliceToken = validToken('alice-chat-owner')
+    const bobToken = validToken('bob-current')
+    let activeTurnId = ''
+    let streamSignal: AbortSignal | undefined
+    authStore.login(aliceToken, { userId: 1, phone: '13800138000', username: 'alice' })
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      activeTurnId = args[4]
+      streamSignal = args[3]?.signal
+      args[2].onAccepted?.()
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    chatStore.openChat()
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('运行工具')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    authStore.login(bobToken, { userId: 2, phone: '13900139000', username: 'bob' })
+    await flushPromises()
+
+    expect(chatApi.requestSessionStop)
+      .toHaveBeenCalledWith('session-1', activeTurnId, aliceToken)
+    expect(streamSignal?.aborted).toBe(true)
+    expect(authStore.getToken()).toBe(bobToken)
+    wrapper.unmount()
+  })
+
+  it('uses a renewed same-user token to stop an already active stream', async () => {
+    const originalToken = validToken('alice-original')
+    const renewedToken = validToken('alice-renewed')
+    const bobToken = validToken('bob-after-renewal')
+    let activeTurnId = ''
+    let streamSignal: AbortSignal | undefined
+    const alice = { userId: 1, phone: '13800138000', username: 'alice' }
+    authStore.login(originalToken, alice)
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      activeTurnId = args[4]
+      streamSignal = args[3]?.signal
+      args[2].onAccepted?.()
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    chatStore.openChat()
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('运行工具')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    authStore.login(renewedToken, alice)
+    await flushPromises()
+    authStore.login(bobToken, { userId: 2, phone: '13900139000', username: 'bob' })
+    await flushPromises()
+
+    expect(chatApi.requestSessionStop)
+      .toHaveBeenCalledWith('session-1', activeTurnId, renewedToken)
+    expect(streamSignal?.aborted).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('captures a token renewed while session creation is pending before dispatch', async () => {
+    const originalToken = validToken('alice-before-create')
+    const renewedToken = validToken('alice-after-create')
+    const bobToken = validToken('bob-after-create')
+    let resolveSession!: (value: typeof session) => void
+    let activeTurnId = ''
+    let streamSignal: AbortSignal | undefined
+    const alice = { userId: 1, phone: '13800138000', username: 'alice' }
+    authStore.login(originalToken, alice)
+    chatApi.createSession.mockReturnValue(new Promise(resolve => { resolveSession = resolve }))
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      activeTurnId = args[4]
+      streamSignal = args[3]?.signal
+      args[2].onAccepted?.()
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    chatStore.openChat()
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('等待会话创建')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    authStore.login(renewedToken, alice)
+    await flushPromises()
+    resolveSession(session)
+    await flushPromises()
+    authStore.login(bobToken, { userId: 2, phone: '13900139000', username: 'bob' })
+    await flushPromises()
+
+    expect(chatApi.requestSessionStop)
+      .toHaveBeenCalledWith('session-1', activeTurnId, renewedToken)
+    expect(streamSignal?.aborted).toBe(true)
     wrapper.unmount()
   })
 })

@@ -28,6 +28,15 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
 
     Optional<SimulationTaskPo> findByIdAndUserId(Long id, Long userId);
 
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM SimulationTaskPo t WHERE t.id = :taskId AND t.userId = :userId "
+         + "AND t.workerId = :workerId AND t.status = :pending")
+    int deleteUndispatchedTask(@Param("taskId") Long taskId,
+                               @Param("userId") Long userId,
+                               @Param("workerId") String workerId,
+                               @Param("pending") SimulationTaskPo.TaskStatus pending);
+
     List<SimulationTaskPo> findByUserIdOrderByCreatedAtDesc(Long userId);
 
     List<SimulationTaskPo> findByUserIdAndIdNotInOrderByCreatedAtDesc(Long userId, List<Long> excludedIds);

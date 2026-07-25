@@ -180,22 +180,23 @@ public class FixServiceImpl implements FixService {
     }
 
     @Override
-    @Transactional
     public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
                                       FixSuggestionDto suggestion, String suggestionToken,
                                       Map<String, PreferredRange> preferredRanges) {
-        String validatedStrategy = validateApplyStrategy(strategy);
-        validatePreferredRanges(preferredRanges);
-        if (suggestion == null || suggestion.getStrategy() == null
-                || !validatedStrategy.equals(suggestion.getStrategy())) {
-            throw new BadRequestException("The submitted suggestion does not match the selected strategy.");
-        }
-        FixSuggestionDto trusted = fixSuggestionTokenService.verify(
-                userId, traceId, validatedStrategy, suggestion, suggestionToken, preferredRanges);
-        if (!trusted.isVerified()) {
-            throw new BadRequestException("Only a verified fix suggestion can be applied.");
-        }
-        return applyFixInternal(userId, traceId, validatedStrategy, trusted, preferredRanges);
+        return formalOperationAdmission.execute(userId, () -> {
+            String validatedStrategy = validateApplyStrategy(strategy);
+            validatePreferredRanges(preferredRanges);
+            if (suggestion == null || suggestion.getStrategy() == null
+                    || !validatedStrategy.equals(suggestion.getStrategy())) {
+                throw new BadRequestException("The submitted suggestion does not match the selected strategy.");
+            }
+            FixSuggestionDto trusted = fixSuggestionTokenService.verify(
+                    userId, traceId, validatedStrategy, suggestion, suggestionToken, preferredRanges);
+            if (!trusted.isVerified()) {
+                throw new BadRequestException("Only a verified fix suggestion can be applied.");
+            }
+            return applyFixInternal(userId, traceId, validatedStrategy, trusted, preferredRanges);
+        });
     }
 
     private FixApplyResultDto applyFixInternal(Long userId, Long traceId, String strategy,
@@ -223,6 +224,10 @@ public class FixServiceImpl implements FixService {
         // runs on the exact snapshot that gets written.
         int[] before = {0};
         List<RuleDto> saved = boardStorageService.updateRulesAgainstSnapshot(userId, boardSnapshot -> {
+            // The rule write happens in BoardStorageService's transactionTemplate. Register the
+            // fence from inside that transaction so a lease loss cannot commit this public REST
+            // entry after another formal operation has claimed the user.
+            formalOperationAdmission.registerCurrentLeaseCommitFence();
             List<RuleDto> boardRules = boardSnapshot.rules();
             before[0] = boardRules.size();
             ModelInputSnapshot currentSnapshot = boardDataConverter.toModelInputSnapshot(boardSnapshot);

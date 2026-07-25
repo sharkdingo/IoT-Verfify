@@ -432,6 +432,8 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(planning.contains("audit-friendly summary, not private hidden chain-of-thought"));
         assertTrue(planning.contains("Use recommend_scenario only"));
         assertTrue(planning.contains("call apply_scenario with confirmed=false"));
+        assertTrue(planning.contains("call apply_fix with confirmed=false"));
+        assertTrue(planning.contains("Never route fuzz findings"));
         assertTrue(planning.contains("do not delete or recreate devices individually"));
         assertTrue(planning.contains("Do not call"));
         assertTrue(planning.contains("add_device, manage_rule, or manage_spec"));
@@ -439,7 +441,9 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(visible.contains("SATISFIED with modelComplete=false"));
         assertTrue(visible.contains("one possible formal-model trajectory"));
         assertTrue(visible.contains("A verified suggestion still is not applied"));
+        assertTrue(visible.contains("apply_fix"));
         assertTrue(visible.contains("Never expose impactToken"));
+        assertTrue(visible.contains("suggestionToken"));
     }
 
     @Test
@@ -557,6 +561,34 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void pendingConfirmationPrompt_replaysStoredApplyFixWithoutRepeatingSignedSuggestion() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "buildPendingTaskSystemPrompt",
+                AiDestructiveActionGuard.PendingActionContext.class,
+                AiScenarioDraftStore.PendingApplication.class,
+                AiTaskContinuationStore.ContinuationContext.class,
+                ChatConfirmationDetector.ConfirmationDecision.class,
+                String.class);
+        method.setAccessible(true);
+
+        LlmMessage context = (LlmMessage) method.invoke(
+                service,
+                new AiDestructiveActionGuard.PendingActionContext(
+                        "apply_fix", "31", "apply-token"),
+                null,
+                null,
+                ChatConfirmationDetector.ConfirmationDecision.confirmed(
+                        ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE),
+                "Apply the reviewed formal fix");
+
+        assertTrue(context.content().contains("Call apply_fix exactly once"));
+        assertTrue(context.content().contains("JSON integer"));
+        assertTrue(context.content().contains("Do not repeat suggestion"));
+        assertTrue(context.content().contains("apply-token"));
+        assertTrue(context.content().contains("\"targetKey\":\"31\""));
+    }
+
+    @Test
     void executeToolLoop_whenToolReturnsError_shouldNotCollectRefreshCommand() throws Exception {
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"))
@@ -603,6 +635,21 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void executeToolLoop_whenFormalFixApplySucceeds_shouldRefreshRules() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("apply_fix", "{\"traceId\":31,\"confirmed\":true}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("apply_fix", "{\"traceId\":31,\"confirmed\":true}"))
+                .thenReturn("{\"operation\":\"applied\",\"applied\":true,\"message\":\"ok\"}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        assertEquals(1, commandSet.size());
+        assertEquals("rule_list", commandSet.iterator().next().getPayload().get("target"));
+    }
+
+    @Test
     void executeToolLoop_whenMutationResultIsUnavailable_shouldRefreshStopAndNotCountSuccess() throws Exception {
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"));
@@ -619,6 +666,37 @@ class ChatServiceImplToolLoopControlTest {
         assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"));
         assertEquals(1, recordInt(loopResult, "uncertainMutationCalls"));
         verify(llmChatService).chatWithTools(anyList(), anyList());
+    }
+
+    @Test
+    void executeToolLoop_whenAsyncDispatchOutcomeIsUnknown_shouldRefreshRunHistoryAndStop() throws Exception {
+        for (String toolName : List.of(
+                "verify_model_async", "simulate_model_async", "fuzz_model_async")) {
+            org.mockito.Mockito.reset(llmChatService, aiToolManager, messageRepo);
+            String statusTool = switch (toolName) {
+                case "verify_model_async" -> "verify_task_status";
+                case "simulate_model_async" -> "simulate_task_status";
+                case "fuzz_model_async" -> "fuzz_task_status";
+                default -> throw new IllegalStateException("Unexpected async start tool " + toolName);
+            };
+            when(llmChatService.chatWithTools(anyList(), anyList()))
+                    .thenReturn(toolCallResult(toolName, "{}"));
+            when(aiToolManager.execute(toolName, "{}"))
+                    .thenReturn("{\"resultStatus\":\"RESULT_UNAVAILABLE\",\"resultAvailable\":false,"
+                            + "\"mutationMayHaveCommitted\":true,"
+                            + "\"errorCode\":\"TASK_DISPATCH_OUTCOME_UNKNOWN\","
+                            + "\"taskId\":17,\"statusTool\":\"" + statusTool + "\"}");
+
+            Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+            Object loopResult = invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+            assertEquals(1, commandSet.size(), toolName);
+            assertEquals("run_history", commandSet.iterator().next().getPayload().get("target"), toolName);
+            assertEquals(0, recordInt(loopResult, "successfulToolCalls"), toolName);
+            assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"), toolName);
+            assertEquals(1, recordInt(loopResult, "uncertainMutationCalls"), toolName);
+            verify(llmChatService).chatWithTools(anyList(), anyList());
+        }
     }
 
     @Test
@@ -783,6 +861,24 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void executeToolLoop_whenEditDeviceSucceeds_shouldRefreshDeviceAndSpecificationLists() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("edit_device", "{\"id\":\"device-1\",\"field\":\"label\",\"label\":\"Hall\"}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("edit_device",
+                "{\"id\":\"device-1\",\"field\":\"label\",\"label\":\"Hall\"}"))
+                .thenReturn("{\"message\":\"ok\"}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        List<String> targets = commandSet.stream()
+                .map(cmd -> String.valueOf(cmd.getPayload().get("target")))
+                .toList();
+        assertEquals(List.of("device_list", "spec_list"), targets);
+    }
+
+    @Test
     void executeToolLoop_whenEnvironmentToolSucceeds_shouldRefreshEnvironmentList() throws Exception {
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_environment", "{\"action\":\"set\",\"name\":\"temperature\",\"value\":\"21\"}"))
@@ -801,8 +897,10 @@ class ChatServiceImplToolLoopControlTest {
     void executeToolLoop_whenRunHistoryChanges_shouldRefreshRunHistory() throws Exception {
         for (String toolName : List.of(
                 "verify_model", "verify_model_async", "simulate_model_async",
-                "cancel_verify_task", "cancel_simulate_task",
-                "delete_trace", "delete_simulation_trace")) {
+                "fuzz_model_async", "cancel_verify_task", "cancel_simulate_task",
+                "cancel_fuzz_task", "delete_trace", "delete_simulation_trace",
+                "delete_verification_run", "delete_fuzz_run", "dismiss_verify_task",
+                "dismiss_simulate_task", "dismiss_fuzz_task")) {
             org.mockito.Mockito.reset(llmChatService, aiToolManager, messageRepo);
             when(llmChatService.chatWithTools(anyList(), anyList()))
                     .thenReturn(toolCallResult(toolName, "{}"))
@@ -1025,14 +1123,14 @@ class ChatServiceImplToolLoopControlTest {
         service.requestStreamStop(1L, "s1", "turn-early-stop-b");
 
         assertEquals(Set.of("turn-early-stop-a", "turn-early-stop-b"),
-                session.getPreAdmissionStopTurnIds());
+                session.getPreAdmissionStopTurns().keySet());
         ConflictException failure = assertThrows(ConflictException.class, () ->
                 service.beginStreamRequest(1L, "s1", "turn-early-stop-a", "do not run"));
         assertTrue(failure.getMessage().contains("stopped before execution began"));
-        assertEquals(Set.of("turn-early-stop-b"), session.getPreAdmissionStopTurnIds());
+        assertEquals(Set.of("turn-early-stop-b"), session.getPreAdmissionStopTurns().keySet());
         assertThrows(ConflictException.class, () ->
                 service.beginStreamRequest(1L, "s1", "turn-early-stop-b", "also do not run"));
-        assertTrue(session.getPreAdmissionStopTurnIds().isEmpty());
+        assertTrue(session.getPreAdmissionStopTurns().isEmpty());
         assertNull(session.getActiveExecutionId());
         verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 message -> message != null && "user".equals(message.getRole())));
@@ -1049,8 +1147,57 @@ class ChatServiceImplToolLoopControlTest {
                 service.requestStreamStop(1L, "s1", "turn-overflow"));
 
         assertTrue(failure.getMessage().contains("Too many chat turns"));
-        assertEquals(64, session.getPreAdmissionStopTurnIds().size());
-        assertFalse(session.getPreAdmissionStopTurnIds().contains("turn-overflow"));
+        assertEquals(64, session.getPreAdmissionStopTurns().size());
+        assertFalse(session.getPreAdmissionStopTurns().containsKey("turn-overflow"));
+    }
+
+    @Test
+    void requestStreamStop_beforeAdmission_discardsExpiredFencesBeforeApplyingCapacity() {
+        LocalDateTime startedAt = LocalDateTime.of(2026, 7, 24, 12, 0);
+        when(sessionRepo.currentDatabaseTime()).thenReturn(startedAt);
+        ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
+        for (int index = 0; index < 64; index++) {
+            service.requestStreamStop(1L, "s1", "turn-expired-" + index);
+        }
+
+        when(sessionRepo.currentDatabaseTime()).thenReturn(startedAt.plusMinutes(3));
+        service.requestStreamStop(1L, "s1", "turn-current");
+
+        assertEquals(Set.of("turn-current"), session.getPreAdmissionStopTurns().keySet());
+        assertEquals(startedAt.plusMinutes(3), session.getPreAdmissionStopTurns().get("turn-current"));
+    }
+
+    @Test
+    void beginStreamRequest_doesNotRejectARequestForAnExpiredStopFence() {
+        LocalDateTime startedAt = LocalDateTime.of(2026, 7, 24, 12, 0);
+        ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
+        session.getPreAdmissionStopTurns().put("turn-reused", startedAt);
+        when(sessionRepo.currentDatabaseTime()).thenReturn(startedAt.plusMinutes(3));
+
+        String executionId = service.beginStreamRequest(1L, "s1", "turn-reused", "run now");
+
+        assertNotNull(executionId);
+        assertTrue(session.getPreAdmissionStopTurns().isEmpty());
+        service.endStreamRequest(1L, "s1", executionId);
+    }
+
+    @Test
+    void beginStreamRequest_rejectsContentContainingOnlyUnicodeSpaces() {
+        assertThrows(BadRequestException.class,
+                () -> service.beginStreamRequest(1L, "s1", "turn-unicode-blank", "\u00A0\u202F\u3000"));
+
+        verify(userRepository, never()).findByIdForUpdate(any());
+        verify(messageRepo, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void beginStreamRequest_rejectsOversizedContentBeforeAdmission() {
+        BadRequestException failure = assertThrows(BadRequestException.class,
+                () -> service.beginStreamRequest(1L, "s1", "turn-oversized", "x".repeat(10_001)));
+
+        assertTrue(failure.getMessage().contains("10000"));
+        verify(userRepository, never()).findByIdForUpdate(any());
+        verify(messageRepo, never()).saveAndFlush(any());
     }
 
     @Test
@@ -1064,7 +1211,7 @@ class ChatServiceImplToolLoopControlTest {
         assertEquals(executionId, session.getActiveExecutionId());
         assertEquals("turn-current", session.getActiveExecutionTurnId());
         assertFalse(Boolean.TRUE.equals(session.getExecutionStopRequested()));
-        assertEquals(Set.of("turn-stale"), session.getPreAdmissionStopTurnIds());
+        assertEquals(Set.of("turn-stale"), session.getPreAdmissionStopTurns().keySet());
 
         Field activeRequests = ChatServiceImpl.class.getDeclaredField("activeStreamRequests");
         activeRequests.setAccessible(true);

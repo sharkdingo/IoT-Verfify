@@ -39,6 +39,8 @@ class BoardLayoutMapperTest {
         BoardLayoutPo po = BoardLayoutPo.builder()
                 .id(1L)
                 .userId(7L)
+                .canvasPanX(Double.MAX_VALUE)
+                .canvasPanY(Double.NaN)
                 .controlPanelWidth(100.0)
                 .inspectorPanelWidth(900.0)
                 .canvasZoom(99.0)
@@ -46,6 +48,8 @@ class BoardLayoutMapperTest {
 
         BoardLayoutDto dto = mapper.toDto(po);
 
+        assertEquals(1_000_000.0, dto.getCanvasPan().getX());
+        assertEquals(0.0, dto.getCanvasPan().getY());
         assertEquals(240.0, dto.getPanels().getControl().getWidth());
         assertEquals(520.0, dto.getPanels().getInspector().getWidth());
         assertEquals(2.0, dto.getCanvasZoom());
@@ -117,6 +121,20 @@ class BoardLayoutMapperTest {
 
         layout.setCanvasZoom(9.0);
         assertEquals(2.0, mapper.toEntity(layout, 9L, 7L).getCanvasZoom());
+    }
+
+    @Test
+    void toEntity_clampsCanvasPanBoundsAndRejectsNonFiniteValues() {
+        BoardLayoutDto layout = new BoardLayoutDto();
+        BoardLayoutDto.CanvasPan pan = new BoardLayoutDto.CanvasPan();
+        pan.setX(-Double.MAX_VALUE);
+        pan.setY(Double.POSITIVE_INFINITY);
+        layout.setCanvasPan(pan);
+
+        BoardLayoutPo po = mapper.toEntity(layout, 9L, 7L);
+
+        assertEquals(-1_000_000.0, po.getCanvasPanX());
+        assertEquals(0.0, po.getCanvasPanY());
     }
 
     @Test

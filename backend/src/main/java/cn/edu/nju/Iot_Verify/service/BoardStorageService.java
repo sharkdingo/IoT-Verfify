@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableUpdateRequestDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeUpdateDto;
@@ -33,15 +34,17 @@ public interface BoardStorageService {
     DeviceMutationResultDto addNodes(Long userId, List<DeviceNodeDto> nodes,
                                      List<BoardEnvironmentVariableDto> environmentVariablePatches);
     DeviceUpdateResultDto updateNodeLayout(Long userId, String nodeId, DeviceLayoutDto layout);
+    DeviceUpdateResultDto updateNodeLayoutIfUnchanged(
+            Long userId, String nodeId, DeviceLayoutDto expected, DeviceLayoutDto desired);
     DeviceUpdateResultDto updateNodeRuntime(Long userId, String nodeId, DeviceRuntimeUpdateDto runtime);
     DeviceMutationResultDto renameNode(
             Long userId, String nodeId, String newLabel, String expectedLabel);
     DeviceDeletionResultDto previewNodeDeletion(Long userId, String nodeId);
     DeviceDeletionResultDto deleteNodeCascade(Long userId, String nodeId, String expectedImpactToken);
     List<BoardEnvironmentVariableDto> getEnvironmentVariables(Long userId);
-    /** Applies non-null fields as name-keyed patches and returns the authoritative result. */
+    /** Applies name-keyed field patches only while each complete expected baseline still matches. */
     EnvironmentMutationResultDto saveEnvironmentVariables(
-            Long userId, List<BoardEnvironmentVariableDto> variables);
+            Long userId, List<EnvironmentVariableUpdateRequestDto> updates);
 
     /**
      * Atomic read-modify-write of the board-level environment pool under the per-user write lock.
@@ -62,22 +65,19 @@ public interface BoardStorageService {
     List<SpecificationDto> getSpecs(Long userId);
     /** Atomically add a single spec under user-level lock. */
     CollectionMutationResultDto<SpecificationDto> addSpec(Long userId, SpecificationDto spec);
-    /** Atomically remove a single spec by ID under user-level lock. */
-    CollectionMutationResultDto<SpecificationDto> removeSpec(Long userId, String specId);
-    /** Atomically remove a spec only when its complete persisted snapshot is unchanged. */
+    /** Atomically remove a spec only when its identity and authored semantics are unchanged. */
     CollectionMutationResultDto<SpecificationDto> removeSpecIfUnchanged(
             Long userId, String specId, SpecificationDto expected);
 
     List<RuleDto> getRules(Long userId);
     /** Atomically add a single rule under user-level lock. */
     CollectionMutationResultDto<RuleDto> addRule(Long userId, RuleDto rule);
-    /** Atomically remove a single rule by ID under user-level lock. */
-    CollectionMutationResultDto<RuleDto> removeRule(Long userId, long ruleId);
-    /** Atomically remove a rule only when its complete persisted snapshot is unchanged. */
+    /** Atomically remove a rule only when its identity and authored semantics are unchanged. */
     CollectionMutationResultDto<RuleDto> removeRuleIfUnchanged(
             Long userId, long ruleId, RuleDto expected);
-    /** Atomically replace only the execution order; the request must contain every current rule id once. */
-    List<RuleDto> reorderRules(Long userId, List<Long> ruleIds);
+    /** Atomically replace execution order only while the complete expected order still matches. */
+    List<RuleDto> reorderRules(
+            Long userId, List<Long> expectedRuleIds, List<Long> ruleIds);
 
     /**
      * Atomic read-modify-write of rules against the complete current model snapshot. The mutator's

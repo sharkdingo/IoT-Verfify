@@ -27,17 +27,21 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
+import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
@@ -115,6 +119,13 @@ class VerificationServiceImplBuildResultTest {
         @Override
         public void execute(Runnable task) {
             throw new TaskRejectedException("rejected");
+        }
+    }
+
+    private static class FailingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        @Override
+        public void execute(Runnable task) {
+            throw new IllegalStateException("executor failed");
         }
     }
 
@@ -870,14 +881,16 @@ class VerificationServiceImplBuildResultTest {
     }
 
     @Test
-    void submitVerification_queueRejected_marksCreatedTaskFailedAndThrowsServiceUnavailable() {
+    void submitVerification_queueRejected_removesUndispatchedTaskAndThrowsServiceUnavailable() {
         VerificationServiceImpl rejectingService = serviceWithVerificationExecutor(new RejectingThreadPoolTaskExecutor());
         VerificationTaskPo savedTask = VerificationTaskPo.builder()
                 .id(12L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
                 .createdAt(LocalDateTime.now()).build();
 
         when(taskRepository.save(any(VerificationTaskPo.class))).thenReturn(savedTask);
-        when(taskRepository.findById(12L)).thenReturn(Optional.of(savedTask));
+        when(taskRepository.deleteUndispatchedTask(
+                eq(12L), eq(1L), anyString(), eq(VerificationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(1);
 
         ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
                 () -> rejectingService.submitVerification(
@@ -885,15 +898,56 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("busy"));
         verify(taskRepository).save(any(VerificationTaskPo.class));
-        verify(taskRepository).failTaskIfActive(
-                eq(12L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
-                eq(VerificationOutcome.INCONCLUSIVE),
-                eq("Server busy, please try again later"), anyString(), any(),
-                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)),
-                anyString(), any(LocalDateTime.class));
+        verify(taskRepository).deleteUndispatchedTask(
+                eq(12L), eq(1L), anyString(), eq(VerificationTaskPo.TaskStatus.PENDING));
+        verify(taskRepository, never()).failTaskIfActive(anyLong(), any(), any(), any(), any(),
+                any(), any(), anyList(), anyString(), any());
         verify(taskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
+    }
+
+    @Test
+    void submitVerification_runtimeDispatchFailure_removesUndispatchedTask() {
+        VerificationServiceImpl failingService = serviceWithVerificationExecutor(new FailingThreadPoolTaskExecutor());
+        VerificationTaskPo savedTask = VerificationTaskPo.builder()
+                .id(18L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+        when(taskRepository.save(any(VerificationTaskPo.class))).thenReturn(savedTask);
+        when(taskRepository.deleteUndispatchedTask(
+                eq(18L), eq(1L), anyString(), eq(VerificationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(1);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> failingService.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(),
+                                List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertEquals("executor failed", error.getMessage());
+        verify(taskRepository).deleteUndispatchedTask(
+                eq(18L), eq(1L), anyString(), eq(VerificationTaskPo.TaskStatus.PENDING));
+    }
+
+    @Test
+    void submitVerification_cleanupUnconfirmed_preservesTaskIdInOutcomeUnknownError() {
+        VerificationServiceImpl rejectingService = serviceWithVerificationExecutor(new RejectingThreadPoolTaskExecutor());
+        VerificationTaskPo savedTask = VerificationTaskPo.builder()
+                .id(19L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+        when(taskRepository.save(any(VerificationTaskPo.class))).thenReturn(savedTask);
+        when(taskRepository.deleteUndispatchedTask(
+                eq(19L), eq(1L), anyString(), eq(VerificationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(0);
+        when(taskRepository.findByIdAndUserId(19L, 1L)).thenReturn(Optional.of(savedTask));
+
+        AsyncTaskDispatchOutcomeUnknownException error = assertThrows(
+                AsyncTaskDispatchOutcomeUnknownException.class,
+                () -> rejectingService.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(),
+                                List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertEquals(19L, error.getTaskId());
+        assertTrue(error.getMessage().contains("cleanup"));
     }
 
     @Test
@@ -1336,6 +1390,85 @@ class VerificationServiceImplBuildResultTest {
 
         assertSame(expected, result);
         verify(verificationTaskMapper).toRunDto(run, 1);
+    }
+
+    @Test
+    void deletionImpactCountsEveryPersistedTraceWithoutParsingEvidence() {
+        CompletedRunDeletionProjection projection = mock(CompletedRunDeletionProjection.class);
+        LocalDateTime createdAt = LocalDateTime.of(2026, 7, 25, 12, 0);
+        LocalDateTime completedAt = createdAt.plusSeconds(2);
+        when(projection.getId()).thenReturn(32L);
+        when(projection.getCreatedAt()).thenReturn(createdAt);
+        when(projection.getCompletedAt()).thenReturn(completedAt);
+        when(taskRepository.findDeletionProjection(
+                32L, 1L, VerificationTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(projection));
+        when(traceRepository.countByUserIdAndVerificationTaskId(1L, 32L)).thenReturn(3L);
+
+        RunDeletionImpactDto impact = service.getRunDeletionImpact(1L, 32L);
+
+        assertEquals(32L, impact.getRunId());
+        assertEquals(3L, impact.getEvidenceCount());
+        assertEquals(createdAt, impact.getCreatedAt());
+        assertEquals(completedAt, impact.getCompletedAt());
+        verify(traceRepository, never()).findByUserIdAndVerificationTaskId(anyLong(), anyLong());
+        verifyNoInteractions(traceMapper, verificationTaskMapper);
+    }
+
+    @Test
+    void confirmedRunDeletionUsesOwnedLockAndExactPersistedTraceCount() {
+        VerificationTaskPo run = VerificationTaskPo.builder()
+                .id(32L)
+                .userId(1L)
+                .status(VerificationTaskPo.TaskStatus.COMPLETED)
+                .specResultsJson("not valid json")
+                .build();
+        when(taskRepository.findCompletedRunForUpdate(
+                32L, 1L, VerificationTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(run));
+        when(traceRepository.countByUserIdAndVerificationTaskId(1L, 32L)).thenReturn(3L);
+        when(traceRepository.deleteByUserIdAndVerificationTaskId(1L, 32L)).thenReturn(3);
+        when(taskRepository.deleteCompletedRun(
+                32L, 1L, VerificationTaskPo.TaskStatus.COMPLETED)).thenReturn(1);
+
+        long deletedCount = service.deleteRun(1L, 32L, 3L);
+
+        assertEquals(3L, deletedCount);
+        verify(taskRepository).deleteCompletedRun(
+                32L, 1L, VerificationTaskPo.TaskStatus.COMPLETED);
+        verifyNoInteractions(traceMapper, verificationTaskMapper);
+    }
+
+    @Test
+    void confirmedRunDeletionRejectsEvidenceAddedAfterPreview() {
+        VerificationTaskPo run = VerificationTaskPo.builder()
+                .id(32L).userId(1L).status(VerificationTaskPo.TaskStatus.COMPLETED).build();
+        when(taskRepository.findCompletedRunForUpdate(
+                32L, 1L, VerificationTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(run));
+        when(traceRepository.countByUserIdAndVerificationTaskId(1L, 32L)).thenReturn(3L);
+
+        ConflictException error = assertThrows(
+                ConflictException.class, () -> service.deleteRun(1L, 32L, 2L));
+
+        assertTrue(error.getMessage().contains("preview the deletion again"));
+        verify(traceRepository, never()).deleteByUserIdAndVerificationTaskId(anyLong(), anyLong());
+        verify(taskRepository, never()).deleteCompletedRun(anyLong(), anyLong(), any());
+    }
+
+    @Test
+    void confirmedRunDeletionRejectsConcurrentEvidenceChangeDuringDelete() {
+        VerificationTaskPo run = VerificationTaskPo.builder()
+                .id(32L).userId(1L).status(VerificationTaskPo.TaskStatus.COMPLETED).build();
+        when(taskRepository.findCompletedRunForUpdate(
+                32L, 1L, VerificationTaskPo.TaskStatus.COMPLETED))
+                .thenReturn(Optional.of(run));
+        when(traceRepository.countByUserIdAndVerificationTaskId(1L, 32L)).thenReturn(3L);
+        when(traceRepository.deleteByUserIdAndVerificationTaskId(1L, 32L)).thenReturn(4);
+
+        assertThrows(ConflictException.class, () -> service.deleteRun(1L, 32L, 3L));
+
+        verify(taskRepository, never()).deleteCompletedRun(anyLong(), anyLong(), any());
     }
 
     @Test

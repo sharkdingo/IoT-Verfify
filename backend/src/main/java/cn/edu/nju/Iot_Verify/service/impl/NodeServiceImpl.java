@@ -170,7 +170,7 @@ public class NodeServiceImpl implements NodeService {
         return candidate;
     }
 
-    private String chooseAvailableLabel(String baseLabel, List<DeviceNodeDto> nodes) {
+    static String chooseAvailableLabel(String baseLabel, List<DeviceNodeDto> nodes) {
         Set<String> used = new HashSet<>();
         for (DeviceNodeDto node : nodes) {
             if (node != null && node.getLabel() != null) {

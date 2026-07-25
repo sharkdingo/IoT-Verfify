@@ -5,7 +5,7 @@ response envelope, the authentication scheme, and the error/status codes. This i
 **single source of truth** for these three things — every other API document links
 here instead of restating them.
 
-Verified against code on 2026-07-24. Source: `dto/Result.java`,
+Verified against code on 2026-07-25. Source: `dto/Result.java`,
 `exception/GlobalExceptionHandler.java`, `configure/JacksonConfig.java`,
 `configure/ApplicationTimeConfig.java`,
 `component/model/ModelRequestParser.java`, `security/`.
@@ -98,14 +98,14 @@ exceptions and their statuses:
 | 404 | `ResourceNotFoundException` | Resource does not exist |
 | 405 | `HttpRequestMethodNotSupportedException` | The path exists but does not support the requested HTTP method |
 | 406 | `HttpMediaTypeNotAcceptableException` | No acceptable representation can be produced; the response body is intentionally empty |
-| 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DeviceRuntimeConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
+| 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DeviceRuntimeConflictException`, `EnvironmentVariableConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
 | 413 | `RequestBodySizeFilter` | JSON request body exceeds the configured byte limit and is rejected before DTO binding |
 | 415 | `HttpMediaTypeNotSupportedException` | The request content type is unsupported |
 | 422 | `ValidationException` | Semantic validation failure |
 | 429 | `FuzzTaskQuotaExceededException`, `FuzzTaskStorageQuotaExceededException`, `AsyncTaskQuotaExceededException`, `UserOperationBusyException`, `AuthRateLimitException`, `ChatHistoryQuotaExceededException` | Per-user active/stored background-task limit, per-user synchronous-operation limit, public authentication attempt limit, or stored chat-history capacity reached. Operation admission returns `USER_FORMAL_OPERATION_BUSY` or `USER_CHAT_OPERATION_BUSY`; authentication limits return an `AUTH_*_RATE_LIMIT_REACHED` reason, `ACCOUNT`, `SOURCE`, or `CAPACITY` scope, retry delay, and `Retry-After` header. Chat capacity returns `CHAT_HISTORY_LIMIT_REACHED` as documented in [chat-sse.md](chat-sse.md). |
 | 500 | `InternalServerException`, `SmvGenerationException`, `PersistedDataIntegrityException` (and uncaught) | Server-side failure or unusable persisted semantic data |
 | 502 | `BadGatewayException` | The configured AI provider replied, but its output could not be parsed as the requested structured result |
-| 503 | `ServiceUnavailableException`, `FixApplyPreflightUnavailableException` | Service temporarily unavailable or an automatic-fix apply preflight could not confirm model equality; the specialized fix rejection includes `data.reasonCode=FIX_APPLY_PREFLIGHT_UNAVAILABLE` and is guaranteed to occur before the board write |
+| 503 | `ServiceUnavailableException`, `AsyncTaskDispatchOutcomeUnknownException`, `FixApplyPreflightUnavailableException` | Service temporarily unavailable; an async task dispatch whose cleanup could not be confirmed; or an automatic-fix apply preflight that could not confirm model equality. Unknown async dispatch returns `data={ reasonCode: "TASK_DISPATCH_OUTCOME_UNKNOWN", taskKind, taskId }` so the caller can reconcile before retrying. The specialized fix rejection includes `data.reasonCode=FIX_APPLY_PREFLIGHT_UNAVAILABLE` and is guaranteed to occur before the board write. |
 | 504 | `SimulationExecutionException` | Synchronous simulation timed out before producing a usable model trace |
 
 Additional mappings: missing required query parameters, bean-validation failures (`@Valid`,
@@ -146,8 +146,11 @@ a stack trace.
 deletion returns `{ reasonCode, currentPreview }`, where `reasonCode` is
 `TEMPLATE_DELETION_PREVIEW_STALE` or `TEMPLATE_DELETION_BLOCKED`. A stale device-runtime
 compare-and-set returns `{ reasonCode: "DEVICE_RUNTIME_STALE", currentDevice }` and makes
-no write. Clients use structured data to refresh the exact pending decision instead of
-parsing the English message.
+no write. A stale public Environment Pool compare-and-set returns
+`{ reasonCode: "ENVIRONMENT_VARIABLE_STALE", variableName, currentVariable }` and also
+makes no write (`currentVariable` is `null` when the item was removed). Clients use
+structured data to refresh the exact pending decision instead of parsing the English
+message.
 
 **Persisted semantic integrity (500)**: JSON columns that define a model, run, trace,
 template, or structured chat-tool message are decoded fail-closed. Missing, blank,

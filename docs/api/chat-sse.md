@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-24. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-25. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -28,6 +28,9 @@ an already-running session from the list response.
 `title=null` means the session has no user-derived title yet; clients render their own
 localized "new conversation" label. Persistence placeholders such as `New Chat` are not
 part of the user-facing contract and are normalized to `null` when reading older rows.
+When a session is first given a title, the backend folds all Unicode whitespace runs to a
+single space, trims leading/trailing whitespace, and keeps at most 12 Unicode code points
+before appending `...`; it does not split a surrogate pair.
 At most 100 sessions are stored per user. Creation beyond that limit returns `400` and asks
 the user to delete an old session; the list endpoint is correspondingly bounded to the 100
 most recently updated sessions.
@@ -55,7 +58,7 @@ Once a worker owns its admitted turn, normal, provider-failure, and client-disco
 attempt to save one visible terminal assistant record. Admission cleanup, pre-execution
 ownership loss, or a terminal write failure can honestly leave no assistant row. A terminal
 write, including execution-trace serialization, is attempted at most once. If it fails, the
- server sends a structured `error` frame and closes without a terminal acknowledgement; it does
+server sends a structured `error` frame and closes without a terminal acknowledgement; it does
 not retry the write as a misleading disconnect row. After any accepted-stream failure, the
 client waits for the session to become idle and replaces optimistic state with authoritative
 history, including the valid user-only outcome. When saved, the terminal row stores
@@ -332,7 +335,7 @@ retrying. With `mutationMayHaveCommitted=false`, no mutation refresh is sent.
 | Field | Type | Rules |
 | :--- | :--- | :--- |
 | `sessionId` | `String` | Required; ≤64 characters |
-| `content` | `String` | Required; ≤10000 characters |
+| `content` | `String` | Required; ≤10000 characters and must contain at least one non-Unicode-whitespace code point |
 | `turnId` | `String` | Required non-blank value, ≤64 characters. The client generates a unique value used to associate the user message and terminal assistant record; omission is rejected with HTTP `400`. |
 | `confirmation` | `ChatConfirmationCommandDto` | Optional explicit protected-action decision: `{ action: "CONFIRM" | "CANCEL", kind: "DESTRUCTIVE" | "DEFAULT_TEMPLATE_RESET" | "SCENE_REPLACEMENT" }`. It is accepted only when that kind is currently pending for the session. |
 
@@ -461,8 +464,11 @@ the current session execution. This distinguishes an explicit user stop from an 
 transport loss and prevents a quick Stop from missing a request that has not entered stream
 admission yet. Concurrent quick Stops retain independent pre-admission turn fences instead of
 overwriting one another; those bounded fence rows are removed with their owning session through
-the same database-level cascade used by the rest of chat history. The owning backend immediately
-closes a blocked provider stream or cancels a pending
+the same database-level cascade used by the rest of chat history. Each fence is timestamped
+with the database clock, expires after two minutes, and is purged before admission and when
+another Stop is recorded; at most 64 live turn fences are retained per session. An expired
+fence therefore cannot cancel a later request that happens to reuse an old turn id. The owning
+backend immediately closes a blocked provider stream or cancels a pending
 planning future; another backend instance observes the durable stop flag during lease
 maintenance and closes its local provider request. Stop still cannot cancel or roll back a
 tool transaction already running on the server. A tool that has already returned is still classified and persisted before the

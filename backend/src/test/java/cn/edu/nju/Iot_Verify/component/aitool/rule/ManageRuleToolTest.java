@@ -440,6 +440,64 @@ class ManageRuleToolTest {
         });
     }
 
+    @Test
+    void reorder_withCompleteOrder_shouldReplaceExecutionOrder() throws Exception {
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node("Light_1", "Light")));
+        RuleDto first = RuleDto.builder().id(2L).ruleString("Rule two").build();
+        RuleDto second = RuleDto.builder().id(1L).ruleString("Rule one").build();
+        when(boardStorageService.reorderRules(1L, List.of(1L, 2L), List.of(2L, 1L)))
+                .thenReturn(List.of(first, second));
+
+        JsonNode json = objectMapper().readTree(tool.execute(
+                "{\"action\":\"reorder\",\"expectedRuleIds\":[1,2],\"ruleIds\":[2,1]}"));
+
+        assertEquals("reordered", json.path("operation").asText());
+        assertEquals("NOT_VERIFIED", json.path("verificationStatus").asText());
+        assertEquals(2, json.path("totalRules").asInt());
+        assertEquals(2L, json.path("rules").get(0).path("ruleId").asLong());
+        assertEquals(1L, json.path("rules").get(1).path("ruleId").asLong());
+        verify(boardStorageService).reorderRules(1L, List.of(1L, 2L), List.of(2L, 1L));
+    }
+
+    @Test
+    void reorder_withMissingRuleIds_shouldReject() throws Exception {
+        JsonNode json = objectMapper().readTree(tool.execute("{\"action\":\"reorder\"}"));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        verify(boardStorageService, never()).reorderRules(anyLong(), any(), any());
+    }
+
+    @Test
+    void reorder_withNonPositiveId_shouldReject() throws Exception {
+        JsonNode json = objectMapper().readTree(tool.execute(
+                "{\"action\":\"reorder\",\"expectedRuleIds\":[1,2],\"ruleIds\":[1,0]}"));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        verify(boardStorageService, never()).reorderRules(anyLong(), any(), any());
+    }
+
+    @Test
+    void reorder_withIdOutsideLongRange_shouldRejectWithoutTruncating() throws Exception {
+        JsonNode json = objectMapper().readTree(tool.execute(
+                "{\"action\":\"reorder\",\"expectedRuleIds\":[1],\"ruleIds\":[18446744073709551617]}"));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        verify(boardStorageService, never()).reorderRules(anyLong(), any(), any());
+    }
+
+    @Test
+    void reorder_rejectsFieldFromOtherAction() throws Exception {
+        JsonNode json = objectMapper().readTree(tool.execute(
+                "{\"action\":\"reorder\",\"expectedRuleIds\":[1],\"ruleIds\":[1],\"ruleId\":5}"));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        verify(boardStorageService, never()).reorderRules(anyLong(), any(), any());
+    }
+
+    private ObjectMapper objectMapper() {
+        return new ObjectMapper();
+    }
+
     private DeviceNodeDto node(String id, String label) {
         DeviceNodeDto node = new DeviceNodeDto();
         node.setId(id);

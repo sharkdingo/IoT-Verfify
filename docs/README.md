@@ -5,6 +5,9 @@ systems. This page is the **Doc Map**: it tells you which document owns which to
 whether that document exists yet, and — for documents not yet written — where the
 source material currently lives.
 
+Verified against code on 2026-07-25. Source: the repository layout and the owning
+documents linked below.
+
 > **Language policy**: all documentation is written in **English** — this resolved the
 > earlier split (root README in Chinese, backend README in English, NuSMV doc in
 > Chinese). Archived binary showcase assets under `docs/assets/` may retain their
@@ -62,7 +65,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | [docs/api/verification.md](api/verification.md) | ✅ ready | Verify/simulate/task/trace/fix DTO-level contract | — |
 | [docs/api/fuzzing.md](api/fuzzing.md) | ✅ ready | Counterexample-exploration task/run/finding DTO-level contract | — |
 | [docs/api/chat-sse.md](api/chat-sse.md) | ✅ ready | SSE streaming protocol for chat | — |
-| [docs/api/ai-tools.md](api/ai-tools.md) | ✅ ready | The 35 AI tools: names, categories, argument semantics | — |
+| [docs/api/ai-tools.md](api/ai-tools.md) | ✅ ready | The 48 AI tools: names, categories, argument semantics | — |
 
 ### Guides
 

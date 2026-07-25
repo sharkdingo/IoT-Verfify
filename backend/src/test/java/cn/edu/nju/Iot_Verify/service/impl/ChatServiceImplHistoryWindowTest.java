@@ -490,6 +490,31 @@ class ChatServiceImplHistoryWindowTest {
     }
 
     @Test
+    void touchSessionTitleFoldsUnicodeWhitespace() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("whitespace-title");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("whitespace-title", 1L)).thenReturn(Optional.of(session));
+
+        invokeTitle("whitespace-title", " \t hello\n\u00A0world\r\u2028");
+
+        assertEquals("hello world", session.getTitle());
+    }
+
+    @Test
+    void touchSessionTitleTruncatesByCodePointWithoutSplittingEmoji() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("unicode-title");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("unicode-title", 1L)).thenReturn(Optional.of(session));
+
+        invokeTitle("unicode-title", "12345678901\uD83D\uDE80tail");
+
+        assertEquals("12345678901\uD83D\uDE80...", session.getTitle());
+        assertEquals(12, session.getTitle().codePointCount(0, session.getTitle().indexOf("...")));
+    }
+
+    @Test
     void createSessionRejectsAnUnboundedCatalog() {
         when(sessionRepo.countByUserId(1L)).thenReturn(100L);
 
@@ -504,6 +529,13 @@ class ChatServiceImplHistoryWindowTest {
         message.setRole(role);
         message.setContent(content);
         return message;
+    }
+
+    private void invokeTitle(String sessionId, String content) throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "touchSessionTitle", String.class, Long.class, String.class);
+        method.setAccessible(true);
+        method.invoke(service, sessionId, 1L, content);
     }
 
     private void stubHistoryPage(String sessionId, List<ChatMessagePo> chronological) {

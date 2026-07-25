@@ -71,6 +71,18 @@ const deletedRule = {
   ruleString: 'Motion sends a notification'
 }
 
+const confirmedRule = {
+  id: '7',
+  name: 'Motion sends a notification',
+  sources: [{
+    fromId: device.id,
+    fromApi: 'motion',
+    itemType: 'api' as const
+  }],
+  toId: device.id,
+  toApi: 'notify'
+}
+
 const deletedSpecification: Specification = {
   id: 'spec-1',
   templateId: '1',
@@ -118,6 +130,16 @@ const template = {
   manifest: { Name: 'Sensor' },
   defaultTemplate: true
 }
+
+const completeTemplateDeletion = (operation: 'preview' | 'deleted') => ({
+  operation,
+  impactToken: 'template-delete-impact-token',
+  canDelete: true,
+  template,
+  ...(operation === 'deleted' ? { deletedTemplate: template } : {}),
+  blockers: [],
+  currentTemplates: operation === 'preview' ? [template] : []
+})
 
 const completeTemplateResetPreview = () => ({
   operation: 'preview',
@@ -170,6 +192,51 @@ describe('board mutation response contracts', () => {
     })
   })
 
+  it.each([
+    ['an affected device without its node contract', { affectedDevices: [{}] }],
+    ['an authoritative node without its node contract', { currentNodes: [{}] }],
+    ['a malformed environment variable', { environmentVariables: [{}] }],
+    ['a malformed environment change', { environmentChanges: [{}] }],
+    ['a malformed current specification', { currentSpecifications: [{}] }]
+  ])('rejects a device mutation with %s', async (_label, overrides) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeDeviceCreation(),
+      ...overrides
+    }))
+
+    await expect(boardApi.addNodes([device])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects a snapshot whose nested node is malformed despite HTTP 200', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope({
+      nodes: [{}],
+      environmentVariables: [],
+      rules: [],
+      specifications: [],
+      deviceTemplates: []
+    }))
+
+    await expect(boardApi.getSnapshot()).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects a snapshot containing duplicate authoritative identities', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope({
+      nodes: [device, { ...device }],
+      environmentVariables: [],
+      rules: [],
+      specifications: [],
+      deviceTemplates: []
+    }))
+
+    await expect(boardApi.getSnapshot()).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
   it('accepts a targeted layout result that preserves device semantics', async () => {
     const moved = { ...device, position: { x: 40, y: 50 }, width: 190, height: 140 }
     const response = {
@@ -188,6 +255,33 @@ describe('board mutation response contracts', () => {
       width: 190,
       height: 140
     })).resolves.toEqual(response)
+  })
+
+  it('rejects a targeted update whose matching node snapshot is malformed', async () => {
+    const malformed = {
+      ...device,
+      label: '',
+      position: { x: 40, y: 50 },
+      width: 190,
+      height: 140
+    }
+    vi.mocked(http.put).mockResolvedValue(resultEnvelope({
+      operation: 'updated',
+      mutationType: 'layout',
+      changedFields: ['position.x', 'position.y', 'width', 'height'],
+      previousDevice: device,
+      currentDevice: malformed,
+      currentNodes: [malformed],
+      currentCount: 1
+    }))
+
+    await expect(boardApi.updateNodeLayout('device_1', {
+      position: { x: 40, y: 50 },
+      width: 190,
+      height: 140
+    })).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
   })
 
   it('rejects a layout result that silently changes runtime state', async () => {
@@ -314,7 +408,7 @@ describe('board mutation response contracts', () => {
 
     const result = await boardApi.previewNodeDeletion(device.id)
 
-    expect(result.deletedDevice).toEqual({ ...device, variables: [], privacies: [] })
+    expect(result.deletedDevice).toEqual(device)
     expect(result.removedRules).toEqual([expect.objectContaining({
       id: '7',
       name: 'Motion sends a notification',
@@ -401,6 +495,18 @@ describe('board mutation response contracts', () => {
       ...completeDeviceDeletion('preview'),
       currentRules: [{ ...deletedRule, command: null }]
     })],
+    ['duplicate removed rule identities', () => ({
+      ...completeDeviceDeletion('preview'),
+      removedRules: [deletedRule, { ...deletedRule }]
+    })],
+    ['duplicate current rule identities', () => ({
+      ...completeDeviceDeletion('preview'),
+      currentRules: [deletedRule, { ...deletedRule }]
+    })],
+    ['a previewed removed rule absent from current rules', () => ({
+      ...completeDeviceDeletion('preview'),
+      currentRules: []
+    })],
     ['an invalid rule condition kind', () => ({
       ...completeDeviceDeletion('preview'),
       removedRules: [{
@@ -431,6 +537,18 @@ describe('board mutation response contracts', () => {
         ...deletedSpecification,
         aConditions: [{}]
       }]
+    })],
+    ['duplicate removed specification identities', () => ({
+      ...completeDeviceDeletion('preview'),
+      removedSpecifications: [deletedSpecification, { ...deletedSpecification }]
+    })],
+    ['duplicate current specification identities', () => ({
+      ...completeDeviceDeletion('preview'),
+      currentSpecifications: [deletedSpecification, { ...deletedSpecification }]
+    })],
+    ['a previewed removed specification absent from current specifications', () => ({
+      ...completeDeviceDeletion('preview'),
+      currentSpecifications: []
     })],
     ['a trust specification without property scope', () => ({
       ...completeDeviceDeletion('preview'),
@@ -489,6 +607,10 @@ describe('board mutation response contracts', () => {
       ...completeDeviceDeletion('preview'),
       environmentVariables: [{}]
     })],
+    ['an environment variable without complete security labels', () => ({
+      ...completeDeviceDeletion('preview'),
+      environmentVariables: [{ name: 'ambientTemperature', value: '22' }]
+    })],
     ['a null environment change', () => ({
       ...completeDeviceDeletion('preview'),
       environmentChanges: [null]
@@ -520,6 +642,33 @@ describe('board mutation response contracts', () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({
       ...completeDeviceDeletion('deleted'),
       currentNodes: [device]
+    }))
+
+    await expect(boardApi.deleteNode(
+      device.id,
+      'device-delete-impact-token'
+    )).rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
+  })
+
+  it('rejects a device deletion result for a different confirmed impact token', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeDeviceDeletion('deleted'),
+      impactToken: 'different-device-delete-impact-token'
+    }))
+
+    await expect(boardApi.deleteNode(
+      device.id,
+      'device-delete-impact-token'
+    )).rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
+  })
+
+  it.each([
+    ['rule', { currentRules: [deletedRule] }],
+    ['specification', { currentSpecifications: [deletedSpecification] }]
+  ])('rejects a deletion result that retains a removed %s', async (_label, overrides) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeDeviceDeletion('deleted'),
+      ...overrides
     }))
 
     await expect(boardApi.deleteNode(
@@ -634,6 +783,112 @@ describe('board mutation response contracts', () => {
     })
   })
 
+  it('rejects a specification mutation whose affected item is malformed', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      operation: 'created',
+      affectedItem: {},
+      currentItems: [deletedSpecification],
+      currentCount: 1
+    }))
+
+    await expect(boardApi.addSpec({
+      id: 'spec-1',
+      templateId: '1',
+      templateLabel: 'Always',
+      aConditions: [],
+      ifConditions: [],
+      thenConditions: [],
+      devices: []
+    })).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects a specification creation response for a different requested id', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      operation: 'created',
+      affectedItem: { ...deletedSpecification, id: 'spec-2' },
+      currentItems: [{ ...deletedSpecification, id: 'spec-2' }],
+      currentCount: 1
+    }))
+
+    await expect(boardApi.addSpec(deletedSpecification)).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects a rule mutation whose affected item is malformed', async () => {
+    vi.mocked(http.delete).mockResolvedValue(resultEnvelope({
+      operation: 'deleted',
+      affectedItem: {},
+      currentItems: [deletedRule],
+      currentCount: 1
+    }))
+
+    await expect(boardApi.removeRule(confirmedRule)).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('sends the confirmed rule snapshot and rejects a deletion response for another id', async () => {
+    vi.mocked(http.delete).mockResolvedValue(resultEnvelope({
+      operation: 'deleted',
+      affectedItem: { ...deletedRule, id: 8 },
+      currentItems: [],
+      currentCount: 0
+    }))
+
+    await expect(boardApi.removeRule(confirmedRule)).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+    expect(vi.mocked(http.delete)).toHaveBeenCalledWith('/board/rules/7', {
+      data: expect.objectContaining({
+        id: 7,
+        ruleString: confirmedRule.name,
+        conditions: [expect.objectContaining({
+          deviceName: device.id,
+          attribute: 'motion',
+          targetType: 'api'
+        })]
+      })
+    })
+  })
+
+  it('sends the complete expected and desired rule order for compare-and-set reordering', async () => {
+    const secondRule = { ...deletedRule, id: 8, ruleString: 'Second rule' }
+    vi.mocked(http.put).mockResolvedValue(resultEnvelope([secondRule, deletedRule]))
+
+    await boardApi.reorderRules(['7', '8'], ['8', '7'])
+
+    expect(vi.mocked(http.put)).toHaveBeenCalledWith('/board/rules/order', {
+      expectedRuleIds: [7, 8],
+      ruleIds: [8, 7]
+    })
+  })
+
+  it('sends only authored specification fields with a confirmed deletion', async () => {
+    vi.mocked(http.delete).mockResolvedValue(resultEnvelope({
+      operation: 'deleted',
+      affectedItem: deletedSpecification,
+      currentItems: [],
+      currentCount: 0
+    }))
+
+    await expect(boardApi.removeSpec(deletedSpecification)).resolves.toMatchObject({
+      operation: 'deleted',
+      affectedItem: { id: deletedSpecification.id }
+    })
+    expect(vi.mocked(http.delete)).toHaveBeenCalledWith('/board/specs/spec-1', {
+      data: {
+        id: 'spec-1',
+        templateId: '1',
+        aConditions: [],
+        ifConditions: [],
+        thenConditions: []
+      }
+    })
+  })
+
   it('accepts an itemized field-level Environment Pool mutation result', async () => {
     const before = { name: 'temperature', value: '27', trust: 'untrusted', privacy: 'private' }
     const after = { ...before, trust: 'trusted' }
@@ -658,17 +913,147 @@ describe('board mutation response contracts', () => {
     }
     vi.mocked(http.post).mockResolvedValue(resultEnvelope(response))
 
-    await expect(boardApi.saveEnvironment([
-      { name: 'temperature', trust: 'trusted' }
-    ])).resolves.toEqual(response)
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: '27', trust: 'untrusted', privacy: 'private' },
+      desired: { trust: 'trusted' }
+    }])).resolves.toEqual(response)
+  })
+
+  it('rejects a null value in an authoritative Environment Pool mutation result', async () => {
+    const before = { name: 'signal', value: 'manual', trust: 'untrusted', privacy: 'public' }
+    const after = { ...before, value: null, trust: 'trusted' }
+    const response = {
+      operation: 'updated',
+      patchResults: [{
+        name: 'signal',
+        suppliedFields: ['trust'],
+        changedFields: ['trust'],
+        preservedFields: ['value', 'privacy'],
+        previousValue: before,
+        currentValue: after
+      }],
+      environmentVariables: [after],
+      environmentChanges: [{
+        changeType: 'UPDATED',
+        name: 'signal',
+        previousValue: before,
+        currentValue: after
+      }],
+      currentCount: 1
+    }
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(response))
+
+    await expect(boardApi.saveEnvironment([{
+      name: 'signal',
+      expected: before,
+      desired: { trust: 'trusted' }
+    }])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects a null value from the authoritative Environment Pool read', async () => {
+    const response = [{ name: 'signal', value: null, trust: 'untrusted', privacy: 'public' }]
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(response))
+
+    await expect(boardApi.getEnvironment()).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects an Environment Pool read that omits the authoritative value field', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope([{
+      name: 'signal',
+      trust: 'untrusted',
+      privacy: 'public'
+    }]))
+
+    await expect(boardApi.getEnvironment()).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects malformed Environment Pool patches before making a request', async () => {
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { trust: 'untrusted', privacy: 'private' },
+      desired: { trust: 'trusted' }
+    } as any])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: null, trust: 'untrusted', privacy: 'private' },
+      desired: { trust: 'trusted' }
+    } as any])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: '27', trust: 'untrusted', privacy: 'private' },
+      desired: { value: null }
+    } as any])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: '27', trust: 'untrusted', privacy: 'private' },
+      desired: { trust: 7 }
+    } as any])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: '27', trust: 'untrusted', privacy: 'private' },
+      desired: { value: ' ' }
+    }])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: '27', trust: 'untrusted', privacy: 'private' },
+      desired: { trust: null }
+    } as any])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+    expect(http.post).not.toHaveBeenCalled()
+  })
+
+  it('rejects a success response that did not apply the desired Environment Pool field', async () => {
+    const unchanged = { name: 'temperature', value: '27', trust: 'untrusted', privacy: 'private' }
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      operation: 'unchanged',
+      patchResults: [{
+        name: 'temperature',
+        suppliedFields: ['trust'],
+        changedFields: [],
+        preservedFields: ['value', 'privacy'],
+        previousValue: unchanged,
+        currentValue: unchanged
+      }],
+      environmentVariables: [unchanged],
+      environmentChanges: [],
+      currentCount: 1
+    }))
+
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: unchanged,
+      desired: { trust: 'trusted' }
+    }])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
   })
 
   it('rejects an Environment Pool mutation result without per-patch reasons', async () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({ environmentVariables: [] }))
 
-    await expect(boardApi.saveEnvironment([
-      { name: 'temperature', trust: 'trusted' }
-    ])).rejects.toMatchObject({
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: '27', trust: 'untrusted', privacy: 'private' },
+      desired: { trust: 'trusted' }
+    }])).rejects.toMatchObject({
       code: BOARD_RESPONSE_INCOMPLETE_CODE
     })
   })
@@ -696,9 +1081,11 @@ describe('board mutation response contracts', () => {
       currentCount: 1
     }))
 
-    await expect(boardApi.saveEnvironment([
-      { name: 'temperature', trust: 'trusted' }
-    ])).rejects.toMatchObject({
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: { value: '27', trust: 'untrusted', privacy: 'private' },
+      desired: { trust: 'trusted' }
+    }])).rejects.toMatchObject({
       code: BOARD_RESPONSE_INCOMPLETE_CODE
     })
   })
@@ -710,6 +1097,135 @@ describe('board mutation response contracts', () => {
       name: 'Sensor',
       manifest: { Name: 'Sensor' }
     })).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it.each([
+    ['an empty manifest', { id: 4, name: 'Sensor', manifest: {}, defaultTemplate: false }],
+    ['a missing persisted id', { ...template, id: undefined }],
+    ['missing template provenance', { ...template, defaultTemplate: undefined }],
+    ['a mismatched manifest name', {
+      id: 4,
+      name: 'Sensor',
+      manifest: { Name: 'Actuator' },
+      defaultTemplate: false
+    }]
+  ])('rejects a device type response with %s', async (_label, response) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(response))
+
+    await expect(boardApi.addDeviceTemplate({
+      name: 'Sensor',
+      manifest: { Name: 'Sensor' }
+    })).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects duplicate device type identities in the catalog', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope([
+      template,
+      { ...template, id: 5 }
+    ]))
+
+    await expect(boardApi.getDeviceTemplates()).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('accepts a device-type deletion preview for the requested template', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(completeTemplateDeletion('preview')))
+
+    await expect(boardApi.previewDeviceTemplateDeletion(template.id)).resolves.toEqual(
+      completeTemplateDeletion('preview')
+    )
+    expect(vi.mocked(http.get)).toHaveBeenCalledWith('/board/templates/4/deletion-preview')
+  })
+
+  it.each([
+    ['the wrong operation', { operation: 'deleted' }],
+    ['a blank impact token', { impactToken: ' ' }],
+    ['a different target identity', {
+      template: { ...template, id: 5 },
+      currentTemplates: [{ ...template, id: 5 }]
+    }],
+    ['a catalog that omits the previewed target', { currentTemplates: [] }],
+    ['a catalog whose target snapshot differs from the preview', {
+      currentTemplates: [{ ...template, defaultTemplate: false }]
+    }],
+    ['duplicate catalog identities', {
+      currentTemplates: [
+        template,
+        { ...template, name: 'Actuator', manifest: { Name: 'Actuator' } }
+      ]
+    }]
+  ])('rejects a device-type deletion preview with %s', async (_label, overrides) => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope({
+      ...completeTemplateDeletion('preview'),
+      ...overrides
+    }))
+
+    await expect(boardApi.previewDeviceTemplateDeletion(template.id)).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects a device-type deletion response for another requested template', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeTemplateDeletion('deleted'),
+      template: { ...template, id: 5 },
+      deletedTemplate: { ...template, id: 5 }
+    }))
+
+    await expect(boardApi.deleteDeviceTemplate(
+      template.id,
+      'template-delete-impact-token'
+    )).rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
+  })
+
+  it('accepts a device-type deletion result for the confirmed snapshot and token', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeTemplateDeletion('deleted')))
+
+    await expect(boardApi.deleteDeviceTemplate(
+      template.id,
+      'template-delete-impact-token'
+    )).resolves.toEqual(completeTemplateDeletion('deleted'))
+  })
+
+  it('rejects a device-type deletion result for a different confirmed impact token', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeTemplateDeletion('deleted'),
+      impactToken: 'different-template-delete-impact-token'
+    }))
+
+    await expect(boardApi.deleteDeviceTemplate(
+      template.id,
+      'template-delete-impact-token'
+    )).rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
+  })
+
+  it('rejects an Environment Pool response containing an unvalidated change row', async () => {
+    const before = { name: 'temperature', value: '27', trust: 'untrusted', privacy: 'private' }
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      operation: 'updated',
+      patchResults: [{
+        name: 'temperature',
+        suppliedFields: ['trust'],
+        changedFields: ['trust'],
+        preservedFields: ['value', 'privacy'],
+        previousValue: before,
+        currentValue: { ...before, trust: 'trusted' }
+      }],
+      environmentVariables: [{ ...before, trust: 'trusted' }],
+      environmentChanges: [{}],
+      currentCount: 1
+    }))
+
+    await expect(boardApi.saveEnvironment([{
+      name: 'temperature',
+      expected: before,
+      desired: { trust: 'trusted' }
+    }])).rejects.toMatchObject({
       code: BOARD_RESPONSE_INCOMPLETE_CODE
     })
   })
@@ -730,6 +1246,23 @@ describe('board mutation response contracts', () => {
     vi.mocked(http.get).mockResolvedValue(resultEnvelope(completeTemplateResetPreview()))
 
     await expect(boardApi.previewDefaultTemplateReset()).resolves.toEqual(completeTemplateResetPreview())
+  })
+
+  it('rejects a reset preview containing a null environment value', async () => {
+    const response = {
+      ...completeTemplateResetPreview(),
+      environmentVariables: [{
+        name: 'signal',
+        value: null,
+        trust: 'untrusted',
+        privacy: 'public'
+      }]
+    }
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(response))
+
+    await expect(boardApi.previewDefaultTemplateReset()).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
   })
 
   it('requires a stable reason code for every default-type reset blocker', async () => {
@@ -773,6 +1306,28 @@ describe('board mutation response contracts', () => {
         changeType: 'REMOVE_OBSOLETE_DEFAULT',
         semanticsChanged: true
       }]
+    }))
+
+    await expect(boardApi.resetDefaultTemplates('reset-impact-token')).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('accepts a committed reset for the confirmed impact token', async () => {
+    const response = {
+      ...completeTemplateResetPreview(),
+      operation: 'reset' as const
+    }
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(response))
+
+    await expect(boardApi.resetDefaultTemplates('reset-impact-token')).resolves.toEqual(response)
+  })
+
+  it('rejects a committed reset for a different confirmed impact token', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeTemplateResetPreview(),
+      operation: 'reset',
+      impactToken: 'different-reset-impact-token'
     }))
 
     await expect(boardApi.resetDefaultTemplates('reset-impact-token')).rejects.toMatchObject({
@@ -865,6 +1420,171 @@ describe('board mutation response contracts', () => {
       name: 'Motion turns on the light',
       toId: 'light_1'
     })])
+  })
+
+  it('pins every automatic-fix lifecycle request to the initiating credential', async () => {
+    const authToken = 'alice-owner-token'
+    const requestId = 'fix-request-1'
+    const signal = new AbortController().signal
+    const transportError = new Error('transport lost')
+    vi.mocked(http.post).mockRejectedValueOnce(transportError)
+
+    await expect(boardApi.fixTrace(7, { strategies: ['parameter'] }, {
+      authToken,
+      requestId,
+      signal
+    })).rejects.toBe(transportError)
+    expect(http.post).toHaveBeenCalledWith(
+      '/verify/traces/7/fix',
+      { strategies: ['parameter'] },
+      expect.objectContaining({
+        headers: { Authorization: `Bearer ${authToken}` },
+        params: { requestId },
+        signal
+      })
+    )
+
+    vi.mocked(http.delete).mockResolvedValueOnce(resultEnvelope(true))
+    await expect(boardApi.cancelFixRequest(requestId, authToken)).resolves.toBe(true)
+    expect(http.delete).toHaveBeenCalledWith(
+      `/verify/fix-requests/${requestId}`,
+      {
+        timeout: 2500,
+        headers: { Authorization: `Bearer ${authToken}` }
+      }
+    )
+
+    vi.mocked(http.get).mockResolvedValueOnce(resultEnvelope({
+      requestId,
+      state: 'RUNNING',
+      stage: 'SEARCHING_AND_VERIFYING',
+      elapsedMs: 10
+    }))
+    await expect(boardApi.getFixRequestStatus(requestId, authToken)).resolves.toMatchObject({
+      requestId,
+      state: 'RUNNING'
+    })
+    expect(http.get).toHaveBeenCalledWith(
+      `/verify/fix-requests/${requestId}`,
+      {
+        timeout: 2500,
+        headers: { Authorization: `Bearer ${authToken}` }
+      }
+    )
+  })
+
+  it('bounds interactive recommendation cancellation and status reads', async () => {
+    const authToken = 'recommendation-owner-token'
+    const requestId = 'recommendation-request-1'
+    vi.mocked(http.delete).mockResolvedValueOnce(resultEnvelope(true))
+
+    await expect(boardApi.cancelRecommendation(requestId, authToken)).resolves.toBe(true)
+    expect(http.delete).toHaveBeenCalledWith(
+      `/board/recommendations/${requestId}`,
+      {
+        timeout: 2500,
+        headers: { Authorization: `Bearer ${authToken}` }
+      }
+    )
+
+    vi.mocked(http.get).mockResolvedValueOnce(resultEnvelope({
+      requestId,
+      state: 'RUNNING',
+      stage: 'RUNNING',
+      elapsedMs: 10
+    }))
+    await expect(boardApi.getRecommendationStatus(requestId, authToken)).resolves.toMatchObject({
+      requestId,
+      state: 'RUNNING'
+    })
+    expect(http.get).toHaveBeenCalledWith(
+      `/board/recommendations/${requestId}`,
+      {
+        timeout: 2500,
+        headers: { Authorization: `Bearer ${authToken}` }
+      }
+    )
+  })
+
+  it('pins every recommendation POST to its explicit owner credential', async () => {
+    const authToken = 'alice-recommendation-token'
+    const standalone = {
+      message: 'No applicable recommendations.',
+      count: 0,
+      requestedCount: 5,
+      validatedCount: 0,
+      filteredCount: 0,
+      filteredItems: [],
+      adjustedCount: 0,
+      adjustedItems: [],
+      rawCandidateCount: 0,
+      inspectedCount: 0,
+      truncatedCount: 0,
+      recommendations: []
+    }
+    const scenarioRequest = {
+      minDevices: 1,
+      minRules: 1,
+      minSpecs: 1,
+      maxDevices: 4,
+      maxRules: 4,
+      maxSpecs: 4
+    }
+    vi.mocked(http.post)
+      .mockResolvedValueOnce(resultEnvelope(standalone))
+      .mockResolvedValueOnce(resultEnvelope(standalone))
+      .mockResolvedValueOnce(resultEnvelope({
+        ...standalone,
+        requestedCount: 3,
+        scenarioName: '',
+        rationale: '',
+        objectiveTargets: { minDevices: 1, minRules: 1, minSpecs: 1 },
+        objectiveStatus: 'PARTIAL',
+        objectiveIssues: [
+          { code: 'NO_DEVICES', message: 'No devices.' },
+          { code: 'NO_AUTOMATION_RULES', message: 'No rules.' },
+          { code: 'NO_SPECIFICATIONS', message: 'No specifications.' }
+        ],
+        verificationReady: false,
+        readinessIssues: [
+          { code: 'NO_DEVICES', message: 'No devices.' },
+          { code: 'NO_SPECIFICATIONS', message: 'No specifications.' }
+        ],
+        semanticWarnings: [],
+        scene: {
+          templates: [],
+          devices: [],
+          environmentVariables: [],
+          rules: [],
+          specs: []
+        }
+      }))
+
+    await boardApi.recommendRelatedDevices({
+      authToken,
+      requestId: 'device-recommendation-1'
+    })
+    await boardApi.recommendSpecifications({
+      authToken,
+      requestId: 'spec-recommendation-1'
+    })
+    await boardApi.recommendScenario(scenarioRequest, {
+      authToken,
+      requestId: 'scenario-recommendation-1'
+    })
+
+    expect(vi.mocked(http.post).mock.calls[0][2]).toMatchObject({
+      timeout: 0,
+      headers: { Authorization: `Bearer ${authToken}` }
+    })
+    expect(vi.mocked(http.post).mock.calls[1][2]).toMatchObject({
+      timeout: 0,
+      headers: { Authorization: `Bearer ${authToken}` }
+    })
+    expect(vi.mocked(http.post).mock.calls[2][2]).toMatchObject({
+      timeout: 0,
+      headers: { Authorization: `Bearer ${authToken}` }
+    })
   })
 
   it('rejects an automatic-fix result whose rule count contradicts its snapshot', async () => {

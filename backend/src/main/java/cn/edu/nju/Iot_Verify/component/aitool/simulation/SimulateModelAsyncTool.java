@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
@@ -90,23 +91,40 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
             request.setEnablePrivacy(enablePrivacy);
             Long taskId = simulationService.submitSimulationWithTemplateSnapshot(
                     userId, request, board.templateManifests());
-            var task = simulationService.getTask(userId, taskId);
+            if (taskId == null || taskId <= 0) {
+                throw new IllegalStateException("Simulation submission returned no usable task id");
+            }
+            try {
+                var task = simulationService.getTask(userId, taskId);
+                if (task == null) {
+                    throw new IllegalStateException("Accepted simulation task was not readable");
+                }
 
-            Map<String, Object> response = new java.util.LinkedHashMap<>();
-            response.put("message", "Simulation task accepted. Its current status is authoritative; completion is not implied.");
-            response.put("taskId", task.getId());
-            response.put("taskStatus", task.getStatus());
-            response.put("progress", task.getProgress());
-            response.put("requestedSteps", task.getRequestedSteps());
-            response.put("isAttack", task.getIsAttack());
-            response.put("attackBudget", task.getAttackBudget());
-            response.put("attackScenario", attackScenario);
-            response.put("enablePrivacy", task.getEnablePrivacy());
-            response.put("modelSnapshot", task.getModelSnapshot());
-            response.put("modelSemantics", task.getModelSemantics());
-            return successJson(response, "Simulation task accepted.");
+                Map<String, Object> response = new java.util.LinkedHashMap<>();
+                response.put("message", "Simulation task accepted. Its current status is authoritative; completion is not implied.");
+                response.put("taskAccepted", true);
+                response.put("taskId", taskId);
+                response.put("taskStatus", task.getStatus());
+                response.put("progress", task.getProgress());
+                response.put("requestedSteps", task.getRequestedSteps());
+                response.put("isAttack", task.getIsAttack());
+                response.put("attackBudget", task.getAttackBudget());
+                response.put("attackScenario", attackScenario);
+                response.put("enablePrivacy", task.getEnablePrivacy());
+                response.put("modelSnapshot", task.getModelSnapshot());
+                response.put("modelSemantics", task.getModelSemantics());
+                return acceptedAsyncTaskJson(
+                        response, taskId, "simulate_task_status");
+            } catch (Exception e) {
+                log.error("Simulation task {} was accepted, but its status response is unavailable",
+                        taskId, e);
+                return acceptedAsyncTaskResultUnavailable(taskId, "simulate_task_status");
+            }
         } catch (ArgValidationException e) {
             return e.getErrorResponse();
+        } catch (AsyncTaskDispatchOutcomeUnknownException e) {
+            log.error("Simulation task {} dispatch outcome is unknown", e.getTaskId(), e);
+            return asyncTaskDispatchOutcomeUnknown(e.getTaskId(), "simulate_task_status");
         } catch (ServiceUnavailableException e) {
             log.warn("simulate_model_async busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

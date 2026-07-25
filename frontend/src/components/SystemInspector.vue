@@ -2,7 +2,10 @@
 import { ref, reactive, computed, watch } from 'vue'
 import type { DeviceNode } from '../types/node'
 import type { DeviceTemplate, InternalVariable } from '../types/device'
-import type { ModelEnvironmentVariable } from '@/types/model'
+import type {
+  EnvironmentVariableUpdateRequest,
+  ModelEnvironmentVariable
+} from '@/types/model'
 import type { RuleForm } from '../types/rule'
 import type { Specification } from '../types/spec'
 import { specTemplateDetails } from '../assets/config/specTemplates'
@@ -30,6 +33,8 @@ interface Props {
   width?: number
   activeSection?: string
   readOnly?: boolean
+  readOnlyMessage?: string
+  environmentSaving?: boolean
   rulesReordering?: boolean
 }
 
@@ -42,14 +47,22 @@ const props = withDefaults(defineProps<Props>(), {
   width: 320,
   activeSection: 'devices',
   readOnly: false,
+  readOnlyMessage: '',
+  environmentSaving: false,
   rulesReordering: false
 })
 
 const ensureWritable = (): boolean => {
   if (!props.readOnly) return true
-  ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
+  ElMessage.warning({
+    message: props.readOnlyMessage || t('app.playbackReadOnlyCloseFirst'),
+    type: 'warning'
+  })
   return false
 }
+
+const mutationTitle = (fallback: string): string =>
+  props.readOnly ? (props.readOnlyMessage || t('app.playbackReadOnlyCloseFirst')) : fallback
 
 // Panel state
 const localCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
@@ -95,7 +108,7 @@ const emit = defineEmits<{
   'open-control-section': [section: 'devices' | 'rules' | 'specs']
   'device-click': [deviceId: string]
   'toggle-rule': [ruleId: string, enabled: boolean]
-  'save-environment': [variables: ModelEnvironmentVariable[]]
+  'save-environment': [variables: EnvironmentVariableUpdateRequest[]]
   'update:collapsed': [value: boolean]
   'update:active-section': [value: InspectorSection]
 }>()
@@ -319,9 +332,14 @@ const environmentVariables = computed(() => {
         ? range.split(' / ').map(formatModelToken).join(' / ')
         : range)
       const saved = environmentPoolByName.value.get(variable.name)
-      const value = saved?.value !== null && saved?.value !== undefined && String(saved.value).trim() !== ''
-        ? String(saved.value)
+      const authoritativeValue = typeof saved?.value === 'string' ? saved.value.trim() : ''
+      const value = authoritativeValue !== ''
+        ? String(saved!.value)
         : defaultEnvironmentValue(variable.definition)
+      // A compare-and-set edit needs a non-blank authoritative baseline value. A variable with
+      // no declared value domain materializes blank and is not verifiable, so its controls are
+      // shown disabled with an explanation instead of silently discarding edits.
+      const editable = authoritativeValue !== ''
       const trust = normalizeTrust(saved?.trust || variable.definition.Trust)
       const privacy = normalizePrivacy(saved?.privacy || variable.definition.Privacy)
       return {
@@ -329,6 +347,7 @@ const environmentVariables = computed(() => {
         displayName: variable.bundled ? formatModelToken(variable.name) : variable.name,
         rangeLabel: ranges.length === 1 ? ranges[0] : t('app.mixedRanges'),
         value,
+        editable,
         valueLabel: value
           ? (variable.bundled ? formatModelToken(value) : value)
           : t('app.modelControlled'),
@@ -361,14 +380,32 @@ watch(environmentVariables, variables => {
 const getEnvironmentSourceTitle = (source: EnvironmentSource) =>
   `${source.role === 'impact' ? t('app.affectsEnvironment') : t('app.readsEnvironment')}: ${source.label}`
 
+type EnvironmentVariableEdit = Partial<Record<'value' | 'trust' | 'privacy', string>>
+
 const updateEnvironmentVariable = (
   name: string,
-  patch: Partial<ModelEnvironmentVariable>
+  patch: EnvironmentVariableEdit
 ) => {
   if (!ensureWritable()) return
-  // The backend treats this endpoint as a name-keyed patch. Sending one field avoids
-  // rebuilding the whole pool from possibly stale props when users edit quickly.
-  emit('save-environment', [{ name, ...patch }])
+  const saved = environmentPoolByName.value.get(name)
+  const authoritativeValue = typeof saved?.value === 'string' ? saved.value.trim() : ''
+  if (!authoritativeValue) return
+  // The compare-and-set baseline must come strictly from the authoritative Environment Pool
+  // snapshot, never from a template-derived display value. normalizeTrust/normalizePrivacy
+  // default to the same untrusted/public the server materializes, so an absent label matches.
+  const expected: EnvironmentVariableUpdateRequest['expected'] = {
+    value: authoritativeValue,
+    trust: normalizeTrust(saved?.trust),
+    privacy: normalizePrivacy(saved?.privacy)
+  }
+  const desired: EnvironmentVariableUpdateRequest['desired'] = {}
+  for (const field of ['value', 'trust', 'privacy'] as const) {
+    const next = patch[field]
+    if (Object.prototype.hasOwnProperty.call(patch, field) && typeof next === 'string') {
+      desired[field] = next
+    }
+  }
+  emit('save-environment', [{ name, expected, desired }])
 }
 
 const eventValue = (event: Event) =>
@@ -663,6 +700,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
     data-testid="system-inspector"
     class="absolute right-0 top-0 bottom-0 glass-panel board-side-panel z-40 flex flex-col overflow-hidden border-l transition-all duration-300 ease-in-out"
     :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"
+    :aria-disabled="props.readOnly ? 'true' : undefined"
     :style="{ width: isCollapsed ? '3rem' : panelWidth }"
     @pointerover="syncFullTextTitle"
     @focusin="syncFullTextTitle"
@@ -842,9 +880,11 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                   <select
                     v-if="variable.enumValues.length > 0"
                     :data-testid="`environment-value-${variable.name}`"
-                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     :value="variable.value"
                     :aria-label="`${variable.displayName} ${t('app.value')}`"
+                    :disabled="props.readOnly || props.environmentSaving || !variable.editable"
+                    :aria-busy="props.environmentSaving ? 'true' : undefined"
+                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   >
                     <option v-for="option in variable.enumValues" :key="option" :value="option">
@@ -854,15 +894,24 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                   <input
                     v-else
                     :data-testid="`environment-value-${variable.name}`"
-                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     :type="variable.lowerBound !== undefined || variable.upperBound !== undefined ? 'number' : 'text'"
                     :min="variable.lowerBound"
                     :max="variable.upperBound"
                     :value="variable.value"
                     :title="variable.valueTitle"
                     :aria-label="`${variable.displayName} ${t('app.value')}`"
+                    :disabled="props.readOnly || props.environmentSaving || !variable.editable"
+                    :aria-busy="props.environmentSaving ? 'true' : undefined"
+                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   />
+                  <p
+                    v-if="!variable.editable"
+                    :data-testid="`environment-not-editable-${variable.name}`"
+                    class="mt-1 text-[10px] leading-4 text-amber-600 dark:text-amber-300"
+                  >
+                    {{ t('app.environmentValueNotEditable') }}
+                  </p>
                 </label>
                 <details class="rounded-md border border-slate-200 bg-white/70 p-1.5 dark:border-slate-700 dark:bg-slate-900/60">
                   <summary class="cursor-pointer text-[10px] font-bold text-slate-500">{{ t('app.advancedTrustPrivacyOverrides') }}</summary>
@@ -872,9 +921,11 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     <span class="block font-bold uppercase text-slate-400">{{ t('app.trust') }}</span>
                     <select
                       :data-testid="`environment-trust-${variable.name}`"
-                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       :value="variable.trust"
                       :aria-label="`${variable.displayName} ${t('app.trust')}`"
+                      :disabled="props.readOnly || props.environmentSaving || !variable.editable"
+                      :aria-busy="props.environmentSaving ? 'true' : undefined"
+                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       @change="updateEnvironmentVariable(variable.name, { trust: eventValue($event) })"
                     >
                       <option value="trusted">{{ t('app.trusted') }}</option>
@@ -885,9 +936,11 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     <span class="block font-bold uppercase text-slate-400">{{ t('app.privacy') }}</span>
                     <select
                       :data-testid="`environment-privacy-${variable.name}`"
-                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       :value="variable.privacy"
                       :aria-label="`${variable.displayName} ${t('app.privacy')}`"
+                      :disabled="props.readOnly || props.environmentSaving || !variable.editable"
+                      :aria-busy="props.environmentSaving ? 'true' : undefined"
+                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       @change="updateEnvironmentVariable(variable.name, { privacy: eventValue($event) })"
                     >
                       <option value="public">{{ t('app.public') }}</option>
@@ -950,8 +1003,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             type="button"
             data-testid="inspector-add-device"
             @click="handleAddDevice"
+            :disabled="props.readOnly"
             class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
-            :title="t('app.openDeviceCreator')"
+            :title="mutationTitle(t('app.openDeviceCreator'))"
             :aria-label="t('app.openDeviceCreator')"
           >
             <span class="material-symbols-outlined text-sm">add</span>
@@ -995,6 +1049,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <button
                 type="button"
                 class="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-md py-1 text-left focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
+                :title="device.name"
                 :aria-label="device.name"
                 @click="handleDeviceClick(device.id)"
               >
@@ -1014,8 +1069,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <button
                 type="button"
                 @click.stop="handleDeleteDevice(device.id)"
+                :disabled="props.readOnly"
                 class="relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-                :title="t('app.removeDevice')"
+                :title="mutationTitle(t('app.removeDevice'))"
                 :aria-label="t('app.removeDevice')"
               >
                 <span class="material-symbols-outlined text-sm">close</span>
@@ -1029,6 +1085,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <button
               type="button"
               @click="handleAddDevice"
+              :disabled="props.readOnly"
               class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
             >
               <span class="material-symbols-outlined text-sm">add</span>
@@ -1074,8 +1131,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             type="button"
             data-testid="inspector-add-rule"
             @click="handleAddRule"
+            :disabled="props.readOnly"
             class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
-            :title="t('app.createRule')"
+            :title="mutationTitle(t('app.createRule'))"
             :aria-label="t('app.createRule')"
           >
             <span class="material-symbols-outlined text-sm">add</span>
@@ -1144,9 +1202,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <div class="flex shrink-0 items-center gap-0.5">
                 <button
                   type="button"
-                  :disabled="props.rulesReordering || !!sectionSearch.rules || rule.isFirst"
+                  :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isFirst"
                   class="rounded p-1 text-blue-500 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-30"
-                  :title="sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleEarlier')"
+                  :title="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleEarlier'))"
                   :aria-label="t('app.moveRuleEarlier')"
                   @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'up')"
                 >
@@ -1154,9 +1212,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 </button>
                 <button
                   type="button"
-                  :disabled="props.rulesReordering || !!sectionSearch.rules || rule.isLast"
+                  :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isLast"
                   class="rounded p-1 text-blue-500 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-30"
-                  :title="sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleLater')"
+                  :title="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleLater'))"
                   :aria-label="t('app.moveRuleLater')"
                   @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'down')"
                 >
@@ -1165,8 +1223,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 <button
                   type="button"
                   @click.stop="rule.originalId && handleDeleteRule(rule.originalId)"
+                  :disabled="props.readOnly"
                   class="rounded p-1 text-blue-400 transition hover:bg-red-50 hover:text-red-500"
-                  :title="t('app.deleteRule')"
+                  :title="mutationTitle(t('app.deleteRule'))"
                   :aria-label="t('app.deleteRule')"
                 >
                   <span class="material-symbols-outlined text-sm" aria-hidden="true">delete</span>
@@ -1186,6 +1245,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <button
               type="button"
               @click="handleAddRule"
+              :disabled="props.readOnly"
               class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
             >
               <span class="material-symbols-outlined text-sm">add</span>
@@ -1231,8 +1291,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             type="button"
             data-testid="inspector-add-spec"
             @click="handleAddSpec"
+            :disabled="props.readOnly"
             class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
-            :title="t('app.openSpecificationCreator')"
+            :title="mutationTitle(t('app.openSpecificationCreator'))"
             :aria-label="t('app.openSpecificationCreator')"
           >
             <span class="material-symbols-outlined text-sm">add</span>
@@ -1283,8 +1344,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <button
                 type="button"
                 @click="handleDeleteSpec(spec.id)"
+                :disabled="props.readOnly"
                 class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-all"
-                :title="t('app.deleteSpecification')"
+                :title="mutationTitle(t('app.deleteSpecification'))"
                 :aria-label="t('app.deleteSpecification')"
               >
                 <span class="material-symbols-outlined text-xs">delete</span>
@@ -1306,6 +1368,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <button
               type="button"
               @click="handleAddSpec"
+              :disabled="props.readOnly"
               class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
             >
               <span class="material-symbols-outlined text-sm">add</span>

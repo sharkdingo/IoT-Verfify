@@ -62,6 +62,7 @@ const props = defineProps<{
   hasMoreFuzzingRuns: boolean
   loadingMoreFuzzingRuns: boolean
   pendingTaskActionKeys?: ReadonlySet<string>
+  pendingResultDeleteKeys?: ReadonlySet<string>
   actionLocked: boolean
   currentBoardScope?: CurrentBoardScope
 }>()
@@ -160,6 +161,12 @@ const resultItems = computed<ResultItem[]>(() => {
 
 const tracesForRun = (run: VerificationRunSummary) => run.counterexamples || []
 const isActiveStatus = (status?: string) => status === 'PENDING' || status === 'RUNNING'
+const isResultDeletePending = (kind: ResultSource, id: number) =>
+  props.pendingResultDeleteKeys?.has(`${kind}:${id}`) === true
+const resultDeleteTestId = (kind: ResultSource, id: number) => {
+  if (kind === 'simulation') return `delete-simulation-trace-${id}`
+  return `delete-${kind === 'fuzzing' ? 'fuzzing' : 'verification'}-run-${id}`
+}
 
 const taskProgress = (task: TaskItem) => {
   const fallback = isActiveStatus(task.status) ? 0 : 100
@@ -631,8 +638,10 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 </div>
                 <button
                   type="button"
+                  :data-testid="resultDeleteTestId(item.kind, item.run.id)"
                   class="min-h-11 shrink-0 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
-                  :disabled="actionLocked"
+                  :disabled="actionLocked || isResultDeletePending(item.kind, item.run.id)"
+                  :aria-busy="isResultDeletePending(item.kind, item.run.id)"
                   @click="emitDeleteResult(item)"
                 >
                   {{ t('app.delete') }}
@@ -676,7 +685,8 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     type="button"
                     :data-testid="`delete-verification-run-${item.run.id}`"
                     class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="actionLocked"
+                    :disabled="actionLocked || isResultDeletePending('verification', item.run.id)"
+                    :aria-busy="isResultDeletePending('verification', item.run.id)"
                     @click="emit('delete-verification-run', item.run)"
                   >
                     {{ t('app.delete') }}
@@ -801,7 +811,8 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     type="button"
                     :data-testid="`delete-fuzzing-run-${item.run.id}`"
                     class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="actionLocked"
+                    :disabled="actionLocked || isResultDeletePending('fuzzing', item.run.id)"
+                    :aria-busy="isResultDeletePending('fuzzing', item.run.id)"
                     @click="emit('delete-fuzzing-run', item.run)"
                   >
                     {{ t('app.delete') }}
@@ -905,7 +916,8 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     type="button"
                     :data-testid="`delete-simulation-trace-${item.run.id}`"
                     class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="actionLocked"
+                    :disabled="actionLocked || isResultDeletePending('simulation', item.run.id)"
+                    :aria-busy="isResultDeletePending('simulation', item.run.id)"
                     @click="emit('delete-simulation-run', item.run)"
                   >
                     {{ t('app.delete') }}

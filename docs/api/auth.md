@@ -4,7 +4,7 @@ Field-level contract for `/api/auth`. The `Result<T>` envelope, the `Bearer` sch
 and error codes are defined once in [overview.md](overview.md); this doc covers the
 request/response bodies only.
 
-Verified against code on 2026-07-24. Source: `controller/AuthController.java`,
+Verified against code on 2026-07-25. Source: `controller/AuthController.java`,
 `service/impl/AuthServiceImpl.java`, and `dto/auth/`.
 
 ---
@@ -116,8 +116,9 @@ curl -X POST http://localhost:8080/api/auth/logout \
 
 Authenticated. Permanently deletes the current account and user-owned data.
 The database transaction first validates the account and removes all user-owned rows.
-Only after that transaction commits does the backend revoke the current token and interrupt
-locally executing verification, simulation, counterexample-exploration, and AI-chat work. This
+Only after that transaction commits does the backend revoke the current token, interrupt
+locally executing verification, simulation, counterexample-exploration, and AI-chat work, and
+publish cross-instance cancellation fences for active AI recommendation and automatic-fix work. This
 prevents a failed deletion from revoking a still-valid session or stopping tasks whose
 database state was rolled back. User-owned data deletion removes board devices, rules,
 specifications, templates, formal traces,
@@ -145,7 +146,10 @@ is treated as a definite rejection and leaves the deletion form available for co
 - Blacklists the current token after the data-deletion transaction commits, same as logout.
 - Interrupts locally executing verification, simulation, exploration, and AI-chat work after
   commit; queued workers subsequently observe that their durable task/session row no longer
-  exists.
+  exists. Recommendation and automatic-fix workers receive a bounded Redis cancellation fence
+  keyed by operation kind and deleted user, so work admitted on another backend instance also
+  stops. Redis failure remains fail-open, while the deleting instance still interrupts its local
+  interactive work.
 - Database ownership constraints connect every user-owned `user_id` to `app_user` with
   `ON DELETE CASCADE`. Writes that commit first are removed with the account; writes that
   reach the database after deletion are rejected because the parent account no longer exists.
@@ -153,7 +157,8 @@ is treated as a definite rejection and leaves the deletion form available for co
   ownership in the same transaction. A stream that reaches a persistence point after account
   deletion therefore stops instead of recreating chat rows.
 - `chat_message.session_id` and `chat_session_pre_admission_stop.session_id` cascade from
-  `chat_session`; the latter stores bounded turn-specific Stop fences. Exploration findings use
+  `chat_session`; the latter stores at most 64 database-timestamped turn-specific Stop fences,
+  each valid for two minutes. Exploration findings use
   a composite `(user_id, fuzz_task_id)` ownership constraint against their task. A late child
   row therefore cannot attach to a missing parent or to another user's task.
 - Durable AI continuation, confirmation, and scenario-draft rows use a composite

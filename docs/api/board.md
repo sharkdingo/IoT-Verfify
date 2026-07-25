@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-24. Source:
+Verified against code on 2026-07-25. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -43,14 +43,14 @@ The replacement commits or rolls back as one transaction.
 | GET | `/api/board/nodes/{nodeId}/deletion-preview` | → `DeviceDeletionResultDto` | Read-only authoritative preview of the device, every referencing rule/spec, and each Environment Pool item that would be removed |
 | POST | `/api/board/nodes/{nodeId}/delete` | `DeviceDeleteRequestDto` → `DeviceDeletionResultDto` | Delete one instance plus every previewed consequence atomically. The opaque `impactToken` from the latest preview must still match the complete server-calculated impact or the server returns `409` before writing. |
 | GET | `/api/board/environment` | → `BoardEnvironmentVariableDto[]` | Board-level environment pool; self-heals from current nodes/templates |
-| POST | `/api/board/environment` | `BoardEnvironmentVariableDto[]` → `EnvironmentMutationResultDto` | Atomically apply at most 200 non-null, name-keyed field patches to values/trust/privacy required by current devices; omitted/null fields retain their current values |
+| POST | `/api/board/environment` | `EnvironmentVariableUpdateRequestDto[]` → `EnvironmentMutationResultDto` | Atomically apply at most 200 name-keyed compare-and-set field patches; every item carries a complete `expected` baseline and a non-empty `desired` patch |
 | GET | `/api/board/rules` | → `RuleDto[]` | List rules in effective execution order |
 | POST | `/api/board/rules` | `RuleDto` → `CollectionMutationResultDto<RuleDto>` | Create exactly one validated rule; request `id` is ignored and the server assigns identity |
-| PUT | `/api/board/rules/order` | `{ ruleIds: Long[] }` → `RuleDto[]` | Atomically replace execution order only. The request accepts at most 100 ids and must contain every current rule id exactly once; stale or partial lists return `409` without writing. |
-| DELETE | `/api/board/rules/{ruleId}` | → `CollectionMutationResultDto<RuleDto>` | Delete exactly one rule or return `404` |
+| PUT | `/api/board/rules/order` | `{ expectedRuleIds: Long[], ruleIds: Long[] }` → `RuleDto[]` | Compare-and-set replacement of execution order only. Both lists accept at most 100 positive ids and must contain every current rule id exactly once. `expectedRuleIds` must match the current order element-for-element; stale, duplicate, or partial input is rejected without writing. |
+| DELETE | `/api/board/rules/{ruleId}` | `RuleDto` (the confirmed current snapshot) → `CollectionMutationResultDto<RuleDto>` | Delete only when the id and authored rule semantics still match; a stale snapshot returns `409` without writing, and a missing rule returns `404` |
 | GET | `/api/board/specs` | → `SpecificationDto[]` | List specs in stable authored order |
 | POST | `/api/board/specs` | `SpecificationDto` → `CollectionMutationResultDto<SpecificationDto>` | Create exactly one validated specification |
-| DELETE | `/api/board/specs/{specId}` | → `CollectionMutationResultDto<SpecificationDto>` | Delete exactly one specification or return `404` |
+| DELETE | `/api/board/specs/{specId}` | `SpecificationDto` (the confirmed current snapshot) → `CollectionMutationResultDto<SpecificationDto>` | Delete only when the id and authored specification semantics still match; a stale snapshot returns `409` without writing, and a missing specification returns `404` |
 | GET | `/api/board/replacement-preview` | → `BoardReplacementPreviewDto` | Return the opaque impact token and authoritative current counts that must be shown before a full scene replacement/clear |
 | POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Explicit atomic full-scene replacement** of complete `nodes` + `environmentVariables` + `rules` + `specs` plus exact `templateSnapshots`; requires the still-current preview `impactToken` |
 | GET | `/api/board/layout` | → `BoardLayoutDto` | Panel/canvas layout |
@@ -117,11 +117,16 @@ metadata. A successful HTTP response with a missing collection, wrong `operation
 missing affected item, or inconsistent `currentCount` is an unconfirmed outcome: the
 Board refreshes the affected collections and never substitutes its local draft or an
 empty array before displaying success.
-Create-time `environmentVariablePatches` have the same field-level semantics as
-`POST /api/board/environment`: each non-null field overrides that shared value, while
-an omitted or null field retains the existing value (or the newly materialized template
-default when the row did not exist). Device creation and these patches commit in one
-transaction.
+Create-time `environmentVariablePatches` retain their existing field-level semantics:
+each non-null field overrides that shared value, while an omitted or null field retains the
+existing value (or the newly materialized template default when the row did not exist).
+They are an internal part of device creation and are not the public environment-update
+request shape. Device creation and these patches commit in one transaction.
+
+`POST /api/board/environment` is the public compare-and-set command. Its canonical
+request, merge, and result semantics are defined under
+[`BoardEnvironmentVariableDto`](#boardenvironmentvariabledto). Its stale-write response
+uses the specialized conflict contract owned by [API error and status codes](./overview.md#error-and-status-codes).
 
 Device update ownership is deliberately split by user intent. There is no public
 whole-`DeviceNodeDto` update endpoint: moving a node must not overwrite a runtime edit,
@@ -243,7 +248,11 @@ Devices tab instead of remaining on a detached element.
 Rule/spec create/delete returns `CollectionMutationResultDto<T>`:
 `{ operation, affectedItem, currentItems, currentCount }`. This is deliberately richer
 than success/id/count so clients can explain exactly what changed and reconcile stale
-local state.
+local state. A REST delete must include the complete item snapshot that the user confirmed
+(`RuleDto` or `SpecificationDto`); the backend compares the identity and authored semantic
+fields while holding the board write lock. It rejects a changed snapshot with `409` and
+performs no write, so a second tab cannot silently delete a newer edit. The returned
+`affectedItem` is the exact deleted snapshot and `currentItems` is authoritative.
 
 Board node mutations validate more than shape. Device ids must be unique and must not
 collide after NuSMV normalization (`AC 1` and `ac_1` are the same model id). For every
@@ -275,22 +284,28 @@ lossless without freezing template labels into every device.
 | Field | Type | Rules |
 | :--- | :--- | :--- |
 | `name` | `String` | Required; must be read by at least one current device template (`InternalVariables[].IsInside=false`) or affected by at least one current device through `ImpactedVariables`; affected-only devices do not gain rule/spec read permission |
-| `value` | `String` | A non-null Environment Pool patch value must be non-blank and legal for the template domain; omitted/null preserves the current field. Complete scene replacement requires an explicit non-blank value |
-| `trust` | `String` | A non-null Environment Pool patch value must normalize to `trusted` / `untrusted`; omitted/null preserves the current field. Complete scene replacement requires the field explicitly |
-| `privacy` | `String` | A non-null Environment Pool patch value must normalize to `public` / `private`; omitted/null preserves the current field. Complete scene replacement requires the field explicitly |
+| `value` | `String` | Required non-blank GET/response value from the canonical finite template domain. Create-time/internal patches accept a legal non-blank override or preserve the materialized template default when omitted/null. Complete scene replacement requires an explicit legal non-blank value |
+| `trust` | `String` | GET/response label; create-time/internal patches accept `trusted` / `untrusted` or preserve it when omitted/null. Complete scene replacement requires the field explicitly |
+| `privacy` | `String` | GET/response label; create-time/internal patches accept `public` / `private` or preserve it when omitted/null. Complete scene replacement requires the field explicitly |
 
 The environment pool is persisted in `board_environment_variable` and scoped to the
 current user's single development board. `GET /api/board/environment` is intentionally
 self-healing: it reads current nodes/templates, inserts missing required variables with
 the default value above, preserves existing values, and prunes variables no current
 device can read or affect. `POST /api/board/environment` accepts only names required by
-the current board and performs the same merge/prune validation before replacing the pool.
-Each submitted item must provide at least one non-null `value`, `trust`, or `privacy`
-field. It is a true field-level patch: omitted items and omitted/null fields preserve
-their materialized current values. Explicit blanks, duplicate submitted names, unknown
-names, and out-of-domain values are rejected before any write. Restoring template
-defaults is an explicit product action implemented through the locked complete
-read-modify-write service; REST callers do not encode that action as an ambiguous null.
+the current board. The public request is an `EnvironmentVariableUpdateRequestDto[]`:
+each item contains a complete `expected` `{ value, trust, privacy }` baseline and a
+non-empty `desired` field patch. All three expected fields are required;
+`expected.value` is the current non-blank value from the variable's finite template domain.
+Omitted desired fields preserve their materialized current values. Explicit JSON `null`
+for `desired.value`, `desired.trust`, or `desired.privacy` is rejected.
+The server compares every baseline under the board
+write lock, then validates names, domains, and labels before replacing the pool. A stale
+or removed baseline performs no write and uses the
+[specialized conflict response](./overview.md#error-and-status-codes). Explicit blanks,
+duplicate submitted names, unknown names, and out-of-domain values are rejected before
+persistence. Accepted scalar values are trimmed, and trust/privacy labels are stored in
+their canonical lower-case form.
 
 `EnvironmentMutationResultDto` contains `{ operation: updated|unchanged, patchResults,
 environmentVariables, environmentChanges, currentCount }`. Each `patchResults[]` row is
@@ -522,7 +537,9 @@ those modes, the later action is blocked as a whole rather than partly applied. 
 whose API effects are disjoint can still take effect together. The
 Board inspector displays this order and changes it through `PUT /rules/order`. A newly
 created manual or AI-recommended rule is appended last. The endpoint is a targeted,
-identity-preserving reorder, not a scene replacement, and returns the authoritative
+identity-preserving compare-and-set reorder, not a scene replacement. The client sends the
+complete order it displayed as `expectedRuleIds` together with the desired `ruleIds`, so a
+concurrent reorder returns `409` instead of being overwritten. It returns the authoritative
 ordered collection. Changing order can change verification/simulation results, so the
 client asks the user to run them again.
 
@@ -1028,11 +1045,14 @@ pool saturation returns `503`. While a request is active, its status DTO is
 counts, selected tool, elapsed time, and the actual server-observed stage. It does not infer a
 phase from elapsed time, and these operational stages are not hidden model reasoning. Stop and
 panel-close actions call the cancellation endpoint before aborting the browser request.
-Owner, status, and cancellation records are token-fenced in Redis, so another backend
-instance can observe and stop the accepted request without allowing an expired worker to
-overwrite a reused id. Active records renew for the callable's lifetime and the final status
-is retained briefly. Redis failure falls back to process-local tracking; a different instance
-cannot see that local execution, so clients use a fresh random request id for every attempt.
+Owner, per-user admission, and initial status are acquired atomically and remain token-fenced
+with cancellation records in Redis, so another backend instance can observe and stop the
+accepted request without allowing an expired worker to overwrite a reused id. Active records
+renew for the callable's lifetime and the final status is retained briefly. Redis unavailability
+detected before that atomic write falls back to process-local tracking; a different instance
+cannot see that local execution. An unknown or post-TTL acquisition result instead returns `503`
+after token-fenced cleanup, because treating possibly acquired ownership as local would allow a
+duplicate worker. Clients use a fresh random request id for every attempt.
 
 After a stop action the Board keeps the workflow visibly stopping until status reports
 `FINISHED`. A first `404` can be a registration-versus-cancellation race and is not treated

@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-24.
+Verified against code on 2026-07-25.
 
 ---
 
@@ -40,14 +40,14 @@ Verified against code on 2026-07-24.
 | GET | `/api/board/nodes/{nodeId}/deletion-preview` | Preview every rule, specification, and Environment Pool effect of deleting one device | `docs/api/board.md` |
 | POST | `/api/board/nodes/{nodeId}/delete` | Confirmed atomic device/rule/spec cascade delete | `docs/api/board.md` |
 | GET | `/api/board/environment` | List and self-heal the board environment pool | `docs/api/board.md` |
-| POST | `/api/board/environment` | Apply itemized field-level patches to the board environment pool | `docs/api/board.md` |
+| POST | `/api/board/environment` | Apply itemized compare-and-set field patches to the board environment pool | `docs/api/board.md` |
 | GET | `/api/board/specs` | List specifications | `docs/api/board.md` |
 | POST | `/api/board/specs` | Create one specification | `docs/api/board.md` |
-| DELETE | `/api/board/specs/{specId}` | Delete one specification | `docs/api/board.md` |
+| DELETE | `/api/board/specs/{specId}` | Delete one specification when its confirmed snapshot is still current | `docs/api/board.md` |
 | GET | `/api/board/rules` | List automation rules | `docs/api/board.md` |
 | POST | `/api/board/rules` | Create one automation rule | `docs/api/board.md` |
 | PUT | `/api/board/rules/order` | Atomically replace rule execution order | `docs/api/board.md` |
-| DELETE | `/api/board/rules/{ruleId}` | Delete one automation rule | `docs/api/board.md` |
+| DELETE | `/api/board/rules/{ruleId}` | Delete one automation rule when its confirmed snapshot is still current | `docs/api/board.md` |
 | GET | `/api/board/replacement-preview` | Preview authoritative current-scene counts and obtain the confirmation impact token | `docs/api/board.md` |
 | POST | `/api/board/batch` | Confirmed atomic full-scene replacement/clear with exact template snapshots | `docs/api/board.md` |
 | GET | `/api/board/snapshot` | Atomic initial Board semantic snapshot | `docs/api/board.md` |

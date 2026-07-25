@@ -8,6 +8,26 @@ const boardSource = readFileSync(resolve(currentDirectory, 'Board.vue'), 'utf8')
 const boardCss = readFileSync(resolve(currentDirectory, '../styles/board.css'), 'utf8')
 
 describe('Board surface accessibility contracts', () => {
+  it('keeps the automatic-fix request owner mounted while its dialog is hidden', () => {
+    const fixDialogStart = boardSource.indexOf('<FixResultDialog')
+    const fixDialog = boardSource.slice(fixDialogStart, boardSource.indexOf('/>', fixDialogStart) + 2)
+
+    expect(fixDialogStart).toBeGreaterThan(-1)
+    expect(fixDialog).toContain('ref="fixResultDialogRef"')
+    expect(fixDialog).toContain(':visible="showFixDialog"')
+    expect(fixDialog).not.toContain('v-if=')
+
+    const openFixStart = boardSource.indexOf('const openFixDialog =')
+    const openFixDialog = boardSource.slice(
+      openFixStart,
+      boardSource.indexOf('const canFixVerificationResultTrace', openFixStart)
+    )
+    expect(openFixDialog).toContain('canOpenTrace?.(traceId) === false')
+    expect(openFixDialog).toContain('showFixDialog.value = true')
+    expect(openFixDialog.indexOf('canOpenTrace?.(traceId) === false'))
+      .toBeLessThan(openFixDialog.indexOf('fixTraceId.value = traceId'))
+  })
+
   it('keeps the template instance dialog focus-managed and the delete footer reachable', () => {
     const templateDialog = boardSource.slice(
       boardSource.indexOf('v-if="templateInstanceDialogVisible"'),
@@ -64,5 +84,19 @@ describe('Board surface accessibility contracts', () => {
 
     expect(boardCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.board-result-dialog-surface,\s*\.board-result-dialog-surface \*/)
     expect(boardCss).not.toContain('.iot-board .board-result-dialog-surface')
+  })
+
+  it('keeps the playback change inspector beside the timeline in short landscape viewports', () => {
+    expect(boardSource).toContain("'has-playback-change-popover': showPlaybackChangePopover")
+
+    const shortLandscapePlayback = boardCss.slice(
+      boardCss.indexOf('A short landscape viewport cannot stack the change inspector'),
+      boardCss.indexOf('/* ==========', boardCss.indexOf('A short landscape viewport cannot stack the change inspector'))
+    )
+    expect(shortLandscapePlayback).toContain('@media (min-width: 641px) and (max-height: 599px)')
+    expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-playback-change-popover')
+    expect(shortLandscapePlayback).toContain('width: min(22rem, 42vw)')
+    expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-timeline-host')
+    expect(shortLandscapePlayback).toContain('right: calc(min(22rem, 42vw) + (var(--board-floating-gap, 1rem) * 2))')
   })
 })

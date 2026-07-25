@@ -6,7 +6,7 @@ running the frontend locally and its source layout. For everything else, see the
 
 ## Run locally
 
-Prerequisites: Node.js 18+. The backend should be running on `http://localhost:8080`
+Prerequisites: Node.js 20.19+ on Node 20, or Node.js 22.12+. The backend should be running on `http://localhost:8080`
 (see [../backend/README.md](../backend/README.md)).
 
 ```bash

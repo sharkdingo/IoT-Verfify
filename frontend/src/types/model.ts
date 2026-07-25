@@ -20,6 +20,21 @@ export interface ModelEnvironmentVariable {
   privacy?: string | null
 }
 
+/** Compare-and-set request used by the public Environment Pool mutation endpoint. */
+export interface EnvironmentVariableUpdateRequest {
+  name: string
+  expected: {
+    value: string
+    trust: string
+    privacy: string
+  }
+  desired: Partial<{
+    value: string
+    trust: string
+    privacy: string
+  }>
+}
+
 export interface ModelRuleCondition {
   deviceName: string
   attribute: string

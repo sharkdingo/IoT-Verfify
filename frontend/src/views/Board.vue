@@ -33,12 +33,90 @@ export const createLatestBoardRequestGuard = () => {
   }
 }
 
+export class BoardMutationAdmissionCancelledError extends Error {
+  constructor() {
+    super('Board mutation admission was cancelled')
+    this.name = 'BoardMutationAdmissionCancelledError'
+  }
+}
+
+export const runAdmittedBoardMutation = <T,>(
+  work: () => Promise<T>,
+  admissionGuard?: () => boolean
+): Promise<T> => {
+  if (admissionGuard && !admissionGuard()) {
+    return Promise.reject(new BoardMutationAdmissionCancelledError())
+  }
+  return work()
+}
+
+export type HistoricalPlaybackAdmissionResult =
+  | 'admitted'
+  | 'request-stale'
+  | 'board-changed'
+  | 'ui-blocked'
+
+export const revalidateHistoricalPlaybackAdmission = async ({
+  waitForPendingMutations,
+  isRequestCurrent,
+  initialMutationEpoch,
+  currentMutationEpoch,
+  recheckUiAdmission
+}: {
+  waitForPendingMutations: () => Promise<void>
+  isRequestCurrent: () => boolean
+  initialMutationEpoch: number
+  currentMutationEpoch: () => number
+  recheckUiAdmission: () => boolean
+}): Promise<HistoricalPlaybackAdmissionResult> => {
+  if (!isRequestCurrent()) return 'request-stale'
+  await waitForPendingMutations()
+  if (!isRequestCurrent()) return 'request-stale'
+  if (currentMutationEpoch() !== initialMutationEpoch) return 'board-changed'
+  return recheckUiAdmission() ? 'admitted' : 'ui-blocked'
+}
+
+export const runTrackedBoardMutation = async <T,>(
+  work: () => Promise<T>,
+  previousSceneFingerprint: string | null,
+  currentSceneFingerprint: () => string | null,
+  onSceneChanged: () => void
+): Promise<T> => {
+  try {
+    return await work()
+  } finally {
+    if (previousSceneFingerprint !== null) {
+      const currentFingerprint = currentSceneFingerprint()
+      if (currentFingerprint !== null && currentFingerprint !== previousSceneFingerprint) {
+        onSceneChanged()
+      }
+    }
+  }
+}
+
+export const handleRecommendationApplySceneChange = (
+  confirmedApplied: boolean,
+  preserveApplied: () => void,
+  invalidateRecommendations: () => void
+) => {
+  if (confirmedApplied) preserveApplied()
+  else invalidateRecommendations()
+}
+
 export const invalidateFuzzingResultRequests = (
   currentRequestEpoch: number,
   invalidateHistoryDetailRequests: () => void
 ): number => {
   invalidateHistoryDetailRequests()
   return currentRequestEpoch + 1
+}
+
+export const confirmHistoryDeletion = async (
+  requestConfirmation: () => Promise<unknown>,
+  invalidateDetailRequests: () => void
+): Promise<void> => {
+  await requestConfirmation()
+  invalidateDetailRequests()
 }
 
 export const createScopedBoardInvalidationBinding = <Message,>(
@@ -169,6 +247,33 @@ export const resolveCurrentBoardNode = <T extends { id: string }>(
   nodeId: string | null | undefined
 ): T | null => nodeId ? nodes.find(node => node.id === nodeId) || null : null
 
+export type DeletionReviewCloseReason = 'board-changed' | 'cancelled' | 'submitted'
+
+export const resolveDeletionReviewDeviceDialogRestore = <T extends { id: string }>(
+  reason: DeletionReviewCloseReason,
+  nodes: readonly T[],
+  sourceDeviceDialogNodeId: string | null,
+  reviewedNodeId: string | null | undefined
+): T | null => {
+  if (reason !== 'board-changed'
+    || !sourceDeviceDialogNodeId
+    || sourceDeviceDialogNodeId !== reviewedNodeId) return null
+  return resolveCurrentBoardNode(nodes, sourceDeviceDialogNodeId)
+}
+
+export type DeviceDialogCloseController = {
+  prepareClose: () => Promise<boolean>
+}
+
+export const continueAfterDeviceDialogApproval = async (
+  controller: DeviceDialogCloseController | null,
+  transition: () => void
+): Promise<boolean> => {
+  if (!controller || !await controller.prepareClose()) return false
+  transition()
+  return true
+}
+
 export type RenameDialogSnapshot<T extends { id: string; label: string }> = {
   node: T
   newName: string
@@ -231,6 +336,89 @@ export const requestScenarioRecommendationWithTargets = <T,>(
   return recommend(request)
 }
 
+export const canonicalBoardSnapshotValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalBoardSnapshotValue)
+  if (value && typeof value === 'object') {
+    const source = value as Record<string, unknown>
+    return Object.fromEntries(Object.keys(source)
+      .sort()
+      .map(key => [key, canonicalBoardSnapshotValue(source[key])]))
+  }
+  return value
+}
+
+export interface RecommendationSceneSnapshotLike {
+  nodes: readonly unknown[]
+  environmentVariables: readonly unknown[]
+  rules: readonly unknown[]
+  specifications: readonly unknown[]
+  deviceTemplates: readonly unknown[]
+}
+
+const canonicalUnorderedCollection = (
+  values: readonly unknown[],
+  project: (value: unknown) => unknown = value => value
+): unknown[] => values
+  .map(value => canonicalBoardSnapshotValue(project(value)))
+  .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+
+const recommendationNodeValue = (value: unknown): unknown => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const {
+    position: _position,
+    width: _width,
+    height: _height,
+    variables,
+    privacies,
+    ...semanticNode
+  } = value as Record<string, unknown>
+  return {
+    ...semanticNode,
+    ...(Array.isArray(variables)
+      ? { variables: canonicalUnorderedCollection(variables) }
+      : {}),
+    ...(Array.isArray(privacies)
+      ? { privacies: canonicalUnorderedCollection(privacies) }
+      : {})
+  }
+}
+
+export const recommendationSceneFingerprint = (
+  snapshot: RecommendationSceneSnapshotLike
+): string => JSON.stringify(canonicalBoardSnapshotValue({
+  nodes: canonicalUnorderedCollection(snapshot.nodes, recommendationNodeValue),
+  environmentVariables: canonicalUnorderedCollection(snapshot.environmentVariables),
+  // Rule order is execution order and therefore remains part of the fingerprint.
+  rules: snapshot.rules.map(canonicalBoardSnapshotValue),
+  specifications: canonicalUnorderedCollection(snapshot.specifications),
+  deviceTemplates: canonicalUnorderedCollection(snapshot.deviceTemplates)
+}))
+
+export const hasRecommendationSceneChanged = (
+  current: RecommendationSceneSnapshotLike | null,
+  incoming: RecommendationSceneSnapshotLike
+): boolean => current !== null
+  && recommendationSceneFingerprint(current) !== recommendationSceneFingerprint(incoming)
+
+export type ConfirmedBoardItemStatus = 'current' | 'scene-changed' | 'item-changed'
+
+export const getConfirmedBoardItemStatus = <T extends { id?: string }>(
+  expectedGeneration: number,
+  currentGeneration: number,
+  replacementInProgress: boolean,
+  collection: readonly T[],
+  itemId: string,
+  expectedItem: T,
+  snapshotOf: (item: T) => unknown = item => item
+): ConfirmedBoardItemStatus => {
+  if (replacementInProgress || expectedGeneration !== currentGeneration) return 'scene-changed'
+  const currentItem = collection.find(item => item.id === itemId)
+  const canonical = (value: unknown) => JSON.stringify(canonicalBoardSnapshotValue(value))
+  return currentItem && canonical(snapshotOf(currentItem)) === canonical(snapshotOf(expectedItem))
+    ? 'current'
+    : 'item-changed'
+}
+
 </script>
 
 <script setup lang="ts">
@@ -290,7 +478,10 @@ import type {
 } from '@/types/fuzzing'
 import { isValidFuzzPaperDomainFingerprint } from '@/types/fuzzing'
 import type { ModelSemantics, RunBoardComparison } from '@/types/modelSemantics'
-import type { ModelEnvironmentVariable } from '@/types/model'
+import type {
+  EnvironmentVariableUpdateRequest,
+  ModelEnvironmentVariable
+} from '@/types/model'
 import type { InteractiveOperationStage, TaskCancellationResult, TaskProgressStage } from '@/types/task'
 import type { FixApplyResult } from '@/types/fix'
 import type { ChatLogoutPreparation } from '@/types/chat'
@@ -322,7 +513,6 @@ import {
 } from '../utils/spec'
 import { assertRuleHasTrigger, getLinkPoints, ruleSimilarityReasonKey } from '../utils/rule'
 import {
-  canOpenTracePlayback,
   deriveTraceContext,
   formatPlaybackSecurityLabel,
   formatTraceSpec,
@@ -354,8 +544,18 @@ import {
 } from '@/utils/attackSurface'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { requestInteractiveCancellation } from '@/utils/interactiveCancellation'
+import {
+  isRecommendationPostOutcomeUnknown,
+  isRecommendationRequestActive,
+  planRecommendationRecoveryAfterStatusFailure,
+  prepareOwnedRecommendationForLogout,
+  refreshRecommendationOwnerCredential,
+  requestIdAfterTerminalSettlement,
+  type RecommendationRequestOwner
+} from '@/utils/recommendationRequestRecovery'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { RECOMMENDATION_RESPONSE_INCOMPLETE_CODE } from '@/utils/recommendationResponse'
+import { sceneTemplatesCoveredByCatalog } from '@/utils/sceneTemplateCoverage'
 import {
   FUZZ_RESPONSE_INCOMPLETE_CODE,
   getFuzzActiveTaskLimit,
@@ -483,6 +683,11 @@ const showLogoutDialog = ref(false)
 const showDeleteAccountDialog = ref(false)
 const isLoggingOut = ref(false)
 const isDeletingAccount = ref(false)
+type InteractiveLogoutPreparation = 'ready' | 'outcome-unknown'
+const fixResultDialogRef = ref<{
+  canOpenTrace?: (traceId: number) => boolean
+  prepareForLogout?: () => Promise<InteractiveLogoutPreparation>
+} | null>(null)
 const currentUser = computed(() => authState.user)
 const currentAuthUserId = computed(() => currentUser.value?.userId ?? null)
 const isAuthScopeTransitioning = ref(false)
@@ -531,6 +736,35 @@ const handleLogoutConfirm = async () => {
           t('app.chat.logoutOutcomeUnknownTitle'),
           {
             confirmButtonText: t('app.chat.logoutOutcomeUnknownConfirm'),
+            cancelButtonText: t('app.cancel'),
+            type: 'warning'
+          }
+        )
+      } catch {
+        return
+      }
+    }
+
+    let interactivePreparation: InteractiveLogoutPreparation = 'ready'
+    try {
+      const [recommendations, fixSearch] = await Promise.all([
+        prepareActiveRecommendationsForLogout(),
+        fixResultDialogRef.value?.prepareForLogout?.() ?? Promise.resolve('ready' as const)
+      ])
+      if (recommendations === 'outcome-unknown' || fixSearch === 'outcome-unknown') {
+        interactivePreparation = 'outcome-unknown'
+      }
+    } catch (error) {
+      console.error('Failed to stop active recommendation or automatic-fix work before logout', error)
+      interactivePreparation = 'outcome-unknown'
+    }
+    if (interactivePreparation === 'outcome-unknown') {
+      try {
+        await ElMessageBox.confirm(
+          t('app.logoutInteractiveOutcomeUnknownMessage'),
+          t('app.logoutInteractiveOutcomeUnknownTitle'),
+          {
+            confirmButtonText: t('app.logoutInteractiveOutcomeUnknownConfirm'),
             cancelButtonText: t('app.cancel'),
             type: 'warning'
           }
@@ -944,8 +1178,23 @@ const hasActionDockActivity = computed(() =>
 )
 const actionDockRailWidth = computed(() => actionDockMode.value === 'expanded' ? '8.75rem' : '3.5rem')
 const actionDockReservedWidth = computed(() => actionDockMode.value === 'expanded' ? 150 : 64)
+const widePanelWidthLimit = computed(() => {
+  if (isNarrowBoardLayout.value) return 520
+  const viewportWidth = actionDockViewportWidth.value
+  const actionRailWidth = actionDockReservedWidth.value
+  const minimumCanvasCorridor = viewportWidth < 1280 ? 220 : 280
+  const reservedGaps = viewportWidth < 1280 ? 56 : 64
+  return Math.min(520, Math.max(
+    240,
+    Math.floor((viewportWidth - actionRailWidth - minimumCanvasCorridor - reservedGaps) / 2)
+  ))
+})
+const effectiveControlPanelWidth = computed(() =>
+  Math.min(boardPanels.control.width, widePanelWidthLimit.value))
+const effectiveInspectorPanelWidth = computed(() =>
+  Math.min(boardPanels.inspector.width, widePanelWidthLimit.value))
 const actionDockRightInset = computed(() => {
-  const inspectorWidth = boardPanels.inspector.collapsed ? 48 : boardPanels.inspector.width
+  const inspectorWidth = boardPanels.inspector.collapsed ? 48 : effectiveInspectorPanelWidth.value
   const gap = actionDockViewportWidth.value < 640 ? 8 : 14
   return inspectorWidth + gap
 })
@@ -987,8 +1236,8 @@ let panelStateTouchedBeforeLayout = false
 let canvasStateTouchedBeforeLayout = false
 
 const boardShellStyle = computed(() => ({
-  '--board-control-width': `${boardPanels.control.collapsed ? 64 : boardPanels.control.width}px`,
-  '--board-inspector-width': `${boardPanels.inspector.collapsed ? 48 : boardPanels.inspector.width}px`,
+  '--board-control-width': `${boardPanels.control.collapsed ? 64 : effectiveControlPanelWidth.value}px`,
+  '--board-inspector-width': `${boardPanels.inspector.collapsed ? 48 : effectiveInspectorPanelWidth.value}px`,
   '--board-action-rail-width': actionDockRailWidth.value
 }))
 
@@ -1073,6 +1322,7 @@ const deviceTemplates = ref<DeviceTemplate[]>([])
 const templatesLoading = ref(false)
 const nodes = ref<DeviceNode[]>([])
 const environmentVariables = ref<ModelEnvironmentVariable[]>([])
+const environmentMutationPending = ref(false)
 const edges = ref<DeviceEdge[]>([])
 const rules = ref<RuleForm[]>([])  // 独立存储规则列表
 const rulesReordering = ref(false)
@@ -1097,6 +1347,12 @@ const handleSceneActionsMenuToggle = () => {
 const isImportingScene = ref(false)
 const isClearingScene = ref(false)
 const isSceneReplacementInProgress = computed(() => isImportingScene.value || isClearingScene.value)
+// Destructive confirmations are fenced only by explicit full-scene replacement.
+// Recommendations use a separate generation because every semantic mutation
+// makes their model context stale, while an unrelated edit need not cancel an
+// exact rule/specification deletion confirmation.
+let boardSceneGeneration = 0
+let recommendationSceneGeneration = 0
 
 const deepClone = <T,>(value: T): T =>
   JSON.parse(JSON.stringify(value))
@@ -1124,11 +1380,23 @@ const boardDataLoadState = reactive<Record<BoardDataKey, BoardDataLoadState>>({
   specs: 'loading'
 })
 const allBoardDataKeys: BoardDataKey[] = ['templates', 'nodes', 'environment', 'rules', 'specs']
+// A failed refresh must not erase ownership of the last accepted snapshot;
+// otherwise the next retry could accept a changed scene without fencing stale work.
+let hydratedBoardAuthScopeEpoch: number | null = null
 const failedBoardDataKeys = computed(() =>
   allBoardDataKeys.filter(key => boardDataLoadState[key] === 'error'))
 const isBoardDataReady = computed(() =>
   !isAuthScopeTransitioning.value
   && allBoardDataKeys.every(key => boardDataLoadState[key] === 'ready'))
+
+// A scene replacement must fence every canvas mutation, including pan/zoom and
+// keyboard movement.  Waiting for the authoritative snapshot also prevents a
+// failed initial load from leaving a locally movable, non-persisted canvas.
+const isCanvasInteractionLocked = computed(() =>
+  isModelPlaybackActive.value
+  || isSceneReplacementInProgress.value
+  || isAuthScopeTransitioning.value
+  || boardDataLoadState.nodes !== 'ready')
 
 const boardDataKeyLabel = (key: BoardDataKey): string => t(`app.boardDataKey_${key}`)
 
@@ -1558,6 +1826,7 @@ const validateTemplateInstanceRuntimeConfig = (template: DeviceTemplate, runtime
 }
 
 let boardMutationQueue: Promise<void> = Promise.resolve()
+let boardMutationAdmissionEpoch = 0
 let nodeLayoutMutationVersion = 0
 const pendingNodeLayouts = new Map<string, { version: number; layout: DeviceLayout }>()
 const activeNodeLayoutInteractions = new Set<string>()
@@ -1595,13 +1864,60 @@ const handleNodeLayoutInteractionEnd = (nodeId: string) => {
   activeNodeLayoutInteractions.delete(nodeId)
 }
 
-const enqueueBoardMutation = async <T,>(work: () => Promise<T>): Promise<T> => {
+interface BoardMutationQueueOptions {
+  admissionGuard?: () => boolean
+  trackSemanticChange?: boolean
+  onSemanticChange?: () => void
+}
+
+interface CreateDeviceInstanceOptions extends BoardMutationQueueOptions {
+  onConfirmedCreate?: () => void
+}
+
+const getCurrentRecommendationSceneFingerprint = (
+  expectedAuthScopeEpoch: number
+): string | null => {
+  if (!isCurrentBoardAuthScope(expectedAuthScopeEpoch)
+    || hydratedBoardAuthScopeEpoch !== expectedAuthScopeEpoch) return null
+  return recommendationSceneFingerprint({
+    deviceTemplates: deviceTemplates.value,
+    nodes: nodes.value,
+    environmentVariables: environmentVariables.value,
+    rules: rules.value,
+    specifications: specifications.value
+  })
+}
+
+const enqueueBoardMutation = async <T,>(
+  work: () => Promise<T>,
+  {
+    admissionGuard,
+    trackSemanticChange = true,
+    onSemanticChange
+  }: BoardMutationQueueOptions = {}
+): Promise<T> => {
+  boardMutationAdmissionEpoch += 1
   const authScopeEpoch = boardAuthScopeEpoch
   const guardedWork = () => {
     if (!isCurrentBoardAuthScope(authScopeEpoch)) {
       return Promise.reject(new PollingAbortedError())
     }
-    return work()
+    return runAdmittedBoardMutation(() => {
+      const previousSceneFingerprint = trackSemanticChange
+        ? getCurrentRecommendationSceneFingerprint(authScopeEpoch)
+        : null
+      return runTrackedBoardMutation(
+        work,
+        previousSceneFingerprint,
+        () => trackSemanticChange
+          ? getCurrentRecommendationSceneFingerprint(authScopeEpoch)
+          : null,
+        () => {
+          if (onSemanticChange) onSemanticChange()
+          else invalidateRecommendationsForSceneChange({ notify: true })
+        }
+      )
+    }, admissionGuard)
   }
   const next = boardMutationQueue.then(guardedWork, guardedWork)
   boardMutationQueue = next.then(() => undefined, () => undefined)
@@ -1648,6 +1964,7 @@ const deviceRuntimeSnapshot = (node: DeviceNode): DeviceRuntimeConfig => ({
 
 // --- UI State ---
 const dialogVisible = ref(false)
+const deviceDialogRef = ref<DeviceDialogCloseController | null>(null)
 let deviceDialogReturnFocusNodeId: string | null = null
 let renameDialogReturnFocusNodeId: string | null = null
 let deleteDialogReturnFocusNodeId: string | null = null
@@ -1677,6 +1994,7 @@ const deletePreviewLoading = ref(false)
 const deleteConfirmReviewSnapshotKey = ref<string | null>(null)
 let deletePreviewRequestEpoch = 0
 let deletePreviewNodeId: string | null = null
+let deleteConfirmSourceDeviceDialogNodeId: string | null = null
 const deleteConfirmDialogData = reactive({
   node: null as DeviceNode | null,
   hasRelations: false,
@@ -1689,17 +2007,6 @@ const deleteConfirmDialogData = reactive({
   environmentChanges: [] as EnvironmentVariableChange[],
   impactToken: ''
 })
-
-const canonicalDeletionSnapshotValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonicalDeletionSnapshotValue)
-  if (value && typeof value === 'object') {
-    const source = value as Record<string, unknown>
-    return Object.fromEntries(Object.keys(source)
-      .sort()
-      .map(key => [key, canonicalDeletionSnapshotValue(source[key])]))
-  }
-  return value
-}
 
 const currentDeletionReviewSnapshotKey = () => {
   const targetId = deleteConfirmDialogData.node?.id
@@ -1728,7 +2035,7 @@ const currentDeletionReviewSnapshotKey = () => {
     ? specifications.value.filter(specification => isSpecRelatedToNode(specification, targetId))
     : []
 
-  return JSON.stringify(canonicalDeletionSnapshotValue({
+  return JSON.stringify(canonicalBoardSnapshotValue({
     targetNode,
     relatedRules,
     relatedSpecifications,
@@ -1750,6 +2057,7 @@ const invalidateDeletePreview = () => {
 
 const clearDeleteConfirmDialog = () => {
   invalidateDeletePreview()
+  deleteConfirmSourceDeviceDialogNodeId = null
   deleteConfirmReviewSnapshotKey.value = null
   deleteConfirmDialogVisible.value = false
   deleteConfirmDialogData.node = null
@@ -1880,6 +2188,7 @@ const clampZoom = (value: number) =>
   Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
 
 const setCanvasZoom = (value: number, options: { preserveCenter?: boolean } = {}) => {
+  if (isCanvasInteractionLocked.value) return
   const nextZoom = clampZoom(value)
   if (!Number.isFinite(nextZoom)) return
   if (Math.abs(nextZoom - canvasZoom.value) < 0.001) return
@@ -1893,6 +2202,7 @@ const setCanvasZoom = (value: number, options: { preserveCenter?: boolean } = {}
 }
 
 const adjustCanvasZoom = (delta: number) => {
+  if (isCanvasInteractionLocked.value) return
   setCanvasZoom(canvasZoom.value + delta, { preserveCenter: true })
 }
 
@@ -1900,6 +2210,10 @@ const canvasZoomPercent = computed(() => Math.round(canvasZoom.value * 100))
 
 const handleCanvasMapZoomInput = (event: Event) => {
   const input = event.target as HTMLInputElement | null
+  if (isCanvasInteractionLocked.value) {
+    if (input) input.value = String(canvasZoomPercent.value)
+    return
+  }
   const value = Number(input?.value)
   if (!Number.isFinite(value)) {
     if (input) input.value = String(canvasZoomPercent.value)
@@ -1910,6 +2224,10 @@ const handleCanvasMapZoomInput = (event: Event) => {
 }
 
 const onBoardWheel = (e: WheelEvent) => {
+  if (isCanvasInteractionLocked.value) {
+    if (e.ctrlKey) e.preventDefault()
+    return
+  }
   if (e.ctrlKey) {
     if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
     if (e.deltaY > 0) {
@@ -1930,7 +2248,8 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
     || target instanceof HTMLSelectElement
     || Boolean(target?.isContentEditable)
 
-  if (!e.defaultPrevented && isCanvasHovered.value && !isEditableTarget && (e.ctrlKey || e.metaKey)) {
+  if (!e.defaultPrevented && !isCanvasInteractionLocked.value
+    && isCanvasHovered.value && !isEditableTarget && (e.ctrlKey || e.metaKey)) {
     if (['=', '+', '-', '0'].includes(e.key)) {
       e.preventDefault()
       if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
@@ -1947,6 +2266,7 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
 }
 
 const onCanvasPointerDown = (e: PointerEvent) => {
+  if (isCanvasInteractionLocked.value) return
   if (e.button !== 0 || e.isPrimary === false || canvasPanPointerId !== null) return
   e.preventDefault()
   isPanning = true
@@ -1966,6 +2286,10 @@ const onCanvasPointerDown = (e: PointerEvent) => {
 
 const onCanvasPointerMove = (e: PointerEvent) => {
   if (!isPanning || e.pointerId !== canvasPanPointerId) return
+  if (isCanvasInteractionLocked.value) {
+    finishCanvasPan(e.pointerId)
+    return
+  }
   const dx = e.clientX - panStart.x
   const dy = e.clientY - panStart.y
   if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
@@ -2014,8 +2338,16 @@ const createDeviceInstanceAt = async (
   tpl: DeviceTemplate,
   pos: { x: number; y: number },
   customName?: string,
-  runtime?: DeviceRuntimeConfig
+  runtime?: DeviceRuntimeConfig,
+  options: CreateDeviceInstanceOptions = {}
 ) => {
+  const { onConfirmedCreate, ...mutationOptions } = options
+  let createConfirmed = false
+  const notifyConfirmedCreate = () => {
+    if (createConfirmed) return
+    createConfirmed = true
+    onConfirmedCreate?.()
+  }
   if (!ensureBoardDataReady(['nodes', 'templates'])) {
     throw new Error(t('app.boardDataLoadFailed'))
   }
@@ -2023,6 +2355,9 @@ const createDeviceInstanceAt = async (
     throw new Error('Device runtime capacity reached')
   }
   return enqueueBoardMutation(async () => {
+    if (!ensureBoardDataReady(['nodes', 'templates'])) {
+      throw new Error(t('app.boardDataLoadFailed'))
+    }
     if (!ensureBoardItemCapacity(
       'devices', getVisibleDeviceNodes().length, 1, REQUEST_LIMITS.devices
     )) {
@@ -2051,6 +2386,7 @@ const createDeviceInstanceAt = async (
       reportEnvironmentChanges(mutation.environmentChanges)
       syncRuleDerivedEdges()
       const created = mutation.affectedDevices[0]
+      notifyConfirmedCreate()
       await focusCreatedDeviceNode(created)
       return { device: created, responseConfirmed: true }
     } catch (error: any) {
@@ -2061,6 +2397,7 @@ const createDeviceInstanceAt = async (
         ])
         const created = nodes.value.find(candidate => candidate.id === node.id)
         if (nodesRefreshed && environmentRefreshed && created) {
+          notifyConfirmedCreate()
           await focusCreatedDeviceNode(created)
           ElMessage.warning(t('app.deviceCreateOutcomeRefreshed', { name: created.label }))
           return { device: created, responseConfirmed: false }
@@ -2069,7 +2406,7 @@ const createDeviceInstanceAt = async (
       ElMessage.error(localizedErrorMessage(error, t('app.saveNodesFailed'), locale.value))
       throw error
     }
-  })
+  }, mutationOptions)
 }
 
 const openTemplateInstanceDialog = (tpl: DeviceTemplate, pos: { x: number; y: number }) => {
@@ -2151,7 +2488,7 @@ const handleTemplateDragEnd = () => {
 
 const onCanvasDragOver = (e: DragEvent) => {
   if (!e.dataTransfer) return
-  if (isModelPlaybackActive.value) {
+  if (isCanvasInteractionLocked.value) {
     e.dataTransfer.dropEffect = 'none'
     return
   }
@@ -2161,6 +2498,7 @@ const onCanvasDragOver = (e: DragEvent) => {
 }
 
 const onCanvasDrop = async (e: DragEvent) => {
+  if (isCanvasInteractionLocked.value) return
   if (!ensurePlaybackClosedForMutation()) return
   const droppedTemplateName = draggingTplName.value
     || e.dataTransfer?.getData('application/x-iot-template')
@@ -2452,17 +2790,24 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
   if (applyingRuleRecommendations.value.has(index)) return
 
   const recommendationEpoch = ruleRecommendationRequestEpoch
+  const requestSceneGeneration = recommendationSceneGeneration
+  const applyAuthScopeEpoch = boardAuthScopeEpoch
+  let recommendationConfirmedApplied = false
 
   let attemptedRule: RuleForm | null = null
   const reportFailure = async (error: any) => {
+    if (!isCurrentBoardAuthScope(applyAuthScopeEpoch)) return
     console.error('applyRecommendation error', error)
     if (!isDefinitiveMutationRejection(error) && attemptedRule) {
       const refreshed = await refreshRules()
+      if (!isCurrentBoardAuthScope(applyAuthScopeEpoch)) return
       if (refreshed && ruleExists(attemptedRule)) {
-        if (recommendationEpoch === ruleRecommendationRequestEpoch) {
+        recommendationConfirmedApplied = true
+        if (recommendationEpoch === ruleRecommendationRequestEpoch
+          && requestSceneGeneration === recommendationSceneGeneration) {
           appliedRuleRecommendations.value.add(index)
+          ElMessage.warning(t('app.ruleCreateOutcomeRefreshed'))
         }
-        ElMessage.warning(t('app.ruleCreateOutcomeRefreshed'))
         return
       }
     }
@@ -2486,12 +2831,19 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
     applyingRuleRecommendations.value.add(index)
     const shouldApply = await confirmRecommendedRuleSimilarity(newRule)
     if (!shouldApply) return
-    if (recommendationEpoch !== ruleRecommendationRequestEpoch) return
+    if (recommendationEpoch !== ruleRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration
+      || isSceneReplacementInProgress.value) return
 
     await enqueueBoardMutation(async () => {
+      if (recommendationEpoch !== ruleRecommendationRequestEpoch
+        || requestSceneGeneration !== recommendationSceneGeneration
+        || !isBoardDataReady.value
+        || isSceneReplacementInProgress.value) return
       try {
         const mutation = await boardApi.addRule(JSON.parse(JSON.stringify(newRule)))
         rules.value = mutation.currentItems
+        recommendationConfirmedApplied = true
         syncRuleDerivedEdges()
         const createdRule = mutation.affectedItem
         if (createdRule?.id) {
@@ -2504,6 +2856,12 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
       } catch (error: any) {
         await reportFailure(error)
       }
+    }, {
+      onSemanticChange: () => handleRecommendationApplySceneChange(
+        recommendationConfirmedApplied,
+        () => preserveAppliedRecommendationAfterSceneChange('rule', index),
+        () => invalidateRecommendationsForSceneChange({ notify: true })
+      )
     })
   } catch (error: any) {
     if (error instanceof RecommendationCandidateError) {
@@ -2589,6 +2947,7 @@ const handleDeviceDialogVisibility = (visible: boolean) => {
 }
 
 const focusDeviceFromInspector = (deviceId: string) => {
+  if (isSceneReplacementInProgress.value) return
   const node = nodes.value.find(n => n.id === deviceId)
   if (!node) return
   focusDeviceNodeOnCanvas(node, { ensureReadable: true })
@@ -2689,11 +3048,16 @@ const renameDevice = () => {
   openRenameDialog(node)
 }
 
-const handleDialogRename = () => {
-  const node = nodes.value.find(candidate => candidate.id === dialogMeta.nodeId)
-  if (!node) return
-  dialogVisible.value = false
-  openRenameDialog(node)
+const handleDialogRename = async () => {
+  const nodeId = dialogMeta.nodeId
+  if (!nodeId) return
+  await continueAfterDeviceDialogApproval(deviceDialogRef.value, () => {
+    if (!dialogVisible.value || dialogMeta.nodeId !== nodeId) return
+    const node = nodes.value.find(candidate => candidate.id === nodeId)
+    if (!node) return
+    dialogVisible.value = false
+    openRenameDialog(node)
+  })
 }
 
 const deleteDevice = () => {
@@ -2804,9 +3168,6 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
         ElMessage.success(mutation.operation === 'updated'
           ? t('app.instanceConfigSaved')
           : t('app.instanceConfigUnchanged'))
-        if (dialogVisible.value && dialogMeta.nodeId === nodeId) {
-          onDeviceListClick(nodeId, { focus: false })
-        }
       } catch (error: any) {
         console.error('保存设备实例配置失败', error)
         if (error?.response?.data?.data?.reasonCode === 'DEVICE_RUNTIME_STALE') {
@@ -2816,9 +3177,6 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
             ElMessage.warning(deviceRuntimeMatches(persisted, runtimeRequest, template)
               ? t('app.deviceRuntimeOutcomeRefreshed')
               : t('app.deviceRuntimeStaleRefreshed'))
-            if (dialogVisible.value && dialogMeta.nodeId === nodeId) {
-              onDeviceListClick(nodeId, { focus: false })
-            }
           } else {
             ElMessage.warning(t('app.deviceRuntimeStaleRefreshFailed'))
           }
@@ -2829,9 +3187,6 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
           const persisted = nodes.value.find(candidate => candidate.id === nodeId)
           if (nodesRefreshed && deviceRuntimeMatches(persisted, runtimeRequest, template)) {
             ElMessage.warning(t('app.deviceRuntimeOutcomeRefreshed'))
-            if (dialogVisible.value && dialogMeta.nodeId === nodeId) {
-              onDeviceListClick(nodeId, { focus: false })
-            }
             return
           }
         }
@@ -2951,7 +3306,18 @@ watch(
   currentSnapshotKey => {
     const reviewedSnapshotKey = deleteConfirmReviewSnapshotKey.value
     if (!currentSnapshotKey || !reviewedSnapshotKey || currentSnapshotKey === reviewedSnapshotKey) return
+    const restoreNode = resolveDeletionReviewDeviceDialogRestore(
+      'board-changed',
+      nodes.value,
+      deleteConfirmSourceDeviceDialogNodeId,
+      deleteConfirmDialogData.node?.id
+    )
     clearDeleteConfirmDialog()
+    if (restoreNode) {
+      bindDeviceDialogNode(restoreNode)
+      deviceDialogReturnFocusNodeId = restoreNode.id
+      dialogVisible.value = true
+    }
     ElMessage.warning(t('app.deviceDeletionPreviewChanged'))
   },
   { flush: 'sync' }
@@ -3019,6 +3385,9 @@ const deleteCurrentNodeWithConfirm = async (nodeId: string) => {
   if (!currentNode) return
 
   deleteDialogReturnFocusNodeId = nodeId
+  deleteConfirmSourceDeviceDialogNodeId = dialogVisible.value && dialogMeta.nodeId === nodeId
+    ? nodeId
+    : null
   const requestEpoch = ++deletePreviewRequestEpoch
   deletePreviewNodeId = nodeId
   deletePreviewLoading.value = true
@@ -3197,6 +3566,94 @@ const {
 
 const deleteNodeFromStatus = (nodeId: string) => deleteCurrentNodeWithConfirm(nodeId)
 
+const normalizeConfirmationText = (value: unknown) => String(value ?? '').trim()
+
+// Delete confirmation must track the fields the backend treats as authored
+// semantics. Labels, formulas, timestamps, and device display caches are rebuilt
+// by the server and must not turn an otherwise safe confirmation into a false
+// stale warning after a refresh.
+const authoredRuleConfirmationSnapshot = (rule: RuleForm) => ({
+  id: normalizeConfirmationText(rule.id),
+  name: normalizeConfirmationText(rule.name),
+  sources: (rule.sources || []).map(source => ({
+    fromId: normalizeConfirmationText(source.fromId),
+    fromApi: normalizeConfirmationText(source.fromApi),
+    itemType: normalizeConfirmationText(source.itemType).toLowerCase(),
+    relation: normalizeConfirmationText(source.relation),
+    value: normalizeConfirmationText(source.value)
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  toId: normalizeConfirmationText(rule.toId),
+  toApi: normalizeConfirmationText(rule.toApi),
+  contentDevice: normalizeConfirmationText(rule.contentDevice),
+  content: normalizeConfirmationText(rule.content)
+})
+
+const authoredSpecificationConditionSnapshot = (condition: Specification['aConditions'][number]) => ({
+  deviceId: normalizeConfirmationText(condition.deviceId),
+  targetType: normalizeConfirmationText(condition.targetType).toLowerCase(),
+  key: normalizeConfirmationText(condition.key),
+  propertyScope: normalizeConfirmationText(condition.propertyScope).toLowerCase(),
+  relation: normalizeConfirmationText(condition.relation),
+  value: normalizeConfirmationText(condition.value)
+})
+
+const sortConfirmationConditions = <T,>(conditions: T[]) =>
+  conditions.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+
+const authoredSpecificationConfirmationSnapshot = (specification: Specification) => ({
+  id: normalizeConfirmationText(specification.id),
+  templateId: normalizeConfirmationText(specification.templateId),
+  aConditions: sortConfirmationConditions(
+    (specification.aConditions || []).map(authoredSpecificationConditionSnapshot)
+  ),
+  ifConditions: sortConfirmationConditions(
+    (specification.ifConditions || []).map(authoredSpecificationConditionSnapshot)
+  ),
+  thenConditions: sortConfirmationConditions(
+    (specification.thenConditions || []).map(authoredSpecificationConditionSnapshot)
+  )
+})
+
+const pendingBoardItemDeletes = new Set<string>()
+const beginBoardItemDelete = (key: string) => {
+  if (pendingBoardItemDeletes.has(key)) return false
+  pendingBoardItemDeletes.add(key)
+  return true
+}
+const finishBoardItemDelete = (key: string) => pendingBoardItemDeletes.delete(key)
+
+// A confirmation dialog can stay open while a scene replacement or an external
+// refresh changes the board.  Re-check both the scene generation and the exact
+// item snapshot before sending a targeted delete, otherwise a reused id could
+// delete an unrelated item from the newer scene.
+const isConfirmedBoardItemCurrent = <T extends { id?: string }>(
+  expectedGeneration: number,
+  collection: T[],
+  itemId: string,
+  expectedItem: T,
+  changedMessage: string,
+  snapshotOf: (item: T) => unknown = item => item
+): boolean => {
+  const status = getConfirmedBoardItemStatus(
+    expectedGeneration,
+    boardSceneGeneration,
+    isSceneReplacementInProgress.value,
+    collection,
+    itemId,
+    expectedItem,
+    snapshotOf
+  )
+  if (status === 'scene-changed') {
+    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    return false
+  }
+  if (status === 'item-changed') {
+    ElMessage.warning({ message: changedMessage, type: 'warning' })
+    return false
+  }
+  return true
+}
+
 /**
  * 删除规则（edges 由 rules 动态生成）
  */
@@ -3205,42 +3662,68 @@ const deleteRule = async (ruleId: string) => {
   if (!ensureBoardDataReady(['rules'])) return
   const ruleToDelete = rules.value.find(r => r.id === ruleId)
   if (!ruleToDelete) return
+  const pendingKey = `rule:${ruleId}`
+  if (!beginBoardItemDelete(pendingKey)) return
+  const confirmationSceneGeneration = boardSceneGeneration
+  const confirmedRuleSnapshot = deepClone(ruleToDelete)
 
   try {
-    await ElMessageBox.confirm(
-      t('app.deleteRuleConfirmMessage', { name: ruleToDelete.name || t('app.unnamedRule') }),
-      t('app.deleteRuleConfirmTitle'),
-      {
-        type: 'warning',
-        confirmButtonText: t('app.delete'),
-        cancelButtonText: t('app.cancel')
-      }
-    )
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    console.error('规则删除确认失败', error)
-    return
-  }
-
-  await enqueueBoardMutation(async () => {
     try {
-      const mutation = await boardApi.removeRule(ruleId)
-      rules.value = mutation.currentItems
-      if (focusedRuleId.value === ruleId) {
-        focusedRuleId.value = null
-      }
-      syncRuleDerivedEdges()
-      ElMessage.success(t('app.deleteRuleSuccess'))
+      await ElMessageBox.confirm(
+        t('app.deleteRuleConfirmMessage', { name: ruleToDelete.name || t('app.unnamedRule') }),
+        t('app.deleteRuleConfirmTitle'),
+        {
+          type: 'warning',
+          confirmButtonText: t('app.delete'),
+          cancelButtonText: t('app.cancel')
+        }
+      )
     } catch (error: any) {
-      console.error('删除规则失败', error)
-      const refreshed = await refreshRules()
-      if (refreshed && !rules.value.some(rule => rule.id === ruleId)) {
-        ElMessage.warning(t('app.ruleDeleteOutcomeRefreshed'))
-        return
-      }
-      ElMessage.error(localizedErrorMessage(error, t('app.deleteRuleFailed'), locale.value))
+      if (error === 'cancel' || error === 'close') return
+      console.error('规则删除确认失败', error)
+      return
     }
-  })
+
+    const snapshotOf = authoredRuleConfirmationSnapshot
+    if (!isConfirmedBoardItemCurrent(
+      confirmationSceneGeneration,
+      rules.value,
+      ruleId,
+      confirmedRuleSnapshot,
+      t('app.ruleChangedBeforeDelete'),
+      snapshotOf
+    )) return
+
+    await enqueueBoardMutation(async () => {
+      if (!isConfirmedBoardItemCurrent(
+        confirmationSceneGeneration,
+        rules.value,
+        ruleId,
+        confirmedRuleSnapshot,
+        t('app.ruleChangedBeforeDelete'),
+        snapshotOf
+      )) return
+      try {
+        const mutation = await boardApi.removeRule(confirmedRuleSnapshot)
+        rules.value = mutation.currentItems
+        if (focusedRuleId.value === ruleId) {
+          focusedRuleId.value = null
+        }
+        syncRuleDerivedEdges()
+        ElMessage.success(t('app.deleteRuleSuccess'))
+      } catch (error: any) {
+        console.error('删除规则失败', error)
+        const refreshed = await refreshRules()
+        if (refreshed && !rules.value.some(rule => rule.id === ruleId)) {
+          ElMessage.warning(t('app.ruleDeleteOutcomeRefreshed'))
+          return
+        }
+        ElMessage.error(localizedErrorMessage(error, t('app.deleteRuleFailed'), locale.value))
+      }
+    })
+  } finally {
+    finishBoardItemDelete(pendingKey)
+  }
 }
 
 const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
@@ -3254,12 +3737,13 @@ const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
       if (currentIndex < 0 || targetIndex < 0 || targetIndex >= rules.value.length) return
 
       const reordered = [...rules.value]
+      const expectedOrder = rules.value.map(rule => String(rule.id || ''))
       const movedRule = reordered[currentIndex]
       reordered[currentIndex] = reordered[targetIndex]
       reordered[targetIndex] = movedRule
       const requestedOrder = reordered.map(rule => String(rule.id || ''))
       try {
-        rules.value = await boardApi.reorderRules(requestedOrder)
+        rules.value = await boardApi.reorderRules(expectedOrder, requestedOrder)
         syncRuleDerivedEdges()
         focusedRuleId.value = ruleId
         ElMessage.success(t('app.ruleOrderUpdated'))
@@ -3287,43 +3771,69 @@ const deleteSpecification = async (specId: string) => {
   if (!ensureBoardDataReady(['specs'])) return
   const specToDelete = specifications.value.find(s => s.id === specId)
   if (!specToDelete) return
+  const pendingKey = `spec:${specId}`
+  if (!beginBoardItemDelete(pendingKey)) return
+  const confirmationSceneGeneration = boardSceneGeneration
+  const confirmedSpecificationSnapshot = deepClone(specToDelete)
 
   try {
-    await ElMessageBox.confirm(
-      t('app.deleteSpecConfirmMessage', {
-        name: getSpecResultDisplayTitle(specToDelete, 0) || t('app.unnamedSpecification')
-      }),
-      t('app.deleteSpecConfirmTitle'),
-      {
-        type: 'warning',
-        confirmButtonText: t('app.delete'),
-        cancelButtonText: t('app.cancel')
-      }
-    )
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    console.error('规约删除确认失败', error)
-    return
-  }
-
-  await enqueueBoardMutation(async () => {
     try {
-      const mutation = await boardApi.removeSpec(specId)
-      specifications.value = mutation.currentItems
-      if (focusedSpecId.value === specId) {
-        focusedSpecId.value = null
-      }
-      ElMessage.success(t('app.deleteSpecSuccess'))
+      await ElMessageBox.confirm(
+        t('app.deleteSpecConfirmMessage', {
+          name: getSpecResultDisplayTitle(specToDelete, 0) || t('app.unnamedSpecification')
+        }),
+        t('app.deleteSpecConfirmTitle'),
+        {
+          type: 'warning',
+          confirmButtonText: t('app.delete'),
+          cancelButtonText: t('app.cancel')
+        }
+      )
     } catch (error: any) {
-      console.error('删除规约失败', error)
-      const refreshed = await refreshSpecifications()
-      if (refreshed && !specifications.value.some(spec => spec.id === specId)) {
-        ElMessage.warning(t('app.specDeleteOutcomeRefreshed'))
-        return
-      }
-      ElMessage.error(localizedErrorMessage(error, t('app.deleteSpecFailed'), locale.value))
+      if (error === 'cancel' || error === 'close') return
+      console.error('规约删除确认失败', error)
+      return
     }
-  })
+
+    const snapshotOf = authoredSpecificationConfirmationSnapshot
+    if (!isConfirmedBoardItemCurrent(
+      confirmationSceneGeneration,
+      specifications.value,
+      specId,
+      confirmedSpecificationSnapshot,
+      t('app.specificationChangedBeforeDelete'),
+      snapshotOf
+    )) return
+
+    await enqueueBoardMutation(async () => {
+      if (!isConfirmedBoardItemCurrent(
+        confirmationSceneGeneration,
+        specifications.value,
+        specId,
+        confirmedSpecificationSnapshot,
+        t('app.specificationChangedBeforeDelete'),
+        snapshotOf
+      )) return
+      try {
+        const mutation = await boardApi.removeSpec(confirmedSpecificationSnapshot)
+        specifications.value = mutation.currentItems
+        if (focusedSpecId.value === specId) {
+          focusedSpecId.value = null
+        }
+        ElMessage.success(t('app.deleteSpecSuccess'))
+      } catch (error: any) {
+        console.error('删除规约失败', error)
+        const refreshed = await refreshSpecifications()
+        if (refreshed && !specifications.value.some(spec => spec.id === specId)) {
+          ElMessage.warning(t('app.specDeleteOutcomeRefreshed'))
+          return
+        }
+        ElMessage.error(localizedErrorMessage(error, t('app.deleteSpecFailed'), locale.value))
+      }
+    })
+  } finally {
+    finishBoardItemDelete(pendingKey)
+  }
 }
 
 /* =================================================================================
@@ -3646,6 +4156,16 @@ const replaceTemplateCatalog = (templates: DeviceTemplate[]) => {
   boardDataLoadState.templates = 'ready'
 }
 
+const handleAuthoritativeBoardStateUnavailable = (
+  keys: Array<'templates' | 'environment'>
+) => {
+  const affectedKeys = new Set(keys)
+  affectedKeys.forEach(key => { boardDataLoadState[key] = 'error' })
+  templatesLoading.value = false
+  invalidateCurrentFuzzingModelFingerprint()
+  invalidateRecommendationsForSceneChange({ notify: true })
+}
+
 
 
 /* =================================================================================
@@ -3694,6 +4214,7 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
     rules.value = snapshot.rules
     specifications.value = snapshot.specifications
     syncRuleDerivedEdges()
+    hydratedBoardAuthScopeEpoch = authScopeEpoch
     allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'ready' })
     void refreshCurrentFuzzingModelFingerprint()
     return true
@@ -3772,39 +4293,56 @@ const formatEnvironmentPatchResults = (results: EnvironmentVariablePatchResult[]
     return `${formatBoardEnvironmentModelToken(result.name, result.name)} (${fields.map(environmentPatchFieldLabel).join(', ')})`
   }).join('; ')
 
-const saveEnvironmentVariables = async (patches: ModelEnvironmentVariable[]) => {
+const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateRequest[]) => {
   if (!ensurePlaybackClosedForMutation()) return
   if (!ensureBoardDataReady(['nodes', 'templates', 'environment'])) return
-  await enqueueBoardMutation(async () => {
-    try {
-      const mutation = await boardApi.saveEnvironment(patches)
-      environmentVariables.value = mutation.environmentVariables
-      const changedPatches = mutation.patchResults.filter(result => result.changedFields.length > 0)
-      if (changedPatches.length > 0) {
-        ElMessage.success(t('app.environmentPatchApplied', {
-          items: formatEnvironmentPatchResults(changedPatches)
-        }))
-      } else {
-        ElMessage.info(t('app.environmentPatchUnchanged', {
-          items: formatEnvironmentPatchResults(mutation.patchResults)
-        }))
+  if (environmentMutationPending.value) {
+    ElMessage.info(t('app.environmentSaveInProgress'))
+    return
+  }
+  environmentMutationPending.value = true
+  try {
+    await enqueueBoardMutation(async () => {
+      try {
+        const mutation = await boardApi.saveEnvironment(patches)
+        environmentVariables.value = mutation.environmentVariables
+        const changedPatches = mutation.patchResults.filter(result => result.changedFields.length > 0)
+        if (changedPatches.length > 0) {
+          ElMessage.success(t('app.environmentPatchApplied', {
+            items: formatEnvironmentPatchResults(changedPatches)
+          }))
+        } else {
+          ElMessage.info(t('app.environmentPatchUnchanged', {
+            items: formatEnvironmentPatchResults(mutation.patchResults)
+          }))
+        }
+        const changedPatchNames = new Set(changedPatches.map(result => result.name))
+        reportEnvironmentChanges(mutation.environmentChanges.filter(
+          change => !changedPatchNames.has(change.name)
+        ))
+      } catch (e: any) {
+        console.error('保存环境变量池失败', e)
+        if (e?.response?.data?.data?.reasonCode === 'ENVIRONMENT_VARIABLE_STALE') {
+          // A stale CAS can also mean that another tab removed a device or
+          // template which sourced this variable. Reconcile the full semantic
+          // snapshot so the inspector cannot keep ghost entries.
+          const refreshed = await refreshBoardSnapshot()
+          ElMessage.warning(refreshed
+            ? t('app.environmentVariableStaleRefreshed')
+            : t('app.environmentVariableStaleRefreshFailed'))
+        } else if (!isDefinitiveMutationRejection(e)) {
+          const refreshed = await refreshBoardSnapshot()
+          ElMessage.warning(refreshed
+            ? t('app.environmentSaveOutcomeRefreshed')
+            : t('app.environmentSaveOutcomeUnknownRefreshFailed'))
+        } else {
+          ElMessage.error(extractApiErrorMessage(e, t('app.saveEnvironmentFailed')))
+        }
       }
-      const changedPatchNames = new Set(changedPatches.map(result => result.name))
-      reportEnvironmentChanges(mutation.environmentChanges.filter(
-        change => !changedPatchNames.has(change.name)
-      ))
-    } catch (e: any) {
-      console.error('保存环境变量池失败', e)
-      if (!isDefinitiveMutationRejection(e)) {
-        const refreshed = await refreshEnvironmentVariables()
-        ElMessage.warning(refreshed
-          ? t('app.environmentSaveOutcomeRefreshed')
-          : t('app.environmentSaveOutcomeUnknownRefreshFailed'))
-      } else {
-        ElMessage.error(extractApiErrorMessage(e, t('app.saveEnvironmentFailed')))
-      }
-    }
-  })
+    })
+  } finally {
+    environmentMutationPending.value = false
+  }
 }
 
 const normalizeSceneString = (value: unknown, field = 'value') => {
@@ -4809,7 +5347,10 @@ const exportScene = () => {
 }
 
 const triggerSceneImport = () => {
-  if (isImportingScene.value) return
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    return
+  }
   if (sceneImportInputRef.value) {
     sceneImportInputRef.value.value = ''
     sceneImportInputRef.value.click()
@@ -4878,16 +5419,10 @@ const showSceneImportError = async (error: any) => {
 }
 
 const refreshSceneForReconciliation = async (): Promise<boolean> => {
-  const [templatesOk, nodesOk, rulesOk, specsOk] = await Promise.all([
-    refreshDeviceTemplates(),
-    refreshDevices(),
-    refreshRules(),
-    refreshSpecifications()
-  ])
-  const environmentOk = await refreshEnvironmentVariables()
-  const refreshed = templatesOk && nodesOk && rulesOk && specsOk && environmentOk
-  if (refreshed) void refreshCurrentFuzzingModelFingerprint()
-  return refreshed
+  // Reconciliation follows an unknown mutation outcome.  Read the semantic board through the
+  // atomic snapshot endpoint so templates, nodes, rules, specs and environment cannot come from
+  // different writes made by another tab while this recovery decision is being made.
+  return refreshBoardSnapshot()
 }
 
 const readBoardReplacementStalePreview = (error: any): BoardReplacementPreview | null => {
@@ -4934,6 +5469,13 @@ const savedBatchMatchesScene = (
   scene: BoardSceneModel
 ): boolean => {
   try {
+    if (!sceneTemplatesCoveredByCatalog(
+      scene.templates,
+      deviceTemplates.value,
+      saved.createdTemplates
+    )) {
+      return false
+    }
     const returnedScene: BoardSceneModel = {
       schema: SCENE_FILE_SCHEMA,
       version: SCENE_FILE_VERSION,
@@ -4961,7 +5503,12 @@ const resetSceneSelectionAfterReplacement = async () => {
   }
 }
 
-const importScene = async (scene: BoardSceneModel): Promise<boolean> => {
+const importScene = async (
+  scene: BoardSceneModel,
+  admissionGuard?: () => boolean
+): Promise<boolean> => {
+  const isAdmitted = () => !admissionGuard || admissionGuard()
+  if (!isAdmitted()) return false
   if (!ensurePlaybackClosedForMutation()) return false
   if (isSceneReplacementInProgress.value) return false
   if (chatStore.state.streaming) {
@@ -4971,6 +5518,7 @@ const importScene = async (scene: BoardSceneModel): Promise<boolean> => {
   isImportingScene.value = true
   try {
     await waitForPendingBoardMutations()
+    if (!isAdmitted()) return false
     if (!ensureBoardDataReady()) return false
     let replacementPreview: BoardReplacementPreview
     try {
@@ -4979,6 +5527,7 @@ const importScene = async (scene: BoardSceneModel): Promise<boolean> => {
       ElMessage.error(localizedErrorMessage(error, t('app.sceneReplacementPreviewFailed'), locale.value))
       return false
     }
+    if (!isAdmitted()) return false
     try {
       await ElMessageBox.confirm(
         t('app.sceneImportConfirmMessage', {
@@ -5002,8 +5551,10 @@ const importScene = async (scene: BoardSceneModel): Promise<boolean> => {
     } catch {
       return false
     }
+    if (!isAdmitted()) return false
 
     return await enqueueBoardMutation(async () => {
+      invalidateForFullSceneReplacement()
       let saved: Awaited<ReturnType<typeof boardApi.saveBoardBatch>>
       try {
         saved = await boardApi.saveBoardBatch({
@@ -5075,7 +5626,10 @@ const importScene = async (scene: BoardSceneModel): Promise<boolean> => {
           })
       ElMessage.success(importMessage)
       return true
-    })
+    }, { admissionGuard, trackSemanticChange: false })
+  } catch (error) {
+    if (error instanceof BoardMutationAdmissionCancelledError) return false
+    throw error
   } finally {
     isImportingScene.value = false
   }
@@ -5119,6 +5673,7 @@ const clearScene = async () => {
       return
     }
 
+    invalidateForFullSceneReplacement()
     await enqueueBoardMutation(async () => {
       try {
         const saved = await boardApi.saveBoardBatch({
@@ -5168,7 +5723,7 @@ const clearScene = async () => {
           ElMessage.warning(t('app.sceneClearOutcomeUnconfirmedAfterRefresh'))
         }
       }
-    })
+    }, { trackSemanticChange: false })
   } finally {
     isClearingScene.value = false
   }
@@ -5179,6 +5734,10 @@ const handleSceneImportFile = async (event: Event) => {
   const file = input?.files?.[0]
   if (!file) return
   try {
+    if (isSceneReplacementInProgress.value) {
+      ElMessage.warning(t('app.sceneReplacementInProgress'))
+      return
+    }
     if (file.size > MAX_SCENE_IMPORT_BYTES) {
       ElMessage.error(t('app.importFileTooLarge', { size: '64 MiB' }))
       return
@@ -5502,9 +6061,9 @@ const getVisibleCanvasFrame = () => {
   const canvasEl = document.querySelector('.canvas-container')
   if (!canvasEl) return null
   const rect = canvasEl.getBoundingClientRect()
-  const leftInset = boardPanels.control.collapsed ? 64 : boardPanels.control.width
+  const leftInset = boardPanels.control.collapsed ? 64 : effectiveControlPanelWidth.value
   const actionRailInset = actionDockReservedWidth.value + (isActionDockPackedMode.value ? 8 : 16)
-  const rightInset = (boardPanels.inspector.collapsed ? 48 : boardPanels.inspector.width) + actionRailInset
+  const rightInset = (boardPanels.inspector.collapsed ? 48 : effectiveInspectorPanelWidth.value) + actionRailInset
   const canvasOffset = getCanvasInnerOffset()
   const topInset = canvasOffset.y
   const timelineVisible = simulationAnimationState.value.visible || traceAnimationState.value.visible
@@ -5693,6 +6252,7 @@ const canvasMapViewportRect = computed(() => {
 })
 
 const navigateCanvasMap = (event: PointerEvent, rect?: DOMRect | null) => {
+  if (isCanvasInteractionLocked.value) return
   const point = canvasMapPointFromEvent(event, rect)
   if (!point) return
   const world = canvasMapPointToWorld(point.x, point.y)
@@ -5702,6 +6262,7 @@ const navigateCanvasMap = (event: PointerEvent, rect?: DOMRect | null) => {
 }
 
 const onCanvasMapPointerDown = (event: PointerEvent) => {
+  if (isCanvasInteractionLocked.value) return
   if (!canvasMapData.value.bounds
     || event.button !== 0
     || event.isPrimary === false
@@ -5723,6 +6284,10 @@ const onCanvasMapPointerDown = (event: PointerEvent) => {
 
 const onCanvasMapPointerMove = (event: PointerEvent) => {
   if (!isCanvasMapDragging.value || event.pointerId !== canvasMapDragPointerId) return
+  if (isCanvasInteractionLocked.value) {
+    finishCanvasMapDrag(event.pointerId)
+    return
+  }
   navigateCanvasMap(event, canvasMapDragRect)
 }
 
@@ -5786,6 +6351,7 @@ const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
 }
 
 const fitToContent = () => {
+  if (isCanvasInteractionLocked.value) return
   if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   fitNodesToCanvas(getVisibleDeviceNodes())
 }
@@ -6131,8 +6697,14 @@ const cancelRecommendationDuringTeardown = (
     controller?.abort()
     return
   }
+  const ownerAuthToken = getRecommendationRequestOwner(requestId)?.authToken
+  if (!ownerAuthToken) {
+    console.warn(`Recommendation owner credential is unavailable during teardown (${requestId})`)
+    controller?.abort()
+    return
+  }
   void requestInteractiveCancellation({
-    cancel: () => boardApi.cancelRecommendation(requestId),
+    cancel: () => cancelRecommendationAsOwner(requestId, ownerAuthToken),
     waitBeforeRetry: () => new Promise<void>(resolve => setTimeout(resolve, 100)),
     maxAttempts: 20
   }).catch(error => {
@@ -6313,6 +6885,7 @@ const ruleRecommendationAdjustedItems = ref<RecommendationAdjustmentItem[]>([])
 const ruleRecommendationRawCandidateCount = ref(0)
 const ruleRecommendationInspectedCount = ref(0)
 const ruleRecommendationTruncatedCount = ref(0)
+const ruleRecommendationIsAppliedConfirmation = ref(false)
 const appliedRuleRecommendations = ref<Set<number>>(new Set())
 const applyingRuleRecommendations = ref<Set<number>>(new Set())
 const showRecommendationPanel = ref(false)
@@ -6481,10 +7054,15 @@ const buildSpecDeviceRefsFromConditions = (
 type RecommendationPanelKind = 'rule' | 'device' | 'spec' | 'scenario'
 
 const recommendationStopRequestsInFlight = new Set<RecommendationPanelKind>()
-const RECOMMENDATION_STOP_STATUS_FAILURE_LIMIT = 30
+const recommendationRequestOwners = new Map<string, RecommendationRequestOwner>()
+const recommendationOutcomeUnknownWarnings = new Set<string>()
+type RecommendationTerminalEvidence = 'post-terminal' | 'status-finished'
+const recommendationTerminalEvidence = new Map<string, RecommendationTerminalEvidence>()
 const RECOMMENDATION_STOP_RETRY_DELAY_MS = 50
 type RecommendationStopRecovery = {
   requestId: string
+  ownerUserId: number | null
+  ownerAuthToken: string
   requestIdRef: Ref<string | null>
   abortControllerRef: Ref<AbortController | null>
   controller: AbortController | null
@@ -6494,12 +7072,195 @@ type RecommendationStopRecovery = {
   cancellationAccepted: boolean
   acceptanceNotified: boolean
   consecutiveStatusFailures: number
+  retryNotBeforeMs: number
 }
 const recommendationStopRecoveries = new Map<RecommendationPanelKind, RecommendationStopRecovery>()
+
+const hasRecommendationTerminalEvidence = (
+  requestId: string
+): boolean => recommendationTerminalEvidence.has(requestId)
+
+const recordRecommendationTerminalEvidence = (
+  requestId: string,
+  evidence: RecommendationTerminalEvidence
+) => {
+  recommendationTerminalEvidence.set(requestId, evidence)
+  if (recommendationTerminalEvidence.size > 64) {
+    const oldestRequestId = recommendationTerminalEvidence.keys().next().value
+    if (oldestRequestId) recommendationTerminalEvidence.delete(oldestRequestId)
+  }
+}
+
+const captureRecommendationRequestOwner = (): RecommendationRequestOwner | null => {
+  const authToken = getToken()
+  if (!authToken) {
+    ElMessage.error(t('app.recommendationAuthenticationRequired'))
+    return null
+  }
+  return { userId: currentAuthUserId.value, authToken }
+}
+
+const getRecommendationRequestOwner = (requestId: string): RecommendationRequestOwner | null => {
+  for (const recovery of recommendationStopRecoveries.values()) {
+    if (recovery.requestId === requestId && recovery.ownerAuthToken) {
+      return { userId: recovery.ownerUserId, authToken: recovery.ownerAuthToken }
+    }
+  }
+  return recommendationRequestOwners.get(requestId) ?? null
+}
+
+watch(
+  () => [currentAuthUserId.value, authState.token] as const,
+  ([userId, authToken]) => {
+    if (userId === null || !authToken) return
+    recommendationRequestOwners.forEach((owner, requestId) => {
+      recommendationRequestOwners.set(
+        requestId,
+        refreshRecommendationOwnerCredential(owner, userId, authToken)
+      )
+    })
+    recommendationStopRecoveries.forEach(recovery => {
+      const refreshed = refreshRecommendationOwnerCredential(
+        { userId: recovery.ownerUserId, authToken: recovery.ownerAuthToken },
+        userId,
+        authToken
+      )
+      recovery.ownerAuthToken = refreshed.authToken
+    })
+  },
+  { flush: 'post' }
+)
 
 const waitForRecommendationCancellationRetry = () => new Promise<void>(resolve => {
   setTimeout(resolve, RECOMMENDATION_STOP_RETRY_DELAY_MS)
 })
+
+const cancelRecommendationAsOwner = (
+  requestId: string,
+  ownerAuthToken: string
+): Promise<boolean> => boardApi.cancelRecommendation(requestId, ownerAuthToken)
+
+const readRecommendationStatusAsOwner = (
+  requestId: string,
+  ownerAuthToken: string
+) => boardApi.getRecommendationStatus(requestId, ownerAuthToken)
+
+const releaseRecommendationTracking = (
+  kind: RecommendationPanelKind,
+  requestId: string,
+  options: {
+    terminalEvidence?: RecommendationTerminalEvidence
+  } = {}
+) => {
+  const recovery = recommendationStopRecoveries.get(kind)
+  if (recovery?.requestId === requestId) {
+    recommendationStopRecoveries.delete(kind)
+    recovery.controller?.abort()
+    if (recovery.abortControllerRef.value === recovery.controller) {
+      recovery.abortControllerRef.value = null
+    }
+    const wasCurrent = recovery.requestIdRef.value === requestId
+    recovery.requestIdRef.value = requestIdAfterTerminalSettlement(
+      recovery.requestIdRef.value,
+      requestId
+    )
+    if (wasCurrent) recovery.setRunning(false)
+  }
+  recommendationRequestOwners.delete(requestId)
+  recommendationOutcomeUnknownWarnings.delete(requestId)
+  if (recommendationProgressRequestId.value === requestId) {
+    recommendationProgressRequestId.value = null
+  }
+  if (options.terminalEvidence) {
+    recordRecommendationTerminalEvidence(requestId, options.terminalEvidence)
+  }
+}
+
+const settleRecommendationPost = (
+  kind: RecommendationPanelKind,
+  requestId: string,
+  requestIdRef: Ref<string | null>,
+  abortControllerRef: Ref<AbortController | null>,
+  controller: AbortController,
+  setRunning: (running: boolean) => void
+) => {
+  const recovery = recommendationStopRecoveries.get(kind)
+  if (recovery?.requestId === requestId) {
+    releaseRecommendationTracking(kind, requestId, { terminalEvidence: 'post-terminal' })
+    return
+  }
+  recommendationRequestOwners.delete(requestId)
+  recommendationOutcomeUnknownWarnings.delete(requestId)
+  recordRecommendationTerminalEvidence(requestId, 'post-terminal')
+  const wasCurrent = requestIdRef.value === requestId
+  requestIdRef.value = requestIdAfterTerminalSettlement(requestIdRef.value, requestId)
+  if (abortControllerRef.value === controller) abortControllerRef.value = null
+  if (recommendationProgressRequestId.value === requestId) {
+    recommendationProgressRequestId.value = null
+  }
+  if (wasCurrent) setRunning(false)
+}
+
+const beginUnknownRecommendationRecovery = (
+  kind: RecommendationPanelKind,
+  requestId: string,
+  requestIdRef: Ref<string | null>,
+  abortControllerRef: Ref<AbortController | null>,
+  setRunning: (running: boolean) => void,
+  cancelledMessageKey: string
+) => {
+  if (requestIdRef.value !== requestId) return
+  if (!recommendationOutcomeUnknownWarnings.has(requestId)) {
+    recommendationOutcomeUnknownWarnings.add(requestId)
+    ElMessage.warning(t('app.recommendationResponseLostRecovering'))
+  }
+  void stopActiveRecommendation(
+    kind,
+    requestIdRef,
+    abortControllerRef,
+    setRunning,
+    cancelledMessageKey,
+    { showMessage: false }
+  )
+}
+
+const ensureRecommendationStopRecovery = (
+  kind: RecommendationPanelKind,
+  requestIdRef: Ref<string | null>,
+  abortControllerRef: Ref<AbortController | null>,
+  setRunning: (running: boolean) => void,
+  cancelledMessageKey: string,
+  options: { showMessage?: boolean } = {}
+): RecommendationStopRecovery | null => {
+  const requestId = requestIdRef.value
+  if (!requestId) return null
+  const existing = recommendationStopRecoveries.get(kind)
+  if (existing?.requestId === requestId) {
+    if (options.showMessage !== false) existing.showMessage = true
+    return existing
+  }
+  const owner = getRecommendationRequestOwner(requestId)
+  if (!owner) return null
+  const recovery: RecommendationStopRecovery = {
+    requestId,
+    ownerUserId: owner.userId,
+    ownerAuthToken: owner.authToken,
+    requestIdRef,
+    abortControllerRef,
+    controller: abortControllerRef.value,
+    setRunning,
+    cancelledMessageKey,
+    showMessage: options.showMessage !== false,
+    cancellationAccepted: false,
+    acceptanceNotified: false,
+    consecutiveStatusFailures: 0,
+    retryNotBeforeMs: 0
+  }
+  recommendationStopRecoveries.set(kind, recovery)
+  recommendationProgressStage.value = 'CANCELLING'
+  setRunning(true)
+  return recovery
+}
 
 const acceptRecommendationCancellation = (
   kind: RecommendationPanelKind,
@@ -6520,24 +7281,11 @@ const acceptRecommendationCancellation = (
 
 const finishRecommendationStopRecovery = (
   kind: RecommendationPanelKind,
-  requestId: string,
-  uncertain = false
+  requestId: string
 ) => {
   const recovery = recommendationStopRecoveries.get(kind)
   if (!recovery || recovery.requestId !== requestId) return
-  recommendationStopRecoveries.delete(kind)
-  recovery.controller?.abort()
-  if (recovery.abortControllerRef.value === recovery.controller) {
-    recovery.abortControllerRef.value = null
-  }
-  if (recovery.requestIdRef.value === requestId) recovery.requestIdRef.value = null
-  if (recommendationProgressRequestId.value === requestId) {
-    recommendationProgressRequestId.value = null
-  }
-  recovery.setRunning(false)
-  if (uncertain) {
-    ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
-  }
+  releaseRecommendationTracking(kind, requestId, { terminalEvidence: 'status-finished' })
 }
 
 const stopActiveRecommendation = async (
@@ -6559,24 +7307,24 @@ const stopActiveRecommendation = async (
     recommendationStopRequestsInFlight.delete(kind)
     return
   }
-  recommendationStopRecoveries.set(kind, {
-    requestId,
+  const recovery = ensureRecommendationStopRecovery(
+    kind,
     requestIdRef,
     abortControllerRef,
-    controller,
     setRunning,
     cancelledMessageKey,
-    showMessage: options.showMessage !== false,
-    cancellationAccepted: false,
-    acceptanceNotified: false,
-    consecutiveStatusFailures: 0
-  })
+    options
+  )
+  if (!recovery) {
+    recommendationStopRequestsInFlight.delete(kind)
+    ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
+    return
+  }
   // Keep the POST transport alive until cancellation is accepted. Aborting it first can let
   // the DELETE beat server-side registration while the provider call continues unobserved.
-  setRunning(true)
   try {
     const cancellationAccepted = await requestInteractiveCancellation({
-      cancel: () => boardApi.cancelRecommendation(requestId),
+      cancel: () => cancelRecommendationAsOwner(requestId, recovery.ownerAuthToken),
       waitBeforeRetry: waitForRecommendationCancellationRetry,
       shouldContinue: () => recommendationStopRecoveries.get(kind)?.requestId === requestId
     })
@@ -6613,60 +7361,67 @@ const refreshRecommendationProgress = async (kind: RecommendationPanelKind) => {
   if (recommendationProgressRefreshInFlight) return
   const requestId = recommendationProgressRequestId.value
   if (!requestId) return
+  const scheduledRecovery = recommendationStopRecoveries.get(kind)
+  if (scheduledRecovery?.requestId === requestId
+    && scheduledRecovery.retryNotBeforeMs > Date.now()) return
   recommendationProgressRefreshInFlight = true
   try {
     const recovery = recommendationStopRecoveries.get(kind)
     if (recovery?.requestId === requestId && !recovery.cancellationAccepted) {
       try {
-        if (await boardApi.cancelRecommendation(requestId)) {
+        if (await cancelRecommendationAsOwner(requestId, recovery.ownerAuthToken)) {
           acceptRecommendationCancellation(kind, requestId)
         }
       } catch {
         // The status read below remains the source of truth while cancellation is retried.
       }
     }
-    const status = await boardApi.getRecommendationStatus(requestId)
+    const statusOwner = getRecommendationRequestOwner(requestId)
+    if (!statusOwner) throw new Error('Recommendation owner credential is unavailable')
+    const status = await readRecommendationStatusAsOwner(requestId, statusOwner.authToken)
     if (getRunningRecommendationKind() === kind && recommendationProgressRequestId.value === requestId) {
       recommendationProgressStage.value = status.stage
       const currentRecovery = recommendationStopRecoveries.get(kind)
       if (currentRecovery?.requestId === requestId) {
         currentRecovery.consecutiveStatusFailures = 0
+        currentRecovery.retryNotBeforeMs = 0
         if (status.state === 'FINISHED') finishRecommendationStopRecovery(kind, requestId)
       }
     }
   } catch (error: any) {
     const recovery = recommendationStopRecoveries.get(kind)
     if (recovery?.requestId === requestId) {
-      // A first 404 can mean the DELETE won a race with POST registration. Treat all
-      // unavailable status reads as bounded uncertainty instead of declaring completion.
-      recovery.consecutiveStatusFailures += 1
-      if (recovery.consecutiveStatusFailures >= RECOMMENDATION_STOP_STATUS_FAILURE_LIMIT) {
-        finishRecommendationStopRecovery(kind, requestId, true)
-      }
+      // A 404 can mean DELETE beat POST registration, while a transport failure says
+      // nothing about server completion. Retain the owner and back off without releasing.
+      const retryPlan = planRecommendationRecoveryAfterStatusFailure(
+        recovery.consecutiveStatusFailures
+      )
+      recovery.consecutiveStatusFailures = retryPlan.consecutiveFailures
+      recovery.retryNotBeforeMs = Date.now() + retryPlan.retryDelayMs
     }
     // Registration and ordinary completion can race with this read; the POST remains authoritative.
   } finally {
     recommendationProgressRefreshInFlight = false
   }
 }
-watch(() => getRunningRecommendationKind(), kind => {
-  if (recommendationProgressTimer) {
-    clearInterval(recommendationProgressTimer)
-    recommendationProgressTimer = null
-  }
-  recommendationProgressElapsed.value = 0
-  recommendationProgressStage.value = 'QUEUED'
-  if (!kind) {
-    recommendationProgressRequestId.value = null
-    return
-  }
-  const startedAt = Date.now()
-  void refreshRecommendationProgress(kind)
-  recommendationProgressTimer = setInterval(() => {
-    recommendationProgressElapsed.value = Math.floor((Date.now() - startedAt) / 1000)
+watch(
+  () => [getRunningRecommendationKind(), recommendationProgressRequestId.value] as const,
+  ([kind, requestId]) => {
+    if (recommendationProgressTimer) {
+      clearInterval(recommendationProgressTimer)
+      recommendationProgressTimer = null
+    }
+    recommendationProgressElapsed.value = 0
+    recommendationProgressStage.value = 'QUEUED'
+    if (!kind || !requestId) return
+    const startedAt = Date.now()
     void refreshRecommendationProgress(kind)
-  }, 1000)
-})
+    recommendationProgressTimer = setInterval(() => {
+      recommendationProgressElapsed.value = Math.floor((Date.now() - startedAt) / 1000)
+      void refreshRecommendationProgress(kind)
+    }, 1000)
+  }
+)
 
 const isAnyRecommendationPanelVisible = (): boolean =>
   showRecommendationPanel.value ||
@@ -6680,6 +7435,11 @@ const isRecommendationRunningForAnother = (kind: RecommendationPanelKind): boole
 }
 
 const canOpenRecommendationPanel = (kind: RecommendationPanelKind): boolean => {
+  if (!ensureBoardDataReady()) return false
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    return false
+  }
   if (simulationAnimationState.value.visible) {
     ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
     return false
@@ -6704,6 +7464,7 @@ const resetRuleRecommendationResults = () => {
   ruleRecommendationRawCandidateCount.value = 0
   ruleRecommendationInspectedCount.value = 0
   ruleRecommendationTruncatedCount.value = 0
+  ruleRecommendationIsAppliedConfirmation.value = false
   appliedRuleRecommendations.value.clear()
   applyingRuleRecommendations.value.clear()
   ruleRecommendationRequested.value = false
@@ -6718,6 +7479,7 @@ const resetDeviceRecommendationResults = () => {
   deviceRecommendationRawCandidateCount.value = 0
   deviceRecommendationInspectedCount.value = 0
   deviceRecommendationTruncatedCount.value = 0
+  deviceRecommendationIsAppliedConfirmation.value = false
   appliedDeviceRecommendations.value.clear()
   applyingDeviceRecommendations.value.clear()
   deviceRecommendationRequested.value = false
@@ -6731,6 +7493,7 @@ const resetSpecRecommendationResults = () => {
   specRecommendationRawCandidateCount.value = 0
   specRecommendationInspectedCount.value = 0
   specRecommendationTruncatedCount.value = 0
+  specRecommendationIsAppliedConfirmation.value = false
   appliedSpecRecommendations.value.clear()
   applyingSpecRecommendations.value.clear()
   specRecommendationRequested.value = false
@@ -6820,7 +7583,7 @@ const openScenarioRecommendationPanel = (): boolean => {
 }
 
 const fetchRuleRecommendations = async () => {
-  if (isRecommendingRules.value) {
+  if (isRecommendationRequestActive(isRecommendingRules.value, ruleRecommendationRequestId.value)) {
     ruleRecommendationRequestEpoch += 1
     await stopActiveRecommendation(
       'rule',
@@ -6831,6 +7594,10 @@ const fetchRuleRecommendations = async () => {
     )
     return
   }
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    return
+  }
   if (!ensureBoardDataReady(['nodes', 'templates', 'rules'])) return
 
   if (showRecommendationPanel.value) {
@@ -6838,6 +7605,9 @@ const fetchRuleRecommendations = async () => {
   } else if (!openRuleRecommendationPanel()) {
     return
   }
+
+  const requestOwner = captureRecommendationRequestOwner()
+  if (!requestOwner) return
 
   isRecommendingRules.value = true
   ruleRecommendationRequested.value = true
@@ -6849,24 +7619,36 @@ const fetchRuleRecommendations = async () => {
   ruleRecommendationRawCandidateCount.value = 0
   ruleRecommendationInspectedCount.value = 0
   ruleRecommendationTruncatedCount.value = 0
+  ruleRecommendationIsAppliedConfirmation.value = false
   appliedRuleRecommendations.value.clear()
   applyingRuleRecommendations.value.clear()
   const requestEpoch = ++ruleRecommendationRequestEpoch
+  const requestSceneGeneration = recommendationSceneGeneration
   const controller = new AbortController()
   const requestId = crypto.randomUUID()
   ruleRecommendationAbortController.value = controller
   ruleRecommendationRequestId.value = requestId
+  recommendationRequestOwners.set(requestId, requestOwner)
   recommendationProgressRequestId.value = requestId
+  let postTerminal = false
+  let requestDispatched = false
   try {
+    const validatedMaxRecommendations = validateRecommendationCount(ruleRecommendationFilters.maxRecommendations)
+    requestDispatched = true
     const response = await rulesApi.recommendRules(
-      validateRecommendationCount(ruleRecommendationFilters.maxRecommendations),
+      {
+        requestId,
+        authToken: requestOwner.authToken,
+        signal: controller.signal
+      },
+      validatedMaxRecommendations,
       ruleRecommendationFilters.category,
       locale.value,
-      ruleRecommendationFilters.userRequirement,
-      requestId,
-      controller.signal
+      ruleRecommendationFilters.userRequirement
     )
-    if (requestEpoch !== ruleRecommendationRequestEpoch) return
+    postTerminal = true
+    if (requestEpoch !== ruleRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration) return
     ruleRecommendations.value = response.recommendations
     ruleRecommendationMessage.value = localizedRecommendationText(
       response.message,
@@ -6879,20 +7661,36 @@ const fetchRuleRecommendations = async () => {
     ruleRecommendationInspectedCount.value = response.inspectedCount
     ruleRecommendationTruncatedCount.value = response.truncatedCount
   } catch (error: any) {
-    if (requestEpoch !== ruleRecommendationRequestEpoch) return
     // 如果是取消请求，不显示错误
     if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
       return
     }
+    if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
+      beginUnknownRecommendationRecovery(
+        'rule',
+        requestId,
+        ruleRecommendationRequestId,
+        ruleRecommendationAbortController,
+        running => { isRecommendingRules.value = running },
+        'app.ruleRecommendationCancelled'
+      )
+      return
+    }
+    postTerminal = true
+    if (requestEpoch !== ruleRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch rule recommendations:', error)
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchRuleRecommendations')))
   } finally {
-    if (requestEpoch === ruleRecommendationRequestEpoch) {
-      isRecommendingRules.value = false
-      if (ruleRecommendationAbortController.value === controller) {
-        ruleRecommendationAbortController.value = null
-      }
-      if (ruleRecommendationRequestId.value === requestId) ruleRecommendationRequestId.value = null
+    if (postTerminal) {
+      settleRecommendationPost(
+        'rule',
+        requestId,
+        ruleRecommendationRequestId,
+        ruleRecommendationAbortController,
+        controller,
+        running => { isRecommendingRules.value = running }
+      )
     }
   }
 }
@@ -6921,6 +7719,7 @@ const deviceRecommendationAdjustedItems = ref<RecommendationAdjustmentItem[]>([]
 const deviceRecommendationRawCandidateCount = ref(0)
 const deviceRecommendationInspectedCount = ref(0)
 const deviceRecommendationTruncatedCount = ref(0)
+const deviceRecommendationIsAppliedConfirmation = ref(false)
 const appliedDeviceRecommendations = ref<Set<number>>(new Set())
 const applyingDeviceRecommendations = ref<Set<number>>(new Set())
 const showDeviceRecommendationPanel = ref(false)
@@ -6941,6 +7740,7 @@ const specRecommendationFilteredItems = ref<RecommendationFilteredItem[]>([])
 const specRecommendationRawCandidateCount = ref(0)
 const specRecommendationInspectedCount = ref(0)
 const specRecommendationTruncatedCount = ref(0)
+const specRecommendationIsAppliedConfirmation = ref(false)
 const appliedSpecRecommendations = ref<Set<number>>(new Set())
 const applyingSpecRecommendations = ref<Set<number>>(new Set())
 const showSpecRecommendationPanel = ref(false)
@@ -6975,6 +7775,75 @@ let scenarioRecommendationRequestEpoch = 0
 let scenarioRecommendationCriteriaVersion = 0
 const recommendedScenarioScene = computed(() => scenarioRecommendationResult.value?.scene || null)
 
+const prepareActiveRecommendationsForLogout = async (): Promise<InteractiveLogoutPreparation> => {
+  const activeRequests = [
+    {
+      kind: 'rule' as const,
+      requestIdRef: ruleRecommendationRequestId,
+      controllerRef: ruleRecommendationAbortController,
+      setRunning: (running: boolean) => { isRecommendingRules.value = running },
+      cancelledMessageKey: 'app.ruleRecommendationCancelled'
+    },
+    {
+      kind: 'device' as const,
+      requestIdRef: deviceRecommendationRequestId,
+      controllerRef: deviceRecommendationAbortController,
+      setRunning: (running: boolean) => { isRecommendingDevices.value = running },
+      cancelledMessageKey: 'app.deviceRecommendationCancelled'
+    },
+    {
+      kind: 'spec' as const,
+      requestIdRef: specRecommendationRequestId,
+      controllerRef: specRecommendationAbortController,
+      setRunning: (running: boolean) => { isRecommendingSpecs.value = running },
+      cancelledMessageKey: 'app.specificationRecommendationCancelled'
+    },
+    {
+      kind: 'scenario' as const,
+      requestIdRef: scenarioRecommendationRequestId,
+      controllerRef: scenarioRecommendationAbortController,
+      setRunning: (running: boolean) => { isRecommendingScenario.value = running },
+      cancelledMessageKey: 'app.scenarioRecommendationCancelled'
+    }
+  ].flatMap(entry => {
+    const requestId = entry.requestIdRef.value
+    const owner = requestId ? getRecommendationRequestOwner(requestId) : null
+    return requestId
+      ? [{
+          ...entry,
+          requestId,
+          owner
+        }]
+      : []
+  })
+  if (activeRequests.length === 0) return 'ready'
+
+  const outcomes = await Promise.all(activeRequests.map(async entry => {
+    if (!entry.owner) return 'outcome-unknown' as const
+    ensureRecommendationStopRecovery(
+      entry.kind,
+      entry.requestIdRef,
+      entry.controllerRef,
+      entry.setRunning,
+      entry.cancelledMessageKey,
+      { showMessage: false }
+    )
+    return prepareOwnedRecommendationForLogout({
+      requestId: entry.requestId,
+      authToken: entry.owner.authToken,
+      cancel: cancelRecommendationAsOwner,
+      readStatus: readRecommendationStatusAsOwner,
+      waitBeforeRetry: waitForRecommendationCancellationRetry,
+      shouldContinue: () => entry.requestIdRef.value === entry.requestId,
+      hasTerminalEvidence: () => hasRecommendationTerminalEvidence(entry.requestId),
+      onCancellationAccepted: () => acceptRecommendationCancellation(entry.kind, entry.requestId),
+      onStatusFinished: () => finishRecommendationStopRecovery(entry.kind, entry.requestId),
+      maxAttempts: 20
+    })
+  }))
+  return outcomes.every(outcome => outcome === 'ready') ? 'ready' : 'outcome-unknown'
+}
+
 watch(
   () => [
     scenarioRecommendationFilters.minDevices,
@@ -6993,7 +7862,7 @@ watch(
 )
 
 const fetchDeviceRecommendations = async () => {
-  if (isRecommendingDevices.value) {
+  if (isRecommendationRequestActive(isRecommendingDevices.value, deviceRecommendationRequestId.value)) {
     deviceRecommendationRequestEpoch += 1
     await stopActiveRecommendation(
       'device',
@@ -7004,6 +7873,10 @@ const fetchDeviceRecommendations = async () => {
     )
     return
   }
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    return
+  }
   if (!ensureBoardDataReady(['nodes', 'templates'])) return
 
   if (showDeviceRecommendationPanel.value) {
@@ -7011,6 +7884,9 @@ const fetchDeviceRecommendations = async () => {
   } else if (!openDeviceRecommendationPanel()) {
     return
   }
+
+  const requestOwner = captureRecommendationRequestOwner()
+  if (!requestOwner) return
   
   isRecommendingDevices.value = true
   deviceRecommendationRequested.value = true
@@ -7022,24 +7898,36 @@ const fetchDeviceRecommendations = async () => {
   deviceRecommendationRawCandidateCount.value = 0
   deviceRecommendationInspectedCount.value = 0
   deviceRecommendationTruncatedCount.value = 0
+  deviceRecommendationIsAppliedConfirmation.value = false
   appliedDeviceRecommendations.value.clear()
   applyingDeviceRecommendations.value.clear()
   const requestEpoch = ++deviceRecommendationRequestEpoch
+  const requestSceneGeneration = recommendationSceneGeneration
   const controller = new AbortController()
   const requestId = crypto.randomUUID()
   deviceRecommendationAbortController.value = controller
   deviceRecommendationRequestId.value = requestId
+  recommendationRequestOwners.set(requestId, requestOwner)
   recommendationProgressRequestId.value = requestId
-  
+  let postTerminal = false
+  let requestDispatched = false
+
   try {
+    const validatedMaxRecommendations = validateRecommendationCount(deviceRecommendationFilters.maxRecommendations)
+    requestDispatched = true
     const response = await boardApi.recommendRelatedDevices(
-      validateRecommendationCount(deviceRecommendationFilters.maxRecommendations),
+      {
+        requestId,
+        authToken: requestOwner.authToken,
+        signal: controller.signal
+      },
+      validatedMaxRecommendations,
       locale.value,
-      deviceRecommendationFilters.userRequirement,
-      requestId,
-      controller.signal
+      deviceRecommendationFilters.userRequirement
     )
-    if (requestEpoch !== deviceRecommendationRequestEpoch) return
+    postTerminal = true
+    if (requestEpoch !== deviceRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration) return
     deviceRecommendations.value = response.recommendations
     deviceRecommendationMessage.value = localizedRecommendationText(
       response.message,
@@ -7052,19 +7940,35 @@ const fetchDeviceRecommendations = async () => {
     deviceRecommendationInspectedCount.value = response.inspectedCount
     deviceRecommendationTruncatedCount.value = response.truncatedCount
   } catch (error: any) {
-    if (requestEpoch !== deviceRecommendationRequestEpoch) return
     if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
       return
     }
+    if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
+      beginUnknownRecommendationRecovery(
+        'device',
+        requestId,
+        deviceRecommendationRequestId,
+        deviceRecommendationAbortController,
+        running => { isRecommendingDevices.value = running },
+        'app.deviceRecommendationCancelled'
+      )
+      return
+    }
+    postTerminal = true
+    if (requestEpoch !== deviceRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch device recommendations:', error)
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchDeviceRecommendations')))
   } finally {
-    if (requestEpoch === deviceRecommendationRequestEpoch) {
-      isRecommendingDevices.value = false
-      if (deviceRecommendationAbortController.value === controller) {
-        deviceRecommendationAbortController.value = null
-      }
-      if (deviceRecommendationRequestId.value === requestId) deviceRecommendationRequestId.value = null
+    if (postTerminal) {
+      settleRecommendationPost(
+        'device',
+        requestId,
+        deviceRecommendationRequestId,
+        deviceRecommendationAbortController,
+        controller,
+        running => { isRecommendingDevices.value = running }
+      )
     }
   }
 }
@@ -7086,7 +7990,7 @@ const closeDeviceRecommendationPanel = () => {
 
 // 获取规约推荐
 const fetchSpecRecommendations = async () => {
-  if (isRecommendingSpecs.value) {
+  if (isRecommendationRequestActive(isRecommendingSpecs.value, specRecommendationRequestId.value)) {
     specRecommendationRequestEpoch += 1
     await stopActiveRecommendation(
       'spec',
@@ -7097,6 +8001,10 @@ const fetchSpecRecommendations = async () => {
     )
     return
   }
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    return
+  }
   if (!ensureBoardDataReady(['nodes', 'templates', 'rules', 'specs'])) return
 
   if (showSpecRecommendationPanel.value) {
@@ -7104,6 +8012,9 @@ const fetchSpecRecommendations = async () => {
   } else if (!openSpecRecommendationPanel()) {
     return
   }
+
+  const requestOwner = captureRecommendationRequestOwner()
+  if (!requestOwner) return
 
   isRecommendingSpecs.value = true
   specRecommendationRequested.value = true
@@ -7114,25 +8025,37 @@ const fetchSpecRecommendations = async () => {
   specRecommendationRawCandidateCount.value = 0
   specRecommendationInspectedCount.value = 0
   specRecommendationTruncatedCount.value = 0
+  specRecommendationIsAppliedConfirmation.value = false
   appliedSpecRecommendations.value.clear()
   applyingSpecRecommendations.value.clear()
   const requestEpoch = ++specRecommendationRequestEpoch
+  const requestSceneGeneration = recommendationSceneGeneration
   const controller = new AbortController()
   const requestId = crypto.randomUUID()
   specRecommendationAbortController.value = controller
   specRecommendationRequestId.value = requestId
+  recommendationRequestOwners.set(requestId, requestOwner)
   recommendationProgressRequestId.value = requestId
+  let postTerminal = false
+  let requestDispatched = false
 
   try {
+    const validatedMaxRecommendations = validateRecommendationCount(specRecommendationFilters.maxRecommendations)
+    requestDispatched = true
     const response = await boardApi.recommendSpecifications(
-      validateRecommendationCount(specRecommendationFilters.maxRecommendations),
+      {
+        requestId,
+        authToken: requestOwner.authToken,
+        signal: controller.signal
+      },
+      validatedMaxRecommendations,
       specRecommendationFilters.category,
       locale.value,
-      specRecommendationFilters.userRequirement,
-      requestId,
-      controller.signal
+      specRecommendationFilters.userRequirement
     )
-    if (requestEpoch !== specRecommendationRequestEpoch) return
+    postTerminal = true
+    if (requestEpoch !== specRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration) return
     specRecommendations.value = response.recommendations
     specRecommendationMessage.value = localizedRecommendationText(
       response.message,
@@ -7144,19 +8067,35 @@ const fetchSpecRecommendations = async () => {
     specRecommendationInspectedCount.value = response.inspectedCount
     specRecommendationTruncatedCount.value = response.truncatedCount
   } catch (error: any) {
-    if (requestEpoch !== specRecommendationRequestEpoch) return
     if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
       return
     }
+    if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
+      beginUnknownRecommendationRecovery(
+        'spec',
+        requestId,
+        specRecommendationRequestId,
+        specRecommendationAbortController,
+        running => { isRecommendingSpecs.value = running },
+        'app.specificationRecommendationCancelled'
+      )
+      return
+    }
+    postTerminal = true
+    if (requestEpoch !== specRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch specification recommendations:', error)
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchSpecificationRecommendations')))
   } finally {
-    if (requestEpoch === specRecommendationRequestEpoch) {
-      isRecommendingSpecs.value = false
-      if (specRecommendationAbortController.value === controller) {
-        specRecommendationAbortController.value = null
-      }
-      if (specRecommendationRequestId.value === requestId) specRecommendationRequestId.value = null
+    if (postTerminal) {
+      settleRecommendationPost(
+        'spec',
+        requestId,
+        specRecommendationRequestId,
+        specRecommendationAbortController,
+        controller,
+        running => { isRecommendingSpecs.value = running }
+      )
     }
   }
 }
@@ -7177,7 +8116,7 @@ const closeSpecRecommendationPanel = () => {
 }
 
 const fetchScenarioRecommendation = async () => {
-  if (isRecommendingScenario.value) {
+  if (isRecommendationRequestActive(isRecommendingScenario.value, scenarioRecommendationRequestId.value)) {
     scenarioRecommendationRequestEpoch += 1
     await stopActiveRecommendation(
       'scenario',
@@ -7188,6 +8127,10 @@ const fetchScenarioRecommendation = async () => {
     )
     return
   }
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    return
+  }
   if (!ensureBoardDataReady()) return
 
   if (showScenarioRecommendationPanel.value) {
@@ -7196,17 +8139,24 @@ const fetchScenarioRecommendation = async () => {
     return
   }
 
+  const requestOwner = captureRecommendationRequestOwner()
+  if (!requestOwner) return
+
   isRecommendingScenario.value = true
   scenarioRecommendationRequested.value = true
   scenarioRecommendationResult.value = null
   scenarioRecommendationMessage.value = ''
   const requestEpoch = ++scenarioRecommendationRequestEpoch
+  const requestSceneGeneration = recommendationSceneGeneration
   const requestCriteriaVersion = scenarioRecommendationCriteriaVersion
   const controller = new AbortController()
   const requestId = crypto.randomUUID()
   scenarioRecommendationAbortController.value = controller
   scenarioRecommendationRequestId.value = requestId
+  recommendationRequestOwners.set(requestId, requestOwner)
   recommendationProgressRequestId.value = requestId
+  let postTerminal = false
+  let requestDispatched = false
 
   try {
     const countLabels: Record<ScenarioRecommendationCountField, string> = {
@@ -7229,10 +8179,19 @@ const fetchScenarioRecommendation = async () => {
       },
       (value, field) => requireIntegerInRange(value, countLabels[field], 1, 10),
       field => new Error(t('app.scenarioMinimumExceedsMaximum', { field: rangeLabels[field] })),
-      request => boardApi.recommendScenario(request, requestId, controller.signal)
+      request => {
+        requestDispatched = true
+        return boardApi.recommendScenario(request, {
+          requestId,
+          authToken: requestOwner.authToken,
+          signal: controller.signal
+        })
+      }
     )
+    postTerminal = true
     if (requestEpoch !== scenarioRecommendationRequestEpoch
-      || requestCriteriaVersion !== scenarioRecommendationCriteriaVersion) return
+      || requestCriteriaVersion !== scenarioRecommendationCriteriaVersion
+      || requestSceneGeneration !== recommendationSceneGeneration) return
 
     const rawScene = response.scene
     const scene = rawScene && Array.isArray(rawScene.devices) && rawScene.devices.length > 0
@@ -7268,19 +8227,35 @@ const fetchScenarioRecommendation = async () => {
       t('app.recommendationsFound', { count: response.count })
     )
   } catch (error: any) {
-    if (requestEpoch !== scenarioRecommendationRequestEpoch) return
     if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
       return
     }
+    if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
+      beginUnknownRecommendationRecovery(
+        'scenario',
+        requestId,
+        scenarioRecommendationRequestId,
+        scenarioRecommendationAbortController,
+        running => { isRecommendingScenario.value = running },
+        'app.scenarioRecommendationCancelled'
+      )
+      return
+    }
+    postTerminal = true
+    if (requestEpoch !== scenarioRecommendationRequestEpoch
+      || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch scenario recommendation:', error)
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchScenarioRecommendation')))
   } finally {
-    if (requestEpoch === scenarioRecommendationRequestEpoch) {
-      isRecommendingScenario.value = false
-      if (scenarioRecommendationAbortController.value === controller) {
-        scenarioRecommendationAbortController.value = null
-      }
-      if (scenarioRecommendationRequestId.value === requestId) scenarioRecommendationRequestId.value = null
+    if (postTerminal) {
+      settleRecommendationPost(
+        'scenario',
+        requestId,
+        scenarioRecommendationRequestId,
+        scenarioRecommendationAbortController,
+        controller,
+        running => { isRecommendingScenario.value = running }
+      )
     }
   }
 }
@@ -7299,6 +8274,112 @@ const closeScenarioRecommendationPanel = () => {
   resetScenarioRecommendationResults()
 }
 
+const keepAppliedRecommendationAdjustments = (
+  items: RecommendationAdjustmentItem[],
+  appliedIndex: number
+): RecommendationAdjustmentItem[] => items
+  .filter(item => item.index === undefined || item.index === appliedIndex + 1)
+  .map(item => item.index === undefined ? item : { ...item, index: 1 })
+
+const preserveAppliedRecommendationAfterSceneChange = (
+  kind: 'rule' | 'device' | 'spec',
+  appliedIndex: number
+) => {
+  if (kind === 'rule') {
+    const appliedRecommendation = ruleRecommendations.value[appliedIndex]
+    if (!appliedRecommendation) {
+      invalidateRecommendationsForSceneChange({ notify: true })
+      return
+    }
+    recommendationSceneGeneration += 1
+    closeDeviceRecommendationPanel()
+    closeSpecRecommendationPanel()
+    closeScenarioRecommendationPanel()
+    ruleRecommendations.value = [appliedRecommendation]
+    ruleRecommendationMessage.value = t('app.appliedRecommendationOnlyNotice')
+    ruleRecommendationFilteredCount.value = 0
+    ruleRecommendationFilteredItems.value = []
+    ruleRecommendationAdjustedItems.value = keepAppliedRecommendationAdjustments(
+      ruleRecommendationAdjustedItems.value,
+      appliedIndex
+    )
+    ruleRecommendationRawCandidateCount.value = 0
+    ruleRecommendationInspectedCount.value = 0
+    ruleRecommendationTruncatedCount.value = 0
+    ruleRecommendationIsAppliedConfirmation.value = true
+    appliedRuleRecommendations.value = new Set([0])
+    applyingRuleRecommendations.value = new Set()
+    return
+  }
+  if (kind === 'device') {
+    const appliedRecommendation = deviceRecommendations.value[appliedIndex]
+    if (!appliedRecommendation) {
+      invalidateRecommendationsForSceneChange({ notify: true })
+      return
+    }
+    recommendationSceneGeneration += 1
+    closeRecommendationPanel()
+    closeSpecRecommendationPanel()
+    closeScenarioRecommendationPanel()
+    deviceRecommendations.value = [appliedRecommendation]
+    deviceRecommendationMessage.value = t('app.appliedRecommendationOnlyNotice')
+    deviceRecommendationFilteredCount.value = 0
+    deviceRecommendationFilteredItems.value = []
+    deviceRecommendationAdjustedItems.value = keepAppliedRecommendationAdjustments(
+      deviceRecommendationAdjustedItems.value,
+      appliedIndex
+    )
+    deviceRecommendationRawCandidateCount.value = 0
+    deviceRecommendationInspectedCount.value = 0
+    deviceRecommendationTruncatedCount.value = 0
+    deviceRecommendationIsAppliedConfirmation.value = true
+    appliedDeviceRecommendations.value = new Set([0])
+    applyingDeviceRecommendations.value = new Set()
+    return
+  }
+
+  const appliedRecommendation = specRecommendations.value[appliedIndex]
+  if (!appliedRecommendation) {
+    invalidateRecommendationsForSceneChange({ notify: true })
+    return
+  }
+  recommendationSceneGeneration += 1
+  closeRecommendationPanel()
+  closeDeviceRecommendationPanel()
+  closeScenarioRecommendationPanel()
+  specRecommendations.value = [appliedRecommendation]
+  specRecommendationMessage.value = t('app.appliedRecommendationOnlyNotice')
+  specRecommendationFilteredCount.value = 0
+  specRecommendationFilteredItems.value = []
+  specRecommendationRawCandidateCount.value = 0
+  specRecommendationInspectedCount.value = 0
+  specRecommendationTruncatedCount.value = 0
+  specRecommendationIsAppliedConfirmation.value = true
+  appliedSpecRecommendations.value = new Set([0])
+  applyingSpecRecommendations.value = new Set()
+}
+
+const invalidateRecommendationsForSceneChange = ({ notify = false }: { notify?: boolean } = {}) => {
+  const hadRecommendationContext = isAnyRecommendationPanelVisible() || isAnyRecommendationRunning()
+  recommendationSceneGeneration += 1
+  // Close every panel and advance each request epoch. stopActiveRecommendation
+  // keeps the transport alive until the server acknowledges cancellation; the
+  // generation/epoch checks make the UI safe even if that acknowledgement races
+  // with the scene change.
+  closeRecommendationPanel()
+  closeDeviceRecommendationPanel()
+  closeSpecRecommendationPanel()
+  closeScenarioRecommendationPanel()
+  if (notify && hadRecommendationContext) {
+    ElMessage.info(t('app.recommendationsInvalidatedByBoardRefresh'))
+  }
+}
+
+const invalidateForFullSceneReplacement = () => {
+  boardSceneGeneration += 1
+  invalidateRecommendationsForSceneChange()
+}
+
 const applyRecommendedScenario = async () => {
   if (!ensurePlaybackClosedForMutation()) return
   const scene = recommendedScenarioScene.value
@@ -7306,7 +8387,13 @@ const applyRecommendedScenario = async () => {
     ElMessage.warning(t('app.noScenarioToApply'))
     return
   }
-  const imported = await importScene(scene)
+  const requestEpoch = scenarioRecommendationRequestEpoch
+  const sceneGeneration = recommendationSceneGeneration
+  const isRecommendationCurrent = () =>
+    requestEpoch === scenarioRecommendationRequestEpoch
+    && sceneGeneration === recommendationSceneGeneration
+    && recommendedScenarioScene.value === scene
+  const imported = await importScene(scene, isRecommendationCurrent)
   if (imported) {
     closeScenarioRecommendationPanel()
   }
@@ -7427,6 +8514,8 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
   }
   if (applyingSpecRecommendations.value.has(index)) return
   const recommendationEpoch = specRecommendationRequestEpoch
+  const requestSceneGeneration = recommendationSceneGeneration
+  let recommendationConfirmedApplied = false
 
   // Reject an invalid recommendation before issuing the targeted create request.
   const rawTemplateId = recommendation.templateId
@@ -7493,10 +8582,17 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
   // 获取现有规约
   applyingSpecRecommendations.value.add(index)
   try {
+    if (requestSceneGeneration !== recommendationSceneGeneration
+      || isSceneReplacementInProgress.value) return
     await enqueueBoardMutation(async () => {
+      if (recommendationEpoch !== specRecommendationRequestEpoch
+        || requestSceneGeneration !== recommendationSceneGeneration
+        || !isBoardDataReady.value
+        || isSceneReplacementInProgress.value) return
       try {
         const mutation = await boardApi.addSpec(newSpec)
         specifications.value = mutation.currentItems
+        recommendationConfirmedApplied = true
         if (recommendationEpoch === specRecommendationRequestEpoch) {
           appliedSpecRecommendations.value.add(index)
         }
@@ -7506,6 +8602,7 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
         if (!isDefinitiveMutationRejection(error)) {
           const refreshed = await refreshSpecifications()
           if (refreshed && specifications.value.some(spec => isSameSpecification(spec, newSpec))) {
+            recommendationConfirmedApplied = true
             if (recommendationEpoch === specRecommendationRequestEpoch) {
               appliedSpecRecommendations.value.add(index)
             }
@@ -7515,6 +8612,12 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
         }
         ElMessage.error(extractApiErrorMessage(error, t('app.failedToSaveSpecification')))
       }
+    }, {
+      onSemanticChange: () => handleRecommendationApplySceneChange(
+        recommendationConfirmedApplied,
+        () => preserveAppliedRecommendationAfterSceneChange('spec', index),
+        () => invalidateRecommendationsForSceneChange({ notify: true })
+      )
     })
   } finally {
     if (recommendationEpoch === specRecommendationRequestEpoch) {
@@ -7637,6 +8740,13 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
   }
   if (applyingDeviceRecommendations.value.has(index)) return
   const recommendationEpoch = deviceRecommendationRequestEpoch
+  const requestSceneGeneration = recommendationSceneGeneration
+  let recommendationConfirmedApplied = false
+  const isRecommendationCurrent = () =>
+    recommendationEpoch === deviceRecommendationRequestEpoch
+    && requestSceneGeneration === recommendationSceneGeneration
+    && isBoardDataReady.value
+    && !isSceneReplacementInProgress.value
 
   const templateName = typeof recommendation.templateName === 'string'
     ? recommendation.templateName.trim()
@@ -7695,12 +8805,28 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
       return
     }
   }
+  if (!isRecommendationCurrent()) return
   
   // createDeviceInstanceAt 内部已保存并在失败时回滚+抛错，这里只需处理成功/失败提示。
   applyingDeviceRecommendations.value.add(index)
   try {
-    const outcome = await createDeviceInstanceAt(template, center, confirmedLabel, runtime)
-    if (recommendationEpoch === deviceRecommendationRequestEpoch) {
+    const outcome = await createDeviceInstanceAt(
+      template,
+      center,
+      confirmedLabel,
+      runtime,
+      {
+        admissionGuard: isRecommendationCurrent,
+        onConfirmedCreate: () => { recommendationConfirmedApplied = true },
+        onSemanticChange: () => handleRecommendationApplySceneChange(
+          recommendationConfirmedApplied,
+          () => preserveAppliedRecommendationAfterSceneChange('device', index),
+          () => invalidateRecommendationsForSceneChange({ notify: true })
+        )
+      }
+    )
+    if (recommendationEpoch === deviceRecommendationRequestEpoch
+      && requestSceneGeneration === recommendationSceneGeneration) {
       appliedDeviceRecommendations.value.add(index)
     }
     if (outcome.responseConfirmed) {
@@ -8394,6 +9520,7 @@ const activeHistoryResultFilter = ref<HistoryResultFilter>('all')
 const loadingTaskHistory = ref(false)
 const loadingResultHistory = ref(false)
 const pendingTaskActionKeys = ref<Set<string>>(new Set())
+const pendingHistoryDeleteKeys = ref<Set<string>>(new Set())
 const historyResultErrors = reactive<Record<HistoryResultSource, string | null>>({
   verification: null,
   fuzzing: null,
@@ -8410,7 +9537,8 @@ const fuzzRunRecoveryRequests = new Map<number, Promise<FuzzingRun>>()
 const historyActionLocked = computed(() =>
   traceAnimationState.value.visible ||
   simulationAnimationState.value.visible ||
-  isAnimationLocked.value
+  isAnimationLocked.value ||
+  pendingHistoryDeleteKeys.value.size > 0
 )
 
 const isCurrentHistoryPanelIntent = (
@@ -8442,6 +9570,18 @@ const withTaskActionLock = async (
     next.delete(key)
     pendingTaskActionKeys.value = next
   }
+}
+
+const beginHistoryDelete = (key: string): boolean => {
+  if (pendingHistoryDeleteKeys.value.has(key)) return false
+  pendingHistoryDeleteKeys.value = new Set(pendingHistoryDeleteKeys.value).add(key)
+  return true
+}
+
+const finishHistoryDelete = (key: string) => {
+  const next = new Set(pendingHistoryDeleteKeys.value)
+  next.delete(key)
+  pendingHistoryDeleteKeys.value = next
 }
 
 const isActiveTaskStatus = (status?: string) => status === 'PENDING' || status === 'RUNNING'
@@ -9221,21 +10361,25 @@ const refreshHistoryResults = () => {
 
 const deleteVerificationRun = async (run: VerificationRunSummary) => {
   const runId = run.id
-  historyDetailRequests.invalidate()
+  const pendingKey = `verification:${runId}`
+  if (!beginHistoryDelete(pendingKey)) return
   try {
-    await ElMessageBox.confirm(
-      t('app.deleteVerificationRunMessage', {
-        time: formatRunTimestamp(run.completedAt),
-        counterexamples: run.counterexampleCount
-      }),
-      t('app.deleteVerificationRunTitle'),
-      {
-        confirmButtonText: t('app.delete'),
-        cancelButtonText: t('app.cancel'),
-        type: 'warning',
-        appendTo: 'body',
-        lockScroll: false
-      }
+    await confirmHistoryDeletion(
+      () => ElMessageBox.confirm(
+        t('app.deleteVerificationRunMessage', {
+          time: formatRunTimestamp(run.completedAt),
+          counterexamples: run.counterexampleCount
+        }),
+        t('app.deleteVerificationRunTitle'),
+        {
+          confirmButtonText: t('app.delete'),
+          cancelButtonText: t('app.cancel'),
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
+        }
+      ),
+      historyDetailRequests.invalidate
     )
     await boardApi.deleteVerificationRun(runId)
     if (boardLifecycleDisposed) return
@@ -9256,6 +10400,8 @@ const deleteVerificationRun = async (run: VerificationRunSummary) => {
       message: localizedErrorMessage(e, t('app.failedToDeleteVerificationRun'), locale.value),
       type: 'error'
     })
+  } finally {
+    finishHistoryDelete(pendingKey)
   }
 }
 
@@ -9702,27 +10848,50 @@ const cancelMiniTask = async (kind: 'verification' | 'fuzzing' | 'simulation', t
   }
 }
 
-const selectAndPlayVerificationTrace = async (traceId: number) => {
-  // Same mutual-exclusion guards as selectAndPlayTrace: a historical trace opens the same animation
-  // surface, so it must not stack on top of a running simulation timeline or the recommendations panel.
-  const guard = canOpenTracePlayback({
-    simulationVisible: simulationAnimationState.value.visible,
-    recommendationPanelVisible: isAnyRecommendationPanelVisible()
-  })
-  if (!guard.allowed) {
-    ElMessage.warning({
-      message: guard.reasonCode === 'SIMULATION_VISIBLE'
-        ? t('app.closeCurrentSimulationFirst')
-        : t('app.closeRecommendationPanelsFirst'),
-      type: 'warning'
-    })
-    return
+const ensureHistoricalPlaybackUiAdmission = (): boolean => {
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    return false
   }
-  if (!ensureLiveBoardEditorClosedForPlayback()) return
+  if (traceAnimationState.value.visible) {
+    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
+    return false
+  }
+  if (simulationAnimationState.value.visible) {
+    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
+    return false
+  }
+  if (isAnyRecommendationPanelVisible()) {
+    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
+    return false
+  }
+  return ensureLiveBoardEditorClosedForPlayback()
+}
+
+const revalidateHistoricalPlaybackAfterLoad = async (
+  requestToken: PagedRequestToken,
+  initialMutationEpoch: number
+): Promise<boolean> => {
+  const result = await revalidateHistoricalPlaybackAdmission({
+    waitForPendingMutations: waitForPendingBoardMutations,
+    isRequestCurrent: () => historyDetailRequests.isCurrent(requestToken) && !boardLifecycleDisposed,
+    initialMutationEpoch,
+    currentMutationEpoch: () => boardMutationAdmissionEpoch,
+    recheckUiAdmission: ensureHistoricalPlaybackUiAdmission
+  })
+  if (result === 'board-changed') {
+    ElMessage.warning({ message: t('app.historicalPlaybackDeferredForBoardChange'), type: 'warning' })
+  }
+  return result === 'admitted'
+}
+
+const selectAndPlayVerificationTrace = async (traceId: number) => {
+  if (!ensureHistoricalPlaybackUiAdmission()) return
+  const initialMutationEpoch = boardMutationAdmissionEpoch
   const requestToken = historyDetailRequests.beginReplace()
   try {
     const trace = await boardApi.getVerificationTrace(traceId)
-    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    if (!await revalidateHistoricalPlaybackAfterLoad(requestToken, initialMutationEpoch)) return
     if (!trace?.states?.length) {
       ElMessage.warning({ message: t('app.traceHasNoStates'), type: 'warning' })
       return
@@ -9763,24 +10932,12 @@ const openFixForVerificationTrace = (trace: { id: number; violatedSpecId?: strin
 }
 
 const selectAndPlaySimulationTrace = async (traceId: number) => {
-  if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
-    return
-  }
-  if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
-    return
-  }
-  if (isAnyRecommendationPanelVisible()) {
-    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
-    return
-  }
-  if (!ensureLiveBoardEditorClosedForPlayback()) return
-
+  if (!ensureHistoricalPlaybackUiAdmission()) return
+  const initialMutationEpoch = boardMutationAdmissionEpoch
   const requestToken = historyDetailRequests.beginReplace()
   try {
     const trace = await simulationApi.getSimulation(traceId)
-    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    if (!await revalidateHistoricalPlaybackAfterLoad(requestToken, initialMutationEpoch)) return
     if (!trace?.states?.length) {
       ElMessage.warning({ message: t('app.simulationRunHasNoStates'), type: 'warning' })
       return
@@ -9824,18 +10981,22 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
 
 const deleteSimulationRun = async (run: SimulationTraceSummary) => {
   const traceId = run.id
-  historyDetailRequests.invalidate()
+  const pendingKey = `simulation:${traceId}`
+  if (!beginHistoryDelete(pendingKey)) return
   try {
-    await ElMessageBox.confirm(
-      t('app.deleteSimulationRunMessage', { time: formatRunTimestamp(run.createdAt) }),
-      t('app.deleteSimulationRunTitle'),
-      {
-        confirmButtonText: t('app.delete'),
-        cancelButtonText: t('app.cancel'),
-        type: 'warning',
-        appendTo: 'body',
-        lockScroll: false
-      }
+    await confirmHistoryDeletion(
+      () => ElMessageBox.confirm(
+        t('app.deleteSimulationRunMessage', { time: formatRunTimestamp(run.createdAt) }),
+        t('app.deleteSimulationRunTitle'),
+        {
+          confirmButtonText: t('app.delete'),
+          cancelButtonText: t('app.cancel'),
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
+        }
+      ),
+      historyDetailRequests.invalidate
     )
     await simulationApi.deleteSimulation(traceId)
     if (boardLifecycleDisposed) return
@@ -9856,6 +11017,8 @@ const deleteSimulationRun = async (run: SimulationTraceSummary) => {
       message: localizedErrorMessage(e, t('app.failedToDeleteSimulationRun'), locale.value),
       type: 'error'
     })
+  } finally {
+    finishHistoryDelete(pendingKey)
   }
 }
 
@@ -9926,18 +11089,22 @@ const closeFuzzingResult = () => {
 }
 
 const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
-  historyDetailRequests.invalidate()
+  const pendingKey = `fuzzing:${run.id}`
+  if (!beginHistoryDelete(pendingKey)) return
   try {
-    await ElMessageBox.confirm(
-      t('app.deleteFuzzingRunMessage', { time: formatRunTimestamp(run.completedAt || run.createdAt) }),
-      t('app.deleteFuzzingRunTitle'),
-      {
-        confirmButtonText: t('app.delete'),
-        cancelButtonText: t('app.cancel'),
-        type: 'warning',
-        appendTo: 'body',
-        lockScroll: false
-      }
+    await confirmHistoryDeletion(
+      () => ElMessageBox.confirm(
+        t('app.deleteFuzzingRunMessage', { time: formatRunTimestamp(run.completedAt || run.createdAt) }),
+        t('app.deleteFuzzingRunTitle'),
+        {
+          confirmButtonText: t('app.delete'),
+          cancelButtonText: t('app.cancel'),
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
+        }
+      ),
+      historyDetailRequests.invalidate
     )
     await fuzzingApi.deleteRun(run.id)
     if (boardLifecycleDisposed) return
@@ -9967,29 +11134,19 @@ const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
       message: t('app.failedToDeleteFuzzingRun'),
       type: 'error'
     })
+  } finally {
+    finishHistoryDelete(pendingKey)
   }
 }
 
 const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) => {
-  if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
-    return
-  }
-  if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
-    return
-  }
-  if (isAnyRecommendationPanelVisible()) {
-    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
-    return
-  }
-  if (!ensureLiveBoardEditorClosedForPlayback()) return
-
+  if (!ensureHistoricalPlaybackUiAdmission()) return
+  const initialMutationEpoch = boardMutationAdmissionEpoch
   const requestToken = historyDetailRequests.beginReplace()
   try {
     if (!runId) throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
     const resolvedRun = await fuzzingApi.getRun(runId)
-    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    if (!await revalidateHistoricalPlaybackAfterLoad(requestToken, initialMutationEpoch)) return
     if (!resolvedRun || resolvedRun.dataAvailable === false || !resolvedRun.modelSnapshot) {
       throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
     }
@@ -10247,6 +11404,11 @@ const fixViolatedSpecId = ref<string>('')
 
 // 打开 Fix 弹窗
 const openFixDialog = (traceId: number, violatedSpecId: string) => {
+  if (fixResultDialogRef.value?.canOpenTrace?.(traceId) === false) {
+    ElMessage.warning(t('app.fixTraceSwitchBlockedByActiveSearch'))
+    showFixDialog.value = true
+    return
+  }
   fixTraceId.value = traceId
   fixViolatedSpecId.value = violatedSpecId
   showFixDialog.value = true
@@ -10504,6 +11666,15 @@ const isAnimationLocked = computed(() =>
   traceAnimationState.value.visible || simulationAnimationState.value.visible
 )
 const isModelPlaybackActive = isAnimationLocked
+
+// Register this after playback refs exist. A watcher evaluates its computed source
+// immediately while collecting dependencies, so registering it earlier would hit the
+// temporal-dead-zone of the playback state during setup.
+watch(isCanvasInteractionLocked, locked => {
+  if (!locked) return
+  finishCanvasPan()
+  finishCanvasMapDrag()
+})
 
 const playbackChangesDismissedKey = ref<string | null>(null)
 const playbackChangePosition = ref({ x: 0, y: 0 })
@@ -12111,7 +13282,8 @@ const counterexampleTraceHelpText = computed(() => {
         'is-narrow-layout': isNarrowBoardLayout,
         'has-narrow-panel-open': showNarrowPanelScrim,
         'has-control-panel-open': isNarrowBoardLayout && !boardPanels.control.collapsed,
-        'has-inspector-panel-open': isNarrowBoardLayout && !boardPanels.inspector.collapsed
+        'has-inspector-panel-open': isNarrowBoardLayout && !boardPanels.inspector.collapsed,
+        'has-playback-change-popover': showPlaybackChangePopover
       }
     ]"
     data-testid="board-root"
@@ -12139,9 +13311,10 @@ const counterexampleTraceHelpText = computed(() => {
           <input
             ref="sceneImportInputRef"
             data-testid="scene-import-file"
-            class="sr-only"
+            class="hidden"
             type="file"
             accept="application/json,.json"
+            :disabled="isSceneReplacementInProgress || !isBoardDataReady"
             @change="handleSceneImportFile"
           />
           <button
@@ -12150,7 +13323,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="scene-import"
             :aria-label="t('app.sceneImport')"
             :title="t('app.sceneImport')"
-            :disabled="isImportingScene || !isBoardDataReady"
+             :disabled="isSceneReplacementInProgress || !isBoardDataReady"
             @click="triggerSceneImport"
           >
             <span class="material-symbols-outlined" aria-hidden="true">upload_file</span>
@@ -12162,7 +13335,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="scene-export"
             :aria-label="t('app.sceneExport')"
             :title="t('app.sceneExport')"
-            :disabled="isImportingScene || isClearingScene || !isBoardDataReady"
+             :disabled="isSceneReplacementInProgress || !isBoardDataReady"
             @click="exportScene"
           >
             <span class="material-symbols-outlined" aria-hidden="true">download</span>
@@ -12174,7 +13347,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="scene-clear"
             :aria-label="t('app.sceneClear')"
             :title="t('app.sceneClear')"
-            :disabled="isImportingScene || isClearingScene || !isBoardDataReady"
+             :disabled="isSceneReplacementInProgress || !isBoardDataReady"
             @click="clearScene"
           >
             <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
@@ -12204,7 +13377,7 @@ const counterexampleTraceHelpText = computed(() => {
             >
               <button
                 type="button"
-                :disabled="isImportingScene || !isBoardDataReady"
+                 :disabled="isSceneReplacementInProgress || !isBoardDataReady"
                 @click="closeSceneActionsMenu(); triggerSceneImport()"
               >
                 <span class="material-symbols-outlined" aria-hidden="true">upload_file</span>
@@ -12212,7 +13385,7 @@ const counterexampleTraceHelpText = computed(() => {
               </button>
               <button
                 type="button"
-                :disabled="isImportingScene || isClearingScene || !isBoardDataReady"
+                 :disabled="isSceneReplacementInProgress || !isBoardDataReady"
                 @click="closeSceneActionsMenu(); exportScene()"
               >
                 <span class="material-symbols-outlined" aria-hidden="true">download</span>
@@ -12221,7 +13394,7 @@ const counterexampleTraceHelpText = computed(() => {
               <button
                 type="button"
                 class="scene-actions-menu__danger"
-                :disabled="isImportingScene || isClearingScene || !isBoardDataReady"
+                 :disabled="isSceneReplacementInProgress || !isBoardDataReady"
                 @click="closeSceneActionsMenu(); clearScene()"
               >
                 <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
@@ -12266,7 +13439,7 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="failedBoardDataKeys.length > 0"
-      class="fixed left-1/2 top-16 z-[2300] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 shadow-lg dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+      class="pointer-events-none fixed left-1/2 top-16 z-[2300] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 shadow-lg dark:border-red-800 dark:bg-red-950 dark:text-red-100"
       role="alert"
       data-testid="board-data-load-error"
     >
@@ -12278,7 +13451,7 @@ const counterexampleTraceHelpText = computed(() => {
       </span>
       <button
         type="button"
-        class="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-400 px-2.5 py-1.5 font-semibold hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
+        class="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-red-400 px-2.5 py-1.5 font-semibold hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
         @click="retryBoardDataLoad"
       >
         <span class="material-symbols-outlined text-base" aria-hidden="true">refresh</span>
@@ -12509,12 +13682,12 @@ const counterexampleTraceHelpText = computed(() => {
       :canvas-pan="canvasPan"
       :canvas-zoom="canvasZoom"
       :collapsed="boardPanels.control.collapsed"
-      :width="boardPanels.control.width"
+      :width="effectiveControlPanelWidth"
       :active-section="boardPanels.control.activeSection"
       :read-only="isModelPlaybackActive || isSceneReplacementInProgress"
       :read-only-message="isSceneReplacementInProgress ? t('app.sceneReplacementInProgress') : t('app.playbackReadOnlyCloseFirst')"
       :run-board-mutation="enqueueBoardMutation"
-      :class="{ 'board-panel--playback-read-only': isModelPlaybackActive || isSceneReplacementInProgress }"
+      :class="{ 'board-panel--interaction-read-only': isModelPlaybackActive || isSceneReplacementInProgress }"
       @create-device="handleCreateDevice"
       @create-devices="handleCreateDevices"
       @template-drag-start="handleTemplateDragStart"
@@ -12523,6 +13696,7 @@ const counterexampleTraceHelpText = computed(() => {
       @add-spec="handleAddSpec"
       @replace-template-catalog="replaceTemplateCatalog"
       @replace-template-state="replaceTemplateState"
+      @authoritative-state-unavailable="handleAuthoritativeBoardStateUnavailable"
       @update:collapsed="handleControlCollapsedUpdate"
       @update:active-section="handleControlActiveSectionUpdate"
     />
@@ -12538,11 +13712,12 @@ const counterexampleTraceHelpText = computed(() => {
       :focused-rule-id="focusedRuleId"
       :focused-spec-id="focusedSpecId"
       :collapsed="boardPanels.inspector.collapsed"
-      :width="boardPanels.inspector.width"
+      :width="effectiveInspectorPanelWidth"
       :active-section="boardPanels.inspector.activeSection"
-      :read-only="isModelPlaybackActive"
+      :read-only="isModelPlaybackActive || isSceneReplacementInProgress"
+      :read-only-message="isSceneReplacementInProgress ? t('app.sceneReplacementInProgress') : t('app.playbackReadOnlyCloseFirst')"
       :rules-reordering="rulesReordering"
-      :class="{ 'board-panel--playback-read-only': isModelPlaybackActive }"
+      :class="{ 'board-panel--interaction-read-only': isModelPlaybackActive || isSceneReplacementInProgress }"
       @delete-device="deleteNodeFromStatus"
       @delete-rule="deleteRule"
       @move-rule="moveRule"
@@ -12551,6 +13726,7 @@ const counterexampleTraceHelpText = computed(() => {
       @open-rule-builder="openRuleBuilder"
       @open-control-section="openControlSection"
       @save-environment="saveEnvironmentVariables"
+      :environment-saving="environmentMutationPending"
       @update:collapsed="handleInspectorCollapsedUpdate"
       @update:active-section="handleInspectorActiveSectionUpdate"
     >
@@ -12560,8 +13736,8 @@ const counterexampleTraceHelpText = computed(() => {
           data-testid="canvas-map"
           class="canvas-map w-full p-3 border rounded-lg shadow-sm bg-white/90 border-slate-200 dark:bg-slate-950/90 dark:border-slate-700"
         >
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500">{{ t('app.canvasMap') }}</span>
+          <div class="canvas-map__header flex items-center justify-between mb-2">
+            <span class="canvas-map__title min-w-0 text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500">{{ t('app.canvasMap') }}</span>
             <div class="canvas-map__zoom-controls flex items-center gap-1" data-testid="canvas-map-zoom-controls">
               <button
                 type="button"
@@ -12569,6 +13745,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="canvas-map-zoom-out"
                 :title="t('app.zoomOut')"
                 :aria-label="t('app.zoomOut')"
+                :disabled="isCanvasInteractionLocked"
                 @click="adjustCanvasZoom(-ZOOM_STEP)"
               >
                 <span class="material-symbols-outlined text-sm" aria-hidden="true">remove</span>
@@ -12583,6 +13760,7 @@ const counterexampleTraceHelpText = computed(() => {
                   step="5"
                   :value="canvasZoomPercent"
                   :aria-label="t('app.zoomLevel')"
+                  :disabled="isCanvasInteractionLocked"
                   @input="handleCanvasMapZoomInput"
                   @change="handleCanvasMapZoomInput"
                   @keydown.stop
@@ -12595,6 +13773,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="canvas-map-zoom-in"
                 :title="t('app.zoomIn')"
                 :aria-label="t('app.zoomIn')"
+                :disabled="isCanvasInteractionLocked"
                 @click="adjustCanvasZoom(ZOOM_STEP)"
               >
                 <span class="material-symbols-outlined text-sm" aria-hidden="true">add</span>
@@ -12605,6 +13784,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="canvas-map-fit"
                 :title="t('app.fitToContent')"
                 :aria-label="t('app.fitToContent')"
+                :disabled="isCanvasInteractionLocked"
                 @click="fitToContent"
               >
                 <span class="material-symbols-outlined text-sm" aria-hidden="true">fit_screen</span>
@@ -12709,7 +13889,7 @@ const counterexampleTraceHelpText = computed(() => {
           :highlighted-trace="highlightedTrace"
           :focused-node-id="focusedNodeId"
           :focused-rule-id="focusedRuleId"
-          :interaction-locked="isModelPlaybackActive"
+          :interaction-locked="isCanvasInteractionLocked"
           @canvas-pointerdown="onCanvasPointerDown"
           @canvas-dragover="onCanvasDragOver"
           @canvas-drop="onCanvasDrop"
@@ -12725,7 +13905,7 @@ const counterexampleTraceHelpText = computed(() => {
 
       <section
         v-if="showCanvasEmptyState"
-        class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-20 py-24"
+        class="canvas-empty-state pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4 py-24 sm:px-8"
         data-testid="canvas-empty-state"
         aria-labelledby="canvas-empty-state-title"
       >
@@ -12871,7 +14051,7 @@ const counterexampleTraceHelpText = computed(() => {
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
               (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning())
                 ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-blue-500 hover:bg-blue-600'
+                : 'bg-blue-700 hover:bg-blue-800'
             ]"
             :title="isSimulating ? t('app.simulationRunning') : t('app.openSimulationSettings')"
           >
@@ -12900,7 +14080,7 @@ const counterexampleTraceHelpText = computed(() => {
               'board-tool-button text-white shadow-lg transition-all hover:scale-[1.03] hover:shadow-xl active:scale-95',
               (isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning())
                 ? 'cursor-not-allowed bg-indigo-300 disabled:hover:scale-100'
-                : showFuzzingPanel ? 'bg-indigo-700' : 'bg-indigo-600 hover:bg-indigo-700'
+                : showFuzzingPanel ? 'bg-indigo-800' : 'bg-indigo-700 hover:bg-indigo-800'
             ]"
             :title="isSceneReplacementInProgress
               ? t('app.sceneReplacementInProgress')
@@ -12932,7 +14112,7 @@ const counterexampleTraceHelpText = computed(() => {
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
               (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning())
                 ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-green-500 hover:bg-green-600'
+                : 'bg-green-700 hover:bg-green-800'
             ]"
             :title="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
           >
@@ -12962,7 +14142,7 @@ const counterexampleTraceHelpText = computed(() => {
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
               (isModelPlaybackActive || isAnyRecommendationRunning())
                 ? 'bg-cyan-300 cursor-not-allowed disabled:hover:scale-100'
-                : showHistoryPanel ? 'bg-cyan-700' : 'bg-cyan-600 hover:bg-cyan-700'
+                : showHistoryPanel ? 'bg-cyan-800' : 'bg-cyan-700 hover:bg-cyan-800'
             ]"
             :title="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.openRunHistory')"
           >
@@ -12997,14 +14177,14 @@ const counterexampleTraceHelpText = computed(() => {
             type="button"
             @click="openScenarioRecommendationsFromActionDock"
             data-testid="open-scenario-recommendations"
-            :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('scenario')"
+            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('scenario')"
             :aria-label="t('app.openScenarioRecommendations')"
             :aria-pressed="showScenarioRecommendationPanel || isRecommendingScenario"
             :class="[
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
               (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('scenario'))
                 ? 'bg-teal-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-teal-600 hover:bg-teal-700'
+                : 'bg-teal-700 hover:bg-teal-800'
             ]"
             :title="t('app.openScenarioRecommendations')"
           >
@@ -13026,14 +14206,14 @@ const counterexampleTraceHelpText = computed(() => {
             type="button"
             @click="openRuleRecommendationsFromActionDock"
             data-testid="open-rule-recommendations"
-            :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('rule')"
+            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('rule')"
             :aria-label="t('app.openRuleRecommendations')"
             :aria-pressed="showRecommendationPanel || isRecommendingRules"
             :class="[
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
               (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('rule'))
                 ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-amber-500 hover:bg-amber-600'
+                : 'bg-amber-700 hover:bg-amber-800'
             ]"
             :title="t('app.openRuleRecommendations')"
           >
@@ -13055,14 +14235,14 @@ const counterexampleTraceHelpText = computed(() => {
             type="button"
             @click="openDeviceRecommendationsFromActionDock"
             data-testid="open-device-recommendations"
-            :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('device')"
+            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('device')"
             :aria-label="t('app.openDeviceRecommendations')"
             :aria-pressed="showDeviceRecommendationPanel || isRecommendingDevices"
             :class="[
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
               (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('device'))
                 ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-purple-500 hover:bg-purple-600'
+                : 'bg-purple-700 hover:bg-purple-800'
             ]"
             :title="t('app.openDeviceRecommendations')"
           >
@@ -13084,14 +14264,14 @@ const counterexampleTraceHelpText = computed(() => {
             type="button"
             @click="openSpecRecommendationsFromActionDock"
             data-testid="open-spec-recommendations"
-            :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('spec')"
+            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('spec')"
             :aria-label="t('app.openSpecificationRecommendations')"
             :aria-pressed="showSpecRecommendationPanel || isRecommendingSpecs"
             :class="[
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
               (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('spec'))
                 ? 'bg-red-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-red-500 hover:bg-red-600'
+                : 'bg-red-700 hover:bg-red-800'
             ]"
             :title="t('app.openSpecificationRecommendations')"
           >
@@ -13123,6 +14303,7 @@ const counterexampleTraceHelpText = computed(() => {
       :has-more-fuzzing-runs="fuzzingRunsHasMore"
       :loading-more-fuzzing-runs="loadingMoreFuzzingRuns"
       :pending-task-action-keys="pendingTaskActionKeys"
+      :pending-result-delete-keys="pendingHistoryDeleteKeys"
       :action-locked="historyActionLocked"
       :current-board-scope="currentFuzzingBoardScope"
       @update:active-layer="setHistoryLayer"
@@ -13740,10 +14921,10 @@ const counterexampleTraceHelpText = computed(() => {
           type="button"
           data-testid="generate-scenario-recommendation"
           @click="fetchScenarioRecommendation"
-          :disabled="isRecommendationRunningForAnother('scenario')"
+          :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('scenario')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingScenario ? 'bg-red-500 hover:bg-red-600' : 'bg-teal-600 hover:bg-teal-700'
+                isRecommendingScenario ? 'bg-red-700 hover:bg-red-800' : 'bg-teal-700 hover:bg-teal-800'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -14041,7 +15222,7 @@ const counterexampleTraceHelpText = computed(() => {
               type="button"
               data-testid="apply-recommended-scenario"
               class="flex items-center justify-center gap-2 rounded-lg bg-teal-600 px-3 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-teal-700"
-              :disabled="isImportingScene"
+              :disabled="isSceneReplacementInProgress"
               @click="applyRecommendedScenario"
             >
               <span class="material-symbols-outlined text-base">playlist_add_check</span>
@@ -14145,10 +15326,10 @@ const counterexampleTraceHelpText = computed(() => {
           type="button"
           data-testid="generate-rule-recommendations"
           @click="fetchRuleRecommendations"
-          :disabled="isRecommendationRunningForAnother('rule')"
+          :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('rule')"
           :class="[
             'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingRules ? 'bg-red-500 hover:bg-red-600' : 'bg-amber-500 hover:bg-amber-600'
+            isRecommendingRules ? 'bg-red-700 hover:bg-red-800' : 'bg-amber-700 hover:bg-amber-800'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -14175,7 +15356,7 @@ const counterexampleTraceHelpText = computed(() => {
           {{ ruleRecommendationMessage }}
         </div>
         <div
-          v-if="ruleRecommendationMessage && !isRecommendingRules"
+          v-if="ruleRecommendationMessage && !isRecommendingRules && !ruleRecommendationIsAppliedConfirmation"
           data-testid="rule-candidate-accounting"
           class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"
         >
@@ -14258,6 +15439,7 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="text-xs font-medium text-slate-500">{{ t('app.recommendationsFound', { count: ruleRecommendations.length }) }}</span>
             <button 
               @click="fetchRuleRecommendations"
+              :disabled="isSceneReplacementInProgress"
               class="text-xs text-amber-600 hover:text-amber-700 font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
@@ -14336,7 +15518,7 @@ const counterexampleTraceHelpText = computed(() => {
             <div class="px-3 pb-3">
               <button 
                 @click="applyRecommendation(rec, index)"
-                :disabled="appliedRuleRecommendations.has(index) || applyingRuleRecommendations.has(index)"
+                :disabled="isSceneReplacementInProgress || appliedRuleRecommendations.has(index) || applyingRuleRecommendations.has(index)"
                 :aria-busy="applyingRuleRecommendations.has(index)"
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
@@ -14438,10 +15620,10 @@ const counterexampleTraceHelpText = computed(() => {
           type="button"
           data-testid="generate-device-recommendations"
           @click="fetchDeviceRecommendations"
-          :disabled="isRecommendationRunningForAnother('device')"
+          :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('device')"
           :class="[
             'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingDevices ? 'bg-red-500 hover:bg-red-600' : 'bg-purple-500 hover:bg-purple-600'
+            isRecommendingDevices ? 'bg-red-700 hover:bg-red-800' : 'bg-purple-700 hover:bg-purple-800'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -14468,7 +15650,7 @@ const counterexampleTraceHelpText = computed(() => {
           {{ deviceRecommendationMessage }}
         </div>
         <div
-          v-if="deviceRecommendationMessage && !isRecommendingDevices"
+          v-if="deviceRecommendationMessage && !isRecommendingDevices && !deviceRecommendationIsAppliedConfirmation"
           data-testid="device-candidate-accounting"
           class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"
         >
@@ -14550,6 +15732,7 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="text-xs font-medium text-slate-500">{{ t('app.devicesRecommended', { count: deviceRecommendations.length }) }}</span>
             <button 
               @click="fetchDeviceRecommendations"
+              :disabled="isSceneReplacementInProgress"
               class="text-xs text-purple-600 hover:text-purple-700 font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
@@ -14631,7 +15814,7 @@ const counterexampleTraceHelpText = computed(() => {
             <div class="px-3 pb-3">
               <button 
                 @click="applyDeviceRecommendation(rec, index)"
-                :disabled="appliedDeviceRecommendations.has(index) || applyingDeviceRecommendations.has(index)"
+                :disabled="isSceneReplacementInProgress || appliedDeviceRecommendations.has(index) || applyingDeviceRecommendations.has(index)"
                 :aria-busy="applyingDeviceRecommendations.has(index)"
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
@@ -14749,10 +15932,10 @@ const counterexampleTraceHelpText = computed(() => {
           type="button"
           data-testid="generate-spec-recommendations"
           @click="fetchSpecRecommendations"
-          :disabled="isRecommendationRunningForAnother('spec')"
+          :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('spec')"
           :class="[
             'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingSpecs ? 'bg-red-600 hover:bg-red-700' : 'bg-red-500 hover:bg-red-600'
+            isRecommendingSpecs ? 'bg-red-800 hover:bg-red-900' : 'bg-red-700 hover:bg-red-800'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -14779,7 +15962,7 @@ const counterexampleTraceHelpText = computed(() => {
           {{ specRecommendationMessage }}
         </div>
         <div
-          v-if="specRecommendationMessage && !isRecommendingSpecs"
+          v-if="specRecommendationMessage && !isRecommendingSpecs && !specRecommendationIsAppliedConfirmation"
           data-testid="spec-candidate-accounting"
           class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"
         >
@@ -14847,6 +16030,7 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="text-xs font-medium text-slate-500">{{ t('app.specificationsRecommended', { count: specRecommendations.length }) }}</span>
             <button 
               @click="fetchSpecRecommendations"
+              :disabled="isSceneReplacementInProgress"
               class="text-xs text-red-600 hover:text-red-700 font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
@@ -14938,7 +16122,7 @@ const counterexampleTraceHelpText = computed(() => {
             <div class="px-3 pb-3">
               <button 
                 @click="applySpecRecommendation(rec, index)"
-                :disabled="appliedSpecRecommendations.has(index) || applyingSpecRecommendations.has(index)"
+                :disabled="isSceneReplacementInProgress || appliedSpecRecommendations.has(index) || applyingSpecRecommendations.has(index)"
                 :aria-busy="applyingSpecRecommendations.has(index)"
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
@@ -15303,6 +16487,7 @@ const counterexampleTraceHelpText = computed(() => {
 
     <DeviceDialog
         v-if="dialogVisible"
+        ref="deviceDialogRef"
         :visible="dialogVisible"
         :device-name="dialogMeta.deviceName"
         :description="dialogMeta.description"
@@ -16511,9 +17696,9 @@ const counterexampleTraceHelpText = computed(() => {
     @open-run-details="openSimulationRunDetails"
   />
 
-  <!-- Fix Result Dialog 组件 -->
+  <!-- Keep the request owner mounted so hidden admission-unknown searches remain cancellable. -->
   <FixResultDialog
-    v-if="showFixDialog"
+    ref="fixResultDialogRef"
     :visible="showFixDialog"
     :trace-id="fixTraceId || 0"
     :violated-spec-id="fixViolatedSpecId"

@@ -241,6 +241,9 @@ const reconciliationRequired = ref(false);
 const isRetryingReconciliation = ref(false);
 const activeStreamSessionId = ref('');
 const activeStreamTurnId = ref('');
+const scopedAuthToken = ref<string | null>(authState.token);
+let scopedAuthUserId = authenticatedUserId.value;
+const activeStreamAuthToken = ref<string | null>(null);
 const historyReplacementWithoutTerminalAllowed = ref(false);
 const explicitStopRegistrationPending = ref(false);
 const activeStreamRetryDraft = ref('');
@@ -477,6 +480,7 @@ let historyRequestEpoch = 0;
 let sessionListRequestEpoch = 0;
 let settlementPromise: Promise<ChatLogoutPreparation> | null = null;
 let settlementAbortController: AbortController | null = null;
+let settlementDetachedTransport: AbortController | null = null;
 let reconciliationPromise: Promise<boolean> | null = null;
 let activityMonitorEpoch = 0;
 let activityMonitorAbortController: AbortController | null = null;
@@ -885,6 +889,7 @@ const clearAuthoritativelyDeletedSession = (sessionId: string) => {
     stopSessionActivityMonitor();
     activeStreamSessionId.value = '';
     activeStreamTurnId.value = '';
+    activeStreamAuthToken.value = null;
     historyReplacementWithoutTerminalAllowed.value = false;
     explicitStopRegistrationPending.value = false;
     activeStreamRetryDraft.value = '';
@@ -963,6 +968,7 @@ const monitorSessionActivity = (sessionId: string, knownActive = false) => {
   if (knownActive) {
     activeStreamSessionId.value = sessionId;
     activeStreamTurnId.value = '';
+    activeStreamAuthToken.value = scopedAuthToken.value;
     historyReplacementWithoutTerminalAllowed.value = true;
     activeStreamRetryDraft.value = '';
     isMonitoringRemoteExecution.value = true;
@@ -987,6 +993,7 @@ const monitorSessionActivity = (sessionId: string, knownActive = false) => {
         remoteActivityCheckFailed.value = false;
         activeStreamSessionId.value = sessionId;
         activeStreamTurnId.value = '';
+        activeStreamAuthToken.value = scopedAuthToken.value;
         historyReplacementWithoutTerminalAllowed.value = true;
         activeStreamRetryDraft.value = '';
         isMonitoringRemoteExecution.value = true;
@@ -1252,7 +1259,25 @@ const abortActiveTransport = (showCancelledMessage = false) => {
   detachActiveTransport(showCancelledMessage)?.abort();
 };
 
-const resetChatForAuthSubjectChange = () => {
+const requestOwnedSessionStop = (sessionId: string, turnId?: string): Promise<void> => {
+  const authToken = activeStreamAuthToken.value || scopedAuthToken.value;
+  return authToken
+      ? requestSessionStop(sessionId, turnId, authToken)
+      : requestSessionStop(sessionId, turnId);
+};
+
+const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
+  const sessionId = activeStreamSessionId.value;
+  const stopAlreadyPending = explicitStopRegistrationPending.value && Boolean(settlementPromise);
+  if (sessionId && previousAuthToken && !stopAlreadyPending) {
+    const turnId = activeStreamTurnId.value;
+    const ownerToken = activeStreamAuthToken.value || previousAuthToken;
+    void requestSessionStop(sessionId, turnId || undefined, ownerToken).catch(error => {
+      console.warn(`[Chat] Failed to stop session ${sessionId} during an account change:`, error);
+    });
+  }
+  settlementDetachedTransport?.abort();
+  settlementDetachedTransport = null;
   chatAuthEpoch += 1;
   streamRequestEpoch += 1;
   sessionListRequestEpoch += 1;
@@ -1275,6 +1300,7 @@ const resetChatForAuthSubjectChange = () => {
   pendingConfirmationLoadFailed.value = false;
   activeStreamSessionId.value = '';
   activeStreamTurnId.value = '';
+  activeStreamAuthToken.value = null;
   historyReplacementWithoutTerminalAllowed.value = false;
   explicitStopRegistrationPending.value = false;
   activeStreamRetryDraft.value = '';
@@ -1343,6 +1369,7 @@ const settleActiveRequest = (
     // Invalidate the original send flow before the stop endpoint closes SSE; otherwise it
     // can race into its normal-completion reconciliation path.
     detachedController = detachActiveTransport(showCancelledMessage);
+    settlementDetachedTransport = detachedController;
   } else {
     abortActiveTransport(showCancelledMessage && Boolean(sessionId));
   }
@@ -1353,6 +1380,7 @@ const settleActiveRequest = (
         inputValue.value = activeStreamRetryDraft.value;
       }
       activeStreamTurnId.value = '';
+      activeStreamAuthToken.value = null;
       historyReplacementWithoutTerminalAllowed.value = false;
       explicitStopRegistrationPending.value = false;
       activeStreamRetryDraft.value = '';
@@ -1371,7 +1399,7 @@ const settleActiveRequest = (
     try {
       if (mustRegisterExplicitStop) {
         try {
-          await requestSessionStop(sessionId, turnId || undefined);
+          await requestOwnedSessionStop(sessionId, turnId || undefined);
           if (!settlementContextIsCurrent()) return 'ready';
           explicitStopRegistrationPending.value = false;
         } catch (error) {
@@ -1389,6 +1417,9 @@ const settleActiveRequest = (
           return outcome;
         } finally {
           detachedController?.abort();
+          if (settlementDetachedTransport === detachedController) {
+            settlementDetachedTransport = null;
+          }
         }
       }
       try {
@@ -1474,6 +1505,7 @@ const settleActiveRequest = (
         if (!retainActiveSession && activeStreamSessionId.value === sessionId) {
           activeStreamSessionId.value = '';
           activeStreamTurnId.value = '';
+          activeStreamAuthToken.value = null;
           historyReplacementWithoutTerminalAllowed.value = false;
           explicitStopRegistrationPending.value = false;
           activeStreamRetryDraft.value = '';
@@ -1498,7 +1530,7 @@ const handleStop = async () => {
 };
 
 const prepareForLogout = async (): Promise<ChatLogoutPreparation> =>
-    await settleActiveRequest(false);
+    await settleActiveRequest(true);
 
 defineExpose({ prepareForLogout });
 
@@ -1508,12 +1540,21 @@ const handleDocumentVisibilityChange = () => {
 
 watch(authenticatedUserId, (nextUserId, previousUserId) => {
   if (nextUserId === previousUserId) return;
-  resetChatForAuthSubjectChange();
+  const previousAuthToken = scopedAuthToken.value;
+  resetChatForAuthSubjectChange(previousAuthToken);
+  scopedAuthToken.value = authState.token;
+  scopedAuthUserId = nextUserId;
   if (nextUserId !== null && visible.value) {
     refreshBoardContext();
     void initSessions();
   }
 }, { flush: 'sync' });
+
+watch(() => authState.token, nextToken => {
+  if (authenticatedUserId.value !== scopedAuthUserId) return;
+  scopedAuthToken.value = nextToken;
+  if (activeStreamAuthToken.value) activeStreamAuthToken.value = nextToken;
+}, { flush: 'post' });
 
 onMounted(() => {
   if (visible.value) {
@@ -1530,6 +1571,8 @@ onUnmounted(() => {
   stopSessionActivityMonitor();
   settlementAbortController?.abort();
   settlementAbortController = null;
+  settlementDetachedTransport?.abort();
+  settlementDetachedTransport = null;
   chatStore.setStreaming(false);
   if (streamElapsedTimer) clearInterval(streamElapsedTimer);
   streamElapsedTimer = null;
@@ -1637,6 +1680,9 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
       scrollToBottom(false);
     };
 
+    // sendStreamChat reads the current token synchronously before dispatch. Capture
+    // the same value here after any asynchronous session creation has completed.
+    activeStreamAuthToken.value = authState.token;
     requestDispatched = true;
     await sendStreamChat(
         targetSessionId,
@@ -1809,6 +1855,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
               && !retainActiveSession && activeStreamSessionId.value === completedSessionId) {
             activeStreamSessionId.value = '';
             activeStreamTurnId.value = '';
+            activeStreamAuthToken.value = null;
             historyReplacementWithoutTerminalAllowed.value = false;
             explicitStopRegistrationPending.value = false;
             activeStreamRetryDraft.value = '';
@@ -2331,6 +2378,7 @@ const scrollToBottom = (force = false) => {
                 v-model="inputValue"
                 data-testid="chat-input"
                 :placeholder="t('app.chat.inputPlaceholder')"
+                :aria-label="t('app.chat.messageInput')"
                 :disabled="interactionLocked || isLoading || historyLoadFailed"
                 rows="2"
                 :maxlength="REQUEST_LIMITS.chatContentCharacters"
@@ -2369,6 +2417,7 @@ const scrollToBottom = (force = false) => {
                     type="button"
                     class="action-btn send"
                     data-testid="chat-send"
+                    :aria-label="t('app.chat.sendMessage')"
                     @click="handleSend"
                     :disabled="interactionLocked || !inputValue.trim() || isLoading || historyLoadFailed"
                     :title="interactionLocked ? t('app.chat.boardInteractionLocked') : undefined"
@@ -3673,6 +3722,19 @@ const scrollToBottom = (force = false) => {
     border-radius: 0.9rem;
   }
 
+  .control-icon-button,
+  .tool-icon,
+  .action-btn {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  /* The mobile panel already has a fixed viewport geometry; a 20px resize
+   * affordance only consumes space and is not a useful touch interaction. */
+  .chat-resize-handle {
+    display: none;
+  }
+
   .sidebar {
     position: absolute;
     inset: 0 auto 0 0;
@@ -3759,6 +3821,19 @@ const scrollToBottom = (force = false) => {
 
   .input-floating-area {
     padding: 0.65rem 0.75rem 0.75rem;
+  }
+}
+
+@media (pointer: coarse), (max-height: 599px) {
+  .control-icon-button,
+  .tool-icon,
+  .action-btn {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .chat-resize-handle {
+    display: none;
   }
 }
 

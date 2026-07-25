@@ -30,6 +30,8 @@ import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
 import cn.edu.nju.Iot_Verify.service.ChatService;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.FuzzService;
+import cn.edu.nju.Iot_Verify.service.InteractiveAiExecutionService;
+import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.service.UserService;
@@ -63,6 +65,8 @@ public class AuthServiceImpl implements AuthService {
     private final SimulationService simulationService;
     private final FuzzService fuzzService;
     private final ChatService chatService;
+    private final InteractiveAiExecutionService interactiveAiExecutionService;
+    private final InteractiveFixExecutionService interactiveFixExecutionService;
     private final UserRepository userRepository;
     private final BoardEnvironmentVariableRepository boardEnvironmentVariableRepository;
     private final BoardLayoutRepository boardLayoutRepository;
@@ -236,6 +240,19 @@ public class AuthServiceImpl implements AuthService {
             } catch (RuntimeException e) {
                 log.warn("Account deletion could not stop local chat work for user {}", userId, e);
             }
+        }
+        stopInteractiveExecution(interactiveAiExecutionService::requestUserExecutionStop,
+                userId, "AI recommendation");
+        stopInteractiveExecution(interactiveFixExecutionService::requestUserExecutionStop,
+                userId, "automatic-fix");
+    }
+
+    private void stopInteractiveExecution(java.util.function.Consumer<Long> stop,
+                                          Long userId, String operationType) {
+        try {
+            stop.accept(userId);
+        } catch (RuntimeException e) {
+            log.warn("Account deletion could not stop {} work for user {}", operationType, userId, e);
         }
     }
 

@@ -185,10 +185,90 @@ describe('SystemInspector rule execution order', () => {
     await wrapper.get('article button').trigger('click')
     const valueSelect = wrapper.get('[data-testid="environment-value-temperature"]')
     expect(valueSelect.find('option[value="off"]').text()).toBe('关闭')
+    await wrapper.setProps({ environmentSaving: true })
+    expect(valueSelect.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="environment-trust-temperature"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="environment-privacy-temperature"]').attributes('disabled')).toBeDefined()
+    await wrapper.setProps({ environmentSaving: false })
     await valueSelect.setValue('on')
     expect(wrapper.emitted('save-environment')?.at(-1)).toEqual([[
-      { name: 'temperature', value: 'on' }
+      {
+        name: 'temperature',
+        // The CAS baseline comes strictly from the authoritative snapshot; an absent trust/privacy
+        // normalizes to the same untrusted/public the server materializes, not a template default.
+        expected: { value: 'off', trust: 'untrusted', privacy: 'public' },
+        desired: { value: 'on' }
+      }
     ]])
+  })
+
+  it('disables environment controls and explains when the authoritative value is missing', async () => {
+    const finiteTemplate: DeviceTemplate = {
+      name: 'Signal source',
+      defaultTemplate: false,
+      manifest: {
+        Name: 'Signal source',
+        InternalVariables: [{
+          Name: 'signal',
+          IsInside: false,
+          FalsifiableWhenCompromised: false,
+          Trust: 'untrusted',
+          Privacy: 'public',
+          Values: ['off', 'on']
+        }]
+      }
+    }
+    const wrapper = mount(SystemInspector, {
+      props: {
+        activeSection: 'devices',
+        deviceTemplates: [finiteTemplate],
+        devices: [{
+          ...devices[0],
+          id: 'signal-1',
+          label: 'Signal source',
+          templateName: 'Signal source'
+        }],
+        environmentVariables: [{
+          name: 'signal',
+          trust: 'untrusted',
+          privacy: 'public'
+        }]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('[data-testid="toggle-environment-pool"]').trigger('click')
+    await wrapper.get('[data-testid="environment-pool"] article button').trigger('click')
+    const valueSelect = wrapper.get('[data-testid="environment-value-signal"]')
+    expect((valueSelect.element as HTMLSelectElement).value).toBe('off')
+    // The control is disabled and an explanation is shown; there is no verifiable baseline to edit.
+    expect(valueSelect.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="environment-trust-signal"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="environment-privacy-signal"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="environment-not-editable-signal"]').exists()).toBe(true)
+    await valueSelect.setValue('on')
+
+    expect(wrapper.emitted('save-environment')).toBeUndefined()
+  })
+
+  it('keeps device navigation available while mutation controls are read-only', async () => {
+    const wrapper = mount(SystemInspector, {
+      props: {
+        activeSection: 'devices',
+        devices,
+        readOnly: true,
+        readOnlyMessage: 'The scene is being replaced.'
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.get('[data-testid="inspector-add-device"]').attributes('disabled')).toBeDefined()
+    const deviceButton = wrapper.get('[data-device-id="sensor-1"] button[aria-label="Hall sensor"]')
+    expect(deviceButton.attributes('disabled')).toBeUndefined()
+    await deviceButton.trigger('click')
+    expect(wrapper.emitted('device-click')).toEqual([['sensor-1']])
+    expect(wrapper.get('[data-device-id="sensor-1"] button[aria-label="Remove device"]')
+      .attributes('disabled')).toBeDefined()
   })
 
   it('localizes the synthetic lowercase state field in bundled rule summaries', () => {

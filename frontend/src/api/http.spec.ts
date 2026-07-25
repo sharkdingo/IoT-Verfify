@@ -58,4 +58,30 @@ describe('board mutation request classification', () => {
     expect(auth.getUser()?.username).toBe('bob')
     expect(push).not.toHaveBeenCalled()
   })
+
+  it('preserves an explicit owner token for cleanup after the current account changes', async () => {
+    const auth = useAuth()
+    const aliceToken = validToken('alice-owner')
+    const bobToken = validToken('bob-current')
+    auth.login(bobToken, { userId: 8, phone: '13900139000', username: 'bob' })
+    let requestConfig: any
+
+    await api.delete('/owned-cleanup', {
+      headers: { Authorization: `Bearer ${aliceToken}` },
+      adapter: async config => {
+        requestConfig = config
+        return {
+          data: { code: 200, message: 'ok', data: true },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config
+        }
+      }
+    })
+
+    expect(requestConfig.headers.get('Authorization')).toBe(`Bearer ${aliceToken}`)
+    expect(requestConfig.authTokenAtRequest).toBe(aliceToken)
+    expect(auth.getToken()).toBe(bobToken)
+  })
 })

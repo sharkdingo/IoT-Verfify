@@ -22,11 +22,11 @@ fix suggestions when a specification is violated.
 - **Bounded counterexample exploration** — a reproducible, HAFuzz-inspired background
   search finds candidate violating paths before formal verification without presenting
   budget exhaustion as a safety proof.
-- **Automatic fix** — parameter adjustment, condition adjustment, and rule disabling,
+- **Automatic fix** — parameter adjustment, condition adjustment, and permanent rule removal,
   each candidate re-verified before it is offered.
 - **Attack simulation** and **interactive simulation** (random N-step traces).
 - **AI assistant** — any OpenAI-compatible LLM endpoint with SSE-streamed final replies
-  and 35 built-in tools; device / rule / specification recommendations, confirmed
+  and 48 built-in tools; device / rule / specification recommendations, confirmed
   atomic application of a generated full-scene draft, and confirmed bundled-template reset.
 - **Bilingual UI** — full zh-CN / en internationalization.
 
@@ -39,7 +39,8 @@ fix suggestions when a specification is violated.
 
 ## Quick start
 
-Prerequisites: JDK 17+, Node.js 18+, Maven 3.6+, MySQL 8.0+, NuSMV 2.6–2.7
+Prerequisites: JDK 17+, Node.js 20.19+ on Node 20 or Node.js 22.12+, Maven 3.6+,
+MySQL 8.0+, NuSMV 2.6–2.7
 (**not** nuXmv); Redis 6.0+ optional (fail-open).
 
 ```bash

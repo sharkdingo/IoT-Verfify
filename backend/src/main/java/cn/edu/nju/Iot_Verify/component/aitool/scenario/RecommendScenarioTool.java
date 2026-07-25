@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.RecommendationCapabilityView;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationFilterItem;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.SpecificationTemplateSemantics;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -24,11 +25,13 @@ import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -150,15 +153,18 @@ public class RecommendScenarioTool extends AbstractAiTool {
     private final PromptCompletionService promptCompletionService;
     private final BoardStorageService boardStorageService;
     private final AiScenarioDraftStore draftStore;
+    private final ChatExecutionConfig chatExecutionConfig;
 
     public RecommendScenarioTool(PromptCompletionService promptCompletionService,
                                  BoardStorageService boardStorageService,
                                  AiScenarioDraftStore draftStore,
+                                 ChatExecutionConfig chatExecutionConfig,
                                  ObjectMapper objectMapper) {
         super(objectMapper);
         this.promptCompletionService = promptCompletionService;
         this.boardStorageService = boardStorageService;
         this.draftStore = draftStore;
+        this.chatExecutionConfig = chatExecutionConfig;
     }
 
     @Override
@@ -262,14 +268,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 ScenarioVerificationReadiness.Status analysis = putScenarioAnalysis(
                         result, objectMapper.valueToTree(scene), 0, language, objectiveTargets);
                 result.put("rationale", validatedRationale(language, 0, 0, 0, analysis.semanticWarnings().size()));
-                if (chatSessionId != null && !chatSessionId.isBlank()) {
-                    attachDraftStatus(
-                            result,
-                            language,
-                            draftStore.saveDraft(
-                                    userId, chatSessionId, "AI Scenario", objectMapper.valueToTree(scene)));
-                }
-                return objectMapper.writeValueAsString(result);
+                return serializeDeliverableDraftResult(userId, chatSessionId, language, result);
             }
 
             String prompt = buildPrompt(
@@ -297,16 +296,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                                 "draftStored", false,
                                 "previousDraftRetained", previousDraftRetained));
             }
-            if (chatSessionId != null && !chatSessionId.isBlank()) {
-                JsonNode scene = objectMapper.valueToTree(result.get("scene"));
-                AiScenarioDraftStore.DraftSaveResult draftSaveResult = draftStore.saveDraft(
-                        userId,
-                        chatSessionId,
-                        String.valueOf(result.getOrDefault("scenarioName", "AI Scenario")),
-                        scene);
-                attachDraftStatus(result, language, draftSaveResult);
-            }
-            return objectMapper.writeValueAsString(result);
+            return serializeDeliverableDraftResult(userId, chatSessionId, language, result);
         } catch (ArgValidationException e) {
             return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
@@ -1916,6 +1906,56 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 ? "本次结果没有替换草稿；会话中上一次有效草稿仍被保留，“应用最新草稿”将应用上一次草稿。"
                 : "This result did not replace the draft. The previous valid draft is still retained, so applying the latest draft would apply that earlier draft.";
         result.put("message", currentMessage.isEmpty() ? warning : currentMessage + " " + warning);
+    }
+
+    private String serializeDeliverableDraftResult(Long userId,
+                                                   String chatSessionId,
+                                                   String language,
+                                                   Map<String, Object> result) throws JsonProcessingException {
+        if (chatSessionId == null || chatSessionId.isBlank()) {
+            return objectMapper.writeValueAsString(result);
+        }
+
+        JsonNode scene = objectMapper.valueToTree(result.get("scene"));
+        boolean canStoreDraft = scene.isObject()
+                && scene.path("devices").isArray()
+                && !scene.path("devices").isEmpty();
+        boolean previousDraftExists = draftStore.latestDraft(userId, chatSessionId).isPresent();
+        AiScenarioDraftStore.DraftSaveResult prospectiveSave = canStoreDraft
+                ? new AiScenarioDraftStore.DraftSaveResult(true, false)
+                : new AiScenarioDraftStore.DraftSaveResult(false, previousDraftExists);
+        attachDraftStatus(result, language, prospectiveSave);
+
+        String serialized = objectMapper.writeValueAsString(result);
+        int resultBytes = serialized.getBytes(StandardCharsets.UTF_8).length;
+        int maxResultBytes = chatExecutionConfig.getMaxToolResultBytes();
+        if (resultBytes > maxResultBytes) {
+            String message = previousDraftExists
+                    ? "The validated scenario result exceeded the safe tool-result limit and was not stored. "
+                            + "The previous visible draft remains available; request a smaller scene before replacing it."
+                    : "The validated scenario result exceeded the safe tool-result limit and was not stored. "
+                            + "Request a smaller scene before applying anything.";
+            return errorJson(message, "TOOL_RESULT_TOO_LARGE", 413, Map.of(
+                    "resultStatus", "RESULT_UNAVAILABLE",
+                    "resultAvailable", false,
+                    "mutationMayHaveCommitted", false,
+                    "draftStored", false,
+                    "previousDraftRetained", previousDraftExists,
+                    "resultBytes", resultBytes,
+                    "maxResultBytes", maxResultBytes));
+        }
+
+        if (canStoreDraft) {
+            AiScenarioDraftStore.DraftSaveResult actualSave = draftStore.saveDraft(
+                    userId,
+                    chatSessionId,
+                    String.valueOf(result.getOrDefault("scenarioName", "AI Scenario")),
+                    scene);
+            if (!actualSave.equals(prospectiveSave)) {
+                throw new IllegalStateException("Scenario draft storage did not match the validated scene.");
+            }
+        }
+        return serialized;
     }
 
     private int intOrDefault(JsonNode node, int fallback, int min, int max) {

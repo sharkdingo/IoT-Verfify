@@ -33,10 +33,16 @@ export const isBoardMutationRequest = (config: { url?: string; method?: string }
 api.interceptors.request.use(
   (config) => {
     const { getToken, getUser } = useAuth();
-    const token = getToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    const currentToken = getToken();
+    const existingAuthorization = config.headers.get('Authorization');
+    if (!existingAuthorization && currentToken) {
+      config.headers.Authorization = `Bearer ${currentToken}`;
     }
+    const effectiveAuthorization = config.headers.get('Authorization');
+    const token = typeof effectiveAuthorization === 'string'
+      && effectiveAuthorization.startsWith('Bearer ')
+      ? effectiveAuthorization.slice(7)
+      : currentToken;
     ;(config as BoardAwareRequestConfig).authTokenAtRequest = token
     ;(config as BoardAwareRequestConfig).boardInvalidationUserId = getUser()?.userId
     return config;

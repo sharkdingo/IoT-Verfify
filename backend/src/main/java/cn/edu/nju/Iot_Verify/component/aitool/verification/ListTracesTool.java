@@ -64,6 +64,7 @@ public class ListTracesTool extends AbstractAiTool {
                             && Boolean.TRUE.equals(trace.getDataAvailable());
                     Map<String, Object> summary = new LinkedHashMap<>();
                     summary.put("traceId", trace.getId());
+                    summary.put("runId", run.getId());
                     summary.put("dataAvailable", available);
                     summary.put("createdAt", trace.getCreatedAt());
                     if (!available) {

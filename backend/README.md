@@ -34,9 +34,9 @@ component/
     generator/    SMV model generation
     executor/     NusmvExecutor — subprocess exec, semaphore concurrency, timeout
     parser/       SmvTraceParser — counterexample parsing
-    fixer/        fault localization + parameter/condition/disable fix strategies
+    fixer/        fault localization + parameter/condition/permanent-removal fix strategies
   fuzz/           deterministic bounded path search + finite safety monitor
-  aitool/         the 35 AI tools
+  aitool/         the 48 AI tools (board/node/rule/scenario/spec/template/simulation/verification/fuzz)
   ai/             LLM abstraction — LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, repositories
 security/         JWT + Spring Security

@@ -39,6 +39,7 @@ import {
 } from '@/utils/deviceImportEnvironment'
 import boardApi, {
   BOARD_RESPONSE_INCOMPLETE_CODE,
+  parseDeviceTemplateDeletionPreview,
   type DefaultTemplateResetResult,
   type DeviceTemplateDeletionResult,
   type EnvironmentVariableChange
@@ -115,6 +116,11 @@ const ensureWritable = (): boolean => {
   return false
 }
 
+const mutationTitle = (fallback: string): string =>
+  props.readOnly ? (props.readOnlyMessage || t('app.playbackReadOnlyCloseFirst')) : fallback
+
+let readOnlyEpoch = 0
+
 const runBoardMutation = <T,>(work: () => Promise<T>): Promise<T> =>
   props.runBoardMutation ? props.runBoardMutation(work) : work()
 
@@ -156,6 +162,7 @@ const emit = defineEmits<{
     templates: DeviceTemplate[]
     environmentVariables: ModelEnvironmentVariable[]
   }]
+  'authoritative-state-unavailable': [keys: Array<'templates' | 'environment'>]
   'verify': []
   'simulate': [data: {
     steps: number
@@ -974,6 +981,7 @@ const generateConditionId = () => {
 
 // Open condition dialog for adding/editing
 const openConditionDialog = (side: SpecSide, index: number = -1) => {
+  if (!ensureWritable()) return
   if (creatingSpecification.value) return
   if (index < 0 && getConditionsForSide(side).length >= REQUEST_LIMITS.specificationConditions) {
     ElMessage.warning(t('app.itemLimitReached', {
@@ -1009,6 +1017,7 @@ const openConditionDialog = (side: SpecSide, index: number = -1) => {
 
 // Save condition from dialog
 const saveCondition = () => {
+  if (!ensureWritable()) return
   if (!editingConditionData.deviceId) {
     ElMessage.warning({
       message: t('app.selectDevice'),
@@ -1114,6 +1123,7 @@ const saveCondition = () => {
 
 // Remove condition
 const removeCondition = (side: SpecSide, index: number) => {
+  if (!ensureWritable()) return
   switch (side) {
     case 'a':
       specForm.aConditions.splice(index, 1)
@@ -1577,6 +1587,7 @@ const naturalLanguageRule = computed(() => {
 
 // Handle template selection
 const handleTemplateChange = () => {
+  if (!ensureWritable()) return
   const template = currentTemplateDetail.value
   if (template) {
     specForm.templateType = template.type
@@ -1794,6 +1805,10 @@ const handleDeviceImportFile = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
+  if (!ensureWritable()) {
+    target.value = ''
+    return
+  }
   try {
     if (file.size > MAX_DEVICE_IMPORT_BYTES) {
       ElMessage.error({ message: t('app.importFileTooLarge', { size: '4 MiB' }), type: 'error' })
@@ -1891,12 +1906,47 @@ const refreshTemplateCatalogForReconciliation = async (): Promise<DeviceTemplate
   }
 }
 
+const templateDeletionConflictReasonCodes = new Set([
+  'TEMPLATE_DELETION_PREVIEW_STALE',
+  'TEMPLATE_DELETION_BLOCKED'
+])
+
+const readTemplateDeletionConflictPreview = (
+  error: any,
+  expectedTemplateId: number
+): { conflictPayload: boolean, preview: DeviceTemplateDeletionResult | null } => {
+  if (Number(error?.response?.status) !== 409) {
+    return { conflictPayload: false, preview: null }
+  }
+  const data = error?.response?.data?.data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { conflictPayload: true, preview: null }
+  }
+  const reasonCode = typeof data.reasonCode === 'string' ? data.reasonCode : ''
+  const hasCurrentPreview = Object.prototype.hasOwnProperty.call(data, 'currentPreview')
+  const recognizedReason = templateDeletionConflictReasonCodes.has(reasonCode)
+  if (!recognizedReason || !hasCurrentPreview) {
+    return { conflictPayload: true, preview: null }
+  }
+  try {
+    const preview = parseDeviceTemplateDeletionPreview(data.currentPreview, expectedTemplateId)
+    if (reasonCode === 'TEMPLATE_DELETION_BLOCKED' && preview.canDelete) {
+      return { conflictPayload: true, preview: null }
+    }
+    return { conflictPayload: true, preview }
+  } catch (contractError) {
+    console.error('Rejected malformed device type deletion conflict preview:', contractError)
+    return { conflictPayload: true, preview: null }
+  }
+}
+
 const handleImportTemplate = async (event: Event) => {
   const target = event.target as HTMLInputElement
   if (!ensureWritable()) {
     target.value = ''
     return
   }
+  const admittedReadOnlyEpoch = readOnlyEpoch
   const file = target.files?.[0]
   if (!file) return
 
@@ -1919,6 +1969,14 @@ const handleImportTemplate = async (event: Event) => {
     return
   }
 
+  // The scene can enter playback/replacement while the file is being parsed.
+  // Re-check immediately before starting the network mutation so a late file
+  // read cannot write after the UI became read-only.
+  if (admittedReadOnlyEpoch !== readOnlyEpoch || !ensureWritable()) {
+    target.value = ''
+    return
+  }
+
   await runBoardMutation(async () => {
     try {
       await boardApi.addDeviceTemplate({ name: requestedName, manifest })
@@ -1929,6 +1987,7 @@ const handleImportTemplate = async (event: Event) => {
       if (!isDefinitiveTemplateMutationRejection(error)) {
         const current = await refreshTemplateCatalogForReconciliation()
         if (!current) {
+          emit('authoritative-state-unavailable', ['templates'])
           ElMessage.warning({ message: t('app.templateMutationOutcomeUnknownRefreshFailed'), type: 'warning' })
         } else if (current.some(template =>
           String(template.name || template.manifest?.Name || '').trim().toLocaleLowerCase()
@@ -1982,6 +2041,7 @@ const closeTemplateDeleteConfirm = (force = false) => {
 const openDeleteConfirm = async (template: any) => {
   if (!ensureWritable()) return
   if (isLoadingTemplateDeletePreview.value) return
+  const admittedReadOnlyEpoch = readOnlyEpoch
   closeTemplatePreview()
   const templateId = Number(template?.id)
   if (!Number.isSafeInteger(templateId) || templateId <= 0) {
@@ -1991,6 +2051,7 @@ const openDeleteConfirm = async (template: any) => {
   isLoadingTemplateDeletePreview.value = true
   try {
     const preview = await boardApi.previewDeviceTemplateDeletion(templateId)
+    if (props.readOnly || admittedReadOnlyEpoch !== readOnlyEpoch) return
     templateToDelete.value = preview.template
     templateDeletePreview.value = preview
     showDeleteConfirmDialog.value = true
@@ -2024,10 +2085,13 @@ const {
 const openResetDefaultsConfirm = async () => {
   if (!ensureWritable()) return
   if (isLoadingDefaultTemplateResetPreview.value) return
+  const admittedReadOnlyEpoch = readOnlyEpoch
   closeTemplatePreview()
   isLoadingDefaultTemplateResetPreview.value = true
   try {
-    defaultTemplateResetPreview.value = await boardApi.previewDefaultTemplateReset()
+    const preview = await boardApi.previewDefaultTemplateReset()
+    if (props.readOnly || admittedReadOnlyEpoch !== readOnlyEpoch) return
+    defaultTemplateResetPreview.value = preview
     showResetDefaultsConfirmDialog.value = true
   } catch (error: any) {
     console.error('Failed to preview default template reset:', error)
@@ -2079,6 +2143,7 @@ const confirmResetDefaultTemplates = async () => {
             closeResetDefaultsConfirm(true)
           } catch (refreshError) {
             console.error('Failed to reconcile default template reset:', refreshError)
+            emit('authoritative-state-unavailable', ['templates', 'environment'])
             ElMessage.warning({ message: t('app.templateMutationOutcomeUnknownRefreshFailed'), center: true })
           }
         } else if (Number(error?.response?.status) === 409) {
@@ -2210,20 +2275,30 @@ const confirmDeleteTemplate = async () => {
       closeTemplateDeleteConfirm(true)
     } catch (error: any) {
       console.error('Failed to delete template:', error)
-      const conflictPreview = error?.response?.data?.data?.currentPreview
-      if (conflictPreview) {
-        templateDeletePreview.value = conflictPreview
-        templateToDelete.value = conflictPreview.template
+      const conflict = readTemplateDeletionConflictPreview(error, templateId)
+      if (conflict.preview) {
+        templateDeletePreview.value = conflict.preview
+        templateToDelete.value = conflict.preview.template
         ElMessage.warning({ message: t('app.templateDeletePreviewChanged'), center: true })
         return
       }
-      if (!isDefinitiveTemplateMutationRejection(error)) {
+      if (conflict.conflictPayload || !isDefinitiveTemplateMutationRejection(error)) {
         const current = await refreshTemplateCatalogForReconciliation()
         if (!current) {
+          emit('authoritative-state-unavailable', ['templates'])
           ElMessage.warning({ message: t('app.templateMutationOutcomeUnknownRefreshFailed'), center: true })
+          if (conflict.conflictPayload) closeTemplateDeleteConfirm(true)
         } else if (!current.some(template => Number(template.id) === templateId)) {
           ElMessage.warning({
             message: t('app.templateDeleteOutcomeRefreshed', { name: templateName }),
+            center: true
+          })
+          closeTemplateDeleteConfirm(true)
+        } else if (conflict.conflictPayload) {
+          const errorMessage = t('app.boardMutationResponseIncomplete')
+          ElMessage({
+            message: t('app.deleteFailedWithReason', { reason: errorMessage }),
+            type: 'error',
             center: true
           })
           closeTemplateDeleteConfirm(true)
@@ -2271,6 +2346,19 @@ const exportTemplate = (template: any) => {
     })
   }
 }
+
+// Playback and scene replacement can begin from another Board surface while a
+// Control Center dialog is open. Close local editors before the read-only
+// render, and let in-flight server mutations finish their own reconciliation.
+// The async preview handlers above also re-check the flag so a late response
+// cannot reopen a confirmation surface after it was closed.
+watch(() => props.readOnly, readOnly => {
+  if (!readOnly) return
+  readOnlyEpoch += 1
+  closeSpecDialog()
+  if (!isDeletingTemplate.value) closeTemplateDeleteConfirm(true)
+  if (!isResettingDefaultTemplates.value) closeResetDefaultsConfirm(true)
+}, { flush: 'sync' })
 
 </script>
 
@@ -2329,7 +2417,7 @@ const exportTemplate = (template: any) => {
           :class="[
             'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'templates'
-              ? 'bg-orange-500 text-white shadow-md'
+              ? 'bg-orange-700 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
           :title="t('app.templates')"
@@ -2343,7 +2431,7 @@ const exportTemplate = (template: any) => {
           :class="[
             'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'devices'
-              ? 'bg-purple-500 text-white shadow-md'
+              ? 'bg-purple-700 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
           :title="t('app.devices')"
@@ -2357,7 +2445,7 @@ const exportTemplate = (template: any) => {
           :class="[
             'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'rules'
-              ? 'bg-blue-500 text-white shadow-md'
+              ? 'bg-blue-700 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
           :title="t('app.rules')"
@@ -2371,7 +2459,7 @@ const exportTemplate = (template: any) => {
           :class="[
             'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'specs'
-              ? 'bg-red-500 text-white shadow-md'
+              ? 'bg-red-700 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
           :title="t('app.specifications')"
@@ -2429,7 +2517,12 @@ const exportTemplate = (template: any) => {
             </button>
           </div>
 
-          <div v-if="deviceCreateMode === 'single'" class="space-y-3">
+          <fieldset
+            v-if="deviceCreateMode === 'single'"
+            :disabled="props.readOnly || creatingSingleDevice"
+            data-testid="single-device-fieldset"
+            class="m-0 min-w-0 space-y-3 border-0 p-0"
+          >
             <div class="relative">
               <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.type') }}</label>
               <div class="relative">
@@ -2599,9 +2692,14 @@ const exportTemplate = (template: any) => {
               <span class="material-symbols-outlined text-sm">add_location</span>
               {{ creatingSingleDevice ? t('app.saving') : `${t('app.add')} ${t('app.dropNode')}` }}
             </button>
-          </div>
+          </fieldset>
 
-          <div v-else-if="deviceCreateMode === 'batch'" class="space-y-3">
+          <fieldset
+            v-else-if="deviceCreateMode === 'batch'"
+            :disabled="props.readOnly || creatingMultipleDevices"
+            data-testid="batch-device-fieldset"
+            class="m-0 min-w-0 space-y-3 border-0 p-0"
+          >
             <div class="relative">
               <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.type') }}</label>
               <select
@@ -2670,9 +2768,14 @@ const exportTemplate = (template: any) => {
               <span class="material-symbols-outlined text-sm">playlist_add</span>
               {{ creatingMultipleDevices ? t('app.saving') : t('app.createDevicesWithCount', { count: batchDevicePreview.length }) }}
             </button>
-          </div>
+          </fieldset>
 
-          <div v-else class="space-y-3">
+          <fieldset
+            v-else
+            :disabled="props.readOnly || creatingMultipleDevices"
+            data-testid="import-device-fieldset"
+            class="m-0 min-w-0 space-y-3 border-0 p-0"
+          >
             <div class="device-import-help">
               <span class="material-symbols-outlined text-sm" aria-hidden="true">info</span>
               <span class="min-w-0 flex-1 truncate" :title="t('app.deviceImportShortHint')">
@@ -2743,7 +2846,7 @@ const exportTemplate = (template: any) => {
               <span class="material-symbols-outlined text-sm">library_add</span>
               {{ creatingMultipleDevices ? t('app.saving') : t('app.createDevicesWithCount', { count: validImportedDevices.length }) }}
             </button>
-          </div>
+          </fieldset>
         </div>
       </details>
 
@@ -2765,8 +2868,12 @@ const exportTemplate = (template: any) => {
 
           <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
             <div class="relative overflow-hidden rounded-lg border-2 border-dashed border-orange-300 bg-orange-50 transition-all hover:border-orange-500 hover:shadow-md">
-              <label class="group cursor-pointer block">
-                <input type="file" accept=".json" class="hidden" @change="handleImportTemplate">
+              <label
+                class="group block"
+                :class="props.readOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'"
+                :title="mutationTitle(t('app.importJsonTemplate'))"
+              >
+                <input type="file" accept=".json" class="hidden" :disabled="props.readOnly" @change="handleImportTemplate">
                 <div class="p-3 flex items-center gap-3">
                   <div class="w-9 h-9 bg-orange-400 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-orange-500 transition-colors">
                     <span class="material-symbols-outlined text-white text-base">upload_file</span>
@@ -2817,6 +2924,7 @@ const exportTemplate = (template: any) => {
                 v-model="templateSearchQuery"
                 class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-orange-400 focus:ring-2 focus:ring-orange-100/50 placeholder:text-slate-400 transition-all shadow-sm"
                 :placeholder="t('app.searchTemplates')"
+                :aria-label="t('app.searchTemplates')"
                 type="text"
               />
               <button
@@ -2840,9 +2948,9 @@ const exportTemplate = (template: any) => {
                 <button
                   type="button"
                   data-testid="reset-default-templates"
-                  class="inline-flex items-center gap-1 rounded-full border border-orange-200 bg-white px-2 py-0.5 text-[10px] font-bold text-orange-700 transition-colors hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  :disabled="props.templatesLoading || isLoadingDefaultTemplateResetPreview"
-                  :title="t('app.resetDefaultTemplates')"
+                  class="inline-flex min-h-11 items-center gap-1 rounded-full border border-orange-200 bg-white px-2 py-0.5 text-[10px] font-bold text-orange-700 transition-colors hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  :disabled="props.readOnly || props.templatesLoading || isLoadingDefaultTemplateResetPreview"
+                  :title="mutationTitle(t('app.resetDefaultTemplates'))"
                   @click="openResetDefaultsConfirm"
                 >
                   <span
@@ -2890,7 +2998,7 @@ const exportTemplate = (template: any) => {
                     :key="template.id"
                     class="template-card relative rounded-lg p-2 border transition-all duration-200"
                     :class="{ 'template-card--active': isTemplatePreviewVisible(template) }"
-                    draggable="true"
+                    :draggable="!props.readOnly"
                     :title="getTemplateName(template)"
                     @click.stop="toggleTemplatePreview(template, $event)"
                     @dragstart.stop="handleTemplateDragStart(template, $event)"
@@ -2941,9 +3049,10 @@ const exportTemplate = (template: any) => {
                         type="button"
                         @click.stop="openDeleteConfirm(template)"
                         @dragstart.stop.prevent
-                        class="template-card__action template-card__action--danger cursor-pointer p-1 rounded transition-colors"
+                        :disabled="props.readOnly || isLoadingTemplateDeletePreview || isDeletingTemplate"
+                        class="template-card__action template-card__action--danger cursor-pointer p-1 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                         :aria-label="t('app.delete')"
-                        :title="t('app.delete')"
+                        :title="mutationTitle(t('app.delete'))"
                       >
                         <span class="material-symbols-outlined text-xs" aria-hidden="true">delete</span>
                       </button>
@@ -3002,7 +3111,9 @@ const exportTemplate = (template: any) => {
           <button
             type="button"
             data-testid="open-rule-builder"
+            :disabled="props.readOnly"
             class="relative w-full overflow-hidden border-0 text-left group cursor-pointer rounded-xl bg-blue-500 hover:bg-blue-600 transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+            :title="mutationTitle(t('app.createRule'))"
             @click="openRuleBuilder"
           >
             <div class="relative p-3 flex items-center gap-3">
@@ -3040,7 +3151,7 @@ const exportTemplate = (template: any) => {
           <!-- Specification Creation -->
           <fieldset
             data-testid="spec-editor-fieldset"
-            :disabled="creatingSpecification"
+            :disabled="props.readOnly || creatingSpecification"
             :aria-busy="creatingSpecification"
             class="m-0 min-w-0 space-y-3 border-0 p-0"
           >
@@ -3541,7 +3652,7 @@ const exportTemplate = (template: any) => {
           @click="saveCondition"
           data-testid="spec-condition-save"
           class="px-5 py-2.5 text-sm font-bold text-black bg-gradient-to-r from-red-500 to-red-600 rounded-lg hover:from-red-600 hover:to-red-700 transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="!editingConditionData.deviceId || !editingConditionData.targetType || (editingConditionData.targetType !== 'state' && !editingConditionData.key)"
+          :disabled="props.readOnly || !editingConditionData.deviceId || !editingConditionData.targetType || (editingConditionData.targetType !== 'state' && !editingConditionData.key)"
         >
           <svg class="w-4 h-4" :fill="editingConditionIndex >= 0 ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="editingConditionIndex >= 0 ? 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' : 'M12 4v16m8-8H4'"/>
@@ -3685,7 +3796,7 @@ const exportTemplate = (template: any) => {
         </button>
         <button
           @click="confirmDeleteTemplate"
-          :disabled="isDeletingTemplate || !templateDeletePreview?.canDelete"
+          :disabled="props.readOnly || isDeletingTemplate || !templateDeletePreview?.canDelete"
           class="px-6 py-2.5 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-500 transition-all shadow-md flex items-center gap-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
         >
           <span class="material-symbols-outlined text-sm">delete</span>
@@ -3826,7 +3937,7 @@ const exportTemplate = (template: any) => {
         <button
           type="button"
           class="template-reset-dialog__btn primary"
-          :disabled="isResettingDefaultTemplates || !defaultTemplateResetPreview?.canApply"
+          :disabled="props.readOnly || isResettingDefaultTemplates || !defaultTemplateResetPreview?.canApply"
           @click="confirmResetDefaultTemplates"
         >
           <span v-if="isResettingDefaultTemplates" class="template-reset-dialog__spinner" aria-hidden="true"></span>
@@ -4363,7 +4474,19 @@ details > summary::-webkit-details-marker {
 }
 
 .template-card__action {
+  display: inline-flex;
+  min-width: 2rem;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
   color: var(--board-text-muted, #64748b);
+}
+
+@media (pointer: coarse) {
+  .template-card__action {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
 }
 
 .template-card__action:hover {

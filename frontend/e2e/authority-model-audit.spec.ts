@@ -209,31 +209,51 @@ const saveEnvironmentRuntimeFields = async (
     headers: authHeaders(auth)
   })
   const current = await unwrap<any[]>(currentResponse)
-  const byName = new Map(current.map(variable => [variable.name, { ...variable }]))
-  let changed = false
+  const byName = new Map(current.map(variable => [variable.name, variable]))
+  const updates = new Map<string, {
+    name: string
+    expected: { value: string | null; trust: string; privacy: string }
+    desired: { value?: string; trust?: string; privacy?: string }
+  }>()
+  const updateFor = (name: string) => {
+    const currentVariable = byName.get(name)
+    if (!currentVariable) return null
+    let update = updates.get(name)
+    if (!update) {
+      update = {
+        name,
+        expected: {
+          value: currentVariable.value ?? null,
+          trust: currentVariable.trust,
+          privacy: currentVariable.privacy
+        },
+        desired: {}
+      }
+      updates.set(name, update)
+    }
+    return update
+  }
 
   for (const variable of runtime.variables || []) {
-    const entry = byName.get(variable.name)
-    if (!entry) continue
-    entry.value = variable.value
-    if (variable.trust) entry.trust = variable.trust
-    changed = true
+    const update = updateFor(variable.name)
+    if (!update) continue
+    update.desired.value = variable.value
+    if (variable.trust) update.desired.trust = variable.trust
   }
 
   for (const privacy of runtime.privacies || []) {
-    const entry = byName.get(privacy.name)
-    if (!entry) continue
-    entry.privacy = privacy.privacy
-    changed = true
+    const update = updateFor(privacy.name)
+    if (!update) continue
+    update.desired.privacy = privacy.privacy
   }
 
-  if (!changed) return
+  if (updates.size === 0) return
 
   const saveResponse = await request.post(`${apiBaseURL}/api/board/environment`, {
     headers: authHeaders(auth),
-    data: Array.from(byName.values())
+    data: Array.from(updates.values())
   })
-  await unwrap<any[]>(saveResponse)
+  await unwrap(saveResponse)
 }
 
 const addDeviceViaLeftPanel = async (

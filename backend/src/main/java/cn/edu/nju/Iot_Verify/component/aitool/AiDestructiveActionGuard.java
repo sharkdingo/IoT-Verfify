@@ -56,6 +56,29 @@ public class AiDestructiveActionGuard {
                         String targetKey,
                         Object previewSnapshot,
                         String domainImpactToken) {
+        return issue(userId, toolName, targetKey, previewSnapshot, domainImpactToken, null);
+    }
+
+    /**
+     * Stores an immutable action payload for tools whose confirmed call must not ask the model to
+     * repeat a signed or otherwise security-sensitive proposal from chat history.
+     */
+    public String issueStoredAction(Long userId,
+                                    String toolName,
+                                    String targetKey,
+                                    Object actionPayload) {
+        if (actionPayload == null) {
+            throw new IllegalArgumentException("actionPayload must not be null");
+        }
+        return issue(userId, toolName, targetKey, actionPayload, null, actionPayload);
+    }
+
+    private String issue(Long userId,
+                         String toolName,
+                         String targetKey,
+                         Object previewSnapshot,
+                         String domainImpactToken,
+                         Object actionPayload) {
         SessionScope scope = currentScope(userId);
         byte[] tokenBytes = new byte[TOKEN_BYTES];
         secureRandom.nextBytes(tokenBytes);
@@ -68,6 +91,7 @@ public class AiDestructiveActionGuard {
         payload.put("targetKey", requireText(targetKey, "targetKey"));
         payload.put("previewDigest", Base64.getEncoder().encodeToString(digest(previewSnapshot)));
         if (domainImpactToken != null) payload.put("domainImpactToken", domainImpactToken);
+        if (actionPayload != null) payload.set("actionPayload", objectMapper.valueToTree(actionPayload));
         stateStore.put(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
                 payload, expiresAt);
         return token;
@@ -78,6 +102,26 @@ public class AiDestructiveActionGuard {
                                  String targetKey,
                                  String suppliedToken,
                                  Object currentPreviewSnapshot) {
+        return consume(userId, toolName, targetKey, suppliedToken, currentPreviewSnapshot, false);
+    }
+
+    /**
+     * Consumes the exact immutable action payload stored by {@link #issueStoredAction}. Current
+     * domain state must still be checked by the called mutation service before it writes.
+     */
+    public ConsumeResult consumeStoredAction(Long userId,
+                                             String toolName,
+                                             String targetKey,
+                                             String suppliedToken) {
+        return consume(userId, toolName, targetKey, suppliedToken, null, true);
+    }
+
+    private ConsumeResult consume(Long userId,
+                                  String toolName,
+                                  String targetKey,
+                                  String suppliedToken,
+                                  Object currentPreviewSnapshot,
+                                  boolean useStoredAction) {
         boolean actionConfirmed = "reset_default_templates".equals(toolName)
                 ? UserContextHolder.isDefaultTemplateResetConfirmed()
                 : UserContextHolder.isDestructiveActionConfirmed();
@@ -122,13 +166,30 @@ public class AiDestructiveActionGuard {
                     "No changes were made. The confirmation token does not match this tool and target; review a fresh preview.");
         }
 
-        byte[] currentDigest = digest(currentPreviewSnapshot);
-        if (!MessageDigest.isEqual(pending.previewDigest(), currentDigest)) {
-            stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
-                    snapshot.version());
-            return ConsumeResult.rejected(
-                    "CONFIRMATION_STALE",
-                    "No changes were made because the protected-action impact changed after the preview; review and confirm the current preview.");
+        if (useStoredAction) {
+            if (pending.actionPayload() == null) {
+                stateStore.remove(scope.userId(), scope.sessionId(),
+                        AiSessionStateStore.Kind.DESTRUCTIVE_ACTION, snapshot.version());
+                return ConsumeResult.rejected(
+                        "CONFIRMATION_MISSING",
+                        "No changes were made because the stored protected-action proposal is unavailable; request a fresh preview.");
+            }
+            if (!MessageDigest.isEqual(pending.previewDigest(), digest(pending.actionPayload()))) {
+                stateStore.remove(scope.userId(), scope.sessionId(),
+                        AiSessionStateStore.Kind.DESTRUCTIVE_ACTION, snapshot.version());
+                return ConsumeResult.rejected(
+                        "CONFIRMATION_MISSING",
+                        "No changes were made because the stored protected-action proposal is unreadable; request a fresh preview.");
+            }
+        } else {
+            byte[] currentDigest = digest(currentPreviewSnapshot);
+            if (!MessageDigest.isEqual(pending.previewDigest(), currentDigest)) {
+                stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                        snapshot.version());
+                return ConsumeResult.rejected(
+                        "CONFIRMATION_STALE",
+                        "No changes were made because the protected-action impact changed after the preview; review and confirm the current preview.");
+            }
         }
 
         if (!stateStore.remove(scope.userId(), scope.sessionId(),
@@ -137,7 +198,7 @@ public class AiDestructiveActionGuard {
                     "CONFIRMATION_CONSUMED",
                     "No changes were made. This protected-action confirmation was already used; request a fresh preview.");
         }
-        return ConsumeResult.approved(pending.domainImpactToken());
+        return ConsumeResult.approved(pending.domainImpactToken(), pending.actionPayload());
     }
 
     public void clearSession(Long userId, String sessionId) {
@@ -174,7 +235,9 @@ public class AiDestructiveActionGuard {
                     Base64.getDecoder().decode(requireText(
                             payload.path("previewDigest").asText(null), "previewDigest")),
                     payload.hasNonNull("domainImpactToken")
-                            ? payload.path("domainImpactToken").asText() : null);
+                            ? payload.path("domainImpactToken").asText() : null,
+                    payload.hasNonNull("actionPayload")
+                            ? payload.path("actionPayload").deepCopy() : null);
         } catch (RuntimeException e) {
             stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
                     snapshot.version());
@@ -247,7 +310,8 @@ public class AiDestructiveActionGuard {
                                  String toolName,
                                  String targetKey,
                                  byte[] previewDigest,
-                                 String domainImpactToken) {
+                                 String domainImpactToken,
+                                 JsonNode actionPayload) {
     }
 
     public record PendingActionContext(String toolName, String targetKey, String impactToken) {
@@ -256,14 +320,16 @@ public class AiDestructiveActionGuard {
     public record ConsumeResult(boolean approved,
                                 String errorCode,
                                 String message,
-                                String domainImpactToken) {
+                                String domainImpactToken,
+                                JsonNode actionPayload) {
 
-        private static ConsumeResult approved(String domainImpactToken) {
-            return new ConsumeResult(true, null, null, domainImpactToken);
+        private static ConsumeResult approved(String domainImpactToken, JsonNode actionPayload) {
+            return new ConsumeResult(true, null, null, domainImpactToken,
+                    actionPayload == null ? null : actionPayload.deepCopy());
         }
 
         private static ConsumeResult rejected(String errorCode, String message) {
-            return new ConsumeResult(false, errorCode, message, null);
+            return new ConsumeResult(false, errorCode, message, null, null);
         }
     }
 }

@@ -29,6 +29,8 @@ import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
 import cn.edu.nju.Iot_Verify.service.ChatService;
 import cn.edu.nju.Iot_Verify.service.FuzzService;
+import cn.edu.nju.Iot_Verify.service.InteractiveAiExecutionService;
+import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.service.UserService;
@@ -64,6 +66,8 @@ class AuthServiceImplLogoutTest {
     @Mock private SimulationService simulationService;
     @Mock private FuzzService fuzzService;
     @Mock private ChatService chatService;
+    @Mock private InteractiveAiExecutionService interactiveAiExecutionService;
+    @Mock private InteractiveFixExecutionService interactiveFixExecutionService;
     @Mock private UserRepository userRepository;
     @Mock private BoardEnvironmentVariableRepository boardEnvironmentVariableRepository;
     @Mock private BoardLayoutRepository boardLayoutRepository;
@@ -96,7 +100,8 @@ class AuthServiceImplLogoutTest {
         authService = new AuthServiceImpl(
                 userService, jwtUtil, passwordEncoder,
                 tokenBlacklistService, userMapper, deviceTemplateService,
-                verificationService, simulationService, fuzzService, chatService, userRepository,
+                verificationService, simulationService, fuzzService, chatService,
+                interactiveAiExecutionService, interactiveFixExecutionService, userRepository,
                 boardEnvironmentVariableRepository,
                 boardLayoutRepository, chatMessageRepository, chatSessionRepository,
                 deviceNodeRepository, deviceTemplateRepository, fuzzFindingRepository,
@@ -302,6 +307,8 @@ class AuthServiceImplLogoutTest {
         verify(fuzzControl).requestLocalExecutionStop(21L);
         verify(fuzzControl).requestLocalExecutionStop(22L);
         verify((ChatExecutionControl) chatService).requestLocalUserExecutionStop(7L);
+        verify(interactiveAiExecutionService).requestUserExecutionStop(7L);
+        verify(interactiveFixExecutionService).requestUserExecutionStop(7L);
         verify(fuzzService, never()).cancelTask(anyLong(), anyLong());
         verify(userRepository).delete(user);
     }
@@ -328,6 +335,8 @@ class AuthServiceImplLogoutTest {
             verifyNoInteractions(tokenBlacklistService);
             verify((AsyncTaskExecutionControl) fuzzService, never()).requestLocalExecutionStop(anyLong());
             verify((ChatExecutionControl) chatService, never()).requestLocalUserExecutionStop(anyLong());
+            verify(interactiveAiExecutionService, never()).requestUserExecutionStop(anyLong());
+            verify(interactiveFixExecutionService, never()).requestUserExecutionStop(anyLong());
 
             TransactionSynchronizationManager.getSynchronizations()
                     .forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
@@ -335,6 +344,8 @@ class AuthServiceImplLogoutTest {
             verify(tokenBlacklistService).blacklist("token", 60L);
             verify((AsyncTaskExecutionControl) fuzzService).requestLocalExecutionStop(22L);
             verify((ChatExecutionControl) chatService).requestLocalUserExecutionStop(7L);
+            verify(interactiveAiExecutionService).requestUserExecutionStop(7L);
+            verify(interactiveFixExecutionService).requestUserExecutionStop(7L);
         } finally {
             TransactionSynchronizationManager.clearSynchronization();
         }
@@ -362,6 +373,8 @@ class AuthServiceImplLogoutTest {
         verifyNoInteractions(tokenBlacklistService);
         verify((AsyncTaskExecutionControl) fuzzService, never()).requestLocalExecutionStop(anyLong());
         verify((ChatExecutionControl) chatService, never()).requestLocalUserExecutionStop(anyLong());
+        verify(interactiveAiExecutionService, never()).requestUserExecutionStop(anyLong());
+        verify(interactiveFixExecutionService, never()).requestUserExecutionStop(anyLong());
         verify(userRepository, never()).delete(any());
     }
 }

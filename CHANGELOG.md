@@ -15,9 +15,150 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-25
+
+#### Added
+- Closed four AI-assistant capability gaps so device editing, rule ordering, run cleanup, and the
+  bounded counterexample-search (fuzz) workflow can be completed in chat instead of forcing a switch
+  back to the UI. The assistant tool catalog grew from 35 to 48 tools.
+  - `edit_device` edits one existing device in place — `field=label` renames it via the same
+    compare-and-set rename as the UI (cascading the new name into referencing specifications, with a
+    case-insensitive conflict returning a no-write `409 DEVICE_LABEL_CONFLICT` and a suggestion),
+    `field=runtime` compare-and-set-replaces its initial state/trust/privacy/variables (concurrent
+    change returns `409 DEVICE_RUNTIME_CONFLICT` with the current device, no write), and
+    `field=layout` compare-and-set moves or resizes its canvas card (concurrent canvas changes return
+    `409 DEVICE_LAYOUT_CONFLICT` with the current device, no write). Each edit is reversible and
+    targeted; fields belonging to another aspect are rejected rather than ignored.
+  - `manage_rule` gained an `action=reorder` that atomically replaces only the
+    verification-significant rule execution order. `expectedRuleIds` preserves the complete order
+    the caller observed and `ruleIds` supplies the desired permutation, so a concurrent reorder is
+    rejected instead of silently overwritten. It is reversible and needs no confirmation.
+  - Added the conversational bounded-search workflow: `fuzz_model_async` (reproducible
+    `BOARD_SNAPSHOT` strategy only),
+    `fuzz_task_status`, `cancel_fuzz_task`, two-turn `dismiss_fuzz_task`, `list_fuzz_runs`,
+    `get_fuzz_run`, `get_fuzz_finding`, and the two-turn cascade `delete_fuzz_run`. Findings remain heuristic
+    candidate evidence, are kept strictly separate from formal traces, and have no route into
+    `fix_violation`/`apply_fix`; budget exhaustion is never reported as satisfaction.
+  - Added verification/simulation history cleanup: two-turn cascade `delete_verification_run` and
+    two-turn `dismiss_verify_task` / `dismiss_simulate_task` (which preview the diagnostics retained
+    by already-dead, resultless tasks and refuse active/completed ones). `list_traces` now also
+    returns each trace's `runId` so runs are addressable from chat.
+  - Run deletion and terminal-task dismissal tools reuse the existing two-turn
+    `AiDestructiveActionGuard` impact-token flow; all new mutating tools are registered in
+    `AiToolManager.MUTATION_CAPABLE_TOOLS` so oversized-result handling reports possible commits.
+
+#### Changed
+- Raised the supported frontend runtime to Node.js `^20.19.0 || >=22.12.0`, declared the
+  constraint in `package.json`, and pinned CI to Node.js 20.19.5 so unsupported Node 18
+  installations fail at the package boundary instead of proceeding after engine warnings.
+
+#### Fixed
+- Stopped the System Inspector from silently discarding Environment Pool edits for a variable
+  whose authoritative value is blank. A variable with no declared value domain (not verifiable)
+  now shows its value, trust, and privacy controls disabled with an explanation instead of
+  accepting an edit that could never be persisted. The compare-and-set baseline is now built
+  strictly from the authoritative Environment Pool snapshot rather than from a template-derived
+  display value, so trust/privacy-only edits no longer send a spurious baseline that the server
+  rejects as stale.
+- Required interactive recommendation and automatic-fix results to pass one atomic Redis
+  completion fence before delivery. The fence checks request ownership, per-user ownership,
+  request cancellation, and account-deletion cancellation together; an expired/replaced lease,
+  stop request, or uncertain Redis response now fails closed instead of returning stale work as
+  successful.
+- Measured a chat scenario recommendation's prospective UTF-8 result before storing its validated
+  full-scene draft. An oversized result now returns `TOOL_RESULT_TOO_LARGE` without creating a
+  hidden draft or replacing the user's previous visible draft.
+- Prevented verification, simulation, and bounded-search queue/dispatcher failures from accumulating
+  dead stored-task rows against the user's quota. A failed start now conditionally removes only the
+  submitting worker's still-pending row for both executor rejection and other runtime failures. If
+  cleanup cannot be confirmed, AI tools preserve the task id as
+  `TASK_DISPATCH_OUTCOME_UNKNOWN`, stop the tool loop, refresh run history, and require status
+  reconciliation before retrying.
+- Revalidated historical verification, simulation, and bounded-search playback after their detail
+  requests return. Playback now waits for already-admitted Board writes and is deferred if a new
+  edit, scene replacement, playback surface, recommendation, or live editor appears while history
+  is loading, instead of opening a read-only timeline over an active edit.
+- Preserved the authoritative task id when an async verification, simulation, or bounded-search
+  submission succeeds but its initial status cannot be read or serialized. The tool now directs the
+  assistant to poll that exact task instead of presenting a retryable start failure. Bounded-search
+  finding detail is also paged (`stateOffset`/`stateLimit`) with matching input-event windows, so a
+  large saved path does not make the only detail tool unusable.
+- Made verification/fuzz run-deletion previews count exact persisted trace/finding rows, including
+  unavailable or damaged evidence, without deserializing their payloads. Confirmed deletion locks
+  the user-owned completed run and rechecks both the expected and actually deleted row counts, so
+  impact drift cannot silently remove more evidence and corrupt fuzz history remains cleanable.
+- Removed the internal persisted specification id from bounded-search run and finding tool
+  responses. The assistant keeps the finding/run operation handles and user-semantic violated
+  specification projection without exposing a second persistence identity.
+- Closed the assistant's formal-fix workflow with a separate `apply_fix` tool. It verifies an
+  exact signed `fix_violation` suggestion before a no-write preview, stores that payload only in
+  the expiring session confirmation state, and requires a later explicit impact-token confirmation.
+  Confirmed application calls the existing signed fix service so signature expiry, complete
+  Board/template/spec/device/environment drift checks, formal-operation admission, and the
+  transaction commit fence remain authoritative. Confirmation mismatch, replay, expiry, malformed
+  schemas, and fuzz-finding inputs fail before mutation. Undeliverable previews are no longer left
+  confirmable, including previews discarded by the chat result-size limit, and admission/settlement
+  ambiguity after service invocation is reported as an unknown mutation result that refreshes rules
+  before retry.
+- Made interactive AI recommendation and automatic-fix ownership acquisition one atomic Redis
+  command. Initial Redis unavailability still falls back to process-local tracking, while an
+  uncertain or post-TTL acquisition now performs token-fenced cleanup and returns `503` instead
+  of creating a possible second owner. Lease polling likewise uses the monotonic call-start time,
+  so a delayed success response cannot revive ownership after the 30-second TTL.
+- Prevented an AI-generated scene from replacing newer Board edits after it waited behind a
+  pending mutation. Scene application now rechecks recommendation ownership after queue drain,
+  replacement preview, user confirmation, and final mutation admission.
+- Made unknown template-import, default-reset, and template-delete outcomes fail closed when
+  authoritative reconciliation also fails. The affected template/environment collections become
+  unavailable, stale recommendations close, and model runs remain blocked until a full refresh
+  succeeds.
+- Validated device-type deletion conflict previews before replacing the open confirmation. Invalid
+  or unexpected `409` payloads now refresh the authoritative type catalog and close the stale
+  confirmation instead of exposing an unverified target, blocker list, or confirmation token.
+- Bound recommendation, chat, and automatic-fix cancellation to the authentication token that
+  started the operation. Sign-out now stops active interactive work before revoking that token,
+  cross-tab account changes cannot cancel Alice's work with Bob's token, and permanent account
+  deletion publishes a bounded cross-instance stop fence for recommendation and fix execution.
+- Kept interactive cancellation aligned with same-user token renewal. Chat streams adopt a renewed
+  credential for later Stop requests, while recommendation teardown and sign-out retries retain a
+  captured owner credential even after the original POST settles with an uncertain transport result.
+- Kept all four AI recommendation requests busy and cancellable when their POST receives no HTTP
+  response. POST, status, and cancellation now use one explicitly captured owner credential; bounded
+  recovery blocks duplicate request ids across transport loss or account switching, sign-out accepts
+  owner-authenticated `FINISHED` status when cancellation returns `false`, and an old terminal POST
+  settlement cannot release a newer recommendation.
+- Kept automatic-fix searches tracked when their POST loses transport before any HTTP response.
+  The dialog now pins one initiating credential across POST, status, and cancellation, rejects
+  unauthenticated starts, and retains the request id and credential through bounded cancellation/status
+  recovery, remains mounted while hidden, blocks a parallel search after close or reopen, and reports
+  logout uncertainty unless cancellation or authoritative completion is confirmed. A `FINISHED`
+  status now releases a hung POST, stale cleanup cannot clear a newer same-strategy request, hidden
+  searches remain bound to their original trace, and lifecycle control calls use short timeouts.
+- Protected unsaved device-instance configuration drafts across close buttons, Escape, backdrop
+  clicks, and the details-to-rename transition. Closing now requires confirmation when normalized
+  runtime/trust/privacy/variable values differ from the server baseline; saving temporarily blocks
+  close, rename, and deletion, while edits made during an in-flight save remain dirty after its
+  response. Long custom device metadata now wraps within narrow details dialogs instead of being
+  clipped outside the visible table.
+- Kept saved-model playback usable in short landscape viewports by placing the step-change inspector
+  and timeline in separate columns while both are visible; dismissing the inspector restores the
+  timeline's full available width.
+- Kept visible confirmation after applying a standalone rule, device, or specification recommendation.
+  The applied candidate remains as a disabled item while every other candidate generated for the old
+  Board context and its candidate-accounting metadata are discarded, so stale suggestions cannot be
+  applied after the scene changes. An unknown rule-create outcome is still reconciled after the user
+  closes the recommendation panel, preventing a committed rule from remaining absent in the UI.
+
 ### 2026-07-24
 
 #### Changed
+- Made public Environment Pool edits compare-and-set operations. The Board now submits a
+  complete baseline with each field patch, rejects stale edits with a structured conflict,
+  and refreshes the current value instead of allowing another tab to overwrite it silently.
+  The baseline carries a non-blank value from the variable's finite template domain plus
+  complete trust/privacy labels. Omitted desired fields preserve their current value, while
+  explicit JSON `null` for value, trust, or privacy is rejected instead of becoming an
+  ambiguous no-op.
 - Made scene-recommendation completion use explicit minimum device, automation-rule,
   and specification targets instead of treating any non-empty category as complete.
   The backend and Board now validate the same target counts, report missing versus
@@ -39,13 +180,38 @@ history into a technical spec. The spec content itself now lives under
   even when the durable result is a user-only turn. Transport loss before response headers is
   treated as an unknown admission outcome, and failed or inconsistent history reloads keep the
   assistant locked until authoritative reconciliation succeeds.
+- Made pre-admission chat Stop fences finite and turn-specific across backend instances. Fences
+  use the database clock, expire after two minutes, and are bounded to 64 live turns per session;
+  an expired fence is purged instead of cancelling a later request. Untitled session titles now
+  fold Unicode whitespace and truncate by Unicode code point (12 code points plus `...`) so
+  multilingual text is not split in the middle of a surrogate pair. Chat admission now uses
+  the same definition and rejects messages made only of Unicode whitespace.
 - Made Device Details retain only still-legal dirty runtime edits when a same-node template
   schema changes. Save remains blocked until the user explicitly adopts the latest runtime or
   continues with the compatible subset; untouched drafts adopt the new schema immediately. State,
   current-state trust, and current-state privacy now reconcile as one context so a refresh cannot
   combine one state's trust/privacy overrides with a different state.
+- Applied the signed automatic-fix mutation under the same per-user formal-operation lease and
+  commit fence as verification and simulation, including a fence registered inside the board-write
+  transaction so an expired lease cannot publish a stale repair.
+- Kept user-defined state and variable identifiers unchanged in fuzzing and playback displays,
+  even when an identifier collides with the bundled `workingState` token.
 
 #### Fixed
+- Fenced rule duplicate/similarity checks to the open editor that started them, so closing
+  the dialog cannot let a delayed check save or report against a discarded draft. Every
+  accepted local or external semantic Board change now closes and cancels recommendations
+  produced for the previous scene, and queued recommendation applications recheck admission
+  immediately before writing. Collection reordering, no-op saves, and canvas-only layout
+  changes keep still-valid recommendations open.
+- Kept cancellation of a history-delete confirmation from cancelling an unrelated in-flight
+  detail or replay request. Detail requests are invalidated only after the user confirms the
+  verification, simulation, or counterexample-search deletion.
+- Made Control Center read-only behavior match playback and scene-replacement semantics.
+  Template preview, search, export, and schema download remain available, while device,
+  template, rule, and specification mutation controls are disabled. Open specification-
+  condition and template confirmation dialogs now close when the lock begins, and late
+  impact-preview responses cannot reopen them.
 - Separated chat SSE failures from model-authored text with a structured `error` frame. A
   valid assistant response beginning with the literal text `[ERROR]` is no longer mistaken
   for a server failure by the frontend, and a parsed server error is retained if the transport
@@ -222,7 +388,10 @@ history into a technical spec. The spec content itself now lives under
   deleted. A save-start edit revision also preserves input made while a runtime save is in
   flight, including the ambiguous case where the user deliberately returns to the old value;
   the authoritative baseline advances even while that draft is preserved, preventing a later
-  refresh from overwriting it. Replacing a same-id device with a different runtime schema
+  refresh from overwriting it. Save acknowledgements now compare the exact submitted draft
+  with the server-canonical, template-materialized result, so clearing an override adopts the
+  template default while edits made after Save remain local. Replacing a same-id device with
+  a different runtime schema
   resets the edit session instead of mixing old fields into the new template. Correctly
   scoped dark-theme selectors now keep the complete device-details surface, runtime editor,
   controls, labels, Markdown code blocks, and information-tooltip triggers readable instead
@@ -235,7 +404,12 @@ history into a technical spec. The spec content itself now lives under
   rejects malformed nested preview/delete responses, and serializes preview reads behind
   pending Board writes. Changes to the target or its actual rule/specification/environment
   impact close the stale confirmation while unrelated Board edits do not; repeated final
-  confirmation still emits only one delete request.
+  confirmation still emits only one delete request. When that automatic invalidation came
+  from Device Details and the same device still exists, the details resume from the current
+  snapshot; cancellation, submitted deletion, and non-dialog entry paths do not force it open.
+  Rule and specification deletion
+  confirmations now also bind to the exact scene generation and item snapshot, so a scene
+  replacement or same-id external edit cannot redirect the approved delete to newer content.
   Runtime saves now send both the edit baseline and desired complete value; the backend
   compares the baseline under the per-user database write lock and returns an explicit
   `DEVICE_RUNTIME_STALE` conflict before writing when another tab changed the device. Runtime

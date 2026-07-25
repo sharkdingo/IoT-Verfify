@@ -10,11 +10,13 @@ repaired rules back to the board (see [Applying a suggestion](#applying-a-sugges
 API contract (`fault-rules`, `fix`, `fix/apply`) → [../api/verification.md](../api/verification.md).
 Spec formulas → [spec-templates.md](spec-templates.md).
 
-Verified against code on 2026-07-24. Source: `component/nusmv/fixer/` — `RuleFixer`,
+Verified against code on 2026-07-25. Source: `component/nusmv/fixer/` — `RuleFixer`,
 `localize/FaultLocalizer`, `strategy/{ParameterAdjustStrategy, ConditionAdjustStrategy,
 RemoveRulesFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFingerprint`,
 `parameterize/{ParameterExtractor, CounterexampleInitialStateConstraints}`;
-`service/impl/FixServiceImpl` (apply flow). Config keys
+`service/impl/FixServiceImpl` (apply flow),
+`component/aitool/verification/ApplyFixTool` (conversational adapter), and
+`component/aitool/AiDestructiveActionGuard` (two-turn confirmation). Config keys
 (`FIX_*`) → [../getting-started/configuration.md](../getting-started/configuration.md).
 
 ---
@@ -312,6 +314,20 @@ and token. Any edit, replay in another context, or expired token rejects with `4
 same proposal is applied. This removes the second expensive strategy search and prevents apply
 from silently choosing a different valid suggestion than the one the user reviewed.
 
+The assistant's `apply_fix` tool uses the same boundary. Its first call verifies the exact
+signed suggestion and returns a no-write impact preview. The session-scoped confirmation
+guard stores that complete request for 15 minutes, so the confirmed call does not reconstruct
+security-sensitive suggestion data from truncated model history. A later explicit confirmation
+consumes the request once and calls `FixService.applyFix`; it does not call a lower-level rule
+mutator. Confirmation expiry/mismatch stops before the service, while signature expiry and all
+current-model drift checks still run inside the service. Fuzz findings remain in their separate
+bounded-exploration domain and cannot be passed to either formal-fix tool. A preview that cannot
+be serialized, or that exceeds the configured chat tool-result limit, is removed from confirmation
+state rather than leaving an unseen action available.
+Once the mutation service starts, an unclassified admission or settlement failure is treated as an
+unknown mutation outcome and requires a rule refresh before retry; the specialized apply-preflight
+`503` remains the explicit no-write exception.
+
 **Drift guards** (all reject with `400` unless noted) ensure the earlier verification evidence
 still describes the model being changed:
 
@@ -358,6 +374,11 @@ is captured **inside the same per-user write lock + transaction** as the save (r
 check → apply → write is one atomic critical section), so the checks cannot themselves
 mix different Board moments and a concurrent save cannot slip between a check and the
 write.
+
+The signed apply entry also runs under the per-user formal-operation admission. Its
+commit fence is registered from inside the board-write transaction, which prevents an
+expired or superseded lease from committing a repair after another formal operation has
+claimed the user.
 
 **Per-strategy effect** (`FixStrategyApplier.apply`): `parameter` overwrites the target
 condition's value (and relation); `condition` adds/removes conditions; `remove` permanently deletes

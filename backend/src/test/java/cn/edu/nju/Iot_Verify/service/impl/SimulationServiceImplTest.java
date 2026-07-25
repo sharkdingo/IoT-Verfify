@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -111,6 +112,13 @@ class SimulationServiceImplTest {
         @Override
         public void execute(Runnable task) {
             throw new TaskRejectedException("rejected");
+        }
+    }
+
+    private static class FailingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        @Override
+        public void execute(Runnable task) {
+            throw new IllegalStateException("executor failed");
         }
     }
 
@@ -767,14 +775,16 @@ class SimulationServiceImplTest {
     }
 
     @Test
-    void submitSimulation_queueRejected_marksCreatedTaskFailedAndThrowsServiceUnavailable() {
+    void submitSimulation_queueRejected_removesUndispatchedTaskAndThrowsServiceUnavailable() {
         SimulationServiceImpl rejectingService = serviceWithSimulationExecutor(new RejectingThreadPoolTaskExecutor());
         SimulationTaskPo savedTask = SimulationTaskPo.builder()
                 .id(13L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
                 .requestedSteps(10).createdAt(LocalDateTime.now()).build();
 
         when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenReturn(savedTask);
-        when(simulationTaskRepository.findById(13L)).thenReturn(Optional.of(savedTask));
+        when(simulationTaskRepository.deleteUndispatchedTask(
+                eq(13L), eq(1L), anyString(), eq(SimulationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(1);
 
         ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
                 () -> rejectingService.submitSimulation(
@@ -783,14 +793,54 @@ class SimulationServiceImplTest {
         assertTrue(ex.getMessage().contains("busy"));
         verify(simulationTaskRepository).save(any(SimulationTaskPo.class));
         verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
-        verify(simulationTaskRepository).failTaskIfActive(
-                eq(13L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
-                eq("Server busy, please try again later"), anyString(), any(),
-                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)),
-                anyString(), any(LocalDateTime.class));
+        verify(simulationTaskRepository).deleteUndispatchedTask(
+                eq(13L), eq(1L), anyString(), eq(SimulationTaskPo.TaskStatus.PENDING));
+        verify(simulationTaskRepository, never()).failTaskIfActive(anyLong(), any(), any(), any(),
+                any(), any(), anyList(), anyString(), any());
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
+    }
+
+    @Test
+    void submitSimulation_runtimeDispatchFailure_removesUndispatchedTask() {
+        SimulationServiceImpl failingService = serviceWithSimulationExecutor(new FailingThreadPoolTaskExecutor());
+        SimulationTaskPo savedTask = SimulationTaskPo.builder()
+                .id(15L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenReturn(savedTask);
+        when(simulationTaskRepository.deleteUndispatchedTask(
+                eq(15L), eq(1L), anyString(), eq(SimulationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(1);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> failingService.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(), 10, false, 0, false)));
+
+        assertEquals("executor failed", error.getMessage());
+        verify(simulationTaskRepository).deleteUndispatchedTask(
+                eq(15L), eq(1L), anyString(), eq(SimulationTaskPo.TaskStatus.PENDING));
+    }
+
+    @Test
+    void submitSimulation_cleanupUnconfirmed_preservesTaskIdInOutcomeUnknownError() {
+        SimulationServiceImpl rejectingService = serviceWithSimulationExecutor(new RejectingThreadPoolTaskExecutor());
+        SimulationTaskPo savedTask = SimulationTaskPo.builder()
+                .id(17L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenReturn(savedTask);
+        when(simulationTaskRepository.deleteUndispatchedTask(
+                eq(17L), eq(1L), anyString(), eq(SimulationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(0);
+        when(simulationTaskRepository.findByIdAndUserId(17L, 1L)).thenReturn(Optional.of(savedTask));
+
+        AsyncTaskDispatchOutcomeUnknownException error = assertThrows(
+                AsyncTaskDispatchOutcomeUnknownException.class,
+                () -> rejectingService.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(), 10, false, 0, false)));
+
+        assertEquals(17L, error.getTaskId());
+        assertTrue(error.getMessage().contains("cleanup"));
     }
 
     @Test

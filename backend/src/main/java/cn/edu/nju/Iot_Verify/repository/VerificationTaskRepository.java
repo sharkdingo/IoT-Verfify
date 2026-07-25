@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.repository;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
@@ -27,6 +28,31 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT t FROM VerificationTaskPo t WHERE t.id = :taskId")
     Optional<VerificationTaskPo> findByIdForUpdate(@Param("taskId") Long taskId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM VerificationTaskPo t WHERE t.id = :runId "
+         + "AND t.userId = :userId AND t.status = :status")
+    Optional<VerificationTaskPo> findCompletedRunForUpdate(
+            @Param("runId") Long runId,
+            @Param("userId") Long userId,
+            @Param("status") VerificationTaskPo.TaskStatus status);
+
+    @Query("SELECT t.id AS id, t.createdAt AS createdAt, t.completedAt AS completedAt "
+         + "FROM VerificationTaskPo t WHERE t.id = :runId "
+         + "AND t.userId = :userId AND t.status = :status")
+    Optional<CompletedRunDeletionProjection> findDeletionProjection(
+            @Param("runId") Long runId,
+            @Param("userId") Long userId,
+            @Param("status") VerificationTaskPo.TaskStatus status);
+
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM VerificationTaskPo t WHERE t.id = :runId "
+         + "AND t.userId = :userId AND t.status = :status")
+    int deleteCompletedRun(
+            @Param("runId") Long runId,
+            @Param("userId") Long userId,
+            @Param("status") VerificationTaskPo.TaskStatus status);
 
     long countByUserId(Long userId);
 
@@ -55,6 +81,15 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
      * 根据ID和用户ID查询任务
      */
     Optional<VerificationTaskPo> findByIdAndUserId(Long id, Long userId);
+
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM VerificationTaskPo t WHERE t.id = :taskId AND t.userId = :userId "
+         + "AND t.workerId = :workerId AND t.status = :pending")
+    int deleteUndispatchedTask(@Param("taskId") Long taskId,
+                               @Param("userId") Long userId,
+                               @Param("workerId") String workerId,
+                               @Param("pending") VerificationTaskPo.TaskStatus pending);
 
     /**
      * 根据用户ID和状态查询任务

@@ -1,5 +1,6 @@
-import { mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ElMessageBox } from 'element-plus'
 
 import DeviceDialog from '@/components/DeviceDialog.vue'
 import { i18n } from '@/assets/i18n'
@@ -7,6 +8,7 @@ import type { DeviceManifest, DeviceTemplate } from '@/types/device'
 
 describe('DeviceDialog template authority', () => {
   afterEach(() => {
+    vi.restoreAllMocks()
     document.body.innerHTML = ''
   })
 
@@ -77,6 +79,50 @@ describe('DeviceDialog template authority', () => {
     renameButton?.click()
     expect(wrapper.emitted('rename')).toHaveLength(1)
 
+    wrapper.unmount()
+  })
+
+  it('wraps long custom metadata instead of clipping it on narrow dialogs', () => {
+    const longName = 'CustomDeviceNameWithoutAnyNaturalBreakPoint0123456789'
+    const longLabel = 'LivingRoomInstanceNameWithoutAnyNaturalBreakPoint0123456789'
+    const longDescription = 'DescriptionWithoutAnyNaturalBreakPoint0123456789'.repeat(3)
+    const manifest: DeviceManifest = {
+      Name: longName,
+      Description: longDescription,
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [],
+      APIs: []
+    }
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        deviceName: longName,
+        description: longDescription,
+        label: longLabel,
+        nodeId: 'long-custom-device',
+        manifest,
+        nodes: [{
+          id: 'long-custom-device',
+          templateName: longName,
+          label: longLabel,
+          position: { x: 0, y: 0 },
+          state: 'Working',
+          width: 176,
+          height: 128
+        }],
+        deviceTemplates: [{ name: longName, manifest, defaultTemplate: false }],
+        specs: []
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(document.querySelector('.device-basic-table')?.classList).toContain('table-fixed')
+    const values = Array.from(document.querySelectorAll<HTMLElement>('.device-basic-value'))
+    expect(values.find(cell => cell.textContent?.includes(longName))?.classList).toContain('break-words')
+    expect(values.find(cell => cell.textContent?.includes(longLabel))?.classList).toContain('break-words')
+    expect(values.find(cell => cell.textContent?.includes(longDescription))?.classList).toContain('break-words')
     wrapper.unmount()
   })
 
@@ -582,6 +628,182 @@ describe('DeviceDialog template authority', () => {
     wrapper.unmount()
   })
 
+  it('treats canonical trim and security-label normalization as its own save acknowledgement', async () => {
+    const manifest: DeviceManifest = {
+      Name: 'Canonical Controller',
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [{
+        Name: 'threshold',
+        IsInside: true,
+        FalsifiableWhenCompromised: false,
+        LowerBound: 0,
+        UpperBound: 100,
+        Trust: 'trusted',
+        Privacy: 'public'
+      }],
+      APIs: []
+    }
+    const template: DeviceTemplate = {
+      name: manifest.Name,
+      manifest,
+      defaultTemplate: false
+    }
+    const node = {
+      id: 'canonical-controller-1',
+      templateName: template.name,
+      label: 'Canonical controller',
+      position: { x: 0, y: 0 },
+      state: 'idle',
+      width: 176,
+      height: 128,
+      variables: [{ name: 'threshold', value: '10', trust: 'trusted' }]
+    }
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        runtimeSaving: false,
+        deviceName: template.name,
+        description: '',
+        label: node.label,
+        nodeId: node.id,
+        manifest,
+        nodes: [node],
+        deviceTemplates: [template],
+        specs: [],
+        onSaveRuntime: () => void wrapper.setProps({ runtimeSaving: true })
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const valueInput = () => document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-threshold"]'
+    )!
+    const trustSelect = () => document.querySelector<HTMLSelectElement>(
+      '[data-testid="device-runtime-variable-trust-threshold"]'
+    )!
+    const setInput = async (value: string) => {
+      valueInput().value = value
+      valueInput().dispatchEvent(new Event('input', { bubbles: true }))
+      await wrapper.vm.$nextTick()
+    }
+
+    await setInput(' 25 ')
+    trustSelect().value = 'untrusted'
+    trustSelect().dispatchEvent(new Event('change', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-save"]')!.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('save-runtime')?.[0]?.[1]).toMatchObject({
+      variables: [{ name: 'threshold', value: '25', trust: 'untrusted' }]
+    })
+
+    // The backend trims values and lower-cases security labels in its response.
+    await wrapper.setProps({
+      nodes: [{
+        ...node,
+        variables: [{ name: 'threshold', value: '25', trust: 'UNTRUSTED' }]
+      }]
+    })
+    expect(document.querySelector('[data-testid="device-runtime-conflict"]')).toBeNull()
+    expect(valueInput().value).toBe('25')
+    expect(trustSelect().value).toBe('untrusted')
+
+    // A local edit made after Save remains local when the same acknowledgement arrives.
+    await setInput(' 30 ')
+    await wrapper.setProps({
+      nodes: [{
+        ...node,
+        variables: [{ name: 'threshold', value: '25', trust: 'untrusted' }]
+      }]
+    })
+    expect(valueInput().value).toBe(' 30 ')
+    expect(document.querySelector('[data-testid="device-runtime-conflict"]')).toBeNull()
+
+    await wrapper.setProps({ runtimeSaving: false })
+    wrapper.unmount()
+  })
+
+  it('adopts template defaults when a saved runtime override is cleared', async () => {
+    const manifest: DeviceManifest = {
+      Name: 'Defaulted Controller',
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [{
+        Name: 'threshold',
+        IsInside: true,
+        FalsifiableWhenCompromised: false,
+        LowerBound: 0,
+        UpperBound: 100,
+        Trust: 'trusted',
+        Privacy: 'public'
+      }],
+      APIs: []
+    }
+    const template: DeviceTemplate = {
+      name: manifest.Name,
+      manifest,
+      defaultTemplate: false
+    }
+    const node = {
+      id: 'defaulted-controller-1',
+      templateName: template.name,
+      label: 'Defaulted controller',
+      position: { x: 0, y: 0 },
+      state: 'idle',
+      width: 176,
+      height: 128,
+      variables: [{ name: 'threshold', value: '25', trust: 'untrusted' }]
+    }
+    let markSaving: (() => void) | null = null
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        runtimeSaving: false,
+        deviceName: template.name,
+        description: '',
+        label: node.label,
+        nodeId: node.id,
+        manifest,
+        nodes: [node],
+        deviceTemplates: [template],
+        specs: [],
+        onSaveRuntime: () => markSaving?.()
+      },
+      global: { plugins: [i18n] }
+    })
+    markSaving = () => {
+      void wrapper.setProps({ runtimeSaving: true })
+    }
+
+    const valueInput = () => document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-threshold"]'
+    )!
+    const trustSelect = () => document.querySelector<HTMLSelectElement>(
+      '[data-testid="device-runtime-variable-trust-threshold"]'
+    )!
+    valueInput().value = ''
+    valueInput().dispatchEvent(new Event('input', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-save"]')!.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('save-runtime')?.[0]?.[1]).toMatchObject({
+      variables: []
+    })
+
+    await wrapper.setProps({ nodes: [{ ...node, variables: [] }] })
+    expect(document.querySelector('[data-testid="device-runtime-conflict"]')).toBeNull()
+    expect(valueInput().value).toBe('0')
+    expect(trustSelect().value).toBe('')
+
+    await wrapper.setProps({ runtimeSaving: false })
+    wrapper.unmount()
+  })
+
   it('adopts a new runtime schema without prompting when the draft was not edited', async () => {
     const manifest = (upperBound: number): DeviceManifest => ({
       Name: 'Controller',
@@ -827,6 +1049,146 @@ describe('DeviceDialog template authority', () => {
     await wrapper.setProps({ deleteLoading: false })
     deleteButton.click()
     expect(wrapper.emitted('delete')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  const mountRuntimeCloseGuard = (runtimeSaving = false) => {
+    const manifest: DeviceManifest = {
+      Name: 'Draft Controller',
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [{
+        Name: 'threshold',
+        IsInside: true,
+        FalsifiableWhenCompromised: false,
+        LowerBound: 0,
+        UpperBound: 100,
+        Trust: 'trusted',
+        Privacy: 'public'
+      }],
+      APIs: []
+    }
+    const template: DeviceTemplate = {
+      name: manifest.Name,
+      manifest,
+      defaultTemplate: false
+    }
+    const node = {
+      id: 'draft-controller-1',
+      templateName: template.name,
+      label: 'Draft controller',
+      position: { x: 0, y: 0 },
+      state: 'Working',
+      width: 176,
+      height: 128,
+      variables: [{ name: 'threshold', value: '10' }]
+    }
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        runtimeSaving,
+        deviceName: template.name,
+        description: '',
+        label: node.label,
+        nodeId: node.id,
+        manifest,
+        nodes: [node],
+        deviceTemplates: [template],
+        specs: []
+      },
+      global: { plugins: [i18n] }
+    })
+    const input = () => document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-threshold"]'
+    )!
+    const edit = async (value: string) => {
+      input().value = value
+      input().dispatchEvent(new Event('input', { bubbles: true }))
+      await wrapper.vm.$nextTick()
+    }
+    return { wrapper, node, edit }
+  }
+
+  it('requires confirmation before discarding a runtime draft and keeps it after cancellation', async () => {
+    const { wrapper, edit } = mountRuntimeCloseGuard()
+    await edit('25')
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+      .mockRejectedValueOnce('cancel')
+      .mockResolvedValue('confirm' as never)
+
+    document.querySelector<HTMLButtonElement>('[data-testid="device-dialog-close"]')!.click()
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith(
+      i18n.global.t('app.deviceRuntimeDiscardMessage'),
+      i18n.global.t('app.deviceRuntimeDiscardTitle'),
+      expect.objectContaining({
+        confirmButtonText: i18n.global.t('app.discardChanges'),
+        cancelButtonText: i18n.global.t('app.cancel')
+      })
+    )
+    expect(wrapper.emitted('update:visible')).toBeUndefined()
+    expect(document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-threshold"]'
+    )?.value).toBe('25')
+
+    document.querySelector<HTMLButtonElement>('[data-testid="device-dialog-footer-close"]')!.click()
+    await flushPromises()
+    expect(wrapper.emitted('update:visible')).toEqual([[false]])
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['backdrop click', (overlay: HTMLElement) => overlay.click()],
+    ['Escape', (overlay: HTMLElement) => overlay.dispatchEvent(new KeyboardEvent(
+      'keydown', { key: 'Escape', bubbles: true }
+    ))]
+  ])('guards %s with the same runtime-draft confirmation', async (_label, trigger) => {
+    const { wrapper, edit } = mountRuntimeCloseGuard()
+    await edit('25')
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    trigger(document.querySelector<HTMLElement>('.device-dialog-overlay')!)
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(wrapper.emitted('update:visible')).toEqual([[false]])
+    wrapper.unmount()
+  })
+
+  it('uses the acknowledged runtime as the new baseline and blocks leaving while saving', async () => {
+    const { wrapper, node, edit } = mountRuntimeCloseGuard()
+    const exposed = wrapper.vm as unknown as {
+      prepareClose: () => Promise<boolean>
+    }
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+
+    await edit('25')
+    document.querySelector<HTMLButtonElement>('[data-testid="device-runtime-save"]')!.click()
+    await wrapper.setProps({ runtimeSaving: true })
+
+    expect(await exposed.prepareClose()).toBe(false)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="device-dialog-close"]')?.disabled)
+      .toBe(true)
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="device-rename"]')?.disabled)
+      .toBe(true)
+    const deleteButton = document.querySelector<HTMLButtonElement>('[data-testid="device-delete"]')!
+    expect(deleteButton.disabled).toBe(true)
+    deleteButton.click()
+    expect(wrapper.emitted('delete')).toBeUndefined()
+
+    await wrapper.setProps({
+      nodes: [{ ...node, variables: [{ name: 'threshold', value: '25' }] }],
+      runtimeSaving: false
+    })
+    expect(await exposed.prepareClose()).toBe(true)
+    expect(confirm).not.toHaveBeenCalled()
+
+    await edit('30')
+    expect(await exposed.prepareClose()).toBe(false)
+    expect(confirm).toHaveBeenCalledOnce()
     wrapper.unmount()
   })
 })

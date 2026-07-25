@@ -56,8 +56,8 @@ public class ManageRuleTool extends AbstractAiTool {
 
         props.put("action", Map.of(
                 "type", "string",
-                "enum", List.of("add", "delete"),
-                "description", "Action to perform: 'add' to create a new rule, 'delete' to remove an existing rule."
+                "enum", List.of("add", "delete", "reorder"),
+                "description", "Action to perform: 'add' to create a new rule, 'delete' to remove an existing rule, 'reorder' to set the exact execution order of all existing rules. Rule execution order is verification-significant."
         ));
 
         props.put("conditions", Map.of(
@@ -110,12 +110,22 @@ public class ManageRuleTool extends AbstractAiTool {
                 "type", "string",
                 "description", "For delete with confirmed=true, copy the opaque impactToken from the latest preview."
         ));
+        props.put("ruleIds", Map.of(
+                "type", "array",
+                "items", Map.of("type", "integer"),
+                "description", "Required for 'reorder'. The complete new execution order as rule IDs (from list_rules). Must contain every current rule id exactly once; the first id runs first. Reorder is a reversible full-list replacement and needs no confirmation."
+        ));
+        props.put("expectedRuleIds", Map.of(
+                "type", "array",
+                "items", Map.of("type", "integer"),
+                "description", "Required for 'reorder'. Copy the complete current rule ID order from the same list_rules result used to construct ruleIds. The reorder is rejected if this baseline changed."
+        ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", props, List.of("action")
         );
 
-        return LlmToolSpec.of(getName(), "Add an automation rule, or preview/delete one through explicit two-turn confirmation. Use list_rules before deleting.", schema);
+        return LlmToolSpec.of(getName(), "Add an automation rule, preview/delete one through explicit two-turn confirmation, or reorder all rules. Use list_rules before deleting or reordering.", schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {
@@ -127,13 +137,15 @@ public class ManageRuleTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
             requireOnlyFields(args, "arguments", Set.of(
-                    "action", "conditions", "command", "label", "ruleId", "confirmed", "impactToken"));
+                    "action", "conditions", "command", "label", "ruleId", "ruleIds",
+                    "expectedRuleIds", "confirmed", "impactToken"));
             String action = requiredTextField(args, "action", "arguments").toLowerCase(Locale.ROOT);
 
             return switch (action) {
                 case "add" -> executeAdd(userId, args);
                 case "delete" -> executeDelete(userId, args);
-                default -> errorJson("Unknown action: " + action + ". Use 'add' or 'delete'.",
+                case "reorder" -> executeReorder(userId, args);
+                default -> errorJson("Unknown action: " + action + ". Use 'add', 'delete', or 'reorder'.",
                         "VALIDATION_ERROR", 400);
             };
         } catch (ArgValidationException e) {
@@ -386,6 +398,55 @@ public class ManageRuleTool extends AbstractAiTool {
                 mutation.getAffectedItem(), safeList(boardStorageService.getNodes(userId))));
         response.put("totalRules", mutation.getCurrentCount());
         return successJson(response, "Rule deleted successfully.");
+    }
+
+    private String executeReorder(Long userId, JsonNode args) throws Exception {
+        requireOnlyFields(args, "arguments", Set.of("action", "expectedRuleIds", "ruleIds"));
+        List<Long> expectedRuleIds = positiveRuleIdsArg(args, "expectedRuleIds");
+        List<Long> ruleIds = positiveRuleIdsArg(args, "ruleIds");
+
+        List<RuleDto> reordered = boardStorageService.reorderRules(
+                userId, expectedRuleIds, ruleIds);
+        List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
+        List<Object> presented = new ArrayList<>();
+        for (RuleDto rule : safeList(reordered)) {
+            presented.add(RuleToolPresenter.present(rule, nodes));
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("message", "Rule execution order updated. The board has not been re-verified.");
+        response.put("operation", "reordered");
+        response.put("verificationStatus", "NOT_VERIFIED");
+        response.put("totalRules", presented.size());
+        response.put("rules", presented);
+        return successJson(response, "Rule execution order updated.");
+    }
+
+    private List<Long> positiveRuleIdsArg(JsonNode args, String field) throws ArgValidationException {
+        JsonNode ruleIdsNode = args.path(field);
+        if (ruleIdsNode.isMissingNode() || !ruleIdsNode.isArray() || ruleIdsNode.isEmpty()) {
+            throw validation("'" + field
+                    + "' array is required for reorder and must list every current rule id once.");
+        }
+
+        List<Long> ruleIds = new ArrayList<>();
+        int index = 0;
+        for (JsonNode idNode : ruleIdsNode) {
+            if (idNode == null || !idNode.isIntegralNumber()
+                    || !idNode.canConvertToLong() || idNode.longValue() <= 0) {
+                throw validation(field + "[" + index + "] must be a positive integer rule id.");
+            }
+            ruleIds.add(idNode.longValue());
+            index++;
+        }
+        if (new java.util.LinkedHashSet<>(ruleIds).size() != ruleIds.size()) {
+            throw validation(field + " must not contain duplicate rule ids.");
+        }
+        return List.copyOf(ruleIds);
+    }
+
+    private ArgValidationException validation(String message) {
+        return new ArgValidationException(errorJson(message, "VALIDATION_ERROR", 400));
     }
 
     private String normalizeRelation(String relation) {

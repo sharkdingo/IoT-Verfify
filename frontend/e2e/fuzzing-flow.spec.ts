@@ -367,9 +367,28 @@ test.describe('bounded counterexample exploration', () => {
       await page.getByTestId('fuzz-population-size').fill('2')
       await page.getByTestId('fuzz-seed').fill('23')
 
+      const environmentResponse = await request.get(`${apiBaseURL}/api/board/environment`, {
+        headers: authHeaders(auth)
+      })
+      const environment = await unwrap<Array<{
+        name: string
+        value: string | null
+        trust: string
+        privacy: string
+      }>>(environmentResponse)
+      const temperature = environment.find(variable => variable.name === 'temperature')
+      expect(temperature).toBeTruthy()
       const changedEnvironment = await request.post(`${apiBaseURL}/api/board/environment`, {
         headers: authHeaders(auth),
-        data: [{ name: 'temperature', value: '31' }]
+        data: [{
+          name: 'temperature',
+          expected: {
+            value: temperature!.value,
+            trust: temperature!.trust,
+            privacy: temperature!.privacy
+          },
+          desired: { value: '31' }
+        }]
       })
       await unwrap(changedEnvironment)
       const staleSubmissionPromise = page.waitForResponse(response =>

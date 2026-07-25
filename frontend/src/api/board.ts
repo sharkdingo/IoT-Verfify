@@ -12,7 +12,10 @@ import type {
     RuleSourceItemType
 } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
-import type { ModelEnvironmentVariable } from '@/types/model'
+import type {
+    EnvironmentVariableUpdateRequest,
+    ModelEnvironmentVariable
+} from '@/types/model'
 import type { ModelTokenSource } from '@/types/modelToken'
 import type { InteractiveOperationStatus, TaskCancellationResult } from '@/types/task'
 import type { PortableSceneFile } from '@/types/scene'
@@ -41,6 +44,7 @@ import {
     validateFixSuggestion
 } from '@/utils/fixResponse'
 import { assertRuleHasTrigger } from '../utils/rule'
+import { validateManifest } from '@/utils/device'
 import { normalizeModelRelation } from '@/utils/modelRequest'
 import {
     validateScenarioRecommendationResponse,
@@ -50,6 +54,10 @@ import {
     validateDeviceRecommendationCandidate,
     validateSpecificationRecommendationCandidate
 } from '@/utils/recommendationMaterialization'
+import {
+    markRecommendationResponseReceived,
+    type OwnedRecommendationPostOptions
+} from '@/utils/recommendationRequestRecovery'
 import {
     validateTaskCancellationResult,
     validateInteractiveOperationStatus,
@@ -199,6 +207,7 @@ export interface SpecificationRecommendation {
 // These synchronous operations are bounded by the server's NuSMV/LLM/fix deadlines.
 // Do not let Axios' shorter CRUD timeout report a false failure while the server is still working.
 const SERVER_BOUNDED_REQUEST = { timeout: 0 } as const
+const INTERACTIVE_CONTROL_REQUEST = { timeout: 2500 } as const
 
 // 辅助函数：解包Result（后端返回 { code, message, data }）
 const unpack = <T>(response: any): T => {
@@ -599,6 +608,18 @@ const requireCurrentCount = (
     }
 }
 
+const requireUniqueIdentities = <T>(
+    items: T[],
+    identityOf: (item: T) => string | number,
+    context: string,
+    field: string
+) => {
+    const identities = items.map(identityOf)
+    if (new Set(identities).size !== identities.length) {
+        throw new BoardResponseContractError(context, `${field} contains duplicate identities`)
+    }
+}
+
 const requireCheckBoolean = (
     result: Record<string, any>,
     field: string,
@@ -704,11 +725,61 @@ const validateDeviceMutationResult = (
     const result = requireResponseRecord(value, context)
     requireOperation(result, expectedOperation, context)
     const affectedDevices = requireResponseArray<DeviceNode>(result, context, 'affectedDevices')
+        .map((device, index) => validateBoardNodeResult(
+            device,
+            `${context}.affectedDevices[${index}]`
+        ))
     const currentNodes = requireResponseArray<DeviceNode>(result, context, 'currentNodes')
-    requireResponseArray<ModelEnvironmentVariable>(result, context, 'environmentVariables')
-    requireResponseArray<EnvironmentVariableChange>(result, context, 'environmentChanges')
-    requireResponseArray<Specification>(result, context, 'currentSpecifications')
+        .map((device, index) => validateBoardNodeResult(
+            device,
+            `${context}.currentNodes[${index}]`
+        ))
+    const environmentVariables = requireResponseArray<ModelEnvironmentVariable>(
+        result,
+        context,
+        'environmentVariables'
+    ).map((variable, index) => validateEnvironmentVariable(
+        variable,
+        `${context}.environmentVariables[${index}]`
+    ))
+    const environmentChanges = requireResponseArray<EnvironmentVariableChange>(
+        result,
+        context,
+        'environmentChanges'
+    ).map((change, index) => validateEnvironmentChangeResult(
+        change,
+        `${context}.environmentChanges[${index}]`
+    ))
+    const currentSpecifications = requireResponseArray<Specification>(
+        result,
+        context,
+        'currentSpecifications'
+    ).map((specification, index) => validateBoardSpecificationResult(
+        specification,
+        `${context}.currentSpecifications[${index}]`
+    ))
+    if (new Set(currentNodes.map(device => device.id)).size !== currentNodes.length) {
+        throw new BoardResponseContractError(context, 'currentNodes contains duplicate device ids')
+    }
+    if (new Set(environmentVariables.map(variable => variable.name)).size !== environmentVariables.length) {
+        throw new BoardResponseContractError(context, 'environmentVariables contains duplicate names')
+    }
+    if (new Set(environmentChanges.map(change => change.name)).size !== environmentChanges.length) {
+        throw new BoardResponseContractError(context, 'environmentChanges contains duplicate names')
+    }
+    if (new Set(currentSpecifications.map(specification => specification.id)).size
+        !== currentSpecifications.length) {
+        throw new BoardResponseContractError(context, 'currentSpecifications contains duplicate ids')
+    }
     requireCurrentCount(result, currentNodes, context)
+
+    if (!Number.isSafeInteger(result.updatedSpecificationCount)
+        || result.updatedSpecificationCount < 0) {
+        throw new BoardResponseContractError(
+            context,
+            'updatedSpecificationCount must be a non-negative integer'
+        )
+    }
 
     const affectedIds = affectedDevices.map(device => String(device?.id || ''))
     if (affectedDevices.length !== expectedDeviceIds.length
@@ -719,7 +790,14 @@ const validateDeviceMutationResult = (
     if (affectedIds.some(id => !id || !currentIds.has(id))) {
         throw new BoardResponseContractError(context, 'an affected device is absent from currentNodes')
     }
-    return result as DeviceMutationResult
+    return {
+        ...result,
+        affectedDevices,
+        currentNodes,
+        environmentVariables,
+        environmentChanges,
+        currentSpecifications
+    } as DeviceMutationResult
 }
 
 const validateDeviceRenameResult = (
@@ -811,14 +889,28 @@ const validateDeviceUpdateResult = (
     if (result.mutationType !== mutationType) {
         throw new BoardResponseContractError(context, `mutationType must be '${mutationType}'`)
     }
-    if (!result.previousDevice || !result.currentDevice
-        || result.previousDevice.id !== nodeId || result.currentDevice.id !== nodeId) {
+    const previousDevice = validateBoardNodeResult(
+        result.previousDevice,
+        `${context}.previousDevice`
+    )
+    const currentDevice = validateBoardNodeResult(
+        result.currentDevice,
+        `${context}.currentDevice`
+    )
+    if (previousDevice.id !== nodeId || currentDevice.id !== nodeId) {
         throw new BoardResponseContractError(context, 'previousDevice/currentDevice must match the requested device')
     }
     const currentNodes = requireResponseArray<DeviceNode>(result, context, 'currentNodes')
+        .map((device, index) => validateBoardNodeResult(
+            device,
+            `${context}.currentNodes[${index}]`
+        ))
+    if (new Set(currentNodes.map(device => device.id)).size !== currentNodes.length) {
+        throw new BoardResponseContractError(context, 'currentNodes contains duplicate device ids')
+    }
     requireCurrentCount(result, currentNodes, context)
     const authoritative = currentNodes.find(device => device.id === nodeId)
-    if (!authoritative || !sameDeviceSnapshot(authoritative, result.currentDevice)) {
+    if (!authoritative || !sameDeviceSnapshot(authoritative, currentDevice)) {
         throw new BoardResponseContractError(context, 'currentDevice must match currentNodes')
     }
 
@@ -829,9 +921,9 @@ const validateDeviceUpdateResult = (
         throw new BoardResponseContractError(context, 'changedFields contains an unsupported or duplicate field')
     }
     const actualChanged = allowedFields.filter(field => deviceUpdateFieldValue(
-        result.previousDevice,
+        previousDevice,
         field
-    ) !== deviceUpdateFieldValue(result.currentDevice, field))
+    ) !== deviceUpdateFieldValue(currentDevice, field))
     if (actualChanged.length !== result.changedFields.length
         || actualChanged.some(field => !result.changedFields.includes(field))) {
         throw new BoardResponseContractError(context, 'changedFields must agree with previous/current devices')
@@ -844,44 +936,46 @@ const validateDeviceUpdateResult = (
         ? DEVICE_RUNTIME_FIELDS
         : DEVICE_LAYOUT_FIELDS
     if (preservedFields.some(field => deviceUpdateFieldValue(
-        result.previousDevice,
+        previousDevice,
         field
-    ) !== deviceUpdateFieldValue(result.currentDevice, field))
-        || result.previousDevice.id !== result.currentDevice.id
-        || result.previousDevice.templateName !== result.currentDevice.templateName
-        || result.previousDevice.label !== result.currentDevice.label) {
+    ) !== deviceUpdateFieldValue(currentDevice, field))
+        || previousDevice.id !== currentDevice.id
+        || previousDevice.templateName !== currentDevice.templateName
+        || previousDevice.label !== currentDevice.label) {
         throw new BoardResponseContractError(context, 'the targeted patch changed a preserved device field')
     }
 
     if (mutationType === 'layout') {
         const layout = requested as DeviceLayout
-        if (result.currentDevice.position?.x !== layout.position.x
-            || result.currentDevice.position?.y !== layout.position.y
-            || result.currentDevice.width !== layout.width
-            || result.currentDevice.height !== layout.height) {
+        if (currentDevice.position?.x !== layout.position.x
+            || currentDevice.position?.y !== layout.position.y
+            || currentDevice.width !== layout.width
+            || currentDevice.height !== layout.height) {
             throw new BoardResponseContractError(context, 'currentDevice does not contain the requested layout')
         }
     } else {
         const runtime = (requested as DeviceRuntimeUpdate).desired
         for (const field of ['currentStateTrust', 'currentStatePrivacy'] as const) {
-            if ((result.currentDevice[field] ?? null) !== (runtime[field] ?? null)) {
+            if ((currentDevice[field] ?? null) !== (runtime[field] ?? null)) {
                 throw new BoardResponseContractError(context, `currentDevice does not contain requested ${field}`)
             }
         }
-        if (runtime.state !== undefined && result.currentDevice.state !== runtime.state) {
+        if (runtime.state !== undefined && currentDevice.state !== runtime.state) {
             throw new BoardResponseContractError(context, 'currentDevice does not contain the requested state')
         }
         for (const field of ['variables', 'privacies'] as const) {
-            if (normalizedDeviceRuntimeCollection(field, result.currentDevice[field])
+            if (normalizedDeviceRuntimeCollection(field, currentDevice[field])
                 !== normalizedDeviceRuntimeCollection(field, runtime[field])) {
                 throw new BoardResponseContractError(context, `currentDevice does not contain requested ${field}`)
             }
         }
     }
-    return result as DeviceUpdateResult
+    return { ...result, previousDevice, currentDevice, currentNodes } as DeviceUpdateResult
 }
 
 const ENVIRONMENT_FIELDS: EnvironmentVariableField[] = ['value', 'trust', 'privacy']
+const ENVIRONMENT_TRUST_VALUES = new Set(['trusted', 'untrusted'])
+const ENVIRONMENT_PRIVACY_VALUES = new Set(['public', 'private'])
 
 const requireEnvironmentFieldArray = (
     value: unknown,
@@ -904,9 +998,57 @@ const environmentFieldValue = (
     field: EnvironmentVariableField
 ) => variable[field] ?? null
 
+const canonicalEnvironmentFieldValue = (
+    field: EnvironmentVariableField,
+    value: unknown
+) => {
+    if (value === null || value === undefined) return null
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    return field === 'trust' || field === 'privacy'
+        ? trimmed.toLowerCase()
+        : trimmed
+}
+
+const validateEnvironmentChangeResult = (
+    value: unknown,
+    context: string
+): EnvironmentVariableChange => {
+    const change = requireResponseRecord(value, context)
+    if (!['ADDED', 'UPDATED', 'REMOVED'].includes(change.changeType)) {
+        throw new BoardResponseContractError(context, 'changeType is invalid')
+    }
+    if (typeof change.name !== 'string' || !change.name.trim()) {
+        throw new BoardResponseContractError(context, 'name is required')
+    }
+    const previous = change.previousValue === null || change.previousValue === undefined
+        ? null
+        : validateEnvironmentVariable(change.previousValue, `${context}.previousValue`)
+    const current = change.currentValue === null || change.currentValue === undefined
+        ? null
+        : validateEnvironmentVariable(change.currentValue, `${context}.currentValue`)
+    if (previous && previous.name !== change.name) {
+        throw new BoardResponseContractError(context, 'previousValue.name must match name')
+    }
+    if (current && current.name !== change.name) {
+        throw new BoardResponseContractError(context, 'currentValue.name must match name')
+    }
+    if ((change.changeType === 'ADDED' && (previous || !current))
+        || (change.changeType === 'UPDATED' && (!previous || !current))
+        || (change.changeType === 'REMOVED' && (!previous || current))) {
+        throw new BoardResponseContractError(context, 'values contradict changeType')
+    }
+    for (const field of ['previousModelTokenSource', 'currentModelTokenSource']) {
+        if (change[field] !== undefined && !MODEL_TOKEN_SOURCES.has(change[field])) {
+            throw new BoardResponseContractError(context, `${field} is invalid`)
+        }
+    }
+    return { ...change, previousValue: previous, currentValue: current } as EnvironmentVariableChange
+}
+
 const validateEnvironmentMutationResult = (
     value: unknown,
-    patches: ModelEnvironmentVariable[]
+    patches: EnvironmentVariableUpdateRequest[]
 ): EnvironmentMutationResult => {
     const context = 'Environment Pool update'
     const result = requireResponseRecord(value, context)
@@ -922,12 +1064,18 @@ const validateEnvironmentMutationResult = (
         result,
         context,
         'environmentVariables'
-    )
+    ).map((variable, index) => validateEnvironmentVariable(
+        variable,
+        `${context}.environmentVariables[${index}]`
+    ))
     const environmentChanges = requireResponseArray<EnvironmentVariableChange>(
         result,
         context,
         'environmentChanges'
-    )
+    ).map((change, index) => validateEnvironmentChangeResult(
+        change,
+        `${context}.environmentChanges[${index}]`
+    ))
     requireCurrentCount(result, environmentVariables, context)
     if ((result.operation === 'unchanged') !== (environmentChanges.length === 0)) {
         throw new BoardResponseContractError(context, 'operation must agree with environmentChanges')
@@ -964,6 +1112,14 @@ const validateEnvironmentMutationResult = (
             || patchResult.currentValue.name !== patchResult.name) {
             throw new BoardResponseContractError(context, 'each patch result needs matching previous/current values')
         }
+        validateEnvironmentVariable(
+            patchResult.previousValue,
+            `${context}.${patchResult.name}.previousValue`
+        )
+        validateEnvironmentVariable(
+            patchResult.currentValue,
+            `${context}.${patchResult.name}.currentValue`
+        )
         if (changedFields.some(field => !suppliedFields.includes(field))) {
             throw new BoardResponseContractError(context, 'changedFields must be a subset of suppliedFields')
         }
@@ -1000,272 +1156,132 @@ const validateEnvironmentMutationResult = (
         if (!patchResult) {
             throw new BoardResponseContractError(context, `no patch result was returned for ${patch.name}`)
         }
-        const expectedSupplied = ENVIRONMENT_FIELDS.filter(field => patch[field] !== null && patch[field] !== undefined)
+        const expectedSupplied = ENVIRONMENT_FIELDS.filter(field =>
+            Object.prototype.hasOwnProperty.call(patch.desired, field))
         if (patchResult.suppliedFields.length !== expectedSupplied.length
             || expectedSupplied.some(field => !patchResult.suppliedFields.includes(field))) {
             throw new BoardResponseContractError(context, `suppliedFields does not match the patch for ${patch.name}`)
         }
+        for (const field of ENVIRONMENT_FIELDS) {
+            const expectedValue = canonicalEnvironmentFieldValue(field, patch.expected[field])
+            const previousValue = canonicalEnvironmentFieldValue(
+                field,
+                patchResult.previousValue[field]
+            )
+            if (expectedValue !== previousValue) {
+                throw new BoardResponseContractError(
+                    context,
+                    `previousValue does not match the expected baseline for ${patch.name}`
+                )
+            }
+            const desiredValue = patch.desired[field]
+            if (Object.prototype.hasOwnProperty.call(patch.desired, field)) {
+                const currentValue = canonicalEnvironmentFieldValue(
+                    field,
+                    patchResult.currentValue[field]
+                )
+                if (canonicalEnvironmentFieldValue(field, desiredValue) !== currentValue) {
+                    throw new BoardResponseContractError(
+                        context,
+                        `currentValue does not match the desired ${field} for ${patch.name}`
+                    )
+                }
+            }
+        }
     }
     return result as EnvironmentMutationResult
+}
+
+const validateEnvironmentUpdateRequests = (
+    value: unknown
+): EnvironmentVariableUpdateRequest[] => {
+    const context = 'Environment Pool update request'
+    if (!Array.isArray(value) || value.length === 0) {
+        throw new BoardResponseContractError(context, 'at least one update is required')
+    }
+    const names = new Set<string>()
+    return value.map((candidate, index) => {
+        const update = requireResponseRecord(candidate, `${context}[${index}]`) as unknown as EnvironmentVariableUpdateRequest
+        const name = typeof update.name === 'string' ? update.name.trim() : ''
+        if (!name || names.has(name)) {
+            throw new BoardResponseContractError(context, `update ${index} has an invalid or duplicate name`)
+        }
+        names.add(name)
+        if (!update.expected || typeof update.expected !== 'object'
+            || typeof update.expected.trust !== 'string' || !update.expected.trust.trim()
+            || typeof update.expected.privacy !== 'string' || !update.expected.privacy.trim()) {
+            throw new BoardResponseContractError(context, `update ${name} has an incomplete expected baseline`)
+        }
+        const expectedFields = Object.keys(update.expected)
+        if (expectedFields.some(field => !ENVIRONMENT_FIELDS.includes(field as EnvironmentVariableField))) {
+            throw new BoardResponseContractError(context, `update ${name} has an unknown expected field`)
+        }
+        if (typeof update.expected.value !== 'string' || !update.expected.value.trim()) {
+            throw new BoardResponseContractError(context, `update ${name} has an invalid expected value`)
+        }
+        if (typeof update.expected.trust === 'string'
+            && !ENVIRONMENT_TRUST_VALUES.has(update.expected.trust.trim().toLowerCase())) {
+            throw new BoardResponseContractError(context, `update ${name} has an invalid expected trust`)
+        }
+        if (typeof update.expected.privacy === 'string'
+            && !ENVIRONMENT_PRIVACY_VALUES.has(update.expected.privacy.trim().toLowerCase())) {
+            throw new BoardResponseContractError(context, `update ${name} has an invalid expected privacy`)
+        }
+        if (!update.desired || typeof update.desired !== 'object') {
+            throw new BoardResponseContractError(context, `update ${name} has no desired patch`)
+        }
+        const desiredFields = Object.keys(update.desired)
+        if (desiredFields.some(field => !ENVIRONMENT_FIELDS.includes(field as EnvironmentVariableField))) {
+            throw new BoardResponseContractError(context, `update ${name} has an unknown desired field`)
+        }
+        const supplied = ENVIRONMENT_FIELDS.filter(field =>
+            Object.prototype.hasOwnProperty.call(update.desired, field))
+        if (supplied.length === 0) {
+            throw new BoardResponseContractError(context, `update ${name} has no desired field`)
+        }
+        if (supplied.some(field => typeof update.desired[field] !== 'string')) {
+            throw new BoardResponseContractError(context, `update ${name} has an invalid desired value`)
+        }
+        if (typeof update.desired.value === 'string' && !update.desired.value.trim()) {
+            throw new BoardResponseContractError(context, `update ${name} has a blank desired value`)
+        }
+        if (typeof update.desired.trust === 'string'
+            && !ENVIRONMENT_TRUST_VALUES.has(update.desired.trust.trim().toLowerCase())) {
+            throw new BoardResponseContractError(context, `update ${name} has an invalid desired trust`)
+        }
+        if (typeof update.desired.privacy === 'string'
+            && !ENVIRONMENT_PRIVACY_VALUES.has(update.desired.privacy.trim().toLowerCase())) {
+            throw new BoardResponseContractError(context, `update ${name} has an invalid desired privacy`)
+        }
+        return { ...update, name }
+    })
 }
 
 const validateDeviceDeletionResult = (
     value: unknown,
     expectedOperation: DeviceDeletionResult['operation'],
     expectedNodeId: string,
-    context: string
+    context: string,
+    expectedImpactToken?: string
 ): Record<string, any> => {
     const result = requireResponseRecord(value, context)
     requireOperation(result, expectedOperation, context)
     if (typeof result.impactToken !== 'string' || !result.impactToken.trim()) {
         throw new BoardResponseContractError(context, 'impactToken is required')
     }
-
-    const validateDevice = (candidate: unknown, field: string): DeviceNode => {
-        const device = requireResponseRecord(candidate, `${context}.${field}`)
-        for (const requiredField of ['id', 'templateName', 'label']) {
-            if (typeof device[requiredField] !== 'string' || !device[requiredField].trim()) {
-                throw new BoardResponseContractError(context, `${field}.${requiredField} is required`)
-            }
-        }
-        const position = requireResponseRecord(device.position, `${context}.${field}.position`)
-        for (const coordinate of ['x', 'y']) {
-            if (typeof position[coordinate] !== 'number'
-                || !Number.isFinite(position[coordinate])
-                || Math.abs(position[coordinate]) > NODE_POSITION_ABS_MAX) {
-                throw new BoardResponseContractError(
-                    context,
-                    `${field}.position.${coordinate} is outside the supported canvas range`
-                )
-            }
-        }
-        for (const [dimension, range] of [
-            ['width', NODE_WIDTH_RANGE],
-            ['height', NODE_HEIGHT_RANGE]
-        ] as const) {
-            if (!Number.isSafeInteger(device[dimension])
-                || device[dimension] < range.min
-                || device[dimension] > range.max) {
-                throw new BoardResponseContractError(
-                    context,
-                    `${field}.${dimension} is outside the supported canvas range`
-                )
-            }
-        }
-        if (device.state !== null && device.state !== undefined && typeof device.state !== 'string') {
-            throw new BoardResponseContractError(context, `${field}.state must be text or null`)
-        }
-        for (const [securityField, allowed] of [
-            ['currentStateTrust', new Set(['trusted', 'untrusted'])],
-            ['currentStatePrivacy', new Set(['public', 'private'])]
-        ] as const) {
-            const value = device[securityField]
-            if (value !== null && value !== undefined
-                && (typeof value !== 'string' || !allowed.has(value))) {
-                throw new BoardResponseContractError(context, `${field}.${securityField} is invalid`)
-            }
-        }
-        const validateRuntimeCollection = (
-            collectionField: 'variables' | 'privacies'
-        ): Array<Record<string, any>> => {
-            const collection = device[collectionField]
-            if (collection === null || collection === undefined) return []
-            if (!Array.isArray(collection)) {
-                throw new BoardResponseContractError(context, `${field}.${collectionField} must be an array`)
-            }
-            const names = new Set<string>()
-            return collection.map((candidateEntry: unknown, index: number) => {
-                const entryField = `${field}.${collectionField}[${index}]`
-                const entry = requireResponseRecord(candidateEntry, `${context}.${entryField}`)
-                if (typeof entry.name !== 'string' || !entry.name.trim()) {
-                    throw new BoardResponseContractError(context, `${entryField}.name is required`)
-                }
-                if (names.has(entry.name)) {
-                    throw new BoardResponseContractError(context, `${field}.${collectionField} has duplicate names`)
-                }
-                names.add(entry.name)
-                if (collectionField === 'variables') {
-                    if (typeof entry.value !== 'string' || !entry.value.trim()) {
-                        throw new BoardResponseContractError(context, `${entryField}.value is required`)
-                    }
-                    if (entry.trust !== null && entry.trust !== undefined
-                        && !['trusted', 'untrusted'].includes(entry.trust)) {
-                        throw new BoardResponseContractError(context, `${entryField}.trust is invalid`)
-                    }
-                } else if (!['public', 'private'].includes(entry.privacy)) {
-                    throw new BoardResponseContractError(context, `${entryField}.privacy is invalid`)
-                }
-                return entry
-            })
-        }
-        return {
-            ...device,
-            state: device.state ?? '',
-            position: { x: position.x, y: position.y },
-            variables: validateRuntimeCollection('variables'),
-            privacies: validateRuntimeCollection('privacies')
-        } as DeviceNode
+    if (expectedOperation === 'deleted'
+        && result.impactToken.trim() !== String(expectedImpactToken || '').trim()) {
+        throw new BoardResponseContractError(context, 'impactToken does not match the confirmed preview')
     }
 
-    const validateRule = (candidate: unknown, field: string): BackendRuleDto => {
-        const rule = requireResponseRecord(candidate, `${context}.${field}`)
-        if (!Number.isSafeInteger(rule.id) || rule.id <= 0) {
-            throw new BoardResponseContractError(context, `${field}.id must be a positive integer`)
-        }
-        const conditions = requireResponseArray(rule.conditions, `${context}.${field}.conditions`)
-        if (conditions.length === 0) {
-            throw new BoardResponseContractError(context, `${field}.conditions cannot be empty`)
-        }
-        conditions.forEach((candidateCondition, index) => {
-            const conditionField = `${field}.conditions[${index}]`
-            const condition = requireResponseRecord(candidateCondition, `${context}.${conditionField}`)
-            for (const requiredField of ['deviceName', 'attribute', 'targetType']) {
-                if (typeof condition[requiredField] !== 'string' || !condition[requiredField].trim()) {
-                    throw new BoardResponseContractError(
-                        context,
-                        `${conditionField}.${requiredField} is required`
-                    )
-                }
-            }
-            const sourceType = normalizeRuleSourceType(condition.targetType)
-            if (!sourceType) {
-                throw new BoardResponseContractError(context, `${conditionField}.targetType is invalid`)
-            }
-            if (sourceType === 'api') {
-                if (hasRuleConditionValue(condition.relation) || hasRuleConditionValue(condition.value)) {
-                    throw new BoardResponseContractError(
-                        context,
-                        `${conditionField} API signals cannot contain relation or value`
-                    )
-                }
-            } else if (typeof condition.relation !== 'string'
-                || !normalizeModelRelation(condition.relation)
-                || typeof condition.value !== 'string'
-                || !condition.value.trim()) {
-                throw new BoardResponseContractError(
-                    context,
-                    `${conditionField} value conditions require a valid relation and value`
-                )
-            }
-        })
-        const command = requireResponseRecord(rule.command, `${context}.${field}.command`)
-        for (const requiredField of ['deviceName', 'action']) {
-            if (typeof command[requiredField] !== 'string' || !command[requiredField].trim()) {
-                throw new BoardResponseContractError(context, `${field}.command.${requiredField} is required`)
-            }
-        }
-        for (const optionalField of ['contentDevice', 'content']) {
-            if (command[optionalField] !== null && command[optionalField] !== undefined
-                && typeof command[optionalField] !== 'string') {
-                throw new BoardResponseContractError(
-                    context,
-                    `${field}.command.${optionalField} must be text or null`
-                )
-            }
-        }
-        if (hasRuleConditionValue(command.contentDevice) !== hasRuleConditionValue(command.content)) {
-            throw new BoardResponseContractError(
-                context,
-                `${field}.command contentDevice and content must be provided together`
-            )
-        }
-        if (rule.ruleString !== null && typeof rule.ruleString !== 'string') {
-            throw new BoardResponseContractError(context, `${field}.ruleString must be text or null`)
-        }
-        return rule as unknown as BackendRuleDto
-    }
-
-    const validateSpecification = (candidate: unknown, field: string): Specification => {
-        const specification = requireResponseRecord(candidate, `${context}.${field}`)
-        if (typeof specification.id !== 'string' || !specification.id.trim()) {
-            throw new BoardResponseContractError(context, `${field}.id is required`)
-        }
-        if (typeof specification.templateId !== 'string' || !/^[1-7]$/.test(specification.templateId)) {
-            throw new BoardResponseContractError(context, `${field}.templateId is invalid`)
-        }
-        if (typeof specification.templateLabel !== 'string') {
-            throw new BoardResponseContractError(context, `${field}.templateLabel must be text`)
-        }
-        if (specification.formula !== null && specification.formula !== undefined
-            && typeof specification.formula !== 'string') {
-            throw new BoardResponseContractError(context, `${field}.formula must be text or null`)
-        }
-        for (const conditionField of ['aConditions', 'ifConditions', 'thenConditions']) {
-            const conditions = requireResponseArray(
-                specification[conditionField],
-                `${context}.${field}.${conditionField}`
-            )
-            conditions.forEach((candidateCondition, index) => {
-                const conditionPath = `${field}.${conditionField}[${index}]`
-                const condition = requireResponseRecord(
-                    candidateCondition,
-                    `${context}.${conditionPath}`
-                )
-                for (const requiredField of ['deviceId', 'targetType', 'key', 'relation', 'value']) {
-                    if (typeof condition[requiredField] !== 'string' || !condition[requiredField].trim()) {
-                        throw new BoardResponseContractError(
-                            context,
-                            `${conditionPath}.${requiredField} is required`
-                        )
-                    }
-                }
-                if (normalizeModelRelation(condition.relation) !== condition.relation
-                    || !SPEC_RELATIONS.has(condition.relation)) {
-                    throw new BoardResponseContractError(context, `${conditionPath}.relation is invalid`)
-                }
-                const targetType = condition.targetType
-                if (!['state', 'mode', 'variable', 'api', 'trust', 'privacy'].includes(targetType)) {
-                    throw new BoardResponseContractError(context, `${conditionPath}.targetType is invalid`)
-                }
-                const hasPropertyScope = condition.propertyScope !== null
-                    && condition.propertyScope !== undefined
-                if (targetType === 'trust' || targetType === 'privacy') {
-                    if (!hasPropertyScope
-                        || !['state', 'variable'].includes(condition.propertyScope)) {
-                        throw new BoardResponseContractError(
-                            context,
-                            `${conditionPath}.propertyScope is required for trust/privacy`
-                        )
-                    }
-                } else if (hasPropertyScope) {
-                    throw new BoardResponseContractError(
-                        context,
-                        `${conditionPath}.propertyScope is only valid for trust/privacy`
-                    )
-                }
-            })
-        }
-        const devices = requireResponseArray(specification.devices, `${context}.${field}.devices`)
-        devices.forEach((candidateDevice, index) => {
-            const deviceField = `${field}.devices[${index}]`
-            const device = requireResponseRecord(candidateDevice, `${context}.${deviceField}`)
-            if (typeof device.deviceId !== 'string' || !device.deviceId.trim()) {
-                throw new BoardResponseContractError(context, `${deviceField}.deviceId is required`)
-            }
-            if (!Array.isArray(device.selectedApis)
-                || device.selectedApis.some((apiName: unknown) => typeof apiName !== 'string')) {
-                throw new BoardResponseContractError(context, `${deviceField}.selectedApis must be text[]`)
-            }
-        })
-        return specification as unknown as Specification
-    }
-
-    const validateEnvironmentVariable = (
-        candidate: unknown,
-        field: string
-    ): ModelEnvironmentVariable => {
-        const variable = requireResponseRecord(candidate, `${context}.${field}`)
-        if (typeof variable.name !== 'string' || !variable.name.trim()) {
-            throw new BoardResponseContractError(context, `${field}.name is required`)
-        }
-        for (const optionalField of ['value', 'trust', 'privacy']) {
-            if (variable[optionalField] !== null && variable[optionalField] !== undefined
-                && typeof variable[optionalField] !== 'string') {
-                throw new BoardResponseContractError(context, `${field}.${optionalField} must be text or null`)
-            }
-        }
-        return variable as ModelEnvironmentVariable
-    }
+    const validateDevice = (candidate: unknown, field: string) =>
+        validateBoardNodeResult(candidate, `${context}.${field}`)
+    const validateRule = (candidate: unknown, field: string) =>
+        validateBackendRuleResult(candidate, `${context}.${field}`)
+    const validateSpecification = (candidate: unknown, field: string) =>
+        validateBoardSpecificationResult(candidate, `${context}.${field}`)
+    const validateEnvironment = (candidate: unknown, field: string) =>
+        validateEnvironmentVariable(candidate, `${context}.${field}`)
 
     const deletedDevice = validateDevice(result.deletedDevice, 'deletedDevice')
     if (deletedDevice.id !== expectedNodeId) {
@@ -1296,54 +1312,50 @@ const validateDeviceDeletionResult = (
     const currentSpecifications = requireResponseArray(result, context, 'currentSpecifications')
         .map((specification, index) => validateSpecification(specification, `currentSpecifications[${index}]`))
 
+    const validateDeletionCollection = <T>(
+        removed: T[],
+        current: T[],
+        identityOf: (item: T) => string | number,
+        field: string
+    ) => {
+        requireUniqueIdentities(removed, identityOf, context, `removed${field}`)
+        requireUniqueIdentities(current, identityOf, context, `current${field}`)
+        const removedIdentities = new Set(removed.map(identityOf))
+        const currentIdentities = new Set(current.map(identityOf))
+        const overlap = [...removedIdentities].some(identity => currentIdentities.has(identity))
+        if (expectedOperation === 'preview') {
+            if ([...removedIdentities].some(identity => !currentIdentities.has(identity))) {
+                throw new BoardResponseContractError(
+                    context,
+                    `removed${field} must be present in current${field} during preview`
+                )
+            }
+        } else if (overlap) {
+            throw new BoardResponseContractError(
+                context,
+                `removed${field} must be absent from current${field} after deletion`
+            )
+        }
+    }
+    validateDeletionCollection(removedRules, currentRules, rule => Number(rule.id), 'Rules')
+    validateDeletionCollection(removedSpecifications, currentSpecifications, specification => specification.id, 'Specifications')
+
     const environmentVariables = requireResponseArray(result, context, 'environmentVariables')
-        .map((variable, index) => validateEnvironmentVariable(variable, `environmentVariables[${index}]`))
+        .map((variable, index) => validateEnvironment(variable, `environmentVariables[${index}]`))
     if (new Set(environmentVariables.map(variable => variable.name)).size !== environmentVariables.length) {
         throw new BoardResponseContractError(context, 'environmentVariables contains duplicate names')
     }
-    const changedEnvironmentNames = new Set<string>()
-    requireResponseArray(result, context, 'environmentChanges').forEach((candidateChange, index) => {
-        const field = `environmentChanges[${index}]`
-        const change = requireResponseRecord(candidateChange, `${context}.${field}`)
-        if (!['ADDED', 'UPDATED', 'REMOVED'].includes(change.changeType)) {
-            throw new BoardResponseContractError(context, `${field}.changeType is invalid`)
-        }
-        if (typeof change.name !== 'string' || !change.name.trim()) {
-            throw new BoardResponseContractError(context, `${field}.name is required`)
-        }
-        if (changedEnvironmentNames.has(change.name)) {
-            throw new BoardResponseContractError(context, 'environmentChanges contains duplicate names')
-        }
-        changedEnvironmentNames.add(change.name)
-        const values: Record<string, ModelEnvironmentVariable | null> = {
-            previousValue: null,
-            currentValue: null
-        }
-        for (const valueField of ['previousValue', 'currentValue']) {
-            if (change[valueField] !== null && change[valueField] !== undefined) {
-                const variable = validateEnvironmentVariable(change[valueField], `${field}.${valueField}`)
-                if (variable.name !== change.name) {
-                    throw new BoardResponseContractError(
-                        context,
-                        `${field}.${valueField}.name must match the change name`
-                    )
-                }
-                values[valueField] = variable
-            }
-        }
-        const hasPreviousValue = values.previousValue !== null
-        const hasCurrentValue = values.currentValue !== null
-        if ((change.changeType === 'ADDED' && (hasPreviousValue || !hasCurrentValue))
-            || (change.changeType === 'UPDATED' && (!hasPreviousValue || !hasCurrentValue))
-            || (change.changeType === 'REMOVED' && (!hasPreviousValue || hasCurrentValue))) {
-            throw new BoardResponseContractError(context, `${field} values contradict changeType`)
-        }
-        for (const sourceField of ['previousModelTokenSource', 'currentModelTokenSource']) {
-            if (change[sourceField] !== undefined && !MODEL_TOKEN_SOURCES.has(change[sourceField])) {
-                throw new BoardResponseContractError(context, `${field}.${sourceField} is invalid`)
-            }
-        }
-    })
+    const environmentChanges = requireResponseArray<EnvironmentVariableChange>(
+        result,
+        context,
+        'environmentChanges'
+    ).map((change, index) => validateEnvironmentChangeResult(
+        change,
+        `${context}.environmentChanges[${index}]`
+    ))
+    if (new Set(environmentChanges.map(change => change.name)).size !== environmentChanges.length) {
+        throw new BoardResponseContractError(context, 'environmentChanges contains duplicate names')
+    }
     return {
         ...result,
         deletedDevice,
@@ -1352,14 +1364,18 @@ const validateDeviceDeletionResult = (
         currentRules,
         removedSpecifications,
         currentSpecifications,
-        environmentVariables
+        environmentVariables,
+        environmentChanges
     } as DeviceDeletionResult & { removedRules: BackendRuleDto[]; currentRules: BackendRuleDto[] }
 }
 
 const validateCollectionMutationResult = <T>(
     value: unknown,
     expectedOperation: CollectionMutationResult<T>['operation'],
-    context: string
+    context: string,
+    validateItem?: (value: unknown, context: string) => T,
+    identityOf?: (item: T) => string | number,
+    expectedAffectedIdentity?: string | number
 ): CollectionMutationResult<T> => {
     const result = requireResponseRecord(value, context)
     requireOperation(result, expectedOperation, context)
@@ -1367,19 +1383,77 @@ const validateCollectionMutationResult = <T>(
         throw new BoardResponseContractError(context, 'affectedItem is required')
     }
     const currentItems = requireResponseArray<T>(result, context, 'currentItems')
-    requireCurrentCount(result, currentItems, context)
-    return result as CollectionMutationResult<T>
+        .map((item, index) => validateItem
+            ? validateItem(item, `${context}.currentItems[${index}]`)
+            : item)
+    const affectedItem = validateItem
+        ? validateItem(result.affectedItem, `${context}.affectedItem`)
+        : result.affectedItem as T
+    if (identityOf) {
+        requireUniqueIdentities(currentItems, identityOf, context, 'currentItems')
+        const affectedIdentity = identityOf(affectedItem)
+        if (expectedAffectedIdentity !== undefined
+            && affectedIdentity !== expectedAffectedIdentity) {
+            throw new BoardResponseContractError(
+                context,
+                'affectedItem does not match the requested item identity'
+            )
+        }
+        const affectedIsCurrent = currentItems.some(item => identityOf(item) === affectedIdentity)
+        if ((expectedOperation === 'created' && !affectedIsCurrent)
+            || (expectedOperation === 'deleted' && affectedIsCurrent)) {
+            throw new BoardResponseContractError(
+                context,
+                'affectedItem contradicts the authoritative currentItems collection'
+            )
+        }
+    }
+    requireCurrentCount({ ...result, currentItems }, currentItems, context)
+    return { ...result, affectedItem, currentItems } as CollectionMutationResult<T>
 }
 
 const validateBoardBatchResult = (value: unknown) => {
     const context = 'Scene replacement'
     const result = requireResponseRecord(value, context)
-    requireResponseArray<DeviceNode>(result, context, 'nodes')
-    requireResponseArray<ModelEnvironmentVariable>(result, context, 'environmentVariables')
-    requireResponseArray<BackendRuleDto>(result, context, 'rules')
-    requireResponseArray<Specification>(result, context, 'specs')
-    requireResponseArray<DeviceTemplate>(result, context, 'createdTemplates')
-    return result as {
+    const nodes = requireResponseArray<DeviceNode>(result, context, 'nodes')
+        .map((node, index) => validateBoardNodeResult(node, `${context}.nodes[${index}]`))
+    if (new Set(nodes.map(node => node.id)).size !== nodes.length) {
+        throw new BoardResponseContractError(context, 'nodes contains duplicate ids')
+    }
+    const environmentVariables = requireResponseArray<ModelEnvironmentVariable>(result, context, 'environmentVariables')
+        .map((variable, index) => validateEnvironmentVariable(variable, `${context}.environmentVariables[${index}]`))
+    if (new Set(environmentVariables.map(variable => variable.name)).size !== environmentVariables.length) {
+        throw new BoardResponseContractError(context, 'environmentVariables contains duplicate names')
+    }
+    const rules = requireResponseArray<BackendRuleDto>(result, context, 'rules')
+        .map((rule, index) => validateBackendRuleResult(rule, `${context}.rules[${index}]`))
+    requireUniqueIdentities(rules, rule => Number(rule.id), context, 'rules')
+    const ruleIds = rules.map(rule => rule.id)
+    if (new Set(ruleIds).size !== ruleIds.length) {
+        throw new BoardResponseContractError(context, 'rules contains duplicate ids')
+    }
+    const specs = requireResponseArray<Specification>(result, context, 'specs')
+        .map((spec, index) => validateBoardSpecificationResult(spec, `${context}.specs[${index}]`))
+    if (new Set(specs.map(spec => spec.id)).size !== specs.length) {
+        throw new BoardResponseContractError(context, 'specs contains duplicate ids')
+    }
+    const createdTemplates = requireResponseArray<DeviceTemplate>(result, context, 'createdTemplates')
+        .map((template, index) => validateDeviceTemplateResult(template, `${context}.createdTemplates[${index}]`))
+    requireUniqueIdentities(
+        createdTemplates,
+        template => template.name.trim().toLowerCase(),
+        context,
+        'createdTemplates'
+    )
+    requireUniqueIdentities(createdTemplates, template => Number(template.id), context, 'createdTemplates')
+    return {
+        ...result,
+        nodes,
+        environmentVariables,
+        rules,
+        specs,
+        createdTemplates
+    } as {
         nodes: DeviceNode[]
         environmentVariables: ModelEnvironmentVariable[]
         rules: BackendRuleDto[]
@@ -1415,12 +1489,41 @@ const validateDeviceTemplateResult = (value: unknown, context: string): DeviceTe
     if (!result.manifest || typeof result.manifest !== 'object' || Array.isArray(result.manifest)) {
         throw new BoardResponseContractError(context, 'template manifest is required')
     }
+    const manifest = result.manifest as Record<string, unknown>
+    if (typeof manifest.Name !== 'string' || !manifest.Name.trim()) {
+        throw new BoardResponseContractError(context, 'template manifest.Name is required')
+    }
+    if (manifest.Name.trim() !== result.name.trim()) {
+        throw new BoardResponseContractError(context, 'template name must match manifest.Name')
+    }
+    const manifestValidation = validateManifest(manifest)
+    if (!manifestValidation.valid) {
+        throw new BoardResponseContractError(
+            context,
+            `template manifest is invalid${manifestValidation.code ? ` (${manifestValidation.code})` : ''}`
+        )
+    }
+    if (!Number.isSafeInteger(result.id) || result.id <= 0) {
+        throw new BoardResponseContractError(context, 'template id must be a positive integer')
+    }
+    if (typeof result.defaultTemplate !== 'boolean') {
+        throw new BoardResponseContractError(context, 'defaultTemplate must be boolean')
+    }
     return result as DeviceTemplate
 }
 
+const sameDeviceTemplateSnapshot = (left: DeviceTemplate, right: DeviceTemplate): boolean =>
+    left.id === right.id
+    && left.name === right.name
+    && left.defaultTemplate === right.defaultTemplate
+    // Both snapshots come from fields serialized by the same backend DTO, so key order is stable.
+    && JSON.stringify(left.manifest) === JSON.stringify(right.manifest)
+
 const validateDeviceTemplateDeletionResult = (
     value: unknown,
-    expectedOperation: DeviceTemplateDeletionResult['operation']
+    expectedOperation: DeviceTemplateDeletionResult['operation'],
+    expectedTemplateId: number,
+    expectedImpactToken?: string
 ): DeviceTemplateDeletionResult => {
     const context = expectedOperation === 'preview'
         ? 'Device type deletion preview'
@@ -1430,10 +1533,20 @@ const validateDeviceTemplateDeletionResult = (
     if (typeof result.impactToken !== 'string' || !result.impactToken.trim()) {
         throw new BoardResponseContractError(context, 'impactToken is required')
     }
+    if (expectedOperation === 'deleted'
+        && result.impactToken.trim() !== String(expectedImpactToken || '').trim()) {
+        throw new BoardResponseContractError(context, 'impactToken does not match the confirmed preview')
+    }
     if (typeof result.canDelete !== 'boolean') {
         throw new BoardResponseContractError(context, 'canDelete must be boolean')
     }
+    if (!Number.isSafeInteger(expectedTemplateId) || expectedTemplateId <= 0) {
+        throw new BoardResponseContractError(context, 'the requested template id is invalid')
+    }
     const template = validateDeviceTemplateResult(result.template, `${context} template`)
+    if (template.id !== expectedTemplateId) {
+        throw new BoardResponseContractError(context, 'template does not match the requested template')
+    }
     const blockers = requireResponseArray<any>(result, context, 'blockers')
     blockers.forEach((blocker, index) => {
         const row = requireResponseRecord(blocker, `${context} blockers[${index}]`)
@@ -1449,28 +1562,237 @@ const validateDeviceTemplateDeletionResult = (
     const currentTemplates = requireResponseArray<DeviceTemplate>(result, context, 'currentTemplates')
     currentTemplates.forEach((item, index) =>
         validateDeviceTemplateResult(item, `${context} currentTemplates[${index}]`))
+    if (currentTemplates.some(item => !Number.isSafeInteger(item.id) || Number(item.id) <= 0)) {
+        throw new BoardResponseContractError(context, 'currentTemplates must include positive ids')
+    }
+    requireUniqueIdentities(
+        currentTemplates,
+        item => item.name.trim().toLowerCase(),
+        context,
+        'currentTemplates'
+    )
+    requireUniqueIdentities(currentTemplates, item => Number(item.id), context, 'currentTemplates')
     if (expectedOperation === 'deleted') {
         const deleted = validateDeviceTemplateResult(result.deletedTemplate, `${context} deletedTemplate`)
-        if (deleted.id !== template.id || currentTemplates.some(item => item.id === deleted.id)) {
+        if (deleted.id !== expectedTemplateId
+            || !sameDeviceTemplateSnapshot(template, deleted)
+            || currentTemplates.some(item => item.id === expectedTemplateId)) {
             throw new BoardResponseContractError(context, 'deletedTemplate contradicts currentTemplates')
+        }
+    } else {
+        const current = currentTemplates.find(item => item.id === expectedTemplateId)
+        if (!current || !sameDeviceTemplateSnapshot(template, current)) {
+            throw new BoardResponseContractError(context, 'currentTemplates must retain the previewed template snapshot')
         }
     }
     return result as DeviceTemplateDeletionResult
 }
 
+export const parseDeviceTemplateDeletionPreview = (
+    value: unknown,
+    expectedTemplateId: number
+): DeviceTemplateDeletionResult => validateDeviceTemplateDeletionResult(
+    value,
+    'preview',
+    expectedTemplateId
+)
+
 const validateEnvironmentVariable = (value: unknown, context: string): ModelEnvironmentVariable => {
     const result = requireResponseRecord(value, context)
-    for (const field of ['name', 'value', 'trust', 'privacy']) {
+    if (typeof result.name !== 'string' || !result.name.trim()) {
+        throw new BoardResponseContractError(context, 'name is required')
+    }
+    if (typeof result.value !== 'string' || !result.value.trim()) {
+        throw new BoardResponseContractError(context, 'value must be a non-blank string')
+    }
+    for (const field of ['trust', 'privacy']) {
         if (typeof result[field] !== 'string' || !result[field].trim()) {
             throw new BoardResponseContractError(context, `${field} is required`)
         }
     }
+    if (!ENVIRONMENT_TRUST_VALUES.has(result.trust.trim().toLowerCase())) {
+        throw new BoardResponseContractError(context, 'trust must be trusted or untrusted')
+    }
+    if (!ENVIRONMENT_PRIVACY_VALUES.has(result.privacy.trim().toLowerCase())) {
+        throw new BoardResponseContractError(context, 'privacy must be public or private')
+    }
     return result as ModelEnvironmentVariable
+}
+
+const validateBoardNodeResult = (value: unknown, context: string): DeviceNode => {
+    const node = requireResponseRecord(value, context)
+    for (const field of ['id', 'templateName', 'label']) {
+        if (typeof node[field] !== 'string' || !node[field].trim()) {
+            throw new BoardResponseContractError(context, `${field} is required`)
+        }
+    }
+    const position = requireResponseRecord(node.position, `${context}.position`)
+    for (const coordinate of ['x', 'y']) {
+        if (typeof position[coordinate] !== 'number'
+            || !Number.isFinite(position[coordinate])
+            || Math.abs(position[coordinate]) > NODE_POSITION_ABS_MAX) {
+            throw new BoardResponseContractError(context, `position.${coordinate} is outside the supported canvas range`)
+        }
+    }
+    for (const [field, range] of [['width', NODE_WIDTH_RANGE], ['height', NODE_HEIGHT_RANGE]] as const) {
+        if (!Number.isSafeInteger(node[field]) || node[field] < range.min || node[field] > range.max) {
+            throw new BoardResponseContractError(context, `${field} is outside the supported canvas range`)
+        }
+    }
+    if (node.state !== null && node.state !== undefined && typeof node.state !== 'string') {
+        throw new BoardResponseContractError(context, 'state must be text or null')
+    }
+    for (const [field, allowed] of [
+        ['currentStateTrust', ENVIRONMENT_TRUST_VALUES],
+        ['currentStatePrivacy', ENVIRONMENT_PRIVACY_VALUES]
+    ] as const) {
+        const candidate = node[field]
+        if (candidate !== null && candidate !== undefined
+            && (typeof candidate !== 'string' || !allowed.has(candidate.trim().toLowerCase()))) {
+            throw new BoardResponseContractError(context, `${field} is invalid`)
+        }
+    }
+    for (const field of ['variables', 'privacies'] as const) {
+        const collection = node[field]
+        if (collection === null || collection === undefined) continue
+        if (!Array.isArray(collection)) {
+            throw new BoardResponseContractError(context, `${field} must be an array`)
+        }
+        const names = new Set<string>()
+        collection.forEach((entry: unknown, index: number) => {
+            const item = requireResponseRecord(entry, `${context}.${field}[${index}]`)
+            if (typeof item.name !== 'string' || !item.name.trim() || names.has(item.name)) {
+                throw new BoardResponseContractError(context, `${field}[${index}].name is missing or duplicated`)
+            }
+            names.add(item.name)
+            if (field === 'variables') {
+                if (typeof item.value !== 'string' || !item.value.trim()) {
+                    throw new BoardResponseContractError(context, `${field}[${index}].value is required`)
+                }
+                if (item.trust !== null && item.trust !== undefined
+                    && (typeof item.trust !== 'string'
+                        || !ENVIRONMENT_TRUST_VALUES.has(item.trust.trim().toLowerCase()))) {
+                    throw new BoardResponseContractError(context, `${field}[${index}].trust is invalid`)
+                }
+            } else if (typeof item.privacy !== 'string'
+                || !ENVIRONMENT_PRIVACY_VALUES.has(item.privacy.trim().toLowerCase())) {
+                throw new BoardResponseContractError(context, `${field}[${index}].privacy is invalid`)
+            }
+        })
+    }
+    // Validation must not silently rewrite an authoritative server snapshot. The
+    // model keeps runtime collections optional, and callers already handle their
+    // absence; preserving the payload also keeps reconciliation identity-stable.
+    return node as unknown as DeviceNode
+}
+
+const validateBackendRuleResult = (value: unknown, context: string): BackendRuleDto => {
+    const rule = requireResponseRecord(value, context)
+    if (!Number.isSafeInteger(rule.id) || rule.id <= 0) {
+        throw new BoardResponseContractError(context, 'id must be a positive integer')
+    }
+    const conditions = requireResponseArray(rule.conditions, `${context}.conditions`)
+    if (conditions.length === 0) throw new BoardResponseContractError(context, 'conditions cannot be empty')
+    conditions.forEach((candidate: unknown, index: number) => {
+        const condition = requireResponseRecord(candidate, `${context}.conditions[${index}]`)
+        for (const field of ['deviceName', 'attribute', 'targetType']) {
+            if (typeof condition[field] !== 'string' || !condition[field].trim()) {
+                throw new BoardResponseContractError(context, `conditions[${index}].${field} is required`)
+            }
+        }
+        const sourceType = normalizeRuleSourceType(condition.targetType)
+        if (!sourceType) throw new BoardResponseContractError(context, `conditions[${index}].targetType is invalid`)
+        if (sourceType === 'api') {
+            if (hasRuleConditionValue(condition.relation) || hasRuleConditionValue(condition.value)) {
+                throw new BoardResponseContractError(context, `conditions[${index}] API signals cannot contain values`)
+            }
+        } else if (typeof condition.relation !== 'string'
+            || !normalizeModelRelation(condition.relation)
+            || typeof condition.value !== 'string'
+            || !condition.value.trim()) {
+            throw new BoardResponseContractError(context, `conditions[${index}] requires relation and value`)
+        }
+    })
+    const command = requireResponseRecord(rule.command, `${context}.command`)
+    for (const field of ['deviceName', 'action']) {
+        if (typeof command[field] !== 'string' || !command[field].trim()) {
+            throw new BoardResponseContractError(context, `command.${field} is required`)
+        }
+    }
+    for (const field of ['contentDevice', 'content']) {
+        if (command[field] !== null && command[field] !== undefined && typeof command[field] !== 'string') {
+            throw new BoardResponseContractError(context, `command.${field} must be text or null`)
+        }
+    }
+    if (hasRuleConditionValue(command.contentDevice) !== hasRuleConditionValue(command.content)) {
+        throw new BoardResponseContractError(context, 'command content fields must be provided together')
+    }
+    if (rule.ruleString !== null && rule.ruleString !== undefined && typeof rule.ruleString !== 'string') {
+        throw new BoardResponseContractError(context, 'ruleString must be text or null')
+    }
+    return rule as unknown as BackendRuleDto
+}
+
+const validateBoardSpecificationResult = (value: unknown, context: string): Specification => {
+    const specification = requireResponseRecord(value, context)
+    if (typeof specification.id !== 'string' || !specification.id.trim()) {
+        throw new BoardResponseContractError(context, 'id is required')
+    }
+    if (typeof specification.templateId !== 'string' || !/^[1-7]$/.test(specification.templateId)) {
+        throw new BoardResponseContractError(context, 'templateId is invalid')
+    }
+    if (typeof specification.templateLabel !== 'string') {
+        throw new BoardResponseContractError(context, 'templateLabel must be text')
+    }
+    if (specification.formula !== null && specification.formula !== undefined
+        && typeof specification.formula !== 'string') {
+        throw new BoardResponseContractError(context, 'formula must be text or null')
+    }
+    for (const field of ['aConditions', 'ifConditions', 'thenConditions']) {
+        const conditions = requireResponseArray(specification[field], `${context}.${field}`)
+        conditions.forEach((candidate: unknown, index: number) => {
+            const condition = requireResponseRecord(candidate, `${context}.${field}[${index}]`)
+            for (const required of ['deviceId', 'targetType', 'key', 'relation', 'value']) {
+                if (typeof condition[required] !== 'string' || !condition[required].trim()) {
+                    throw new BoardResponseContractError(context, `${field}[${index}].${required} is required`)
+                }
+            }
+            if (!['state', 'mode', 'variable', 'api', 'trust', 'privacy'].includes(condition.targetType)) {
+                throw new BoardResponseContractError(context, `${field}[${index}].targetType is invalid`)
+            }
+            if (!SPEC_RELATIONS.has(normalizeModelRelation(condition.relation) || '')) {
+                throw new BoardResponseContractError(context, `${field}[${index}].relation is invalid`)
+            }
+            if (condition.side !== null && condition.side !== undefined
+                && !['a', 'if', 'then'].includes(condition.side)) {
+                throw new BoardResponseContractError(context, `${field}[${index}].side is invalid`)
+            }
+            if (['trust', 'privacy'].includes(condition.targetType)
+                && !['state', 'variable'].includes(condition.propertyScope)) {
+                throw new BoardResponseContractError(context, `${field}[${index}].propertyScope is required`)
+            }
+            if (!['trust', 'privacy'].includes(condition.targetType)
+                && condition.propertyScope !== null && condition.propertyScope !== undefined) {
+                throw new BoardResponseContractError(context, `${field}[${index}].propertyScope is unexpected`)
+            }
+        })
+    }
+    const devices = requireResponseArray(specification.devices, `${context}.devices`)
+    devices.forEach((candidate: unknown, index: number) => {
+        const device = requireResponseRecord(candidate, `${context}.devices[${index}]`)
+        if (typeof device.deviceId !== 'string' || !device.deviceId.trim()
+            || !Array.isArray(device.selectedApis)
+            || device.selectedApis.some((name: unknown) => typeof name !== 'string')) {
+            throw new BoardResponseContractError(context, `devices[${index}] is malformed`)
+        }
+    })
+    return specification as unknown as Specification
 }
 
 const validateDefaultTemplateResetResult = (
     value: unknown,
-    expectedOperation: DefaultTemplateResetResult['operation']
+    expectedOperation: DefaultTemplateResetResult['operation'],
+    expectedImpactToken?: string
 ): DefaultTemplateResetResult => {
     const context = expectedOperation === 'preview'
         ? 'Default device type reset preview'
@@ -1480,6 +1802,10 @@ const validateDefaultTemplateResetResult = (
     if (typeof result.impactToken !== 'string' || !result.impactToken.trim()) {
         throw new BoardResponseContractError(context, 'impactToken is required')
     }
+    if (expectedOperation === 'reset'
+        && result.impactToken.trim() !== String(expectedImpactToken || '').trim()) {
+        throw new BoardResponseContractError(context, 'impactToken does not match the confirmed preview')
+    }
     if (typeof result.canApply !== 'boolean') {
         throw new BoardResponseContractError(context, 'canApply must be boolean')
     }
@@ -1487,6 +1813,10 @@ const validateDefaultTemplateResetResult = (
     const affectedDevices = requireResponseArray<any>(result, context, 'affectedDevices')
     const blockers = requireResponseArray<any>(result, context, 'blockers')
     const environmentChanges = requireResponseArray<EnvironmentVariableChange>(result, context, 'environmentChanges')
+        .map((change, index) => validateEnvironmentChangeResult(
+            change,
+            `${context}.environmentChanges[${index}]`
+        ))
     const currentTemplates = requireResponseArray<DeviceTemplate>(result, context, 'currentTemplates')
     const environmentVariables = requireResponseArray<ModelEnvironmentVariable>(result, context, 'environmentVariables')
     if (templateChanges.length === 0) {
@@ -1549,24 +1879,20 @@ const validateDefaultTemplateResetResult = (
         validateDeviceTemplateResult(template, `${context} currentTemplates[${index}]`))
     environmentVariables.forEach((variable, index) =>
         validateEnvironmentVariable(variable, `${context} environmentVariables[${index}]`))
+    requireUniqueIdentities(
+        currentTemplates,
+        template => template.name.trim().toLowerCase(),
+        context,
+        'currentTemplates'
+    )
+    requireUniqueIdentities(currentTemplates, template => Number(template.id), context, 'currentTemplates')
+    requireUniqueIdentities(environmentVariables, variable => variable.name, context, 'environmentVariables')
 
     const environmentByName = new Map(environmentVariables.map(variable => [variable.name, variable]))
-    environmentChanges.forEach((change, index) => {
-        const row = requireResponseRecord(change, context)
-        if (!['ADDED', 'UPDATED', 'REMOVED'].includes(row.changeType)) {
-            throw new BoardResponseContractError(context, `environmentChanges[${index}].changeType is invalid`)
-        }
-        if (typeof row.name !== 'string' || !row.name.trim()) {
-            throw new BoardResponseContractError(context, `environmentChanges[${index}].name is required`)
-        }
-        for (const field of ['previousModelTokenSource', 'currentModelTokenSource'] as const) {
-            if (row[field] !== undefined && !MODEL_TOKEN_SOURCES.has(row[field])) {
-                throw new BoardResponseContractError(
-                    context,
-                    `environmentChanges[${index}].${field} is invalid`
-                )
-            }
-        }
+    if (new Set(environmentChanges.map(change => change.name)).size !== environmentChanges.length) {
+        throw new BoardResponseContractError(context, 'environmentChanges contains duplicate names')
+    }
+    environmentChanges.forEach((row) => {
         if (expectedOperation === 'reset') {
             const current = environmentByName.get(row.name)
             if (row.changeType === 'REMOVED' ? current !== undefined : current === undefined) {
@@ -1616,6 +1942,8 @@ const validateFixApplyResult = (
         throw new BoardResponseContractError(context, 'appliedSuggestion must identify the verified fix actually written')
     }
     const rules = requireResponseArray<BackendRuleDto>(result, context, 'rules')
+        .map((rule, index) => validateBackendRuleResult(rule, `${context}.rules[${index}]`))
+    requireUniqueIdentities(rules, rule => Number(rule.id), context, 'rules')
     if (!Number.isSafeInteger(result.previousRuleCount) || result.previousRuleCount < 0
         || !Number.isSafeInteger(result.currentRuleCount)
         || result.currentRuleCount !== rules.length) {
@@ -1628,7 +1956,7 @@ const validateFixApplyResult = (
     if (typeof result.message !== 'string' || !result.message.trim()) {
         throw new BoardResponseContractError(context, 'message is required')
     }
-    return result as Omit<FixApplyResult, 'rules'> & { rules: BackendRuleDto[] }
+    return { ...result, rules } as Omit<FixApplyResult, 'rules'> & { rules: BackendRuleDto[] }
 }
 
 export default {
@@ -1639,30 +1967,50 @@ export default {
             unpack<unknown>(await api.get('/board/snapshot')),
             context
         )
+        const rawNodes = requireResponseArray<DeviceNode>(snapshot.nodes, `${context}.nodes`)
+            .map((node, index) => validateBoardNodeResult(node, `${context}.nodes[${index}]`))
         const rawRules = requireResponseArray<BackendRuleDto>(snapshot.rules, `${context}.rules`)
+            .map((rule, index) => validateBackendRuleResult(rule, `${context}.rules[${index}]`))
+        const rawSpecifications = requireResponseArray<Specification>(
+            snapshot.specifications,
+            `${context}.specifications`
+        ).map((spec, index) => validateBoardSpecificationResult(spec, `${context}.specifications[${index}]`))
+        const environmentVariables = requireResponseArray<ModelEnvironmentVariable>(
+            snapshot.environmentVariables,
+            `${context}.environmentVariables`
+        ).map((variable, index) =>
+            validateEnvironmentVariable(variable, `${context}.environmentVariables[${index}]`))
+        const deviceTemplates = requireResponseArray<DeviceTemplate>(
+            snapshot.deviceTemplates,
+            `${context}.deviceTemplates`
+        ).map((template, index) =>
+            validateDeviceTemplateResult(template, `${context}.deviceTemplates[${index}]`))
+        requireUniqueIdentities(rawNodes, node => node.id, context, 'nodes')
+        requireUniqueIdentities(environmentVariables, variable => variable.name, context, 'environmentVariables')
+        requireUniqueIdentities(rawRules, rule => Number(rule.id), context, 'rules')
+        requireUniqueIdentities(rawSpecifications, specification => specification.id, context, 'specifications')
+        requireUniqueIdentities(
+            deviceTemplates,
+            template => template.name.trim().toLowerCase(),
+            context,
+            'deviceTemplates'
+        )
+        requireUniqueIdentities(deviceTemplates, template => Number(template.id), context, 'deviceTemplates')
         return {
-            nodes: requireResponseArray<DeviceNode>(snapshot.nodes, `${context}.nodes`),
-            environmentVariables: requireResponseArray<ModelEnvironmentVariable>(
-                snapshot.environmentVariables,
-                `${context}.environmentVariables`
-            ),
+            nodes: rawNodes,
+            environmentVariables,
             rules: rawRules.map(fromBackendRuleDto),
-            specifications: requireResponseArray<Specification>(
-                snapshot.specifications,
-                `${context}.specifications`
-            ),
-            deviceTemplates: requireResponseArray<DeviceTemplate>(
-                snapshot.deviceTemplates,
-                `${context}.deviceTemplates`
-            ).map((template, index) =>
-                validateDeviceTemplateResult(template, `${context}.deviceTemplates[${index}]`))
+            specifications: rawSpecifications,
+            deviceTemplates
         }
     },
     getNodes: async (): Promise<DeviceNode[]> => {
-        return requireResponseArray<DeviceNode>(
+        const nodes = requireResponseArray<DeviceNode>(
             unpack<unknown>(await api.get('/board/nodes')),
             'Device list'
-        );
+        ).map((node, index) => validateBoardNodeResult(node, `Device list[${index}]`));
+        requireUniqueIdentities(nodes, node => node.id, 'Device list', 'nodes')
+        return nodes
     },
     addNodes: async (
         devices: DeviceNode[],
@@ -1740,7 +2088,8 @@ export default {
             })),
             'deleted',
             nodeId,
-            'Device deletion'
+            'Device deletion',
+            impactToken
         ) as Omit<DeviceDeletionResult, 'removedRules' | 'currentRules'> & {
             removedRules: BackendRuleDto[];
             currentRules: BackendRuleDto[];
@@ -1754,34 +2103,56 @@ export default {
 
     // ==== 环境变量池 ====
     getEnvironment: async (): Promise<ModelEnvironmentVariable[]> => {
-        return requireResponseArray<ModelEnvironmentVariable>(
+        const variables = requireResponseArray<ModelEnvironmentVariable>(
             unpack<unknown>(await api.get('/board/environment')),
             'Environment Pool'
-        );
+        ).map((variable, index) => validateEnvironmentVariable(
+            variable,
+            `Environment Pool environmentVariables[${index}]`
+        ));
+        requireUniqueIdentities(variables, variable => variable.name, 'Environment Pool', 'environmentVariables')
+        return variables
     },
-    saveEnvironment: async (variables: ModelEnvironmentVariable[]): Promise<EnvironmentMutationResult> => {
+    saveEnvironment: async (variables: EnvironmentVariableUpdateRequest[]): Promise<EnvironmentMutationResult> => {
+        const validated = validateEnvironmentUpdateRequests(variables)
         return validateEnvironmentMutationResult(
-            unpack<unknown>(await api.post('/board/environment', variables)),
-            variables
+            unpack<unknown>(await api.post('/board/environment', validated)),
+            validated
         );
     },
 
     // ==== 规约 ====
     getSpecs: async (): Promise<Specification[]> => {
-        return requireResponseArray<Specification>(unpack<unknown>(await api.get('/board/specs')), 'Specification list');
+        const specifications = requireResponseArray<Specification>(
+            unpack<unknown>(await api.get('/board/specs')),
+            'Specification list'
+        )
+            .map((spec, index) => validateBoardSpecificationResult(spec, `Specification list[${index}]`));
+        requireUniqueIdentities(specifications, specification => specification.id, 'Specification list', 'specifications')
+        return specifications
     },
     addSpec: async (spec: Specification): Promise<CollectionMutationResult<Specification>> => {
         return validateCollectionMutationResult<Specification>(
             unpack<unknown>(await api.post('/board/specs', toBackendSpecificationWriteDto(spec))),
             'created',
-            'Specification creation'
+            'Specification creation',
+            validateBoardSpecificationResult,
+            specification => specification.id,
+            spec.id
         );
     },
-    removeSpec: async (specId: string): Promise<CollectionMutationResult<Specification>> => {
+    removeSpec: async (spec: Specification): Promise<CollectionMutationResult<Specification>> => {
+        const specId = String(spec.id || '').trim()
+        if (!specId) throw new Error('Persisted specification id is required for deletion')
         return validateCollectionMutationResult<Specification>(
-            unpack<unknown>(await api.delete(`/board/specs/${encodeURIComponent(specId)}`)),
+            unpack<unknown>(await api.delete(`/board/specs/${encodeURIComponent(specId)}`, {
+                data: toBackendSpecificationWriteDto(spec)
+            })),
             'deleted',
-            'Specification deletion'
+            'Specification deletion',
+            validateBoardSpecificationResult,
+            specification => specification.id,
+            specId
         );
     },
 
@@ -1791,7 +2162,10 @@ export default {
             unpack<unknown>(await api.get('/board/rules')),
             'Rule list'
         );
-        return data.map(fromBackendRuleDto);
+        const rules = data.map((rule, index) =>
+            validateBackendRuleResult(rule, `Rule list[${index}]`))
+        requireUniqueIdentities(rules, rule => Number(rule.id), 'Rule list', 'rules')
+        return rules.map(fromBackendRuleDto)
     },
     addRule: async (rule: RuleForm): Promise<CollectionMutationResult<RuleForm>> => {
         assertRuleHasTrigger(rule)
@@ -1799,7 +2173,9 @@ export default {
         const result = validateCollectionMutationResult<BackendRuleDto>(
             unpack<unknown>(await api.post('/board/rules', toBackendRuleDto(rule))),
             'created',
-            'Rule creation'
+            'Rule creation',
+            validateBackendRuleResult,
+            rule => Number(rule.id)
         );
         return {
             ...result,
@@ -1807,29 +2183,46 @@ export default {
             currentItems: result.currentItems.map(fromBackendRuleDto)
         };
     },
-    reorderRules: async (ruleIds: string[]): Promise<RuleForm[]> => {
-        const persistedIds = ruleIds.map(ruleId => {
+    reorderRules: async (expectedRuleIds: string[], ruleIds: string[]): Promise<RuleForm[]> => {
+        const toPersistedIds = (ids: string[], field: string) => ids.map(ruleId => {
             const numericId = Number(ruleId)
             if (!Number.isSafeInteger(numericId) || numericId <= 0) {
-                throw new Error('Every rule must have a persisted id before execution order can be changed')
+                throw new Error(`Every ${field} rule must have a persisted id before execution order can be changed`)
             }
             return numericId
         })
+        const expectedPersistedIds = toPersistedIds(expectedRuleIds, 'expected')
+        const persistedIds = toPersistedIds(ruleIds, 'requested')
         const result = requireResponseArray<BackendRuleDto>(
-            unpack<unknown>(await api.put('/board/rules/order', { ruleIds: persistedIds })),
+            unpack<unknown>(await api.put('/board/rules/order', {
+                expectedRuleIds: expectedPersistedIds,
+                ruleIds: persistedIds
+            })),
             'Rule reorder'
-        )
+        ).map((rule, index) => validateBackendRuleResult(rule, `Rule reorder[${index}]`))
+        if (result.length !== persistedIds.length
+            || result.some((rule, index) => rule.id !== persistedIds[index])) {
+            throw new BoardResponseContractError(
+                'Rule reorder',
+                'the authoritative order must match the requested rule ids'
+            )
+        }
         return result.map(fromBackendRuleDto)
     },
-    removeRule: async (ruleId: string): Promise<CollectionMutationResult<RuleForm>> => {
+    removeRule: async (rule: RuleForm): Promise<CollectionMutationResult<RuleForm>> => {
+        const ruleId = String(rule.id || '').trim()
         const numericId = Number(ruleId);
         if (!Number.isSafeInteger(numericId) || numericId <= 0) {
             throw new Error('Persisted rule id is required for deletion');
         }
+        const expected = toBackendRuleDto(rule)
         const result = validateCollectionMutationResult<BackendRuleDto>(
-            unpack<unknown>(await api.delete(`/board/rules/${numericId}`)),
+            unpack<unknown>(await api.delete(`/board/rules/${numericId}`, { data: expected })),
             'deleted',
-            'Rule deletion'
+            'Rule deletion',
+            validateBackendRuleResult,
+            rule => Number(rule.id),
+            numericId
         );
         return {
             ...result,
@@ -1923,8 +2316,16 @@ export default {
             unpack<unknown>(await api.get('/board/templates')),
             'Device type catalog'
         );
-        return templates.map((template, index) =>
+        const validated = templates.map((template, index) =>
             validateDeviceTemplateResult(template, `Device type catalog[${index}]`));
+        requireUniqueIdentities(
+            validated,
+            template => template.name.trim().toLowerCase(),
+            'Device type catalog',
+            'templates'
+        )
+        requireUniqueIdentities(validated, template => Number(template.id), 'Device type catalog', 'templates')
+        return validated
     },
     getDeviceTemplateSchema: async (): Promise<Record<string, unknown>> => {
         return unpack<Record<string, unknown>>(await api.get('/board/templates/schema'));
@@ -1944,19 +2345,22 @@ export default {
     resetDefaultTemplates: async (impactToken: string): Promise<DefaultTemplateResetResult> => {
         return validateDefaultTemplateResetResult(
             unpack<unknown>(await api.post('/board/templates/defaults/reset', { impactToken })),
-            'reset'
+            'reset',
+            impactToken
         );
     },
     previewDeviceTemplateDeletion: async (id: number): Promise<DeviceTemplateDeletionResult> => {
-        return validateDeviceTemplateDeletionResult(
+        return parseDeviceTemplateDeletionPreview(
             unpack<unknown>(await api.get(`/board/templates/${id}/deletion-preview`)),
-            'preview'
+            id
         );
     },
     deleteDeviceTemplate: async (id: number, impactToken: string): Promise<DeviceTemplateDeletionResult> => {
         return validateDeviceTemplateDeletionResult(
             unpack<unknown>(await api.post(`/board/templates/${id}/delete`, { impactToken })),
-            'deleted'
+            'deleted',
+            id,
+            impactToken
         );
     },
 
@@ -2050,71 +2454,106 @@ export default {
 
     // ==== 设备推荐 ====
     recommendRelatedDevices: async (
+        options: OwnedRecommendationPostOptions,
         maxRecommendations: number = 5,
         language: string = 'en',
-        userRequirement: string = '',
-        requestId: string = crypto.randomUUID(),
-        signal?: AbortSignal
+        userRequirement: string = ''
     ): Promise<DeviceRecommendationResponse<DeviceRecommendation>> => {
-        return validateStandaloneRecommendationResponse<DeviceRecommendationResponse<DeviceRecommendation>>(
-            unpack<unknown>(await api.post(`/board/devices/recommend?requestId=${encodeURIComponent(requestId)}`, {
-                maxRecommendations,
-                language,
-                userRequirement
-            }, { signal, ...SERVER_BOUNDED_REQUEST })),
-            'Device recommendation',
-            validateDeviceRecommendationCandidate,
-            true
-        );
+        const requestId = options.requestId || crypto.randomUUID()
+        const response = await api.post(`/board/devices/recommend?requestId=${encodeURIComponent(requestId)}`, {
+            maxRecommendations,
+            language,
+            userRequirement
+        }, {
+            signal: options.signal,
+            ...SERVER_BOUNDED_REQUEST,
+            headers: { Authorization: `Bearer ${options.authToken}` }
+        })
+        try {
+            return validateStandaloneRecommendationResponse<DeviceRecommendationResponse<DeviceRecommendation>>(
+                unpack<unknown>(response),
+                'Device recommendation',
+                validateDeviceRecommendationCandidate,
+                true
+            );
+        } catch (error) {
+            throw markRecommendationResponseReceived(error)
+        }
     },
 
     // ==== 规约推荐 ====
     recommendSpecifications: async (
+        options: OwnedRecommendationPostOptions,
         maxRecommendations: number = 5,
         category: string = 'all',
         language: string = 'en',
-        userRequirement: string = '',
-        requestId: string = crypto.randomUUID(),
-        signal?: AbortSignal
+        userRequirement: string = ''
     ): Promise<RecommendationResponse<SpecificationRecommendation>> => {
-        return validateStandaloneRecommendationResponse<RecommendationResponse<SpecificationRecommendation>>(
-            unpack<unknown>(await api.post('/board/specs/recommend', {
-                maxRecommendations, category, language, userRequirement, requestId
-            }, {
-                signal,
-                ...SERVER_BOUNDED_REQUEST
-            })),
-            'Specification recommendation',
-            validateSpecificationRecommendationCandidate
-        );
+        const requestId = options.requestId || crypto.randomUUID()
+        const response = await api.post('/board/specs/recommend', {
+            maxRecommendations, category, language, userRequirement, requestId
+        }, {
+            signal: options.signal,
+            ...SERVER_BOUNDED_REQUEST,
+            headers: { Authorization: `Bearer ${options.authToken}` }
+        })
+        try {
+            return validateStandaloneRecommendationResponse<RecommendationResponse<SpecificationRecommendation>>(
+                unpack<unknown>(response),
+                'Specification recommendation',
+                validateSpecificationRecommendationCandidate
+            );
+        } catch (error) {
+            throw markRecommendationResponseReceived(error)
+        }
     },
 
     // ==== 可导入、未验证的场景草案推荐 ====
     recommendScenario: async (
         request: ScenarioRecommendationRequest,
-        requestId: string = crypto.randomUUID(),
-        signal?: AbortSignal
+        options: OwnedRecommendationPostOptions
     ): Promise<ScenarioRecommendationResponse> => {
-        return validateScenarioRecommendationResponse<ScenarioRecommendationResponse>(
-            unpack<unknown>(await api.post(
-                `/board/scenario/recommend?requestId=${encodeURIComponent(requestId)}`,
-                request,
-                { signal, ...SERVER_BOUNDED_REQUEST }
-            )),
-            'Scenario recommendation',
-            request
-        );
+        const requestId = options.requestId || crypto.randomUUID()
+        const response = await api.post(
+            `/board/scenario/recommend?requestId=${encodeURIComponent(requestId)}`,
+            request,
+            {
+                signal: options.signal,
+                ...SERVER_BOUNDED_REQUEST,
+                headers: { Authorization: `Bearer ${options.authToken}` }
+            }
+        )
+        try {
+            return validateScenarioRecommendationResponse<ScenarioRecommendationResponse>(
+                unpack<unknown>(response),
+                'Scenario recommendation',
+                request
+            );
+        } catch (error) {
+            throw markRecommendationResponseReceived(error)
+        }
     },
 
-    cancelRecommendation: async (requestId: string): Promise<boolean> => {
+    cancelRecommendation: async (requestId: string, authToken: string): Promise<boolean> => {
         return unpack<boolean>(await api.delete(
-            `/board/recommendations/${encodeURIComponent(requestId)}`
+            `/board/recommendations/${encodeURIComponent(requestId)}`,
+            {
+                ...INTERACTIVE_CONTROL_REQUEST,
+                headers: { Authorization: `Bearer ${authToken}` }
+            }
         ));
     },
 
-    getRecommendationStatus: async (requestId: string): Promise<InteractiveOperationStatus> => {
+    getRecommendationStatus: async (
+        requestId: string,
+        authToken: string
+    ): Promise<InteractiveOperationStatus> => {
         return validateInteractiveOperationStatus(unpack<unknown>(await api.get(
-            `/board/recommendations/${encodeURIComponent(requestId)}`
+            `/board/recommendations/${encodeURIComponent(requestId)}`,
+            {
+                ...INTERACTIVE_CONTROL_REQUEST,
+                headers: { Authorization: `Bearer ${authToken}` }
+            }
         )));
     },
 
@@ -2134,30 +2573,46 @@ export default {
      */
     fixTrace: async (
         traceId: number,
-        request?: FixRequest,
-        options: { requestId?: string; signal?: AbortSignal } = {}
+        request: FixRequest | undefined,
+        options: { authToken: string; requestId?: string; signal?: AbortSignal }
     ): Promise<FixResult> => {
         const requestId = options.requestId || crypto.randomUUID()
         return validateFixResult(
             unpack<unknown>(await api.post(
                 `/verify/traces/${traceId}/fix`,
                 request || {},
-                { ...SERVER_BOUNDED_REQUEST, params: { requestId }, signal: options.signal }
+                {
+                    ...SERVER_BOUNDED_REQUEST,
+                    headers: { Authorization: `Bearer ${options.authToken}` },
+                    params: { requestId },
+                    signal: options.signal
+                }
             )),
             traceId,
             request?.strategies || []
         );
     },
 
-    cancelFixRequest: async (requestId: string): Promise<boolean> => {
+    cancelFixRequest: async (requestId: string, authToken: string): Promise<boolean> => {
         return unpack<boolean>(await api.delete(
-            `/verify/fix-requests/${encodeURIComponent(requestId)}`
+            `/verify/fix-requests/${encodeURIComponent(requestId)}`,
+            {
+                ...INTERACTIVE_CONTROL_REQUEST,
+                headers: { Authorization: `Bearer ${authToken}` }
+            }
         ));
     },
 
-    getFixRequestStatus: async (requestId: string): Promise<InteractiveOperationStatus> => {
+    getFixRequestStatus: async (
+        requestId: string,
+        authToken: string
+    ): Promise<InteractiveOperationStatus> => {
         return validateInteractiveOperationStatus(unpack<unknown>(await api.get(
-            `/verify/fix-requests/${encodeURIComponent(requestId)}`
+            `/verify/fix-requests/${encodeURIComponent(requestId)}`,
+            {
+                ...INTERACTIVE_CONTROL_REQUEST,
+                headers: { Authorization: `Bearer ${authToken}` }
+            }
         )));
     },
 

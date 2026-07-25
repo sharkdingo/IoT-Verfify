@@ -2,8 +2,8 @@
 package cn.edu.nju.Iot_Verify.po;
 
 import java.time.LocalDateTime;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import jakarta.persistence.*;
 import lombok.Data;
@@ -53,9 +53,10 @@ public class ChatSessionPo {
             uniqueConstraints = @UniqueConstraint(
                     name = "uk_chat_pre_admission_stop_session_turn",
                     columnNames = {"session_id", "turn_id"}))
-    @Column(name = "turn_id", nullable = false, length = 64)
+    @MapKeyColumn(name = "turn_id", length = 64, nullable = false)
+    @Column(name = "stopped_at", nullable = false)
     @OnDelete(action = OnDeleteAction.CASCADE)
-    private Set<String> preAdmissionStopTurnIds = new LinkedHashSet<>();
+    private Map<String, LocalDateTime> preAdmissionStopTurns = new LinkedHashMap<>();
 
     @PrePersist
     protected void onCreate() {

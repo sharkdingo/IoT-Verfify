@@ -2,6 +2,10 @@
 import api from '@/api/http'
 import { validateStandaloneRecommendationResponse } from '@/utils/recommendationResponse'
 import { validateRuleRecommendationCandidate } from '@/utils/recommendationMaterialization'
+import {
+  markRecommendationResponseReceived,
+  type OwnedRecommendationPostOptions
+} from '@/utils/recommendationRequestRecovery'
 
 // 辅助函数：解包Result（后端返回 { code, message, data }）
 const unpack = <T>(response: any): T => {
@@ -72,13 +76,14 @@ export interface RecommendRulesResponse {
 }
 
 export const recommendRules = async (
+  options: OwnedRecommendationPostOptions,
   maxRecommendations: number = 5,
   category: string = 'all',
   language: string = 'en',
-  userRequirement: string = '',
-  requestId: string = crypto.randomUUID(),
-  signal?: AbortSignal
+  userRequirement: string = ''
 ): Promise<RecommendRulesResponse> => {
+  const requestId = options.requestId || crypto.randomUUID()
+  const signal = options.signal
   const ownedController = signal ? null : new AbortController()
   if (ownedController) {
     currentAbortController?.abort()
@@ -90,14 +95,19 @@ export const recommendRules = async (
       maxRecommendations, category, language, userRequirement, requestId
     }, {
       signal: signal || ownedController!.signal,
-      timeout: 0
+      timeout: 0,
+      headers: { Authorization: `Bearer ${options.authToken}` }
     })
-    return validateStandaloneRecommendationResponse<RecommendRulesResponse>(
-      unpack<unknown>(response),
-      'Rule recommendation',
-      validateRuleRecommendationCandidate,
-      true
-    )
+    try {
+      return validateStandaloneRecommendationResponse<RecommendRulesResponse>(
+        unpack<unknown>(response),
+        'Rule recommendation',
+        validateRuleRecommendationCandidate,
+        true
+      )
+    } catch (error) {
+      throw markRecommendationResponseReceived(error)
+    }
   } finally {
     if (ownedController && currentAbortController === ownedController) {
       currentAbortController = null

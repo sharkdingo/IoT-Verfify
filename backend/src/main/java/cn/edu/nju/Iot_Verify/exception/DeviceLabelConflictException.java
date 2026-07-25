@@ -10,7 +10,7 @@ public class DeviceLabelConflictException extends ConflictException {
     private final String suggestedLabel;
 
     public DeviceLabelConflictException(String requestedLabel, String suggestedLabel) {
-        super("Display name '" + requestedLabel + "' is already in use. No device was created; "
+        super("Display name '" + requestedLabel + "' is already in use. No device change was made; "
                 + "use '" + suggestedLabel + "' or choose another name.");
         this.requestedLabel = requestedLabel;
         this.suggestedLabel = suggestedLabel;

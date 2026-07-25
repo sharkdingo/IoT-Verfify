@@ -14,14 +14,11 @@ public class BoardLayoutMapper {
     private static final double DEFAULT_ZOOM = 1.0;
     private static final double MIN_ZOOM = 0.4;
     private static final double MAX_ZOOM = 2.0;
+    private static final double MAX_ABS_PAN = 1_000_000.0;
     private static final String DEFAULT_CONTROL_SECTION = "templates";
     private static final String DEFAULT_INSPECTOR_SECTION = "devices";
     private static final Set<String> CONTROL_SECTIONS = Set.of("devices", "templates", "rules", "specs");
     private static final Set<String> INSPECTOR_SECTIONS = Set.of("devices", "rules", "specs");
-
-    private static double d(Double value, double defaultValue) {
-        return value != null ? value : defaultValue;
-    }
 
     private static String text(String value, String defaultValue) {
         return value != null && !value.isBlank() ? value : defaultValue;
@@ -34,8 +31,8 @@ public class BoardLayoutMapper {
         BoardLayoutDto dto = new BoardLayoutDto();
 
         BoardLayoutDto.CanvasPan pan = new BoardLayoutDto.CanvasPan();
-        pan.setX(po.getCanvasPanX());
-        pan.setY(po.getCanvasPanY());
+        pan.setX(pan(po.getCanvasPanX()));
+        pan.setY(pan(po.getCanvasPanY()));
         dto.setCanvasPan(pan);
 
         dto.setCanvasZoom(zoom(po.getCanvasZoom()));
@@ -71,8 +68,8 @@ public class BoardLayoutMapper {
         return BoardLayoutPo.builder()
                 .id(id)
                 .userId(userId)
-                .canvasPanX(layout.getCanvasPan() != null ? d(layout.getCanvasPan().getX(), 0.0) : 0.0)
-                .canvasPanY(layout.getCanvasPan() != null ? d(layout.getCanvasPan().getY(), 0.0) : 0.0)
+                .canvasPanX(layout.getCanvasPan() != null ? pan(layout.getCanvasPan().getX()) : 0.0)
+                .canvasPanY(layout.getCanvasPan() != null ? pan(layout.getCanvasPan().getY()) : 0.0)
                 .canvasZoom(zoom(layout.getCanvasZoom()))
                 .controlPanelCollapsed(panelCollapsed(controlPanel))
                 .controlPanelWidth(panelWidth(controlPanel, DEFAULT_CONTROL_WIDTH))
@@ -112,6 +109,13 @@ public class BoardLayoutMapper {
             return defaultWidth;
         }
         return Math.min(520.0, Math.max(240.0, width));
+    }
+
+    private double pan(Double value) {
+        if (value == null || !Double.isFinite(value)) {
+            return 0.0;
+        }
+        return Math.min(MAX_ABS_PAN, Math.max(-MAX_ABS_PAN, value));
     }
 
     private double zoom(Double value) {

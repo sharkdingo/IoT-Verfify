@@ -87,13 +87,14 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private static final int MAX_PRE_ADMISSION_STOP_TURNS = 64;
+    private static final Duration PRE_ADMISSION_STOP_TTL = Duration.ofMinutes(2);
 
     private static final int HISTORY_CHAR_LIMIT = 4000;
     private static final int SESSION_LOCK_STRIPES = 256;
     private static final long EXECUTION_CONTROL_POLL_NANOS = Duration.ofMillis(250).toNanos();
     private static final Object[] SESSION_LOCKS = createSessionLocks();
     private static final Set<String> CONTINUATION_SENSITIVE_FIELDS = Set.of(
-            "impactToken", "confirmationToken", "domainImpactToken");
+            "impactToken", "confirmationToken", "domainImpactToken", "suggestionToken");
     private static final Set<String> TOOL_RESULT_CONTROL_FIELDS = Set.of(
             "error", "errorCode", "status", "requiresUserConfirmation",
             "resultAvailable", "resultStatus", "mutationMayHaveCommitted", "objectiveStatus");
@@ -366,7 +367,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     requireActiveUserForWrite(userId);
                     ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
                             .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-                    if (session.getPreAdmissionStopTurnIds().remove(effectiveTurnId)) {
+                    LocalDateTime stopFenceNow = databaseNow();
+                    purgeExpiredPreAdmissionStops(session, stopFenceNow);
+                    if (session.getPreAdmissionStopTurns().containsKey(effectiveTurnId)) {
+                        session.getPreAdmissionStopTurns().remove(effectiveTurnId);
                         sessionRepo.saveAndFlush(session);
                         stoppedBeforeAdmission.set(true);
                         return;
@@ -550,19 +554,20 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             transactionTemplate.executeWithoutResult(status -> {
                 ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
                         .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-                if (!hasActiveExecutionLease(session, databaseNow())) {
+                LocalDateTime now = databaseNow();
+                if (!hasActiveExecutionLease(session, now)) {
                     if (effectiveTurnId == null
                             || Objects.equals(effectiveTurnId, session.getActiveExecutionTurnId())) {
                         requestIdRef.set(session.getActiveExecutionId());
                     }
                     clearExecutionLease(session);
-                    recordPreAdmissionStopIfNeeded(session, effectiveTurnId);
+                    recordPreAdmissionStopIfNeeded(session, effectiveTurnId, now);
                     sessionRepo.saveAndFlush(session);
                     return;
                 }
                 if (effectiveTurnId != null
                         && !Objects.equals(effectiveTurnId, session.getActiveExecutionTurnId())) {
-                    recordPreAdmissionStopIfNeeded(session, effectiveTurnId);
+                    recordPreAdmissionStopIfNeeded(session, effectiveTurnId, now);
                     sessionRepo.saveAndFlush(session);
                     return;
                 }
@@ -580,14 +585,22 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
     }
 
-    private void recordPreAdmissionStopIfNeeded(ChatSessionPo session, String turnId) {
+    private void recordPreAdmissionStopIfNeeded(
+            ChatSessionPo session, String turnId, LocalDateTime now) {
         if (turnId == null || messageRepo.existsBySessionIdAndTurnId(session.getId(), turnId)) return;
-        Set<String> stoppedTurns = session.getPreAdmissionStopTurnIds();
-        if (!stoppedTurns.contains(turnId) && stoppedTurns.size() >= MAX_PRE_ADMISSION_STOP_TURNS) {
+        Map<String, LocalDateTime> stoppedTurns = session.getPreAdmissionStopTurns();
+        purgeExpiredPreAdmissionStops(session, now);
+        if (!stoppedTurns.containsKey(turnId) && stoppedTurns.size() >= MAX_PRE_ADMISSION_STOP_TURNS) {
             throw new ConflictException(
                     "Too many chat turns are waiting for pre-admission stop acknowledgement.");
         }
-        stoppedTurns.add(turnId);
+        stoppedTurns.putIfAbsent(turnId, now);
+    }
+
+    private void purgeExpiredPreAdmissionStops(ChatSessionPo session, LocalDateTime now) {
+        LocalDateTime cutoff = now.minus(PRE_ADMISSION_STOP_TTL);
+        session.getPreAdmissionStopTurns().entrySet().removeIf(entry ->
+                entry.getValue() == null || !entry.getValue().isAfter(cutoff));
     }
 
     @Override
@@ -1298,18 +1311,46 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     private String requireTurnContent(String content) {
-        if (content == null || content.isBlank()) {
+        if (content == null) {
             throw new BadRequestException("Content is required");
         }
         if (content.length() > RequestLimits.MAX_CHAT_CONTENT_LENGTH) {
             throw new BadRequestException("Content must not exceed 10000 characters");
         }
+        if (collapseTitleWhitespace(content).isEmpty()) {
+            throw new BadRequestException("Content is required");
+        }
         return content;
     }
 
     private String titleFromContent(String content) {
-        String newTitle = content.length() > 12 ? content.substring(0, 12) + "..." : content;
-        return newTitle.replace("\n", " ").trim();
+        String normalized = collapseTitleWhitespace(content);
+        if (normalized.codePointCount(0, normalized.length()) <= 12) {
+            return normalized;
+        }
+        int end = normalized.offsetByCodePoints(0, 12);
+        return normalized.substring(0, end) + "...";
+    }
+
+    private String collapseTitleWhitespace(String content) {
+        StringBuilder normalized = new StringBuilder(content.length());
+        boolean pendingSpace = false;
+        for (int index = 0; index < content.length();) {
+            int codePoint = content.codePointAt(index);
+            index += Character.charCount(codePoint);
+            if (Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint)) {
+                if (normalized.length() > 0) {
+                    pendingSpace = true;
+                }
+                continue;
+            }
+            if (pendingSpace) {
+                normalized.append(' ');
+                pendingSpace = false;
+            }
+            normalized.appendCodePoint(codePoint);
+        }
+        return normalized.toString();
     }
 
     private void touchSessionTitle(String sessionId, Long userId, String content) {
@@ -1393,30 +1434,41 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         - Explain why each suggestion matches the user's goal and the available device capabilities; do not invent a numeric confidence score
 
         Destructive Action Guidelines:
-        - Device, template, rule, specification, and saved-trace deletion is always a two-turn operation.
-        - On the first turn, call the delete tool with confirmed=false and summarize the returned target and impact.
+        - Device, template, rule, specification, and saved-trace deletion, deletion of a whole
+          verification run (delete_verification_run) or counterexample-search run (delete_fuzz_run),
+          dismissal of a failed/cancelled task, and applying a formal fix are always two-turn operations.
+        - Task dismissal (dismiss_verify_task, dismiss_simulate_task, dismiss_fuzz_task) previews the
+          terminal task and diagnostics that would be lost. It never removes an active or completed task,
+          so cancel active work first and use the matching run/trace deletion tool for saved history.
+        - On the first turn, call the relevant protected-action tool with confirmed=false and summarize the returned target and impact.
         - Stop and ask the user for explicit confirmation. Never set confirmed=true in the same user turn as the preview.
-        - Set confirmed=true only when the latest user message explicitly confirms the previously previewed deletion.
+        - Set confirmed=true only when the latest user message explicitly confirms the previously previewed action.
         - If dependencies or target data changed after preview, explain the conflict and request a new preview.
+        - fix_violation only analyzes a formal verification trace. To apply one returned signed suggestion,
+          call apply_fix with confirmed=false and that exact suggestion (plus the exact preferred range
+          selections used to generate it). After the user confirms its preview in a later turn, call
+          apply_fix with confirmed=true, traceId, and impactToken only. Never route fuzz findings into either tool.
         - A confirmation pauses only the protected step, not the user's larger task. After the confirmed mutation
           returns a usable result, resume the original objective and freely compose the remaining tools. For example,
           a requested targeted replacement may confirm a deletion, then create the replacement and repair affected
           rules or specifications. Stop again only if another protected action needs its own confirmation.
 
         Available tools:
-        - Device: add_device, delete_device, search_devices, recommend_related_devices
+        - Device: add_device, edit_device, delete_device, search_devices, recommend_related_devices
         - Environment: manage_environment
         - Rule: list_rules, manage_rule, check_duplicate_rule, check_rule_similarity, recommend_rules
         - Spec: list_specs, manage_spec, recommend_specifications
         - Scene draft and atomic apply: recommend_scenario, apply_scenario
         - Template: list_templates, add_template, delete_template, reset_default_templates
         - Verification sync: verify_model
-        - Verification async: verify_model_async, verify_task_status, cancel_verify_task
-        - Verification traces: list_traces, get_trace, delete_trace, fix_violation
+        - Verification async: verify_model_async, verify_task_status, cancel_verify_task, dismiss_verify_task
+        - Verification runs, traces, and formal fix: list_traces, get_trace, delete_trace, delete_verification_run, fix_violation, apply_fix
         - Simulation sync: simulate_model
-        - Simulation async: simulate_model_async, simulate_task_status, cancel_simulate_task
+        - Simulation async: simulate_model_async, simulate_task_status, cancel_simulate_task, dismiss_simulate_task
         - Simulation traces: list_simulation_traces, get_simulation_trace, delete_simulation_trace
+        - Counterexample search (bounded fuzz): fuzz_model_async, fuzz_task_status, cancel_fuzz_task, dismiss_fuzz_task, list_fuzz_runs, get_fuzz_run, get_fuzz_finding, delete_fuzz_run
         - Board: board_overview
+        edit_device renames, re-configures runtime, or moves/resizes one existing device (reversible, one aspect per call). manage_rule action=reorder sets the full rule execution order. Counterexample-search findings are heuristic candidate evidence, not formal traces: never route a fuzz finding into fix_violation or apply_fix, and never describe budget exhaustion as a proof that a specification holds.
         """;
 
         return LlmMessage.system(systemPromptContent);
@@ -1507,6 +1559,22 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             payload.put("toolName", destructivePending.toolName());
             payload.put("targetKey", destructivePending.targetKey());
             payload.put("impactToken", destructivePending.impactToken());
+            if ("apply_fix".equals(destructivePending.toolName())) {
+                return LlmMessage.system("""
+                        Server-authoritative confirmation context:
+                        - The latest user message confirms the exact pending formal-fix application preview.
+                        - Call apply_fix exactly once with confirmed=true, traceId set to the JSON integer
+                          represented by the numeric targetKey text, and impactToken copied exactly.
+                          Do not repeat suggestion or preferredRangeSelections; the server retained the exact
+                          signed proposal from the preview.
+                        - Do not request another preview or call a read tool first. apply_fix will re-check
+                          signature expiry, complete current-model drift, and its write fence before persistence.
+                        - After a usable result, continue only the remaining work still consistent with the latest message.
+                        Pending action: %s
+                        %s
+                        Task context: %s
+                        """.formatted(payload, userAuthority, taskContext));
+            }
             return LlmMessage.system("""
                     Server-authoritative confirmation context:
                     - The latest user message confirms the exact pending destructive preview below.
@@ -1683,10 +1751,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         - Simulation is one possible formal-model trajectory, not a prediction of the physical home. If
           modelComplete=false, say which modeled rules were omitted before interpreting the trajectory.
         - Automatic-fix output is a proposal. fixable=false or an empty suggestions list must include the returned
-          summary, strategy-attempt reasons, and warnings. A verified suggestion still is not applied; Board drift
-          and the repaired property are checked again by the separate apply action.
+          summary, strategy-attempt reasons, and warnings. A verified suggestion still is not applied; apply_fix
+          first previews it and requires a later explicit confirmation, then checks Board drift and the write fence.
         - Do not expose device node ids, rule/spec/task/trace ids, generated NuSMV names, raw formulas, or zero-based positions unless the user explicitly asks for technical details. Prefer the returned display labels and descriptions.
-        - Never expose impactToken, confirmationToken, domainImpactToken, or other opaque authorization values, even when they appear in a tool result.
+        - Never expose impactToken, confirmationToken, domainImpactToken, suggestionToken, or other opaque authorization values, even when they appear in a tool result.
         - formulaPreview is descriptive preview text. Only checkedExpression is the expression actually sent to the model checker for that run.
         - For casual non-IoT questions, answer directly.
         - Explain verification, simulation, rules, and specifications in user-friendly language.
@@ -2635,6 +2703,21 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                             : action + (preferChinese ? "：" : ": ") + description);
                 }
             }
+            if ("apply_fix".equals(functionName)) {
+                String operation = root.path("operation").asText("").trim();
+                if ("preview".equals(operation)) {
+                    return compactToolProgressDetail(preferChinese
+                            ? "已预览形式化修复建议；尚未修改规则，等待明确确认。"
+                            : "Previewed the formal fix; no rules changed and explicit confirmation is pending.");
+                }
+                if ("applied".equals(operation)) {
+                    return compactToolProgressDetail(preferChinese
+                            ? String.format("已应用形式化修复：规则数由 %d 变为 %d。",
+                            root.path("previousRuleCount").asInt(0), root.path("currentRuleCount").asInt(0))
+                            : String.format("Applied the formal fix; rule count changed from %d to %d.",
+                            root.path("previousRuleCount").asInt(0), root.path("currentRuleCount").asInt(0)));
+                }
+            }
             if ("manage_spec".equals(functionName)) {
                 String operation = root.path("operation").asText("").trim();
                 JsonNode spec = "deleted".equals(operation)
@@ -2766,7 +2849,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private String sanitizeProgressDetail(String value, int maxChars) {
         if (value == null) return null;
         String sanitized = value
-                .replaceAll("(?i)(impactToken|confirmationToken|domainImpactToken)\\s*[:=]\\s*[^,;\\s]+", "$1=[hidden]")
+                .replaceAll("(?i)(impactToken|confirmationToken|domainImpactToken|suggestionToken)\\s*[:=]\\s*[^,;\\s]+", "$1=[hidden]")
                 .replaceAll("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b", "[internal reference]")
                 .replaceAll("(?i)\\b(?:device|node|rule|spec|task|trace|simulation)[_-][a-z0-9_-]+\\b", "[internal reference]")
                 .replaceAll("(?i)\\b(?:device|node|rule|spec(?:ification)?|task|trace|simulation|session|user)\\s+id\\s*[:=#]?\\s*[a-z0-9_-]+", "[internal reference]");
@@ -2791,7 +2874,14 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 commandSet.add(new StreamResponseDto.CommandDto(
                         "REFRESH_DATA", Map.of("target", "spec_list")));
             }
-            case "manage_rule" ->
+            case "edit_device" -> {
+                commandSet.add(new StreamResponseDto.CommandDto(
+                        "REFRESH_DATA", Map.of("target", "device_list")));
+                // Renaming a device also refreshes persisted specification label snapshots.
+                commandSet.add(new StreamResponseDto.CommandDto(
+                        "REFRESH_DATA", Map.of("target", "spec_list")));
+            }
+            case "manage_rule", "apply_fix" ->
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "rule_list")));
             case "manage_spec" ->
@@ -2810,8 +2900,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "template_list")));
             case "verify_model", "verify_model_async", "simulate_model_async",
-                    "cancel_verify_task", "cancel_simulate_task",
-                    "delete_trace", "delete_simulation_trace" ->
+                    "fuzz_model_async", "cancel_verify_task", "cancel_simulate_task",
+                    "cancel_fuzz_task", "delete_trace", "delete_simulation_trace",
+                    "delete_verification_run", "delete_fuzz_run", "dismiss_verify_task",
+                    "dismiss_simulate_task", "dismiss_fuzz_task" ->
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "run_history")));
             default -> {

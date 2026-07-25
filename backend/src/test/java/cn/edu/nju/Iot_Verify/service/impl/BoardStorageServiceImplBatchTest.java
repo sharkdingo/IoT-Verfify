@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableChangeDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableUpdateRequestDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeConfigDto;
@@ -17,7 +18,10 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.BoardReplacementStaleException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
+import cn.edu.nju.Iot_Verify.exception.DeviceLabelConflictException;
+import cn.edu.nju.Iot_Verify.exception.DeviceLayoutConflictException;
 import cn.edu.nju.Iot_Verify.exception.DeviceRuntimeConflictException;
+import cn.edu.nju.Iot_Verify.exception.EnvironmentVariableConflictException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.BoardEnvironmentVariablePo;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
@@ -47,11 +51,13 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -180,6 +186,71 @@ class BoardStorageServiceImplBatchTest {
     }
 
     @Test
+    void removeRuleIfUnchanged_acceptsTheAuthoredSnapshotWithoutServerManagedFields() {
+        RulePo stored = RulePo.builder().id(9L).userId(1L).build();
+        RuleDto.Condition condition = RuleDto.Condition.builder()
+                .deviceName("sensor-1")
+                .attribute("motion")
+                .targetType("api")
+                .build();
+        RuleDto.Command command = new RuleDto.Command("alarm-1", "on", null, null);
+        RuleDto current = RuleDto.builder()
+                .id(9L)
+                .conditions(List.of(condition))
+                .command(command)
+                .ruleString("Motion starts alarm")
+                .createdAt(LocalDateTime.now())
+                .build();
+        RuleDto expected = RuleDto.builder()
+                .id(9L)
+                .conditions(List.of(condition))
+                .command(command)
+                .ruleString("Motion starts alarm")
+                .build();
+        when(ruleRepo.findByUserId(1L)).thenReturn(List.of(stored), List.of());
+        when(ruleMapper.toDto(stored)).thenReturn(current);
+
+        service.removeRuleIfUnchanged(1L, 9L, expected);
+
+        verify(ruleRepo).deleteById(9L);
+    }
+
+    @Test
+    void removeRuleIfUnchanged_rejectsAWriteWithoutAConfirmedSnapshot() {
+        assertThrows(BadRequestException.class,
+                () -> service.removeRuleIfUnchanged(1L, 9L, null));
+
+        verifyNoInteractions(ruleRepo);
+    }
+
+    @Test
+    void removeSpecIfUnchanged_rejectsChangedAuthoredSemanticsBeforeWriting() {
+        SpecificationPo stored = new SpecificationPo();
+        stored.setId("spec-9");
+        SpecificationDto current = new SpecificationDto();
+        current.setId("spec-9");
+        current.setTemplateId("1");
+        SpecificationDto expected = new SpecificationDto();
+        expected.setId("spec-9");
+        expected.setTemplateId("2");
+        when(specRepo.findByUserId(1L)).thenReturn(List.of(stored));
+        when(specificationMapper.toDto(stored)).thenReturn(current);
+
+        assertThrows(ConflictException.class,
+                () -> service.removeSpecIfUnchanged(1L, "spec-9", expected));
+
+        verify(specRepo, never()).deleteByUserId(anyLong());
+    }
+
+    @Test
+    void removeSpecIfUnchanged_rejectsAWriteWithoutAConfirmedSnapshot() {
+        assertThrows(BadRequestException.class,
+                () -> service.removeSpecIfUnchanged(1L, "spec-9", null));
+
+        verifyNoInteractions(specRepo);
+    }
+
+    @Test
     void renameNode_returnsConflictWhenAnotherTabClaimedTheRequestedLabel() {
         DeviceNodePo targetStored = DeviceNodePo.builder()
                 .id("device-1")
@@ -197,10 +268,11 @@ class BoardStorageServiceImplBatchTest {
         when(deviceNodeMapper.toDto(targetStored)).thenReturn(target);
         when(deviceNodeMapper.toDto(competingStored)).thenReturn(competing);
 
-        ConflictException error = assertThrows(ConflictException.class,
+        DeviceLabelConflictException error = assertThrows(DeviceLabelConflictException.class,
                 () -> service.renameNode(1L, "device-1", "claimed NAME", "Original name"));
 
-        assertTrue(error.getMessage().contains("now used by another device"));
+        assertEquals("claimed NAME", error.getRequestedLabel());
+        assertEquals("claimed NAME_1", error.getSuggestedLabel());
         verify(nodeRepo, never()).deleteByUserId(anyLong());
         verify(nodeRepo, never()).save(any());
         verify(nodeRepo, never()).saveAll(any());
@@ -769,8 +841,12 @@ class BoardStorageServiceImplBatchTest {
 
         EnvironmentMutationResultDto result = serviceWithEnvironment.saveEnvironmentVariables(
                 1L,
-                List.of(new BoardEnvironmentVariableDto(
-                        "temperature", null, "trusted", null)));
+                List.of(new EnvironmentVariableUpdateRequestDto(
+                        "temperature",
+                        new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                                " 27 ", " UNTRUSTED ", " PRIVATE "),
+                        new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                                null, " TRUSTED ", null))));
 
         assertEquals("updated", result.getOperation());
         assertEquals(1, result.getCurrentCount());
@@ -796,6 +872,167 @@ class BoardStorageServiceImplBatchTest {
             }
             return false;
         }));
+
+        assertThrows(ValidationException.class, () -> serviceWithEnvironment.saveEnvironmentVariables(
+                1L,
+                List.of(new EnvironmentVariableUpdateRequestDto(
+                        "temperature",
+                        new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                                "27", "untrusted", "private"),
+                        new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                                " ", "trusted", null)))));
+        verify(environmentRepo, times(1)).saveAll(any());
+    }
+
+    @Test
+    void saveEnvironmentVariables_checksEveryBaselineBeforeWritingAnyItem() {
+        BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
+                nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                null, new DeviceTemplateMapper(), null, userRepository);
+
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Climate")
+                .internalVariables(List.of(
+                        DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                .name("temperature")
+                                .isInside(false)
+                                .lowerBound(0)
+                                .upperBound(50)
+                                .trust("trusted")
+                                .privacy("public")
+                                .build(),
+                        DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                .name("humidity")
+                                .isInside(false)
+                                .lowerBound(0)
+                                .upperBound(100)
+                                .trust("trusted")
+                                .privacy("public")
+                                .build()))
+                .build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L)
+                .name("Climate")
+                .manifestJson(JsonUtils.toJson(manifest))
+                .defaultTemplate(true)
+                .build();
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("climate_1");
+        node.setTemplateName("Climate");
+        BoardEnvironmentVariablePo temperature = BoardEnvironmentVariablePo.builder()
+                .userId(1L)
+                .name("temperature")
+                .value("27")
+                .trust("untrusted")
+                .privacy("private")
+                .build();
+        BoardEnvironmentVariablePo humidity = BoardEnvironmentVariablePo.builder()
+                .userId(1L)
+                .name("humidity")
+                .value("40")
+                .trust("trusted")
+                .privacy("public")
+                .build();
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(new DeviceNodePo()));
+        when(deviceNodeMapper.toDto(any())).thenReturn(node);
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(environmentRepo.findByUserIdOrderByNameAsc(1L)).thenReturn(List.of(humidity, temperature));
+
+        List<EnvironmentVariableUpdateRequestDto> updates = List.of(
+                new EnvironmentVariableUpdateRequestDto(
+                        "temperature",
+                        new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                                "27", "untrusted", "private"),
+                        new EnvironmentVariableUpdateRequestDto.DesiredPatch("28", null, null)),
+                new EnvironmentVariableUpdateRequestDto(
+                        "humidity",
+                        new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                                "41", "trusted", "public"),
+                        new EnvironmentVariableUpdateRequestDto.DesiredPatch("42", null, null)));
+
+        EnvironmentVariableConflictException conflict = assertThrows(
+                EnvironmentVariableConflictException.class,
+                () -> serviceWithEnvironment.saveEnvironmentVariables(1L, updates));
+
+        assertEquals("humidity", conflict.getVariableName());
+        assertEquals("40", conflict.getCurrentVariable().getValue());
+        verify(environmentRepo, never()).deleteByUserId(anyLong());
+        verify(environmentRepo, never()).saveAll(any());
+    }
+
+    @Test
+    void saveEnvironmentVariables_reportsRemovedVariableAsStaleConflict() {
+        BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
+                nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                null, new DeviceTemplateMapper(), null, userRepository);
+
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("CurrentTemplate")
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("temperature")
+                        .isInside(false)
+                        .lowerBound(0)
+                        .upperBound(50)
+                        .trust("trusted")
+                        .privacy("public")
+                        .build()))
+                .build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L)
+                .name("CurrentTemplate")
+                .manifestJson(JsonUtils.toJson(manifest))
+                .defaultTemplate(true)
+                .build();
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("current_1");
+        node.setTemplateName("CurrentTemplate");
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(new DeviceNodePo()));
+        when(deviceNodeMapper.toDto(any())).thenReturn(node);
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(environmentRepo.findByUserIdOrderByNameAsc(1L)).thenReturn(List.of());
+
+        EnvironmentVariableConflictException conflict = assertThrows(
+                EnvironmentVariableConflictException.class,
+                () -> serviceWithEnvironment.saveEnvironmentVariables(1L, List.of(
+                        new EnvironmentVariableUpdateRequestDto(
+                                "removedVariable",
+                                new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                                        "old", "trusted", "public"),
+                                new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                                        "new", null, null)))));
+
+        assertEquals("removedVariable", conflict.getVariableName());
+        assertNull(conflict.getCurrentVariable());
+        verify(environmentRepo, never()).deleteByUserId(anyLong());
+        verify(environmentRepo, never()).saveAll(any());
+    }
+
+    @Test
+    void saveEnvironmentVariables_requiresANonBlankExpectedValue() {
+        BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
+                nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                null, new DeviceTemplateMapper(), null, userRepository);
+
+        ValidationException error = assertThrows(
+                ValidationException.class,
+                () -> serviceWithEnvironment.saveEnvironmentVariables(
+                        1L,
+                        List.of(new EnvironmentVariableUpdateRequestDto(
+                                "temperature",
+                                new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                                        null, "trusted", "public"),
+                                new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                                        "28", null, null)))));
+
+        assertEquals("Expected environment variable value is required",
+                error.getErrors().get("environmentUpdates[0].expected.value"));
+        verify(environmentRepo, never()).deleteByUserId(anyLong());
+        verify(environmentRepo, never()).saveAll(any());
     }
 
     @Test
@@ -843,6 +1080,19 @@ class BoardStorageServiceImplBatchTest {
         assertEquals("Hall switch", result.getCurrentDevice().getLabel());
         assertEquals(35.0, result.getCurrentDevice().getPosition().getX());
         assertEquals(190, result.getCurrentDevice().getWidth());
+
+        DeviceNodeDto.Position stalePosition = new DeviceNodeDto.Position();
+        stalePosition.setX(10.0);
+        stalePosition.setY(20.0);
+        DeviceNodeDto.Position nextPosition = new DeviceNodeDto.Position();
+        nextPosition.setX(50.0);
+        nextPosition.setY(60.0);
+        assertThrows(DeviceLayoutConflictException.class, () ->
+                serviceWithRealMapper.updateNodeLayoutIfUnchanged(
+                        1L,
+                        "switch_1",
+                        new DeviceLayoutDto(stalePosition, 176, 128),
+                        new DeviceLayoutDto(nextPosition, 200, 150)));
     }
 
     @Test
@@ -1345,7 +1595,8 @@ class BoardStorageServiceImplBatchTest {
         when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
         when(ruleMapper.toEntity(any(), anyLong())).thenAnswer(invocation -> new RulePo());
 
-        List<RuleDto> saved = service.reorderRules(1L, List.of(2L, 1L));
+        List<RuleDto> saved = service.reorderRules(
+                1L, List.of(1L, 2L), List.of(2L, 1L));
 
         assertEquals(List.of(2L, 1L), saved.stream().map(RuleDto::getId).toList());
         ArgumentCaptor<RulePo> captor = ArgumentCaptor.forClass(RulePo.class);
@@ -1354,6 +1605,22 @@ class BoardStorageServiceImplBatchTest {
                 .map(RulePo::getExecutionOrder).toList());
         assertEquals(List.of(2L, 1L), captor.getAllValues().stream()
                 .map(RulePo::getId).toList());
+    }
+
+    @Test
+    void reorderRules_rejectsWhenAnotherWriterAlreadyChangedTheOrder() {
+        RulePo firstPo = RulePo.builder().id(1L).userId(1L).executionOrder(1).build();
+        RulePo secondPo = RulePo.builder().id(2L).userId(1L).executionOrder(0).build();
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L))
+                .thenReturn(List.of(secondPo, firstPo));
+        when(ruleMapper.toDto(firstPo)).thenReturn(RuleDto.builder().id(1L).build());
+        when(ruleMapper.toDto(secondPo)).thenReturn(RuleDto.builder().id(2L).build());
+
+        ConflictException failure = assertThrows(ConflictException.class, () ->
+                service.reorderRules(1L, List.of(1L, 2L), List.of(2L, 1L)));
+
+        assertTrue(failure.getMessage().contains("order changed"));
+        verify(ruleRepo, never()).save(any());
     }
 
     @Test

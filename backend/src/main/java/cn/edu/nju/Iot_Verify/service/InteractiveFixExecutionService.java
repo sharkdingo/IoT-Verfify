@@ -93,6 +93,15 @@ public class InteractiveFixExecutionService {
         return cancelled || remotelySignalled;
     }
 
+    public void requestUserExecutionStop(Long userId) {
+        if (distributedStore != null) {
+            distributedStore.requestUserCancellation("fix", userId);
+        }
+        active.forEach((key, execution) -> {
+            if (Objects.equals(key.userId(), userId)) execution.cancel(false);
+        });
+    }
+
     public InteractiveOperationStatusDto getStatus(Long userId, String requestId) {
         purgeExpiredStatuses();
         String id = validateRequestId(requestId);
@@ -163,6 +172,7 @@ public class InteractiveFixExecutionService {
         private final AtomicReference<ExecutionState> state =
                 new AtomicReference<>(ExecutionState.WAITING);
         private final AtomicBoolean cleaned = new AtomicBoolean(false);
+        private final AtomicBoolean distributedCompletionPublished = new AtomicBoolean(false);
         private final AtomicReference<InteractiveOperationStage> stage =
                 new AtomicReference<>(InteractiveOperationStage.QUEUED);
         private final DistributedInteractiveExecutionStore.Lease distributedLease;
@@ -182,7 +192,12 @@ public class InteractiveFixExecutionService {
                     distributedStore.update(distributedLease, ExecutionState.RUNNING.name(), stage.get());
                 }
                 try {
-                    return operation.call();
+                    T result = operation.call();
+                    if (distributedStore != null) {
+                        distributedStore.completeSuccessfully(distributedLease, stage.get());
+                        distributedCompletionPublished.set(true);
+                    }
+                    return result;
                 } finally {
                     state.set(ExecutionState.FINISHED);
                     cleanup();
@@ -223,7 +238,9 @@ public class InteractiveFixExecutionService {
             if (!cleaned.compareAndSet(false, true)) return;
             recentlyCompleted.put(key, new RecentStatus(
                     status(), System.nanoTime() + COMPLETED_STATUS_TTL_NANOS));
-            if (distributedStore != null) distributedStore.finish(distributedLease, stage.get());
+            if (distributedStore != null && !distributedCompletionPublished.get()) {
+                distributedStore.finish(distributedLease, stage.get());
+            }
             active.remove(key, this);
         }
     }

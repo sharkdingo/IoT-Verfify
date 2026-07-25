@@ -1,22 +1,43 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import {
+  BoardMutationAdmissionCancelledError,
   collectBundledEnvironmentNames,
   clampFloatingMenuPosition,
+  confirmHistoryDeletion,
+  continueAfterDeviceDialogApproval,
+  getConfirmedBoardItemStatus,
   createLatestBoardRequestGuard,
   createScopedBoardInvalidationBinding,
   focusCollapsedNarrowPanelToggle,
+  handleRecommendationApplySceneChange,
+  hasRecommendationSceneChanged,
   hasFrozenBundledTokenSource,
   invalidateFuzzingResultRequests,
   isAccountDeletionOutcomeUncertain,
   loadBoardResultWithRetry,
   reconcileBoardNodeSnapshot,
   reconcileRenameDialogSnapshot,
+  recommendationSceneFingerprint,
+  revalidateHistoricalPlaybackAdmission,
   requestScenarioRecommendationWithTargets,
+  runAdmittedBoardMutation,
+  runTrackedBoardMutation,
   resolveCurrentBoardNode,
+  resolveDeletionReviewDeviceDialogRestore,
   shouldRedirectNarrowPanelFocus
 } from './Board.vue'
 import { createPagedRequestCoordinator } from '@/utils/pagedRequestCoordinator'
+import {
+  isRecommendationPostOutcomeUnknown,
+  isRecommendationRequestActive,
+  markRecommendationResponseReceived,
+  planRecommendationRecoveryAfterStatusFailure,
+  prepareOwnedRecommendationForLogout,
+  refreshRecommendationOwnerCredential,
+  requestIdAfterTerminalSettlement
+} from '@/utils/recommendationRequestRecovery'
+import { sceneTemplatesCoveredByCatalog } from '@/utils/sceneTemplateCoverage'
 import ScenarioObjectiveIssues from '@/components/ScenarioObjectiveIssues.vue'
 
 describe('Board empty scenario objective feedback', () => {
@@ -40,6 +61,389 @@ describe('Board empty scenario objective feedback', () => {
     expect(wrapper.text()).toContain('No devices were generated.')
     expect(wrapper.text()).toContain('No rules were generated.')
     expect(wrapper.text()).toContain('No specifications were generated.')
+  })
+})
+
+describe('Board history deletion confirmation', () => {
+  it('keeps an in-flight detail request current when deletion is cancelled', async () => {
+    const invalidate = vi.fn()
+
+    await expect(confirmHistoryDeletion(
+      () => Promise.reject('cancel'),
+      invalidate
+    )).rejects.toBe('cancel')
+
+    expect(invalidate).not.toHaveBeenCalled()
+  })
+
+  it('invalidates in-flight detail requests only after deletion is confirmed', async () => {
+    const invalidate = vi.fn()
+
+    await confirmHistoryDeletion(() => Promise.resolve(), invalidate)
+
+    expect(invalidate).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Board historical playback admission', () => {
+  it('waits for the existing mutation queue before admitting playback', async () => {
+    let releaseMutation!: () => void
+    const pendingMutation = new Promise<void>(resolve => { releaseMutation = resolve })
+    const recheckUiAdmission = vi.fn(() => true)
+
+    const admission = revalidateHistoricalPlaybackAdmission({
+      waitForPendingMutations: () => pendingMutation,
+      isRequestCurrent: () => true,
+      initialMutationEpoch: 3,
+      currentMutationEpoch: () => 3,
+      recheckUiAdmission
+    })
+
+    expect(recheckUiAdmission).not.toHaveBeenCalled()
+    releaseMutation()
+    await expect(admission).resolves.toBe('admitted')
+    expect(recheckUiAdmission).toHaveBeenCalledOnce()
+  })
+
+  it('rejects playback when a board mutation was enqueued while history loaded', async () => {
+    let mutationEpoch = 7
+    let releaseMutation!: () => void
+    const pendingMutation = new Promise<void>(resolve => { releaseMutation = resolve })
+    const recheckUiAdmission = vi.fn(() => true)
+    const admission = revalidateHistoricalPlaybackAdmission({
+      waitForPendingMutations: () => pendingMutation,
+      isRequestCurrent: () => true,
+      initialMutationEpoch: mutationEpoch,
+      currentMutationEpoch: () => mutationEpoch,
+      recheckUiAdmission
+    })
+
+    mutationEpoch += 1
+    releaseMutation()
+
+    await expect(admission).resolves.toBe('board-changed')
+    expect(recheckUiAdmission).not.toHaveBeenCalled()
+  })
+
+  it('rejects playback when an editor opens before the loaded history is presented', async () => {
+    let editorOpen = false
+    let releaseMutation!: () => void
+    const pendingMutation = new Promise<void>(resolve => { releaseMutation = resolve })
+    const admission = revalidateHistoricalPlaybackAdmission({
+      waitForPendingMutations: () => pendingMutation,
+      isRequestCurrent: () => true,
+      initialMutationEpoch: 11,
+      currentMutationEpoch: () => 11,
+      recheckUiAdmission: () => !editorOpen
+    })
+
+    editorOpen = true
+    releaseMutation()
+
+    await expect(admission).resolves.toBe('ui-blocked')
+  })
+
+  it('rejects playback when its detail request becomes stale while mutations drain', async () => {
+    let requestCurrent = true
+    let releaseMutation!: () => void
+    const pendingMutation = new Promise<void>(resolve => { releaseMutation = resolve })
+    const recheckUiAdmission = vi.fn(() => true)
+    const admission = revalidateHistoricalPlaybackAdmission({
+      waitForPendingMutations: () => pendingMutation,
+      isRequestCurrent: () => requestCurrent,
+      initialMutationEpoch: 5,
+      currentMutationEpoch: () => 5,
+      recheckUiAdmission
+    })
+
+    requestCurrent = false
+    releaseMutation()
+
+    await expect(admission).resolves.toBe('request-stale')
+    expect(recheckUiAdmission).not.toHaveBeenCalled()
+  })
+
+  it('does not wait on the mutation queue after the history request becomes stale', async () => {
+    const waitForPendingMutations = vi.fn(() => Promise.resolve())
+
+    await expect(revalidateHistoricalPlaybackAdmission({
+      waitForPendingMutations,
+      isRequestCurrent: () => false,
+      initialMutationEpoch: 2,
+      currentMutationEpoch: () => 2,
+      recheckUiAdmission: () => true
+    })).resolves.toBe('request-stale')
+
+    expect(waitForPendingMutations).not.toHaveBeenCalled()
+  })
+})
+
+describe('Board recommendation scene ownership', () => {
+  const scene = {
+    deviceTemplates: [
+      { id: 1, name: 'Switch', manifest: { Name: 'Switch', Modes: ['on', 'off'] } },
+      { id: 2, name: 'Sensor', manifest: { Name: 'Sensor', Modes: [] } }
+    ],
+    nodes: [
+      {
+        id: 'switch-1',
+        templateName: 'Switch',
+        label: 'Hall switch',
+        state: 'off',
+        position: { x: 10, y: 20 },
+        width: 176,
+        height: 128,
+        variables: [
+          { name: 'power', value: '0' },
+          { name: 'voltage', value: '220' }
+        ]
+      }
+    ],
+    environmentVariables: [
+      { name: 'temperature', value: '20', trust: 'trusted', privacy: 'public' },
+      { name: 'humidity', value: '40', trust: 'trusted', privacy: 'public' }
+    ],
+    rules: [
+      { id: '1', name: 'First rule' },
+      { id: '2', name: 'Second rule' }
+    ],
+    specifications: [
+      { id: 'spec-1', templateId: '1' },
+      { id: 'spec-2', templateId: '2' }
+    ]
+  }
+
+  it('keeps recommendations for layout-only changes and unordered response collections', () => {
+    const reordered = {
+      ...scene,
+      deviceTemplates: [...scene.deviceTemplates].reverse(),
+      nodes: scene.nodes.map(node => ({
+        ...node,
+        position: { x: 900, y: 500 },
+        width: 80,
+        height: 60,
+        variables: [...node.variables].reverse()
+      })),
+      environmentVariables: [...scene.environmentVariables].reverse(),
+      specifications: [...scene.specifications].reverse()
+    }
+
+    expect(hasRecommendationSceneChanged(scene, reordered)).toBe(false)
+  })
+
+  it('fences an old recommendation after a changed authoritative refresh', () => {
+    const requestGuard = createLatestBoardRequestGuard()
+    const requestEpoch = requestGuard.begin()
+    const refreshed = {
+      ...scene,
+      nodes: scene.nodes.map(node => ({ ...node, state: 'on' }))
+    }
+
+    if (hasRecommendationSceneChanged(scene, refreshed)) requestGuard.invalidate()
+
+    expect(requestGuard.isCurrent(requestEpoch)).toBe(false)
+  })
+
+  it('treats rule execution-order changes as semantic changes', () => {
+    expect(hasRecommendationSceneChanged(scene, {
+      ...scene,
+      rules: [...scene.rules].reverse()
+    })).toBe(true)
+  })
+
+  it('does not invalidate on the initial authoritative hydration', () => {
+    expect(hasRecommendationSceneChanged(null, scene)).toBe(false)
+  })
+
+  it('does not start a queued mutation after its recommendation generation expires', async () => {
+    let sceneGeneration = 4
+    const requestSceneGeneration = sceneGeneration
+    const addNodes = vi.fn().mockResolvedValue({})
+    sceneGeneration += 1
+
+    await expect(runAdmittedBoardMutation(
+      addNodes,
+      () => requestSceneGeneration === sceneGeneration
+    )).rejects.toBeInstanceOf(BoardMutationAdmissionCancelledError)
+    expect(addNodes).not.toHaveBeenCalled()
+  })
+
+  it('expires an in-flight recommendation after a local environment change', async () => {
+    let currentScene = scene
+    let recommendationGeneration = 7
+    const requestGeneration = recommendationGeneration
+
+    await runTrackedBoardMutation(
+      async () => {
+        currentScene = {
+          ...currentScene,
+          environmentVariables: currentScene.environmentVariables.map(variable =>
+            variable.name === 'temperature' ? { ...variable, value: '21' } : variable)
+        }
+      },
+      recommendationSceneFingerprint(currentScene),
+      () => recommendationSceneFingerprint(currentScene),
+      () => { recommendationGeneration += 1 }
+    )
+
+    expect(requestGeneration).not.toBe(recommendationGeneration)
+  })
+
+  it('invalidates displayed recommendations after a local device or rule change', async () => {
+    let currentScene = scene
+    const invalidate = vi.fn()
+
+    await runTrackedBoardMutation(
+      async () => {
+        currentScene = {
+          ...currentScene,
+          nodes: currentScene.nodes.map(node => ({ ...node, state: 'on' })),
+          rules: [...currentScene.rules, { id: '3', name: 'Third rule' }]
+        }
+      },
+      recommendationSceneFingerprint(currentScene),
+      () => recommendationSceneFingerprint(currentScene),
+      invalidate
+    )
+
+    expect(invalidate).toHaveBeenCalledOnce()
+  })
+
+  it('does not mark a failed recommendation as applied after an unrelated refresh changes the scene', async () => {
+    let currentScene = scene
+    const preserveApplied = vi.fn()
+    const invalidate = vi.fn()
+
+    await runTrackedBoardMutation(
+      async () => {
+        currentScene = {
+          ...currentScene,
+          environmentVariables: currentScene.environmentVariables.map(variable =>
+            variable.name === 'temperature' ? { ...variable, value: '23' } : variable)
+        }
+      },
+      recommendationSceneFingerprint(currentScene),
+      () => recommendationSceneFingerprint(currentScene),
+      () => handleRecommendationApplySceneChange(false, preserveApplied, invalidate)
+    )
+
+    expect(preserveApplied).not.toHaveBeenCalled()
+    expect(invalidate).toHaveBeenCalledOnce()
+  })
+
+  it('retains only the applied confirmation after a confirmed recommendation changes the scene', async () => {
+    let currentScene = scene
+    const preserveApplied = vi.fn()
+    const invalidate = vi.fn()
+
+    await runTrackedBoardMutation(
+      async () => {
+        currentScene = {
+          ...currentScene,
+          rules: [...currentScene.rules, { id: '3', name: 'Applied recommendation' }]
+        }
+      },
+      recommendationSceneFingerprint(currentScene),
+      () => recommendationSceneFingerprint(currentScene),
+      () => handleRecommendationApplySceneChange(true, preserveApplied, invalidate)
+    )
+
+    expect(preserveApplied).toHaveBeenCalledOnce()
+    expect(invalidate).not.toHaveBeenCalled()
+  })
+})
+
+describe('Board recommendation request recovery', () => {
+  it('keeps a no-response POST outcome active and blocks allocation of a replacement id', () => {
+    expect(isRecommendationPostOutcomeUnknown(new Error('transport lost'))).toBe(true)
+    expect(isRecommendationRequestActive(false, 'request-with-unknown-outcome')).toBe(true)
+    expect(isRecommendationRequestActive(false, null)).toBe(false)
+  })
+
+  it('treats HTTP and validated-response failures as terminal response evidence', () => {
+    expect(isRecommendationPostOutcomeUnknown({ response: { status: 503 } })).toBe(false)
+    expect(isRecommendationPostOutcomeUnknown(
+      markRecommendationResponseReceived(new Error('invalid response body'))
+    )).toBe(false)
+  })
+
+  it('retains the owner token across an account switch but accepts same-owner renewal', () => {
+    const owner = { userId: 7, authToken: 'alice-original-token' }
+
+    expect(refreshRecommendationOwnerCredential(owner, 8, 'bob-token')).toBe(owner)
+    expect(refreshRecommendationOwnerCredential(owner, 7, 'alice-renewed-token')).toEqual({
+      userId: 7,
+      authToken: 'alice-renewed-token'
+    })
+  })
+
+  it('accepts FINISHED status during logout when cancellation returns false', async () => {
+    const cancel = vi.fn().mockResolvedValue(false)
+    const readStatus = vi.fn().mockResolvedValue({
+      requestId: 'recommendation-logout-1',
+      state: 'FINISHED',
+      stage: 'FINALIZING',
+      elapsedMs: 120
+    })
+    const onStatusFinished = vi.fn()
+
+    await expect(prepareOwnedRecommendationForLogout({
+      requestId: 'recommendation-logout-1',
+      authToken: 'alice-owner-token',
+      cancel,
+      readStatus,
+      waitBeforeRetry: vi.fn().mockResolvedValue(undefined),
+      shouldContinue: () => true,
+      hasTerminalEvidence: () => false,
+      onStatusFinished,
+      maxAttempts: 1
+    })).resolves.toBe('ready')
+
+    expect(cancel).toHaveBeenCalledWith('recommendation-logout-1', 'alice-owner-token')
+    expect(readStatus).toHaveBeenCalledWith('recommendation-logout-1', 'alice-owner-token')
+    expect(onStatusFinished).toHaveBeenCalledOnce()
+  })
+
+  it('keeps logout outcome unknown when owner-auth cancellation and status cannot prove a terminal state', async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error('network unavailable'))
+    const readStatus = vi.fn().mockRejectedValue(new Error('network unavailable'))
+
+    await expect(prepareOwnedRecommendationForLogout({
+      requestId: 'recommendation-logout-2',
+      authToken: 'alice-owner-token',
+      cancel,
+      readStatus,
+      waitBeforeRetry: vi.fn().mockResolvedValue(undefined),
+      shouldContinue: () => true,
+      hasTerminalEvidence: () => false,
+      maxAttempts: 1
+    })).resolves.toBe('outcome-unknown')
+
+    expect(cancel).toHaveBeenCalledWith('recommendation-logout-2', 'alice-owner-token')
+    expect(readStatus).toHaveBeenCalledWith('recommendation-logout-2', 'alice-owner-token')
+  })
+
+  it('does not let an old POST settlement clear a newer request', () => {
+    expect(requestIdAfterTerminalSettlement('new-request', 'old-request')).toBe('new-request')
+    expect(requestIdAfterTerminalSettlement('old-request', 'old-request')).toBeNull()
+  })
+
+  it('never releases recommendation ownership because status reads keep failing', () => {
+    let consecutiveFailures = 0
+    let lastPlan = planRecommendationRecoveryAfterStatusFailure(consecutiveFailures)
+    const firstRetryDelay = lastPlan.retryDelayMs
+
+    for (let attempt = 1; attempt < 100; attempt += 1) {
+      consecutiveFailures = lastPlan.consecutiveFailures
+      lastPlan = planRecommendationRecoveryAfterStatusFailure(consecutiveFailures)
+    }
+
+    expect(lastPlan).toMatchObject({
+      consecutiveFailures: 100,
+      releaseTracking: false
+    })
+    expect(lastPlan.retryDelayMs).toBeGreaterThan(firstRetryDelay)
+    expect(isRecommendationRequestActive(true, 'still-owned-request')).toBe(true)
   })
 })
 
@@ -149,6 +553,55 @@ describe('Board node snapshot reconciliation', () => {
   })
 })
 
+describe('Board invalidated deletion-review restoration', () => {
+  const currentNode = { id: 'device-a', label: 'Renamed elsewhere' }
+
+  it('restores the originating details only after a board change for the same live node', () => {
+    expect(resolveDeletionReviewDeviceDialogRestore(
+      'board-changed',
+      [currentNode],
+      'device-a',
+      'device-a'
+    )).toBe(currentNode)
+  })
+
+  it('does not reopen details after cancellation or a submitted deletion', () => {
+    expect(resolveDeletionReviewDeviceDialogRestore(
+      'cancelled',
+      [currentNode],
+      'device-a',
+      'device-a'
+    )).toBeNull()
+    expect(resolveDeletionReviewDeviceDialogRestore(
+      'submitted',
+      [currentNode],
+      'device-a',
+      'device-a'
+    )).toBeNull()
+  })
+
+  it('does not restore a non-dialog review, a different target, or a deleted node', () => {
+    expect(resolveDeletionReviewDeviceDialogRestore(
+      'board-changed',
+      [currentNode],
+      null,
+      'device-a'
+    )).toBeNull()
+    expect(resolveDeletionReviewDeviceDialogRestore(
+      'board-changed',
+      [currentNode],
+      'device-a',
+      'device-b'
+    )).toBeNull()
+    expect(resolveDeletionReviewDeviceDialogRestore(
+      'board-changed',
+      [],
+      'device-a',
+      'device-a'
+    )).toBeNull()
+  })
+})
+
 describe('Board rename-dialog snapshot reconciliation', () => {
   it('preserves an unsaved name and its CAS baseline while rebinding the current node', () => {
     const stale = { id: 'a', label: 'Original' }
@@ -176,6 +629,119 @@ describe('Board rename-dialog snapshot reconciliation', () => {
       originalLabel: 'Renamed elsewhere'
     })
     expect(reconcileRenameDialogSnapshot([], draft)).toBeNull()
+  })
+
+  it('does not replace device details with rename until the draft-close guard approves', async () => {
+    const transition = vi.fn()
+    const declined = {
+      prepareClose: vi.fn().mockResolvedValue(false)
+    }
+
+    await expect(continueAfterDeviceDialogApproval(declined, transition)).resolves.toBe(false)
+    expect(declined.prepareClose).toHaveBeenCalledOnce()
+    expect(transition).not.toHaveBeenCalled()
+
+    const approved = {
+      prepareClose: vi.fn().mockResolvedValue(true)
+    }
+    await expect(continueAfterDeviceDialogApproval(approved, transition)).resolves.toBe(true)
+    expect(transition).toHaveBeenCalledOnce()
+  })
+
+  it('does not bypass the draft-close guard when the async dialog instance is unavailable', async () => {
+    const transition = vi.fn()
+
+    await expect(continueAfterDeviceDialogApproval(null, transition)).resolves.toBe(false)
+    expect(transition).not.toHaveBeenCalled()
+  })
+})
+
+describe('Board destructive-confirmation fencing', () => {
+  const originalRule = {
+    id: 'rule_1',
+    name: 'Turn on light',
+    sources: [{ fromId: 'sensor_1', fromApi: 'motion', itemType: 'api' }],
+    toId: 'light_1',
+    toApi: 'on'
+  }
+
+  it('rejects a confirmation after the scene generation changes', () => {
+    expect(getConfirmedBoardItemStatus(
+      3,
+      4,
+      false,
+      [originalRule],
+      originalRule.id,
+      originalRule
+    )).toBe('scene-changed')
+  })
+
+  it('rejects a reused id when the item content changed during confirmation', () => {
+    const replacement = { ...originalRule, name: 'Turn off light' }
+    expect(getConfirmedBoardItemStatus(
+      3,
+      3,
+      false,
+      [replacement],
+      originalRule.id,
+      originalRule
+    )).toBe('item-changed')
+  })
+
+  it('accepts the exact item snapshot when the scene is still current', () => {
+    expect(getConfirmedBoardItemStatus(
+      3,
+      3,
+      false,
+      [{ ...originalRule }],
+      originalRule.id,
+      { ...originalRule }
+    )).toBe('current')
+  })
+
+  it('can compare only authored fields when a server display cache changes', () => {
+    const expected = {
+      id: 'rule_1',
+      name: 'Turn on light',
+      formula: 'old display cache'
+    }
+    const current = {
+      ...expected,
+      formula: 'new display cache'
+    }
+    const authored = (rule: typeof expected) => ({ id: rule.id, name: rule.name })
+
+    expect(getConfirmedBoardItemStatus(
+      3,
+      3,
+      false,
+      [current],
+      expected.id,
+      expected,
+      authored
+    )).toBe('current')
+  })
+})
+
+describe('Board scene-template response reconciliation', () => {
+  const sensor = { name: 'Sensor', manifest: { Name: 'Sensor' } }
+
+  it('requires every referenced scene template to exist after a successful batch response', () => {
+    expect(sceneTemplatesCoveredByCatalog([sensor], [], [])).toBe(false)
+    expect(sceneTemplatesCoveredByCatalog([sensor], [], [{ ...sensor, id: 7 }])).toBe(true)
+  })
+
+  it('rejects a same-name template with different semantics and unrelated created templates', () => {
+    expect(sceneTemplatesCoveredByCatalog(
+      [sensor],
+      [{ name: 'Sensor', manifest: { Name: 'Sensor', InitState: 'offline' } }],
+      []
+    )).toBe(false)
+    expect(sceneTemplatesCoveredByCatalog(
+      [sensor],
+      [sensor],
+      [{ name: 'Other', manifest: { Name: 'Other' } }]
+    )).toBe(false)
   })
 })
 

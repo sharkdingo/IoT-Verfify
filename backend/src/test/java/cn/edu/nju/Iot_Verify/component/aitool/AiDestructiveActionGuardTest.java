@@ -177,4 +177,47 @@ class AiDestructiveActionGuardTest {
         assertEquals("CONFIRMATION_MISSING",
                 issuer.consume(1L, "delete_trace", "17", token, preview).errorCode());
     }
+
+    @Test
+    void storedAction_canBeConsumedExactlyOnceAcrossInstances() {
+        InMemoryAiSessionStateStore sharedState = new InMemoryAiSessionStateStore();
+        Clock clock = Clock.fixed(Instant.parse("2026-07-17T00:00:00Z"), ZoneOffset.UTC);
+        AiDestructiveActionGuard issuer = new AiDestructiveActionGuard(
+                new ObjectMapper(), sharedState, clock);
+        AiDestructiveActionGuard consumer = new AiDestructiveActionGuard(
+                new ObjectMapper(), sharedState, clock);
+        Map<String, Object> action = Map.of("traceId", 19, "strategy", "remove");
+        String token = issuer.issueStoredAction(1L, "apply_fix", "19", action);
+        UserContextHolder.setDestructiveActionConfirmed(true);
+
+        AiDestructiveActionGuard.ConsumeResult result =
+                consumer.consumeStoredAction(1L, "apply_fix", "19", token);
+
+        assertTrue(result.approved());
+        assertEquals(19, result.actionPayload().path("traceId").asInt());
+        assertEquals("remove", result.actionPayload().path("strategy").asText());
+        assertEquals("CONFIRMATION_MISSING",
+                issuer.consumeStoredAction(1L, "apply_fix", "19", token).errorCode());
+    }
+
+    @Test
+    void storedAction_expiresWithoutReturningItsPayload() {
+        InMemoryAiSessionStateStore sharedState = new InMemoryAiSessionStateStore();
+        Instant issuedAt = Instant.parse("2026-07-17T00:00:00Z");
+        AiDestructiveActionGuard issuer = new AiDestructiveActionGuard(
+                new ObjectMapper(), sharedState, Clock.fixed(issuedAt, ZoneOffset.UTC));
+        String token = issuer.issueStoredAction(
+                1L, "apply_fix", "23", Map.of("traceId", 23));
+        AiDestructiveActionGuard expiredConsumer = new AiDestructiveActionGuard(
+                new ObjectMapper(), sharedState,
+                Clock.fixed(issuedAt.plusSeconds(16 * 60), ZoneOffset.UTC));
+        UserContextHolder.setDestructiveActionConfirmed(true);
+
+        AiDestructiveActionGuard.ConsumeResult result =
+                expiredConsumer.consumeStoredAction(1L, "apply_fix", "23", token);
+
+        assertFalse(result.approved());
+        assertEquals("CONFIRMATION_MISSING", result.errorCode());
+        assertEquals(null, result.actionPayload());
+    }
 }

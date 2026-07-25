@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
@@ -134,6 +135,7 @@ class VerificationAsyncToolsTest {
         assertEquals(false, json.path("enablePrivacy").asBoolean());
         assertEquals(1, json.path("modelSnapshot").path("deviceCount").asInt());
         assertTrue(json.path("modelSnapshot").path("templatesFrozen").asBoolean());
+        assertTrue(json.path("taskAccepted").asBoolean());
         assertTrue(json.path("message").asText().contains("completion is not implied"));
         verify(verificationService).submitVerificationWithTemplateSnapshot(eq(1L), any(), any());
         verify(verificationService).getTask(1L, 100L);
@@ -164,12 +166,82 @@ class VerificationAsyncToolsTest {
     }
 
     @Test
+    void verifyModelAsync_whenDispatchCleanupIsUnknown_shouldPreserveTaskId() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        when(boardDataConverter.getModelInputSnapshot(1L)).thenReturn(snapshot(device, spec));
+        doThrow(new AsyncTaskDispatchOutcomeUnknownException(
+                "verification", 103L, new IllegalStateException("cleanup failed")))
+                .when(verificationService)
+                .submitVerificationWithTemplateSnapshot(eq(1L), any(), any());
+
+        JsonNode json = objectMapper.readTree(verifyModelAsyncTool.execute("{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertEquals("TASK_DISPATCH_OUTCOME_UNKNOWN", json.path("errorCode").asText());
+        assertTrue(json.path("mutationMayHaveCommitted").asBoolean());
+        assertEquals(103L, json.path("taskId").asLong());
+        assertEquals("verify_task_status", json.path("statusTool").asText());
+        assertTrue(json.path("message").asText().contains("before retrying"));
+        verify(verificationService).submitVerificationWithTemplateSnapshot(eq(1L), any(), any());
+        verifyNoMoreInteractions(verificationService);
+    }
+
+    @Test
     void verifyTaskStatus_missingTaskId_shouldReturnError() throws Exception {
         String result = verifyTaskStatusTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);
         assertTrue(result.contains("taskId"));
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
+    }
+
+    @Test
+    void verifyModelAsync_whenAcceptedTaskStatusCannotBeRead_shouldPreserveTaskId() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        when(boardDataConverter.getModelInputSnapshot(1L)).thenReturn(snapshot(device, spec));
+        when(verificationService.submitVerificationWithTemplateSnapshot(eq(1L), any(), any()))
+                .thenReturn(101L);
+        when(verificationService.getTask(1L, 101L))
+                .thenThrow(new ServiceUnavailableException("status store unavailable"));
+
+        JsonNode json = objectMapper.readTree(verifyModelAsyncTool.execute("{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertEquals("ACCEPTED_TASK_STATUS_UNAVAILABLE", json.path("errorCode").asText());
+        assertTrue(json.path("taskAccepted").asBoolean());
+        assertTrue(json.path("mutationMayHaveCommitted").asBoolean());
+        assertEquals(101L, json.path("taskId").asLong());
+        assertEquals("verify_task_status", json.path("statusTool").asText());
+        assertTrue(json.path("message").asText().contains("do not submit a duplicate"));
+        verify(verificationService).submitVerificationWithTemplateSnapshot(eq(1L), any(), any());
+        verify(verificationService).getTask(1L, 101L);
+    }
+
+    @Test
+    void verifyModelAsync_whenAcceptedResponseSerializationFails_shouldPreserveTaskId() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        when(boardDataConverter.getModelInputSnapshot(1L)).thenReturn(snapshot(device, spec));
+        when(verificationService.submitVerificationWithTemplateSnapshot(eq(1L), any(), any()))
+                .thenReturn(102L);
+        when(verificationService.getTask(1L, 102L)).thenReturn(VerificationTaskDto.builder()
+                .id(102L).status("PENDING").progress(0).build());
+        ObjectMapper failingMapper = spy(new ObjectMapper().findAndRegisterModules());
+        doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
+        VerifyModelAsyncTool tool = new VerifyModelAsyncTool(
+                boardDataConverter, verificationService, failingMapper);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertTrue(json.path("taskAccepted").asBoolean());
+        assertEquals(102L, json.path("taskId").asLong());
+        assertEquals("verify_task_status", json.path("statusTool").asText());
     }
 
     @Test

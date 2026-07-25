@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> Verified against code on 2026-07-22. Source:
+> Verified against code on 2026-07-25. Source:
 > `backend/src/main/resources/application.yaml`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/component/nusmv/`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/VerificationServiceImpl.java`,
@@ -27,10 +27,14 @@ Unable to connect to Redis at localhost:6379
 
 Redis is optional and runs in fail-open mode: a failed connection does not stop the backend
 from starting. Logout token revocation stops working, and per-user operation admission plus
-interactive recommendation/fix status and cancellation fall back to process-local behavior.
-Previously issued tokens remain valid until they expire, and separately load-balanced backend
-instances cannot coordinate those operations while Redis is unavailable. See the authoritative
-[Redis behavior](../getting-started/configuration.md#redis) for active-lease handling.
+interactive recommendation/fix status and cancellation can fall back to process-local behavior.
+For recommendation/fix work, that fallback is allowed only when Redis is unavailable before the
+atomic ownership command is attempted. A lost/unknown command result or a success response that
+arrives after its lease TTL returns `503` and attempts token-fenced cleanup; retry with a fresh
+request id rather than assuming no operation was admitted. Previously issued tokens remain valid
+until they expire, and separately load-balanced backend instances cannot coordinate local-fallback
+operations while Redis is unavailable. See the authoritative [Redis behavior](../getting-started/configuration.md#redis)
+for active-lease handling.
 
 - To restore full behavior, start Redis (`redis-server`, or `docker run -d -p 6379:6379 redis:alpine`).
 - Otherwise it is safe to continue on one backend instance with the degraded behavior above.

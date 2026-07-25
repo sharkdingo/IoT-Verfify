@@ -131,7 +131,7 @@ describe('CanvasBoard device context actions', () => {
     const target = {
       id: 'light-1',
       templateName: 'Light',
-      label: 'Hall light',
+      label: 'Living-room Temperature Sensor',
       position: { x: 420, y: 220 },
       state: 'off',
       width: 176,
@@ -582,7 +582,7 @@ describe('CanvasBoard device context actions', () => {
     const node = {
       id: 'light-1',
       templateName: 'Light',
-      label: 'Hall light',
+      label: 'Living-room Temperature Sensor',
       position: { x: 20, y: 30 },
       state: 'off',
       width: 176,
@@ -610,11 +610,18 @@ describe('CanvasBoard device context actions', () => {
     await wrapper.setProps({ zoom: 0.5 })
     expect(rendered.classes()).toContain('device-node--compact')
     expect(rendered.findAll('.resize-handle')).toHaveLength(1)
+    expect(rendered.get('.device-label').text()).toBe('Living-room Temperature Sensor')
+    expect(rendered.attributes('style')).toContain('--canvas-zoom: 0.5')
 
     await rendered.trigger('keydown', { key: 'ArrowRight', ctrlKey: true })
     await rendered.trigger('keydown', { key: 'ArrowDown', ctrlKey: true, shiftKey: true })
     expect(node.width).toBe(186)
     expect(node.height).toBe(129)
+    expect(wrapper.emitted('node-moved-or-resized')).toEqual([['light-1'], ['light-1']])
+
+    await wrapper.setProps({ interactionLocked: true })
+    await rendered.trigger('keydown', { key: 'ArrowRight', ctrlKey: true })
+    expect(node.width).toBe(186)
     expect(wrapper.emitted('node-moved-or-resized')).toEqual([['light-1'], ['light-1']])
     wrapper.unmount()
   })
@@ -652,4 +659,5 @@ describe('CanvasBoard device context actions', () => {
     expect(rendered.findAll('.resize-handle')).toHaveLength(1)
     wrapper.unmount()
   })
+
 })

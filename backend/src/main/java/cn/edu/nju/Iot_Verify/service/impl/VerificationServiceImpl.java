@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
@@ -35,19 +36,22 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
-import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
+import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
-import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
@@ -776,10 +780,15 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                         input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
         try {
             enqueueVerificationTask(userId, taskId, input);
-        } catch (TaskRejectedException e) {
-            log.warn("Verification task {} rejected: thread pool full", taskId);
-            failTaskById(taskId, "Server busy, please try again later");
-            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        } catch (RuntimeException e) {
+            if (!cleanupUndispatchedTask(userId, taskId, e)) {
+                throw new AsyncTaskDispatchOutcomeUnknownException("verification", taskId, e);
+            }
+            if (e instanceof TaskRejectedException) {
+                log.warn("Verification task {} rejected before dispatch; task record removed", taskId);
+                throw new ServiceUnavailableException("Server busy, please try again later", e);
+            }
+            throw e;
         }
         return taskId;
     }
@@ -879,9 +888,33 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     JsonUtils.toJson(ModelSemanticsDto.forRun(
                             input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
             enqueueVerificationTask(userId, requiredTaskId, input);
-        } catch (TaskRejectedException e) {
-            failTaskById(requiredTaskId, "Server busy, please try again later");
-            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        } catch (RuntimeException e) {
+            String message = e instanceof TaskRejectedException
+                    ? "Server busy, please try again later"
+                    : "Task dispatch failed before execution: " + e.getClass().getSimpleName();
+            failTaskById(requiredTaskId, message);
+            if (e instanceof TaskRejectedException) {
+                throw new ServiceUnavailableException("Server busy, please try again later", e);
+            }
+            throw e;
+        }
+    }
+
+    private boolean cleanupUndispatchedTask(Long userId, Long taskId, RuntimeException failure) {
+        try {
+            int deleted = taskRepository.deleteUndispatchedTask(
+                    taskId, userId, workerId, VerificationTaskPo.TaskStatus.PENDING);
+            if (deleted == 1) return true;
+            boolean absent = taskRepository.findByIdAndUserId(taskId, userId).isEmpty();
+            if (!absent) {
+                log.error("Could not remove verification task {} after failure before dispatch", taskId);
+            }
+            return absent;
+        } catch (RuntimeException cleanupError) {
+            failure.addSuppressed(cleanupError);
+            log.error("Could not remove verification task {} after failure before dispatch",
+                    taskId, cleanupError);
+            return false;
         }
     }
 
@@ -1222,6 +1255,21 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
     @Override
     @Transactional(readOnly = true)
+    public RunDeletionImpactDto getRunDeletionImpact(Long userId, Long runId) {
+        CompletedRunDeletionProjection run = taskRepository.findDeletionProjection(
+                        runId, userId, VerificationTaskPo.TaskStatus.COMPLETED)
+                .orElseThrow(() -> new ResourceNotFoundException("VerificationRun", runId));
+        long traceCount = traceRepository.countByUserIdAndVerificationTaskId(userId, runId);
+        return RunDeletionImpactDto.builder()
+                .runId(run.getId())
+                .evidenceCount(traceCount)
+                .createdAt(run.getCreatedAt())
+                .completedAt(run.getCompletedAt())
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<TraceDto> getRunTraces(Long userId, Long runId) {
         getCompletedRun(userId, runId);
         return traceMapper.toDtoList(traceRepository.findByUserIdAndVerificationTaskId(userId, runId));
@@ -1230,9 +1278,42 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     @Override
     @Transactional
     public void deleteRun(Long userId, Long runId) {
-        VerificationTaskPo run = getCompletedRun(userId, runId);
-        traceRepository.deleteByUserIdAndVerificationTaskId(userId, runId);
-        taskRepository.delete(Objects.requireNonNull(run));
+        deleteRunInternal(userId, runId, null);
+    }
+
+    @Override
+    @Transactional
+    public long deleteRun(Long userId, Long runId, long expectedTraceCount) {
+        if (expectedTraceCount < 0) {
+            throw new IllegalArgumentException("Expected trace count must not be negative");
+        }
+        return deleteRunInternal(userId, runId, expectedTraceCount);
+    }
+
+    private long deleteRunInternal(Long userId, Long runId, Long expectedTraceCount) {
+        taskRepository.findCompletedRunForUpdate(
+                        runId, userId, VerificationTaskPo.TaskStatus.COMPLETED)
+                .orElseThrow(() -> new ResourceNotFoundException("VerificationRun", runId));
+        long actualTraceCount = traceRepository.countByUserIdAndVerificationTaskId(userId, runId);
+        if (expectedTraceCount != null && actualTraceCount != expectedTraceCount) {
+            throw staleDeletionImpact("counterexample trace", expectedTraceCount, actualTraceCount);
+        }
+        int deletedTraceCount = traceRepository.deleteByUserIdAndVerificationTaskId(userId, runId);
+        if (deletedTraceCount != actualTraceCount) {
+            throw staleDeletionImpact("counterexample trace", actualTraceCount, deletedTraceCount);
+        }
+        int deletedRunCount = taskRepository.deleteCompletedRun(
+                runId, userId, VerificationTaskPo.TaskStatus.COMPLETED);
+        if (deletedRunCount != 1) {
+            throw new ConflictException(
+                    "Verification run changed during deletion; preview the deletion again before confirming");
+        }
+        return actualTraceCount;
+    }
+
+    private ConflictException staleDeletionImpact(String evidenceKind, long expected, long actual) {
+        return new ConflictException("Run deletion impact changed from " + expected + " to " + actual
+                + " " + evidenceKind + " rows; preview the deletion again before confirming");
     }
 
     private VerificationTaskPo getCompletedRun(Long userId, Long runId) {
