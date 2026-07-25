@@ -1913,6 +1913,10 @@ const enqueueBoardMutation = async <T,>(
           ? getCurrentRecommendationSceneFingerprint(authScopeEpoch)
           : null,
         () => {
+          // The verified model no longer matches the board, regardless of how this mutation
+          // chooses to treat recommendations. Mark staleness here so no onSemanticChange
+          // override can leave a stale verdict claiming to describe the current canvas.
+          markVerificationResultStale()
           if (onSemanticChange) onSemanticChange()
           else invalidateRecommendationsForSceneChange({ notify: true })
         }
@@ -6819,6 +6823,16 @@ defineExpose({
 const isVerifying = ref(false)
 const verificationResult = ref<any>(null)
 const verificationError = ref<string | null>(null)
+// A displayed verdict describes the model that was verified. Any semantic board change
+// (applying a fix, editing rules/specs/devices from the inspector or chat) makes it stale,
+// so the counterexample actions must stop claiming to describe the current board.
+const verificationResultStale = ref(false)
+
+// Called from the single semantic-scene-change hook in the board mutation queue, so every
+// mutation path (fix apply, chat tool, inspector edit) is covered by one rule.
+const markVerificationResultStale = () => {
+  if (verificationResult.value) verificationResultStale.value = true
+}
 
 type RunSubmission<T> = { request: T; signature: string; taskId?: number }
 
@@ -7508,6 +7522,7 @@ const resetScenarioRecommendationResults = () => {
 function closeResultSurfaces() {
   fuzzingResultRequestEpoch += 1
   verificationResult.value = null
+  verificationResultStale.value = false
   verificationError.value = null
   simulationResult.value = null
   simulationError.value = null
@@ -8377,6 +8392,8 @@ const invalidateRecommendationsForSceneChange = ({ notify = false }: { notify?: 
 
 const invalidateForFullSceneReplacement = () => {
   boardSceneGeneration += 1
+  // Scene import/clear opt out of fingerprint tracking, so mark staleness explicitly here.
+  markVerificationResultStale()
   invalidateRecommendationsForSceneChange()
 }
 
@@ -10418,6 +10435,7 @@ const openVerificationRun = async (runId: number) => {
       buildVerificationResultFromRun(run, traces),
       null
     )
+    verificationResultStale.value = false
     closeHistoryPanel(false)
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
@@ -11415,7 +11433,8 @@ const openFixDialog = (traceId: number, violatedSpecId: string) => {
 }
 
 const canFixVerificationResultTrace = (trace: Trace): boolean => (
-  hasPersistedVerificationTrace(verificationResult.value, trace)
+  !verificationResultStale.value
+  && hasPersistedVerificationTrace(verificationResult.value, trace)
 )
 
 const openFixForVerificationResultTrace = (trace: Trace) => {
@@ -11981,7 +12000,14 @@ const selectAndPlayTrace = (traceIndex: number) => {
     return
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
-  
+  // Replaying a counterexample animates it over the CURRENT canvas. Once the board has
+  // changed, the trace no longer describes this model, so refuse instead of showing a
+  // walkthrough that contradicts the live scene.
+  if (verificationResultStale.value) {
+    ElMessage.warning({ message: t('app.verificationResultStaleReverify'), type: 'warning' })
+    return
+  }
+
   if (verificationResult.value?.traces?.length > 0 && traceIndex < verificationResult.value.traces.length) {
     resetPlaybackChanges()
     activeFuzzingFinding.value = null
@@ -12255,6 +12281,7 @@ const handleVerify = async (): Promise<boolean> => {
   cancellingVerificationTask.value = false
   verificationError.value = null
   verificationResult.value = null
+  verificationResultStale.value = false
 
   try {
     const req = buildVerificationRequestPayload({
@@ -12870,6 +12897,7 @@ const pollAsyncVerification = async (
       upsertVerificationTaskSummary({ ...task, progress: 100 })
       if (options.presentResult || showVerificationPanel.value) {
         verificationResult.value = result
+        verificationResultStale.value = false
         notifyVerificationOutcome(verificationResult.value)
         showVerificationPanel.value = false
       } else {
@@ -13040,6 +13068,7 @@ const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
 const closeResultDialog = () => {
   verificationResult.value = null
+  verificationResultStale.value = false
   verificationError.value = null
 }
 const {
@@ -17024,6 +17053,15 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <div v-else-if="verificationResult" class="space-y-4">
+          <div
+            v-if="verificationResultStale"
+            data-testid="verification-result-stale-banner"
+            role="status"
+            class="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm leading-5 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+          >
+            <span class="material-symbols-outlined text-base" aria-hidden="true">history</span>
+            <span>{{ t('app.verificationResultStaleReverify') }}</span>
+          </div>
           <!-- Status Card -->
           <div class="p-5 rounded-xl" :class="verificationResultStatus.cardClass">
             <div class="flex items-center gap-3">
@@ -17276,9 +17314,11 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="verification-trace-fix-unavailable"
                 class="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
               >
-                {{ t(verificationResult.historyPersistence.status === 'OUTCOME_UNKNOWN'
-                  ? 'app.verificationTracePersistenceUnknownFixUnavailable'
-                  : 'app.verificationTraceNotPersistedFixUnavailable') }}
+                {{ verificationResultStale
+                  ? t('app.verificationResultStaleReverify')
+                  : t(verificationResult.historyPersistence.status === 'OUTCOME_UNKNOWN'
+                    ? 'app.verificationTracePersistenceUnknownFixUnavailable'
+                    : 'app.verificationTraceNotPersistedFixUnavailable') }}
               </p>
               <div class="text-xs font-bold text-slate-600 mb-1">
                 {{ t('app.traceVisualization.violatedSpecification') }}: {{ getTraceSpecDisplayTitle(trace) }}

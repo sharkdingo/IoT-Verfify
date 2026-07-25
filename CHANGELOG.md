@@ -53,6 +53,13 @@ history into a technical spec. The spec content itself now lives under
   installations fail at the package boundary instead of proceeding after engine warnings.
 
 #### Fixed
+- Stopped a displayed verification verdict from continuing to claim it describes the current
+  board after the model changed. Applying an automatic fix, or editing rules/specifications/
+  devices from the inspector or the AI chat while the result dialog is open, now marks the
+  verdict stale: the dialog shows an explicit "re-run verification" banner, the per-counterexample
+  Fix action is withdrawn, and counterexample replay is refused instead of animating a trace over
+  a canvas it no longer describes. Staleness is driven by the existing semantic scene fingerprint,
+  so every mutation path is covered, and a newly presented result always starts clean.
 - Stopped the System Inspector from silently discarding Environment Pool edits for a variable
   whose authoritative value is blank. A variable with no declared value domain (not verifiable)
   now shows its value, trust, and privacy controls disabled with an explanation instead of

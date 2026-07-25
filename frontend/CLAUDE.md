@@ -117,6 +117,13 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
 - **Verification warnings are user-visible.** `disabledRuleCount`,
   `skippedSpecCount`, and `[rule-disabled]` / `[spec-skipped]` entries in `checkLogs`
   must be shown even when `safe === true`.
+- **A displayed verdict only describes the model that was verified.** Any semantic board
+  change (applying a fix, editing rules/specs/devices from the inspector or chat) makes an
+  open verification result stale: `Board.vue` flags it from the single semantic-scene-change
+  hook in the mutation queue, then withdraws the per-counterexample Fix action, refuses
+  counterexample replay, and shows the re-run banner. Never let a stale verdict keep
+  offering actions that imply it describes the current canvas, and always clear the flag
+  when a fresh result is presented.
 - **Run history has two user layers.** Task Status contains only active or no-result
   failed/cancelled jobs. History Results contains one item per completed verification
   or saved simulation; verification counterexamples are nested summary evidence, not
