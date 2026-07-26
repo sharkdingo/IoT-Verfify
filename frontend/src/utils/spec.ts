@@ -413,3 +413,35 @@ export const removeSpecsForNode = (
     })
     return { nextSpecs: next, removed }
 }
+
+/**
+ * Collapse a specification's conditions into its distinct device references.
+ *
+ * A specification stores one entry per referenced device, accumulating the `api` keys that its
+ * conditions select. `lookupNodes` supplies labels for readability only; the `deviceId` is the
+ * authoritative identity, so an unknown node degrades to showing the id rather than dropping
+ * the reference.
+ */
+export function buildSpecDeviceRefsFromConditions(
+    conditions: SpecCondition[],
+    lookupNodes: DeviceNode[]
+) {
+    const byDevice = new Map<string, { deviceId: string; deviceLabel: string; selectedApis: string[] }>()
+    conditions.forEach(condition => {
+        if (!condition.deviceId) return
+        const existing = byDevice.get(condition.deviceId)
+        if (existing) {
+            if (condition.targetType === 'api' && condition.key && !existing.selectedApis.includes(condition.key)) {
+                existing.selectedApis.push(condition.key)
+            }
+            return
+        }
+        const node = lookupNodes.find(candidate => candidate.id === condition.deviceId)
+        byDevice.set(condition.deviceId, {
+            deviceId: condition.deviceId,
+            deviceLabel: condition.deviceLabel || node?.label || condition.deviceId,
+            selectedApis: condition.targetType === 'api' && condition.key ? [condition.key] : []
+        })
+    })
+    return Array.from(byDevice.values())
+}
