@@ -1006,5 +1006,3 @@ export const createSceneCodec = (t: Translate) => {
     normalizeSceneFile
   }
 }
-
-export type SceneCodec = ReturnType<typeof createSceneCodec>

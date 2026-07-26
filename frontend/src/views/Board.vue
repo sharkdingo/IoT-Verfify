@@ -4323,9 +4323,8 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
   }
 }
 
-// Portable-scene normalization/validation/canonicalization lives in utils/scene.ts as pure
-// functions; the codec binds the translator once so rejection messages stay localized.
-const sceneCodec = createSceneCodec(t)
+// Portable-scene normalization/validation/canonicalization lives in board/portableScene.ts as
+// pure functions; the codec binds the translator once so rejection messages stay localized.
 const {
   requireIntegerInRange,
   optionalIntegerInRange,
@@ -4335,7 +4334,7 @@ const {
   assertSceneReferences,
   canonicalizeSceneFile,
   normalizeSceneFile
-} = sceneCodec
+} = createSceneCodec(t)
 
 const getReferencedSceneTemplates = (devices: DeviceNode[]) => {
   const names = new Set(devices.map(device => normalizeTemplateLookupName(device.templateName)).filter(Boolean))
