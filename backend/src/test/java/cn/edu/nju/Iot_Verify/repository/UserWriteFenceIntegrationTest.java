@@ -248,7 +248,7 @@ class UserWriteFenceIntegrationTest {
     private BoardStorageServiceImpl boardServiceInstance(UserRepository userRepository) {
         return new BoardStorageServiceImpl(
                 nodes, environment, null, null, null, templates, null,
-                new TransactionTemplate(transactionManager), null,
+                new TransactionTemplate(transactionManager), null, null,
                 new SpecificationMapper(), new RuleMapper(), new DeviceNodeMapper(), null,
                 new DeviceTemplateMapper(), null, userRepository);
     }

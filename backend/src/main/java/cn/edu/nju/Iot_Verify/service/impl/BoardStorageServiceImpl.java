@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateNuSmvValidator;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
@@ -99,6 +101,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceTemplateService deviceTemplateService;
     private final TransactionTemplate transactionTemplate;
     private final SmvGenerator smvGenerator;
+    private final DeviceTemplateNuSmvValidator templateNuSmvValidator;
     private final SpecificationMapper specificationMapper;
     private final RuleMapper ruleMapper;
     private final DeviceNodeMapper deviceNodeMapper;
@@ -106,6 +109,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceTemplateMapper deviceTemplateMapper;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     private final UserRepository userRepository;
+
+    /** Template names must be printable ASCII (spaces allowed) so that
+     *  Locale.ROOT toLowerCase and MySQL LOWER() produce identical results. */
+    private static final java.util.regex.Pattern SAFE_TEMPLATE_NAME =
+            java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
     private ChatExecutionLeaseGuard chatExecutionLeaseGuard;
 
     @Autowired
@@ -2846,7 +2854,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     private boolean hasModeStateMachine(DeviceManifest manifest) {
-        return !modeNames(manifest).isEmpty() && !modeStates(manifest).isEmpty();
+        return !DeviceManifestModes.modeNames(manifest).isEmpty() && !DeviceManifestModes.modeStates(manifest).isEmpty();
     }
 
     private void validateNodeTrust(Map<String, String> errors, String field, String value) {
@@ -3235,8 +3243,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                                      DeviceManifest manifest,
                                      String relation,
                                      String rawValue) {
-        Map<String, List<String>> modeStates = modeStates(manifest);
-        List<String> modes = modeNames(manifest);
+        Map<String, List<String>> modeStates = DeviceManifestModes.modeStates(manifest);
+        List<String> modes = DeviceManifestModes.modeNames(manifest);
         if (modes.isEmpty() || modeStates.isEmpty()) {
             errors.putIfAbsent(field, "Device template has no legal states");
             return;
@@ -3266,7 +3274,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                                     String mode,
                                     String relation,
                                     String rawValue) {
-        Map<String, List<String>> modeStates = modeStates(manifest);
+        Map<String, List<String>> modeStates = DeviceManifestModes.modeStates(manifest);
         List<String> legalStates = modeStates.get(mode);
         if (legalStates == null || legalStates.isEmpty()) {
             errors.putIfAbsent(field, "Mode has no legal values: " + mode);
@@ -3506,50 +3514,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         if (!hasText(modeName)) {
             return false;
         }
-        return modeNames(manifest).contains(modeName.trim());
-    }
-
-    private List<String> modeNames(DeviceManifest manifest) {
-        if (manifest == null || manifest.getModes() == null) {
-            return List.of();
-        }
-        return manifest.getModes().stream()
-                .filter(this::hasText)
-                .map(String::trim)
-                .toList();
-    }
-
-    private Map<String, List<String>> modeStates(DeviceManifest manifest) {
-        List<String> modes = modeNames(manifest);
-        if (modes.isEmpty() || manifest == null || manifest.getWorkingStates() == null) {
-            return Collections.emptyMap();
-        }
-        Map<String, List<String>> result = new LinkedHashMap<>();
-        for (String mode : modes) {
-            result.put(mode, new ArrayList<>());
-        }
-
-        boolean singleMode = modes.size() == 1;
-        for (DeviceManifest.WorkingState state : manifest.getWorkingStates()) {
-            if (state == null || !hasText(state.getName())) {
-                continue;
-            }
-            if (singleMode) {
-                addUniqueState(result.get(modes.get(0)), DeviceSmvDataFactory.cleanStateName(state.getName()));
-                continue;
-            }
-            String[] parts = state.getName().split(";");
-            for (int i = 0; i < parts.length && i < modes.size(); i++) {
-                addUniqueState(result.get(modes.get(i)), DeviceSmvDataFactory.cleanStateName(parts[i]));
-            }
-        }
-        return result;
-    }
-
-    private void addUniqueState(List<String> states, String state) {
-        if (states != null && hasText(state) && !states.contains(state)) {
-            states.add(state);
-        }
+        return DeviceManifestModes.modeNames(manifest).contains(modeName.trim());
     }
 
     private void validatePropertyReference(Map<String, String> errors,
@@ -3939,7 +3904,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         safeDto.setName(canonicalName);
         safeDto.getManifest().setName(canonicalName);
         deviceTemplateSchemaValidator.validateManifest(canonicalName, safeDto.getManifest());
-        validateTemplateManifestForNuSmv(canonicalName, safeDto.getManifest());
+        templateNuSmvValidator.validateTemplateManifestForNuSmv(canonicalName, safeDto.getManifest());
 
         boolean duplicated = deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(userId, canonicalName);
         if (duplicated) {
@@ -3961,7 +3926,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         } catch (DataIntegrityViolationException e) {
             throw ConflictException.duplicateTemplate(canonicalName);
         }
-        runTemplateNuSmvPrecheck(userId, canonicalName, safeDto.getManifest());
+        templateNuSmvValidator.runTemplateNuSmvPrecheck(userId, canonicalName, safeDto.getManifest());
 
         return deviceTemplateMapper.toDto(saved);
     }
@@ -4112,8 +4077,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
                 for (DeviceTemplatePo saved : savedDefaults) {
                     DeviceTemplateDto dto = deviceTemplateMapper.toDto(saved);
-                    validateTemplateManifestForNuSmv(dto.getName(), dto.getManifest());
-                    runTemplateNuSmvPrecheck(userId, dto.getName(), dto.getManifest());
+                    templateNuSmvValidator.validateTemplateManifestForNuSmv(dto.getName(), dto.getManifest());
+                    templateNuSmvValidator.runTemplateNuSmvPrecheck(userId, dto.getName(), dto.getManifest());
                 }
 
                 List<DeviceNodeDto> nodes = getNodesInternal(userId);
@@ -4152,7 +4117,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .map(deviceTemplateMapper::toDto)
                 .toList();
         for (DeviceTemplateDto dto : defaultDtos) {
-            validateTemplateManifestForNuSmv(dto.getName(), dto.getManifest());
+            templateNuSmvValidator.validateTemplateManifestForNuSmv(dto.getName(), dto.getManifest());
         }
 
         List<DeviceTemplatePo> currentEntities = new ArrayList<>(deviceTemplateRepo.findByUserId(userId));
@@ -4484,574 +4449,4 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             Map<String, String> validationErrors) {
     }
 
-    private static final java.util.regex.Pattern SAFE_SMV_TOKEN =
-            java.util.regex.Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
-
-    /** Template names must be printable ASCII (spaces allowed) so that
-     *  Locale.ROOT toLowerCase and MySQL LOWER() produce identical results. */
-    private static final java.util.regex.Pattern SAFE_TEMPLATE_NAME =
-            java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
-    private static final int MAX_TEMPLATE_ICON_LENGTH = 262_144;
-    private static final java.util.regex.Pattern SAFE_TEMPLATE_ICON =
-            java.util.regex.Pattern.compile(
-                    "^data:image/(svg\\+xml|png|jpe?g|webp|gif)(;[^,]+)?,.+$",
-                    java.util.regex.Pattern.CASE_INSENSITIVE);
-
-    private void validateTemplateManifestForNuSmv(String templateName, DeviceManifest manifest) {
-        validateTemplateIcon(templateName, manifest.getIcon());
-
-        // ── Validate InternalVariable / ImpactedVariable names FIRST ──
-        // These apply to ALL templates (including no-mode sensors), because the NuSMV
-        // generation pipeline uses raw variable names (DeviceSmvDataFactory:83, :267).
-        if (manifest.getInternalVariables() != null) {
-            for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
-                validateSmvIdentifier(templateName, "InternalVariable", iv.getName());
-                validateTemplateVariableDomain(templateName, "InternalVariable", iv.getName(),
-                        iv.getValues(), iv.getLowerBound(), iv.getUpperBound(), iv.getNaturalChangeRate());
-                if (!Boolean.TRUE.equals(iv.getIsInside())
-                        && (!hasText(iv.getTrust()) || !hasText(iv.getPrivacy()))) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': shared environment InternalVariable '"
-                                    + iv.getName() + "' must explicitly define Trust and Privacy.");
-                }
-            }
-        }
-        if (manifest.getEnvironmentDomains() != null) {
-            for (DeviceManifest.EnvironmentDomain domain : manifest.getEnvironmentDomains()) {
-                validateSmvIdentifier(templateName, "EnvironmentDomain", domain.getName());
-                validateTemplateVariableDomain(templateName, "EnvironmentDomain", domain.getName(),
-                        domain.getValues(), domain.getLowerBound(), domain.getUpperBound(),
-                        domain.getNaturalChangeRate());
-                if (!hasText(domain.getTrust()) || !hasText(domain.getPrivacy())) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': EnvironmentDomain '" + domain.getName()
-                                    + "' must explicitly define Trust and Privacy.");
-                }
-            }
-        }
-        if (manifest.getImpactedVariables() != null) {
-            for (String impacted : manifest.getImpactedVariables()) {
-                validateSmvIdentifier(templateName, "ImpactedVariable", impacted);
-            }
-        }
-
-        // ── Mode-related validation ──
-        boolean hasModes = manifest.getModes() != null && !manifest.getModes().isEmpty();
-        boolean hasInitState = manifest.getInitState() != null && !manifest.getInitState().isBlank();
-        boolean hasWorkingStates = manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
-
-        if (manifest.getApis() != null && !manifest.getApis().isEmpty()) {
-            if (!hasModes) {
-                throw new BadRequestException("Template '" + templateName
-                        + "': APIs require at least one Mode because API commands are modeled as state changes.");
-            }
-        }
-        validateTemplateDynamics(templateName, manifest);
-
-        if (!hasModes && !hasInitState && !hasWorkingStates) {
-            // No-mode device template (pure sensor) — collision check among variables only
-            checkVariableCollisions(templateName, manifest, Collections.emptyList());
-            return;
-        }
-
-        // If any mode-related field is present, all three must be present
-        if (!hasModes) {
-            throw new BadRequestException("Template '" + templateName + "' must contain non-empty Modes.");
-        }
-        if (!hasInitState) {
-            throw new BadRequestException("Template '" + templateName + "' must contain InitState.");
-        }
-        if (!hasWorkingStates) {
-            throw new BadRequestException("Template '" + templateName + "' must contain non-empty WorkingStates.");
-        }
-
-        // Validate mode names are legal NuSMV identifiers (after stripping spaces)
-        for (String mode : manifest.getModes()) {
-            String cleaned = mode == null ? "" : mode.replace(" ", "");
-            if (!SAFE_SMV_TOKEN.matcher(cleaned).matches()) {
-                throw new BadRequestException(
-                        "Template '" + templateName + "': mode name '" + mode
-                                + "' contains invalid characters. Only letters, digits and underscores are allowed.");
-            }
-        }
-
-        // Validate working-state names are legal NuSMV identifiers
-        for (DeviceManifest.WorkingState ws : manifest.getWorkingStates()) {
-            if (ws.getName() == null) continue;
-            // Multi-mode states can be semicolon-separated; validate each segment
-            String[] segments = ws.getName().split(";", -1);
-            for (String seg : segments) {
-                String cleaned = seg.trim().replace(" ", "");
-                if (cleaned.isEmpty()) continue; // empty segment in ";cool" is allowed
-                if (!SAFE_SMV_TOKEN.matcher(cleaned).matches()) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': state name '" + ws.getName()
-                                    + "' contains invalid characters. Only letters, digits and underscores are allowed.");
-                }
-            }
-        }
-
-        // Check for identifier collisions (modes + variables)
-        checkVariableCollisions(templateName, manifest, manifest.getModes());
-    }
-
-    private void validateTemplateVariableDomain(String templateName,
-                                                String kind,
-                                                String name,
-                                                List<String> values,
-                                                Integer lowerBound,
-                                                Integer upperBound,
-                                                String naturalChangeRate) {
-        if (lowerBound != null && upperBound != null && lowerBound > upperBound) {
-            throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
-                    + name + "' has LowerBound " + lowerBound + " greater than UpperBound " + upperBound + ".");
-        }
-        if (values != null) {
-            Set<String> normalizedValues = new LinkedHashSet<>();
-            for (String rawValue : values) {
-                String value = rawValue == null ? "" : rawValue.replace(" ", "");
-                if (value.isEmpty() || !normalizedValues.add(value)) {
-                    throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
-                            + name + "' contains empty or duplicate enum values after model normalization.");
-                }
-            }
-        }
-        boolean numeric = lowerBound != null && upperBound != null;
-        if (hasText(naturalChangeRate) && !numeric) {
-            throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
-                    + name + "' declares NaturalChangeRate, but only numeric ranges can change by a rate.");
-        }
-        if (hasText(naturalChangeRate)) {
-            String[] parts = naturalChangeRate.replace("[", "").replace("]", "").split(",", -1);
-            try {
-                int lowerRate;
-                int upperRate;
-                if (parts.length == 1) {
-                    int rate = Integer.parseInt(parts[0].trim());
-                    lowerRate = Math.min(0, rate);
-                    upperRate = Math.max(0, rate);
-                } else if (parts.length == 2) {
-                    lowerRate = Integer.parseInt(parts[0].trim());
-                    upperRate = Integer.parseInt(parts[1].trim());
-                } else {
-                    throw new NumberFormatException("wrong number of rate values");
-                }
-                if (lowerRate > upperRate) {
-                    throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
-                            + name + "' has invalid or descending NaturalChangeRate '" + naturalChangeRate + "'.");
-                }
-            } catch (NumberFormatException exception) {
-                throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
-                        + name + "' has invalid NaturalChangeRate '" + naturalChangeRate + "'.");
-            }
-        }
-    }
-
-    private void validateTemplateDynamics(String templateName, DeviceManifest manifest) {
-        if (manifest.getWorkingStates() == null) {
-            return;
-        }
-        Map<String, DeviceManifest.InternalVariable> writableDomains = new LinkedHashMap<>();
-        if (manifest.getInternalVariables() != null) {
-            for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
-                if (variable != null && Boolean.TRUE.equals(variable.getIsInside())) {
-                    writableDomains.putIfAbsent(variable.getName(), variable);
-                }
-            }
-        }
-        if (manifest.getImpactedVariables() != null) {
-            for (String impacted : manifest.getImpactedVariables()) {
-                DeviceManifest.InternalVariable domain = EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted);
-                if (domain != null) {
-                    writableDomains.putIfAbsent(impacted, domain);
-                }
-            }
-        }
-        for (DeviceManifest.WorkingState state : manifest.getWorkingStates()) {
-            if (state == null || state.getDynamics() == null) {
-                continue;
-            }
-            Set<String> seen = new LinkedHashSet<>();
-            for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
-                String variableName = dynamic == null ? null : dynamic.getVariableName();
-                if (!hasText(variableName)) {
-                    throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                            + state.getName() + "' Dynamics requires VariableName.");
-                }
-                if (!seen.add(variableName)) {
-                    throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                            + state.getName() + "' defines Dynamics for '" + variableName + "' more than once.");
-                }
-                DeviceManifest.InternalVariable domain = writableDomains.get(variableName);
-                if (domain == null) {
-                    throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                            + state.getName() + "' has Dynamics for unknown or non-writable variable '"
-                            + variableName + "'.");
-                }
-                boolean numeric = domain.getLowerBound() != null && domain.getUpperBound() != null;
-                if (numeric) {
-                    if (!hasText(dynamic.getChangeRate()) || dynamic.getValue() != null) {
-                        throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                                + state.getName() + "' must use ChangeRate for numeric Dynamics target '"
-                                + variableName + "'.");
-                    }
-                    try {
-                        Integer.parseInt(dynamic.getChangeRate().trim());
-                    } catch (NumberFormatException exception) {
-                        throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                                + state.getName() + "' has non-integer ChangeRate '"
-                                + dynamic.getChangeRate() + "' for '" + variableName + "'.");
-                    }
-                } else {
-                    if (!hasText(dynamic.getValue()) || dynamic.getChangeRate() != null) {
-                        throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                                + state.getName() + "' must use Value for enum/boolean Dynamics target '"
-                                + variableName + "'.");
-                    }
-                    DeviceManifest.Assignment assignment = DeviceManifest.Assignment.builder()
-                            .attribute(variableName).value(dynamic.getValue()).build();
-                    validateTemplateDiscreteValue(templateName, state.getName(), assignment, domain);
-                }
-            }
-        }
-    }
-
-    private void validateTemplateDiscreteValue(String templateName,
-                                               String stateName,
-                                               DeviceManifest.Assignment assignment,
-                                               DeviceManifest.InternalVariable domain) {
-        String value = assignment.getValue().replace(" ", "");
-        if (domain.getValues() != null && !domain.getValues().isEmpty()) {
-            boolean allowed = domain.getValues().stream()
-                    .filter(Objects::nonNull)
-                    .map(candidate -> candidate.replace(" ", ""))
-                    .anyMatch(value::equals);
-            if (!allowed) {
-                throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                        + stateName + "' sets Dynamics target '" + assignment.getAttribute()
-                        + "' outside enum domain " + domain.getValues() + ".");
-            }
-        } else if (!"TRUE".equalsIgnoreCase(value) && !"FALSE".equalsIgnoreCase(value)) {
-            throw new BadRequestException("Template '" + templateName + "': WorkingState '"
-                    + stateName + "' sets boolean Dynamics target '" + assignment.getAttribute()
-                    + "' to '" + assignment.getValue() + "'; use TRUE or FALSE.");
-        }
-    }
-
-    private void validateTemplateIcon(String templateName, String icon) {
-        if (icon == null || icon.isBlank()) {
-            return;
-        }
-        String trimmed = icon.trim();
-        if (trimmed.length() > MAX_TEMPLATE_ICON_LENGTH) {
-            throw new BadRequestException("Template '" + templateName
-                    + "' Icon is too large. Use a self-contained data:image URI under 256 KB.");
-        }
-        if (!SAFE_TEMPLATE_ICON.matcher(trimmed).matches()) {
-            throw new BadRequestException("Template '" + templateName
-                    + "' Icon must be a self-contained data:image URI (svg/png/jpeg/webp/gif).");
-        }
-    }
-
-    /**
-     * Check that mode names, internal variable names, environment domains, and impacted
-     * variable names do not
-     * collide after case-insensitive normalization. An ImpactedVariable may share a name
-     * with an environment InternalVariable (IsInside=false/null), because that means the
-     * device can read and affect the same shared environment value. It must not share a
-     * name with a local InternalVariable (IsInside=true), which would make a device-private
-     * state look like a board-level environment variable.
-     */
-    private void checkVariableCollisions(String templateName, DeviceManifest manifest, List<String> modes) {
-        // Track modes separately - they must not collide with each other
-        Set<String> modeNames = new HashSet<>();
-        for (String mode : modes) {
-            String cleaned = mode == null ? "" : mode.replace(" ", "");
-            if (!cleaned.isEmpty() && !modeNames.add(cleaned.toLowerCase())) {
-                throw new BadRequestException(
-                        "Template '" + templateName + "': duplicate mode name after normalization: '" + mode + "'.");
-            }
-        }
-
-        // Track internal variables - they must not collide with modes or each other
-        Set<String> internalVarNames = new HashSet<>();
-        Map<String, Boolean> localInternalVars = new HashMap<>();
-        if (manifest.getInternalVariables() != null) {
-            for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
-                String cleaned = iv.getName() == null ? "" : iv.getName().replace(" ", "");
-                if (cleaned.isEmpty()) continue;
-
-                String normalized = cleaned.toLowerCase();
-                localInternalVars.put(normalized, Boolean.TRUE.equals(iv.getIsInside()));
-                if (modeNames.contains(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': InternalVariable '" + iv.getName()
-                            + "' collides with mode name.");
-                }
-                if (!internalVarNames.add(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': duplicate InternalVariable name after normalization: '"
-                            + iv.getName() + "'.");
-                }
-            }
-        }
-
-        Set<String> environmentDomainNames = new HashSet<>();
-        if (manifest.getEnvironmentDomains() != null) {
-            for (DeviceManifest.EnvironmentDomain domain : manifest.getEnvironmentDomains()) {
-                String cleaned = domain.getName() == null ? "" : domain.getName().replace(" ", "");
-                if (cleaned.isEmpty()) continue;
-
-                String normalized = cleaned.toLowerCase(Locale.ROOT);
-                if (modeNames.contains(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': EnvironmentDomain '" + domain.getName()
-                                    + "' collides with mode name.");
-                }
-                if (internalVarNames.contains(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': EnvironmentDomain '" + domain.getName()
-                                    + "' duplicates an InternalVariable. Use EnvironmentDomains only for "
-                                    + "impact-only values; a readable environment variable already supplies its domain.");
-                }
-                if (!environmentDomainNames.add(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': duplicate EnvironmentDomain name after normalization: '"
-                                    + domain.getName() + "'.");
-                }
-            }
-        }
-
-        // Track impacted variables. They may share a name only with environment
-        // InternalVariables, never with local InternalVariables.
-        Set<String> impactedVarNames = new HashSet<>();
-        if (manifest.getImpactedVariables() != null) {
-            for (String impacted : manifest.getImpactedVariables()) {
-                String cleaned = impacted == null ? "" : impacted.replace(" ", "");
-                if (cleaned.isEmpty()) continue;
-
-                String normalized = cleaned.toLowerCase();
-                if (modeNames.contains(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': ImpactedVariable '" + impacted
-                            + "' collides with mode name.");
-                }
-                if (!impactedVarNames.add(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': duplicate ImpactedVariable name after normalization: '"
-                            + impacted + "'.");
-                }
-                if (Boolean.TRUE.equals(localInternalVars.get(normalized))) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': ImpactedVariable '" + impacted
-                            + "' cannot share a name with a local InternalVariable. "
-                            + "Use WorkingStates.Dynamics for device-local state changes, and reserve "
-                            + "ImpactedVariables for shared environment variables.");
-                }
-                if (EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted) == null) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': ImpactedVariable '" + impacted
-                                    + "' has no domain in this manifest. Add EnvironmentDomains[].Name='" + impacted
-                                    + "', or declare a readable InternalVariable with the same name and IsInside=false.");
-                }
-            }
-        }
-
-        for (String domainName : environmentDomainNames) {
-            if (!impactedVarNames.contains(domainName)) {
-                throw new BadRequestException(
-                        "Template '" + templateName + "': EnvironmentDomain '" + domainName
-                                + "' is unused. EnvironmentDomains may only describe names listed in ImpactedVariables.");
-            }
-        }
-
-        checkGeneratedSmvIdentifierCollisions(templateName, manifest, modes);
-    }
-
-    /**
-     * User-authored identifiers are literal, but the NuSMV backend derives extra
-     * variables in the same module namespace. Reject only concrete generated-name
-     * collisions; do not reserve broad prefixes such as trust_ or privacy_.
-     */
-    private void checkGeneratedSmvIdentifierCollisions(String templateName, DeviceManifest manifest, List<String> modes) {
-        Map<String, String> identifiers = new LinkedHashMap<>();
-
-        registerSmvIdentifier(templateName, identifiers, "is_attack", "generated attack flag");
-
-        for (String mode : modes) {
-            String cleaned = mode == null ? "" : mode.replace(" ", "");
-            registerSmvIdentifier(templateName, identifiers, cleaned, "mode '" + mode + "'");
-        }
-
-        if (manifest.getInternalVariables() != null) {
-            for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
-                if (iv == null) {
-                    continue;
-                }
-                String name = iv.getName() == null ? "" : iv.getName().replace(" ", "");
-                registerSmvIdentifier(templateName, identifiers, name, "InternalVariable '" + iv.getName() + "'");
-                registerSmvIdentifier(templateName, identifiers, "trust_" + name,
-                        "generated trust for InternalVariable '" + iv.getName() + "'");
-                registerSmvIdentifier(templateName, identifiers, "privacy_" + name,
-                        "generated privacy for InternalVariable '" + iv.getName() + "'");
-            }
-        }
-
-        Map<String, List<String>> modeStates = modeStates(manifest);
-        for (String mode : modes) {
-            List<String> states = modeStates.get(mode);
-            if (states == null) {
-                continue;
-            }
-            for (String state : states) {
-                String suffix = mode + "_" + state;
-                registerSmvIdentifier(templateName, identifiers, "trust_" + suffix,
-                        "generated trust for state '" + suffix + "'");
-                registerSmvIdentifier(templateName, identifiers, "privacy_" + suffix,
-                        "generated privacy for state '" + suffix + "'");
-            }
-        }
-
-        if (manifest.getImpactedVariables() != null) {
-            for (String impacted : manifest.getImpactedVariables()) {
-                if (isNumericTemplateVariable(manifest, impacted)) {
-                    registerSmvIdentifier(templateName, identifiers, impacted + "_rate",
-                            "generated rate for ImpactedVariable '" + impacted + "'");
-                }
-            }
-        }
-
-        if (manifest.getApis() != null) {
-            for (DeviceManifest.API api : manifest.getApis()) {
-                if (api != null && Boolean.TRUE.equals(api.getSignal())) {
-                    registerSmvIdentifier(templateName, identifiers,
-                            DeviceSmvDataFactory.formatApiSignalName(api.getName()),
-                            "generated signal for API '" + api.getName() + "'");
-                }
-            }
-        }
-
-        if (manifest.getContents() != null) {
-            for (DeviceManifest.Content content : manifest.getContents()) {
-                if (content != null && hasText(content.getName())) {
-                    registerSmvIdentifier(templateName, identifiers, "privacy_" + content.getName(),
-                            "generated privacy for Content '" + content.getName() + "'");
-                }
-            }
-        }
-    }
-
-    private void registerSmvIdentifier(String templateName,
-                                       Map<String, String> identifiers,
-                                       String rawIdentifier,
-                                       String source) {
-        if (!hasText(rawIdentifier)) {
-            return;
-        }
-        String identifier = rawIdentifier.trim();
-        String normalized = identifier.toLowerCase(Locale.ROOT);
-        String previous = identifiers.putIfAbsent(normalized, source);
-        if (previous != null) {
-            throw new BadRequestException("Template '" + templateName
-                    + "': generated NuSMV identifier '" + identifier
-                    + "' from " + source + " collides with " + previous
-                    + ". Rename the user-authored item so generated internals do not share a namespace.");
-        }
-    }
-
-    private boolean isNumericTemplateVariable(DeviceManifest manifest, String rawName) {
-        if (!hasText(rawName) || manifest == null) {
-            return false;
-        }
-        DeviceManifest.InternalVariable domain =
-                EnvironmentDomainUtils.resolveImpactDomain(manifest, rawName.trim());
-        return domain != null && domain.getLowerBound() != null && domain.getUpperBound() != null;
-    }
-
-    /**
-     * Validate that a name is a legal NuSMV identifier: matches [a-zA-Z_][a-zA-Z0-9_]*
-     * and is not a NuSMV reserved word (case-insensitive).
-     * IMPORTANT: Does NOT strip spaces — validates the raw name to ensure it's used as-is in NuSMV generation.
-     */
-    private void validateSmvIdentifier(String templateName, String fieldType, String name) {
-        if (name == null || name.isBlank()) {
-            throw new BadRequestException(
-                    "Template '" + templateName + "': " + fieldType + " name must not be blank.");
-        }
-        // Reject leading/trailing whitespace and common space character
-        // (tab/newline will be caught by regex below as "invalid characters")
-        if (name.trim().length() != name.length() || name.contains(" ")) {
-            throw new BadRequestException(
-                    "Template '" + templateName + "': " + fieldType + " name '" + name
-                            + "' contains whitespace. Only letters, digits and underscores are allowed.");
-        }
-        // Validate against NuSMV identifier pattern
-        if (!SAFE_SMV_TOKEN.matcher(name).matches()) {
-            throw new BadRequestException(
-                    "Template '" + templateName + "': " + fieldType + " name '" + name
-                            + "' contains invalid characters. Only letters, digits and underscores are allowed, and must start with a letter or underscore.");
-        }
-        // Check against NuSMV reserved words (case-insensitive)
-        if (DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name)
-                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toUpperCase())
-                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toLowerCase())) {
-            throw new BadRequestException(
-                    "Template '" + templateName + "': " + fieldType + " name '" + name
-                            + "' is a NuSMV reserved word and cannot be used as an identifier.");
-        }
-    }
-
-    private void runTemplateNuSmvPrecheck(Long userId, String templateName, DeviceManifest manifest) {
-        DeviceVerificationDto probe = new DeviceVerificationDto();
-        probe.setVarName("__template_probe_device__");
-        probe.setTemplateName(templateName);
-        probe.setState(manifest.getInitState());
-
-        SmvGenerator.GenerateResult generated = null;
-        try {
-            generated = smvGenerator.generate(
-                    userId,
-                    List.of(probe),
-                    List.of(),
-                    List.of(),
-                    AttackScenarioDto.none(),
-                    false,
-                    SmvGenerator.GeneratePurpose.VERIFICATION
-            );
-        } catch (SmvGenerationException e) {
-            if (SmvGenerationException.ErrorCategories.TEMPLATE_LOAD_ERROR.equals(e.getErrorCategory())
-                    || SmvGenerationException.ErrorCategories.MANIFEST_PARSE_ERROR.equals(e.getErrorCategory())
-                    || SmvGenerationException.ErrorCategories.TEMPLATE_NOT_FOUND.equals(e.getErrorCategory())
-                    || SmvGenerationException.ErrorCategories.MULTIPLE_DEVICES_FAILED.equals(e.getErrorCategory())) {
-                throw new InternalServerException(
-                        "NuSMV precheck failed for template '" + templateName + "'.", e);
-            }
-            String reason = (e.getMessage() == null || e.getMessage().isBlank())
-                    ? e.getErrorCategory()
-                    : "[" + e.getErrorCategory() + "] " + e.getMessage();
-            throw new BadRequestException("Template '" + templateName
-                    + "' cannot be used in NuSMV flow: " + reason);
-        } catch (Exception e) {
-            throw new InternalServerException(
-                    "NuSMV precheck failed for template '" + templateName + "'.", e);
-        } finally {
-            cleanupGeneratedSmvFile(generated);
-        }
-    }
-
-    private void cleanupGeneratedSmvFile(SmvGenerator.GenerateResult generated) {
-        if (generated == null || generated.smvFile() == null) {
-            return;
-        }
-        Path smvPath = generated.smvFile().toPath();
-        try {
-            Files.deleteIfExists(smvPath);
-            Path parent = smvPath.getParent();
-            if (parent != null) {
-                Files.deleteIfExists(parent);
-            }
-        } catch (Exception e) {
-            log.debug("Failed to cleanup template precheck file: {}", smvPath, e);
-        }
-    }
 }

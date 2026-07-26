@@ -26,6 +26,7 @@ import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
 import cn.edu.nju.Iot_Verify.repository.RuleRepository;
 import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateNuSmvValidator;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
@@ -103,6 +104,10 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         // Use a real DeviceTemplateMapper so toDto() works in addDeviceTemplate tests
         deviceTemplateMapper = new DeviceTemplateMapper();
         deviceNodeMapper = new DeviceNodeMapper();
+        // The NuSMV template validation moved to its own component; use a real one over the
+        // mocked generator so these tests still exercise validation through the service API.
+        DeviceTemplateNuSmvValidator templateNuSmvValidator =
+                new DeviceTemplateNuSmvValidator(smvGenerator);
         service = new BoardStorageServiceImpl(
                 nodeRepo,
                 null,
@@ -113,6 +118,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 deviceTemplateService,
                 transactionTemplate,
                 smvGenerator,
+                templateNuSmvValidator,
                 specificationMapper,
                 ruleMapper,
                 deviceNodeMapper,

@@ -95,7 +95,7 @@ class BoardStorageServiceImplBatchTest {
     void setUp() {
         service = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         // Execute the transaction callback inline.
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv ->
@@ -480,7 +480,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_savesEnvironmentVariablesWithImportedNodes() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -552,7 +552,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_rejectsActiveDevicesWithConflictingEnvironmentSemantics() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest.InternalVariable slowTemperature =
@@ -597,7 +597,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_rejectsDeviceReferenceThatCollidesWithGeneratedEnvironmentName() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Sensor")
@@ -629,7 +629,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_rejectsDeviceReferenceThatWouldDisableRulePlaybackAndAttackAnalysis() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Switch")
@@ -685,7 +685,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_sceneImportRejectsMissingEnvironmentValuesBeforeBoardMutation() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -748,7 +748,7 @@ class BoardStorageServiceImplBatchTest {
     void updateEnvironmentVariables_resetsOneVariableToTemplateDefaultsInsideAtomicMutation() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -802,7 +802,7 @@ class BoardStorageServiceImplBatchTest {
     void saveEnvironmentVariables_preservesEveryFieldNotPresentInThePatch() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -888,7 +888,7 @@ class BoardStorageServiceImplBatchTest {
     void saveEnvironmentVariables_checksEveryBaselineBeforeWritingAnyItem() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -966,7 +966,7 @@ class BoardStorageServiceImplBatchTest {
     void saveEnvironmentVariables_reportsRemovedVariableAsStaleConflict() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -1015,7 +1015,7 @@ class BoardStorageServiceImplBatchTest {
     void saveEnvironmentVariables_requiresANonBlankExpectedValue() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         ValidationException error = assertThrows(
@@ -1040,7 +1040,7 @@ class BoardStorageServiceImplBatchTest {
         DeviceNodeMapper realMapper = new DeviceNodeMapper();
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1")
@@ -1117,7 +1117,7 @@ class BoardStorageServiceImplBatchTest {
         DeviceNodeMapper realMapper = new DeviceNodeMapper();
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Switch")
@@ -1173,7 +1173,7 @@ class BoardStorageServiceImplBatchTest {
         DeviceNodeMapper realMapper = new DeviceNodeMapper();
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1")
@@ -1242,7 +1242,7 @@ class BoardStorageServiceImplBatchTest {
         DeviceNodeMapper realMapper = new DeviceNodeMapper();
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1").userId(1L).templateName("Switch").label("Hall switch")
@@ -1291,7 +1291,7 @@ class BoardStorageServiceImplBatchTest {
         DeviceNodeMapper realMapper = new DeviceNodeMapper();
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1").userId(1L).templateName("Switch").label("Hall switch")
@@ -1340,7 +1340,7 @@ class BoardStorageServiceImplBatchTest {
     void addSpec_rejectsUntrustedSourceSafetyApiWithoutModeledEndState() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Notification Service")
@@ -1393,7 +1393,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_sceneTemplateMismatchRejectsBeforeBoardMutation() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest existingManifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -1432,7 +1432,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_sceneSnapshotNameMismatchRejectsBeforeBoardMutation() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -1481,7 +1481,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_missingTemplateSnapshotRejectsEvenWhenTemplateAlreadyExists() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -1517,7 +1517,7 @@ class BoardStorageServiceImplBatchTest {
     void saveBoardBatch_unreferencedTemplateSnapshotRejectsBeforeBoardMutation() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
@@ -1811,7 +1811,7 @@ class BoardStorageServiceImplBatchTest {
     void createNode_returnsEnvironmentPoolChangesFromTheSameTransaction() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceTemplateDto.DeviceManifest.InternalVariable temperature =
@@ -1872,7 +1872,7 @@ class BoardStorageServiceImplBatchTest {
     void deletionPreviewIncludesEnvironmentRemovalAndConfirmationRejectsEnvironmentDrift() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceNodeDto node = boardNode("sensor1", "Temperature Sensor", "Hall sensor");
@@ -1928,7 +1928,7 @@ class BoardStorageServiceImplBatchTest {
     void deletionPreviewKeepsEnvironmentRequiredByAnotherDevice() {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
-                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
                 null, new DeviceTemplateMapper(), null, userRepository);
 
         DeviceNodeDto target = boardNode("sensor1", "Temperature Sensor", "Hall sensor");
