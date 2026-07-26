@@ -15,6 +15,24 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-26
+
+#### Fixed
+- **Stale verification verdict tracking** — the frontend now correctly marks verification results
+  as stale when error-recovery paths refresh the board outside the normal mutation queue:
+  - Environment save CAS-stale / unknown-outcome recovery (two paths)
+  - Device delete 404 / unknown-outcome recovery (two paths)
+  - Scene import/clear unknown-outcome recovery (two paths)
+  - Fuzzing paper-domain stale recovery
+  - Scene replacement drift detection
+  
+  These paths call `refreshBoardSnapshot()` or `refreshSceneForReconciliation()` directly, bypassing
+  the semantic-change callback that normally marks stale. If a verification result was displayed when
+  these errors occurred, the verdict would incorrectly claim to describe the now-changed board.
+  
+  Fix: explicitly mark stale after successful reconciliation in each recovery path. The async
+  verification replay guard (commit 092124d) was already correct; this closes the error-path gaps.
+
 ### 2026-07-25
 
 #### Added
