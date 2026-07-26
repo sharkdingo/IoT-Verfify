@@ -1885,6 +1885,60 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(repaired.specResults.every((result: any) => result.outcome === 'SATISFIED')).toBe(true)
   })
 
+  test('withdraws counterexample actions once an applied fix makes the open verdict stale', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    const scenePath = path.resolve(process.cwd(), '..', 'docs', 'examples', 'acceptance-demo-scene.json')
+    await page.getByTestId('scene-import-file').setInputFiles(scenePath)
+    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+    await waitForApi<any[]>(request, auth, '/api/board/rules', rules => rules.length === 3)
+    await waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length === 5)
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    await page.getByTestId('run-verification').click()
+    await expect(page.getByTestId('verification-result-dialog')).toBeVisible({ timeout: 60_000 })
+
+    // The verdict describes the model that was just verified, so it starts fresh and offers Fix.
+    await expect(page.getByTestId('verification-result-stale-banner')).toHaveCount(0)
+    const traceFix = page.getByTestId('verification-trace-fix').first()
+    await expect(traceFix).toBeVisible({ timeout: 30_000 })
+    await traceFix.click()
+    await expect(page.getByTestId('fix-result-dialog')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('fix-strategy-remove')).toBeVisible({ timeout: 120_000 })
+    await page.getByTestId('fix-strategy-remove').click()
+    await page.getByTestId('fix-try-current').click()
+    const applyFix = page.getByTestId('fix-apply-current')
+    await expect(applyFix).toBeVisible({ timeout: 180_000 })
+    await applyFix.click()
+    // Removing rules requires an explicit confirmation before the mutation is sent.
+    await page.locator('.el-message-box')
+      .getByRole('button', { name: /Remove Rules and Apply|移除规则并应用/ })
+      .click()
+
+    // Applying the fix mutated the rules while the verification dialog stayed open. The verdict
+    // and its counterexamples no longer describe the current board, so the UI must say so and
+    // stop offering actions that imply otherwise: no Fix button, and replay is refused.
+    await expect(page.getByTestId('fix-result-dialog')).toBeHidden({ timeout: 60_000 })
+    await expect(page.getByTestId('verification-result-dialog')).toBeVisible()
+    await expect(page.getByTestId('verification-result-stale-banner')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('verification-trace-fix')).toHaveCount(0)
+    await expect(page.getByTestId('verification-trace-fix-unavailable').first())
+      .toContainText(/changed after this verification/i)
+
+    // A fresh run must not inherit the stale warning.
+    await page.getByTestId('close-verification-result').click()
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    await page.getByTestId('run-verification').click()
+    await expect(page.getByTestId('verification-result-dialog')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('verification-result-stale-banner')).toHaveCount(0)
+  })
+
   test('imports the multi-violation JSON and repairs both baseline violations through one root removal', async ({ page, request }) => {
     const auth = await createAuthenticatedUser(request)
     await saveEmptyBoard(request, auth)
