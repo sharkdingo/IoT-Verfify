@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.component.ai.chat.ChatToolProgressPresenter;
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.AiTaskContinuationStore;
@@ -122,7 +123,8 @@ class ChatServiceImplToolLoopControlTest {
     private Method executeToolLoopMethod;
     private Method executeToolLoopWithTraceMethod;
     private Method jsonErrorMethod;
-    private Method toolProgressDetailMethod;
+    private final ChatToolProgressPresenter toolProgressPresenter =
+            new ChatToolProgressPresenter(new ObjectMapper());
     private Method classifyToolExecutionMethod;
     private Method attachPersistedExecutionTracesMethod;
 
@@ -192,9 +194,6 @@ class ChatServiceImplToolLoopControlTest {
                 int.class
         );
         jsonErrorMethod.setAccessible(true);
-        toolProgressDetailMethod = ChatServiceImpl.class.getDeclaredMethod(
-                "toolProgressDetail", String.class, String.class, boolean.class);
-        toolProgressDetailMethod.setAccessible(true);
         classifyToolExecutionMethod = ChatServiceImpl.class.getDeclaredMethod(
                 "classifyToolExecution", String.class, String.class);
         classifyToolExecutionMethod.setAccessible(true);
@@ -222,6 +221,7 @@ class ChatServiceImplToolLoopControlTest {
                 scenarioDraftStore,
                 taskContinuationStore,
                 objectMapper,
+                new ChatToolProgressPresenter(objectMapper),
                 chatMapper,
                 transactionTemplate,
                 chatExecutionConfig
@@ -258,8 +258,7 @@ class ChatServiceImplToolLoopControlTest {
 
     @Test
     void toolProgressDetail_shouldNotExposeRawInternalIdentifiersFromErrors() throws Exception {
-        String detail = (String) toolProgressDetailMethod.invoke(
-                service,
+        String detail = toolProgressPresenter.toolProgressDetail(
                 "manage_rule",
                 "{\"error\":\"Rule rule-17 for user id 42 was not found\",\"errorCode\":\"NOT_FOUND\"}",
                 false);
@@ -299,14 +298,13 @@ class ChatServiceImplToolLoopControlTest {
                 service, "board_overview",
                 "{\"devices\":[],\"rules\":[],\"specs\":[],\"edges\":[],"
                         + "\"environmentVariables\":[]}").toString());
-        assertNull(toolProgressDetailMethod.invoke(
-                service, "board_overview", "{\"devices\":[]}", false));
+        assertNull(toolProgressPresenter.toolProgressDetail(
+                "board_overview", "{\"devices\":[]}", false));
     }
 
     @Test
     void toolProgressDetail_shouldSummarizeCommonMutationFromStructuredFields() throws Exception {
-        String detail = (String) toolProgressDetailMethod.invoke(
-                service,
+        String detail = toolProgressPresenter.toolProgressDetail(
                 "add_device",
                 "{\"operation\":\"created\",\"device\":{\"id\":\"device-17\",\"label\":\"Hall Light\",\"state\":\"off\"},\"environmentChanges\":[{}]}",
                 false);

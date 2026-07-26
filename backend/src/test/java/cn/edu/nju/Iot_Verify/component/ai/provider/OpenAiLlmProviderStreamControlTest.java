@@ -48,6 +48,13 @@ import static org.mockito.Mockito.when;
  */
 class OpenAiLlmProviderStreamControlTest {
 
+    /**
+     * Bound for latches that wait for an async task to REACH a point, not for a behavioural
+     * deadline. The old 1-2s bounds failed under full-suite CPU contention (the common
+     * ForkJoinPool is shared), reporting a timing artifact as a cancellation defect.
+     */
+    private static final long COORDINATION_TIMEOUT_SECONDS = 10;
+
     @Test
     @SuppressWarnings("unchecked")
     void streamChat_withStopSignal_shouldStopConsumingFurtherChunks() {
@@ -139,7 +146,7 @@ class OpenAiLlmProviderStreamControlTest {
             public boolean hasNext() {
                 iteratorBlocked.countDown();
                 try {
-                    streamClosed.await(2, TimeUnit.SECONDS);
+                    streamClosed.await(COORDINATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
@@ -168,9 +175,9 @@ class OpenAiLlmProviderStreamControlTest {
         CompletableFuture<Void> call = CompletableFuture.runAsync(() ->
                 provider.streamChat(request, ignored -> { }, () -> false, control));
 
-        org.junit.jupiter.api.Assertions.assertTrue(iteratorBlocked.await(1, TimeUnit.SECONDS));
+        org.junit.jupiter.api.Assertions.assertTrue(iteratorBlocked.await(COORDINATION_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         control.cancel();
-        call.get(2, TimeUnit.SECONDS);
+        call.get(COORDINATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         verify(streamResponse, atLeastOnce()).close();
     }
@@ -197,9 +204,9 @@ class OpenAiLlmProviderStreamControlTest {
         CompletableFuture<LlmChatResponse> call = CompletableFuture.supplyAsync(() ->
                 provider.chat(request(), control));
 
-        org.junit.jupiter.api.Assertions.assertTrue(requestStarted.await(1, TimeUnit.SECONDS));
+        org.junit.jupiter.api.Assertions.assertTrue(requestStarted.await(COORDINATION_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         control.cancel();
-        LlmChatResponse response = call.get(2, TimeUnit.SECONDS);
+        LlmChatResponse response = call.get(COORDINATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         org.junit.jupiter.api.Assertions.assertTrue(pending.isCancelled());
         org.junit.jupiter.api.Assertions.assertFalse(response.hasToolCalls());

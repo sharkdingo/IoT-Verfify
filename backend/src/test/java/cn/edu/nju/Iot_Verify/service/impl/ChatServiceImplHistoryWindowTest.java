@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.component.ai.chat.ChatToolProgressPresenter;
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
@@ -106,6 +107,7 @@ class ChatServiceImplHistoryWindowTest {
                 scenarioDraftStore,
                 taskContinuationStore,
                 new ObjectMapper(),
+                new ChatToolProgressPresenter(new ObjectMapper()),
                 chatMapper,
                 transactionTemplate,
                 new ChatExecutionConfig()

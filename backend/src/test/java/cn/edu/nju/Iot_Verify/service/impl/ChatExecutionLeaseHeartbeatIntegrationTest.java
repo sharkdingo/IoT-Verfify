@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.component.ai.chat.ChatToolProgressPresenter;
 import cn.edu.nju.Iot_Verify.component.ai.AiTaskContinuationStore;
 import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
@@ -155,6 +156,7 @@ class ChatExecutionLeaseHeartbeatIntegrationTest {
                 mock(AiScenarioDraftStore.class),
                 mock(AiTaskContinuationStore.class),
                 objectMapper,
+                new ChatToolProgressPresenter(objectMapper),
                 mock(ChatMapper.class),
                 new TransactionTemplate(transactionManager),
                 config);
