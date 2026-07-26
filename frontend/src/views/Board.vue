@@ -460,7 +460,7 @@ import type {
   VerificationTask,
   VerificationTaskSummary
 } from '@/types/verify'
-import type { SimulationRequest, SimulationState, SimulationTask, SimulationTaskSummary, SimulationTraceSummary } from '@/types/simulation'
+import type { SimulationRequest, SimulationResult, SimulationState, SimulationTask, SimulationTaskSummary, SimulationTraceSummary } from '@/types/simulation'
 import type { AttackScenario, AttackScenarioMode } from '@/types/attackScenario'
 import type {
   AvailableFuzzingRunSummary,
@@ -5878,7 +5878,7 @@ defineExpose({
 
 // ==== Verification Logic ====
 const isVerifying = ref(false)
-const verificationResult = ref<any>(null)
+const verificationResult = ref<VerificationResultView | null>(null)
 const verificationError = ref<string | null>(null)
 // A displayed verdict describes the model that was verified. Any semantic board change
 // (applying a fix, editing rules/specs/devices from the inspector or chat) makes it stale,
@@ -5901,6 +5901,18 @@ type RunSubmission<T> = { request: T; signature: string; taskId?: number }
 
 const activeVerificationSubmission = ref<RunSubmission<VerificationRequest> | null>(null)
 const activeSimulationSubmission = ref<RunSubmission<SimulationRequest> | null>(null)
+
+/** A run result as held by the board: the server payload plus the locally-attached submission. */
+type VerificationResultView = VerificationResult & { localRunSubmission?: RunSubmission<VerificationRequest> }
+/**
+ * A simulation result as held by the board. `historyPersistence` describes the save outcome of a
+ * FRESH run, so a saved trace reopened from history legitimately has none -- the board never
+ * reads it off this ref, and modelling it optional avoids a cast at that entry point.
+ */
+type SimulationResultView =
+  Omit<SimulationResult, 'historyPersistence'>
+  & Partial<Pick<SimulationResult, 'historyPersistence'>>
+  & { localRunSubmission?: RunSubmission<SimulationRequest> }
 
 const attachLocalRunSubmission = <T extends Record<string, any>, R>(
   result: T,
@@ -7781,12 +7793,12 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
 
 // ==== Simulation Logic ====
 const isSimulating = ref(false)
-const simulationResult = ref<any>(null)
+const simulationResult = ref<SimulationResultView | null>(null)
 const simulationError = ref<string | null>(null)
 // Result of the last successful simulation, kept so its logs / raw NuSMV output stay reachable while
 // the timeline is open. The result dialog only auto-opens on error; on success we go straight to the
 // timeline (by design) and let the user open the logs on demand via openSimulationLogs().
-const lastSimulationResult = ref<any>(null)
+const lastSimulationResult = ref<SimulationResultView | null>(null)
 
 // Simulation form state (moved from ControlCenter)
 interface AttackRunForm {
@@ -10579,6 +10591,11 @@ const openSimulationAnimationFromSavedStates = () => {
 const savedSimulationStates = ref<SimulationState[]>([])
 
 // 反例路径高亮状态
+// Deliberately untyped: this one ref feeds three consumers whose playback shapes disagree
+// today -- CanvasBoard requires `states[].devices`, while utils/traceEdgePlayback's
+// TracePlaybackLike and the local ActivePlaybackState both make it optional, with different
+// device types. Narrowing it needs those three contracts reconciled first; typing it here
+// only relocates the mismatch into casts.
 const highlightedTrace = ref<any>(null)
 
 // 反例路径动画控制状态
@@ -10606,7 +10623,7 @@ const openTraceAnimationAt = (selectedTraceIndex: number) => {
 }
 
 // 独立保存的 traces 数据（用于对话框关闭后）
-const savedTraces = ref<any[]>([])
+const savedTraces = ref<Trace[]>([])
 
 // Playback is a read-only view over a persisted runtime snapshot. Derive the lock from
 // the visible playback surfaces so no entry point can forget to acquire or release it.
@@ -10937,11 +10954,12 @@ const selectAndPlayTrace = (traceIndex: number) => {
     return
   }
 
-  if (verificationResult.value?.traces?.length > 0 && traceIndex < verificationResult.value.traces.length) {
+  const traces = verificationResult.value?.traces
+  if (traces && traceIndex >= 0 && traceIndex < traces.length) {
     resetPlaybackChanges()
     activeFuzzingFinding.value = null
     // 保存 traces 数据到独立变量
-    savedTraces.value = [...verificationResult.value.traces]
+    savedTraces.value = [...traces]
     
     // 关闭验证结果对话框
     closeResultDialog()
@@ -11129,10 +11147,11 @@ const openSimulationTimeline = () => {
     return
   }
 
-  if (simulationResult.value?.states?.length > 0) {
+  const simulationStates = simulationResult.value?.states
+  if (simulationStates && simulationStates.length > 0) {
     resetPlaybackChanges()
     // 保存模拟 states 数据到独立变量
-    savedSimulationStates.value = [...simulationResult.value.states]
+    savedSimulationStates.value = [...simulationStates]
     
     // 关闭模拟结果对话框
     simulationResult.value = null
