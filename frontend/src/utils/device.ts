@@ -1,84 +1,12 @@
 import type {
-    BasicDeviceInfo,
-    DeviceApiView,
     DeviceManifest,
-    DeviceStateView,
-    DeviceTemplate,
-    DeviceVariableView,
     InternalVariable
 } from '../types/device'
 import type { DeviceNode } from '../types/node'
 
-// --- 设备状态管理 ---
-// 存储所有设备实例的状态，key 是 deviceId，value 是当前状态
-const deviceStates: Map<string, string> = new Map()
-
-/**
- * 获取设备的状态
- * @param deviceId 设备实例的唯一标识
- * @param initState 设备的初始状态（从模板的 InitState 获取）
- * @returns 当前状态，如果未设置则返回初始状态
- */
-export const getDeviceState = (deviceId: string, initState: string): string => {
-    if (!deviceStates.has(deviceId)) {
-        deviceStates.set(deviceId, initState)
-    }
-    return deviceStates.get(deviceId) || initState
-}
-
-/**
- * 更新设备状态
- * @param deviceId 设备实例的唯一标识
- * @param nextState 新状态
- */
-export const updateDeviceState = (deviceId: string, nextState: string): void => {
-    deviceStates.set(deviceId, nextState)
-}
-
-/**
- * 根据 API 触发更新设备状态
- * @param deviceId 设备实例的唯一标识
- * @param apiName 触发的 API 名称
- * @param manifest 设备模板清单
- * @returns 是否成功更新状态
- */
-export const updateDeviceStateByApi = (deviceId: string, apiName: string, manifest: DeviceManifest): boolean => {
-    if (!manifest || !manifest.APIs) return false
-
-    const api = manifest.APIs.find(a => a.Name === apiName)
-    if (api && api.EndState) {
-        updateDeviceState(deviceId, api.EndState)
-        return true
-    }
-    return false
-}
-
-/**
- * 重置设备状态到初始状态
- * @param deviceId 设备实例的唯一标识
- * @param initState 设备的初始状态
- */
-export const resetDeviceState = (deviceId: string, initState: string): void => {
-    deviceStates.set(deviceId, initState)
-}
-
-/**
- * 清除设备状态（当设备被删除时调用）
- * @param deviceId 设备实例的唯一标识
- */
-export const clearDeviceState = (deviceId: string): void => {
-    deviceStates.delete(deviceId)
-}
-
 // --- 图标与路径 ---
 
 const deviceIconModules = import.meta.glob('../assets/*/*.svg', {
-    eager: true,
-    query: '?url',
-    import: 'default'
-}) as Record<string, string>
-
-const variableIconModules = import.meta.glob('../assets/variables/*.svg', {
     eager: true,
     query: '?url',
     import: 'default'
@@ -209,29 +137,6 @@ export const getDeviceIconUrl = (
         || createGeneratedDeviceIcon(deviceType, state)
 }
 
-/**
- * 获取设备图标的路径
- * @param folder 设备模板名称（转换为文件夹格式）
- * @param state 当前状态
- * @returns 图标的 URL 路径
- */
-export const getDeviceIconPath = (folder: string, state: string) => {
-    return getBundledDeviceIconPath(folder, state)
-        || getFirstBundledDeviceIconPath(folder)
-        || createGeneratedDeviceIcon(folder.replace(/_/g, ' '), state)
-}
-
-/**
- * 获取变量图标的路径
- * @param variableName 变量名称
- * @returns 图标的 URL 路径
- */
-export const getVariableIconPath = (variableName: string) => {
-    return variableIconModules[`../assets/variables/${variableName}.svg`]
-        || variableIconModules['../assets/variables/temperature.svg']
-        || ''
-}
-
 export const getNodeIcon = (
     node: DeviceNode,
     manifestOrState?: DeviceManifest | string | null,
@@ -242,102 +147,6 @@ export const getNodeIcon = (
     const currentState = explicitState || node.state || manifest?.InitState || 'Working'
 
     return getDeviceIconUrl(node.templateName, currentState, manifest)
-}
-
-// --- 状态查找 ---
-
-export const getEndStateByApi = (
-    templates: DeviceTemplate[],
-    templateName: string,
-    apiName: string
-): string | null => {
-    const tpl = templates.find(t => t.name === templateName)
-    if (!tpl) return null
-    const api = (tpl.manifest.APIs ?? []).find(a => a.Name === apiName)
-    return api ? api.EndState : null
-}
-
-// --- 信息提取 (用于 DeviceDialog 展示) ---
-
-export const extractBasicDeviceInfo = (
-    manifest: DeviceManifest | null | undefined,
-    fallbackName: string,
-    instanceLabel: string,
-    fallbackDescription: string
-): BasicDeviceInfo => {
-    const name = manifest?.Name ?? fallbackName
-    const description = manifest?.Description ?? fallbackDescription
-    const initState = manifest?.InitState ?? ''
-    const impacted = Array.isArray(manifest?.ImpactedVariables) ? manifest!.ImpactedVariables : []
-
-    return {
-        name,
-        instanceLabel,
-        description,
-        initState,
-        impactedVariables: impacted
-    }
-}
-
-export const extractDeviceVariables = (
-    manifest: DeviceManifest | null | undefined
-): DeviceVariableView[] => {
-    if (!manifest) return []
-    const views: DeviceVariableView[] = []
-
-    // 1. Internal Variables
-    if (Array.isArray(manifest.InternalVariables)) {
-        manifest.InternalVariables.forEach(v => {
-            let valStr = ''
-            if (v.Values && v.Values.length) valStr = v.Values.join(' / ')
-            else if (v.LowerBound !== undefined && v.UpperBound !== undefined) valStr = `[${v.LowerBound}, ${v.UpperBound}]`
-
-            views.push({
-                name: v.Name,
-                value: valStr, // 这里展示类型或范围
-                trust: v.Trust ?? ''
-            })
-        })
-    }
-
-    // 2. Impacted Variables
-    if (Array.isArray(manifest.ImpactedVariables)) {
-        manifest.ImpactedVariables.forEach(name => {
-            if (!views.some(v => v.name === name)) {
-                const definition = resolveImpactEnvironmentDefinition(manifest, name)
-                const value = definition?.Values?.length
-                    ? definition.Values.join(' / ')
-                    : definition?.LowerBound !== undefined && definition?.UpperBound !== undefined
-                        ? `[${definition.LowerBound}, ${definition.UpperBound}]`
-                        : ''
-                views.push({ name, value, trust: definition?.Trust ?? '' })
-            }
-        })
-    }
-    return views
-}
-
-export const extractDeviceStates = (
-    manifest: DeviceManifest | null | undefined
-): DeviceStateView[] => {
-    if (!manifest || !Array.isArray(manifest.WorkingStates)) return []
-    return manifest.WorkingStates.map(ws => ({
-        name: ws.Name,
-        description: ws.Description ?? '',
-        trust: ws.Trust ?? ''
-    }))
-}
-
-export const extractDeviceApis = (
-    manifest: DeviceManifest | null | undefined
-): DeviceApiView[] => {
-    if (!manifest || !Array.isArray(manifest.APIs)) return []
-    return manifest.APIs.map(api => ({
-        name: api.Name,
-        from: api.StartState ?? '',
-        to: api.EndState,
-        description: api.Description ?? ''
-    }))
 }
 
 // --- 校验逻辑 ---
@@ -719,9 +528,4 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
     }
 
     return { valid: true }
-}
-
-// --- 增强版图标获取函数 ---
-export const getNodeIconWithFallback = (node: DeviceNode): string => {
-  return getNodeIcon(node)
 }

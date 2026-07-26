@@ -1,8 +1,6 @@
 import type { DeviceNode } from '../types/node'
 import type {
-    SpecSide,
     SpecCondition,
-    SpecTemplateId,
     Specification
 } from '../types/spec'
 import type { DeviceTemplate } from '../types/device'
@@ -18,27 +16,7 @@ interface SpecFormulaContext {
  * 条件创建 & 模式判断
  * =======================================*/
 
-export function createEmptyCondition(side: SpecSide): SpecCondition {
-    return {
-        id: `cond_${side}_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-        side,
-        deviceId: '',
-        deviceLabel: '',
-        targetType: 'state',
-        key: '',
-        relation: 'in',
-        value: ''
-    }
-}
-
-export function getSpecMode(templateId: SpecTemplateId | '' | null): 'single' | 'ifThen' | null {
-    if (!templateId) return null
-    const num = Number(templateId)
-    // 假设 1,2,3,7 是单句，4,5,6 是 IF/THEN
-    return num >= 4 && num !== 7 ? 'ifThen' : 'single'
-}
-
-export function getTemplateByNodeId(
+function getTemplateByNodeId(
     nodeId: string,
     nodes: DeviceNode[],
     templates: DeviceTemplate[]
@@ -52,112 +30,6 @@ export function getTemplateByNodeId(
             .filter(Boolean)
         return names.includes(target)
     })
-}
-
-/* =========================================
- * 目标字段（Target）逻辑
- * =======================================*/
-
-/**
- * 获取“属性/API”下拉框的选项
- * 返回值必须跟后端/NuSMV 语义一致：
- * - state 固定使用 key=state
- * - api 只能使用 Signal=true 的 API
- * - trust/privacy use propertyScope + a user-domain mode/variable key
- */
-export function getTargetOptions(
-    cond: SpecCondition,
-    nodes: DeviceNode[],
-    templates: DeviceTemplate[]
-) {
-    const tpl = getTemplateByNodeId(cond.deviceId, nodes, templates)
-    if (!tpl || !tpl.manifest) {
-        return [{ label: 'State', value: 'state' }]
-    }
-
-    const manifest = tpl.manifest
-
-    if (cond.targetType === 'state') {
-        return [{ label: 'State', value: 'state' }]
-    }
-
-    if (cond.targetType === 'mode') {
-        return (manifest.Modes || [])
-            .filter(Boolean)
-            .map(mode => ({ label: mode, value: mode }))
-    }
-
-    if (cond.targetType === 'api') {
-        return (manifest.APIs || [])
-            .filter(api => api?.Name && api.Signal === true)
-            .map(api => ({ label: api.Name, value: api.Name }))
-    }
-
-    const variableOptions = (manifest.InternalVariables || [])
-        .filter(iv => iv?.Name)
-        .map(iv => ({ label: iv.Name, value: iv.Name }))
-
-    if (cond.targetType === 'variable') {
-        return variableOptions
-    }
-
-    const modes = manifest.Modes || []
-    const statePropertyOptions = modes.filter(Boolean).map(mode => ({
-        label: modes.length === 1 ? 'Current state' : `Current ${mode} state`,
-        value: mode,
-        propertyScope: 'state' as const
-    }))
-    const variablePropertyOptions = variableOptions.map(option => ({
-        ...option,
-        propertyScope: 'variable' as const
-    }))
-
-    return [...statePropertyOptions, ...variablePropertyOptions]
-}
-
-
-/* =========================================
- * 描述生成 (Natural Language)
- * =======================================*/
-
-const describeCondition = (c: SpecCondition): string => {
-    const device = c.deviceLabel || c.deviceId || '<?>'
-    const target = c.targetType === 'state'
-        ? 'state'
-        : (c.targetType === 'trust' || c.targetType === 'privacy') && c.propertyScope === 'state'
-            ? `current ${c.key} state`
-            : c.key || ''
-
-    // 优化 API 显示
-    if (c.targetType === 'api') {
-        return `'${device}' executes '${target}'`
-    }
-
-    const relation = c.relation || ''
-    const value = c.value?.trim()
-    const valuePart = value ? ` '${value}'` : ''
-
-    return `'${device}' ${target} ${relation}${valuePart}`
-}
-
-export const buildSpecText = (spec: Specification): string => {
-    const aPart = spec.aConditions.map(describeCondition).join(' and ')
-    const ifPart = spec.ifConditions.map(describeCondition).join(' and ')
-    const thenPart = spec.thenConditions.map(describeCondition).join(' and ')
-
-    const ensureNonEmpty = (text: string) =>
-        text && text.trim().length > 0 ? text : spec.templateLabel
-
-    switch (spec.templateId) {
-        case '1': return ensureNonEmpty(aPart ? `${aPart} holds forever` : '')
-        case '2': return ensureNonEmpty(aPart ? `${aPart} will happen later` : '')
-        case '3': return ensureNonEmpty(aPart ? `${aPart} never happens` : '')
-        case '4': return ensureNonEmpty(ifPart && thenPart ? `If ${ifPart}, then ${thenPart} immediately` : '')
-        case '5': return ensureNonEmpty(ifPart && thenPart ? `If ${ifPart}, then ${thenPart} later` : '')
-        case '6': return ensureNonEmpty(ifPart && thenPart ? `If ${ifPart}, then ${thenPart} later and forever` : '')
-        case '7': return ensureNonEmpty(aPart ? `${aPart} fails due to untrusted` : '')
-        default: return spec.templateLabel
-    }
 }
 
 const previewQuote = (value: unknown): string =>
@@ -287,44 +159,6 @@ export const buildSpecFormula = (spec: Pick<Specification,
     }
 }
 
-/* =========================================
- * 校验与清洗
- * =======================================*/
-
-export const isEmptyCondition = (c: SpecCondition): boolean => {
-    return !c.deviceId && !c.key && (!c.value || !c.value.toString().trim())
-}
-
-export const isCompleteCondition = (c: SpecCondition): boolean => {
-    if (isEmptyCondition(c)) return false
-    if (!c.deviceId || !c.targetType || !c.key) return false
-    if ((c.targetType === 'trust' || c.targetType === 'privacy')
-        && !['state', 'variable'].includes(c.propertyScope || '')) return false
-    if (c.targetType !== 'trust' && c.targetType !== 'privacy' && c.propertyScope) return false
-
-    // API 条件表示 signal API 被触发；保存/建模时会固定为 "= TRUE"。
-    if (c.targetType === 'api') return true
-
-    // State / Variable 需要 relation 和 value
-    return !!c.relation && !!(c.value && c.value.toString().trim())
-}
-
-export const validateAndCleanConditions = (
-    conds: SpecCondition[]
-): { cleaned: SpecCondition[]; hasIncomplete: boolean } => {
-    const cleaned: SpecCondition[] = []
-    let hasIncomplete = false
-    for (const c of conds) {
-        if (isEmptyCondition(c)) continue
-        if (!isCompleteCondition(c)) {
-            hasIncomplete = true
-            break
-        }
-        cleaned.push(c)
-    }
-    return { cleaned, hasIncomplete }
-}
-
 const normalizeSpecificationSetValue = (
     value: unknown,
     relation: string,
@@ -364,34 +198,6 @@ export const buildSpecificationSemanticKey = (specification: Pick<
 export const isSameSpecification = (a: Specification, b: Specification): boolean =>
     buildSpecificationSemanticKey(a) === buildSpecificationSemanticKey(b)
 
-export const updateSpecsForNodeRename = (
-    specs: Specification[],
-    nodeId: string,
-    newLabel: string
-): boolean => {
-    let changed = false
-    const update = (list: SpecCondition[]) => {
-        list.forEach(c => {
-            if (c.deviceId === nodeId && c.deviceLabel !== newLabel) {
-                c.deviceLabel = newLabel
-                changed = true
-            }
-        })
-    }
-    specs.forEach(s => {
-        update(s.aConditions)
-        update(s.ifConditions)
-        update(s.thenConditions)
-        ;(s.devices || []).forEach(d => {
-            if (d.deviceId === nodeId && d.deviceLabel !== newLabel) {
-                d.deviceLabel = newLabel
-                changed = true
-            }
-        })
-    })
-    return changed
-}
-
 export const isSpecRelatedToNode = (spec: Specification, nodeId: string) => {
     // 检查规约选择的设备
     if (spec.devices && spec.devices.some(d => d.deviceId === nodeId)) return true
@@ -399,19 +205,6 @@ export const isSpecRelatedToNode = (spec: Specification, nodeId: string) => {
     // 检查条件中是否包含该设备
     const check = (list: SpecCondition[]) => list && list.length > 0 && list.some(c => c.deviceId === nodeId)
     return check(spec.aConditions) || check(spec.ifConditions) || check(spec.thenConditions)
-}
-
-export const removeSpecsForNode = (
-    specs: Specification[],
-    nodeId: string,
-): { nextSpecs: Specification[]; removed: Specification[] } => {
-    const next: Specification[] = []
-    const removed: Specification[] = []
-    specs.forEach(s => {
-        if (isSpecRelatedToNode(s, nodeId)) removed.push(s)
-        else next.push(s)
-    })
-    return { nextSpecs: next, removed }
 }
 
 /**

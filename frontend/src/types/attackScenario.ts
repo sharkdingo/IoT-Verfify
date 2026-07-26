@@ -11,9 +11,3 @@ export interface AttackScenario {
   budget?: number
   points?: AttackPoint[]
 }
-
-export const noAttackScenario = (): AttackScenario => ({
-  mode: 'NONE',
-  budget: 0,
-  points: []
-})
