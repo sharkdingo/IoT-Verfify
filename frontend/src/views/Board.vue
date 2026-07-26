@@ -492,6 +492,7 @@ import type { PortableSceneFile } from '@/types/scene'
 import { getNodeIcon as resolveNodeIcon } from '../utils/device'
 import { getVerificationOutcome, normalizeSpecResults } from '../utils/verificationResult'
 import { createDeviceInstanceId, deviceLabelKey, getUniqueLabel } from '../utils/canvas/nodeCreate'
+import { screenToWorld } from '../utils/canvas/geometry'
 import {
   buildSpecDeviceRefsFromConditions,
   buildSpecificationSemanticKey,
@@ -2485,8 +2486,7 @@ const onCanvasDrop = async (e: DragEvent) => {
   const Sx = e.clientX - rect.left
   const Sy = e.clientY - rect.top
 
-  const x = (Sx - canvasPan.value.x) / canvasZoom.value
-  const y = (Sy - canvasPan.value.y) / canvasZoom.value
+  const { x, y } = screenToWorld(Sx, Sy, canvasPan.value, canvasZoom.value)
 
   openTemplateInstanceDialog(tpl, { x, y })
   draggingTplName.value = null
@@ -5716,8 +5716,7 @@ const getNextNodePosition = (occupiedNodes: DeviceNode[] = nodes.value): { x: nu
 
   while (attempts < maxAttempts) {
     // 转换到世界坐标
-    const worldX = (screenX - canvasPan.value.x) / canvasZoom.value
-    const worldY = (screenY - canvasPan.value.y) / canvasZoom.value
+    const { x: worldX, y: worldY } = screenToWorld(screenX, screenY, canvasPan.value, canvasZoom.value)
 
     // 检查与其他节点的重叠
     const hasOverlap = occupiedNodes.some(node => {
@@ -5749,10 +5748,7 @@ const getNextNodePosition = (occupiedNodes: DeviceNode[] = nodes.value): { x: nu
   screenX = screenCenterX + Math.cos(randomAngle) * randomRadius
   screenY = screenCenterY + Math.sin(randomAngle) * randomRadius
 
-  const finalX = (screenX - canvasPan.value.x) / canvasZoom.value
-  const finalY = (screenY - canvasPan.value.y) / canvasZoom.value
-
-  return { x: finalX, y: finalY }
+  return screenToWorld(screenX, screenY, canvasPan.value, canvasZoom.value)
 }
 
 const cancelRecommendationDuringTeardown = (
