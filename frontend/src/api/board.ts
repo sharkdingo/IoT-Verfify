@@ -3,8 +3,10 @@ import api from './http';
 
 // 引入类型
 import type {
+    DeviceRecommendation,
     RecommendationAdjustmentItem,
-    RecommendationFilteredItem
+    RecommendationFilteredItem,
+    SpecificationRecommendation
 } from '@/types/recommendation'
 import type { DeviceNode } from '../types/node'
 import type { Specification } from '../types/spec'
@@ -81,32 +83,12 @@ import {
 } from '@/utils/canvas/nodeLayout'
 
 export type {
+    DeviceRecommendation,
     RecommendationAdjustmentItem,
-    RecommendationFilteredItem
+    RecommendationFilteredItem,
+    SpecificationRecommendation
 } from '@/types/recommendation'
 
-export interface DeviceRecommendation {
-    templateName: string
-    suggestedLabel: string
-    /** Advisory recommendation context; not persisted as a device/model field. */
-    intendedUse?: string
-    /** Advisory recommendation context; not persisted as a device/model field. */
-    suggestedPlacement?: string
-    description?: string
-    reason?: string
-    initialState?: string
-    currentStateTrust?: 'trusted' | 'untrusted'
-    currentStatePrivacy?: 'public' | 'private'
-    initialVariables?: Array<{
-        name: string
-        value: string
-        trust?: 'trusted' | 'untrusted'
-    }>
-    initialPrivacies?: Array<{
-        name: string
-        privacy: 'public' | 'private'
-    }>
-}
 
 interface RecommendationResponse<T = any> {
     message: string
@@ -186,15 +168,6 @@ export interface ScenarioSemanticWarning {
     message: string
 }
 
-export interface SpecificationRecommendation {
-    category?: string
-    /** Advisory explanation; applying persists only templateId and structured conditions. */
-    rationale: string
-    templateId: string
-    aConditions: Specification['aConditions']
-    ifConditions: Specification['ifConditions']
-    thenConditions: Specification['thenConditions']
-}
 
 // These synchronous operations are bounded by the server's NuSMV/LLM/fix deadlines.
 // Do not let Axios' shorter CRUD timeout report a false failure while the server is still working.

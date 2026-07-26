@@ -1,5 +1,8 @@
-import type { RuleRecommendation } from '@/api/rules'
-import type { DeviceRecommendation, SpecificationRecommendation } from '@/api/board'
+import type {
+  DeviceRecommendation,
+  RuleRecommendation,
+  SpecificationRecommendation
+} from '@/types/recommendation'
 import type { RuleForm, RuleSourceItemType } from '@/types/rule'
 import type { SpecCondition } from '@/types/spec'
 import { normalizeModelRelation } from '@/utils/modelRequest'

@@ -2,7 +2,8 @@
 import api from '@/api/http'
 import type {
     RecommendationAdjustmentItem,
-    RecommendationFilteredItem
+    RecommendationFilteredItem,
+    RuleRecommendation
 } from '@/types/recommendation'
 import { validateStandaloneRecommendationResponse } from '@/utils/recommendationResponse'
 import { validateRuleRecommendationCandidate } from '@/utils/recommendationMaterialization'
@@ -22,34 +23,11 @@ let currentAbortController: AbortController | null = null;
 /**
  * 获取规则推荐
  */
-export interface RuleRecommendation {
-  category?: string
-  /** Exact user-facing rule name persisted when the candidate is applied. */
-  name: string
-  conditions: {
-    deviceId: string
-    deviceLabel?: string
-    deviceName: string
-    attribute: string
-    targetType: 'api' | 'variable' | 'mode' | 'state'
-    relation?: string
-    value?: string
-  }[]
-  command: {
-    deviceId: string
-    deviceLabel?: string
-    deviceName: string
-    action: string
-    contentDevice?: string
-    contentDeviceLabel?: string
-    content?: string
-    contentPrivacy?: 'public' | 'private'
-  }
-}
 
 export type {
     RecommendationAdjustmentItem,
-    RecommendationFilteredItem
+    RecommendationFilteredItem,
+    RuleRecommendation
 } from '@/types/recommendation'
 
 export interface RecommendRulesResponse {

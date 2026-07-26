@@ -1,3 +1,5 @@
+import type { Specification } from './spec'
+
 /**
  * Shared recommendation-response accounting types.
  *
@@ -24,4 +26,65 @@ export interface RecommendationAdjustmentItem {
   reason: string
   label?: string
   appliedValues: Record<string, unknown>
+}
+
+/** One LLM-proposed automation rule, before the user applies it to the board. */
+export interface RuleRecommendation {
+  category?: string
+  /** Exact user-facing rule name persisted when the candidate is applied. */
+  name: string
+  conditions: {
+    deviceId: string
+    deviceLabel?: string
+    deviceName: string
+    attribute: string
+    targetType: 'api' | 'variable' | 'mode' | 'state'
+    relation?: string
+    value?: string
+  }[]
+  command: {
+    deviceId: string
+    deviceLabel?: string
+    deviceName: string
+    action: string
+    contentDevice?: string
+    contentDeviceLabel?: string
+    content?: string
+    contentPrivacy?: 'public' | 'private'
+  }
+}
+
+/** One LLM-proposed device instance, before the user adds it to the board. */
+export interface DeviceRecommendation {
+  templateName: string
+  suggestedLabel: string
+  /** Advisory recommendation context; not persisted as a device/model field. */
+  intendedUse?: string
+  /** Advisory recommendation context; not persisted as a device/model field. */
+  suggestedPlacement?: string
+  description?: string
+  reason?: string
+  initialState?: string
+  currentStateTrust?: 'trusted' | 'untrusted'
+  currentStatePrivacy?: 'public' | 'private'
+  initialVariables?: Array<{
+    name: string
+    value: string
+    trust?: 'trusted' | 'untrusted'
+  }>
+  initialPrivacies?: Array<{
+    name: string
+    privacy: 'public' | 'private'
+  }>
+}
+
+/** One LLM-proposed specification, carrying the structured conditions that get persisted. */
+export interface SpecificationRecommendation {
+  category?: string
+  /** Advisory explanation; applying persists only templateId and structured conditions. */
+  rationale: string
+  templateId: string
+  aConditions: Specification['aConditions']
+  ifConditions: Specification['ifConditions']
+  thenConditions: Specification['thenConditions']
 }
