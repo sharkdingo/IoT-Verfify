@@ -12327,6 +12327,7 @@ const handleVerify = async (): Promise<boolean> => {
       ...result,
       specResults: normalizeSpecResults((result as any).specResults)
     }, submission)
+    verificationResultStale.value = false
     if (['FAILED', 'OUTCOME_UNKNOWN'].includes(result.historyPersistence.status)) {
       ElMessage.warning({
         message: result.historyPersistence.status === 'OUTCOME_UNKNOWN'
