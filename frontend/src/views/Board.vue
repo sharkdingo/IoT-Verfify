@@ -3358,6 +3358,7 @@ const forceDeleteNode = async (
         return { responseConfirmed: false, stalePreview: true }
       } else if (error?.response?.status === 404) {
         const refreshed = await refreshSceneForReconciliation()
+        if (refreshed) markVerificationResultStale()
         if (refreshed && !nodes.value.some(node => node.id === nodeId)) {
           ElMessage.warning(t('app.deviceDeleteOutcomeRefreshed'))
           return { responseConfirmed: false }
@@ -3365,6 +3366,7 @@ const forceDeleteNode = async (
         ElMessage.error(message)
       } else if (!isDefinitiveMutationRejection(error)) {
         const refreshed = await refreshSceneForReconciliation()
+        if (refreshed) markVerificationResultStale()
         if (!refreshed) {
           ElMessage.warning(t('app.deviceDeleteOutcomeUnknownRefreshFailed'))
         } else if (!nodes.value.some(node => node.id === nodeId)) {
@@ -4331,11 +4333,13 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
           // template which sourced this variable. Reconcile the full semantic
           // snapshot so the inspector cannot keep ghost entries.
           const refreshed = await refreshBoardSnapshot()
+          if (refreshed) markVerificationResultStale()
           ElMessage.warning(refreshed
             ? t('app.environmentVariableStaleRefreshed')
             : t('app.environmentVariableStaleRefreshFailed'))
         } else if (!isDefinitiveMutationRejection(e)) {
           const refreshed = await refreshBoardSnapshot()
+          if (refreshed) markVerificationResultStale()
           ElMessage.warning(refreshed
             ? t('app.environmentSaveOutcomeRefreshed')
             : t('app.environmentSaveOutcomeUnknownRefreshFailed'))
@@ -5448,6 +5452,7 @@ const reportBoardReplacementDrift = async (error: any): Promise<boolean> => {
   const preview = readBoardReplacementStalePreview(error)
   if (!preview) return false
   const refreshed = await refreshSceneForReconciliation()
+  if (refreshed) markVerificationResultStale()
   ElMessage.warning(t(
     refreshed ? 'app.sceneReplacementChangedBeforeApply' : 'app.sceneReplacementChangedRefreshFailed',
     {
@@ -5582,6 +5587,7 @@ const importScene = async (
         }
 
         const refreshed = await refreshSceneForReconciliation()
+        if (refreshed) markVerificationResultStale()
         if (!refreshed) {
           ElMessage.warning(t('app.sceneImportOutcomeUnknownRefreshFailed'))
           return false
@@ -5712,6 +5718,7 @@ const clearScene = async () => {
           return
         }
         const refreshed = await refreshSceneForReconciliation()
+        if (refreshed) markVerificationResultStale()
         if (!refreshed) {
           ElMessage.warning(t('app.sceneClearOutcomeUnknownRefreshFailed'))
           return
@@ -12524,6 +12531,7 @@ const runFuzzing = async (): Promise<boolean> => {
       if (stalePaperDomain) {
         paperDomainStaleRecoveryActive.value = true
         const boardRefreshed = await refreshSceneForReconciliation()
+        if (boardRefreshed) markVerificationResultStale()
         invalidatePaperDomainPreview()
         fuzzingError.value = t(boardRefreshed
           ? 'app.fuzzPaperDomainStale'
