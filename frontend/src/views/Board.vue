@@ -9474,13 +9474,7 @@ const watchSimulationTask = async (taskId: number) => {
         return
       }
       savedSimulationStates.value = [...result.states]
-      simulationAnimationState.value = {
-        visible: true
-      }
-      highlightedTrace.value = {
-        states: savedSimulationStates.value,
-        selectedStateIndex: 0
-      }
+      openSimulationAnimationFromSavedStates()
       notifySimulationOutcome(result, true)
     }
   } catch (error: any) {
@@ -9841,12 +9835,7 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
     closeHistoryPanel(false)
     activeFuzzingFinding.value = null
     savedTraces.value = [trace]
-    traceAnimationState.value = {
-      visible: true,
-      selectedTraceIndex: 0,
-      selectedStateIndex: 0,
-      isPlaying: false
-    }
+    openTraceAnimationAt(0)
     const currentTraceData = currentTrace.value
     if (currentTraceData) {
       highlightedTrace.value = {
@@ -9904,13 +9893,7 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
     lastSimulationResult.value = result
     simulationResult.value = null
     savedSimulationStates.value = [...trace.states]
-    simulationAnimationState.value = {
-      visible: true
-    }
-    highlightedTrace.value = {
-      states: savedSimulationStates.value,
-      selectedStateIndex: 0
-    }
+    openSimulationAnimationFromSavedStates()
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load simulation trace:', e)
@@ -10114,12 +10097,7 @@ const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) =>
     closeFuzzingResult()
     activeFuzzingFinding.value = finding
     savedTraces.value = [trace]
-    traceAnimationState.value = {
-      visible: true,
-      selectedTraceIndex: 0,
-      selectedStateIndex: 0,
-      isPlaying: false
-    }
+    openTraceAnimationAt(0)
     highlightedTrace.value = { ...trace, selectedStateIndex: 0 }
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
@@ -10585,6 +10563,19 @@ const simulationAnimationState = ref({
   visible: false
 })
 
+/**
+ * Open the simulation playback surface over `savedSimulationStates`, highlighting its first
+ * state. Callers set `savedSimulationStates` first; this pairs opening with the rewind so the
+ * timeline can never appear while the canvas still highlights a previous run's state.
+ */
+const openSimulationAnimationFromSavedStates = () => {
+  simulationAnimationState.value = { visible: true }
+  highlightedTrace.value = {
+    states: savedSimulationStates.value,
+    selectedStateIndex: 0
+  }
+}
+
 // 独立保存的模拟 states 数据（用于对话框关闭后）
 const savedSimulationStates = ref<SimulationState[]>([])
 
@@ -10598,6 +10589,22 @@ const traceAnimationState = ref({
   selectedStateIndex: 0,
   isPlaying: false
 })
+
+/**
+ * Open the counterexample playback surface on one trace, paused at its first state.
+ *
+ * Every entry point (verification result dialog, history panel, fuzz finding) starts playback
+ * the same way and differs only in which trace index it selects, so the reset is expressed once
+ * -- a caller cannot forget to rewind `selectedStateIndex` or leave `isPlaying` set.
+ */
+const openTraceAnimationAt = (selectedTraceIndex: number) => {
+  traceAnimationState.value = {
+    visible: true,
+    selectedTraceIndex,
+    selectedStateIndex: 0,
+    isPlaying: false
+  }
+}
 
 // 独立保存的 traces 数据（用于对话框关闭后）
 const savedTraces = ref<any[]>([])
@@ -10941,12 +10948,7 @@ const selectAndPlayTrace = (traceIndex: number) => {
     closeResultDialog()
     
     // 设置选中的 trace 索引
-    traceAnimationState.value = {
-      visible: true,
-      selectedTraceIndex: traceIndex,
-      selectedStateIndex: 0,
-      isPlaying: false
-    }
+    openTraceAnimationAt(traceIndex)
     
     // 高亮第一个状态
     const trace = currentTrace.value
@@ -11137,15 +11139,7 @@ const openSimulationTimeline = () => {
     simulationResult.value = null
     
     // 打开模拟时间轴动画
-    simulationAnimationState.value = {
-      visible: true
-    }
-    
-    // 高亮第一个状态
-    highlightedTrace.value = {
-      states: savedSimulationStates.value,
-      selectedStateIndex: 0
-    }
+    openSimulationAnimationFromSavedStates()
   }
 }
 
@@ -11660,13 +11654,7 @@ const handleSimulate = async (simConfig: {
 
         savedSimulationStates.value = [...result.states]
         showSimulationPanel.value = false
-        simulationAnimationState.value = {
-          visible: true
-        }
-        highlightedTrace.value = {
-          states: savedSimulationStates.value,
-          selectedStateIndex: 0
-        }
+        openSimulationAnimationFromSavedStates()
         notifySimulationOutcome(result, true)
         return true
       }
@@ -11678,15 +11666,7 @@ const handleSimulate = async (simConfig: {
       showSimulationPanel.value = false
       
       // 打开模拟时间轴动画
-      simulationAnimationState.value = {
-        visible: true
-      }
-      
-      // 高亮第一个状态
-      highlightedTrace.value = {
-        states: savedSimulationStates.value,
-        selectedStateIndex: 0
-      }
+      openSimulationAnimationFromSavedStates()
       
       notifySimulationOutcome(result, !!normalizedSimConfig.saveToHistory)
       return true
