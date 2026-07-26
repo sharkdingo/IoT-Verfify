@@ -435,7 +435,7 @@ import {
   formatRecommendationCategory,
   RULE_RECOMMENDATION_CATEGORY_OPTIONS,
   SPEC_RECOMMENDATION_CATEGORY_OPTIONS
-} from '@/utils/recommendationCategory'
+} from './board/recommendationCategory'
 import { authApi } from '@/api/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
@@ -490,7 +490,7 @@ import type { PortableSceneFile } from '@/types/scene'
 
 // Utils
 import { getNodeIcon as resolveNodeIcon } from '../utils/device'
-import { getVerificationOutcome, normalizeSpecResults } from '../utils/verificationResult'
+import { getVerificationOutcome, normalizeSpecResults } from './board/verificationResult'
 import { createDeviceInstanceId, deviceLabelKey, getUniqueLabel } from '../utils/canvas/nodeCreate'
 import { screenToWorld } from '../utils/canvas/geometry'
 import {
@@ -529,7 +529,7 @@ import {
   getAttackScenarioIssue,
   getAttackSelectionIssue,
   selectedAttackPoints
-} from '@/utils/attackSurface'
+} from './board/attackSurface'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { requestInteractiveCancellation } from '@/utils/interactiveCancellation'
 import {
@@ -550,7 +550,7 @@ import {
   SCENE_FILE_SCHEMA,
   SCENE_FILE_VERSION,
   type BoardSceneModel
-} from '@/utils/scene'
+} from './board/portableScene'
 import {
   FUZZ_RESPONSE_INCOMPLETE_CODE,
   getFuzzActiveTaskLimit,
@@ -564,7 +564,7 @@ import {
   fuzzNotificationStorageKeyForUser,
   fuzzRunRetryDelayMs,
   isTransientTaskHttpStatus
-} from '@/utils/fuzzingRecovery'
+} from './board/fuzzingRecovery'
 import {
   createPagedRequestCoordinator,
   type PagedRequestToken

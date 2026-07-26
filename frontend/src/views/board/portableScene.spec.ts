@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSceneCodec, SCENE_FILE_SCHEMA, SCENE_FILE_VERSION } from '../scene'
+import { createSceneCodec, SCENE_FILE_SCHEMA, SCENE_FILE_VERSION } from './portableScene'
 
 // The codec is the trust boundary for imported scene files, so these tests assert that
 // malformed input is REJECTED rather than coerced into a half-valid board. The translator is

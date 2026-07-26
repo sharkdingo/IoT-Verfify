@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getVerificationOutcome, normalizeSpecResult } from '../verificationResult'
+import { getVerificationOutcome, normalizeSpecResult } from './verificationResult'
 
 describe('verification result semantics', () => {
   it('does not turn an unknown or legacy boolean result into a violation', () => {

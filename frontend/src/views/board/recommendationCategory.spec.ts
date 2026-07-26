@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatRecommendationCategory } from '@/utils/recommendationCategory'
+import { formatRecommendationCategory } from './recommendationCategory'
 
 const labels: Record<string, string> = {
   'app.recommendationCategorySecurity': 'Security label',

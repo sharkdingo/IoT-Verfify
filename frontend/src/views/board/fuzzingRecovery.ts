@@ -1,4 +1,4 @@
-import { FUZZ_RESPONSE_INCOMPLETE_CODE } from './fuzzingResponse'
+import { FUZZ_RESPONSE_INCOMPLETE_CODE } from '@/utils/fuzzingResponse'
 
 export type TrackedFuzzRunRecovery = 'RETRY' | 'UNAVAILABLE'
 

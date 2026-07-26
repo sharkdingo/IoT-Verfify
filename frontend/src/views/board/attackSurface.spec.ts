@@ -4,7 +4,7 @@ import {
   getAttackScenarioIssue,
   getAttackSelectionIssue,
   selectedAttackPoints
-} from '@/utils/attackSurface'
+} from './attackSurface'
 import type { DeviceTemplate } from '@/types/device'
 import type { DeviceNode } from '@/types/node'
 import type { RuleForm } from '@/types/rule'

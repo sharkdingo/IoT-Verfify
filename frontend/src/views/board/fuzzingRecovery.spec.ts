@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FUZZ_RESPONSE_INCOMPLETE_CODE } from '../fuzzingResponse'
+import { FUZZ_RESPONSE_INCOMPLETE_CODE } from '@/utils/fuzzingResponse'
 import {
   FUZZ_INLINE_RESULT_RECOVERY_MAX_FAILURES,
   classifyTrackedFuzzRunError,
@@ -7,7 +7,7 @@ import {
   fuzzNotificationStorageKeyForUser,
   fuzzRunRetryDelayMs,
   isTransientTaskHttpStatus
-} from '../fuzzingRecovery'
+} from './fuzzingRecovery'
 
 describe('tracked fuzz-run recovery', () => {
   it('stops retrying malformed response data and explicit client errors', () => {
