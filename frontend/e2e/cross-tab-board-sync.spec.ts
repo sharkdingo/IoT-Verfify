@@ -1,4 +1,5 @@
 import { type Page } from '@playwright/test'
+import path from 'node:path'
 import { createAuthenticatedUser, expect, test, type AuthUser } from './support/auth'
 
 test.describe.configure({ timeout: 120_000 })
@@ -345,6 +346,56 @@ test('switching accounts remounts the workspace and rebinds board invalidations'
 
     await expect(observer.locator('.device-node').filter({ hasText: bobLabel }))
       .toBeVisible({ timeout: 15_000 })
+  } finally {
+    await context.close()
+  }
+})
+
+// A displayed verdict describes the model that was verified. The result dialog is a modal
+// overlay, so the reachable way to change the board underneath it is another tab: this tab's
+// foreground/cross-tab snapshot refresh reconciles the board while the verdict stays open.
+// The verdict must then stop offering actions that imply it describes the current canvas.
+test('a cross-tab board change marks an open verification verdict stale', async ({ browser, request }) => {
+  const auth = await createAuthenticatedUser(request, { usernamePrefix: 'staleverdict' })
+  const context = await browser.newContext()
+  const viewer = await context.newPage()
+  await openWorkspace(viewer, auth)
+  const writer = await context.newPage()
+  await openWorkspace(writer, auth)
+
+  try {
+    // Build the smallest board that yields a violated verdict with a replayable counterexample.
+    await viewer.bringToFront()
+    const scenePath = path.resolve(process.cwd(), '..', 'docs', 'examples', 'acceptance-demo-scene.json')
+    await viewer.getByTestId('scene-import-file').setInputFiles(scenePath)
+    await viewer.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+    await expect(viewer.getByTestId('scene-import')).toBeEnabled({ timeout: 60_000 })
+
+    await viewer.getByTestId('open-verification-panel').click()
+    await viewer.getByTestId('verification-mode-sync').click()
+    await viewer.getByTestId('run-verification').click()
+    await expect(viewer.getByTestId('verification-result-dialog')).toBeVisible({ timeout: 90_000 })
+    // A freshly presented verdict describes the board it was computed from.
+    await expect(viewer.getByTestId('verification-result-stale-banner')).toHaveCount(0)
+    await expect(viewer.getByTestId('verification-trace-fix').first())
+      .toBeVisible({ timeout: 30_000 })
+
+    // Change the board from the other tab, then return so this tab reconciles its snapshot.
+    const viewerRefresh = viewer.waitForResponse(response =>
+      response.request().method() === 'GET'
+        && new URL(response.url()).pathname === '/api/board/snapshot')
+    await writer.bringToFront()
+    await createDevice(writer, `Stale probe ${Date.now()}`)
+    await viewer.bringToFront()
+    await viewerRefresh
+
+    // The verdict no longer describes the reconciled board, so it says so and withdraws Fix.
+    await expect(viewer.getByTestId('verification-result-dialog')).toBeVisible()
+    await expect(viewer.getByTestId('verification-result-stale-banner'))
+      .toBeVisible({ timeout: 30_000 })
+    await expect(viewer.getByTestId('verification-trace-fix')).toHaveCount(0)
   } finally {
     await context.close()
   }

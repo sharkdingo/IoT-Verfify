@@ -6834,11 +6834,17 @@ const verificationError = ref<string | null>(null)
 // (applying a fix, editing rules/specs/devices from the inspector or chat) makes it stale,
 // so the counterexample actions must stop claiming to describe the current board.
 const verificationResultStale = ref(false)
+// A simulation trace is the same kind of claim: replay animates it over the CURRENT canvas,
+// so a reconciled board invalidates it for exactly the same reason. Declared here (next to the
+// verification flag) so both are set from the one hook below; the simulation state itself lives
+// further down with the rest of the simulation logic.
+const simulationResultStale = ref(false)
 
 // Called from the single semantic-scene-change hook in the board mutation queue, so every
 // mutation path (fix apply, chat tool, inspector edit) is covered by one rule.
 const markVerificationResultStale = () => {
   if (verificationResult.value) verificationResultStale.value = true
+  if (simulationResult.value) simulationResultStale.value = true
 }
 
 type RunSubmission<T> = { request: T; signature: string; taskId?: number }
@@ -7532,6 +7538,7 @@ function closeResultSurfaces() {
   verificationResultStale.value = false
   verificationError.value = null
   simulationResult.value = null
+  simulationResultStale.value = false
   simulationError.value = null
   fuzzingResult.value = null
   fuzzingError.value = null
@@ -10527,6 +10534,7 @@ const watchSimulationTask = async (taskId: number) => {
       submissionForTask(activeSimulationSubmission.value, taskId)
     )
     lastSimulationResult.value = result
+    simulationResultStale.value = false
     if (result.traceId) {
       simulationHistoryRequests.invalidate()
       simulationRuns.value = [
@@ -12205,7 +12213,13 @@ const openSimulationTimeline = () => {
     return
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
-  
+  // Replay animates these states over the CURRENT canvas. Once the board has been reconciled,
+  // the trace no longer describes this model, so refuse rather than show a contradicting walkthrough.
+  if (simulationResultStale.value) {
+    ElMessage.warning({ message: t('app.simulationResultStaleRerun'), type: 'warning' })
+    return
+  }
+
   if (simulationResult.value?.states?.length > 0) {
     resetPlaybackChanges()
     // 保存模拟 states 数据到独立变量
@@ -12625,6 +12639,7 @@ const handleSimulate = async (simConfig: {
   cancellingSimulationTask.value = false
   simulationError.value = null
   simulationResult.value = null
+  simulationResultStale.value = false
 
   // 重置异步任务状态
   if (normalizedSimConfig.isAsync) {
@@ -12704,6 +12719,7 @@ const handleSimulate = async (simConfig: {
     // openSimulationLogs(); the success path opens the timeline (below), not the result dialog.
     result = attachLocalRunSubmission(result, submission)
     lastSimulationResult.value = result
+    simulationResultStale.value = false
     if (result.traceId) {
       simulationHistoryRequests.invalidate()
       simulationRuns.value = [
@@ -13091,6 +13107,7 @@ const {
 const isSimulationResultDialogOpen = computed(() => !!simulationResult.value || !!simulationError.value)
 const closeSimulationResultDialog = () => {
   simulationResult.value = null
+  simulationResultStale.value = false
   simulationError.value = null
 }
 const {
@@ -16836,6 +16853,15 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <div v-else-if="simulationResult" class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+        <div
+          v-if="simulationResultStale"
+          data-testid="simulation-result-stale-banner"
+          role="status"
+          class="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-5 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+        >
+          <span class="material-symbols-outlined text-base" aria-hidden="true">history</span>
+          <span>{{ t('app.simulationResultStaleRerun') }}</span>
+        </div>
         <div
           v-if="!isSimulationModelComplete(simulationResult)"
           class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
