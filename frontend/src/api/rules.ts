@@ -1,5 +1,9 @@
 // src/api/rules.ts - Rules API
 import api from '@/api/http'
+import type {
+    RecommendationAdjustmentItem,
+    RecommendationFilteredItem
+} from '@/types/recommendation'
 import { validateStandaloneRecommendationResponse } from '@/utils/recommendationResponse'
 import { validateRuleRecommendationCandidate } from '@/utils/recommendationMaterialization'
 import {
@@ -43,22 +47,10 @@ export interface RuleRecommendation {
   }
 }
 
-export interface RecommendationFilteredItem {
-  type: string
-  index: number
-  reasonCode: string
-  reason: string
-  label?: string
-}
-
-export interface RecommendationAdjustmentItem {
-  type: string
-  index?: number
-  reasonCode: string
-  reason: string
-  label?: string
-  appliedValues: Record<string, unknown>
-}
+export type {
+    RecommendationAdjustmentItem,
+    RecommendationFilteredItem
+} from '@/types/recommendation'
 
 export interface RecommendRulesResponse {
   message: string

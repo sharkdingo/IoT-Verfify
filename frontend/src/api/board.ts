@@ -2,6 +2,10 @@
 import api from './http';
 
 // 引入类型
+import type {
+    RecommendationAdjustmentItem,
+    RecommendationFilteredItem
+} from '@/types/recommendation'
 import type { DeviceNode } from '../types/node'
 import type { Specification } from '../types/spec'
 import type { BoardLayoutDto } from '../types/canvas'
@@ -76,22 +80,10 @@ import {
     NODE_WIDTH_RANGE
 } from '@/utils/canvas/nodeLayout'
 
-export interface RecommendationFilteredItem {
-    type: string
-    index: number
-    reasonCode: string
-    reason: string
-    label?: string
-}
-
-export interface RecommendationAdjustmentItem {
-    type: string
-    index?: number
-    reasonCode: string
-    reason: string
-    label?: string
-    appliedValues: Record<string, unknown>
-}
+export type {
+    RecommendationAdjustmentItem,
+    RecommendationFilteredItem
+} from '@/types/recommendation'
 
 export interface DeviceRecommendation {
     templateName: string
