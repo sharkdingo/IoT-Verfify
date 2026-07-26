@@ -6107,6 +6107,21 @@ const specificationExists = (recommendation: any): boolean => {
 
 type RecommendationPanelKind = 'rule' | 'device' | 'spec' | 'scenario'
 
+/**
+ * The in-flight request identity for one recommendation panel.
+ *
+ * Every step of the ownership / cancellation / recovery machinery needs the same four things,
+ * and they always belong to the same panel. Bundling them per panel means a call site names
+ * the panel once instead of re-threading four arguments that must not be mixed between panels.
+ */
+type RecommendationRequestHandle = {
+  kind: RecommendationPanelKind
+  requestId: Ref<string | null>
+  abortController: Ref<AbortController | null>
+  running: Ref<boolean>
+  cancelledMessageKey: string
+}
+
 const recommendationStopRequestsInFlight = new Set<RecommendationPanelKind>()
 const recommendationRequestOwners = new Map<string, RecommendationRequestOwner>()
 const recommendationOutcomeUnknownWarnings = new Set<string>()
@@ -6231,13 +6246,12 @@ const releaseRecommendationTracking = (
 }
 
 const settleRecommendationPost = (
-  kind: RecommendationPanelKind,
+  panel: RecommendationRequestHandle,
   requestId: string,
-  requestIdRef: Ref<string | null>,
-  abortControllerRef: Ref<AbortController | null>,
-  controller: AbortController,
-  setRunning: (running: boolean) => void
+  controller: AbortController
 ) => {
+  const { kind, requestId: requestIdRef, abortController: abortControllerRef } = panel
+  const setRunning = (running: boolean) => { panel.running.value = running }
   const recovery = recommendationStopRecoveries.get(kind)
   if (recovery?.requestId === requestId) {
     releaseRecommendationTracking(kind, requestId, { terminalEvidence: 'post-terminal' })
@@ -6256,36 +6270,24 @@ const settleRecommendationPost = (
 }
 
 const beginUnknownRecommendationRecovery = (
-  kind: RecommendationPanelKind,
-  requestId: string,
-  requestIdRef: Ref<string | null>,
-  abortControllerRef: Ref<AbortController | null>,
-  setRunning: (running: boolean) => void,
-  cancelledMessageKey: string
+  panel: RecommendationRequestHandle,
+  requestId: string
 ) => {
-  if (requestIdRef.value !== requestId) return
+  if (panel.requestId.value !== requestId) return
   if (!recommendationOutcomeUnknownWarnings.has(requestId)) {
     recommendationOutcomeUnknownWarnings.add(requestId)
     ElMessage.warning(t('app.recommendationResponseLostRecovering'))
   }
-  void stopActiveRecommendation(
-    kind,
-    requestIdRef,
-    abortControllerRef,
-    setRunning,
-    cancelledMessageKey,
-    { showMessage: false }
-  )
+  void stopActiveRecommendation(panel, { showMessage: false })
 }
 
 const ensureRecommendationStopRecovery = (
-  kind: RecommendationPanelKind,
-  requestIdRef: Ref<string | null>,
-  abortControllerRef: Ref<AbortController | null>,
-  setRunning: (running: boolean) => void,
-  cancelledMessageKey: string,
+  panel: RecommendationRequestHandle,
   options: { showMessage?: boolean } = {}
 ): RecommendationStopRecovery | null => {
+  const { kind, requestId: requestIdRef, abortController: abortControllerRef } = panel
+  const setRunning = (running: boolean) => { panel.running.value = running }
+  const cancelledMessageKey = panel.cancelledMessageKey
   const requestId = requestIdRef.value
   if (!requestId) return null
   const existing = recommendationStopRecoveries.get(kind)
@@ -6343,13 +6345,11 @@ const finishRecommendationStopRecovery = (
 }
 
 const stopActiveRecommendation = async (
-  kind: RecommendationPanelKind,
-  requestIdRef: Ref<string | null>,
-  abortControllerRef: Ref<AbortController | null>,
-  setRunning: (running: boolean) => void,
-  cancelledMessageKey: string,
+  panel: RecommendationRequestHandle,
   options: { showMessage?: boolean } = {}
 ) => {
+  const { kind, requestId: requestIdRef, abortController: abortControllerRef } = panel
+  const setRunning = (running: boolean) => { panel.running.value = running }
   if (recommendationStopRequestsInFlight.has(kind)) return
   recommendationStopRequestsInFlight.add(kind)
   const requestId = requestIdRef.value
@@ -6361,14 +6361,7 @@ const stopActiveRecommendation = async (
     recommendationStopRequestsInFlight.delete(kind)
     return
   }
-  const recovery = ensureRecommendationStopRecovery(
-    kind,
-    requestIdRef,
-    abortControllerRef,
-    setRunning,
-    cancelledMessageKey,
-    options
-  )
+  const recovery = ensureRecommendationStopRecovery(panel, options)
   if (!recovery) {
     recommendationStopRequestsInFlight.delete(kind)
     ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
@@ -6641,13 +6634,7 @@ const openScenarioRecommendationPanel = (): boolean => {
 const fetchRuleRecommendations = async () => {
   if (isRecommendationRequestActive(isRecommendingRules.value, ruleRecommendationRequestId.value)) {
     ruleRecommendationRequestEpoch += 1
-    await stopActiveRecommendation(
-      'rule',
-      ruleRecommendationRequestId,
-      ruleRecommendationAbortController,
-      running => { isRecommendingRules.value = running },
-      'app.ruleRecommendationCancelled'
-    )
+    await stopActiveRecommendation(ruleRecommendationPanel)
     return
   }
   if (isSceneReplacementInProgress.value) {
@@ -6722,14 +6709,7 @@ const fetchRuleRecommendations = async () => {
       return
     }
     if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
-      beginUnknownRecommendationRecovery(
-        'rule',
-        requestId,
-        ruleRecommendationRequestId,
-        ruleRecommendationAbortController,
-        running => { isRecommendingRules.value = running },
-        'app.ruleRecommendationCancelled'
-      )
+      beginUnknownRecommendationRecovery(ruleRecommendationPanel, requestId)
       return
     }
     postTerminal = true
@@ -6739,14 +6719,7 @@ const fetchRuleRecommendations = async () => {
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchRuleRecommendations')))
   } finally {
     if (postTerminal) {
-      settleRecommendationPost(
-        'rule',
-        requestId,
-        ruleRecommendationRequestId,
-        ruleRecommendationAbortController,
-        controller,
-        running => { isRecommendingRules.value = running }
-      )
+      settleRecommendationPost(ruleRecommendationPanel, requestId, controller)
     }
   }
 }
@@ -6754,14 +6727,7 @@ const fetchRuleRecommendations = async () => {
 // 关闭推荐面板
 const closeRecommendationPanel = () => {
   ruleRecommendationRequestEpoch += 1
-  void stopActiveRecommendation(
-    'rule',
-    ruleRecommendationRequestId,
-    ruleRecommendationAbortController,
-    running => { isRecommendingRules.value = running },
-    'app.ruleRecommendationCancelled',
-    { showMessage: false }
-  )
+  void stopActiveRecommendation(ruleRecommendationPanel, { showMessage: false })
   showRecommendationPanel.value = false
   resetRuleRecommendationResults()
 }
@@ -6816,6 +6782,39 @@ const showScenarioRecommendationPanel = ref(false)
 const scenarioRecommendationAbortController = ref<AbortController | null>(null)
 const scenarioRecommendationRequestId = ref<string | null>(null)
 const scenarioRecommendationRequested = ref(false)
+
+/**
+ * One handle per recommendation panel, so the shared ownership / cancellation / recovery
+ * machinery is told which panel to act on instead of receiving its refs one by one.
+ */
+const ruleRecommendationPanel: RecommendationRequestHandle = {
+  kind: 'rule',
+  requestId: ruleRecommendationRequestId,
+  abortController: ruleRecommendationAbortController,
+  running: isRecommendingRules,
+  cancelledMessageKey: 'app.ruleRecommendationCancelled'
+}
+const deviceRecommendationPanel: RecommendationRequestHandle = {
+  kind: 'device',
+  requestId: deviceRecommendationRequestId,
+  abortController: deviceRecommendationAbortController,
+  running: isRecommendingDevices,
+  cancelledMessageKey: 'app.deviceRecommendationCancelled'
+}
+const specRecommendationPanel: RecommendationRequestHandle = {
+  kind: 'spec',
+  requestId: specRecommendationRequestId,
+  abortController: specRecommendationAbortController,
+  running: isRecommendingSpecs,
+  cancelledMessageKey: 'app.specificationRecommendationCancelled'
+}
+const scenarioRecommendationPanel: RecommendationRequestHandle = {
+  kind: 'scenario',
+  requestId: scenarioRecommendationRequestId,
+  abortController: scenarioRecommendationAbortController,
+  running: isRecommendingScenario,
+  cancelledMessageKey: 'app.scenarioRecommendationCancelled'
+}
 const scenarioRecommendationMessage = ref('')
 const scenarioRecommendationResult = ref<ScenarioRecommendationResult | null>(null)
 const scenarioRecommendationFilters = reactive({
@@ -6833,67 +6832,30 @@ const recommendedScenarioScene = computed(() => scenarioRecommendationResult.val
 
 const prepareActiveRecommendationsForLogout = async (): Promise<InteractiveLogoutPreparation> => {
   const activeRequests = [
-    {
-      kind: 'rule' as const,
-      requestIdRef: ruleRecommendationRequestId,
-      controllerRef: ruleRecommendationAbortController,
-      setRunning: (running: boolean) => { isRecommendingRules.value = running },
-      cancelledMessageKey: 'app.ruleRecommendationCancelled'
-    },
-    {
-      kind: 'device' as const,
-      requestIdRef: deviceRecommendationRequestId,
-      controllerRef: deviceRecommendationAbortController,
-      setRunning: (running: boolean) => { isRecommendingDevices.value = running },
-      cancelledMessageKey: 'app.deviceRecommendationCancelled'
-    },
-    {
-      kind: 'spec' as const,
-      requestIdRef: specRecommendationRequestId,
-      controllerRef: specRecommendationAbortController,
-      setRunning: (running: boolean) => { isRecommendingSpecs.value = running },
-      cancelledMessageKey: 'app.specificationRecommendationCancelled'
-    },
-    {
-      kind: 'scenario' as const,
-      requestIdRef: scenarioRecommendationRequestId,
-      controllerRef: scenarioRecommendationAbortController,
-      setRunning: (running: boolean) => { isRecommendingScenario.value = running },
-      cancelledMessageKey: 'app.scenarioRecommendationCancelled'
-    }
-  ].flatMap(entry => {
-    const requestId = entry.requestIdRef.value
+    ruleRecommendationPanel,
+    deviceRecommendationPanel,
+    specRecommendationPanel,
+    scenarioRecommendationPanel
+  ].flatMap(panel => {
+    const requestId = panel.requestId.value
     const owner = requestId ? getRecommendationRequestOwner(requestId) : null
-    return requestId
-      ? [{
-          ...entry,
-          requestId,
-          owner
-        }]
-      : []
+    return requestId ? [{ panel, requestId, owner }] : []
   })
   if (activeRequests.length === 0) return 'ready'
 
   const outcomes = await Promise.all(activeRequests.map(async entry => {
     if (!entry.owner) return 'outcome-unknown' as const
-    ensureRecommendationStopRecovery(
-      entry.kind,
-      entry.requestIdRef,
-      entry.controllerRef,
-      entry.setRunning,
-      entry.cancelledMessageKey,
-      { showMessage: false }
-    )
+    ensureRecommendationStopRecovery(entry.panel, { showMessage: false })
     return prepareOwnedRecommendationForLogout({
       requestId: entry.requestId,
       authToken: entry.owner.authToken,
       cancel: cancelRecommendationAsOwner,
       readStatus: readRecommendationStatusAsOwner,
       waitBeforeRetry: waitForRecommendationCancellationRetry,
-      shouldContinue: () => entry.requestIdRef.value === entry.requestId,
+      shouldContinue: () => entry.panel.requestId.value === entry.requestId,
       hasTerminalEvidence: () => hasRecommendationTerminalEvidence(entry.requestId),
-      onCancellationAccepted: () => acceptRecommendationCancellation(entry.kind, entry.requestId),
-      onStatusFinished: () => finishRecommendationStopRecovery(entry.kind, entry.requestId),
+      onCancellationAccepted: () => acceptRecommendationCancellation(entry.panel.kind, entry.requestId),
+      onStatusFinished: () => finishRecommendationStopRecovery(entry.panel.kind, entry.requestId),
       maxAttempts: 20
     })
   }))
@@ -6920,13 +6882,7 @@ watch(
 const fetchDeviceRecommendations = async () => {
   if (isRecommendationRequestActive(isRecommendingDevices.value, deviceRecommendationRequestId.value)) {
     deviceRecommendationRequestEpoch += 1
-    await stopActiveRecommendation(
-      'device',
-      deviceRecommendationRequestId,
-      deviceRecommendationAbortController,
-      running => { isRecommendingDevices.value = running },
-      'app.deviceRecommendationCancelled'
-    )
+    await stopActiveRecommendation(deviceRecommendationPanel)
     return
   }
   if (isSceneReplacementInProgress.value) {
@@ -7000,14 +6956,7 @@ const fetchDeviceRecommendations = async () => {
       return
     }
     if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
-      beginUnknownRecommendationRecovery(
-        'device',
-        requestId,
-        deviceRecommendationRequestId,
-        deviceRecommendationAbortController,
-        running => { isRecommendingDevices.value = running },
-        'app.deviceRecommendationCancelled'
-      )
+      beginUnknownRecommendationRecovery(deviceRecommendationPanel, requestId)
       return
     }
     postTerminal = true
@@ -7017,14 +6966,7 @@ const fetchDeviceRecommendations = async () => {
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchDeviceRecommendations')))
   } finally {
     if (postTerminal) {
-      settleRecommendationPost(
-        'device',
-        requestId,
-        deviceRecommendationRequestId,
-        deviceRecommendationAbortController,
-        controller,
-        running => { isRecommendingDevices.value = running }
-      )
+      settleRecommendationPost(deviceRecommendationPanel, requestId, controller)
     }
   }
 }
@@ -7032,14 +6974,7 @@ const fetchDeviceRecommendations = async () => {
 // 关闭设备推荐面板
 const closeDeviceRecommendationPanel = () => {
   deviceRecommendationRequestEpoch += 1
-  void stopActiveRecommendation(
-    'device',
-    deviceRecommendationRequestId,
-    deviceRecommendationAbortController,
-    running => { isRecommendingDevices.value = running },
-    'app.deviceRecommendationCancelled',
-    { showMessage: false }
-  )
+  void stopActiveRecommendation(deviceRecommendationPanel, { showMessage: false })
   showDeviceRecommendationPanel.value = false
   resetDeviceRecommendationResults()
 }
@@ -7048,13 +6983,7 @@ const closeDeviceRecommendationPanel = () => {
 const fetchSpecRecommendations = async () => {
   if (isRecommendationRequestActive(isRecommendingSpecs.value, specRecommendationRequestId.value)) {
     specRecommendationRequestEpoch += 1
-    await stopActiveRecommendation(
-      'spec',
-      specRecommendationRequestId,
-      specRecommendationAbortController,
-      running => { isRecommendingSpecs.value = running },
-      'app.specificationRecommendationCancelled'
-    )
+    await stopActiveRecommendation(specRecommendationPanel)
     return
   }
   if (isSceneReplacementInProgress.value) {
@@ -7127,14 +7056,7 @@ const fetchSpecRecommendations = async () => {
       return
     }
     if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
-      beginUnknownRecommendationRecovery(
-        'spec',
-        requestId,
-        specRecommendationRequestId,
-        specRecommendationAbortController,
-        running => { isRecommendingSpecs.value = running },
-        'app.specificationRecommendationCancelled'
-      )
+      beginUnknownRecommendationRecovery(specRecommendationPanel, requestId)
       return
     }
     postTerminal = true
@@ -7144,14 +7066,7 @@ const fetchSpecRecommendations = async () => {
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchSpecificationRecommendations')))
   } finally {
     if (postTerminal) {
-      settleRecommendationPost(
-        'spec',
-        requestId,
-        specRecommendationRequestId,
-        specRecommendationAbortController,
-        controller,
-        running => { isRecommendingSpecs.value = running }
-      )
+      settleRecommendationPost(specRecommendationPanel, requestId, controller)
     }
   }
 }
@@ -7159,14 +7074,7 @@ const fetchSpecRecommendations = async () => {
 // 关闭规约推荐面板
 const closeSpecRecommendationPanel = () => {
   specRecommendationRequestEpoch += 1
-  void stopActiveRecommendation(
-    'spec',
-    specRecommendationRequestId,
-    specRecommendationAbortController,
-    running => { isRecommendingSpecs.value = running },
-    'app.specificationRecommendationCancelled',
-    { showMessage: false }
-  )
+  void stopActiveRecommendation(specRecommendationPanel, { showMessage: false })
   showSpecRecommendationPanel.value = false
   resetSpecRecommendationResults()
 }
@@ -7174,13 +7082,7 @@ const closeSpecRecommendationPanel = () => {
 const fetchScenarioRecommendation = async () => {
   if (isRecommendationRequestActive(isRecommendingScenario.value, scenarioRecommendationRequestId.value)) {
     scenarioRecommendationRequestEpoch += 1
-    await stopActiveRecommendation(
-      'scenario',
-      scenarioRecommendationRequestId,
-      scenarioRecommendationAbortController,
-      running => { isRecommendingScenario.value = running },
-      'app.scenarioRecommendationCancelled'
-    )
+    await stopActiveRecommendation(scenarioRecommendationPanel)
     return
   }
   if (isSceneReplacementInProgress.value) {
@@ -7287,14 +7189,7 @@ const fetchScenarioRecommendation = async () => {
       return
     }
     if (requestDispatched && !postTerminal && isRecommendationPostOutcomeUnknown(error)) {
-      beginUnknownRecommendationRecovery(
-        'scenario',
-        requestId,
-        scenarioRecommendationRequestId,
-        scenarioRecommendationAbortController,
-        running => { isRecommendingScenario.value = running },
-        'app.scenarioRecommendationCancelled'
-      )
+      beginUnknownRecommendationRecovery(scenarioRecommendationPanel, requestId)
       return
     }
     postTerminal = true
@@ -7304,28 +7199,14 @@ const fetchScenarioRecommendation = async () => {
     ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchScenarioRecommendation')))
   } finally {
     if (postTerminal) {
-      settleRecommendationPost(
-        'scenario',
-        requestId,
-        scenarioRecommendationRequestId,
-        scenarioRecommendationAbortController,
-        controller,
-        running => { isRecommendingScenario.value = running }
-      )
+      settleRecommendationPost(scenarioRecommendationPanel, requestId, controller)
     }
   }
 }
 
 const closeScenarioRecommendationPanel = () => {
   scenarioRecommendationRequestEpoch += 1
-  void stopActiveRecommendation(
-    'scenario',
-    scenarioRecommendationRequestId,
-    scenarioRecommendationAbortController,
-    running => { isRecommendingScenario.value = running },
-    'app.scenarioRecommendationCancelled',
-    { showMessage: false }
-  )
+  void stopActiveRecommendation(scenarioRecommendationPanel, { showMessage: false })
   showScenarioRecommendationPanel.value = false
   resetScenarioRecommendationResults()
 }
