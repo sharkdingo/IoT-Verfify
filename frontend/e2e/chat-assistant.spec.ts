@@ -305,22 +305,33 @@ test('a rule_list refresh command makes the workspace re-read undo availability'
   // A real scene gives us device-referencing rules to delete.
   await page.getByTestId('scene-import-file').setInputFiles(path.resolve(
     process.cwd(), '..', 'docs', 'examples', 'default-climate-conflict-scene.json'))
-  // The disabled state is applied locally the instant the journal is cleared, while confirming
-  // availability GETs are still in flight — and a full scene replacement triggers several (the
-  // journal-cleared re-read, the snapshot reload, the data-ready hook). Any of them can resolve after
-  // the out-of-band delete below, legitimately report canUndo=true, and re-enable the button — failing
-  // the negative assertion for a fixture-ordering reason rather than a product one. Waiting on the
-  // *server's* view of availability is the deterministic barrier: once it reports an empty journal,
-  // every in-flight read can only be reporting the same thing.
-  await page.getByRole('dialog').getByRole('button', { name: /Replace in full|全量替换/ }).click()
   // Scene replacement clears the journal, so this is a clean baseline.
+  await page.getByRole('dialog').getByRole('button', { name: /Replace in full|全量替换/ }).click()
   await expect(page.getByTestId('board-undo')).toBeDisabled({ timeout: 60_000 })
-  await expect.poll(async () => (await unwrap<{ canUndo: boolean }>(
-    await request.get(`${apiBaseURL}/api/board/edits/availability`, { headers }))).canUndo,
-    { timeout: 60_000 }).toBe(false)
   await expect.poll(async () => (await unwrap<any[]>(await request.get(rulesUrl, { headers }))).length,
     { timeout: 60_000 }).toBeGreaterThan(0)
   const rules = await unwrap<any[]>(await request.get(rulesUrl, { headers }))
+
+  // The "board has not been told yet" window below is only meaningful if the board is not allowed to
+  // find out on its own. It re-reads availability for several legitimate reasons (the journal-cleared
+  // re-read, a snapshot reload, the data-ready hook, tab focus), and after the out-of-band delete every
+  // one of those correctly returns canUndo=true — which enables the button for a reason that has
+  // nothing to do with the REFRESH_DATA command under test. Earlier attempts to order this with a
+  // barrier still flaked in CI, because there is no point at which the client is guaranteed to be done
+  // reading. So the reads are pinned to the pre-delete answer for the duration of the window, and
+  // released just before the command is delivered.
+  await page.route('**/api/board/edits/availability', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json; charset=UTF-8',
+    body: JSON.stringify({
+      code: 200,
+      message: 'ok',
+      data: {
+        applied: false, reasonCode: 'AVAILABILITY_ONLY',
+        rules: [], specs: [], canUndo: false, canRedo: false
+      }
+    })
+  }))
 
   // Delete through the same journal-recording endpoint the assistant's tools use. The model's
   // wording is not under test here; the contract is that an assistant-path edit is as reversible
@@ -398,7 +409,18 @@ test('a rule_list refresh command makes the workspace re-read undo availability'
   const composer = page.getByTestId('chat-input')
   await expect(composer).toBeVisible({ timeout: 30_000 })
   await composer.fill('Delete one rule.')
+  // `rule_list` maps to `refreshRulesFromChat`, which reloads the rule list and *then* awaits the undo
+  // availability re-read. Watching for that rule fetch is what actually pins the handler: the button
+  // alone does not, because `refreshBoardSnapshot` re-reads availability for its own reasons and chat
+  // activity triggers one — this test passed with the target pointed at a nonexistent method until the
+  // assertion below was added.
+  const ruleReloadFromRefreshCommand = page.waitForRequest(request =>
+    request.url().includes('/api/board/rules')
+    && request.method() === 'GET', { timeout: 60_000 })
+  // Release the availability pin only now, so the window above stayed deterministic.
+  await page.unroute('**/api/board/edits/availability')
   await page.getByTestId('chat-send').click()
+  await ruleReloadFromRefreshCommand
 
   // The refresh must re-read the journal, or the same edit would be undoable when the user made it
   // and not when the assistant did.
