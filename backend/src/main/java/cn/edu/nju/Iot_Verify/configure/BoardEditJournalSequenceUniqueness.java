@@ -125,9 +125,12 @@ public class BoardEditJournalSequenceUniqueness implements SmartInitializingSing
                     while (resultSet.next()) ids.add(resultSet.getLong(1));
                 }
             }
-            // Two passes through a disjoint high range: assigning 1..n directly would collide with a
-            // row that still holds one of those values.
-            long offset = 1_000_000_000L;
+            // Two passes through a disjoint range: assigning 1..n directly would collide with a row
+            // that still holds one of those values. The staging range starts above this account's
+            // current maximum rather than at a fixed constant — row count is capped, but the sequence
+            // value itself grows for the life of the account, so a literal offset is an assumption
+            // that silently expires.
+            long offset = maxSequenceFor(connection, userId) + 1;
             try (PreparedStatement update = connection.prepareStatement(
                     "UPDATE board_edit_journal SET sequence = ? WHERE id = ?")) {
                 for (int index = 0; index < ids.size(); index++) {
@@ -146,8 +149,18 @@ public class BoardEditJournalSequenceUniqueness implements SmartInitializingSing
         }
     }
 
-    private long count(Connection connection, String sql) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(sql);
+    /** Highest sequence currently held by this account, or 0 when it has none. */
+    private long maxSequenceFor(Connection connection, Long userId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COALESCE(MAX(sequence), 0) FROM board_edit_journal WHERE user_id = ?")) {
+            statement.setLong(1, userId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong(1) : 0L;
+            }
+        }
+    }
+
+    private long count(Connection connection, String sql) throws SQLException {        try (PreparedStatement statement = connection.prepareStatement(sql);
              ResultSet resultSet = statement.executeQuery()) {
             return resultSet.next() ? resultSet.getLong(1) : 0L;
         }
