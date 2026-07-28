@@ -303,6 +303,25 @@ class BoardEditUndoIntegrationTest {
     }
 
     @Test
+    void redoOfASpecificationDeleteRemovesItAgain() {
+        // Closes the last cell of the {rule, spec, order} x {create, delete} x {undo, redo} matrix.
+        // The create/redo cell is where a false "unreadable" conflict hid, so the rest are pinned too.
+        service.addSpec(userId, newSpec("on"));
+        service.addSpec(userId, newSpec("off"));
+        SpecificationDto target = service.getSpecs(userId).get(0);
+        service.removeSpecIfUnchanged(userId, target.getId(), target);
+        assertEquals(1, service.getSpecs(userId).size());
+
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertEquals(2, service.getSpecs(userId).size());
+
+        BoardUndoResultDto redone = service.redoLastUndoneEdit(userId);
+        assertTrue(redone.isApplied(), "redo must re-apply the deletion");
+        assertEquals("REDONE", redone.getReasonCode());
+        assertEquals(1, service.getSpecs(userId).size());
+    }
+
+    @Test
     void redoOfACreateRestoresTheRuleRatherThanReportingItUnreadable() {
         // A CREATE entry records no execution position — there was nothing there before it — so the
         // "missing recorded position" guard must not fire on this path. It used to, making every redo
