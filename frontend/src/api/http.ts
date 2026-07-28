@@ -2,7 +2,7 @@
 import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { useAuth } from '../stores/auth';
-import { router } from '../router';
+import { redirectToLogin } from '../router/loginRedirect';
 import { publishBoardInvalidation } from '@/utils/boardInvalidation';
 
 const api = axios.create({
@@ -25,7 +25,10 @@ export const isBoardMutationRequest = (config: { url?: string; method?: string }
   if (method === 'get' || method === 'head' || method === 'options') return false
   const path = (config.url || '').split('?')[0]
   if (/^\/?board\/(?:rules\/check-(?:duplicate|similarity)|(?:rules|specs)\/recommend)$/.test(path)) return false
-  return /^\/?board\/(nodes|environment|specs|rules|templates|batch)(?:\/|$)/.test(path)
+  // `edits/availability` is a GET and already excluded above; `edits/undo|redo` change rules and
+  // specifications when they apply, so other tabs must be invalidated exactly as for a direct
+  // mutation. The response interceptor skips the no-op case (`applied: false`).
+  return /^\/?board\/(nodes|environment|specs|rules|templates|batch|edits)(?:\/|$)/.test(path)
     || /^\/?verify\/traces\/[^/]+\/fix\/apply$/.test(path)
 }
 
@@ -52,10 +55,28 @@ api.interceptors.request.use(
   }
 );
 
-// 响应拦截器 - 处理401错误
+/**
+ * Whether a completed response should invalidate other tabs' board state.
+ *
+ * <p>Split from the interceptor so the no-op case is testable: an undo/redo that applied nothing
+ * changed no rule or spec, and invalidating would force a pointless snapshot reload in every tab.
+ */
+export const shouldPublishBoardInvalidation = (
+  config: { url?: string; method?: string },
+  body?: unknown
+) => {
+  if (!isBoardMutationRequest(config)) return false
+  // Scoped to the undo endpoints on purpose: `FixApplyResultDto` also carries `applied`, with a
+  // different meaning ("did not persist"), so keying on the field alone would silently suppress a
+  // fix-apply invalidation that other tabs need.
+  const path = (config.url || '').split('?')[0]
+  if (!/^\/?board\/edits\/(undo|redo)$/.test(path)) return true
+  return (body as { data?: { applied?: boolean } })?.data?.applied !== false
+}
+
 api.interceptors.response.use(
   (response) => {
-    if (isBoardMutationRequest(response.config)) {
+    if (shouldPublishBoardInvalidation(response.config, response.data)) {
       publishBoardInvalidation(
         (response.config as BoardAwareRequestConfig).boardInvalidationUserId,
         'http-mutation'
@@ -69,14 +90,7 @@ api.interceptors.response.use(
       const requestToken = requestConfig?.authTokenAtRequest ?? null
       const { logoutIfTokenMatches } = useAuth();
       if (logoutIfTokenMatches(requestToken)) {
-        const currentRoute = router.currentRoute.value;
-        if (currentRoute.path !== '/') {
-          const query: Record<string, string> = { mode: 'login' };
-          if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
-            query.redirect = currentRoute.fullPath;
-          }
-          router.push({ path: '/', query });
-        }
+        void redirectToLogin();
       }
     }
     return Promise.reject(error);

@@ -37,9 +37,11 @@ export const initializeTheme = () => {
   if (initialized) return
   initialized = true
 
+  // No stored preference means "follow the OS", which is also the first-run default.
+  // A stored value is an explicit user choice and wins until it is reset.
   const storedTheme = readStoredTheme()
-  followsSystem.value = false
-  theme.value = storedTheme ?? 'light'
+  followsSystem.value = storedTheme === null
+  theme.value = storedTheme ?? getSystemTheme()
   applyTheme(theme.value)
 
   if (typeof window !== 'undefined') {
@@ -58,10 +60,6 @@ export const useTheme = () => {
     applyTheme(mode)
   }
 
-  const toggleTheme = () => {
-    setTheme(theme.value === 'dark' ? 'light' : 'dark')
-  }
-
   const resetThemeToSystem = () => {
     followsSystem.value = true
     localStorage.removeItem(THEME_STORAGE_KEY)
@@ -69,12 +67,28 @@ export const useTheme = () => {
     applyTheme(theme.value)
   }
 
+  /**
+   * User-facing cycle: light -> dark -> follow system -> light.
+   * Keeps "follow system" reachable instead of leaving it write-only.
+   */
+  const cycleThemeMode = () => {
+    if (followsSystem.value) {
+      setTheme('light')
+      return
+    }
+    if (theme.value === 'light') {
+      setTheme('dark')
+      return
+    }
+    resetThemeToSystem()
+  }
+
   return {
     theme,
     followsSystem,
     isDark: computed(() => theme.value === 'dark'),
     setTheme,
-    toggleTheme,
+    cycleThemeMode,
     resetThemeToSystem
   }
 }

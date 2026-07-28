@@ -258,11 +258,22 @@ public class SmvSpecificationBuilder {
                 || hasPrivacyConditions(spec.getThenConditions());
     }
 
+    /**
+     * Canonicalizes a spec condition's target type for comparison.
+     *
+     * <p>Two of the four sites in this class trimmed before lowercasing and two did not, so a target
+     * type with surrounding whitespace was recognized by the safety-shape check and then fell through
+     * the expression builder's dispatch to an unrelated branch. {@code Locale.ROOT} is required
+     * because a Turkish default locale maps {@code I} to {@code ı}, which matches no keyword here.
+     */
+    private static String normalizeSpecTargetType(String targetType) {
+        return targetType == null ? null : targetType.trim().toLowerCase(Locale.ROOT);
+    }
+
     private boolean hasPrivacyConditions(List<SpecConditionDto> conditions) {
         if (conditions == null) return false;
         return conditions.stream().anyMatch(c ->
-                c != null && c.getTargetType() != null
-                        && "privacy".equalsIgnoreCase(c.getTargetType().trim()));
+                c != null && "privacy".equals(normalizeSpecTargetType(c.getTargetType())));
     }
 
     /**
@@ -319,7 +330,7 @@ public class SmvSpecificationBuilder {
             throw new InvalidConditionException("device '" + describeDeviceRef(cond) + "' not found in deviceSmvMap");
         }
         String varName = smv.getVarName();
-        String targetType = cond.getTargetType() != null ? cond.getTargetType().toLowerCase() : null;
+        String targetType = normalizeSpecTargetType(cond.getTargetType());
 
         if ("api".equals(targetType)) {
             if (cond.getKey() == null) {
@@ -428,9 +439,8 @@ public class SmvSpecificationBuilder {
             if (condition == null) {
                 continue;
             }
-            String targetType = condition.getTargetType() != null
-                    ? condition.getTargetType().trim().toLowerCase(Locale.ROOT)
-                    : "";
+            String normalized = normalizeSpecTargetType(condition.getTargetType());
+            String targetType = normalized == null ? "" : normalized;
             if ("trust".equals(targetType) || "privacy".equals(targetType)) {
                 throw new InvalidConditionException(
                         "safety conditions must describe a protected event or value, not an explicit trust/privacy predicate");
@@ -810,7 +820,7 @@ public class SmvSpecificationBuilder {
         if (!hasDeviceRef(cond)) return null;
         DeviceSmvData smv = findDeviceSmvDataForSpec(cond, deviceSmvMap);
         String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(describeDeviceRef(cond));
-        String targetType = cond.getTargetType() != null ? cond.getTargetType().toLowerCase() : null;
+        String targetType = normalizeSpecTargetType(cond.getTargetType());
 
         if ("variable".equals(targetType)) {
             if (cond.getKey() == null || cond.getKey().isBlank()) {
@@ -879,9 +889,11 @@ public class SmvSpecificationBuilder {
         if (smv == null || smv.getManifest() == null || smv.getManifest().getApis() == null) {
             return null;
         }
+        // Trimmed for the same reason as validateApiSignalExists.
+        String normalizedKey = cond.getKey() == null ? null : cond.getKey().trim();
         for (DeviceManifest.API api : smv.getManifest().getApis()) {
             if (api != null && Boolean.TRUE.equals(api.getSignal())
-                    && api.getName() != null && api.getName().equals(cond.getKey())) {
+                    && api.getName() != null && api.getName().equals(normalizedKey)) {
                 String endState = api.getEndState();
                 if (endState == null || endState.isBlank()
                         || smv.getModes() == null || smv.getModes().isEmpty()) {
@@ -1004,8 +1016,11 @@ public class SmvSpecificationBuilder {
         if (smv.getManifest() == null || smv.getManifest().getApis() == null) {
             throw new InvalidConditionException("device '" + deviceId + "' has no APIs defined");
         }
+        // Trimmed to match buildVariableCondition and resolveModeName: admission stores the key
+        // trimmed, and a raw comparison here rejected a spec those paths had already resolved.
+        String normalizedKey = apiKey == null ? null : apiKey.trim();
         for (DeviceManifest.API api : smv.getManifest().getApis()) {
-            if (api.getName() != null && api.getName().equals(apiKey)
+            if (api != null && api.getName() != null && api.getName().equals(normalizedKey)
                     && api.getSignal() != null && api.getSignal()) {
                 return;
             }

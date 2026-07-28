@@ -18,7 +18,7 @@ describe('board modal surfaces', () => {
       global: { plugins: [i18n] }
     })
 
-    expect(wrapper.classes()).toContain('z-[2400]')
+    expect(wrapper.classes()).toContain('z-[var(--z-modal)]')
     expect(wrapper.get('[role="dialog"]').attributes('aria-modal')).toBe('true')
     wrapper.unmount()
   })
@@ -38,7 +38,7 @@ describe('board modal surfaces', () => {
 
     const overlay = wrapper.get('[data-testid="spec-condition-dialog"]')
     const dialog = overlay.get('[role="dialog"]')
-    expect(overlay.classes()).toContain('z-[2400]')
+    expect(overlay.classes()).toContain('z-[var(--z-modal)]')
     expect(dialog.classes()).toContain('control-center-dialog-surface')
     expect(dialog.classes()).toContain('control-center-spec-dialog')
     expect(dialog.get('.control-center-dialog-body').classes()).toContain('overflow-y-auto')

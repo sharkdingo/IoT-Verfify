@@ -7,7 +7,10 @@
 
 /* ========== 公共变量：与主题无关的尺寸 / 排版 ========== */
 :root {
-    font-family: sans-serif;
+    /* Body typography. Tailwind's `font-body` maps to the same stack. */
+    --iot-font-body: 'Inter Variable', 'Inter', system-ui, sans-serif;
+    --iot-font-display: 'Space Grotesk Variable', 'Space Grotesk', var(--iot-font-body);
+    font-family: var(--iot-font-body);
     /* 文本字号 */
     --iot-font-base: 1rem;
     --iot-font-title: 1.3rem;
@@ -47,6 +50,27 @@
     --field-bg: #ffffff;
     --field-border: #cbd5e1;
     --shadow-elevated: 0 18px 42px rgba(15, 23, 42, 0.16);
+
+    /* ===== Stacking layers =====
+     * One ordered scale for everything that floats. Add a named layer here instead of
+     * inventing another literal: the previous ad-hoc values (100, 1000, 2000, 2200,
+     * 2350, 9999, 10000) gave no way to tell which surface should win.
+     * Values inside a single component's own stacking context stay local and small. */
+    --z-board-nav: 1000;
+    --z-chat-panel: 1200;
+    --z-board-banner: 2200;
+    --z-board-alert: 2300;
+    /* Recommendation panels sit above the fail-closed banners so a failed load cannot
+     * trap the user inside an already-open panel. */
+    --z-board-panel-above-alert: 2350;
+    --z-modal: 2400;
+    /* Modals opened *from* another modal (nested confirmations). */
+    --z-modal-nested: 2500;
+    /* Account/session decisions must sit above any workspace modal. */
+    --z-session-modal: 2600;
+    /* Element Plus overlays are teleported to <body> and must beat every app surface. */
+    --z-message-box: 30000;
+    --z-toast: 30010;
 
     /* 画布网格尺寸 */
     --iot-grid-size: 2rem;
@@ -302,18 +326,13 @@
 
 /* ---------- MessageBox 蒙层颜色（深/浅主题分别控制透明度） ---------- */
 
-:root {
-    --iot-z-message-box: 30000;
-    --iot-z-toast: 30010;
-}
-
 .el-overlay.is-message-box,
 .el-overlay-message-box {
-    z-index: var(--iot-z-message-box) !important;
+    z-index: var(--z-message-box) !important;
 }
 
 .el-message {
-    z-index: var(--iot-z-toast) !important;
+    z-index: var(--z-toast) !important;
 }
 
 :root[data-theme='dark'] .el-overlay.is-message-box {

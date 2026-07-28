@@ -117,7 +117,15 @@ Evolution is scope-sensitive. A device-local variable follows its declared Trans
 assignment, WorkingState Dynamic, or numeric `NaturalChangeRate`; if none applies, it
 retains its current value. The generator does not invent arbitrary local device changes.
 A shared numeric environment value follows its declared natural rate and active device
-effects within the declared domain. A shared enum/boolean environment value is an
+effects within the declared domain, plus MEDIC's environment disturbance: the paper models
+such a variable as a self-loop constrained by `v' - v ∈ [-1 + env.D.v, 1 + env.D.v]`, i.e.
+the value moves by the device effect "with a slight disturbance in the range of [-1, 1] in
+each time step" (MEDIC §3.1, Fig. 2b). When a device effect is active — some submitted device lists the
+variable in `ImpactedVariables` — the domain-boundary branches therefore carry a ±1 candidate even
+when no `NaturalChangeRate` is declared; a physical quantity is only imperfectly observed, so
+treating it as movable only by a declared rate would be unsound in the unsafe direction. With no
+device effect at all, the boundary branches are not emitted and the value follows `NaturalChangeRate`
+alone. All candidates are clamped to the declared domain. A shared enum/boolean environment value is an
 uncontrolled model input and may otherwise choose any value in its declared domain on
 each step. These assumptions are returned, rather than merely documented, through
 `modelSemantics.environmentEvolutionEffects` and `localVariableFallbackPolicy`.
@@ -417,7 +425,13 @@ guard.
 Request validation rejects known semantic mismatches before execution. A residual
 generation-time condition failure disables that rule with guard `FALSE`, increments
 `disabledRuleCount`, and adds an item-level `generationIssues` reason. It is not silently
-treated as a working rule.
+treated as a working rule. The same applies to a command action that resolves to no
+template API (`RULE_UNRESOLVABLE_COMMAND_ACTION`): the rule contributes no branch to state,
+property, or probe assignments, so it is counted rather than dropped. Action names are
+compared trimmed at both admission and generation, and are stored trimmed. Rule condition
+attributes and specification-condition keys follow the same rule: all three are matched against
+manifest variable, mode, and signal-API names by exact equality, so a single normalization point
+avoids a padded value passing admission and then failing generation.
 
 Internal `iot_verify_rule_fired_<index>` probes record which generated rule guards were
 true in a trace. The parser persists the zero-based probe index as the required frozen

@@ -63,14 +63,25 @@ export interface ChatHistoryPage {
     hasMore: boolean
 }
 
-export type StreamRefreshTarget =
-    | 'device_list'
-    | 'environment_list'
-    | 'rule_list'
-    | 'spec_list'
-    | 'template_list'
-    | 'run_history'
-    | 'board_state'
+/**
+ * Every board state an assistant `REFRESH_DATA` command can name.
+ *
+ * Single source of truth: the SSE frame validator (`api/chat.ts`) and the board's target table
+ * (`views/board/assistantRefresh.ts`) both derive from this, because they used to repeat the same
+ * seven strings independently — adding a target meant editing three lists, and missing one silently
+ * either rejected a valid frame or skipped the refresh it asked for.
+ */
+export const STREAM_REFRESH_TARGETS = [
+    'device_list',
+    'environment_list',
+    'rule_list',
+    'spec_list',
+    'template_list',
+    'run_history',
+    'board_state'
+] as const
+
+export type StreamRefreshTarget = typeof STREAM_REFRESH_TARGETS[number]
 
 export interface StreamCommand {
     type: 'REFRESH_DATA'

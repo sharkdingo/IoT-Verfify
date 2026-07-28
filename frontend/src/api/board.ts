@@ -10,6 +10,15 @@ import type {
 } from '@/types/recommendation'
 import type { DeviceNode } from '../types/node'
 import type { Specification } from '../types/spec'
+import type { BoardUndoAvailability, BoardUndoResult } from '../types/boardEdit'
+import {
+    BOARD_EDIT_ENTITY_TYPES,
+    BOARD_EDIT_OPERATIONS,
+    BOARD_UNDO_REASON_CODES,
+    isBoardEditEntityType,
+    isBoardEditOperation,
+    isBoardUndoReasonCode
+} from '../types/boardEdit'
 import type { BoardLayoutDto } from '../types/canvas'
 import type {
     DuplicateRuleReasonCode,
@@ -329,11 +338,26 @@ const toBackendSpecificationWriteDto = (spec: Specification) => ({
     }))
 });
 
+/**
+ * The create/delete shape of the backend's collection-mutation envelope.
+ *
+ * Rule reorder shares the envelope on the wire but not this type: it reports
+ * `operation: "reordered"` with a null `affectedItem`, because one up/down press changes no single
+ * record. `reorderRules` validates that shape itself rather than through
+ * `validateCollectionMutationResult`, which requires `affectedItem`.
+ */
 export interface CollectionMutationResult<T> {
     operation: 'created' | 'deleted';
     affectedItem: T;
     currentItems: T[];
     currentCount: number;
+    /**
+     * Undo availability after this mutation, present only for reversible ones (rule and
+     * specification create/delete). The server journal is the authority, so the client mirrors
+     * this rather than inferring availability from its own actions.
+     */
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
 
 export interface DuplicateRuleCheckResult {
@@ -1377,6 +1401,57 @@ const validateCollectionMutationResult = <T>(
     return { ...result, affectedItem, currentItems } as CollectionMutationResult<T>
 }
 
+/**
+ * Validates an undo/redo/availability payload at the boundary.
+ *
+ * The rule and specification lists are the authoritative post-operation collections, so they get
+ * the same validation as a normal read: a malformed one must be rejected rather than written into
+ * board state.
+ */
+const parseBoardUndoResult = (value: unknown): BoardUndoResult => {
+    const context = 'Board edit undo'
+    const raw = requireResponseRecord(value, context)
+    if (typeof raw.applied !== 'boolean'
+        || typeof raw.canUndo !== 'boolean'
+        || typeof raw.canRedo !== 'boolean') {
+        throw new BoardResponseContractError(
+            context, 'applied, canUndo and canRedo must be booleans')
+    }
+    const rules = requireResponseArray<BackendRuleDto>(raw, context, 'rules')
+        .map((rule, index) => validateBackendRuleResult(rule, `${context}.rules[${index}]`))
+    requireUniqueIdentities(rules, rule => Number(rule.id), context, 'rules')
+
+    const specs = requireResponseArray<Specification>(raw, context, 'specs')
+        .map((spec, index) => validateBoardSpecificationResult(spec, `${context}.specs[${index}]`))
+    // Validated rather than cast: defaulting an absent reasonCode to 'NOTHING_TO_APPLY' produced
+    // `applied: true` alongside a code contradicting it, and an unknown string became a typed value
+    // that lies — a consumer switching on it silently takes no branch.
+    if (!isBoardUndoReasonCode(raw.reasonCode)) {
+        throw new BoardResponseContractError(
+            context, `reasonCode must be one of ${BOARD_UNDO_REASON_CODES.join(', ')}`)
+    }
+    if (raw.entityType !== undefined && raw.entityType !== null
+        && !isBoardEditEntityType(raw.entityType)) {
+        throw new BoardResponseContractError(
+            context, `entityType must be one of ${BOARD_EDIT_ENTITY_TYPES.join(', ')}`)
+    }
+    if (raw.originalOperation !== undefined && raw.originalOperation !== null
+        && !isBoardEditOperation(raw.originalOperation)) {
+        throw new BoardResponseContractError(
+            context, `originalOperation must be one of ${BOARD_EDIT_OPERATIONS.join(', ')}`)
+    }
+    return {
+        applied: raw.applied,
+        entityType: raw.entityType ?? undefined,
+        originalOperation: raw.originalOperation ?? undefined,
+        reasonCode: raw.reasonCode,
+        rules: rules.map(fromBackendRuleDto),
+        specs,
+        canUndo: raw.canUndo,
+        canRedo: raw.canRedo
+    }
+}
+
 const validateBoardBatchResult = (value: unknown) => {
     const context = 'Scene replacement'
     const result = requireResponseRecord(value, context)
@@ -2148,7 +2223,14 @@ export default {
             currentItems: result.currentItems.map(fromBackendRuleDto)
         };
     },
-    reorderRules: async (expectedRuleIds: string[], ruleIds: string[]): Promise<RuleForm[]> => {
+    /**
+     * Persists a new rule execution order. Reversible, so the result carries undo availability
+     * alongside the authoritative ordering.
+     */
+    reorderRules: async (
+        expectedRuleIds: string[],
+        ruleIds: string[]
+    ): Promise<{ rules: RuleForm[]; canUndo?: boolean; canRedo?: boolean }> => {
         const toPersistedIds = (ids: string[], field: string) => ids.map(ruleId => {
             const numericId = Number(ruleId)
             if (!Number.isSafeInteger(numericId) || numericId <= 0) {
@@ -2158,13 +2240,17 @@ export default {
         })
         const expectedPersistedIds = toPersistedIds(expectedRuleIds, 'expected')
         const persistedIds = toPersistedIds(ruleIds, 'requested')
-        const result = requireResponseArray<BackendRuleDto>(
+        // Reorder is a collection-level edit, so the envelope carries no `affectedItem`; it is
+        // validated here rather than through `validateCollectionMutationResult`.
+        const envelope = requireResponseRecord(
             unpack<unknown>(await api.put('/board/rules/order', {
                 expectedRuleIds: expectedPersistedIds,
                 ruleIds: persistedIds
             })),
             'Rule reorder'
-        ).map((rule, index) => validateBackendRuleResult(rule, `Rule reorder[${index}]`))
+        )
+        const result = requireResponseArray<BackendRuleDto>(envelope, 'Rule reorder', 'currentItems')
+            .map((rule, index) => validateBackendRuleResult(rule, `Rule reorder[${index}]`))
         if (result.length !== persistedIds.length
             || result.some((rule, index) => rule.id !== persistedIds[index])) {
             throw new BoardResponseContractError(
@@ -2172,7 +2258,11 @@ export default {
                 'the authoritative order must match the requested rule ids'
             )
         }
-        return result.map(fromBackendRuleDto)
+        return {
+            rules: result.map(fromBackendRuleDto),
+            canUndo: typeof envelope.canUndo === 'boolean' ? envelope.canUndo : undefined,
+            canRedo: typeof envelope.canRedo === 'boolean' ? envelope.canRedo : undefined
+        }
     },
     removeRule: async (rule: RuleForm): Promise<CollectionMutationResult<RuleForm>> => {
         const ruleId = String(rule.id || '').trim()
@@ -2195,6 +2285,31 @@ export default {
             currentItems: result.currentItems.map(fromBackendRuleDto)
         };
     },
+
+    /**
+     * Reverses the newest reversible board edit, or re-applies the newest undone one.
+     *
+     * The server journal is the authority for what is reversible and for the resulting
+     * availability, so nothing about local history is sent. `applied: false` means there was
+     * nothing left in that direction — an ordinary outcome that makes repeated calls idempotent.
+     */
+    /**
+     * Current undo availability, with no side effects.
+     *
+     * Read on board load so the affordance is restored from server state — undo history survives a
+     * reload, a second tab, and a different device, so it must not be inferred from local actions.
+     * Returns availability only; the rule/spec lists are empty because this is a query, not an
+     * update, and callers must not apply them.
+     */
+    getBoardEditAvailability: async (): Promise<BoardUndoAvailability> => {
+        const result = parseBoardUndoResult(
+            unpack<unknown>(await api.get('/board/edits/availability')))
+        return { canUndo: result.canUndo, canRedo: result.canRedo }
+    },
+
+    applyBoardEditUndo: async (direction: 'undo' | 'redo'): Promise<BoardUndoResult> =>
+        parseBoardUndoResult(
+            unpack<unknown>(await api.post(`/board/edits/${direction}`))),
 
     /** Returns the authoritative current-board impact that the user must confirm. */
     previewBoardReplacement: async (): Promise<BoardReplacementPreview> => {

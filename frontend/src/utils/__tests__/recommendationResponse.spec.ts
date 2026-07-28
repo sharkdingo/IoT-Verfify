@@ -93,6 +93,38 @@ describe('recommendation candidate accounting', () => {
     }))
   })
 
+  it('rejects a scenario that applied scene items it never claims to have validated', () => {
+    // The accounting strip is the user's only evidence for where the applied scene came from. A
+    // payload reporting zero inspected candidates while handing over four scene items would render
+    // "raw 0, inspected 0, kept 0" beside four devices and rules on the canvas.
+    expect(() => validateScenarioRecommendationResponse({
+      message: 'Scenario generated.',
+      count: 4,
+      requestedCount: 4,
+      validatedCount: 0,
+      filteredCount: 0,
+      filteredItems: [],
+      adjustedCount: 0,
+      adjustedItems: [],
+      rawCandidateCount: 0,
+      inspectedCount: 0,
+      truncatedCount: 0,
+      scenarioName: 'Home',
+      rationale: '',
+      ...partialScenarioObjective,
+      verificationReady: false,
+      readinessIssues: [],
+      semanticWarnings: [],
+      scene: {
+        templates: [],
+        devices: [{}, {}],
+        environmentVariables: [],
+        rules: [{}, {}],
+        specs: []
+      }
+    }, 'Scenario')).toThrow(/validated/i)
+  })
+
   it('accepts a scenario whose final count includes a synthesized environment value', () => {
     const result = {
       message: 'Scenario generated.',

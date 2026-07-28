@@ -11,17 +11,19 @@ import { FIX_RESPONSE_INCOMPLETE_CODE } from '@/utils/fixResponse'
 const elementPlus = vi.hoisted(() => ({
   confirm: vi.fn(),
   success: vi.fn(),
+  // `notifyBlocked` and `notifyInfo` stay separate: sharing a spy would let a blocked-action
+  // warning silently downgrade to an informational toast and still satisfy the assertions below.
   warning: vi.fn(),
+  info: vi.fn(),
   error: vi.fn()
 }))
 
-vi.mock('element-plus', () => ({
-  ElMessage: {
-    success: elementPlus.success,
-    warning: elementPlus.warning,
-    error: elementPlus.error
-  },
-  ElMessageBox: { confirm: elementPlus.confirm }
+vi.mock('@/utils/feedback', () => ({
+  notifySuccess: elementPlus.success,
+  notifyBlocked: elementPlus.warning,
+  notifyInfo: elementPlus.info,
+  notifyError: elementPlus.error,
+  confirmDestructive: elementPlus.confirm
 }))
 
 const boardApi = vi.hoisted(() => ({
@@ -368,7 +370,7 @@ describe('FixResultDialog strategy workflow', () => {
       elapsedMs: 1000
     })
     boardApi.cancelFixRequest.mockResolvedValue(true)
-    elementPlus.confirm.mockResolvedValue('confirm')
+    elementPlus.confirm.mockResolvedValue(true)
   })
 
   afterEach(async () => {
@@ -403,7 +405,7 @@ describe('FixResultDialog strategy workflow', () => {
     ]))
     expect(wrapper.text()).toContain('faultLocalizationNoRuleCaveat')
     expect(wrapper.text()).not.toContain('No user-defined automation rule was localized.')
-    expect(wrapper.get('[data-testid="fix-result-dialog"]').classes()).toContain('z-[2500]')
+    expect(wrapper.get('[data-testid="fix-result-dialog"]').classes()).toContain('z-[var(--z-modal-nested)]')
     expect(wrapper.find('[data-testid="fix-strategy-remove"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-try-current"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-apply-current"]').exists()).toBe(false)
@@ -514,6 +516,63 @@ describe('FixResultDialog strategy workflow', () => {
 
     expect(wrapper.find('[data-testid="fix-strategy-loading"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="fix-apply-current"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('protects typed preferred ranges while a search is still running', async () => {
+    // Reset used to clear the rows *before* `fetchFixSuggestions` silently returned, so a click
+    // during an in-flight search destroyed the user's bounds and issued no re-run — and the
+    // returning result was then hidden behind "preferences changed, re-run".
+    boardApi.fixTrace.mockResolvedValueOnce(parameterResult())
+    const wrapper = mountDialog()
+    await flush()
+
+    await wrapper.get('[data-testid="fix-strategy-parameter"]').trigger('click')
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    // A parameter result exposes the preferred-range panel with a row per target.
+    expect(wrapper.find('[data-testid="fix-run-with-preferences"]').exists()).toBe(true)
+    // Add a row the way the panel's "Add" button does, then type bounds into it.
+    const dialog = wrapper.vm as any
+    dialog.addPreferenceRow()
+    await wrapper.vm.$nextTick()
+    expect(dialog.preferredRangeRows.length).toBeGreaterThan(0)
+    dialog.preferredRangeRows[0].lower = 18
+    dialog.preferredRangeRows[0].upper = 22
+    await wrapper.vm.$nextTick()
+
+    // Now start a second search and act on the preference controls while it is in flight.
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const runWithPreferences = wrapper.get('[data-testid="fix-run-with-preferences"]')
+    expect(runWithPreferences.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="fix-preference-blocked"]').text())
+      .toBe('fixSearchInProgress')
+
+    // Both halves of the guard are asserted separately, because either alone would hide a
+    // regression in the other: `trigger('click')` no-ops on a disabled button, so clicking proves
+    // nothing about the handler, and the handler alone would leave a live-looking control.
+    const reset = wrapper.get('[data-testid="fix-clear-preferences"]')
+    expect(reset.attributes('disabled')).toBeDefined()
+
+    const callsBefore = boardApi.fixTrace.mock.calls.length
+    // Invoke the handler directly, as a stale queued event or a programmatic caller would.
+    await dialog.clearPreferenceRows()
+    await wrapper.vm.$nextTick()
+
+    // The decisive assertion: typed bounds survive a Reset that could not act.
+    expect(dialog.preferredRangeRows[0].lower).toBe(18)
+    expect(boardApi.fixTrace.mock.calls.length).toBe(callsBefore)
+
+    pending.resolve(parameterResult())
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="fix-preference-blocked"]').exists()).toBe(false)
   })
 
   it('cancels an active search when the parent hides the dialog', async () => {

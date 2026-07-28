@@ -2,11 +2,14 @@ package cn.edu.nju.Iot_Verify.util;
 
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /** Canonical, order-insensitive signature for the behavior represented by a board rule. */
 public final class RuleSemanticSignature {
@@ -31,11 +34,31 @@ public final class RuleSemanticSignature {
                 canonicalConditionKeys(rule.getConditions(), true));
     }
 
+    /**
+     * True when both rules command the same thing under exactly the same conditions.
+     *
+     * <p>Compares condition <em>multisets</em>, not the {@link Signature} sets. Order carries no
+     * meaning in a conjunction, so this stays order-insensitive — but cardinality does: a rule
+     * edited from {@code [C, C]} to {@code [C]} has changed. This predicate also gates the
+     * "delete only if unchanged" and undo/redo conflict checks, where treating those two as equal
+     * let a delete land on a rule the user had never reviewed.
+     *
+     * <p>{@code Signature} keeps set semantics deliberately: its consumer reasons about subset and
+     * overlap between different rules, where collapsing duplicates is correct.
+     */
     public static boolean exactlyMatches(RuleDto left, RuleDto right) {
-        Signature leftSignature = from(left);
-        Signature rightSignature = from(right);
-        return leftSignature.commandKey().equals(rightSignature.commandKey())
-                && leftSignature.conditionKeys().equals(rightSignature.conditionKeys());
+        return commandKey(left == null ? null : left.getCommand())
+                .equals(commandKey(right == null ? null : right.getCommand()))
+                && conditionMultiset(left).equals(conditionMultiset(right));
+    }
+
+    /** Canonical condition keys with their occurrence counts, so cardinality survives comparison. */
+    private static Map<String, Long> conditionMultiset(RuleDto rule) {
+        if (rule == null) {
+            return Map.of();
+        }
+        return canonicalConditionKeyList(rule.getConditions(), false).stream()
+                .collect(Collectors.groupingBy(key -> key, Collectors.counting()));
     }
 
     private static String commandKey(RuleDto.Command command) {
@@ -50,7 +73,17 @@ public final class RuleSemanticSignature {
     }
 
     private static Set<String> canonicalConditionKeys(List<RuleDto.Condition> conditions, boolean shapeOnly) {
-        Set<String> result = new TreeSet<>();
+        return new TreeSet<>(canonicalConditionKeyList(conditions, shapeOnly));
+    }
+
+    /**
+     * One canonical key per condition, duplicates retained.
+     *
+     * <p>The set and multiset views are both derived from this list so a normalization change cannot
+     * apply to only one of them.
+     */
+    private static List<String> canonicalConditionKeyList(List<RuleDto.Condition> conditions, boolean shapeOnly) {
+        List<String> result = new ArrayList<>();
         if (conditions == null) {
             return result;
         }

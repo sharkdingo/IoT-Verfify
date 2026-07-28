@@ -64,14 +64,14 @@ class BoardStorageServiceImplSemanticSnapshotTest {
         service = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, layoutRepo, templateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                boardLayoutMapper, deviceTemplateMapper, null, userRepository);
+                boardLayoutMapper, deviceTemplateMapper, null, userRepository, null);
         when(transactionTemplate.execute(any())).thenAnswer(invocation ->
                 ((TransactionCallback<?>) invocation.getArgument(0)).doInTransaction(null));
         when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(new UserPo()));
     }
 
     @Test
-    void getSemanticSnapshot_readsEveryModelCollectionInsideOneLockedTransaction() {
+    void getSemanticSnapshot_readsEveryModelCollectionInOneTransaction() {
         DeviceNodePo nodePo = new DeviceNodePo();
         DeviceNodeDto node = new DeviceNodeDto();
         BoardEnvironmentVariablePo environmentPo = BoardEnvironmentVariablePo.builder()

@@ -1,5 +1,7 @@
 import { nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 
+import { useBodyScrollLock } from './useBodyScrollLock'
+
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -37,6 +39,12 @@ export const useModalAccessibility = (
 ) => {
   const dialogRef = ref<HTMLElement | null>(null)
   let previousActiveElement: HTMLElement | null = null
+
+  // A focus-trapping surface is a real modal: the page behind it must not scroll.
+  // Non-modal tool panels (trapFocus: false) leave the page scrollable on purpose.
+  if (options.trapFocus !== false) {
+    useBodyScrollLock(isOpen)
+  }
 
   const getFocusableElements = () => {
     const dialog = dialogRef.value

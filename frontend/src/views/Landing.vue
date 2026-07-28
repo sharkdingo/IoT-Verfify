@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import PublicHeader from '@/components/common/PublicHeader.vue'
 import { authApi } from '@/api/auth'
 import { useAuth } from '@/stores/auth'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { isValidNormalizedUsername, normalizeAccountIdentifier } from '@/utils/accountIdentifier'
+import { notifySuccess } from '@/utils/feedback'
 
 type AuthMode = 'login' | 'register'
 
@@ -55,10 +55,18 @@ const isRegisterMode = computed(() => authMode.value === 'register')
 const panelTitle = computed(() => isRegisterMode.value ? t('auth.getStarted') : t('auth.welcomeBack'))
 const panelSubtitle = computed(() => isRegisterMode.value ? t('auth.getStartedSubtitle') : t('auth.welcomeBackSubtitle'))
 const loadingLabel = computed(() => isRegisterMode.value ? t('auth.creatingAccount') : t('auth.signingIn'))
+// Only same-origin absolute paths are honoured, and the login-surface parameters are
+// stripped so a successful sign-in always lands on a clean workspace URL instead of
+// carrying `?mode=`/`?redirect=` into the board.
 const redirectTarget = computed(() => {
   const redirect = route.query.redirect
-  if (typeof redirect !== 'string') return '/board'
-  return redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/board'
+  if (typeof redirect !== 'string' || !redirect.startsWith('/') || redirect.startsWith('//')) {
+    return '/board'
+  }
+  const resolved = router.resolve(redirect)
+  if (resolved.name === '404' || resolved.path === '/') return '/board'
+  const { mode: _mode, redirect: _redirect, ...query } = resolved.query
+  return { path: resolved.path, query, hash: resolved.hash }
 })
 
 watch(
@@ -113,6 +121,8 @@ const openAuthPanel = () => {
   setAuthMode('login')
 }
 
+// Mirrors the backend's RegisterRequestDto `^1[3-9]\d{9}$` constraint. Keep the two in
+// step: loosening only this side moves the rejection to the server.
 const validatePhone = (phone: string, key: string) => {
   if (!phone.trim()) {
     formErrors[key] = t('auth.phoneRequired')
@@ -222,9 +232,8 @@ const handleLogin = async () => {
         phone: res.data.phone,
         username: res.data.username
       })
-      ElMessage.success(t('auth.loginSuccess'))
-      await router.push(redirectTarget.value)
-    } else {
+      notifySuccess(t('auth.loginSuccess'))
+      await router.push(redirectTarget.value)    } else {
       requestError.value = localizedTextOrFallback(res.message, t('auth.loginFailed'), locale.value)
       await focusRequestError()
     }
@@ -257,7 +266,7 @@ const handleRegister = async () => {
         phone: res.data.phone,
         username: res.data.username
       })
-      ElMessage.success(t('auth.registerSuccess'))
+      notifySuccess(t('auth.registerSuccess'))
       await router.push(redirectTarget.value)
     } else {
       requestError.value = localizedTextOrFallback(res.message, t('auth.registerFailed'), locale.value)

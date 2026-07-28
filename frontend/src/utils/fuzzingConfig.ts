@@ -111,3 +111,56 @@ export const getFuzzingConfigurationIssue = (
   }
   return null
 }
+
+/**
+ * The budget fields a server-side preview is computed for.
+ *
+ * A preview is only meaningful for the exact budget it was requested with, so these three are
+ * compared field by field rather than trusted because a response arrived.
+ */
+export interface FuzzingBudget {
+  maxIterations: number
+  pathLength: number
+  populationSize: number
+}
+
+/** A preview the server returned, tagged with the board semantics it was computed against. */
+export interface FuzzingPreviewState<T extends FuzzingBudget> {
+  preview: T | null
+  loading: boolean
+  error: unknown
+  /** Board semantics the preview was computed for, as captured when the request was issued. */
+  previewSemanticKey: string | null
+}
+
+/**
+ * Whether a fetched workload preview may be shown as describing the current form.
+ *
+ * This is the guard against presenting a stale estimate as current: the user can change a budget
+ * field or edit the board while a preview is in flight, and a late response would otherwise be
+ * rendered next to inputs it was never computed for. Both the board semantics and every budget
+ * field must still match, and a preview that is loading or failed is never "ready".
+ */
+export const isFuzzingPreviewCurrent = <T extends FuzzingBudget>(
+  state: FuzzingPreviewState<T>,
+  budget: FuzzingBudget,
+  currentSemanticKey: string
+): boolean => {
+  const { preview } = state
+  return !!preview
+    && !state.loading
+    && !state.error
+    && state.previewSemanticKey === currentSemanticKey
+    && preview.maxIterations === budget.maxIterations
+    && preview.pathLength === budget.pathLength
+    && preview.populationSize === budget.populationSize
+}
+
+/** True when every budget field is an integer inside its documented bound. */
+export const hasValidFuzzingBudget = (budget: FuzzingBudget): boolean => ([
+  [budget.maxIterations, FUZZ_ITERATIONS_MIN, FUZZ_ITERATIONS_MAX],
+  [budget.pathLength, FUZZ_PATH_LENGTH_MIN, FUZZ_PATH_LENGTH_MAX],
+  [budget.populationSize, FUZZ_POPULATION_MIN, FUZZ_POPULATION_MAX]
+] as const).every(([value, minimum, maximum]) => Number.isInteger(value)
+  && value >= minimum
+  && value <= maximum)

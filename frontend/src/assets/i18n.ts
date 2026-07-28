@@ -97,6 +97,10 @@ const messages = {
             switchTheme: '切换主题',
             lightTheme: '浅色',
             darkTheme: '深色',
+            systemTheme: '跟随系统',
+            themeModeLight: '主题：浅色',
+            themeModeDark: '主题：深色',
+            themeModeSystem: '主题：跟随系统',
             relationEquals: '等于',
             relationNotEquals: '不等于',
             relationGreater: '大于',
@@ -485,6 +489,8 @@ const messages = {
             specPreviewSafety: '{conditions} 成立时，任一受保护条件若带有“不可信”控制来源标签即构成违规；自动化目标仅在全部实际触发来源都不可信时获得该标签',
             configureSpecification: '配置规约',
             editCondition: '编辑条件',
+            editConditionNumbered: '编辑条件 {number}',
+            removeConditionNumbered: '删除条件 {number}',
             conditionDetails: '条件详情',
             deviceSelection: '设备选择',
             noConditionsAdded: '尚未添加条件',
@@ -963,6 +969,11 @@ const messages = {
             trustPropagationIncluded: '自动化规则按实际控制来源传播可信标签：只要触发来源中至少一个可信，目标事件仍标为可信；只有全部触发来源都不可信时，目标才标为不可信。这不是认证或数据完整性保证。',
             labelPropagationScopeSummary: '信任与敏感度标签仅在自动化规则命令执行时传播；设备模板内部转换、自然演化和状态动态不会重新标记结果。',
             verificationAttackCoverage: '设备与逻辑命令传输点的受损行为已纳入：本次快照共有 {total} 个会改变模型行为的可受损点（{devices} 个设备实例 + {links} 个按规则计数的逻辑传输点；不是画布触发边数量），验证覆盖每个建模分支中非确定选择、最多 {count} 个受损点的组合。其中 {falsifiable} 个设备声明了可伪造读数，受损时读数可在声明域内失真；规则存在时，受损命令目标或逻辑传输点会丢弃对应命令。未声明的攻击效应不会被暗示，设备其它内部转换也不会因此冻结。',
+            runAssumptionNoAttack: '未含受损行为',
+            runAssumptionAttackBudget: '受损点上限 {count}/{total}',
+            runAssumptionAttackPoints: '指定受损点 {count} 个',
+            runAssumptionPrivacy: '含隐私规约',
+            runAssumptionsLabel: '本次运行的前提',
             verificationNoAttackCoverage: '设备与自动化链路受损行为未纳入：本次结果不能说明读数被篡改或控制命令失效时规约仍成立。',
             privacyPropagationIncluded: '已追踪触发源及规则所选内容标签在自动化命令中的敏感度传播；未建模访问控制、加密、真实载荷或现实网络泄漏。',
             privacyPropagationNotIncluded: '未追踪私密数据标签传播：本次结果不包含这方面的结论。',
@@ -975,6 +986,8 @@ const messages = {
             generationWarnings: '生成警告',
             disabledRulesSkippedSpecs: '{rules} 条规则被禁用，{specs} 条规约被跳过。',
             unknownModelItem: '未命名的模型项',
+            deletedModelItem: '设备已删除',
+            specConditionDeviceMissing: '有 {count} 个条件引用了已删除的设备，请修改或移除后再创建。',
             unknownOmissionReason: '后端未提供原因',
             generationIssueDetailsUnavailable: '此结果只包含汇总数量，未包含逐项原因；不能据此判断具体哪些内容未进入模型。',
             generationIssueRuleNoTriggers: '规则没有触发条件，因此未进入本次模型。',
@@ -982,6 +995,7 @@ const messages = {
             generationIssueRuleUnresolvableTrigger: '至少一个触发条件无法对应到当前设备字段、状态或事件，因此该规则未进入本次模型。',
             generationIssueRuleNoResolvableTriggers: '规则的触发条件均无法转换为模型条件，因此该规则未进入本次模型。',
             generationIssueRulePropertyUnavailable: '规则条件无法生成本次信任或隐私传播约束，因此相关规则语义未进入模型。',
+            generationIssueRuleUnresolvableAction: '规则动作在目标设备模板中找不到对应接口，该规则未进入模型。请检查动作名称是否与模板一致。',
             generationIssueSpecNoConditions: '规约没有可检查条件，因此未进入本次模型。',
             generationIssueSpecPrivacyDisabled: '本次运行未启用隐私传播建模，因此该隐私规约未检查。',
             generationIssueSpecUnsupportedRelation: '条件使用了所选字段不支持的比较方式，因此该规约未检查。',
@@ -1054,6 +1068,7 @@ const messages = {
             parameterPreferences: '参数偏好',
             useCurrent: '使用当前建议',
             runWithPreferences: '按偏好运行',
+            fixSearchInProgress: '修复搜索进行中，请等待其结束后再调整偏好范围。',
             reset: '重置',
             unusedPreferences: '未使用',
             unusedPreferencesDetail: '{count} 个偏好没有匹配到当前可调整条件，已被忽略。',
@@ -1633,6 +1648,15 @@ const messages = {
             failedToLoadRunResultSources: '{sources}未能加载；其他已加载的历史结果仍可查看。',
             historyResultsPartialFailure: '部分历史来源加载失败。下方已有记录可能是上次成功加载的旧数据，请重试后再据此判断。',
             failedToLoadVerificationRun: '加载验证结果失败',
+            deepLinkUnavailable: '链接指向的运行记录不可用，可能已被删除或不属于当前账户。已返回画布。',
+            boardUndo: '撤销',
+            boardRedo: '重做',
+            boardUndoBlocked: '请先关闭回放或等待当前场景操作完成，然后再撤销。',
+            boardUndoNothingToApply: '没有可撤销的编辑。',
+            boardUndoRedoNothingToApply: '没有可重做的编辑。',
+            boardUndoConflict: '该编辑之后此规则或规约已被更改，撤销会覆盖新的修改。已刷新为服务器上的当前状态。',
+            boardUndoFailed: '撤销失败，画布未发生更改。',
+            deepLinkUnavailableDismiss: '关闭此提示',
             failedToLoadTasks: '加载任务失败',
             failedToLoadTask: '加载任务失败',
             failedToDeleteTrace: '删除轨迹失败',
@@ -1947,7 +1971,7 @@ const messages = {
                 progressPlanningTitle: '选择下一项操作',
                 progressPlanningDetail: '第 {round} 轮：根据已返回的实际结果组合后续工具。',
                 progressReasoningTitle: '思考摘要',
-                progressReasoningFallback: '正在整理当前目标、已知事实与下一步行动。',
+                progressReasoningFallback: '本轮没有返回可展示的推理说明。',
                 progressToolStartedDetail: '第 {round} 轮：已启动工具 {tool}。',
                 progressToolSucceededDetail: '第 {round} 轮：工具返回可用结果，可继续执行剩余任务。',
                 progressToolPartialDetail: '第 {round} 轮：工具返回了可审阅但不完整的结果，缺失部分未视为完成。',
@@ -1970,6 +1994,19 @@ const messages = {
                 progressUnknownTool: '未知工具',
                 progressElapsed: '已用时 {seconds} 秒',
                 toolLabels: {
+                    editDevice: '修改设备',
+                    applyFix: '应用修复建议',
+                    deleteVerificationRun: '删除验证记录',
+                    dismissVerifyTask: '忽略验证任务',
+                    dismissSimulateTask: '忽略仿真任务',
+                    fuzzModelAsync: '启动反例探索',
+                    fuzzTaskStatus: '查询探索状态',
+                    cancelFuzzTask: '取消反例探索',
+                    listFuzzRuns: '查看探索历史',
+                    getFuzzRun: '读取探索结果',
+                    getFuzzFinding: '读取候选证据',
+                    deleteFuzzRun: '删除探索记录',
+                    dismissFuzzTask: '忽略探索任务',
                     addDevice: '创建设备',
                     deleteDevice: '预览或删除设备',
                     searchDevices: '搜索当前设备',
@@ -2032,6 +2069,9 @@ const messages = {
                 copyFailed: '复制失败',
                 speechUnsupported: '当前浏览器不支持语音识别',
                 startSpeaking: '请开始说话...',
+                // Button labels, distinct from the `startSpeaking` toast sentence above.
+                startVoiceInput: '开始语音输入',
+                stopVoiceInput: '停止语音输入',
                 speechError: '语音识别出错',
                 speechStartFailed: '启动失败',
                 deleteSessionMessage: '删除后无法恢复，确定要删除该会话吗？',
@@ -2054,6 +2094,69 @@ const messages = {
                 incompleteStreamHistoryRestored: '回复流不完整，已恢复服务端保存的会话历史；未保存的临时回复已移除。',
                 httpRequestFailed: '请求未能开始（HTTP {status}）',
                 presetTasks: {
+                    listSeparator: '、',
+                    fallback: {
+                        devices: '当前设备',
+                        templates: '可用模板',
+                        rules: '当前规则',
+                        specs: '当前规约'
+                    },
+                    empty: {
+                        fromTemplates: {
+                            title: '从模板搭场景',
+                            desc: '{count} 个模板可用',
+                            text: '请基于当前可用模板（{templates}）设计一个可验证的 IoT 场景，控制在 5 到 8 个设备，并给出关键规则和规约。'
+                        },
+                        starterDevices: {
+                            title: '推荐起步设备',
+                            desc: '先形成可验证闭环',
+                            text: '我现在画布为空。请从模板（{templates}）里推荐一组起步设备，并说明每个设备在场景中的作用。'
+                        },
+                        planGoals: {
+                            title: '规划验证目标',
+                            desc: '先定义要防什么',
+                            text: '请帮我规划一个有意义、可由 IFTTT 规则检验的安全或隐私验证目标，并说明哪些结论必须运行正式验证后才能确认；不要预先保证会产生反例。'
+                        },
+                        setupSteps: {
+                            title: '生成搭建步骤',
+                            desc: '设备、规则、规约顺序',
+                            text: '请按“模板导入设备 -> 创建规则 -> 配置规约 -> 运行验证”的顺序，给我一份简短可执行的搭建步骤。'
+                        }
+                    },
+                    scene: {
+                        rulesDesc: '{devices} 个设备，{rules} 条规则',
+                        addRules: {
+                            title: '补齐规则',
+                            text: '当前画布有设备（{devices}），但还没有规则。请基于这些设备推荐 3 条短小、可验证的 IFTTT 规则。'
+                        },
+                        reviewRules: {
+                            title: '审查规则冲突',
+                            text: '请审查当前规则（{rules}）和设备（{devices}），找出可能导致循环触发、冲突状态或安全风险的地方。'
+                        },
+                        devicesDesc: '当前设备：{devices}',
+                        addDevices: {
+                            title: '补充关键设备',
+                            text: '当前画布设备偏少（{devices}）。请根据现有设备推荐最多 3 个补充设备，并说明为什么需要它们。'
+                        },
+                        refineDevices: {
+                            title: '优化设备关系',
+                            text: '请根据当前设备（{devices}）整理设备之间的触发链路，并指出哪些连线或规则最值得优先检查。'
+                        },
+                        specsDesc: '{count} 条规约',
+                        generateSpecs: {
+                            title: '生成规约',
+                            text: '请基于当前设备（{devices}）和规则数量 {rules}，推荐 2 条容易验证且能暴露风险的规约。'
+                        },
+                        reviewSpecs: {
+                            title: '审查规约',
+                            text: '请检查当前规约（{specs}）是否真正覆盖了设备与规则风险，并给出需要补充的验证点。'
+                        },
+                        violationTest: {
+                            title: '设计违规测试',
+                            desc: '用于模拟和验证',
+                            text: '请基于当前画布摘要：设备 {devices}、规则 {rules}、规约 {specs}，设计一个旨在暴露违规的候选测试路径，并说明必须通过仿真或正式验证确认它是否真的违规，不要保证结果。'
+                        }
+                    },
                     quickDevice: {
                         title: '快速创建设备',
                         desc: '一键添加空调、净化器等组件',
@@ -2310,6 +2413,10 @@ const messages = {
             switchTheme: 'Switch theme',
             lightTheme: 'Light',
             darkTheme: 'Dark',
+            systemTheme: 'System',
+            themeModeLight: 'Theme: light',
+            themeModeDark: 'Theme: dark',
+            themeModeSystem: 'Theme: follow system',
             relationEquals: 'Equals',
             relationNotEquals: 'Not equals',
             relationGreater: 'Greater than',
@@ -2698,6 +2805,8 @@ const messages = {
             specPreviewSafety: '{conditions} is a violation when any protected condition carries an untrusted control-source label; an automation target receives that label only when all actual trigger sources were untrusted',
             configureSpecification: 'Configure Specification',
             editCondition: 'Edit Condition',
+            editConditionNumbered: 'Edit condition {number}',
+            removeConditionNumbered: 'Remove condition {number}',
             conditionDetails: 'Condition Details',
             deviceSelection: 'Device Selection',
             noConditionsAdded: 'No conditions added',
@@ -3176,6 +3285,11 @@ const messages = {
             trustPropagationIncluded: 'Automation rules propagate trust from the actual control sources: a target event remains trusted when at least one trigger source is trusted, and becomes untrusted only when all trigger sources are untrusted. This is not authentication or a data-integrity guarantee.',
             labelPropagationScopeSummary: 'Trust and sensitivity labels propagate only when an automation-rule command executes; template-internal transitions, natural evolution, and state dynamics do not relabel their results.',
             verificationAttackCoverage: 'Compromised-device and logical command-delivery behavior was included. This run snapshot contained {total} behavior-changing points ({devices} device instances + {links} rule-counted logical delivery points, not canvas trigger edges), and verification covered every modeled branch with up to {count} compromised point(s). Of those devices, {falsifiable} declare falsifiable readings that may vary within their domains when compromised. When rules exist, a compromised command target or logical delivery point drops the matching command. Effects absent from this scene are not implied, and other device-internal transitions are not frozen.',
+            runAssumptionNoAttack: 'No compromise modeled',
+            runAssumptionAttackBudget: 'Up to {count}/{total} compromised',
+            runAssumptionAttackPoints: '{count} chosen attack points',
+            runAssumptionPrivacy: 'Privacy specs included',
+            runAssumptionsLabel: 'Assumptions for this run',
             verificationNoAttackCoverage: 'Compromised-device and automation-link behavior was not included, so this result does not establish that specifications hold when readings are tampered with or control commands fail.',
             privacyPropagationIncluded: 'Sensitivity propagation from trigger sources and rule-selected content labels was tracked on automation commands; access control, encryption, payload bytes, and real network leakage were not modeled.',
             privacyPropagationNotIncluded: 'Private-data label propagation was not tracked, so this run makes no conclusion about it.',
@@ -3188,6 +3302,8 @@ const messages = {
             generationWarnings: 'Generation Warnings',
             disabledRulesSkippedSpecs: '{rules} disabled rule(s), {specs} skipped specification(s).',
             unknownModelItem: 'Unnamed model item',
+            deletedModelItem: 'Device deleted',
+            specConditionDeviceMissing: '{count} condition(s) reference a deleted device. Edit or remove them before creating.',
             unknownOmissionReason: 'No reason was returned by the backend',
             generationIssueDetailsUnavailable: 'This result contains summary counts but no item-level reasons, so it cannot identify exactly what was omitted from the model.',
             generationIssueRuleNoTriggers: 'The rule has no trigger conditions, so it was not included in this model.',
@@ -3195,6 +3311,7 @@ const messages = {
             generationIssueRuleUnresolvableTrigger: 'At least one trigger cannot be matched to a current device field, state, or event, so the rule was not included in this model.',
             generationIssueRuleNoResolvableTriggers: 'None of the rule triggers could be converted into model conditions, so the rule was not included in this model.',
             generationIssueRulePropertyUnavailable: 'The rule conditions could not produce the required trust or privacy propagation constraint, so that rule semantics were not included.',
+            generationIssueRuleUnresolvableAction: 'The rule action does not match any API on the target device template, so the rule was not included in the model. Check that the action name matches the template.',
             generationIssueSpecNoConditions: 'The specification has no checkable conditions, so it was not included in this model.',
             generationIssueSpecPrivacyDisabled: 'Privacy propagation was not enabled for this run, so this privacy specification was not checked.',
             generationIssueSpecUnsupportedRelation: 'The condition uses a comparison that the selected field does not support, so the specification was not checked.',
@@ -3267,6 +3384,7 @@ const messages = {
             parameterPreferences: 'Parameter Preferences',
             useCurrent: 'Use Current',
             runWithPreferences: 'Run with Preferences',
+            fixSearchInProgress: 'A fix search is running. Wait for it to finish before changing preferred ranges.',
             reset: 'Reset',
             unusedPreferences: 'Unused',
             unusedPreferencesDetail: '{count} preference(s) did not match current adjustable conditions and were ignored.',
@@ -3846,6 +3964,15 @@ const messages = {
             failedToLoadRunResultSources: 'Could not load {sources}. Other history results that loaded successfully remain available.',
             historyResultsPartialFailure: 'Some history sources failed to load. Existing rows below may be stale from the last successful load; retry before relying on them.',
             failedToLoadVerificationRun: 'Failed to load verification result',
+            deepLinkUnavailable: 'The run this link points to is unavailable — it may have been deleted or belong to another account. Returned to the board.',
+            boardUndo: 'Undo',
+            boardRedo: 'Redo',
+            boardUndoBlocked: 'Close playback or wait for the current scene operation to finish before undoing.',
+            boardUndoNothingToApply: 'There is no edit to undo.',
+            boardUndoRedoNothingToApply: 'There is no edit to redo.',
+            boardUndoConflict: 'This rule or specification changed after that edit, so undoing it would discard the newer change. Reloaded the current server state.',
+            boardUndoFailed: 'Undo failed. The board was left unchanged.',
+            deepLinkUnavailableDismiss: 'Dismiss this message',
             failedToLoadTasks: 'Failed to load tasks',
             failedToLoadTask: 'Failed to load task',
             failedToDeleteTrace: 'Failed to delete trace',
@@ -4160,7 +4287,7 @@ const messages = {
                 progressPlanningTitle: 'Choose the next action',
                 progressPlanningDetail: 'Round {round}: composing the next tools from actual returned results.',
                 progressReasoningTitle: 'Reasoning summary',
-                progressReasoningFallback: 'Summarizing the current goal, observed facts, and next action.',
+                progressReasoningFallback: 'No reasoning was returned for this round.',
                 progressToolStartedDetail: 'Round {round}: started tool {tool}.',
                 progressToolSucceededDetail: 'Round {round}: the tool returned a usable result; remaining work can continue.',
                 progressToolPartialDetail: 'Round {round}: the tool returned a reviewable but incomplete result; missing parts were not treated as completed.',
@@ -4183,6 +4310,19 @@ const messages = {
                 progressUnknownTool: 'unknown tool',
                 progressElapsed: '{seconds}s elapsed',
                 toolLabels: {
+                    editDevice: 'Edit device',
+                    applyFix: 'Apply fix suggestion',
+                    deleteVerificationRun: 'Delete verification run',
+                    dismissVerifyTask: 'Dismiss verification task',
+                    dismissSimulateTask: 'Dismiss simulation task',
+                    fuzzModelAsync: 'Start exploration',
+                    fuzzTaskStatus: 'Check exploration status',
+                    cancelFuzzTask: 'Cancel exploration',
+                    listFuzzRuns: 'List exploration runs',
+                    getFuzzRun: 'Read exploration result',
+                    getFuzzFinding: 'Read candidate evidence',
+                    deleteFuzzRun: 'Delete exploration run',
+                    dismissFuzzTask: 'Dismiss exploration task',
                     addDevice: 'Create device',
                     deleteDevice: 'Preview or delete device',
                     searchDevices: 'Search current devices',
@@ -4245,6 +4385,8 @@ const messages = {
                 copyFailed: 'Failed to copy',
                 speechUnsupported: 'Speech recognition is not supported in this browser',
                 startSpeaking: 'Please start speaking...',
+                startVoiceInput: 'Start voice input',
+                stopVoiceInput: 'Stop voice input',
                 speechError: 'Speech recognition failed',
                 speechStartFailed: 'Failed to start',
                 deleteSessionMessage: 'This cannot be undone. Delete this session?',
@@ -4267,6 +4409,69 @@ const messages = {
                 incompleteStreamHistoryRestored: 'The response stream was incomplete. Saved server history was restored and any unpersisted draft reply was removed.',
                 httpRequestFailed: 'The request could not start (HTTP {status})',
                 presetTasks: {
+                    listSeparator: ', ',
+                    fallback: {
+                        devices: 'current devices',
+                        templates: 'available templates',
+                        rules: 'current rules',
+                        specs: 'current specs'
+                    },
+                    empty: {
+                        fromTemplates: {
+                            title: 'Start from templates',
+                            desc: '{count} templates available',
+                            text: 'Using the current templates ({templates}), design a verifiable IoT scenario with 5 to 8 devices, key rules, and specs.'
+                        },
+                        starterDevices: {
+                            title: 'Suggest starter devices',
+                            desc: 'Build a verifiable loop first',
+                            text: "The board is empty. Recommend starter devices from these templates ({templates}) and explain each device's role."
+                        },
+                        planGoals: {
+                            title: 'Plan verification goals',
+                            desc: 'Define what to prevent',
+                            text: 'Help me plan a meaningful safety or privacy goal that IFTTT rules can exercise. State what must be confirmed by formal verification, without promising a counterexample in advance.'
+                        },
+                        setupSteps: {
+                            title: 'Generate setup steps',
+                            desc: 'Devices, rules, specs order',
+                            text: 'Give me concise setup steps in this order: add devices from templates, create rules, configure specs, run verification.'
+                        }
+                    },
+                    scene: {
+                        rulesDesc: '{devices} devices, {rules} rules',
+                        addRules: {
+                            title: 'Add missing rules',
+                            text: 'The board has devices ({devices}) but no rules. Recommend 3 concise, verifiable IFTTT rules for them.'
+                        },
+                        reviewRules: {
+                            title: 'Review rule conflicts',
+                            text: 'Review the current rules ({rules}) and devices ({devices}) for loops, conflicting states, or safety risks.'
+                        },
+                        devicesDesc: 'Devices: {devices}',
+                        addDevices: {
+                            title: 'Add key devices',
+                            text: 'The board has few devices ({devices}). Recommend up to 3 additional devices and explain why they are needed.'
+                        },
+                        refineDevices: {
+                            title: 'Refine device relations',
+                            text: 'Summarize trigger chains among the current devices ({devices}) and point out which links or rules to inspect first.'
+                        },
+                        specsDesc: '{count} specs',
+                        generateSpecs: {
+                            title: 'Generate specs',
+                            text: 'Based on the current devices ({devices}) and {rules} rules, recommend 2 easy-to-verify specs that can expose risks.'
+                        },
+                        reviewSpecs: {
+                            title: 'Review specs',
+                            text: 'Check whether the current specs ({specs}) cover the device and rule risks, and suggest missing verification points.'
+                        },
+                        violationTest: {
+                            title: 'Design a violation test',
+                            desc: 'For simulation and verification',
+                            text: 'Using the current board summary of {devices} devices, {rules} rules, and {specs} specs, design a concise candidate path aimed at exposing a violation. Explain that simulation or formal verification must confirm the outcome; do not guarantee it.'
+                        }
+                    },
                     quickDevice: {
                         title: 'Quick Device Setup',
                         desc: 'Add devices such as ACs and purifiers',

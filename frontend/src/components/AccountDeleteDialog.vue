@@ -28,7 +28,6 @@ const form = reactive({
   password: ''
 })
 const confirmationWasEdited = ref(false)
-let confirmationEditPending = false
 
 const confirmationHint = computed(() => t('app.deleteAccountConfirmationHint'))
 const confirmationMatches = computed(() => {
@@ -40,28 +39,24 @@ const canConfirm = computed(() => confirmationWasEdited.value
   && form.password.length > 0
   && !props.loading)
 
-const markConfirmationEditIntent = () => {
-  confirmationEditPending = true
-}
-
-const markConfirmationEditIntentByKeyboard = (event: KeyboardEvent) => {
-  if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
-  if (event.key.length === 1 || event.key === 'Backspace' || event.key === 'Delete') {
-    markConfirmationEditIntent()
-  }
-}
-
-const confirmConfirmationEdited = () => {
-  if (!confirmationEditPending) return
-  confirmationWasEdited.value = true
-  confirmationEditPending = false
+/**
+ * Requires the confirmation text to have been entered through a real edit, so a password manager
+ * filling the field cannot satisfy the typed-confirmation gate on its own.
+ *
+ * Keyed on `InputEvent.inputType` rather than on preceding keystrokes: every genuine edit reports
+ * one — including Android soft keyboards, which report `KeyboardEvent.key` as `Unidentified`, and
+ * dropped text, which fires no keydown at all. Gating on printable keys left the delete button
+ * permanently disabled in both cases, with nothing on screen explaining why. Programmatic value
+ * assignment fires a plain `Event` with no `inputType`, which is what this rejects.
+ */
+const confirmConfirmationEdited = (event: Event) => {
+  if (event instanceof InputEvent && event.inputType) confirmationWasEdited.value = true
 }
 
 const resetForm = () => {
   form.confirmation = ''
   form.password = ''
   confirmationWasEdited.value = false
-  confirmationEditPending = false
 }
 
 const handleCancel = () => {
@@ -131,9 +126,6 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               :placeholder="t('app.deleteAccountConfirmationPlaceholder')"
               :aria-invalid="Boolean(form.confirmation) && !confirmationMatches"
               :disabled="loading"
-              @keydown="markConfirmationEditIntentByKeyboard"
-              @paste="markConfirmationEditIntent"
-              @compositionstart="markConfirmationEditIntent"
               @input="confirmConfirmationEdited"
             >
             <small :class="{ danger: form.confirmation && !confirmationMatches }">
@@ -171,7 +163,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 .account-delete-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: var(--z-session-modal);
   display: flex;
   align-items: center;
   justify-content: center;

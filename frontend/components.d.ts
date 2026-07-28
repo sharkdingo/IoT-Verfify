@@ -28,7 +28,6 @@ declare module 'vue' {
     FuzzingResultDialog: typeof import('./src/components/FuzzingResultDialog.vue')['default']
     InfoTooltip: typeof import('./src/components/common/InfoTooltip.vue')['default']
     LanguageToggle: typeof import('./src/components/common/LanguageToggle.vue')['default']
-    LogoutConfirm: typeof import('./src/components/LogoutConfirm.vue')['default']
     LogoutConfirmDialog: typeof import('./src/components/LogoutConfirmDialog.vue')['default']
     PlaybackChangePopover: typeof import('./src/components/PlaybackChangePopover.vue')['default']
     PublicHeader: typeof import('./src/components/common/PublicHeader.vue')['default']
@@ -40,6 +39,7 @@ declare module 'vue' {
     SimulationTimeline: typeof import('./src/components/SimulationTimeline.vue')['default']
     SystemInspector: typeof import('./src/components/SystemInspector.vue')['default']
     ThemeToggle: typeof import('./src/components/common/ThemeToggle.vue')['default']
+    ToggleSwitch: typeof import('./src/components/common/ToggleSwitch.vue')['default']
     TraceHistoryPanel: typeof import('./src/components/TraceHistoryPanel.vue')['default']
   }
 }

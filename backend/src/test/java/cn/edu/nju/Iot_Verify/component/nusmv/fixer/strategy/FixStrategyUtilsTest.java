@@ -302,12 +302,15 @@ class FixStrategyUtilsTest {
     // ======================== E1: extractCandidateConditions ========================
 
     @Test
-    void extractCandidateConditions_stateMapping() {
+    void extractCandidateConditions_paddedTargetType_stillDispatches() {
+        // targetType selects which candidate shape is built and is compared lowercased, so padding
+        // must not make the condition fall through unrecognized. The padded *key* is covered by
+        // extractCandidateConditions_variableMapping, where the k
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("thermo");
 
         RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
         SpecificationDto spec = buildSpec(
-                buildSpecCond("thermo", "state", "on", "=", "on"));
+                buildSpecCond("thermo", "  STATE  ", "  state  ", "=", "on"));
 
         List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
                 spec, rule, deviceMap, 5);
@@ -323,7 +326,7 @@ class FixStrategyUtilsTest {
 
         RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
         SpecificationDto spec = buildSpec(
-                buildSpecCond("sensor", "variable", "temperature", ">", "30"));
+                buildSpecCond("sensor", "  VARIABLE  ", "  temperature  ", ">", "30"));
 
         List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
                 spec, rule, deviceMap, 5);
@@ -772,12 +775,22 @@ class FixStrategyUtilsTest {
 
         RuleDto.Condition c = RuleDto.Condition.builder()
                 .deviceName("sensor").targetType("variable").attribute("temperature").relation(">").value("30").build();
+        // Equal condition built separately, and one differing only in relation *spelling* — the
+        // fingerprint normalizes relation aliases, so these must agree.
+        RuleDto.Condition equivalent = RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("VARIABLE").attribute("temperature").relation("GT").value("30").build();
+        RuleDto.Condition different = RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("variable").attribute("temperature").relation(">").value("31").build();
 
         String fp1 = FixStrategyUtils.conditionFingerprint(c, deviceMap);
-        String fp2 = FixStrategyUtils.conditionFingerprint(c, deviceMap);
+        String fp2 = FixStrategyUtils.conditionFingerprint(equivalent, deviceMap);
 
         assertNotNull(fp1);
+        // Comparing two calls on the *same* object only proved determinism, which a method that
+        // ignored its input would also satisfy. Equality must survive normalization instead, and a
+        // genuinely different condition must not collide.
         assertEquals(fp1, fp2);
+        assertNotEquals(fp1, FixStrategyUtils.conditionFingerprint(different, deviceMap));
         assertTrue(fp1.contains("sensor"));
         assertTrue(fp1.contains("temperature"));
     }

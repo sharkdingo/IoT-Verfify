@@ -795,7 +795,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
     // Service-internal: task creation is only reachable through submitVerification and
     // the package-private async path below; it is no longer part of the public interface.
-    @Transactional
+    // Deliberately not @Transactional: self-invocation bypasses the proxy, so the annotation would
+    // never start one. The transaction lives in the private overload's transactionTemplate.
     Long createTask(Long userId,
                     AttackScenarioDto attackScenario,
                     boolean enablePrivacy,
@@ -863,7 +864,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     // Service-internal failure compensation, reachable only from the submit/async paths below.
-    @Transactional
+    // Deliberately not @Transactional: self-invocation bypasses the proxy. failTask owns the
+    // transaction.
     void failTaskById(Long taskId, String errorMessage) {
         taskRepository.findById(Objects.requireNonNull(taskId, "taskId must not be null"))
                 .ifPresent(task -> failTask(task, errorMessage));
@@ -962,13 +964,17 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 input.templateManifests(), input.deviceSmvMap());
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
 
-        registerRunningTask(taskId, Thread.currentThread());
-        updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
-
         File smvFile = null;
         VerificationTaskPo task = null;
         VerificationResultDto finalResult = null;
         try {
+            // Both of these must be inside the try: `updateTaskProgress` writes the in-memory map
+            // before its database write, so a database failure here would otherwise leave this
+            // thread registered as running the task. The pooled thread then picks up a different
+            // task, and a later cancel of *this* task interrupts that unrelated work.
+            registerRunningTask(taskId, Thread.currentThread());
+            updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
+
             // Check in-memory cancellation marker (fast path for same-instance cancellation).
             if (isTaskCancelled(taskId)) {
                 return;

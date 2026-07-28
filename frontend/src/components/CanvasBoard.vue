@@ -475,7 +475,13 @@ const onNodeLostPointerCapture = (e: PointerEvent) => {
 
 const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
   e.preventDefault()
-  if (e.button !== 0 || e.isPrimary === false || activeDragPointerId !== null) {
+  // Also refuse while a resize owns a node. `isPrimary` rejects a second touch, but a pen and a
+  // mouse are each primary within their own type, so the two gestures could otherwise run at once:
+  // a corner resize rewrites `node.position` for tl/bl/tr while the drag snapshots its origin from
+  // it, and the first pointer to lift would emit `node-layout-interaction-end`, dropping the
+  // parent's "pointer owns this node" guard while the other gesture is still writing geometry.
+  if (e.button !== 0 || e.isPrimary === false
+      || activeDragPointerId !== null || activeResizePointerId !== null) {
     return
   }
   if (props.interactionLocked) {
@@ -585,7 +591,8 @@ const onPointerDownResize = (
 ) => {
   e.stopPropagation()
   e.preventDefault()
-  if (props.interactionLocked || e.button !== 0 || e.isPrimary === false || activeResizePointerId !== null) return
+  if (props.interactionLocked || e.button !== 0 || e.isPrimary === false
+      || activeResizePointerId !== null || activeDragPointerId !== null) return
   beginNodeResize(e, node, dir, resizeState)
   activeResizePointerId = e.pointerId
   activeResizeTarget = e.currentTarget as HTMLElement

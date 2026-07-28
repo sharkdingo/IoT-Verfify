@@ -68,10 +68,9 @@ describe('Board history deletion confirmation', () => {
   it('keeps an in-flight detail request current when deletion is cancelled', async () => {
     const invalidate = vi.fn()
 
-    await expect(confirmHistoryDeletion(
-      () => Promise.reject('cancel'),
-      invalidate
-    )).rejects.toBe('cancel')
+    // Cancelling is an ordinary outcome reported as `false`, not a thrown rejection.
+    await expect(confirmHistoryDeletion(() => Promise.resolve(false), invalidate))
+      .resolves.toBe(false)
 
     expect(invalidate).not.toHaveBeenCalled()
   })
@@ -79,7 +78,8 @@ describe('Board history deletion confirmation', () => {
   it('invalidates in-flight detail requests only after deletion is confirmed', async () => {
     const invalidate = vi.fn()
 
-    await confirmHistoryDeletion(() => Promise.resolve(), invalidate)
+    await expect(confirmHistoryDeletion(() => Promise.resolve(true), invalidate))
+      .resolves.toBe(true)
 
     expect(invalidate).toHaveBeenCalledOnce()
   })

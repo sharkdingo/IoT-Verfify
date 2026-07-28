@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
+import cn.edu.nju.Iot_Verify.util.InterruptPreservation;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -67,6 +68,14 @@ public class AiToolManager {
         try {
             return boundResult(functionName, tool.execute(argsJson));
         } catch (Exception e) {
+            // Broad enough to capture an InterruptedException, which clears the flag as it is thrown.
+            // A tool that delegates to synchronous verification or simulation runs work that *is*
+            // interruptible, and swallowing the flag here would leave a later interruptible call on
+            // this same thread unable to see it. Re-arming is safe against leaking into the next
+            // request because ThreadConfig's task decorator clears the flag at the task boundary —
+            // note ChatServiceImpl.synchronizeExecutionStop reads isInterrupted() and ends the turn as
+            // DISCONNECTED, so an escaped flag would abort the *current* turn as well.
+            InterruptPreservation.preserveInterrupt(e);
             log.error("AI tool '{}' threw unexpected exception", functionName, e);
             return errorJson("Tool execution failed due to an internal error", "TOOL_EXECUTION_ERROR", 500);
         }

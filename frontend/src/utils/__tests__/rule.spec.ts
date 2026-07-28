@@ -8,6 +8,8 @@ import {
   ruleSimilarityReasonKey,
   updateRulesForNodeRename
 } from '../rule'
+import { i18n } from '@/assets/i18n'
+import type { DuplicateRuleReasonCode, RuleSimilarityReasonCode } from '@/types/rule'
 
 describe('rule utils', () => {
   it('getNodeCenter should compute center correctly', () => {
@@ -79,6 +81,32 @@ describe('rule utils', () => {
       .toBe('app.ruleCheckSameShape')
     expect(ruleSimilarityReasonKey('AI_HIGH_SCORE_REVIEW'))
       .toBe('app.ruleSimilarityHighScoreReview')
+  })
+
+  // Spot-checking one code per table would let a new backend code ship with no message behind its
+  // key, which renders the raw key to the user in place of the reason.
+  const duplicateCodes: DuplicateRuleReasonCode[] = [
+    'NO_EXISTING_RULES',
+    'EXACT_MATCH',
+    'TRIGGER_SET_CONTAINS_OTHER',
+    'SAME_TRIGGER_SHAPE_DIFFERENT_VALUES',
+    'PARTIAL_TRIGGER_OVERLAP',
+    'NO_MATCHING_SIGNATURE'
+  ]
+  const similarityCodes: RuleSimilarityReasonCode[] = [
+    'NO_EXISTING_RULES',
+    'AI_DUPLICATE',
+    'AI_SIMILAR',
+    'AI_HIGH_SCORE_REVIEW',
+    'AI_NO_SIGNIFICANT_SIMILARITY'
+  ]
+
+  it.each(['zh-CN', 'en'] as const)('has a %s message for every rule-check reason code', locale => {
+    const missing = [
+      ...duplicateCodes.map(duplicateRuleReasonKey),
+      ...similarityCodes.map(ruleSimilarityReasonKey)
+    ].filter(key => !i18n.global.te(key, locale))
+    expect(missing).toEqual([])
   })
 })
 

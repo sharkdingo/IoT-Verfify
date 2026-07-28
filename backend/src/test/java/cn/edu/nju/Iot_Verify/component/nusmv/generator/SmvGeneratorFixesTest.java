@@ -3055,7 +3055,8 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
-        // WITH-rate =upper boundary: candidates are clamped
+        // WITH-rate =upper boundary: candidates are clamped. The -1 is MEDIC's environment
+        // disturbance (§3.1, Fig. 2b), not an unauthored step — see appendNumericEnvTransition.
         assertTrue(result.contains("a_temperature=35-(ac_1.temperature_rate): {"
                         + "max(15, min(35, toint(a_temperature)-1+ac_1.temperature_rate)), "
                         + "max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
@@ -3065,7 +3066,7 @@ class SmvGeneratorFixesTest {
         assertTrue(result.contains("a_temperature>35-(ac_1.temperature_rate): {35}"),
                 ">upper boundary should emit constant upper, got:\n" + result);
 
-        // WITH-rate =lower boundary: candidates are clamped
+        // WITH-rate =lower boundary: candidates are clamped, +1 disturbance included.
         assertTrue(result.contains("a_temperature=15-(ac_1.temperature_rate): {"
                         + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
                         + "max(15, min(35, a_temperature+1+ac_1.temperature_rate))}"),
@@ -3081,6 +3082,54 @@ class SmvGeneratorFixesTest {
                         + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
                         + "max(15, min(35, a_temperature + 30+ac_1.temperature_rate))}"),
                 "TRUE branch should clamp all three candidates, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("A10-boundary: MEDIC's ±1 environment disturbance survives an absent NaturalChangeRate")
+    void numericEnvTransition_withRate_noNcr_keepsEnvironmentDisturbance() {
+        // Same impacted variable but with NO NaturalChangeRate. MEDIC models a shared environment
+        // value as moving by the device effect plus a [-1,1] disturbance each step (§3.1, Fig. 2b), so
+        // the boundary branches must still offer the disturbed candidate: a physical quantity is only
+        // imperfectly observed, and assuming otherwise would be unsound in the unsafe direction.
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 15, 35);
+        temperature.setNaturalChangeRate(null);
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temperature))
+                .impactedVariables(List.of("temperature"))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder()
+                        .name("on").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("setOn").startState("on").endState("on").build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("ac_1", "AC",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(temperature), manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.getEnvVariables().put("temperature", temperature);
+        smv.getImpactedVariables().add("temperature");
+
+        DeviceVerificationDto dto = device("ac_1", "AC");
+        dto.setState("on");
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ac_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
+
+        assertTrue(result.contains("a_temperature=35-(ac_1.temperature_rate): {"
+                        + "max(15, min(35, toint(a_temperature)-1+ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
+                "=upper boundary keeps the -1 disturbance without a declared rate, got:\n" + result);
+        assertTrue(result.contains("a_temperature=15-(ac_1.temperature_rate): {"
+                        + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature+1+ac_1.temperature_rate))}"),
+                "=lower boundary keeps the +1 disturbance without a declared rate, got:\n" + result);
+        // With no NaturalChangeRate the default branch offers the device effect alone, so the
+        // disturbance is a property of the boundary branches specifically.
+        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
+                "the default branch has no NCR candidates to add, got:\n" + result);
     }
 
     @Test
@@ -3360,5 +3409,109 @@ class SmvGeneratorFixesTest {
         assertTrue(module.contains("init(privacy_Detection_motion) := private;"), module);
         assertFalse(module.contains("next(trust_Detection_motion)"),
                 "A sensor with no command API keeps template-authored state labels read-only");
+    }
+
+    /** Builds the lock/sensor pair used by the unresolvable-action tests. */
+    private Map<String, DeviceSmvData> lockAndSensorMap() {
+        DeviceManifest lockManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("locked").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("unlocked").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("unlock").startState("locked").endState("unlocked").build()))
+                .build();
+        DeviceSmvData lock = buildSmvData("lock_1", "Lock", List.of("Mode"),
+                Map.of("Mode", List.of("locked", "unlocked")), List.of(), lockManifest);
+        lock.setSensor(false);
+        lock.setInstanceStateTrust("trusted");
+        lock.getCurrentModeStates().put("Mode", "locked");
+
+        DeviceManifest sensorManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(numericVar("temperature", true, 0, 100)))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData sensor = buildSmvData("sensor_1", "Sensor", List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(numericVar("temperature", true, 0, 100)), sensorManifest);
+        sensor.setSensor(true);
+        sensor.setInstanceStateTrust("trusted");
+        sensor.getCurrentModeStates().put("Mode", "on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("lock_1", lock);
+        map.put("sensor_1", sensor);
+        return map;
+    }
+
+    private List<DeviceVerificationDto> lockAndSensorDtos() {
+        DeviceVerificationDto lockDto = device("lock_1", "Lock");
+        lockDto.setState("locked");
+        DeviceVerificationDto sensorDto = device("sensor_1", "Sensor");
+        sensorDto.setState("on");
+        return List.of(lockDto, sensorDto);
+    }
+
+    private RuleDto ruleCommanding(String action) {
+        RuleDto.Condition cond = new RuleDto.Condition();
+        cond.setDeviceName("sensor_1");
+        cond.setTargetType("variable");
+        cond.setAttribute("temperature");
+        cond.setRelation(">");
+        cond.setValue("30");
+
+        RuleDto.Command cmd = new RuleDto.Command();
+        cmd.setDeviceName("lock_1");
+        cmd.setAction(action);
+
+        RuleDto rule = new RuleDto();
+        rule.setId(1L);
+        rule.setConditions(List.of(cond));
+        rule.setCommand(cmd);
+        return rule;
+    }
+
+    @Test
+    @DisplayName("A rule condition attribute with surrounding whitespace still resolves")
+    void paddedConditionAttribute_resolvesLikeAdmissionValidation() {
+        RuleDto rule = ruleCommanding("unlock");
+        rule.getConditions().get(0).setAttribute("  temperature  ");
+
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String smv = mainBuilder.build(1L, lockAndSensorDtos(), List.of(rule),
+                lockAndSensorMap(), AttackScenarioDto.none(), false, context);
+
+        assertEquals(0, context.warningsSnapshot().disabledRuleCount(),
+                "Admission resolves the attribute trimmed, so generation must too, got:\n" + smv);
+        assertTrue(smv.contains("sensor_1.temperature"), smv);
+    }
+
+    @Test
+    @DisplayName("An unresolvable rule command action is reported, not silently dropped")
+    void unresolvableCommandAction_isRecordedAsDisabledRule() {
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String smv = mainBuilder.build(1L, lockAndSensorDtos(), List.of(ruleCommanding("open sesame")),
+                lockAndSensorMap(), AttackScenarioDto.none(), false, context);
+
+        SmvGenerationContext.WarningSnapshot snapshot = context.warningsSnapshot();
+        assertEquals(1, snapshot.disabledRuleCount(),
+                "A rule absent from the model must be counted, got:\n" + smv);
+        assertEquals(ModelGenerationIssueReasonCode.RULE_UNRESOLVABLE_COMMAND_ACTION,
+                snapshot.generationIssues().get(0).getReasonCode());
+        assertEquals("RULE_DISABLED", snapshot.generationIssues().get(0).getIssueType());
+    }
+
+    @Test
+    @DisplayName("A rule command action with surrounding whitespace still resolves to its API")
+    void paddedCommandAction_resolvesLikeAdmissionValidation() {
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String smv = mainBuilder.build(1L, lockAndSensorDtos(), List.of(ruleCommanding("  unlock  ")),
+                lockAndSensorMap(), AttackScenarioDto.none(), false, context);
+
+        assertEquals(0, context.warningsSnapshot().disabledRuleCount(),
+                "Admission compares trimmed, so generation must too, got:\n" + smv);
+        assertTrue(smv.contains("unlocked"), smv);
     }
 }

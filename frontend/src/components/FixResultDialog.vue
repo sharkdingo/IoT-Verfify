@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import boardApi from '@/api/board'
 import { FIX_RESPONSE_INCOMPLETE_CODE } from '@/utils/fixResponse'
@@ -25,6 +24,7 @@ import type {
   PreferredRangeSelection
 } from '@/types/fix'
 import type { InteractiveOperationStage } from '@/types/task'
+import { confirmDestructive, notifyBlocked, notifyError, notifySuccess } from '@/utils/feedback'
 
 const props = defineProps<{
   visible: boolean
@@ -340,7 +340,7 @@ const buildPreferredRangeSelections = (showWarnings = false): PreferredRangeSele
       continue
     }
     if (values.some(isBlank)) {
-      if (showWarnings) ElMessage.warning(t('app.preferredRangeCompleteFields'))
+      if (showWarnings) notifyBlocked(t('app.preferredRangeCompleteFields'))
       return null
     }
 
@@ -350,20 +350,20 @@ const buildPreferredRangeSelections = (showWarnings = false): PreferredRangeSele
 
     const adjustment = parameterAdjustmentByTargetId.value.get(targetId)
     if (!adjustment) {
-      if (showWarnings) ElMessage.warning(t('app.preferredRangeSelectTarget'))
+      if (showWarnings) notifyBlocked(t('app.preferredRangeSelectTarget'))
       return null
     }
     if (!Number.isFinite(lower) || !Number.isFinite(upper) || !Number.isInteger(lower) || !Number.isInteger(upper)) {
-      if (showWarnings) ElMessage.warning(t('app.preferredRangeIntegerBounds'))
+      if (showWarnings) notifyBlocked(t('app.preferredRangeIntegerBounds'))
       return null
     }
     if (lower > upper) {
-      if (showWarnings) ElMessage.warning(t('app.preferredRangeLowerBeforeUpper'))
+      if (showWarnings) notifyBlocked(t('app.preferredRangeLowerBeforeUpper'))
       return null
     }
 
     if (seen.has(targetId)) {
-      if (showWarnings) ElMessage.warning(t('app.duplicatePreferredRange', { key: preferredRangeTargetLabel(targetId) }))
+      if (showWarnings) notifyBlocked(t('app.duplicatePreferredRange', { key: preferredRangeTargetLabel(targetId) }))
       return null
     }
     seen.add(targetId)
@@ -383,7 +383,7 @@ const addPreferenceRow = (adjustment?: ParameterTarget) => {
     return targetId && !preferredRangeRows.value.some(row => row.targetId === targetId)
   })
   if (!nextAdjustment) {
-    ElMessage.warning(t('app.noParameterPreferenceTargets'))
+    notifyBlocked(t('app.noParameterPreferenceTargets'))
     return
   }
   preferredRangeRows.value.push({
@@ -409,7 +409,7 @@ const useAdjustmentAsPreference = (adjustment: ParameterAdjustment) => {
 const lockAdjustmentAtOriginal = (adjustment: ParameterAdjustment) => {
   const original = Number(adjustment.originalValue)
   if (!Number.isInteger(original)) {
-    ElMessage.warning(t('app.preferredRangeIntegerBounds'))
+    notifyBlocked(t('app.preferredRangeIntegerBounds'))
     return
   }
   useAdjustmentAsPreference(adjustment)
@@ -423,7 +423,7 @@ const lockAdjustmentAtOriginal = (adjustment: ParameterAdjustment) => {
 const seedPreferenceRowsFromSuggestion = () => {
   const adjustments = parameterAdjustments.value.filter(adjustment => preferredRangeTargetId(adjustment))
   if (adjustments.length === 0) {
-    ElMessage.warning(t('app.noParameterPreferenceTargets'))
+    notifyBlocked(t('app.noParameterPreferenceTargets'))
     return
   }
   preferredRangeRows.value = adjustments.map(adj => ({
@@ -455,7 +455,7 @@ const fetchFaultRules = async () => {
     if (requestVersion !== dialogRequestVersion || traceId !== props.traceId || !props.visible) return
     console.error('Failed to fetch fault rules:', error)
     faultLoadFailed.value = true
-    ElMessage.error(fixResponseErrorMessage(error, t('app.failedToLoadFaultLocalization')))
+    notifyError(fixResponseErrorMessage(error, t('app.failedToLoadFaultLocalization')))
   } finally {
     if (requestVersion === dialogRequestVersion && traceId === props.traceId) {
       faultLoading.value = false
@@ -518,7 +518,7 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
   const authToken = getToken()
   if (!authToken) {
     strategyErrors.value[strategy] = t('app.fixAuthenticationRequired')
-    ElMessage.error(strategyErrors.value[strategy])
+    notifyError(strategyErrors.value[strategy])
     return
   }
 
@@ -584,7 +584,7 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
     if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to fetch fix suggestions:', error)
     strategyErrors.value[strategy] = fixResponseErrorMessage(error, t('app.failedToLoadFixSuggestions'))
-    ElMessage.error(strategyErrors.value[strategy])
+    notifyError(strategyErrors.value[strategy])
   } finally {
     if (postSettledWithTerminalEvidence && activeFixRequestId.value === requestId) {
       clearActiveFixTracking(requestId, 'post-terminal')
@@ -607,11 +607,27 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
 }
 
 const refreshWithPreferences = async () => {
+  if (preferenceActionBlockedReason.value) return
   if (buildPreferredRangeSelections(true) === null) return
   await fetchFixSuggestions('parameter')
 }
 
+/**
+ * Why the preference actions are unavailable, or '' when they are usable.
+ *
+ * One computed drives both the disabled state and the visible reason, so the button and the message
+ * cannot disagree. Reset previously cleared the rows *before* `fetchFixSuggestions` silently
+ * returned, so a click during an in-flight search destroyed the user's typed bounds and issued no
+ * re-run — and the returning result was then hidden behind "preferences changed, re-run".
+ */
+const preferenceActionBlockedReason = computed(() => {
+  if (strategyLoading.value) return t('app.fixSearchInProgress')
+  if (activeFixRequestId.value || unresolvedFixRequestId.value) return t('app.fixSearchInProgress')
+  return ''
+})
+
 const clearPreferenceRows = async () => {
+  if (preferenceActionBlockedReason.value) return
   preferredRangeRows.value = []
   await fetchFixSuggestions('parameter')
 }
@@ -623,7 +639,7 @@ const handleOpen = () => {
   dialogRequestVersion += 1
   if (activeFixRequestId.value || unresolvedFixRequestId.value) {
     if (activeFixTraceId.value !== props.traceId) {
-      ElMessage.warning(t('app.fixTraceSwitchBlockedByActiveSearch'))
+      notifyBlocked(t('app.fixTraceSwitchBlockedByActiveSearch'))
       emit('update:visible', false)
       return
     }
@@ -656,30 +672,20 @@ const trySelectedStrategy = () => fetchFixSuggestions(selectedStrategy.value)
 const applyFix = async (suggestion: FixSuggestion) => {
   if (!props.traceId) return
   if (!suggestion.verified) {
-    ElMessage.warning(t('app.unverifiedFixCannotApply'))
+    notifyBlocked(t('app.unverifiedFixCannotApply'))
     return
   }
   if (!templateSnapshotAllowsApply.value) {
-    ElMessage.warning(fixResult.value?.templateSnapshotComparison === 'CHANGED'
+    notifyBlocked(fixResult.value?.templateSnapshotComparison === 'CHANGED'
       ? t('app.fixTemplateSnapshotChangedLimitation')
       : t('app.fixTemplateSnapshotUnavailableLimitation'))
     return
   }
-  if (suggestion.strategy === 'remove') {
-    try {
-      await ElMessageBox.confirm(
-        t('app.confirmRemoveRulesFix', { count: suggestion.removedRuleDescriptions?.length || 0 }),
-        t('app.removeRulesFixTitle'),
-        {
-          confirmButtonText: t('app.removeRulesAndApply'),
-          cancelButtonText: t('app.cancel'),
-          type: 'warning'
-        }
-      )
-    } catch {
-      return
-    }
-  }
+  if (suggestion.strategy === 'remove' && !await confirmDestructive({
+    title: t('app.removeRulesFixTitle'),
+    message: t('app.confirmRemoveRulesFix', { count: suggestion.removedRuleDescriptions?.length || 0 }),
+    confirmText: t('app.removeRulesAndApply')
+  })) return
   applyingFix.value = true
   try {
     const result = await boardApi.applyFix(
@@ -688,10 +694,10 @@ const applyFix = async (suggestion: FixSuggestion) => {
       suggestion.strategy === 'parameter' ? lastPreferredRangeSelections.value : undefined
     )
     if (!result.applied || (!result.verificationRechecked && !result.verificationEvidenceReused)) {
-      ElMessage.warning(localizedTextOrFallback(result.message, t('app.failedToApplyFix'), locale.value))
+      notifyBlocked(localizedTextOrFallback(result.message, t('app.failedToApplyFix'), locale.value))
       return
     }
-    ElMessage.success(t(result.verificationRechecked
+    notifySuccess(t(result.verificationRechecked
       ? 'app.fixAppliedWithRecheck'
       : 'app.fixAppliedWithSignedEvidence'))
     emit('applied', result)
@@ -709,7 +715,7 @@ const applyFix = async (suggestion: FixSuggestion) => {
       return
     }
     // Drift, stale targets, and service-unavailable preflight failures occur before the write.
-    ElMessage.error(fixApplyErrorMessage(error))
+    notifyError(fixApplyErrorMessage(error))
   } finally {
     applyingFix.value = false
   }
@@ -871,7 +877,7 @@ const clearActiveFixTracking = (
 const warnFixOutcomeUnknown = (requestId: string) => {
   if (fixOutcomeUnknownWarningRequestId === requestId) return
   fixOutcomeUnknownWarningRequestId = requestId
-  ElMessage.warning(t('app.fixStopRequestMayStillBeRunning'))
+  notifyBlocked(t('app.fixStopRequestMayStillBeRunning'))
 }
 
 const beginUnknownFixRecovery = (requestId: string) => {
@@ -1006,7 +1012,7 @@ defineExpose({ canOpenTrace, prepareForLogout })
 // Close dialog
 const closeDialog = () => {
   if (applyingFix.value) {
-    ElMessage.warning(t('app.fixApplyStillRunning'))
+    notifyBlocked(t('app.fixApplyStillRunning'))
     return
   }
   cancelActiveFixSearch()
@@ -1023,7 +1029,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   <div
     v-if="visible"
     data-testid="fix-result-dialog"
-    class="fixed inset-0 z-[2500] bg-black/60 backdrop-blur-sm flex items-center justify-center"
+    class="fixed inset-0 z-[var(--z-modal-nested)] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
     @click="closeDialog"
     @keydown="handleModalKeydown"
   >
@@ -1312,8 +1318,10 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                     <button
                       type="button"
                       data-testid="fix-run-with-preferences"
+                      :disabled="Boolean(preferenceActionBlockedReason)"
+                      :aria-describedby="preferenceActionBlockedReason ? 'fix-preference-blocked' : undefined"
                       @click="refreshWithPreferences"
-                      class="px-3 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold flex items-center gap-1 transition-colors"
+                      class="px-3 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <span class="material-symbols-outlined text-base">refresh</span>
                       {{ t('app.runWithPreferences') }}
@@ -1321,13 +1329,22 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                     <button
                       v-if="preferredRangeRows.length || activePreferredRangeCount"
                       type="button"
+                      data-testid="fix-clear-preferences"
+                      :disabled="Boolean(preferenceActionBlockedReason)"
+                      :aria-describedby="preferenceActionBlockedReason ? 'fix-preference-blocked' : undefined"
                       @click="clearPreferenceRows"
-                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                     >
                       <span class="material-symbols-outlined text-base">restart_alt</span>
                       {{ t('app.reset') }}
                     </button>
                   </div>
+                  <p
+                    v-if="preferenceActionBlockedReason"
+                    id="fix-preference-blocked"
+                    data-testid="fix-preference-blocked"
+                    class="mt-2 text-xs text-slate-500 dark:text-slate-400"
+                  >{{ preferenceActionBlockedReason }}</p>
                 </div>
               </div>
 

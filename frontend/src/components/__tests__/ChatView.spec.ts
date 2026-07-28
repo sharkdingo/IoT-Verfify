@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
-import { ElMessage } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { i18n } from '@/assets/i18n'
@@ -46,6 +45,7 @@ vi.mock('@/api/chat', async importOriginal => {
 
 import { ChatStreamError } from '@/api/chat'
 import ChatView from '../ChatView.vue'
+import * as feedback from '@/utils/feedback'
 
 const chatStore = useChatStore()
 const authStore = useAuth()
@@ -119,6 +119,67 @@ describe('ChatView', () => {
     authStore.logout()
     chatStore.closeChat()
     chatStore.setStreaming(false)
+    // `i18n` is a module singleton shared by every spec in this file. A test that switches locale and
+    // restores it on its last line leaves the catalogue on `en` if an assertion between the two throws,
+    // cascading failures through the later tests that match Chinese strings.
+    i18n.global.locale.value = 'zh-CN'
+  })
+
+  it('takes board preset copy from i18n in both locales', async () => {
+    // These 12 presets used to be built from inline `locale.value === 'zh-CN' ? … : …` ternaries —
+    // ~30 user-visible strings that no translation file knew about, so a third locale or a wording
+    // revision could not reach them. Asserting against the message catalogue is what keeps them there.
+    chatStore.openChat()
+    const wrapper = mountChat({
+      getBoardContext: () => ({
+        deviceCount: 0, ruleCount: 0, specCount: 0, templateCount: 3,
+        devices: [], rules: [], specs: [], templates: ['Light', 'AC']
+      })
+    })
+    await flushPromises()
+
+    // Exact equality on the rendered title, not substring containment: an inline literal that merely
+    // *starts* with the catalogue text would satisfy `toContain` and hide the regression.
+    const titles = () => wrapper.findAll('.task-title').map(node => node.text())
+
+    const zhTitle = i18n.global.t('app.chat.presetTasks.empty.fromTemplates.title')
+    expect(titles()).toContain(zhTitle)
+
+    i18n.global.locale.value = 'en'
+    await flushPromises()
+    const enTitle = i18n.global.t('app.chat.presetTasks.empty.fromTemplates.title')
+    expect(enTitle).not.toBe(zhTitle)
+    expect(titles()).toContain(enTitle)
+    // Every rendered preset must be a catalogue string in the active locale.
+    expect(titles().length).toBeGreaterThan(0)
+
+    // The locale restore lives in afterEach, so a failure above cannot leak `en` into later tests.
+    wrapper.unmount()
+  })
+
+  it('translates every tool name the backend can report', () => {
+    // Unlabelled tools fell through to `toolName.replace(/_/g, ' ')`, so a user watching the trace
+    // saw raw `fuzz model async`. 14 tools were missing, all of the newer fuzz/dismiss family — the
+    // gap is silent, which is why it needs a check rather than vigilance. Asserting the catalogue
+    // directly, because the mapping table is component-internal.
+    const labelled = [
+      'edit_device', 'apply_fix', 'delete_verification_run', 'dismiss_verify_task',
+      'dismiss_simulate_task', 'fuzz_model_async', 'fuzz_task_status', 'cancel_fuzz_task',
+      'list_fuzz_runs', 'get_fuzz_run', 'get_fuzz_finding', 'delete_fuzz_run', 'dismiss_fuzz_task'
+    ]
+    const camel = (name: string) =>
+      name.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase())
+
+    // Read the raw per-locale catalogue: the i18n instance sets `fallbackLocale: 'en'`, so a missing
+    // zh-CN key resolves to the English message through both `t` and `tm` — the exact gap this guards
+    // would be invisible if asserted through translation.
+    for (const loc of ['zh-CN', 'en'] as const) {
+      const labels = (i18n.global.getLocaleMessage(loc) as any)?.app?.chat?.toolLabels ?? {}
+      for (const toolName of labelled) {
+        const key = camel(toolName)
+        expect(typeof labels[key], `app.chat.toolLabels.${key} missing in ${loc}`).toBe('string')
+      }
+    }
   })
 
   it('loads existing sessions when mounted after the assistant is already open', async () => {
@@ -230,7 +291,7 @@ describe('ChatView', () => {
         streamSignal?.addEventListener('abort', () => resolve(), { once: true })
       })
     })
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     authStore.login(validToken('alice'), {
       userId: 1,
       phone: '13800138000',
@@ -295,7 +356,7 @@ describe('ChatView', () => {
         streamSignal?.addEventListener('abort', () => resolve(), { once: true })
       })
     })
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     const executeCommand = vi.fn().mockResolvedValue(true)
     authStore.login(validToken('alice'), {
       userId: 1,
@@ -360,7 +421,7 @@ describe('ChatView', () => {
       args[2].onMessage('Alice 的临时回复')
       args[2].onFinish?.({ turnId: args[4], executionStatus: 'PARTIAL' })
     })
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     authStore.login(validToken('alice'), {
       userId: 1,
       phone: '13800138000',
@@ -425,7 +486,7 @@ describe('ChatView', () => {
       args[2].onMessage('Alice 的临时回复')
       args[2].onFinish?.({ turnId: aliceTurnId, executionStatus: 'PARTIAL' })
     })
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     authStore.login(validToken('alice'), {
       userId: 1,
       phone: '13800138000',
@@ -489,7 +550,7 @@ describe('ChatView', () => {
   })
 
   it('shows localized feedback when an explicit new-session request is rejected', async () => {
-    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as any)
+    const errorMessage = vi.spyOn(feedback, 'notifyError').mockImplementation(() => undefined)
     chatApi.createSession.mockRejectedValue(new Error('session limit reached'))
     chatStore.openChat()
 
@@ -507,7 +568,7 @@ describe('ChatView', () => {
   })
 
   it('treats an incomplete new-session response as a visible failure', async () => {
-    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as any)
+    const errorMessage = vi.spyOn(feedback, 'notifyError').mockImplementation(() => undefined)
     chatApi.createSession.mockResolvedValue({})
     chatStore.openChat()
 
@@ -842,7 +903,7 @@ describe('ChatView', () => {
 
   it('unlocks after a reattached execution ends with authoritative user-only history', async () => {
     vi.useFakeTimers()
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     const userOnlyHistory = historyPage([
       { role: 'user', content: '检查后台状态', turnId: 'remote-turn' }
     ])
@@ -1307,7 +1368,7 @@ describe('ChatView', () => {
         streamSignal?.addEventListener('abort', () => resolve(), { once: true })
       })
     })
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     chatStore.openChat()
 
     const wrapper = mountChat()
@@ -1461,7 +1522,7 @@ describe('ChatView', () => {
   })
 
   it('releases a completed turn when another window deletes its session before history reload', async () => {
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     const executeCommand = vi.fn().mockResolvedValue(true)
     chatApi.getSessionList.mockResolvedValue([session])
     chatApi.getSessionHistory
@@ -1566,7 +1627,7 @@ describe('ChatView', () => {
   })
 
   it('waits for idle, reconciles the Board, and replaces an incomplete accepted stream with server history', async () => {
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     const executeCommand = vi.fn().mockResolvedValue(true)
     let activeTurnId = ''
     chatApi.getSessionList.mockResolvedValue([session])
@@ -1733,7 +1794,7 @@ describe('ChatView', () => {
 
   it('keeps the settlement lock when history reload fails and replaces the draft on retry', async () => {
     vi.useFakeTimers()
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as any)
+    const warning = vi.spyOn(feedback, 'notifyBlocked').mockImplementation(() => undefined)
     const executeCommand = vi.fn().mockResolvedValue(true)
     let activeTurnId = ''
     let sessionActive = false
@@ -1830,7 +1891,7 @@ describe('ChatView', () => {
   })
 
   it('explains a stored-history limit instead of reporting a concurrency conflict', async () => {
-    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as any)
+    const errorMessage = vi.spyOn(feedback, 'notifyError').mockImplementation(() => undefined)
     chatApi.getSessionList.mockResolvedValue([session])
     chatApi.sendStreamChat.mockRejectedValue(new ChatStreamError('limit', {
       kind: 'HTTP_ERROR',
@@ -1979,12 +2040,21 @@ describe('ChatView', () => {
     expect(wrapper.text()).toContain('1 成功')
     expect(wrapper.text()).toContain('设备已创建。')
     expect(wrapper.get('.chat-execution-state').text()).toContain('已完成')
+    // The newest turn's reasoning stays expanded after completion: it used to shut the instant the
+    // stream ended, so anyone who was not watching live never read the argument behind the answer.
     const completedDetails = wrapper.get('details.chat-execution-trace')
-    expect(completedDetails.attributes('open')).toBeUndefined()
+    expect(completedDetails.attributes('open')).toBeDefined()
 
+    // A deliberate collapse is remembered, rather than being re-expanded on the next render.
+    const completedDetailsElement = completedDetails.element as HTMLDetailsElement
+    completedDetailsElement.open = false
+    await completedDetails.trigger('toggle')
+    await flushPromises()
+    expect(wrapper.get('details.chat-execution-trace').attributes('open')).toBeUndefined()
+
+    // Re-expanding scrolls back to the first step rather than restoring a stale offset.
     const completedEvents = completedDetails.get('.chat-execution-events').element as HTMLElement
     completedEvents.scrollTop = 80
-    const completedDetailsElement = completedDetails.element as HTMLDetailsElement
     completedDetailsElement.open = true
     await completedDetails.trigger('toggle')
     await flushPromises()
@@ -2292,6 +2362,87 @@ describe('ChatView', () => {
     expect(chatApi.requestSessionStop)
       .toHaveBeenCalledWith('session-1', activeTurnId, renewedToken)
     expect(streamSignal?.aborted).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('ChatView voice input', () => {
+  /** Minimal stand-in for the browser SpeechRecognition the component constructs. */
+  class FakeRecognition {
+    static last: FakeRecognition | null = null
+    onstart: (() => void) | null = null
+    onend: (() => void) | null = null
+    onerror: (() => void) | null = null
+    onresult: ((event: any) => void) | null = null
+    lang = ''
+    interimResults = false
+    maxAlternatives = 0
+    aborted = false
+    stopped = false
+
+    constructor() { FakeRecognition.last = this }
+    start() { this.onstart?.() }
+    abort() { this.aborted = true }
+    stop() { this.stopped = true }
+  }
+
+  beforeEach(() => {
+    FakeRecognition.last = null
+    ;(window as any).SpeechRecognition = FakeRecognition
+    chatStore.openChat()
+  })
+
+  afterEach(() => {
+    delete (window as any).SpeechRecognition
+    document.body.innerHTML = ''
+  })
+
+  const micButton = (wrapper: ReturnType<typeof mountChat>) =>
+    wrapper.findAll('button').find(button =>
+      button.attributes('aria-pressed') !== undefined
+      && button.attributes('aria-label')?.match(/语音输入|voice input/i))!
+
+  it('stops the recognizer when the panel unmounts', async () => {
+    const wrapper = mountChat()
+    await flushPromises()
+
+    await micButton(wrapper).trigger('click')
+    const recognition = FakeRecognition.last!
+    expect(recognition).toBeDefined()
+
+    wrapper.unmount()
+
+    // Without teardown the microphone stays open after logout or navigating away.
+    expect(recognition.aborted).toBe(true)
+  })
+
+  it('does not write a late transcript into a torn-down panel', async () => {
+    const wrapper = mountChat()
+    await flushPromises()
+    await micButton(wrapper).trigger('click')
+    const recognition = FakeRecognition.last!
+
+    wrapper.unmount()
+    expect(() => recognition.onresult?.({ results: [[{ transcript: 'late words' }]] })).not.toThrow()
+  })
+
+  it('lets the user stop a recording they started', async () => {
+    const wrapper = mountChat()
+    await flushPromises()
+
+    const start = micButton(wrapper)
+    const startLabel = start.attributes('aria-label')
+    await start.trigger('click')
+    await flushPromises()
+
+    // The control must become a real stop affordance, not just look active.
+    const stop = micButton(wrapper)
+    expect(stop.attributes('aria-pressed')).toBe('true')
+    expect(stop.attributes('aria-label')).not.toBe(startLabel)
+
+    await stop.trigger('click')
+    expect(FakeRecognition.last!.aborted).toBe(true)
+    expect(micButton(wrapper).attributes('aria-pressed')).toBe('false')
     wrapper.unmount()
   })
 })

@@ -111,12 +111,18 @@ export const invalidateFuzzingResultRequests = (
   return currentRequestEpoch + 1
 }
 
+/**
+ * Confirms a history deletion, invalidating in-flight detail requests only once the user has
+ * agreed. Returns whether to proceed: cancelling is an ordinary outcome, not an exception, so
+ * callers branch on the result instead of catching.
+ */
 export const confirmHistoryDeletion = async (
-  requestConfirmation: () => Promise<unknown>,
+  requestConfirmation: () => Promise<boolean>,
   invalidateDetailRequests: () => void
-): Promise<void> => {
-  await requestConfirmation()
+): Promise<boolean> => {
+  if (!await requestConfirmation()) return false
   invalidateDetailRequests()
+  return true
 }
 
 export const createScopedBoardInvalidationBinding = <Message,>(
@@ -426,7 +432,7 @@ export const getConfirmedBoardItemStatus = <T extends { id?: string }>(
  * 1. Imports & Setup
  * ================================================================================= */
 import {ref, reactive, computed, defineAsyncComponent, nextTick, onMounted, onBeforeUnmount, watch, h, type Ref} from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
@@ -437,7 +443,6 @@ import {
   SPEC_RECOMMENDATION_CATEGORY_OPTIONS
 } from './board/recommendationCategory'
 import { authApi } from '@/api/auth'
-import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
 
 // Types
@@ -490,7 +495,33 @@ import type { PortableSceneFile } from '@/types/scene'
 
 // Utils
 import { getNodeIcon as resolveNodeIcon } from '../utils/device'
+import {
+  acknowledge,
+  confirmDestructive,
+  dismissAllNotifications,
+  notifyBlocked,
+  notifyError,
+  notifyInfo,
+  notifySuccess
+} from '@/utils/feedback'
 import { getVerificationOutcome, normalizeSpecResults } from './board/verificationResult'
+import {
+  applyBoardRunTarget,
+  hasUnusableBoardRunParams,
+  isSameBoardRunTarget,
+  parseBoardRunTarget,
+  type BoardRunTarget
+} from './board/runDeepLink'
+import { createBoardSemanticCommit } from './board/semanticCommit'
+import {
+  formatRecommendationFilteredItem as formatFilteredItem,
+  formatRecommendationFilteredType as formatFilteredType
+} from './board/recommendationFilterText'
+import {
+  formatSceneValidationCoordinate,
+  getStructuredValidationErrors,
+  readBoardReplacementStalePreview
+} from './board/sceneImportDiagnostics'
 import { createDeviceInstanceId, deviceLabelKey, getUniqueLabel } from '../utils/canvas/nodeCreate'
 import { screenToWorld } from '../utils/canvas/geometry'
 import {
@@ -571,12 +602,9 @@ import {
 } from '@/utils/pagedRequestCoordinator'
 import { generationIssueReasonKey } from '@/utils/generationIssue'
 import {
-  FUZZ_ITERATIONS_MAX,
-  FUZZ_ITERATIONS_MIN,
+  hasValidFuzzingBudget,
+  isFuzzingPreviewCurrent,
   FUZZ_PATH_LENGTH_MAX,
-  FUZZ_PATH_LENGTH_MIN,
-  FUZZ_POPULATION_MAX,
-  FUZZ_POPULATION_MIN,
   getFuzzingConfigurationIssue,
   isKnownFuzzingSpecificationSupported
 } from '@/utils/fuzzingConfig'
@@ -624,7 +652,6 @@ import { defaultSpecTemplates, specTemplateDetails } from '../assets/config/spec
 import boardApi, {
   BOARD_RESPONSE_INCOMPLETE_CODE,
   type BoardReplacementPreview,
-  type BoardReplacementStaleData,
   type DeviceLayout,
   type DeviceRecommendation,
   type EnvironmentVariablePatchResult,
@@ -645,9 +672,12 @@ import SystemInspector from '../components/SystemInspector.vue'
 import LanguageToggle from '@/components/common/LanguageToggle.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
+import ToggleSwitch from '@/components/common/ToggleSwitch.vue'
 import ScenarioObjectiveIssues from '@/components/ScenarioObjectiveIssues.vue'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
+import { openModalDepth } from '@/composables/useBodyScrollLock'
 import { useTheme } from '@/composables/useTheme'
+import { useBoardUndo } from '@/composables/useBoardUndo'
 
 const LogoutConfirmDialog = defineAsyncComponent(() => import('@/components/LogoutConfirmDialog.vue'))
 const AccountDeleteDialog = defineAsyncComponent(() => import('@/components/AccountDeleteDialog.vue'))
@@ -669,10 +699,17 @@ const props = defineProps<{
 
 const { t, te, locale } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const chatStore = useChatStore()
 const { toggleChat } = chatStore
 const { state: authState, logout, logoutIfTokenMatches, getToken } = useAuth()
 const { theme } = useTheme()
+
+/**
+ * Set once the deep-link layer is initialised. The result-surface closers are declared
+ * before it, so they clear the URL through this hook instead of forcing a large reorder.
+ */
+let clearRunDeepLink: () => void = () => {}
 
 const showLogoutDialog = ref(false)
 const showDeleteAccountDialog = ref(false)
@@ -721,23 +758,16 @@ const handleLogoutConfirm = async () => {
       chatPreparation = 'reconciliation-failed'
     }
     if (chatPreparation === 'reconciliation-failed') {
-      ElMessage.error(t('app.chat.logoutReconcileFailed'))
+      notifyError(t('app.chat.logoutReconcileFailed'))
       return
     }
     if (chatPreparation === 'outcome-unknown') {
-      try {
-        await ElMessageBox.confirm(
-          t('app.chat.logoutOutcomeUnknownMessage'),
-          t('app.chat.logoutOutcomeUnknownTitle'),
-          {
-            confirmButtonText: t('app.chat.logoutOutcomeUnknownConfirm'),
-            cancelButtonText: t('app.cancel'),
-            type: 'warning'
-          }
-        )
-      } catch {
-        return
-      }
+      const proceed = await confirmDestructive({
+        title: t('app.chat.logoutOutcomeUnknownTitle'),
+        message: t('app.chat.logoutOutcomeUnknownMessage'),
+        confirmText: t('app.chat.logoutOutcomeUnknownConfirm')
+      })
+      if (!proceed) return
     }
 
     let interactivePreparation: InteractiveLogoutPreparation = 'ready'
@@ -754,19 +784,12 @@ const handleLogoutConfirm = async () => {
       interactivePreparation = 'outcome-unknown'
     }
     if (interactivePreparation === 'outcome-unknown') {
-      try {
-        await ElMessageBox.confirm(
-          t('app.logoutInteractiveOutcomeUnknownMessage'),
-          t('app.logoutInteractiveOutcomeUnknownTitle'),
-          {
-            confirmButtonText: t('app.logoutInteractiveOutcomeUnknownConfirm'),
-            cancelButtonText: t('app.cancel'),
-            type: 'warning'
-          }
-        )
-      } catch {
-        return
-      }
+      const proceed = await confirmDestructive({
+        title: t('app.logoutInteractiveOutcomeUnknownTitle'),
+        message: t('app.logoutInteractiveOutcomeUnknownMessage'),
+        confirmText: t('app.logoutInteractiveOutcomeUnknownConfirm')
+      })
+      if (!proceed) return
     }
 
     try {
@@ -819,7 +842,7 @@ const handleDeleteAccountConfirm = async (payload: { password: string; confirmat
     trackedFuzzTaskIds.value = []
     if (logoutIfTokenMatches(requestToken)) {
       showDeleteAccountDialog.value = false
-      ElMessage.success(t('app.deleteAccountSuccess'))
+      notifySuccess(t('app.deleteAccountSuccess'))
       await router.replace({ path: '/', query: { mode: 'register' } })
     }
   } catch (error: any) {
@@ -829,12 +852,12 @@ const handleDeleteAccountConfirm = async (payload: { password: string; confirmat
       trackedFuzzTaskIds.value = []
       if (logoutIfTokenMatches(requestToken)) {
         showDeleteAccountDialog.value = false
-        ElMessage.warning(t('app.deleteAccountOutcomeUnknown'))
+        notifyBlocked(t('app.deleteAccountOutcomeUnknown'))
         await router.replace({ path: '/', query: { mode: 'login' } })
       }
     } else if (getToken() === requestToken) {
       const message = localizedErrorMessage(error, t('app.deleteAccountFailed'), locale.value)
-      ElMessage.error(message)
+      notifyError(message)
     }
   } finally {
     isDeletingAccount.value = false
@@ -914,9 +937,9 @@ const reportEnvironmentChanges = (
     .map(change => `${formatEnvironmentSnapshot(change.previousValue, bundledNames)} -> ${formatEnvironmentSnapshot(change.currentValue, bundledNames)}`)
   const removed = values.filter(change => change.changeType === 'REMOVED')
     .map(change => formatEnvironmentSnapshot(change.previousValue, bundledNames))
-  if (added.length > 0) ElMessage.info(t('app.environmentPoolAddedByDeviceChange', { items: added.join(', ') }))
-  if (updated.length > 0) ElMessage.info(t('app.environmentPoolUpdatedByDeviceChange', { items: updated.join(', ') }))
-  if (removed.length > 0) ElMessage.info(t('app.environmentPoolRemovedByDeviceChange', { items: removed.join(', ') }))
+  if (added.length > 0) notifyInfo(t('app.environmentPoolAddedByDeviceChange', { items: added.join(', ') }))
+  if (updated.length > 0) notifyInfo(t('app.environmentPoolUpdatedByDeviceChange', { items: updated.join(', ') }))
+  if (removed.length > 0) notifyInfo(t('app.environmentPoolRemovedByDeviceChange', { items: removed.join(', ') }))
 }
 
 const MAX_SCENE_IMPORT_BYTES = REQUEST_LIMITS.sceneBytes
@@ -928,7 +951,7 @@ const ensureBoardItemCapacity = (
   maximum: number
 ) => {
   if (currentCount + additionalCount <= maximum) return true
-  ElMessage.warning(t('app.boardCapacityReached', {
+  notifyBlocked(t('app.boardCapacityReached', {
     resource: t(`app.${resource}`),
     limit: maximum
   }))
@@ -937,7 +960,7 @@ const ensureBoardItemCapacity = (
 
 const ensureNestedItemCapacity = (resource: string, count: number, maximum: number) => {
   if (count <= maximum) return true
-  ElMessage.warning(t('app.itemLimitReached', { resource, limit: maximum }))
+  notifyBlocked(t('app.itemLimitReached', { resource, limit: maximum }))
   return false
 }
 
@@ -1377,7 +1400,7 @@ const boardDataKeyLabel = (key: BoardDataKey): string => t(`app.boardDataKey_${k
 const ensureBoardDataReady = (keys: BoardDataKey[] = allBoardDataKeys): boolean => {
   const unavailable = keys.filter(key => boardDataLoadState[key] !== 'ready')
   if (unavailable.length === 0) return true
-  ElMessage.error(t('app.boardDataEditBlocked', {
+  notifyError(t('app.boardDataEditBlocked', {
     collections: unavailable.map(boardDataKeyLabel).join(', ')
   }))
   return false
@@ -1393,7 +1416,7 @@ const assertRulesHaveTriggers = (candidateRules: RuleForm[]): boolean => {
     candidateRules.forEach((rule, index) => assertRuleHasTrigger(rule, index))
     return true
   } catch (error: any) {
-    ElMessage.warning({ message: t('app.ruleTriggerSourceRequired'), type: 'warning' })
+    notifyBlocked(t('app.ruleTriggerSourceRequired'))
     return false
   }
 }
@@ -1470,22 +1493,16 @@ const notifySimulationOutcome = (result: any, saved: boolean) => {
   const stateCount = result?.states?.length || 0
   const disabledRuleCount = getSimulationDisabledRuleCount(result)
   if (!isSimulationModelComplete(result)) {
-    ElMessage.warning({
-      message: t('app.simulationCompletedWithDisabledRules', {
+    notifyBlocked(t('app.simulationCompletedWithDisabledRules', {
         states: stateCount,
         rules: disabledRuleCount,
         saved: saved ? t('app.savedToHistorySuffix') : ''
-      }),
-      type: 'warning'
-    })
+      }))
     return
   }
-  ElMessage.success({
-    message: saved
+  notifySuccess(saved
       ? t('app.simulationTaskCompletedSaved', { count: stateCount })
-      : t('app.simulationCompletedWithStates', { count: stateCount }),
-    type: 'success'
-  })
+      : t('app.simulationCompletedWithStates', { count: stateCount }))
 }
 
 const extractApiErrorMessage = (error: any, fallback: string): string => {
@@ -1691,30 +1708,27 @@ const notifyVerificationOutcome = (result: any) => {
         : verificationOutcome === 'INCONCLUSIVE'
           ? t('app.verificationInconclusiveSummary')
           : getVerificationFailureMessage(result)
-      ElMessage.warning({ message, type: 'warning' })
+      notifyBlocked(message)
       return
     }
     const outcome = verificationOutcome === 'SATISFIED'
       ? t('app.verificationPassed')
       : getVerificationFailureMessage(result)
-    ElMessage.warning({
-      message: t('app.generationWarningSummary', {
+    notifyBlocked(t('app.generationWarningSummary', {
         outcome,
         total: counts.total,
         disabledRuleCount: counts.disabledRuleCount,
         skippedSpecCount: counts.skippedSpecCount
-      }),
-      type: 'warning'
-    })
+      }))
     return
   }
 
   if (verificationOutcome === 'SATISFIED') {
-    ElMessage.success({ message: t('app.verificationSatisfiedComplete'), type: 'success' })
+    notifySuccess(t('app.verificationSatisfiedComplete'))
   } else if (verificationOutcome === 'INCONCLUSIVE') {
-    ElMessage.warning({ message: t('app.verificationInconclusiveSummary'), type: 'warning' })
+    notifyBlocked(t('app.verificationInconclusiveSummary'))
   } else {
-    ElMessage.warning({ message: getVerificationFailureMessage(result), type: 'warning' })
+    notifyBlocked(getVerificationFailureMessage(result))
   }
 }
 
@@ -2341,7 +2355,7 @@ const createDeviceInstanceAt = async (
     const baseName = customName?.trim() || tpl.manifest.Name
     const uniqueLabel = getUniqueLabel(baseName, getVisibleDeviceNodes())
     if (uniqueLabel !== baseName) {
-      ElMessage.warning(t('app.deviceNameChangedBeforeCreate', { name: uniqueLabel }))
+      notifyBlocked(t('app.deviceNameChangedBeforeCreate', { name: uniqueLabel }))
       throw new Error('Device name changed before queued creation')
     }
     const node: DeviceNode = {
@@ -2374,11 +2388,11 @@ const createDeviceInstanceAt = async (
         if (nodesRefreshed && environmentRefreshed && created) {
           notifyConfirmedCreate()
           await focusCreatedDeviceNode(created)
-          ElMessage.warning(t('app.deviceCreateOutcomeRefreshed', { name: created.label }))
+          notifyBlocked(t('app.deviceCreateOutcomeRefreshed', { name: created.label }))
           return { device: created, responseConfirmed: false }
         }
       }
-      ElMessage.error(localizedErrorMessage(error, t('app.saveNodesFailed'), locale.value))
+      notifyError(localizedErrorMessage(error, t('app.saveNodesFailed'), locale.value))
       throw error
     }
   }, mutationOptions)
@@ -2416,20 +2430,20 @@ const confirmTemplateInstanceCreate = async () => {
   const name = templateInstanceDialogData.name.trim()
   if (!tpl) return
   if (!name) {
-    ElMessage.warning(t('app.enterDeviceName'))
+    notifyBlocked(t('app.enterDeviceName'))
     return
   }
   const availableName = getUniqueLabel(name, getVisibleDeviceNodes())
   if (availableName !== name) {
     templateInstanceDialogData.name = availableName
-    ElMessage.warning(t('app.deviceNameAdjustedToAvoidConflict', { name: availableName }))
+    notifyBlocked(t('app.deviceNameAdjustedToAvoidConflict', { name: availableName }))
     return
   }
 
   const runtime = buildTemplateInstanceRuntimeConfig(tpl)
   const runtimeError = validateTemplateInstanceRuntimeConfig(tpl, runtime)
   if (runtimeError) {
-    ElMessage.warning(runtimeError)
+    notifyBlocked(runtimeError)
     return
   }
 
@@ -2438,10 +2452,10 @@ const confirmTemplateInstanceCreate = async () => {
     const outcome = await createDeviceInstanceAt(tpl, templateInstanceDialogData.position, availableName, runtime)
     const created = outcome.device
     if (created.label !== availableName) {
-      ElMessage.warning(t('app.deviceNameAdjustedToAvoidConflict', { name: created.label }))
+      notifyBlocked(t('app.deviceNameAdjustedToAvoidConflict', { name: created.label }))
     }
     if (outcome.responseConfirmed) {
-      ElMessage.success(t('app.deviceAddedWithName', { name: created.label }))
+      notifySuccess(t('app.deviceAddedWithName', { name: created.label }))
     }
     templateInstanceDialogVisible.value = false
     templateInstanceDialogData.template = null
@@ -2522,9 +2536,9 @@ const handleNodeMovedOrResized = async (nodeId: string) => {
       if (!isDefinitiveMutationRejection(error)
         && refreshed
         && deviceLayoutMatches(nodes.value.find(candidate => candidate.id === nodeId), layout)) {
-        ElMessage.warning(t('app.deviceLayoutOutcomeRefreshed'))
+        notifyBlocked(t('app.deviceLayoutOutcomeRefreshed'))
       } else {
-        ElMessage.error(extractApiErrorMessage(error, t('app.saveNodesFailed')))
+        notifyError(extractApiErrorMessage(error, t('app.saveNodesFailed')))
       }
     }
   })
@@ -2549,7 +2563,7 @@ const handleAddRule = async (request: {
         if (!ensureBoardItemCapacity('rules', rules.value.length, 1, REQUEST_LIMITS.rules)) return
         const { sources, toId, toApi } = payload
         if (!sources || !sources.length || !toId || !toApi) {
-          ElMessage.warning(t('app.fillAllRuleFields'))
+          notifyBlocked(t('app.fillAllRuleFields'))
           return
         }
         if (!ensureNestedItemCapacity(
@@ -2565,24 +2579,23 @@ const handleAddRule = async (request: {
         }
         attemptedRule = newRule
         const mutation = await boardApi.addRule(JSON.parse(JSON.stringify(newRule)))
-        rules.value = mutation.currentItems
-        syncRuleDerivedEdges()
+        commitSemanticScene({ rules: mutation.currentItems, availability: mutation })
         if (mutation.affectedItem?.id) {
           await focusRuleOnCanvas(mutation.affectedItem.id)
         }
-        ElMessage.success(t('app.addRuleSuccess'))
+        notifySuccess(t('app.addRuleSuccess'))
         saved = true
       } catch (error: any) {
         console.error('addRule error', error)
         if (!isDefinitiveMutationRejection(error) && attemptedRule) {
           const refreshed = await refreshRules()
           if (refreshed && ruleExists(attemptedRule)) {
-            ElMessage.warning(t('app.ruleCreateOutcomeRefreshed'))
+            notifyBlocked(t('app.ruleCreateOutcomeRefreshed'))
             saved = true
             return
           }
         }
-        ElMessage.error(extractApiErrorMessage(error, t('app.saveRulesFailed')))
+        notifyError(extractApiErrorMessage(error, t('app.saveRulesFailed')))
       }
     })
   } finally {
@@ -2712,44 +2725,18 @@ const confirmRecommendedRuleSimilarity = async (candidate: RuleForm): Promise<bo
         })
       : t('app.aiSimilarRuleMayExist', { reason })
 
-    try {
-      await ElMessageBox.confirm(
-        message,
-        t('app.aiRuleSimilarityDetected'),
-        {
-          confirmButtonText: t('app.applyAnyway'),
-          cancelButtonText: t('app.cancel'),
-          type: 'warning',
-          appendTo: 'body',
-          lockScroll: false
-        }
-      )
-      return true
-    } catch (error: any) {
-      if (error === 'cancel' || error === 'close') return false
-      console.error('AI similarity confirmation failed:', error)
-      return false
-    }
+    return await confirmDestructive({
+      title: t('app.aiRuleSimilarityDetected'),
+      message,
+      confirmText: t('app.applyAnyway')
+    })
   } catch (error) {
     console.error('AI similarity check failed before applying recommendation:', error)
-    try {
-      await ElMessageBox.confirm(
-        t('app.aiSimilarityCheckFailedCanStillApply'),
-        t('app.aiRuleSimilarityDetected'),
-        {
-          confirmButtonText: t('app.applyAnyway'),
-          cancelButtonText: t('app.cancel'),
-          type: 'warning',
-          appendTo: 'body',
-          lockScroll: false
-        }
-      )
-      return true
-    } catch (confirmError: any) {
-      if (confirmError === 'cancel' || confirmError === 'close') return false
-      console.error('AI similarity failure confirmation failed:', confirmError)
-      return false
-    }
+    return await confirmDestructive({
+      title: t('app.aiRuleSimilarityDetected'),
+      message: t('app.aiSimilarityCheckFailedCanStillApply'),
+      confirmText: t('app.applyAnyway')
+    })
   }
 }
 
@@ -2758,7 +2745,7 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
   if (!ensurePlaybackClosedForMutation()) return
   if (!ensureBoardDataReady(['nodes', 'templates', 'rules'])) return
   if (appliedRuleRecommendations.value.has(index)) {
-    ElMessage.warning(t('app.recommendationAlreadyApplied'))
+    notifyBlocked(t('app.recommendationAlreadyApplied'))
     return
   }
   if (applyingRuleRecommendations.value.has(index)) return
@@ -2780,12 +2767,12 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
         if (recommendationEpoch === ruleRecommendationRequestEpoch
           && requestSceneGeneration === recommendationSceneGeneration) {
           appliedRuleRecommendations.value.add(index)
-          ElMessage.warning(t('app.ruleCreateOutcomeRefreshed'))
+          notifyBlocked(t('app.ruleCreateOutcomeRefreshed'))
         }
         return
       }
     }
-    ElMessage.error(extractApiErrorMessage(error, t('app.failedToApplyRule')))
+    notifyError(extractApiErrorMessage(error, t('app.failedToApplyRule')))
   }
   try {
     if (!ensureBoardItemCapacity('rules', rules.value.length, 1, REQUEST_LIMITS.rules)) return
@@ -2799,7 +2786,7 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
       return
     }
     if (ruleExists(newRule)) {
-      ElMessage.warning(t('app.duplicateRuleExists'))
+      notifyBlocked(t('app.duplicateRuleExists'))
       return
     }
     applyingRuleRecommendations.value.add(index)
@@ -2816,9 +2803,8 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
         || isSceneReplacementInProgress.value) return
       try {
         const mutation = await boardApi.addRule(JSON.parse(JSON.stringify(newRule)))
-        rules.value = mutation.currentItems
+        commitSemanticScene({ rules: mutation.currentItems, availability: mutation })
         recommendationConfirmedApplied = true
-        syncRuleDerivedEdges()
         const createdRule = mutation.affectedItem
         if (createdRule?.id) {
           await focusRuleOnCanvas(createdRule.id)
@@ -2826,7 +2812,7 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
         if (recommendationEpoch === ruleRecommendationRequestEpoch) {
           appliedRuleRecommendations.value.add(index)
         }
-        ElMessage.success(t('app.ruleAddedSuccessfully'))
+        notifySuccess(t('app.ruleAddedSuccessfully'))
       } catch (error: any) {
         await reportFailure(error)
       }
@@ -2839,7 +2825,7 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
     })
   } catch (error: any) {
     if (error instanceof RecommendationCandidateError) {
-      ElMessage.warning(t('app.recommendationInvalidFieldNoChange', { field: error.field }))
+      notifyBlocked(t('app.recommendationInvalidFieldNoChange', { field: error.field }))
       return
     }
     await reportFailure(error)
@@ -2871,7 +2857,7 @@ const getDeleteDialogFallbackFocus = () =>
 
 const onDeviceListClick = (deviceId: string, options: { focus?: boolean; ensureReadable?: boolean } = {}) => {
   if (isModelPlaybackActive.value) {
-    ElMessage.info({ message: t('app.playbackDeviceDetailsUseTimeline'), type: 'info' })
+    notifyInfo(t('app.playbackDeviceDetailsUseTimeline'))
     return
   }
   const node = nodes.value.find(n => n.id === deviceId)
@@ -3052,7 +3038,7 @@ const handleRenameDevice = async (
     const requestedLabelKey = deviceLabelKey(newLabel)
     const exists = nodes.value.some(n => deviceLabelKey(n.label) === requestedLabelKey && n.id !== nodeId)
     if (exists) {
-      ElMessage.error(t('app.nameExists'))
+      notifyError(t('app.nameExists'))
       return false
     }
     if (!nodes.value.some(node => node.id === nodeId)) return false
@@ -3064,7 +3050,7 @@ const handleRenameDevice = async (
       specifications.value = mutation.currentSpecifications
       reportEnvironmentChanges(mutation.environmentChanges)
       syncRuleDerivedEdges()
-      ElMessage.success(t('app.renameSuccess'))
+      notifySuccess(t('app.renameSuccess'))
       return true
     } catch (error: any) {
       if (error?.response?.status === 409) {
@@ -3076,16 +3062,16 @@ const handleRenameDevice = async (
         const currentNode = nodes.value.find(candidate => candidate.id === nodeId)
         if (nodesRefreshed && specsRefreshed && environmentRefreshed && currentNode) {
           if (currentNode.label === newLabel) {
-            ElMessage.warning(t('app.deviceRenameOutcomeRefreshed', { name: newLabel }))
+            notifyBlocked(t('app.deviceRenameOutcomeRefreshed', { name: newLabel }))
             return true
           }
           if (renameDialogVisible.value && renameDialogData.node?.id === nodeId) {
             renameDialogData.node = currentNode
             renameDialogData.originalLabel = currentNode.label
           }
-          ElMessage.warning(t('app.deviceRenameConflictRefreshed', { name: currentNode.label }))
+          notifyBlocked(t('app.deviceRenameConflictRefreshed', { name: currentNode.label }))
         } else {
-          ElMessage.warning(t('app.deviceRenameConflictRefreshFailed'))
+          notifyBlocked(t('app.deviceRenameConflictRefreshFailed'))
         }
         return false
       }
@@ -3097,11 +3083,11 @@ const handleRenameDevice = async (
         ])
         const renamed = nodes.value.find(candidate => candidate.id === nodeId && candidate.label === newLabel)
         if (nodesRefreshed && specsRefreshed && environmentRefreshed && renamed) {
-          ElMessage.warning(t('app.deviceRenameOutcomeRefreshed', { name: newLabel }))
+          notifyBlocked(t('app.deviceRenameOutcomeRefreshed', { name: newLabel }))
           return true
         }
       }
-      ElMessage.error(extractApiErrorMessage(error, t('app.saveNodesFailed')))
+      notifyError(extractApiErrorMessage(error, t('app.saveNodesFailed')))
       return false
     }
   })
@@ -3116,13 +3102,13 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
 
   const template = resolveTemplateForNode(node)
   if (!template) {
-    ElMessage.error(t('app.loadTemplatesFailed'))
+    notifyError(t('app.loadTemplatesFailed'))
     return
   }
 
   const validationMessage = validateDeviceRuntimeConfig(template, runtime, t, { variableScope: 'local' })
   if (validationMessage) {
-    ElMessage.warning(validationMessage)
+    notifyBlocked(validationMessage)
     return
   }
 
@@ -3139,7 +3125,7 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
         })
         replaceNodesFromServer(mutation.currentNodes)
         syncRuleDerivedEdges()
-        ElMessage.success(mutation.operation === 'updated'
+        notifySuccess(mutation.operation === 'updated'
           ? t('app.instanceConfigSaved')
           : t('app.instanceConfigUnchanged'))
       } catch (error: any) {
@@ -3148,11 +3134,11 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
           const refreshed = await refreshDevices()
           if (refreshed) {
             const persisted = nodes.value.find(candidate => candidate.id === nodeId)
-            ElMessage.warning(deviceRuntimeMatches(persisted, runtimeRequest, template)
+            notifyBlocked(deviceRuntimeMatches(persisted, runtimeRequest, template)
               ? t('app.deviceRuntimeOutcomeRefreshed')
               : t('app.deviceRuntimeStaleRefreshed'))
           } else {
-            ElMessage.warning(t('app.deviceRuntimeStaleRefreshFailed'))
+            notifyBlocked(t('app.deviceRuntimeStaleRefreshFailed'))
           }
           return
         }
@@ -3160,11 +3146,11 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
           const nodesRefreshed = await refreshDevices()
           const persisted = nodes.value.find(candidate => candidate.id === nodeId)
           if (nodesRefreshed && deviceRuntimeMatches(persisted, runtimeRequest, template)) {
-            ElMessage.warning(t('app.deviceRuntimeOutcomeRefreshed'))
+            notifyBlocked(t('app.deviceRuntimeOutcomeRefreshed'))
             return
           }
         }
-        ElMessage.error(extractApiErrorMessage(error, t('app.instanceConfigSaveFailed')))
+        notifyError(extractApiErrorMessage(error, t('app.instanceConfigSaveFailed')))
       }
     })
   } finally {
@@ -3264,7 +3250,7 @@ watch(
     const removedDeviceId = [...staleSurfaceNodeIds]
       .find(nodeId => externallyRefreshedRemovedNodeIds?.has(nodeId))
     if (removedDeviceId) {
-      ElMessage.warning(t('app.deviceRemovedExternally'))
+      notifyBlocked(t('app.deviceRemovedExternally'))
       void nextTick(focusVisibleBoardControl)
     }
   },
@@ -3292,7 +3278,7 @@ watch(
       deviceDialogReturnFocusNodeId = restoreNode.id
       dialogVisible.value = true
     }
-    ElMessage.warning(t('app.deviceDeletionPreviewChanged'))
+    notifyBlocked(t('app.deviceDeletionPreviewChanged'))
   },
   { flush: 'sync' }
 )
@@ -3318,35 +3304,37 @@ const forceDeleteNode = async (
       specifications.value = mutation.currentSpecifications
       reportEnvironmentChanges(mutation.environmentChanges, bundledEnvironmentNamesBeforeDelete)
       syncRuleDerivedEdges()
+      // The cascade made every recorded inverse unreachable, so the server cleared the journal.
+      notifyUndoJournalCleared()
       return { responseConfirmed: true }
     } catch (error: any) {
       console.error('删除设备失败', error)
       const message = extractApiErrorMessage(error, t('app.deleteDeviceFailedRetry'))
       if (error?.response?.status === 409) {
         await Promise.all([refreshDevices(), refreshEnvironmentVariables(), refreshRules(), refreshSpecifications()])
-        ElMessage.warning(message)
+        notifyBlocked(message)
         return { responseConfirmed: false, stalePreview: true }
       } else if (error?.response?.status === 404) {
         const refreshed = await refreshSceneForReconciliation()
         if (refreshed) markVerificationResultStale()
         if (refreshed && !nodes.value.some(node => node.id === nodeId)) {
-          ElMessage.warning(t('app.deviceDeleteOutcomeRefreshed'))
+          notifyBlocked(t('app.deviceDeleteOutcomeRefreshed'))
           return { responseConfirmed: false }
         }
-        ElMessage.error(message)
+        notifyError(message)
       } else if (!isDefinitiveMutationRejection(error)) {
         const refreshed = await refreshSceneForReconciliation()
         if (refreshed) markVerificationResultStale()
         if (!refreshed) {
-          ElMessage.warning(t('app.deviceDeleteOutcomeUnknownRefreshFailed'))
+          notifyBlocked(t('app.deviceDeleteOutcomeUnknownRefreshFailed'))
         } else if (!nodes.value.some(node => node.id === nodeId)) {
-          ElMessage.warning(t('app.deviceDeleteOutcomeRefreshed'))
+          notifyBlocked(t('app.deviceDeleteOutcomeRefreshed'))
           return { responseConfirmed: false }
         } else {
-          ElMessage.warning(t('app.deviceDeleteOutcomeUnconfirmedAfterRefresh'))
+          notifyBlocked(t('app.deviceDeleteOutcomeUnconfirmedAfterRefresh'))
         }
       } else {
-        ElMessage.error(message)
+        notifyError(message)
       }
       return null
     }
@@ -3420,13 +3408,13 @@ const deleteCurrentNodeWithConfirm = async (nodeId: string) => {
       const refreshed = await enqueueBoardMutation(refreshSceneForReconciliation).catch(() => false)
       if (refreshed && !resolveCurrentBoardNode(nodes.value, nodeId)) {
         clearDeleteConfirmDialog()
-        ElMessage.warning(t('app.deviceDeleteOutcomeRefreshed'))
+        notifyBlocked(t('app.deviceDeleteOutcomeRefreshed'))
         return
       }
       if (requestEpoch !== deletePreviewRequestEpoch || deletePreviewNodeId !== nodeId) return
     }
     clearDeleteConfirmDialog()
-    ElMessage.error(localizedErrorMessage(error, t('app.deviceDeletionPreviewFailed'), locale.value))
+    notifyError(localizedErrorMessage(error, t('app.deviceDeletionPreviewFailed'), locale.value))
   } finally {
     if (requestEpoch === deletePreviewRequestEpoch && deletePreviewNodeId === nodeId) {
       deletePreviewLoading.value = false
@@ -3504,7 +3492,7 @@ const confirmDelete = async () => {
       return
     }
     if (outcome.responseConfirmed) {
-      ElMessage.success(t('app.deviceDeleteSuccessSummary', {
+      notifySuccess(t('app.deviceDeleteSuccessSummary', {
         name: deletion.nodeName,
         rules: deletion.ruleCount,
         specs: deletion.specCount,
@@ -3518,7 +3506,7 @@ const confirmDelete = async () => {
     clearDeleteConfirmDialog()
   } catch (error) {
     console.error('删除设备失败:', error)
-    ElMessage.error(t('app.deleteDeviceFailedRetry'))
+    notifyError(t('app.deleteDeviceFailedRetry'))
   } finally {
     deleteConfirmSubmitting.value = false
     if (reopenDeletionPreview) void deleteCurrentNodeWithConfirm(deletion.nodeId)
@@ -3620,11 +3608,11 @@ const isConfirmedBoardItemCurrent = <T extends { id?: string }>(
     snapshotOf
   )
   if (status === 'scene-changed') {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return false
   }
   if (status === 'item-changed') {
-    ElMessage.warning({ message: changedMessage, type: 'warning' })
+    notifyBlocked(changedMessage)
     return false
   }
   return true
@@ -3644,21 +3632,11 @@ const deleteRule = async (ruleId: string) => {
   const confirmedRuleSnapshot = deepClone(ruleToDelete)
 
   try {
-    try {
-      await ElMessageBox.confirm(
-        t('app.deleteRuleConfirmMessage', { name: ruleToDelete.name || t('app.unnamedRule') }),
-        t('app.deleteRuleConfirmTitle'),
-        {
-          type: 'warning',
-          confirmButtonText: t('app.delete'),
-          cancelButtonText: t('app.cancel')
-        }
-      )
-    } catch (error: any) {
-      if (error === 'cancel' || error === 'close') return
-      console.error('规则删除确认失败', error)
-      return
-    }
+    if (!await confirmDestructive({
+      title: t('app.deleteRuleConfirmTitle'),
+      message: t('app.deleteRuleConfirmMessage', { name: ruleToDelete.name || t('app.unnamedRule') }),
+      confirmText: t('app.delete')
+    })) return
 
     const snapshotOf = authoredRuleConfirmationSnapshot
     if (!isConfirmedBoardItemCurrent(
@@ -3681,20 +3659,16 @@ const deleteRule = async (ruleId: string) => {
       )) return
       try {
         const mutation = await boardApi.removeRule(confirmedRuleSnapshot)
-        rules.value = mutation.currentItems
-        if (focusedRuleId.value === ruleId) {
-          focusedRuleId.value = null
-        }
-        syncRuleDerivedEdges()
-        ElMessage.success(t('app.deleteRuleSuccess'))
+        commitSemanticScene({ rules: mutation.currentItems, availability: mutation })
+        notifySuccess(t('app.deleteRuleSuccess'))
       } catch (error: any) {
         console.error('删除规则失败', error)
         const refreshed = await refreshRules()
         if (refreshed && !rules.value.some(rule => rule.id === ruleId)) {
-          ElMessage.warning(t('app.ruleDeleteOutcomeRefreshed'))
+          notifyBlocked(t('app.ruleDeleteOutcomeRefreshed'))
           return
         }
-        ElMessage.error(localizedErrorMessage(error, t('app.deleteRuleFailed'), locale.value))
+        notifyError(localizedErrorMessage(error, t('app.deleteRuleFailed'), locale.value))
       }
     })
   } finally {
@@ -3719,10 +3693,11 @@ const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
       reordered[targetIndex] = movedRule
       const requestedOrder = reordered.map(rule => String(rule.id || ''))
       try {
-        rules.value = await boardApi.reorderRules(expectedOrder, requestedOrder)
-        syncRuleDerivedEdges()
+        const mutation = await boardApi.reorderRules(expectedOrder, requestedOrder)
+        commitSemanticScene({ rules: mutation.rules, availability: mutation })
+        // Keep the moved rule selected so the user can press the button again immediately.
         focusedRuleId.value = ruleId
-        ElMessage.success(t('app.ruleOrderUpdated'))
+        notifySuccess(t('app.ruleOrderUpdated'))
       } catch (error: any) {
         console.error('规则执行顺序保存失败', error)
         const refreshed = await refreshRules()
@@ -3731,9 +3706,9 @@ const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
           && refreshed && currentOrder.length === requestedOrder.length
           && currentOrder.every((id, index) => id === requestedOrder[index])) {
           focusedRuleId.value = ruleId
-          ElMessage.warning(t('app.ruleOrderOutcomeRefreshed'))
+          notifyBlocked(t('app.ruleOrderOutcomeRefreshed'))
         } else {
-          ElMessage.error(extractApiErrorMessage(error, t('app.ruleOrderUpdateFailed')))
+          notifyError(extractApiErrorMessage(error, t('app.ruleOrderUpdateFailed')))
         }
       }
     })
@@ -3753,23 +3728,13 @@ const deleteSpecification = async (specId: string) => {
   const confirmedSpecificationSnapshot = deepClone(specToDelete)
 
   try {
-    try {
-      await ElMessageBox.confirm(
-        t('app.deleteSpecConfirmMessage', {
-          name: getSpecResultDisplayTitle(specToDelete, 0) || t('app.unnamedSpecification')
-        }),
-        t('app.deleteSpecConfirmTitle'),
-        {
-          type: 'warning',
-          confirmButtonText: t('app.delete'),
-          cancelButtonText: t('app.cancel')
-        }
-      )
-    } catch (error: any) {
-      if (error === 'cancel' || error === 'close') return
-      console.error('规约删除确认失败', error)
-      return
-    }
+    if (!await confirmDestructive({
+      title: t('app.deleteSpecConfirmTitle'),
+      message: t('app.deleteSpecConfirmMessage', {
+        name: getSpecResultDisplayTitle(specToDelete, 0) || t('app.unnamedSpecification')
+      }),
+      confirmText: t('app.delete')
+    })) return
 
     const snapshotOf = authoredSpecificationConfirmationSnapshot
     if (!isConfirmedBoardItemCurrent(
@@ -3792,19 +3757,16 @@ const deleteSpecification = async (specId: string) => {
       )) return
       try {
         const mutation = await boardApi.removeSpec(confirmedSpecificationSnapshot)
-        specifications.value = mutation.currentItems
-        if (focusedSpecId.value === specId) {
-          focusedSpecId.value = null
-        }
-        ElMessage.success(t('app.deleteSpecSuccess'))
+        commitSemanticScene({ specs: mutation.currentItems, availability: mutation })
+        notifySuccess(t('app.deleteSpecSuccess'))
       } catch (error: any) {
         console.error('删除规约失败', error)
         const refreshed = await refreshSpecifications()
         if (refreshed && !specifications.value.some(spec => spec.id === specId)) {
-          ElMessage.warning(t('app.specDeleteOutcomeRefreshed'))
+          notifyBlocked(t('app.specDeleteOutcomeRefreshed'))
           return
         }
-        ElMessage.error(localizedErrorMessage(error, t('app.deleteSpecFailed'), locale.value))
+        notifyError(localizedErrorMessage(error, t('app.deleteSpecFailed'), locale.value))
       }
     })
   } finally {
@@ -3896,7 +3858,7 @@ const persistBoardLayout = async (request: QueuedBoardLayoutSave): Promise<boole
       console.error('保存画布布局失败', e)
       if (!layoutSaveErrorShown) {
         layoutSaveErrorShown = true
-        ElMessage.error(t('app.saveLayoutFailed'))
+        notifyError(t('app.saveLayoutFailed'))
       }
     }
     return false
@@ -4193,6 +4155,12 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
     hydratedBoardAuthScopeEpoch = authScopeEpoch
     allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'ready' })
     void refreshCurrentFuzzingModelFingerprint()
+    // Undo history is server state and some commands reset it (scene replacement, device
+    // deletion, another tab's work). A wholesale reload must re-read it too, or the button
+    // would keep offering an undo the journal no longer has. Called explicitly rather than left to
+    // the isBoardDataReady watcher: that only fires because this function flips every load-state key
+    // through 'loading' first, so availability would break silently if that flicker ever stopped.
+    void loadBoardUndoAvailability()
     return true
   } catch (error) {
     if (!isCurrentBoardAuthScope(authScopeEpoch)) return false
@@ -4273,7 +4241,7 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
   if (!ensurePlaybackClosedForMutation()) return
   if (!ensureBoardDataReady(['nodes', 'templates', 'environment'])) return
   if (environmentMutationPending.value) {
-    ElMessage.info(t('app.environmentSaveInProgress'))
+    notifyInfo(t('app.environmentSaveInProgress'))
     return
   }
   environmentMutationPending.value = true
@@ -4284,11 +4252,11 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
         environmentVariables.value = mutation.environmentVariables
         const changedPatches = mutation.patchResults.filter(result => result.changedFields.length > 0)
         if (changedPatches.length > 0) {
-          ElMessage.success(t('app.environmentPatchApplied', {
+          notifySuccess(t('app.environmentPatchApplied', {
             items: formatEnvironmentPatchResults(changedPatches)
           }))
         } else {
-          ElMessage.info(t('app.environmentPatchUnchanged', {
+          notifyInfo(t('app.environmentPatchUnchanged', {
             items: formatEnvironmentPatchResults(mutation.patchResults)
           }))
         }
@@ -4304,17 +4272,17 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
           // snapshot so the inspector cannot keep ghost entries.
           const refreshed = await refreshBoardSnapshot()
           if (refreshed) markVerificationResultStale()
-          ElMessage.warning(refreshed
+          notifyBlocked(refreshed
             ? t('app.environmentVariableStaleRefreshed')
             : t('app.environmentVariableStaleRefreshFailed'))
         } else if (!isDefinitiveMutationRejection(e)) {
           const refreshed = await refreshBoardSnapshot()
           if (refreshed) markVerificationResultStale()
-          ElMessage.warning(refreshed
+          notifyBlocked(refreshed
             ? t('app.environmentSaveOutcomeRefreshed')
             : t('app.environmentSaveOutcomeUnknownRefreshFailed'))
         } else {
-          ElMessage.error(extractApiErrorMessage(e, t('app.saveEnvironmentFailed')))
+          notifyError(extractApiErrorMessage(e, t('app.saveEnvironmentFailed')))
         }
       }
     })
@@ -4389,18 +4357,18 @@ const exportScene = () => {
   try {
     scene = buildSceneExport()
   } catch (error) {
-    ElMessage.error(getSceneErrorMessage(error))
+    notifyError(getSceneErrorMessage(error))
     return
   }
   const serialized = JSON.stringify(scene, null, 2)
   const exportBytes = new Blob([serialized], { type: 'application/json;charset=utf-8' }).size
   if (exportBytes > MAX_SCENE_IMPORT_BYTES) {
-    ElMessage.error(t('app.sceneExportTooLarge', { size: '64 MiB' }))
+    notifyError(t('app.sceneExportTooLarge', { size: '64 MiB' }))
     return
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   downloadJsonFile(`iot-verify-scene-${timestamp}.json`, serialized)
-  ElMessage.success(t('app.sceneExportStarted', {
+  notifySuccess(t('app.sceneExportStarted', {
     devices: scene.devices.length,
     variables: scene.environmentVariables.length,
     rules: scene.rules.length,
@@ -4410,7 +4378,7 @@ const exportScene = () => {
 
 const triggerSceneImport = () => {
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return
   }
   if (sceneImportInputRef.value) {
@@ -4425,59 +4393,34 @@ const getSceneErrorMessage = (error: any) => {
   if (!error?.response) return message
   const field = rawMessage.match(/\b(?:templates|devices|nodes|environmentVariables|rules|specs)\[\d+](?:\.[A-Za-z0-9_]+)*/)?.[0]
   if (!field) return message
-  return `${formatSceneValidationCoordinate(field)}: ${t('app.sceneImportValidationItemInvalid')}`
-}
-
-const getStructuredValidationErrors = (error: any): Array<[string, string]> => {
-  const errors = error?.response?.data?.data?.errors
-  if (!errors || typeof errors !== 'object' || Array.isArray(errors)) return []
-  return Object.entries(errors)
-    .filter(([field, reason]) => field && typeof reason === 'string' && reason.trim())
-    .map(([field, reason]) => [field, String(reason)] as [string, string])
-}
-
-const formatSceneValidationCoordinate = (field: string): string => {
-  const patterns: Array<[RegExp, string]> = [
-    [/^templates\[(\d+)]/, 'sceneImportValidationTemplate'],
-    [/^devices\[(\d+)]/, 'sceneImportValidationDevice'],
-    [/^nodes\[(\d+)]/, 'sceneImportValidationDevice'],
-    [/^environmentVariables\[(\d+)]/, 'sceneImportValidationEnvironment'],
-    [/^rules\[(\d+)]/, 'sceneImportValidationRule'],
-    [/^specs\[(\d+)]/, 'sceneImportValidationSpecification']
-  ]
-  for (const [pattern, key] of patterns) {
-    const match = field.match(pattern)
-    if (match) return t(`app.${key}`, { index: Number(match[1]) + 1 })
-  }
-  return t('app.sceneImportValidationScene')
+  return `${formatSceneValidationCoordinate(field, t)}: ${t('app.sceneImportValidationItemInvalid')}`
 }
 
 const showSceneImportError = async (error: any) => {
   const entries = getStructuredValidationErrors(error)
   if (entries.length === 0) {
-    ElMessage.error(getSceneErrorMessage(error))
+    notifyError(getSceneErrorMessage(error))
     return
   }
-  try {
-    await ElMessageBox.alert(
-      h('div', { class: 'space-y-3 text-left' }, [
-        h('p', { class: 'text-sm text-slate-600' }, t('app.sceneImportValidationSummary', { count: entries.length })),
+  await acknowledge({
+    title: t('app.sceneImportValidationTitle'),
+    tone: 'error',
+    message: h('div', { class: 'space-y-3 text-left' }, [
+        h('p', { class: 'text-sm', style: { color: 'var(--text-muted)' } },
+          t('app.sceneImportValidationSummary', { count: entries.length })),
         ...entries.map(([field, reason]) => h('div', { class: 'border-l-2 border-rose-300 pl-3' }, [
-          h('div', { class: 'text-sm font-semibold text-slate-800' }, formatSceneValidationCoordinate(field)),
-          h('div', { class: 'mt-0.5 text-sm text-slate-600' }, t('app.sceneImportValidationItemInvalid')),
-          h('details', { class: 'mt-1 text-xs text-slate-500' }, [
+          h('div', { class: 'text-sm font-semibold', style: { color: 'var(--text)' } },
+            formatSceneValidationCoordinate(field, t)),
+          h('div', { class: 'mt-0.5 text-sm', style: { color: 'var(--text-muted)' } },
+            t('app.sceneImportValidationItemInvalid')),
+          h('details', { class: 'mt-1 text-xs', style: { color: 'var(--text-muted)' } }, [
             h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
-            h('code', { class: 'mt-1 block break-all text-xs text-slate-400' }, field),
+            h('code', { class: 'mt-1 block break-all text-xs', style: { color: 'var(--text-muted)' } }, field),
             h('div', { class: 'mt-1 whitespace-pre-wrap break-words' }, reason)
           ])
         ]))
-      ]),
-      t('app.sceneImportValidationTitle'),
-      { type: 'error' }
-    )
-  } catch {
-    // Closing the diagnostic dialog needs no follow-up action.
-  }
+    ])
+  })
 }
 
 const refreshSceneForReconciliation = async (): Promise<boolean> => {
@@ -4487,27 +4430,12 @@ const refreshSceneForReconciliation = async (): Promise<boolean> => {
   return refreshBoardSnapshot()
 }
 
-const readBoardReplacementStalePreview = (error: any): BoardReplacementPreview | null => {
-  const data = error?.response?.data?.data as Partial<BoardReplacementStaleData> | undefined
-  const preview = data?.currentPreview as Partial<BoardReplacementPreview> | undefined
-  if (data?.reasonCode !== 'BOARD_REPLACEMENT_STALE' || !preview) return null
-  if (typeof preview.impactToken !== 'string' || !preview.impactToken.trim()) return null
-  const counts = [
-    preview.deviceCount,
-    preview.environmentVariableCount,
-    preview.ruleCount,
-    preview.specificationCount
-  ]
-  if (!counts.every(value => Number.isSafeInteger(value) && Number(value) >= 0)) return null
-  return preview as BoardReplacementPreview
-}
-
 const reportBoardReplacementDrift = async (error: any): Promise<boolean> => {
   const preview = readBoardReplacementStalePreview(error)
   if (!preview) return false
   const refreshed = await refreshSceneForReconciliation()
   if (refreshed) markVerificationResultStale()
-  ElMessage.warning(t(
+  notifyBlocked(t(
     refreshed ? 'app.sceneReplacementChangedBeforeApply' : 'app.sceneReplacementChangedRefreshFailed',
     {
       devices: preview.deviceCount,
@@ -4575,7 +4503,7 @@ const importScene = async (
   if (!ensurePlaybackClosedForMutation()) return false
   if (isSceneReplacementInProgress.value) return false
   if (chatStore.state.streaming) {
-    ElMessage.warning(t('app.finishAssistantBeforeSceneReplacement'))
+    notifyBlocked(t('app.finishAssistantBeforeSceneReplacement'))
     return false
   }
   isImportingScene.value = true
@@ -4587,33 +4515,25 @@ const importScene = async (
     try {
       replacementPreview = await boardApi.previewBoardReplacement()
     } catch (error: any) {
-      ElMessage.error(localizedErrorMessage(error, t('app.sceneReplacementPreviewFailed'), locale.value))
+      notifyError(localizedErrorMessage(error, t('app.sceneReplacementPreviewFailed'), locale.value))
       return false
     }
     if (!isAdmitted()) return false
-    try {
-      await ElMessageBox.confirm(
-        t('app.sceneImportConfirmMessage', {
-          currentDevices: replacementPreview.deviceCount,
-          currentVariables: replacementPreview.environmentVariableCount,
-          currentRules: replacementPreview.ruleCount,
-          currentSpecs: replacementPreview.specificationCount,
-          devices: scene.devices.length,
-          variables: scene.environmentVariables.length,
-          rules: scene.rules.length,
-          specs: scene.specs.length
-        }),
-        t('app.sceneImportConfirmTitle'),
-        {
-          type: 'warning',
-          customClass: 'scene-replacement-confirm',
-          confirmButtonText: t('app.sceneImportConfirmAction'),
-          cancelButtonText: t('app.cancel')
-        }
-      )
-    } catch {
-      return false
-    }
+    if (!await confirmDestructive({
+      title: t('app.sceneImportConfirmTitle'),
+      message: t('app.sceneImportConfirmMessage', {
+        currentDevices: replacementPreview.deviceCount,
+        currentVariables: replacementPreview.environmentVariableCount,
+        currentRules: replacementPreview.ruleCount,
+        currentSpecs: replacementPreview.specificationCount,
+        devices: scene.devices.length,
+        variables: scene.environmentVariables.length,
+        rules: scene.rules.length,
+        specs: scene.specs.length
+      }),
+      confirmText: t('app.sceneImportConfirmAction'),
+      customClass: 'scene-replacement-confirm'
+    })) return false
     if (!isAdmitted()) return false
 
     return await enqueueBoardMutation(async () => {
@@ -4643,15 +4563,15 @@ const importScene = async (
         const refreshed = await refreshSceneForReconciliation()
         if (refreshed) markVerificationResultStale()
         if (!refreshed) {
-          ElMessage.warning(t('app.sceneImportOutcomeUnknownRefreshFailed'))
+          notifyBlocked(t('app.sceneImportOutcomeUnknownRefreshFailed'))
           return false
         }
         if (currentBoardMatchesScene(scene)) {
           await resetSceneSelectionAfterReplacement()
-          ElMessage.warning(t('app.sceneImportCurrentMatchesAfterUnconfirmedResponse'))
+          notifyBlocked(t('app.sceneImportCurrentMatchesAfterUnconfirmedResponse'))
           return true
         }
-        ElMessage.warning(t('app.sceneImportOutcomeUnconfirmedAfterRefresh'))
+        notifyBlocked(t('app.sceneImportOutcomeUnconfirmedAfterRefresh'))
         return false
       }
 
@@ -4688,7 +4608,7 @@ const importScene = async (
             rules: rules.value.length,
             specs: specifications.value.length
           })
-      ElMessage.success(importMessage)
+      notifySuccess(importMessage)
       return true
     }, { admissionGuard, trackSemanticChange: false })
   } catch (error) {
@@ -4703,7 +4623,7 @@ const clearScene = async () => {
   if (!ensurePlaybackClosedForMutation()) return
   if (isClearingScene.value || isImportingScene.value) return
   if (chatStore.state.streaming) {
-    ElMessage.warning(t('app.finishAssistantBeforeSceneReplacement'))
+    notifyBlocked(t('app.finishAssistantBeforeSceneReplacement'))
     return
   }
   isClearingScene.value = true
@@ -4714,28 +4634,20 @@ const clearScene = async () => {
     try {
       replacementPreview = await boardApi.previewBoardReplacement()
     } catch (error: any) {
-      ElMessage.error(localizedErrorMessage(error, t('app.sceneReplacementPreviewFailed'), locale.value))
+      notifyError(localizedErrorMessage(error, t('app.sceneReplacementPreviewFailed'), locale.value))
       return
     }
-    try {
-      await ElMessageBox.confirm(
-        t('app.sceneClearConfirmMessage', {
-          devices: replacementPreview.deviceCount,
-          variables: replacementPreview.environmentVariableCount,
-          rules: replacementPreview.ruleCount,
-          specs: replacementPreview.specificationCount
-        }),
-        t('app.sceneClearConfirmTitle'),
-        {
-          type: 'warning',
-          customClass: 'scene-replacement-confirm',
-          confirmButtonText: t('app.sceneClearConfirmAction'),
-          cancelButtonText: t('app.cancel')
-        }
-      )
-    } catch {
-      return
-    }
+    if (!await confirmDestructive({
+      title: t('app.sceneClearConfirmTitle'),
+      message: t('app.sceneClearConfirmMessage', {
+        devices: replacementPreview.deviceCount,
+        variables: replacementPreview.environmentVariableCount,
+        rules: replacementPreview.ruleCount,
+        specs: replacementPreview.specificationCount
+      }),
+      confirmText: t('app.sceneClearConfirmAction'),
+      customClass: 'scene-replacement-confirm'
+    })) return
 
     invalidateForFullSceneReplacement()
     await enqueueBoardMutation(async () => {
@@ -4761,20 +4673,20 @@ const clearScene = async () => {
         focusedNodeId.value = null
         focusedRuleId.value = null
         focusedSpecId.value = null
-        ElMessage.success(t('app.sceneClearSuccess'))
+        notifySuccess(t('app.sceneClearSuccess'))
       } catch (error: any) {
         console.error('清空场景失败', error)
         if (await reportBoardReplacementDrift(error)) return
         const status = Number(error?.response?.status || 0)
         if (status >= 400 && status < 500) {
           const message = localizedErrorMessage(error, t('app.sceneClearFailed'), locale.value)
-          ElMessage.error(message)
+          notifyError(message)
           return
         }
         const refreshed = await refreshSceneForReconciliation()
         if (refreshed) markVerificationResultStale()
         if (!refreshed) {
-          ElMessage.warning(t('app.sceneClearOutcomeUnknownRefreshFailed'))
+          notifyBlocked(t('app.sceneClearOutcomeUnknownRefreshFailed'))
           return
         }
         const isEmpty = getVisibleDeviceNodes().length === 0
@@ -4783,9 +4695,9 @@ const clearScene = async () => {
           && specifications.value.length === 0
         if (isEmpty) {
           await resetSceneSelectionAfterReplacement()
-          ElMessage.warning(t('app.sceneClearCurrentEmptyAfterUnconfirmedResponse'))
+          notifyBlocked(t('app.sceneClearCurrentEmptyAfterUnconfirmedResponse'))
         } else {
-          ElMessage.warning(t('app.sceneClearOutcomeUnconfirmedAfterRefresh'))
+          notifyBlocked(t('app.sceneClearOutcomeUnconfirmedAfterRefresh'))
         }
       }
     }, { trackSemanticChange: false })
@@ -4800,11 +4712,11 @@ const handleSceneImportFile = async (event: Event) => {
   if (!file) return
   try {
     if (isSceneReplacementInProgress.value) {
-      ElMessage.warning(t('app.sceneReplacementInProgress'))
+      notifyBlocked(t('app.sceneReplacementInProgress'))
       return
     }
     if (file.size > MAX_SCENE_IMPORT_BYTES) {
-      ElMessage.error(t('app.importFileTooLarge', { size: '64 MiB' }))
+      notifyError(t('app.importFileTooLarge', { size: '64 MiB' }))
       return
     }
     const text = await file.text()
@@ -4813,7 +4725,7 @@ const handleSceneImportFile = async (event: Event) => {
       raw = JSON.parse(text)
     } catch (error) {
       console.error('场景 JSON 解析失败', error)
-      ElMessage.error(t('app.invalidJsonFile'))
+      notifyError(t('app.invalidJsonFile'))
       return
     }
     let scene: BoardSceneModel
@@ -4821,7 +4733,7 @@ const handleSceneImportFile = async (event: Event) => {
       scene = normalizeSceneFile(raw)
     } catch (error) {
       console.error('场景文件校验失败', error)
-      ElMessage.error(error instanceof Error && error.message.trim()
+      notifyError(error instanceof Error && error.message.trim()
         ? error.message
         : t('app.sceneImportFailed'))
       return
@@ -4829,7 +4741,7 @@ const handleSceneImportFile = async (event: Event) => {
     await importScene(scene)
   } catch (error) {
     console.error('读取场景文件失败', error)
-    ElMessage.error(getSceneErrorMessage(error))
+    notifyError(getSceneErrorMessage(error))
   } finally {
     if (input) input.value = ''
   }
@@ -4870,9 +4782,9 @@ const refreshSpecifications = async (): Promise<boolean> => {
 const retryBoardDataLoad = async () => {
   await requestBoardSnapshotRefresh({ force: true })
   if (isBoardDataReady.value) {
-    ElMessage.success(t('app.boardDataReloaded'))
+    notifySuccess(t('app.boardDataReloaded'))
   } else {
-    ElMessage.error(t('app.boardDataLoadFailed'))
+    notifyError(t('app.boardDataLoadFailed'))
   }
 }
 
@@ -4928,7 +4840,7 @@ const loadBoardAuthScope = async (
   ])
   if (!isCurrentBoardAuthScope(expectedAuthScopeEpoch)) return
   if (!boardLoaded || !isBoardDataReady.value) {
-    ElMessage.error(t('app.boardDataLoadFailed'))
+    notifyError(t('app.boardDataLoadFailed'))
   }
   applyLoadedBoardLayout(layout, options.initialLayout === true)
 }
@@ -5389,7 +5301,7 @@ const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
   const bounds = getNodeBounds(targetNodes)
   const frame = getVisibleCanvasFrame()
   if (!bounds || !frame) {
-    ElMessage.info({ message: t('app.noDevicesOnCanvas'), type: 'info' })
+    notifyInfo(t('app.noDevicesOnCanvas'))
     return
   }
 
@@ -5448,7 +5360,7 @@ const handleCreateDevice = async (data: {
       const requestedLabel = customName.trim()
       const uniqueLabel = getUniqueLabel(requestedLabel, getVisibleDeviceNodes())
       if (uniqueLabel !== requestedLabel) {
-        ElMessage.warning(t('app.deviceNameAlreadyExists'))
+        notifyBlocked(t('app.deviceNameAlreadyExists'))
         return
       }
       const node: DeviceNode = {
@@ -5468,7 +5380,7 @@ const handleCreateDevice = async (data: {
       reportEnvironmentChanges(mutation.environmentChanges)
       const created = mutation.affectedDevices[0]
       await focusCreatedDeviceNode(created)
-      ElMessage.success(t('app.deviceAddedWithName', { name: created.label }))
+      notifySuccess(t('app.deviceAddedWithName', { name: created.label }))
       saved = true
     } catch (error: any) {
       if (!isDefinitiveMutationRejection(error) && requestedNode) {
@@ -5479,12 +5391,12 @@ const handleCreateDevice = async (data: {
         const created = nodes.value.find(candidate => candidate.id === requestedNode?.id)
         if (nodesRefreshed && environmentRefreshed && created) {
           await focusCreatedDeviceNode(created)
-          ElMessage.warning(t('app.deviceCreateOutcomeRefreshed', { name: created.label }))
+          notifyBlocked(t('app.deviceCreateOutcomeRefreshed', { name: created.label }))
           saved = true
           return
         }
       }
-      ElMessage.error(localizedErrorMessage(error, t('app.saveNodesFailed'), locale.value))
+      notifyError(localizedErrorMessage(error, t('app.saveNodesFailed'), locale.value))
     } finally {
       data.complete(saved)
     }
@@ -5509,7 +5421,7 @@ const handleCreateDevices = async (data: {
     const items = Array.isArray(data.items) ? data.items : []
 
     if (items.length === 0) {
-      ElMessage.warning(t('app.noDevicesToCreate'))
+      notifyBlocked(t('app.noDevicesToCreate'))
       data.complete(false)
       return
     }
@@ -5520,7 +5432,7 @@ const handleCreateDevices = async (data: {
       return
     }
     if (items.some(item => !item?.template?.manifest?.Name || !item.customName?.trim())) {
-      ElMessage.warning(t('app.deviceBatchContainsInvalidItems'))
+      notifyBlocked(t('app.deviceBatchContainsInvalidItems'))
       data.complete(false)
       return
     }
@@ -5554,7 +5466,7 @@ const handleCreateDevices = async (data: {
     }
 
     if (nameConflicts.length > 0) {
-      ElMessage.warning(t('app.deviceBatchNameConflictBlocked', {
+      notifyBlocked(t('app.deviceBatchNameConflictBlocked', {
         changes: nameConflicts.join(', ')
       }))
       data.complete(false)
@@ -5569,7 +5481,7 @@ const handleCreateDevices = async (data: {
       syncRuleDerivedEdges()
       const lastCreated = mutation.affectedDevices[mutation.affectedDevices.length - 1]
       await focusCreatedDeviceNode(lastCreated)
-      ElMessage.success(t('app.devicesAddedWithCount', { count: createdNodes.length }))
+      notifySuccess(t('app.devicesAddedWithCount', { count: createdNodes.length }))
       savedSuccessfully = true
     } catch (error: any) {
       console.error('批量创建设备或环境变量保存失败', error)
@@ -5583,7 +5495,7 @@ const handleCreateDevices = async (data: {
         if (nodesRefreshed && environmentRefreshed && allPresent) {
           const lastCreated = nodes.value.find(candidate => candidate.id === createdNodes[createdNodes.length - 1].id)
           if (lastCreated) await focusCreatedDeviceNode(lastCreated)
-          ElMessage.warning(t('app.devicesCreateOutcomeRefreshed', { count: createdNodes.length }))
+          notifyBlocked(t('app.devicesCreateOutcomeRefreshed', { count: createdNodes.length }))
           savedSuccessfully = true
           return
         }
@@ -5591,7 +5503,7 @@ const handleCreateDevices = async (data: {
       const fallbackMessage = data.environmentVariables?.length
         ? t('app.saveEnvironmentFailed')
         : t('app.saveNodesFailed')
-      ElMessage.error(localizedErrorMessage(error, fallbackMessage, locale.value))
+      notifyError(localizedErrorMessage(error, fallbackMessage, locale.value))
     } finally {
       data.complete(savedSuccessfully)
     }
@@ -5655,27 +5567,27 @@ const handleAddSpec = async (data: {
         ], nodes.value)
 
         if (specifications.value.some(spec => isSameSpecification(spec, newSpec))) {
-          ElMessage.warning(t('app.specDuplicate'))
+          notifyBlocked(t('app.specDuplicate'))
           return
         }
 
         const mutation = await boardApi.addSpec(newSpec)
-        specifications.value = mutation.currentItems
+        commitSemanticScene({ specs: mutation.currentItems, availability: mutation })
         const createdSpec = mutation.affectedItem
         await focusSpecInInspector(createdSpec?.id)
-        ElMessage.success(t('app.specificationAddedSuccessfully'))
+        notifySuccess(t('app.specificationAddedSuccessfully'))
         saved = true
       } catch (error: any) {
         console.error('[Board] Failed to add specification:', error)
         if (!isDefinitiveMutationRejection(error) && attemptedSpec) {
           const refreshed = await refreshSpecifications()
           if (refreshed && specifications.value.some(spec => isSameSpecification(spec, attemptedSpec!))) {
-            ElMessage.warning(t('app.specCreateOutcomeRefreshed'))
+            notifyBlocked(t('app.specCreateOutcomeRefreshed'))
             saved = true
             return
           }
         }
-        ElMessage.error(extractApiErrorMessage(error, t('app.saveSpecsFailed')))
+        notifyError(extractApiErrorMessage(error, t('app.saveSpecsFailed')))
       }
     })
   } finally {
@@ -5825,8 +5737,26 @@ onBeforeUnmount(() => {
 
 const refreshDevicesFromChat = async () => enqueueBoardMutation(() => refreshDevices())
 const refreshEnvironmentFromChat = async () => enqueueBoardMutation(() => refreshEnvironmentVariables())
-const refreshRulesFromChat = async () => enqueueBoardMutation(() => refreshRules())
-const refreshSpecificationsFromChat = async () => enqueueBoardMutation(() => refreshSpecifications())
+// An assistant rule/spec edit goes through the journal-recording write path, so it changes undo
+// availability — but these refreshes only reload one collection, and the `isBoardDataReady` watcher
+// that reloads availability fires on the *aggregate* state changing. When the other keys are already
+// 'ready', that flag never leaves `true`, the watcher never runs, and the affordance silently depends
+// on some later unrelated refresh. Re-read it here instead.
+//
+// Called through a late-bound reference because `useBoardUndo` is set up further down this file and
+// `const` does not hoist.
+let reloadUndoAvailability: () => Promise<void> = async () => undefined
+
+const refreshRulesFromChat = async () => enqueueBoardMutation(async () => {
+  const ok = await refreshRules()
+  await reloadUndoAvailability()
+  return ok
+})
+const refreshSpecificationsFromChat = async () => enqueueBoardMutation(async () => {
+  const ok = await refreshSpecifications()
+  await reloadUndoAvailability()
+  return ok
+})
 const refreshTemplatesFromChat = async () => enqueueBoardMutation(() => refreshDeviceTemplates())
 const refreshRunHistoryFromChat = async () => refreshRunHistory()
 const refreshAllBoardStateFromChat = async () => enqueueBoardMutation(() => refreshAllBoardState())
@@ -5894,8 +5824,37 @@ const simulationResultStale = ref(false)
 // mutation path (fix apply, chat tool, inspector edit) is covered by one rule.
 const markVerificationResultStale = () => {
   if (verificationResult.value) verificationResultStale.value = true
-  if (simulationResult.value) simulationResultStale.value = true
+  // Keyed on the surviving run, not the details dialog: the dialog can be closed and reopened from
+  // `lastSimulationResult`, and replay admission is decided for the run. Watching the dialog ref
+  // meant a board change while only the timeline was open never set the flag at all.
+  if (lastSimulationResult.value) simulationResultStale.value = true
 }
+
+/**
+ * Single owner of everything a rule/specification mutation owes the rest of the board.
+ *
+ * Every semantic mutation calls this instead of hand-assembling the same four follow-ups, which
+ * is what previously let rule reorder skip undo availability and undo skip the canvas edges.
+ * See `board/semanticCommit.ts` for the ordering guarantee.
+ */
+const commitSemanticScene = createBoardSemanticCommit({
+  setRules: next => { rules.value = next },
+  setSpecs: next => { specifications.value = next },
+  syncRuleDerivedEdges: () => syncRuleDerivedEdges(),
+  markVerificationResultStale: () => markVerificationResultStale(),
+  // Declared later in setup; both are only reached from async handlers, never during setup.
+  syncUndoAvailability: availability => syncBoardUndoAvailability(availability),
+  clearDanglingFocus: scene => {
+    if (scene.rules && focusedRuleId.value
+      && !scene.rules.some(rule => String(rule.id || '') === focusedRuleId.value)) {
+      focusedRuleId.value = null
+    }
+    if (scene.specs && focusedSpecId.value
+      && !scene.specs.some(spec => spec.id === focusedSpecId.value)) {
+      focusedSpecId.value = null
+    }
+  }
+})
 
 type RunSubmission<T> = { request: T; signature: string; taskId?: number }
 
@@ -5992,35 +5951,12 @@ const ruleRecommendationCategories = RULE_RECOMMENDATION_CATEGORY_OPTIONS
 const validateRecommendationCount = (value: unknown, field = t('app.maxRecommendationsField')): number =>
   optionalIntegerInRange(value, field, 5, 1, 10)
 
-const formatRecommendationFilteredType = (type: unknown): string => {
-  switch (String(type || '').toLowerCase()) {
-    case 'device':
-      return t('app.filteredCandidateDevice')
-    case 'rule':
-      return t('app.filteredCandidateRule')
-    case 'spec':
-    case 'specification':
-      return t('app.filteredCandidateSpecification')
-    case 'environment':
-    case 'environmentVariable':
-      return t('app.filteredCandidateEnvironment')
-    default:
-      return t('app.filteredCandidateItem')
-  }
-}
-
-const formatRecommendationFilteredItem = (item: RecommendationFilteredItem): string => {
-  const index = item.index || '?'
-  const reason = localizedRecommendationText(
-    item.reason,
-    t('app.recommendationFilteredUnknownReason')
-  )
-  const type = formatRecommendationFilteredType(item.type)
-  const label = item.label?.trim()
-  return label
-    ? t('app.recommendationFilteredReasonWithLabel', { type, index, label, reason })
-    : t('app.recommendationFilteredReason', { type, index, reason })
-}
+// Wording rules live in `board/recommendationFilterText.ts` so they can be tested without the board.
+const recommendationTextContext = computed(() => ({ t, locale: locale.value }))
+const formatRecommendationFilteredType = (type: unknown): string =>
+  formatFilteredType(type, recommendationTextContext.value)
+const formatRecommendationFilteredItem = (item: RecommendationFilteredItem): string =>
+  formatFilteredItem(item, recommendationTextContext.value)
 
 type RecommendationAdjustmentContext = 'rule' | 'device' | 'scenario'
 
@@ -6174,7 +6110,7 @@ const recordRecommendationTerminalEvidence = (
 const captureRecommendationRequestOwner = (): RecommendationRequestOwner | null => {
   const authToken = getToken()
   if (!authToken) {
-    ElMessage.error(t('app.recommendationAuthenticationRequired'))
+    notifyError(t('app.recommendationAuthenticationRequired'))
     return null
   }
   return { userId: currentAuthUserId.value, authToken }
@@ -6287,7 +6223,7 @@ const beginUnknownRecommendationRecovery = (
   if (panel.requestId.value !== requestId) return
   if (!recommendationOutcomeUnknownWarnings.has(requestId)) {
     recommendationOutcomeUnknownWarnings.add(requestId)
-    ElMessage.warning(t('app.recommendationResponseLostRecovering'))
+    notifyBlocked(t('app.recommendationResponseLostRecovering'))
   }
   void stopActiveRecommendation(panel, { showMessage: false })
 }
@@ -6342,7 +6278,7 @@ const acceptRecommendationCancellation = (
   }
   if (recovery.showMessage && !recovery.acceptanceNotified) {
     recovery.acceptanceNotified = true
-    ElMessage.info(t(recovery.cancelledMessageKey))
+    notifyInfo(t(recovery.cancelledMessageKey))
   }
 }
 
@@ -6375,7 +6311,7 @@ const stopActiveRecommendation = async (
   const recovery = ensureRecommendationStopRecovery(panel, options)
   if (!recovery) {
     recommendationStopRequestsInFlight.delete(kind)
-    ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
+    notifyBlocked(t('app.recommendationStopRequestMayStillBeRunning'))
     return
   }
   // Keep the POST transport alive until cancellation is accepted. Aborting it first can let
@@ -6389,11 +6325,11 @@ const stopActiveRecommendation = async (
     if (cancellationAccepted) {
       acceptRecommendationCancellation(kind, requestId)
     } else {
-      ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
+      notifyBlocked(t('app.recommendationStopRequestMayStillBeRunning'))
     }
   } catch (error) {
     console.error('Failed to cancel recommendation request:', error)
-    ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
+    notifyBlocked(t('app.recommendationStopRequestMayStillBeRunning'))
   } finally {
     recommendationStopRequestsInFlight.delete(kind)
     void refreshRecommendationProgress(kind)
@@ -6495,19 +6431,19 @@ const isRecommendationRunningForAnother = (kind: RecommendationPanelKind): boole
 const canOpenRecommendationPanel = (kind: RecommendationPanelKind): boolean => {
   if (!ensureBoardDataReady()) return false
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return false
   }
   if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeCurrentSimulationFirst'))
     return false
   }
   if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeCounterexampleFirst'))
     return false
   }
   if (isRecommendationRunningForAnother(kind)) {
-    ElMessage.warning({ message: t('app.recommendationGenerationInProgress'), type: 'warning' })
+    notifyBlocked(t('app.recommendationGenerationInProgress'))
     return false
   }
   return true
@@ -6563,13 +6499,14 @@ const resetScenarioRecommendationResults = () => {
   scenarioRecommendationRequested.value = false
 }
 
+// Closing a surface is not a fresh result, so it must not clear a stale flag: `lastVerificationResult`
+// and `lastSimulationResult` outlive every dialog, and reopening one must still warn that the canvas
+// changed under it. Only a new run clears the flag.
 function closeResultSurfaces() {
   fuzzingResultRequestEpoch += 1
   verificationResult.value = null
-  verificationResultStale.value = false
   verificationError.value = null
   simulationResult.value = null
-  simulationResultStale.value = false
   simulationError.value = null
   fuzzingResult.value = null
   fuzzingError.value = null
@@ -6577,70 +6514,69 @@ function closeResultSurfaces() {
   showFuzzingResultDialog.value = false
 }
 
-const openRuleRecommendationPanel = (): boolean => {
-  if (showRecommendationPanel.value) return true
-  if (!canOpenRecommendationPanel('rule')) return false
+/**
+ * Recommendation panels are mutually exclusive with each other and with the run panels.
+ * One table-driven opener keeps that invariant in a single place: the previous
+ * copy-per-panel version had already drifted (the scenario panel closed *itself*, which
+ * threw away the state it had just reset).
+ *
+ * Accessors are lazy because the per-panel close handlers are declared further down.
+ */
+const recommendationPanels: Record<RecommendationPanelKind, {
+  isVisible: () => boolean
+  show: () => void
+  close: () => void
+  resetResults: () => void
+}> = {
+  rule: {
+    isVisible: () => showRecommendationPanel.value,
+    show: () => { showRecommendationPanel.value = true },
+    close: () => closeRecommendationPanel(),
+    resetResults: () => resetRuleRecommendationResults()
+  },
+  device: {
+    isVisible: () => showDeviceRecommendationPanel.value,
+    show: () => { showDeviceRecommendationPanel.value = true },
+    close: () => closeDeviceRecommendationPanel(),
+    resetResults: () => resetDeviceRecommendationResults()
+  },
+  spec: {
+    isVisible: () => showSpecRecommendationPanel.value,
+    show: () => { showSpecRecommendationPanel.value = true },
+    close: () => closeSpecRecommendationPanel(),
+    resetResults: () => resetSpecRecommendationResults()
+  },
+  scenario: {
+    isVisible: () => showScenarioRecommendationPanel.value,
+    show: () => { showScenarioRecommendationPanel.value = true },
+    close: () => closeScenarioRecommendationPanel(),
+    resetResults: () => resetScenarioRecommendationResults()
+  }
+}
+
+const openRecommendationPanel = (kind: RecommendationPanelKind): boolean => {
+  const panel = recommendationPanels[kind]
+  if (panel.isVisible()) return true
+  if (!canOpenRecommendationPanel(kind)) return false
+
   closeResultSurfaces()
   closeHistoryPanel()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
   showFuzzingPanel.value = false
-  closeDeviceRecommendationPanel()
-  closeSpecRecommendationPanel()
-  closeScenarioRecommendationPanel()
-  resetRuleRecommendationResults()
-  showRecommendationPanel.value = true
+  for (const otherKind of Object.keys(recommendationPanels) as RecommendationPanelKind[]) {
+    if (otherKind !== kind) recommendationPanels[otherKind].close()
+  }
+
+  panel.resetResults()
+  panel.show()
   return true
 }
 
-const openDeviceRecommendationPanel = (): boolean => {
-  if (showDeviceRecommendationPanel.value) return true
-  if (!canOpenRecommendationPanel('device')) return false
-  closeResultSurfaces()
-  closeHistoryPanel()
-  showSimulationPanel.value = false
-  showVerificationPanel.value = false
-  showFuzzingPanel.value = false
-  closeRecommendationPanel()
-  closeSpecRecommendationPanel()
-  closeScenarioRecommendationPanel()
-  resetDeviceRecommendationResults()
-  showDeviceRecommendationPanel.value = true
-  return true
-}
-
-const openSpecRecommendationPanel = (): boolean => {
-  if (showSpecRecommendationPanel.value) return true
-  if (!canOpenRecommendationPanel('spec')) return false
-  closeResultSurfaces()
-  closeHistoryPanel()
-  showSimulationPanel.value = false
-  showVerificationPanel.value = false
-  showFuzzingPanel.value = false
-  closeRecommendationPanel()
-  closeDeviceRecommendationPanel()
-  closeScenarioRecommendationPanel()
-  resetSpecRecommendationResults()
-  showSpecRecommendationPanel.value = true
-  return true
-}
-
-const openScenarioRecommendationPanel = (): boolean => {
-  if (showScenarioRecommendationPanel.value) return true
-  if (!canOpenRecommendationPanel('scenario')) return false
-  closeResultSurfaces()
-  closeHistoryPanel()
-  showSimulationPanel.value = false
-  showVerificationPanel.value = false
-  showFuzzingPanel.value = false
-  closeRecommendationPanel()
-  closeDeviceRecommendationPanel()
-  closeSpecRecommendationPanel()
-  closeScenarioRecommendationPanel()
-  resetScenarioRecommendationResults()
-  showScenarioRecommendationPanel.value = true
-  return true
-}
+const openRuleRecommendationPanel = () => openRecommendationPanel('rule')
+const openDeviceRecommendationPanel = () => openRecommendationPanel('device')
+const openSpecRecommendationPanel = () => openRecommendationPanel('spec')
+const openScenarioRecommendationPanel = () => openRecommendationPanel('scenario')
 
 const fetchRuleRecommendations = async () => {
   if (isRecommendationRequestActive(isRecommendingRules.value, ruleRecommendationRequestId.value)) {
@@ -6649,7 +6585,7 @@ const fetchRuleRecommendations = async () => {
     return
   }
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return
   }
   if (!ensureBoardDataReady(['nodes', 'templates', 'rules'])) return
@@ -6727,7 +6663,7 @@ const fetchRuleRecommendations = async () => {
     if (requestEpoch !== ruleRecommendationRequestEpoch
       || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch rule recommendations:', error)
-    ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchRuleRecommendations')))
+    notifyError(extractRecommendationErrorMessage(error, t('app.failedToFetchRuleRecommendations')))
   } finally {
     if (postTerminal) {
       settleRecommendationPost(ruleRecommendationPanel, requestId, controller)
@@ -6897,7 +6833,7 @@ const fetchDeviceRecommendations = async () => {
     return
   }
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return
   }
   if (!ensureBoardDataReady(['nodes', 'templates'])) return
@@ -6974,7 +6910,7 @@ const fetchDeviceRecommendations = async () => {
     if (requestEpoch !== deviceRecommendationRequestEpoch
       || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch device recommendations:', error)
-    ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchDeviceRecommendations')))
+    notifyError(extractRecommendationErrorMessage(error, t('app.failedToFetchDeviceRecommendations')))
   } finally {
     if (postTerminal) {
       settleRecommendationPost(deviceRecommendationPanel, requestId, controller)
@@ -6998,7 +6934,7 @@ const fetchSpecRecommendations = async () => {
     return
   }
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return
   }
   if (!ensureBoardDataReady(['nodes', 'templates', 'rules', 'specs'])) return
@@ -7074,7 +7010,7 @@ const fetchSpecRecommendations = async () => {
     if (requestEpoch !== specRecommendationRequestEpoch
       || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch specification recommendations:', error)
-    ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchSpecificationRecommendations')))
+    notifyError(extractRecommendationErrorMessage(error, t('app.failedToFetchSpecificationRecommendations')))
   } finally {
     if (postTerminal) {
       settleRecommendationPost(specRecommendationPanel, requestId, controller)
@@ -7097,7 +7033,7 @@ const fetchScenarioRecommendation = async () => {
     return
   }
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning(t('app.sceneReplacementInProgress'))
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return
   }
   if (!ensureBoardDataReady()) return
@@ -7207,7 +7143,7 @@ const fetchScenarioRecommendation = async () => {
     if (requestEpoch !== scenarioRecommendationRequestEpoch
       || requestSceneGeneration !== recommendationSceneGeneration) return
     console.error('Failed to fetch scenario recommendation:', error)
-    ElMessage.error(extractRecommendationErrorMessage(error, t('app.failedToFetchScenarioRecommendation')))
+    notifyError(extractRecommendationErrorMessage(error, t('app.failedToFetchScenarioRecommendation')))
   } finally {
     if (postTerminal) {
       settleRecommendationPost(scenarioRecommendationPanel, requestId, controller)
@@ -7319,7 +7255,7 @@ const invalidateRecommendationsForSceneChange = ({ notify = false }: { notify?: 
   closeSpecRecommendationPanel()
   closeScenarioRecommendationPanel()
   if (notify && hadRecommendationContext) {
-    ElMessage.info(t('app.recommendationsInvalidatedByBoardRefresh'))
+    notifyInfo(t('app.recommendationsInvalidatedByBoardRefresh'))
   }
 }
 
@@ -7328,13 +7264,29 @@ const invalidateForFullSceneReplacement = () => {
   // Scene import/clear opt out of fingerprint tracking, so mark staleness explicitly here.
   markVerificationResultStale()
   invalidateRecommendationsForSceneChange()
+  notifyUndoJournalCleared()
+}
+
+/**
+ * Some commands make every recorded inverse unreachable, so the server drops the whole undo
+ * journal: scene replace/clear (they rewrite all collections) and device deletion (it cascades
+ * into the rules and specs referencing that device). The journal is the authority for what is
+ * reversible, so those commands must re-read it — otherwise the button keeps offering an undo that
+ * would only report "nothing to undo".
+ */
+const notifyUndoJournalCleared = () => {
+  // The server discarded the whole journal, so nothing is reversible — applied locally at once
+  // because the re-read below is fire-and-forget, and until it lands the button would still offer an
+  // undo that can only answer "nothing to undo".
+  syncBoardUndoAvailability({ canUndo: false, canRedo: false })
+  void loadBoardUndoAvailability()
 }
 
 const applyRecommendedScenario = async () => {
   if (!ensurePlaybackClosedForMutation()) return
   const scene = recommendedScenarioScene.value
   if (!scene) {
-    ElMessage.warning(t('app.noScenarioToApply'))
+    notifyBlocked(t('app.noScenarioToApply'))
     return
   }
   const requestEpoch = scenarioRecommendationRequestEpoch
@@ -7352,13 +7304,13 @@ const applyRecommendedScenario = async () => {
 const exportRecommendedScenario = () => {
   const scene = recommendedScenarioScene.value
   if (!scene) {
-    ElMessage.warning(t('app.noScenarioToApply'))
+    notifyBlocked(t('app.noScenarioToApply'))
     return
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const portableScene = canonicalizeSceneFile(scene)
   downloadJsonFile(`iot-verify-ai-scenario-${timestamp}.json`, portableScene)
-  ElMessage.success(t('app.sceneExportStarted', {
+  notifySuccess(t('app.sceneExportStarted', {
     devices: scene.devices.length,
     variables: scene.environmentVariables.length,
     rules: scene.rules.length,
@@ -7459,7 +7411,7 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
   if (!ensurePlaybackClosedForMutation()) return
   if (!ensureBoardDataReady(['nodes', 'templates', 'specs'])) return
   if (appliedSpecRecommendations.value.has(index)) {
-    ElMessage.warning(t('app.recommendationAlreadyApplied'))
+    notifyBlocked(t('app.recommendationAlreadyApplied'))
     return
   }
   if (applyingSpecRecommendations.value.has(index)) return
@@ -7470,10 +7422,7 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
   // Reject an invalid recommendation before issuing the targeted create request.
   const rawTemplateId = recommendation.templateId
   if (typeof rawTemplateId !== 'string' || !/^[1-7]$/.test(rawTemplateId)) {
-    ElMessage.warning({
-      message: t('app.invalidRecommendedTemplateId', { templateId: rawTemplateId ?? '' }),
-      type: 'warning'
-    })
+    notifyBlocked(t('app.invalidRecommendedTemplateId', { templateId: rawTemplateId ?? '' }))
     return
   }
   const templateId = rawTemplateId as SpecTemplateId
@@ -7498,7 +7447,7 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
       ))) return
   } catch (error) {
     const field = error instanceof RecommendationCandidateError ? error.field : t('app.unknownModelItem')
-    ElMessage.warning(t('app.recommendationInvalidFieldNoChange', { field }))
+    notifyBlocked(t('app.recommendationInvalidFieldNoChange', { field }))
     return
   }
 
@@ -7525,7 +7474,7 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
   }
 
   if (specificationExists(newSpec)) {
-    ElMessage.warning(t('app.specDuplicate'))
+    notifyBlocked(t('app.specDuplicate'))
     return
   }
 
@@ -7541,12 +7490,12 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
         || isSceneReplacementInProgress.value) return
       try {
         const mutation = await boardApi.addSpec(newSpec)
-        specifications.value = mutation.currentItems
+        commitSemanticScene({ specs: mutation.currentItems, availability: mutation })
         recommendationConfirmedApplied = true
         if (recommendationEpoch === specRecommendationRequestEpoch) {
           appliedSpecRecommendations.value.add(index)
         }
-        ElMessage.success(t('app.specificationAddedSuccessfully'))
+        notifySuccess(t('app.specificationAddedSuccessfully'))
       } catch (error: any) {
         console.error('Failed to save specification:', error)
         if (!isDefinitiveMutationRejection(error)) {
@@ -7556,11 +7505,11 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
             if (recommendationEpoch === specRecommendationRequestEpoch) {
               appliedSpecRecommendations.value.add(index)
             }
-            ElMessage.warning(t('app.specCreateOutcomeRefreshed'))
+            notifyBlocked(t('app.specCreateOutcomeRefreshed'))
             return
           }
         }
-        ElMessage.error(extractApiErrorMessage(error, t('app.failedToSaveSpecification')))
+        notifyError(extractApiErrorMessage(error, t('app.failedToSaveSpecification')))
       }
     }, {
       onSemanticChange: () => handleRecommendationApplySceneChange(
@@ -7685,7 +7634,7 @@ const buildRecommendedDeviceRuntime = (recommendation: DeviceRecommendation): Re
 const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, index: number) => {
   if (!ensurePlaybackClosedForMutation()) return
   if (appliedDeviceRecommendations.value.has(index)) {
-    ElMessage.warning(t('app.recommendationAlreadyApplied'))
+    notifyBlocked(t('app.recommendationAlreadyApplied'))
     return
   }
   if (applyingDeviceRecommendations.value.has(index)) return
@@ -7702,14 +7651,14 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
     ? recommendation.templateName.trim()
     : ''
   if (!templateName) {
-    ElMessage.error(t('app.recommendationInvalidFieldNoChange', { field: 'templateName' }))
+    notifyError(t('app.recommendationInvalidFieldNoChange', { field: 'templateName' }))
     return
   }
 
   const template = findTemplateByAnyName(templateName)
   
   if (!template) {
-    ElMessage.error(t('app.templateNotFoundWithName', { name: templateName }))
+    notifyError(t('app.templateNotFoundWithName', { name: templateName }))
     return
   }
   
@@ -7718,42 +7667,28 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
 
   const label = recommendedDeviceLabel(recommendation)
   if (!label) {
-    ElMessage.error(t('app.recommendationInvalidFieldNoChange', { field: 'suggestedLabel' }))
+    notifyError(t('app.recommendationInvalidFieldNoChange', { field: 'suggestedLabel' }))
     return
   }
   const runtimeResult = buildRecommendedDeviceRuntime(recommendation)
   if (runtimeResult.error) {
-    ElMessage.warning(runtimeResult.error)
+    notifyBlocked(runtimeResult.error)
     return
   }
   const runtime = runtimeResult.runtime
   const runtimeError = validateDeviceRuntimeConfig(template, runtime, t, { variableScope: 'local' })
   if (runtimeError) {
-    ElMessage.warning(runtimeError)
+    notifyBlocked(runtimeError)
     return
   }
   const availableLabel = getUniqueLabel(label, getVisibleDeviceNodes())
   let confirmedLabel = label
   if (availableLabel !== label) {
-    try {
-      await ElMessageBox.confirm(
-        t('app.deviceRecommendationNameConflictConfirm', { from: label, to: availableLabel }),
-        t('app.deviceRecommendationNameConflictTitle'),
-        {
-          type: 'warning',
-          confirmButtonText: t('app.confirm'),
-          cancelButtonText: t('app.cancel'),
-          appendTo: 'body',
-          lockScroll: false
-        }
-      )
-      confirmedLabel = availableLabel
-    } catch (error: any) {
-      if (error !== 'cancel' && error !== 'close') {
-        console.error('Recommended device name confirmation failed:', error)
-      }
-      return
-    }
+    if (!await confirmDestructive({
+      title: t('app.deviceRecommendationNameConflictTitle'),
+      message: t('app.deviceRecommendationNameConflictConfirm', { from: label, to: availableLabel })
+    })) return
+    confirmedLabel = availableLabel
   }
   if (!isRecommendationCurrent()) return
   
@@ -7780,7 +7715,7 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
       appliedDeviceRecommendations.value.add(index)
     }
     if (outcome.responseConfirmed) {
-      ElMessage.success(t('app.deviceAddedWithName', { name: outcome.device.label }))
+      notifySuccess(t('app.deviceAddedWithName', { name: outcome.device.label }))
     }
   } catch {
     // createDeviceInstanceAt already displayed the server failure.
@@ -8139,24 +8074,19 @@ const fuzzingWorkloadSemanticKey = computed(() => JSON.stringify({
   populationSize: fuzzingForm.populationSize
 }))
 
-const validFuzzingBudgetFields = () => [
-  [fuzzingForm.maxIterations, FUZZ_ITERATIONS_MIN, FUZZ_ITERATIONS_MAX],
-  [fuzzingForm.pathLength, FUZZ_PATH_LENGTH_MIN, FUZZ_PATH_LENGTH_MAX],
-  [fuzzingForm.populationSize, FUZZ_POPULATION_MIN, FUZZ_POPULATION_MAX]
-].every(([value, minimum, maximum]) => Number.isInteger(value)
-  && value >= minimum
-  && value <= maximum)
 
-const fuzzingWorkloadReady = computed(() => {
-  const preview = fuzzingWorkloadPreview.value
-  return !!preview
-    && !fuzzingWorkloadPreviewLoading.value
-    && !fuzzingWorkloadPreviewError.value
-    && fuzzingWorkloadPreviewSemanticKey.value === fuzzingWorkloadSemanticKey.value
-    && preview.maxIterations === fuzzingForm.maxIterations
-    && preview.pathLength === fuzzingForm.pathLength
-    && preview.populationSize === fuzzingForm.populationSize
-})
+// A preview is only shown when it still describes this board and this budget; the freshness rule
+// and its tests live in `utils/fuzzingConfig.ts`.
+const fuzzingWorkloadReady = computed(() => isFuzzingPreviewCurrent(
+  {
+    preview: fuzzingWorkloadPreview.value,
+    loading: fuzzingWorkloadPreviewLoading.value,
+    error: fuzzingWorkloadPreviewError.value,
+    previewSemanticKey: fuzzingWorkloadPreviewSemanticKey.value
+  },
+  fuzzingForm,
+  fuzzingWorkloadSemanticKey.value
+))
 
 const fuzzingWorkload = computed(() => fuzzingWorkloadReady.value
   ? fuzzingWorkloadPreview.value?.estimatedWorkload
@@ -8286,7 +8216,7 @@ const refreshFuzzingWorkloadPreview = async () => {
     fuzzingWorkloadPreviewTimer = null
   }
   if (!showFuzzingPanel.value
-    || !validFuzzingBudgetFields()
+    || !hasValidFuzzingBudget(fuzzingForm)
     || !fuzzingPreviewPrerequisitesReady.value) {
     invalidateFuzzingWorkloadPreview()
     return
@@ -8359,7 +8289,7 @@ watch(
   [showFuzzingPanel, fuzzingWorkloadSemanticKey, fuzzingPreviewPrerequisitesReady],
   ([visible]) => {
     invalidateFuzzingWorkloadPreview()
-    if (visible && validFuzzingBudgetFields() && fuzzingPreviewPrerequisitesReady.value) {
+    if (visible && hasValidFuzzingBudget(fuzzingForm) && fuzzingPreviewPrerequisitesReady.value) {
       scheduleFuzzingWorkloadPreview()
     }
   },
@@ -8954,11 +8884,7 @@ const reconcileTrackedFuzzTasks = async (
     }
   }))
   if (isCurrent() && unavailableTaskIds.length > 0) {
-    ElMessage.error({
-      message: t('app.fuzzTrackedRunsUnavailable', { count: unavailableTaskIds.length }),
-      type: 'error',
-      duration: 6500
-    })
+    notifyError(t('app.fuzzTrackedRunsUnavailable', { count: unavailableTaskIds.length }))
   }
 }
 
@@ -9010,10 +8936,7 @@ const loadTaskInbox = async (
     if (!taskInboxRequests.isCurrent(token)) return true
     console.error('Failed to load async tasks:', e)
     if (showError) {
-      ElMessage.error({
-        message: extractApiErrorMessage(e, t('app.failedToLoadTasks')),
-        type: 'error'
-      })
+      notifyError(extractApiErrorMessage(e, t('app.failedToLoadTasks')))
     }
     return false
   } finally {
@@ -9053,7 +8976,7 @@ const loadVerificationRuns = async (showError = true): Promise<boolean> => {
       locale.value
     )
     if (showError) {
-      ElMessage.error({ message: t('app.failedToLoadVerificationHistory'), type: 'error' })
+      notifyError(t('app.failedToLoadVerificationHistory'))
     }
     return false
   } finally {
@@ -9079,7 +9002,7 @@ const loadSimulationRuns = async (showError = true): Promise<boolean> => {
       locale.value
     )
     if (showError) {
-      ElMessage.error({ message: t('app.failedToLoadSimulationHistory'), type: 'error' })
+      notifyError(t('app.failedToLoadSimulationHistory'))
     }
     return false
   } finally {
@@ -9121,10 +9044,7 @@ const executeFuzzingRunsRequest = async (
       locale.value
     )
     if (showError) {
-      ElMessage.error({
-        message: extractApiErrorMessage(e, t('app.failedToLoadFuzzingHistory')),
-        type: 'error'
-      })
+      notifyError(extractApiErrorMessage(e, t('app.failedToLoadFuzzingHistory')))
     }
     return false
   } finally {
@@ -9182,12 +9102,9 @@ const loadHistoryResults = async (showError = true): Promise<boolean> => {
       !results[2] ? t('app.fuzzRunResult') : null
     ].filter((source): source is string => Boolean(source))
     if (failedSources.length > 0 && showError) {
-      ElMessage.error({
-        message: t('app.failedToLoadRunResultSources', {
+      notifyError(t('app.failedToLoadRunResultSources', {
           sources: failedSources.join(locale.value.toLowerCase().startsWith('zh') ? '、' : ', ')
-        }),
-        type: 'error'
-      })
+        }))
     }
     return results.every(Boolean)
   } finally {
@@ -9260,11 +9177,11 @@ const toggleHistoryPanel = async (layer: HistoryLayer = activeHistoryLayer.value
     return
   }
   if (isModelPlaybackActive.value) {
-    ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
+    notifyBlocked(t('app.playbackReadOnlyCloseFirst'))
     return
   }
   if (isAnyRecommendationRunning()) {
-    ElMessage.warning({ message: t('app.recommendationGenerationInProgress'), type: 'warning' })
+    notifyBlocked(t('app.recommendationGenerationInProgress'))
     return
   }
 
@@ -9314,42 +9231,32 @@ const deleteVerificationRun = async (run: VerificationRunSummary) => {
   const pendingKey = `verification:${runId}`
   if (!beginHistoryDelete(pendingKey)) return
   try {
-    await confirmHistoryDeletion(
-      () => ElMessageBox.confirm(
-        t('app.deleteVerificationRunMessage', {
+    if (!await confirmHistoryDeletion(
+      () => confirmDestructive({
+        title: t('app.deleteVerificationRunTitle'),
+        message: t('app.deleteVerificationRunMessage', {
           time: formatRunTimestamp(run.completedAt),
           counterexamples: run.counterexampleCount
         }),
-        t('app.deleteVerificationRunTitle'),
-        {
-          confirmButtonText: t('app.delete'),
-          cancelButtonText: t('app.cancel'),
-          type: 'warning',
-          appendTo: 'body',
-          lockScroll: false
-        }
-      ),
+        confirmText: t('app.delete')
+      }),
       historyDetailRequests.invalidate
-    )
+    )) return
     await boardApi.deleteVerificationRun(runId)
     if (boardLifecycleDisposed) return
     verificationHistoryRequests.invalidate()
     verificationRuns.value = verificationRuns.value.filter(item => item.id !== runId)
-    ElMessage.success({ message: t('app.verificationRunDeleted'), type: 'success' })
+    notifySuccess(t('app.verificationRunDeleted'))
   } catch (e: any) {
-    if (e === 'cancel' || e === 'close') return
     if (boardLifecycleDisposed) return
     console.error('Failed to delete verification run:', e)
     const refreshed = await loadVerificationRuns(false)
     if (boardLifecycleDisposed) return
     if (refreshed && !verificationRuns.value.some(item => item.id === runId)) {
-      ElMessage.warning({ message: t('app.verificationRunDeleteOutcomeRefreshed'), type: 'warning' })
+      notifyBlocked(t('app.verificationRunDeleteOutcomeRefreshed'))
       return
     }
-    ElMessage.error({
-      message: localizedErrorMessage(e, t('app.failedToDeleteVerificationRun'), locale.value),
-      type: 'error'
-    })
+    notifyError(localizedErrorMessage(e, t('app.failedToDeleteVerificationRun'), locale.value))
   } finally {
     finishHistoryDelete(pendingKey)
   }
@@ -9373,7 +9280,8 @@ const openVerificationRun = async (runId: number) => {
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load verification run:', e)
-    ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToLoadVerificationRun')), type: 'error' })
+    if (loadingFromDeepLink) reportUnusableDeepLink()
+    else notifyError(extractApiErrorMessage(e, t('app.failedToLoadVerificationRun')))
   } finally {
     historyDetailRequests.finish(requestToken)
   }
@@ -9384,7 +9292,7 @@ const watchVerificationTask = async (taskId: number) => {
     if (asyncVerificationTask.value.taskId === taskId) {
       showVerificationPanel.value = true
     } else {
-      ElMessage.info({ message: t('app.taskWatchAlreadyActive'), type: 'info' })
+      notifyInfo(t('app.taskWatchAlreadyActive'))
     }
     closeHistoryPanel()
     return
@@ -9409,10 +9317,10 @@ const watchVerificationTask = async (taskId: number) => {
         : extractApiErrorMessage(error, t('app.verificationFailed'))
       if (isAsyncTaskCancelledError(error)) {
         verificationError.value = null
-        ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
+        notifyInfo(t('app.verificationCancelled'))
       } else {
         verificationError.value = message
-        ElMessage.error({ message, type: 'error' })
+        notifyError(message)
       }
     }
   } finally {
@@ -9431,7 +9339,7 @@ const watchSimulationTask = async (taskId: number) => {
     if (asyncSimulationTask.value.taskId === taskId) {
       showSimulationPanel.value = true
     } else {
-      ElMessage.info({ message: t('app.taskWatchAlreadyActive'), type: 'info' })
+      notifyInfo(t('app.taskWatchAlreadyActive'))
     }
     closeHistoryPanel()
     return
@@ -9495,10 +9403,10 @@ const watchSimulationTask = async (taskId: number) => {
         : extractApiErrorMessage(error, t('app.simulationFailed'))
       if (isAsyncTaskCancelledError(error)) {
         simulationError.value = null
-        ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
+        notifyInfo(t('app.simulationCancelled'))
       } else {
         simulationError.value = message
-        ElMessage.error({ message, type: 'error' })
+        notifyError(message)
       }
     }
   } finally {
@@ -9545,7 +9453,7 @@ const summarizeFuzzingRun = (run: FuzzingRun): AvailableFuzzingRunSummary => ({
 
 const presentFuzzingRun = (run: FuzzingRun) => {
   // Transient notices must not cover the result's title or primary actions.
-  ElMessage.closeAll()
+  dismissAllNotifications()
   const summary = summarizeFuzzingRun(run)
   upsertFuzzingRunSummary(summary)
   fuzzingError.value = null
@@ -9560,7 +9468,7 @@ const watchFuzzingTask = async (taskId: number) => {
     if (asyncFuzzingTask.value.taskId === taskId) {
       showFuzzingPanel.value = true
     } else {
-      ElMessage.info({ message: t('app.taskWatchAlreadyActive'), type: 'info' })
+      notifyInfo(t('app.taskWatchAlreadyActive'))
     }
     closeHistoryPanel()
     return
@@ -9594,11 +9502,11 @@ const watchFuzzingTask = async (taskId: number) => {
       if (isAsyncTaskCancelledError(error)) {
         untrackFuzzTask(taskId)
         fuzzingError.value = null
-        ElMessage.info({ message: t('app.fuzzSearchCancelled'), type: 'info' })
+        notifyInfo(t('app.fuzzSearchCancelled'))
       } else if (isFuzzTaskRecoveryPendingError(error)) {
         fuzzingError.value = null
         fuzzingSettingsNotice.value = t('app.fuzzResultRecoveryPending')
-        ElMessage.info({ message: fuzzingSettingsNotice.value, type: 'info', duration: 6500 })
+        notifyInfo(fuzzingSettingsNotice.value)
       } else if (isFuzzCompletedResultUnavailableError(error)) {
         fuzzingError.value = error.message || t('app.failedToLoadFuzzingRun')
         markFuzzNotificationUnread({
@@ -9618,7 +9526,7 @@ const watchFuzzingTask = async (taskId: number) => {
             kind: 'FAILED',
             createdAt: new Date().toISOString()
           })
-          ElMessage.error({ message: fuzzingError.value, type: 'error' })
+          notifyError(fuzzingError.value)
         }
       }
     }
@@ -9648,7 +9556,7 @@ const cancelVerificationTaskFromInbox = (taskId: number) => withTaskActionLock(
     } catch (error) {
       if (boardLifecycleDisposed) return
       console.error('Failed to cancel verification task from inbox:', error)
-      ElMessage.error({ message: t('app.failedToCancelVerificationTask'), type: 'error' })
+      notifyError(t('app.failedToCancelVerificationTask'))
     } finally {
       if (!boardLifecycleDisposed) {
         await loadTaskInbox(false, { showLoading: false })
@@ -9671,7 +9579,7 @@ const cancelSimulationTaskFromInbox = (taskId: number) => withTaskActionLock(
     } catch (error) {
       if (boardLifecycleDisposed) return
       console.error('Failed to cancel simulation task from inbox:', error)
-      ElMessage.error({ message: t('app.failedToCancelSimulationTask'), type: 'error' })
+      notifyError(t('app.failedToCancelSimulationTask'))
     } finally {
       if (!boardLifecycleDisposed) {
         await loadTaskInbox(false, { showLoading: false })
@@ -9694,7 +9602,7 @@ const cancelFuzzingTaskFromInbox = (taskId: number) => withTaskActionLock(
     } catch (error) {
       if (boardLifecycleDisposed) return
       console.error('Failed to cancel fuzzing task from inbox:', error)
-      ElMessage.error({ message: t('app.failedToCancelFuzzingTask'), type: 'error' })
+      notifyError(t('app.failedToCancelFuzzingTask'))
     } finally {
       if (!boardLifecycleDisposed) {
         await loadTaskInbox(false, { showLoading: false })
@@ -9711,10 +9619,10 @@ const dismissVerificationTask = (taskId: number) => withTaskActionLock(
       if (boardLifecycleDisposed) return
       invalidateTaskInboxRequests()
       verificationTasks.value = verificationTasks.value.filter(task => task.id !== taskId)
-      ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
+      notifySuccess(t('app.taskDismissed'))
     } catch (e: any) {
       if (boardLifecycleDisposed) return
-      ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToDismissTask')), type: 'error' })
+      notifyError(extractApiErrorMessage(e, t('app.failedToDismissTask')))
       await loadTaskInbox(false, { showLoading: false })
     }
   }
@@ -9728,10 +9636,10 @@ const dismissSimulationTask = (taskId: number) => withTaskActionLock(
       if (boardLifecycleDisposed) return
       invalidateTaskInboxRequests()
       simulationTasks.value = simulationTasks.value.filter(task => task.id !== taskId)
-      ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
+      notifySuccess(t('app.taskDismissed'))
     } catch (e: any) {
       if (boardLifecycleDisposed) return
-      ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToDismissTask')), type: 'error' })
+      notifyError(extractApiErrorMessage(e, t('app.failedToDismissTask')))
       await loadTaskInbox(false, { showLoading: false })
     }
   }
@@ -9747,11 +9655,11 @@ const dismissFuzzingTask = (taskId: number) => withTaskActionLock(
       fuzzingTasks.value = fuzzingTasks.value.filter(task => task.id !== taskId)
       clearFuzzNotifications(undefined, taskId)
       untrackFuzzTask(taskId)
-      ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
+      notifySuccess(t('app.taskDismissed'))
     } catch (e: any) {
       if (boardLifecycleDisposed) return
       console.error('Failed to dismiss fuzzing task:', e)
-      ElMessage.error({ message: t('app.failedToDismissTask'), type: 'error' })
+      notifyError(t('app.failedToDismissTask'))
       await loadTaskInbox(false, { showLoading: false })
     }
   }
@@ -9759,7 +9667,7 @@ const dismissFuzzingTask = (taskId: number) => withTaskActionLock(
 
 const openTaskInbox = async () => {
   if (isModelPlaybackActive.value) {
-    ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
+    notifyBlocked(t('app.playbackReadOnlyCloseFirst'))
     return
   }
   const intentEpoch = ++historyPanelIntentEpoch
@@ -9796,19 +9704,19 @@ const cancelMiniTask = async (kind: 'verification' | 'fuzzing' | 'simulation', t
 
 const ensureHistoricalPlaybackUiAdmission = (): boolean => {
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return false
   }
   if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeCounterexampleFirst'))
     return false
   }
   if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeCurrentSimulationFirst'))
     return false
   }
   if (isAnyRecommendationPanelVisible()) {
-    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeRecommendationPanelsFirst'))
     return false
   }
   return ensureLiveBoardEditorClosedForPlayback()
@@ -9826,7 +9734,7 @@ const revalidateHistoricalPlaybackAfterLoad = async (
     recheckUiAdmission: ensureHistoricalPlaybackUiAdmission
   })
   if (result === 'board-changed') {
-    ElMessage.warning({ message: t('app.historicalPlaybackDeferredForBoardChange'), type: 'warning' })
+    notifyBlocked(t('app.historicalPlaybackDeferredForBoardChange'))
   }
   return result === 'admitted'
 }
@@ -9839,7 +9747,7 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
     const trace = await boardApi.getVerificationTrace(traceId)
     if (!await revalidateHistoricalPlaybackAfterLoad(requestToken, initialMutationEpoch)) return
     if (!trace?.states?.length) {
-      ElMessage.warning({ message: t('app.traceHasNoStates'), type: 'warning' })
+      notifyBlocked(t('app.traceHasNoStates'))
       return
     }
     closeResultDialog()
@@ -9857,7 +9765,7 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load trace:', e)
-    ElMessage.error({ message: t('app.failedToLoadTrace'), type: 'error' })
+    notifyError(t('app.failedToLoadTrace'))
   } finally {
     historyDetailRequests.finish(requestToken)
   }
@@ -9865,7 +9773,7 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
 
 const openFixForVerificationTrace = (trace: { id: number; violatedSpecId?: string }) => {
   if (!trace.violatedSpecId) {
-    ElMessage.warning({ message: t('app.traceMissingViolatedSpec'), type: 'warning' })
+    notifyBlocked(t('app.traceMissingViolatedSpec'))
     return
   }
   closeHistoryPanel()
@@ -9880,7 +9788,7 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
     const trace = await simulationApi.getSimulation(traceId)
     if (!await revalidateHistoricalPlaybackAfterLoad(requestToken, initialMutationEpoch)) return
     if (!trace?.states?.length) {
-      ElMessage.warning({ message: t('app.simulationRunHasNoStates'), type: 'warning' })
+      notifyBlocked(t('app.simulationRunHasNoStates'))
       return
     }
 
@@ -9908,7 +9816,8 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load simulation trace:', e)
-    ElMessage.error({ message: t('app.failedToLoadSimulationRun'), type: 'error' })
+    if (loadingFromDeepLink) reportUnusableDeepLink()
+    else notifyError(t('app.failedToLoadSimulationRun'))
   } finally {
     historyDetailRequests.finish(requestToken)
   }
@@ -9919,39 +9828,29 @@ const deleteSimulationRun = async (run: SimulationTraceSummary) => {
   const pendingKey = `simulation:${traceId}`
   if (!beginHistoryDelete(pendingKey)) return
   try {
-    await confirmHistoryDeletion(
-      () => ElMessageBox.confirm(
-        t('app.deleteSimulationRunMessage', { time: formatRunTimestamp(run.createdAt) }),
-        t('app.deleteSimulationRunTitle'),
-        {
-          confirmButtonText: t('app.delete'),
-          cancelButtonText: t('app.cancel'),
-          type: 'warning',
-          appendTo: 'body',
-          lockScroll: false
-        }
-      ),
+    if (!await confirmHistoryDeletion(
+      () => confirmDestructive({
+        title: t('app.deleteSimulationRunTitle'),
+        message: t('app.deleteSimulationRunMessage', { time: formatRunTimestamp(run.createdAt) }),
+        confirmText: t('app.delete')
+      }),
       historyDetailRequests.invalidate
-    )
+    )) return
     await simulationApi.deleteSimulation(traceId)
     if (boardLifecycleDisposed) return
     simulationHistoryRequests.invalidate()
     simulationRuns.value = simulationRuns.value.filter(t => t.id !== traceId)
-    ElMessage.success({ message: t('app.simulationRunDeleted'), type: 'success' })
+    notifySuccess(t('app.simulationRunDeleted'))
   } catch (e: any) {
-    if (e === 'cancel' || e === 'close') return
     if (boardLifecycleDisposed) return
     console.error('Failed to delete simulation trace:', e)
     const refreshed = await loadSimulationRuns(false)
     if (boardLifecycleDisposed) return
     if (refreshed && !simulationRuns.value.some(item => item.id === traceId)) {
-      ElMessage.warning({ message: t('app.simulationDeleteOutcomeRefreshed'), type: 'warning' })
+      notifyBlocked(t('app.simulationDeleteOutcomeRefreshed'))
       return
     }
-    ElMessage.error({
-      message: localizedErrorMessage(e, t('app.failedToDeleteSimulationRun'), locale.value),
-      type: 'error'
-    })
+    notifyError(localizedErrorMessage(e, t('app.failedToDeleteSimulationRun'), locale.value))
   } finally {
     finishHistoryDelete(pendingKey)
   }
@@ -9967,7 +9866,7 @@ const fuzzingCompletionMessage = (run: AvailableFuzzingRunSummary | FuzzingRun):
 
 const openFuzzingRun = async (runId: number) => {
   if (isModelPlaybackActive.value) {
-    ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
+    notifyBlocked(t('app.playbackReadOnlyCloseFirst'))
     return
   }
   const requestEpoch = ++fuzzingResultRequestEpoch
@@ -9997,10 +9896,8 @@ const openFuzzingRun = async (runId: number) => {
     console.error('Failed to load fuzzing run:', e)
     showFuzzingResultDialog.value = false
     fuzzingError.value = null
-    ElMessage.error({
-      message: extractApiErrorMessage(e, t('app.failedToLoadFuzzingRun')),
-      type: 'error'
-    })
+    if (loadingFromDeepLink) reportUnusableDeepLink()
+    else notifyError(extractApiErrorMessage(e, t('app.failedToLoadFuzzingRun')))
   } finally {
     if (requestEpoch === fuzzingResultRequestEpoch) {
       fuzzingResultLoading.value = false
@@ -10012,6 +9909,11 @@ const openFuzzingRun = async (runId: number) => {
   }
 }
 
+/**
+ * Hides the exploration result surface without touching the URL, so it can serve as an
+ * internal transition (opening a finding replay). `dismissFuzzingResult` is the user-facing
+ * close that also clears the deep link.
+ */
 const closeFuzzingResult = () => {
   fuzzingResultRequestEpoch = invalidateFuzzingResultRequests(
     fuzzingResultRequestEpoch,
@@ -10023,24 +9925,23 @@ const closeFuzzingResult = () => {
   fuzzingResultLoading.value = false
 }
 
+const dismissFuzzingResult = () => {
+  closeFuzzingResult()
+  clearRunDeepLink()
+}
+
 const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
   const pendingKey = `fuzzing:${run.id}`
   if (!beginHistoryDelete(pendingKey)) return
   try {
-    await confirmHistoryDeletion(
-      () => ElMessageBox.confirm(
-        t('app.deleteFuzzingRunMessage', { time: formatRunTimestamp(run.completedAt || run.createdAt) }),
-        t('app.deleteFuzzingRunTitle'),
-        {
-          confirmButtonText: t('app.delete'),
-          cancelButtonText: t('app.cancel'),
-          type: 'warning',
-          appendTo: 'body',
-          lockScroll: false
-        }
-      ),
+    if (!await confirmHistoryDeletion(
+      () => confirmDestructive({
+        title: t('app.deleteFuzzingRunTitle'),
+        message: t('app.deleteFuzzingRunMessage', { time: formatRunTimestamp(run.completedAt || run.createdAt) }),
+        confirmText: t('app.delete')
+      }),
       historyDetailRequests.invalidate
-    )
+    )) return
     await fuzzingApi.deleteRun(run.id)
     if (boardLifecycleDisposed) return
     fuzzingHistoryRequests.invalidate()
@@ -10051,24 +9952,20 @@ const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
     if (boardLifecycleDisposed) return
     if (fuzzingResult.value?.id === run.id) closeFuzzingResult()
     if (!refreshed) {
-      ElMessage.warning({ message: t('app.fuzzingRunDeletedRefreshPending'), type: 'warning' })
+      notifyBlocked(t('app.fuzzingRunDeletedRefreshPending'))
       return
     }
-    ElMessage.success({ message: t('app.fuzzingRunDeleted'), type: 'success' })
+    notifySuccess(t('app.fuzzingRunDeleted'))
   } catch (e: any) {
-    if (e === 'cancel' || e === 'close') return
     if (boardLifecycleDisposed) return
     console.error('Failed to delete fuzzing run:', e)
     const refreshed = await loadFuzzingRuns(false)
     if (boardLifecycleDisposed) return
     if (refreshed && !fuzzingRuns.value.some(item => item.id === run.id)) {
-      ElMessage.warning({ message: t('app.fuzzingDeleteOutcomeRefreshed'), type: 'warning' })
+      notifyBlocked(t('app.fuzzingDeleteOutcomeRefreshed'))
       return
     }
-    ElMessage.error({
-      message: t('app.failedToDeleteFuzzingRun'),
-      type: 'error'
-    })
+    notifyError(t('app.failedToDeleteFuzzingRun'))
   } finally {
     finishHistoryDelete(pendingKey)
   }
@@ -10087,7 +9984,7 @@ const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) =>
     }
     const finding = resolveFuzzingRunFinding(resolvedRun, findingId)
     if (!finding.states.length) {
-      ElMessage.warning({ message: t('app.fuzzFindingHasNoStates'), type: 'warning' })
+      notifyBlocked(t('app.fuzzFindingHasNoStates'))
       return
     }
 
@@ -10113,10 +10010,7 @@ const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) =>
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load fuzzing finding:', e)
-    ElMessage.error({
-      message: extractApiErrorMessage(e, t('app.failedToLoadFuzzingFinding')),
-      type: 'error'
-    })
+    notifyError(extractApiErrorMessage(e, t('app.failedToLoadFuzzingFinding')))
   } finally {
     historyDetailRequests.finish(requestToken)
   }
@@ -10152,7 +10046,7 @@ const openFormalVerificationForFuzzFinding = (finding: FuzzingFindingSummary | F
     boardDrifted: sourceRun ? fuzzRunHasBoardDrift(sourceRun) : true
   }
   closeHistoryPanel()
-  closeFuzzingResult()
+  dismissFuzzingResult()
   showSimulationPanel.value = false
   showFuzzingPanel.value = false
   showVerificationPanel.value = true
@@ -10166,7 +10060,7 @@ const openFormalVerificationForCurrentBoard = () => {
     boardDrifted: fuzzingResultBoardDrifted.value
   } : null
   closeHistoryPanel()
-  closeFuzzingResult()
+  dismissFuzzingResult()
   showSimulationPanel.value = false
   showFuzzingPanel.value = false
   showVerificationPanel.value = true
@@ -10202,7 +10096,7 @@ const reuseFuzzingSettings = () => {
     : unavailableTargetCount > 0
       ? t('app.fuzzSettingsReusedWithMissingTargets', { count: unavailableTargetCount })
       : t('app.fuzzSettingsReused')
-  closeFuzzingResult()
+  dismissFuzzingResult()
   closeHistoryPanel()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
@@ -10240,24 +10134,21 @@ const notifyTaskCancellationResult = (
     : kind === 'fuzzing' ? 'app.fuzzTaskName' : 'app.simulationTaskName')
   switch (result.cancellationOutcome) {
     case 'ACCEPTED':
-      ElMessage.info({
-        message: t(result.executionMayStillBeStopping
+      notifyInfo(t(result.executionMayStillBeStopping
           ? 'app.taskCancellationAcceptedStopping'
-          : 'app.taskCancellationAccepted', { task }),
-        type: 'info'
-      })
+          : 'app.taskCancellationAccepted', { task }))
       break
     case 'ALREADY_CANCELLED':
-      ElMessage.info({ message: t('app.taskAlreadyCancelled', { task }), type: 'info' })
+      notifyInfo(t('app.taskAlreadyCancelled', { task }))
       break
     case 'ALREADY_COMPLETED':
-      ElMessage.warning({ message: t('app.taskAlreadyCompleted', { task }), type: 'warning' })
+      notifyBlocked(t('app.taskAlreadyCompleted', { task }))
       break
     case 'ALREADY_FAILED':
-      ElMessage.warning({ message: t('app.taskAlreadyFailed', { task }), type: 'warning' })
+      notifyBlocked(t('app.taskAlreadyFailed', { task }))
       break
     default:
-      ElMessage.warning({ message: t('app.taskCancellationNotAccepted', { task }), type: 'warning' })
+      notifyBlocked(t('app.taskCancellationNotAccepted', { task }))
   }
 }
 
@@ -10267,6 +10158,11 @@ const closeSimulationPanel = () => {
   showSimulationPanel.value = false
 }
 
+// These are non-modal tool panels: the canvas behind them stays live and focus is
+// deliberately not trapped, so they render as `role="region"` rather than
+// `role="dialog"`. `useModalAccessibility` is reused here only for Escape-to-close and
+// focus restoration. Anything that claims `role="dialog"` + `aria-modal="true"` must
+// keep `trapFocus` on.
 const floatingPanelAccessibility = { trapFocus: false } as const
 const recommendationPanelAccessibility = {
   trapFocus: false,
@@ -10335,7 +10231,7 @@ const fixViolatedSpecId = ref<string>('')
 // 打开 Fix 弹窗
 const openFixDialog = (traceId: number, violatedSpecId: string) => {
   if (fixResultDialogRef.value?.canOpenTrace?.(traceId) === false) {
-    ElMessage.warning(t('app.fixTraceSwitchBlockedByActiveSearch'))
+    notifyBlocked(t('app.fixTraceSwitchBlockedByActiveSearch'))
     showFixDialog.value = true
     return
   }
@@ -10374,7 +10270,7 @@ const cancelAsyncVerification = async () => {
     if (boardLifecycleDisposed) return
     verificationCancelRequested.value = false
     const msg = localizedErrorMessage(error, t('app.failedToCancelVerificationTask'), locale.value)
-    ElMessage.error({ message: msg, type: 'error' })
+    notifyError(msg)
   } finally {
     cancellingVerificationTask.value = false
   }
@@ -10400,7 +10296,7 @@ const cancelAsyncSimulation = async () => {
     if (boardLifecycleDisposed) return
     simulationCancelRequested.value = false
     const msg = localizedErrorMessage(error, t('app.failedToCancelSimulationTask'), locale.value)
-    ElMessage.error({ message: msg, type: 'error' })
+    notifyError(msg)
   } finally {
     cancellingSimulationTask.value = false
   }
@@ -10423,10 +10319,7 @@ const cancelAsyncFuzzing = async () => {
     if (boardLifecycleDisposed) return
     fuzzingCancelRequested.value = false
     console.error('Failed to cancel fuzzing task:', error)
-    ElMessage.error({
-      message: t('app.failedToCancelFuzzingTask'),
-      type: 'error'
-    })
+    notifyError(t('app.failedToCancelFuzzingTask'))
   } finally {
     cancellingFuzzingTask.value = false
   }
@@ -10442,7 +10335,7 @@ const handleFixApplied = (result: FixApplyResult) => {
 
     rules.value = result.rules
     syncRuleDerivedEdges()
-    ElMessage.warning(t(result.verificationRechecked
+    notifyBlocked(t(result.verificationRechecked
       ? 'app.fixAppliedRefreshFallbackRechecked'
       : 'app.fixAppliedRefreshFallbackSignedEvidence'))
     return false
@@ -10461,7 +10354,7 @@ const handleFixOutcomeUncertain = async () => {
   pendingFixRefreshPromise = refreshPromise
   try {
     const refreshed = await refreshPromise
-    ElMessage.warning(refreshed
+    notifyBlocked(refreshed
       ? t('app.fixApplyOutcomeUnconfirmedAfterRefresh')
       : t('app.fixApplyOutcomeUnknownRefreshFailed'))
   } finally {
@@ -10480,11 +10373,11 @@ const waitForPendingFixRefresh = async () => {
 // 面板互斥切换函数
 const togglePanel = (panel: 'simulation' | 'fuzzing' | 'verification') => {
   if (isModelPlaybackActive.value) {
-    ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
+    notifyBlocked(t('app.playbackReadOnlyCloseFirst'))
     return
   }
   if (isAnyRecommendationRunning()) {
-    ElMessage.warning({ message: t('app.recommendationGenerationInProgress'), type: 'warning' })
+    notifyBlocked(t('app.recommendationGenerationInProgress'))
     return
   }
 
@@ -10533,11 +10426,11 @@ const openVerificationFromActionDock = () => {
 
 const openFuzzingFromActionDock = () => {
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return
   }
   // Dismiss earlier scene/task notices before placing a tool panel beneath them.
-  ElMessage.closeAll()
+  dismissAllNotifications()
   if (!isFuzzing.value) fuzzingWatchedTask.value = null
   fuzzingSettingsNotice.value = null
   togglePanel('fuzzing')
@@ -10631,6 +10524,78 @@ const isAnimationLocked = computed(() =>
   traceAnimationState.value.visible || simulationAnimationState.value.visible
 )
 const isModelPlaybackActive = isAnimationLocked
+
+/* ===== Board edit undo/redo =====
+ * Reverses a persisted *board edit* (rule/specification create or delete). Deliberately separate
+ * from every other "go back" affordance on this screen: browser Back/Forward and deep links move
+ * between run surfaces, dialog close/dismiss hides a surface, and run cancellation stops a job —
+ * none of those touch the edit journal, and undo does not touch them.
+ *
+ * The server journal is the authority, so this holds no local snapshot stack; each result carries
+ * the authoritative collections, which are applied here in one place.
+ * Registered after the playback refs exist, matching the pattern used just below. */
+// A modal covering the board also blocks undo. The accelerator is on `window` and the modal's own
+// buttons own no native undo, so without this Ctrl+Z pressed inside an open dialog silently mutated
+// the board behind it while the dialog kept showing a draft built from the pre-undo collections.
+const isBoardUndoBlocked = () => isModelPlaybackActive.value
+  || isSceneReplacementInProgress.value
+  || !isBoardDataReady.value
+  || openModalDepth.value > 0
+
+const {
+  canUndo: canUndoBoardEdit,
+  canRedo: canRedoBoardEdit,
+  isApplying: isApplyingBoardEditUndo,
+  loadAvailability: loadBoardUndoAvailability,
+  syncAvailability: syncBoardUndoAvailability,
+  undo: undoBoardEdit,
+  redo: redoBoardEdit
+} = useBoardUndo({
+  // An undo *is* a semantic board mutation, so it owes the same follow-ups as any other and goes
+  // through the same owner. `canUndo`/`canRedo` come from the response, not from a local guess.
+  applyResult: result => commitSemanticScene({
+    rules: result.rules,
+    specs: result.specs,
+    availability: result
+  }),
+  // Serializes with every other board mutation, and re-checks admission when the slot is reached:
+  // `isBlocked()` is evaluated once before queueing, so without this a undo queued behind a slow
+  // delete could land after playback started.
+  submit: work => enqueueBoardMutation(work, {
+    admissionGuard: () => !isBoardUndoBlocked(),
+    trackSemanticChange: false
+  }),
+  // An undo *is* a semantic scene change, so it owes recommendation invalidation too.
+  // `commitSemanticScene` owns staleness but not this — the mutation queue's own
+  // `onSemanticChange` is skipped by `trackSemanticChange: false`.
+  onApplied: () => invalidateRecommendationsForSceneChange({ notify: true }),
+  isIgnorableError: error => isPollingAbortedError(error)
+    || error instanceof BoardMutationAdmissionCancelledError,
+  isBlocked: isBoardUndoBlocked,
+  report: (reasonCode, direction, error) => {
+    if (reasonCode === 'blocked') {
+      notifyBlocked(t('app.boardUndoBlocked'))
+      return
+    }
+    if (reasonCode === 'nothing') {
+      notifyInfo(direction === 'undo'
+        ? t('app.boardUndoNothingToApply')
+        : t('app.boardUndoRedoNothingToApply'))
+      return
+    }
+    if (reasonCode === 'conflict') {
+      // The board is unchanged; reload so the user sees the state that actually won.
+      notifyBlocked(t('app.boardUndoConflict'))
+      void refreshBoardSnapshot()
+      return
+    }
+    console.error('Board edit undo failed:', error)
+    notifyError(t('app.boardUndoFailed'))
+  }
+})
+
+// Bind the late reference the assistant refresh helpers above call, now that it exists.
+reloadUndoAvailability = loadBoardUndoAvailability
 
 // Register this after playback refs exist. A watcher evaluates its computed source
 // immediately while collecting dependencies, so registering it earlier would hit the
@@ -10778,25 +10743,25 @@ const isLiveBoardEditorVisible = computed(() =>
 
 const ensureLiveBoardEditorClosedForPlayback = (): boolean => {
   if (chatStore.state.streaming) {
-    ElMessage.warning({ message: t('app.finishAssistantBeforePlayback'), type: 'warning' })
+    notifyBlocked(t('app.finishAssistantBeforePlayback'))
     return false
   }
   if (!isLiveBoardEditorVisible.value) return true
-  ElMessage.warning({ message: t('app.closeLiveEditorBeforePlayback'), type: 'warning' })
+  notifyBlocked(t('app.closeLiveEditorBeforePlayback'))
   return false
 }
 
 const notifyAutomaticPlaybackDeferred = () => {
-  ElMessage.info({ message: t('app.simulationPlaybackDeferredForEditor'), type: 'info' })
+  notifyInfo(t('app.simulationPlaybackDeferredForEditor'))
 }
 
 const ensurePlaybackClosedForMutation = (): boolean => {
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return false
   }
   if (!isModelPlaybackActive.value) return true
-  ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
+  notifyBlocked(t('app.playbackReadOnlyCloseFirst'))
   return false
 }
 
@@ -10937,12 +10902,12 @@ const traceEnvironmentVariableTitle = (name: string, value: string) => {
 const selectAndPlayTrace = (traceIndex: number) => {
   // 互斥检查：如果模拟动画正在显示，则不允许打开反例路径动画
   if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeCurrentSimulationFirst'))
     return
   }
   
   if (isAnyRecommendationPanelVisible()) {
-    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeRecommendationPanelsFirst'))
     return
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
@@ -10950,7 +10915,7 @@ const selectAndPlayTrace = (traceIndex: number) => {
   // changed, the trace no longer describes this model, so refuse instead of showing a
   // walkthrough that contradicts the live scene.
   if (verificationResultStale.value) {
-    ElMessage.warning({ message: t('app.verificationResultStaleReverify'), type: 'warning' })
+    notifyBlocked(t('app.verificationResultStaleReverify'))
     return
   }
 
@@ -10979,12 +10944,18 @@ const selectAndPlayTrace = (traceIndex: number) => {
 }
 
 // 关闭反例路径动画
+/**
+ * Closes a replay. Both call sites are the user's own close button, so this leaves the
+ * addressed artifact entirely and the deep link goes with it — otherwise the URL would still
+ * name the run and the sync watcher would reopen its result surface.
+ */
 const closeTraceAnimation = () => {
   stopTraceAnimation()
   traceAnimationState.value.visible = false
   highlightedTrace.value = null
   activeFuzzingFinding.value = null
   resetPlaybackChanges()
+  clearRunDeepLink()
 }
 
 // 选择违规规约
@@ -11131,19 +11102,19 @@ const handleHighlightTrace = (trace: any) => {
 const openSimulationTimeline = () => {
   // 互斥检查：如果反例路径动画正在显示，则不允许打开模拟动画
   if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeCounterexampleFirst'))
     return
   }
   
   if (isAnyRecommendationPanelVisible()) {
-    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
+    notifyBlocked(t('app.closeRecommendationPanelsFirst'))
     return
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
   // Replay animates these states over the CURRENT canvas. Once the board has been reconciled,
   // the trace no longer describes this model, so refuse rather than show a contradicting walkthrough.
   if (simulationResultStale.value) {
-    ElMessage.warning({ message: t('app.simulationResultStaleRerun'), type: 'warning' })
+    notifyBlocked(t('app.simulationResultStaleRerun'))
     return
   }
 
@@ -11175,6 +11146,10 @@ const closeSimulationTimeline = () => {
   simulationAnimationState.value.visible = false
   highlightedTrace.value = null
   resetPlaybackChanges()
+  // For `run=simulation:<id>` the timeline *is* the addressed surface, so the URL must stop naming
+  // it. Otherwise a refresh or a shared link reopens the playback the user deliberately closed, and
+  // the board re-enters read-only playback mode.
+  clearRunDeepLink()
 }
 
 // 处理 SimulationTimeline 组件的关闭事件
@@ -11187,29 +11162,29 @@ const handleSimulationTimelineClose = (visible: boolean) => {
 const handleVerify = async (): Promise<boolean> => {
   if (isVerifying.value) return false
   if (!verificationForm.isAsync && synchronousSimulationRunning.value) {
-    ElMessage.warning(t('app.formalOperationBusy'))
+    notifyBlocked(t('app.formalOperationBusy'))
     return false
   }
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return false
   }
   await waitForPendingFixRefresh()
   await waitForPendingBoardMutations()
   if (!ensureBoardDataReady()) return false
   if (nodes.value.length === 0) {
-    ElMessage.warning({ message: t('app.noDevicesToVerify'), type: 'warning' })
+    notifyBlocked(t('app.noDevicesToVerify'))
     return false
   }
   if (specifications.value.length === 0) {
-    ElMessage.warning({ message: t('app.noSpecsToVerify'), type: 'warning' })
+    notifyBlocked(t('app.noSpecsToVerify'))
     return false
   }
   if (!assertRulesHaveTriggers(rules.value)) {
     return false
   }
   if (verificationAttackConfigurationError.value) {
-    ElMessage.error(verificationAttackConfigurationError.value)
+    notifyError(verificationAttackConfigurationError.value)
     return false
   }
   if (verificationForm.attackMode === 'ANY_UP_TO_BUDGET') {
@@ -11270,13 +11245,9 @@ const handleVerify = async (): Promise<boolean> => {
     }, submission)
     verificationResultStale.value = false
     if (['FAILED', 'OUTCOME_UNKNOWN'].includes(result.historyPersistence.status)) {
-      ElMessage.warning({
-        message: result.historyPersistence.status === 'OUTCOME_UNKNOWN'
+      notifyBlocked(result.historyPersistence.status === 'OUTCOME_UNKNOWN'
           ? t('app.verificationHistorySaveOutcomeUnknown')
-          : t('app.verificationHistorySaveFailed'),
-        type: 'warning',
-        duration: 6500
-      })
+          : t('app.verificationHistorySaveFailed'))
       void loadVerificationRuns(false)
     }
     notifyVerificationOutcome(verificationResult.value)
@@ -11293,11 +11264,11 @@ const handleVerify = async (): Promise<boolean> => {
         || extractApiErrorMessage(error, t('app.verificationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       verificationError.value = null
-      ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
+      notifyInfo(t('app.verificationCancelled'))
     } else {
       console.error('Verification failed:', error)
       verificationError.value = message
-      ElMessage.error({ message: verificationError.value || t('app.verificationFailed'), type: 'error' })
+      notifyError(verificationError.value || t('app.verificationFailed'))
     }
     return false
   } finally {
@@ -11318,45 +11289,42 @@ const runVerification = async () => {
 const runFuzzing = async (): Promise<boolean> => {
   if (isFuzzing.value) return false
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return false
   }
   await waitForPendingFixRefresh()
   await waitForPendingBoardMutations()
   if (!ensureBoardDataReady(['templates', 'nodes', 'environment', 'rules', 'specs'])) return false
   if (nodes.value.length === 0) {
-    ElMessage.warning({ message: t('app.noDevicesToFuzz'), type: 'warning' })
+    notifyBlocked(t('app.noDevicesToFuzz'))
     return false
   }
   if (specifications.value.length === 0) {
-    ElMessage.warning({ message: t('app.noSpecsToFuzz'), type: 'warning' })
+    notifyBlocked(t('app.noSpecsToFuzz'))
     return false
   }
   if (!assertRulesHaveTriggers(rules.value)) return false
 
   if (!fuzzingWorkloadReady.value) {
-    if (!fuzzingWorkloadPreviewLoading.value && validFuzzingBudgetFields()) {
+    if (!fuzzingWorkloadPreviewLoading.value && hasValidFuzzingBudget(fuzzingForm)) {
       scheduleFuzzingWorkloadPreview()
     }
-    ElMessage.warning({
-      message: fuzzingWorkloadPreviewError.value || t('app.fuzzWorkloadRequired'),
-      type: 'warning'
-    })
+    notifyBlocked(fuzzingWorkloadPreviewError.value || t('app.fuzzWorkloadRequired'))
     return false
   }
 
   if (fuzzingContentCommandUnsupported.value) {
-    ElMessage.warning({ message: t('app.fuzzContentCommandPreflightBlocked'), type: 'warning' })
+    notifyBlocked(t('app.fuzzContentCommandPreflightBlocked'))
     return false
   }
 
   const eligibleSpecIds = knownFuzzEligibleSpecifications.value.map(spec => spec.id)
   if (eligibleSpecIds.length === 0) {
-    ElMessage.warning({ message: t('app.noEligibleSpecsToFuzz'), type: 'warning' })
+    notifyBlocked(t('app.noEligibleSpecsToFuzz'))
     return false
   }
   if (effectiveFuzzingConfigurationError.value) {
-    ElMessage.warning({ message: effectiveFuzzingConfigurationError.value, type: 'warning' })
+    notifyBlocked(effectiveFuzzingConfigurationError.value)
     return false
   }
   const requestTargetSpecIds = fuzzingForm.targetSelectionMode === 'EXPLICIT'
@@ -11375,7 +11343,7 @@ const runFuzzing = async (): Promise<boolean> => {
   let request: FuzzingRequest
   if (fuzzingForm.explorationMode === 'PAPER_COMPATIBLE') {
     if (!isValidFuzzPaperDomainFingerprint(paperDomainFingerprint)) {
-      ElMessage.warning({ message: t('app.fuzzPaperDomainRequired'), type: 'warning' })
+      notifyBlocked(t('app.fuzzPaperDomainRequired'))
       return false
     }
     request = {
@@ -11427,9 +11395,9 @@ const runFuzzing = async (): Promise<boolean> => {
         createdAt: run.completedAt
       })
       if (notificationShown && run.outcome === 'BUDGET_EXHAUSTED') {
-        ElMessage.info({ message: fuzzingCompletionMessage(run), type: 'info', duration: 6500 })
+        notifyInfo(fuzzingCompletionMessage(run))
       } else if (notificationShown) {
-        ElMessage.warning({ message: fuzzingCompletionMessage(run), type: 'warning', duration: 6500 })
+        notifyBlocked(fuzzingCompletionMessage(run))
       }
     }
     return true
@@ -11438,12 +11406,12 @@ const runFuzzing = async (): Promise<boolean> => {
     if (isAsyncTaskCancelledError(error)) {
       if (submittedTaskId) untrackFuzzTask(submittedTaskId)
       fuzzingError.value = null
-      ElMessage.info({ message: t('app.fuzzSearchCancelled'), type: 'info' })
+      notifyInfo(t('app.fuzzSearchCancelled'))
     } else if (submittedTaskId && isFuzzTaskRecoveryPendingError(error)) {
       fuzzingError.value = null
       fuzzingSettingsNotice.value = t('app.fuzzResultRecoveryPending')
       if (!showFuzzingPanel.value) {
-        ElMessage.info({ message: fuzzingSettingsNotice.value, type: 'info', duration: 6500 })
+        notifyInfo(fuzzingSettingsNotice.value)
       }
     } else if (submittedTaskId && isFuzzCompletedResultUnavailableError(error)) {
       const unavailableMessage = error.message || t('app.failedToLoadFuzzingRun')
@@ -11455,7 +11423,7 @@ const runFuzzing = async (): Promise<boolean> => {
         createdAt: new Date().toISOString()
       })
       if (!showFuzzingPanel.value) {
-        ElMessage.error({ message: unavailableMessage, type: 'error' })
+        notifyError(unavailableMessage)
       }
     } else {
       console.error('Fuzz search failed:', error)
@@ -11473,7 +11441,7 @@ const runFuzzing = async (): Promise<boolean> => {
         if (boardRefreshed && showFuzzingPanel.value && validPaperPathLength()) {
           schedulePaperDomainPreview()
         } else {
-          ElMessage.warning({ message: fuzzingError.value, type: 'warning' })
+          notifyBlocked(fuzzingError.value)
         }
       } else {
         fuzzingError.value = fuzzTaskQuotaMessage(error)
@@ -11485,11 +11453,11 @@ const runFuzzing = async (): Promise<boolean> => {
           kind: 'FAILED',
           createdAt: new Date().toISOString()
         })
-        ElMessage.error({ message: fuzzingError.value, type: 'error' })
+        notifyError(fuzzingError.value)
       } else if (submittedTaskId) {
         untrackFuzzTask(submittedTaskId)
       } else if (!showFuzzingPanel.value && !stalePaperDomain) {
-        ElMessage.error({ message: fuzzingError.value, type: 'error' })
+        notifyError(fuzzingError.value)
       }
     }
     return false
@@ -11522,18 +11490,18 @@ const handleSimulate = async (simConfig: {
 }): Promise<boolean> => {
   if (isSimulating.value) return false
   if (!simConfig.isAsync && synchronousVerificationRunning.value) {
-    ElMessage.warning(t('app.formalOperationBusy'))
+    notifyBlocked(t('app.formalOperationBusy'))
     return false
   }
   if (isSceneReplacementInProgress.value) {
-    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    notifyBlocked(t('app.sceneReplacementInProgress'))
     return false
   }
   await waitForPendingFixRefresh()
   await waitForPendingBoardMutations()
   if (!ensureBoardDataReady(['templates', 'nodes', 'environment', 'rules'])) return false
   if (nodes.value.length === 0) {
-    ElMessage.warning({ message: t('app.noDevicesToSimulate'), type: 'warning' })
+    notifyBlocked(t('app.noDevicesToSimulate'))
     return false
   }
   if (!assertRulesHaveTriggers(rules.value)) {
@@ -11544,12 +11512,12 @@ const handleSimulate = async (simConfig: {
   try {
     requestSteps = validateSimulationSteps(normalizedSimConfig.steps)
   } catch (error: any) {
-    ElMessage.error(error?.message || t('app.simulationFailed'))
+    notifyError(error?.message || t('app.simulationFailed'))
     return false
   }
   const simulationScenarioError = attackConfigurationError(normalizedSimConfig, false)
   if (simulationScenarioError) {
-    ElMessage.error(simulationScenarioError)
+    notifyError(simulationScenarioError)
     return false
   }
 
@@ -11625,13 +11593,9 @@ const handleSimulate = async (simConfig: {
     }
 
     if (['FAILED', 'OUTCOME_UNKNOWN'].includes(result.historyPersistence?.status)) {
-      ElMessage.warning({
-        message: result.historyPersistence.status === 'OUTCOME_UNKNOWN'
+      notifyBlocked(result.historyPersistence.status === 'OUTCOME_UNKNOWN'
           ? t('app.simulationHistorySaveOutcomeUnknown')
-          : t('app.simulationHistorySaveFailed'),
-        type: 'warning',
-        duration: 6500
-      })
+          : t('app.simulationHistorySaveFailed'))
       void loadSimulationRuns(false)
     }
     
@@ -11691,7 +11655,7 @@ const handleSimulate = async (simConfig: {
     } else {
       const failureReason = t('app.simulationCompletedNoStates')
       simulationError.value = failureReason
-      ElMessage.error({ message: failureReason, type: 'error' })
+      notifyError(failureReason)
       return false
     }
 
@@ -11706,11 +11670,11 @@ const handleSimulate = async (simConfig: {
         || extractApiErrorMessage(error, t('app.simulationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       simulationError.value = null
-      ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
+      notifyInfo(t('app.simulationCancelled'))
     } else {
       console.error('Simulation failed:', error)
       simulationError.value = message
-      ElMessage.error({ message: simulationError.value || t('app.simulationFailed'), type: 'error' })
+      notifyError(simulationError.value || t('app.simulationFailed'))
     }
     return false
   } finally {
@@ -11724,7 +11688,7 @@ const handleSimulate = async (simConfig: {
 // Open the saved run summary and technical details without replacing the primary timeline view.
 const openSimulationRunDetails = () => {
   if (!lastSimulationResult.value) {
-    ElMessage.info({ message: t('app.noSimulationRunDetailsAvailable'), type: 'info' })
+    notifyInfo(t('app.noSimulationRunDetailsAvailable'))
     return
   }
   simulationResult.value = lastSimulationResult.value
@@ -11997,37 +11961,239 @@ const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
 
 // ==== Results Dialog ====
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
+/**
+ * Closes the verification result surface. Also used as an internal transition (opening a
+ * counterexample replay hides the dialog), so it must not touch the URL — otherwise replaying
+ * a trace would strip the very params describing it. `dismissResultDialog` is the user-facing
+ * close that clears the deep link.
+ */
 const closeResultDialog = () => {
   verificationResult.value = null
   verificationResultStale.value = false
   verificationError.value = null
+}
+
+const dismissResultDialog = () => {
+  closeResultDialog()
+  clearRunDeepLink()
 }
 const {
   setDialogRef: setVerificationResultDialogRef,
   handleModalKeydown: handleVerificationResultDialogKeydown
 } = useModalAccessibility(
   showResultDialog,
-  closeResultDialog,
+  dismissResultDialog,
   () => document.querySelector<HTMLElement>('[data-testid="open-verification-panel"]')
 )
 const isSimulationResultDialogOpen = computed(() => !!simulationResult.value || !!simulationError.value)
+// Closing the details dialog hides a surface; it does not produce a fresh result, so the stale flag
+// must survive it. Only a new run (or a wholesale board reload) clears it.
 const closeSimulationResultDialog = () => {
   simulationResult.value = null
-  simulationResultStale.value = false
   simulationError.value = null
+}
+
+const dismissSimulationResultDialog = () => {
+  closeSimulationResultDialog()
+  clearRunDeepLink()
 }
 const {
   setDialogRef: setSimulationResultDialogRef,
   handleModalKeydown: handleSimulationResultDialogKeydown
 } = useModalAccessibility(
   isSimulationResultDialogOpen,
-  closeSimulationResultDialog,
+  dismissSimulationResultDialog,
   () => document.querySelector<HTMLElement>('[data-testid="open-simulation-panel"]')
 )
+/* ===== Deep-linkable run surfaces =====
+ * The URL is the single authority for "which run result is open"; board state mirrors it
+ * one-way. Openers navigate instead of assigning state directly, so back/forward, refresh,
+ * and a pasted link all take the same code path. Panel layout and canvas transform stay out
+ * of the URL on purpose — they are already persisted server-side per user.
+ * Contract: docs/guides/frontend-ui-conventions.md */
+const deepLinkTarget = computed(() => parseBoardRunTarget(route.query))
+const staleDeepLink = ref(false)
+
+/** The target currently reflected on screen, so the watcher can skip redundant loads. */
+let appliedDeepLinkTarget: BoardRunTarget | null = null
+/**
+ * True while a run is being loaded because the URL asked for it. A failure then means the
+ * link is unusable (banner + strip), whereas the same failure from a history click is an
+ * ordinary transient error (toast).
+ */
+let loadingFromDeepLink = false
+
+/**
+ * Navigation we initiate ourselves must not be re-applied by the target watcher (a redundant
+ * refetch) and must not clear a stale-link notice this navigation was made to report. So the
+ * URL is written first and the surface is loaded here, with `appliedDeepLinkTarget` recording
+ * what is on screen. Recording the target is deterministic, unlike a boolean whose lifetime
+ * depends on when the watcher happens to flush.
+ */
+const navigateToRunTarget = async (target: BoardRunTarget | null, mode: 'push' | 'replace') => {
+  if (isSameBoardRunTarget(target, deepLinkTarget.value)) return
+  appliedDeepLinkTarget = target
+  const query = applyBoardRunTarget(route.query, target)
+  await (mode === 'push' ? router.push({ query }) : router.replace({ query }))
+}
+
+/**
+ * Opening a run is a `push` so Back closes it; clearing or correcting one is a `replace` so
+ * dismissing a surface does not leave a dead history entry the user must step over.
+ */
+const openRunTarget = async (target: BoardRunTarget) => {
+  staleDeepLink.value = false
+  await navigateToRunTarget(target, 'push')
+  await applyDeepLinkTarget(target)
+}
+
+const clearRunTarget = () => navigateToRunTarget(null, 'replace')
+
+/**
+ * Marks "no run is open" immediately, then clears the URL. The synchronous part matters: a
+ * caller may dismiss one surface and open another in the same tick (reuse exploration
+ * settings), and the pending navigation must not let the sync watcher reopen what the user
+ * just left.
+ */
+clearRunDeepLink = () => {
+  appliedDeepLinkTarget = null
+  void clearRunTarget()
+}
+
+
 const isResultSurfaceVisible = computed(() =>
   showResultDialog.value || !!simulationResult.value || !!simulationError.value
   || showFuzzingResultDialog.value
 )
+
+/**
+ * Applies the URL target to the board. Loaders already guard against races and stale
+ * responses, so this only decides *what* to open and reports an unusable link once.
+ */
+const applyDeepLinkTarget = async (target: BoardRunTarget | null) => {
+  appliedDeepLinkTarget = target
+  if (!target) {
+    closeResultSurfaces()
+    return
+  }
+
+  loadingFromDeepLink = true
+  try {
+    await loadDeepLinkTarget(target)
+  } finally {
+    loadingFromDeepLink = false
+  }
+}
+
+const loadDeepLinkTarget = async (target: BoardRunTarget) => {
+  if (target.kind === 'verification') {
+    await openVerificationRun(target.runId)
+    // The trace list only exists once its run is loaded, so replay is a second step.
+    if (target.traceId !== undefined && verificationResult.value) {
+      await selectAndPlayVerificationTrace(target.traceId)
+    }
+    return
+  }
+  if (target.kind === 'simulation') {
+    await selectAndPlaySimulationTrace(target.runId)
+    return
+  }
+  await openFuzzingRun(target.runId)
+  if (target.findingId !== undefined && fuzzingResult.value) {
+    await selectAndPlayFuzzingFinding(target.findingId, target.runId)
+  }
+}
+
+/**
+ * Reconciles the board with the URL. Runs on every URL change we did not initiate
+ * (Back/Forward, a link pasted into a live tab) and once the snapshot becomes ready, because
+ * the run loaders need board data and a cold load arrives before it exists. Watching readiness
+ * also covers an account switch, which reloads the snapshot underneath an unchanged URL.
+ */
+const syncBoardToDeepLink = async () => {
+  if (!isBoardDataReady.value) return
+
+  // Checked before the no-change short-circuit: malformed params parse to `null`, which
+  // compares equal to "nothing open", so the link would otherwise be silently ignored. A
+  // syntactically dead link needs no explanation beyond a clean board — only a well-formed
+  // link to a run we cannot load warrants the banner.
+  if (hasUnusableBoardRunParams(route.query)) {
+    appliedDeepLinkTarget = null
+    // Stripped directly: `navigateToRunTarget(null)` would see an already-`null` target and
+    // decide there is nothing to do, leaving the dead params in the URL.
+    void router.replace({ query: applyBoardRunTarget(route.query, null) })
+    return
+  }
+
+  const target = deepLinkTarget.value
+  if (isSameBoardRunTarget(target, appliedDeepLinkTarget)) return
+  staleDeepLink.value = false
+  await applyDeepLinkTarget(target)
+}
+
+watch([() => route.query, isBoardDataReady], syncBoardToDeepLink, { immediate: true })
+
+// Undo history is server state, so read it once the board is loaded rather than assuming a fresh
+// page has none: the account may have reversible edits from an earlier session or another tab.
+watch(isBoardDataReady, ready => {
+  if (ready) void loadBoardUndoAvailability()
+}, { immediate: true })
+
+/**
+ * A link can be malformed, or name a run that was deleted or belongs to another account.
+ * Both degrade to the plain board with one persistent, dismissible explanation — never a
+ * fabricated empty result — and the dead params are stripped so a refresh stays clean.
+ */
+const reportUnusableDeepLink = () => {
+  staleDeepLink.value = true
+  appliedDeepLinkTarget = null
+  // Strip directly rather than via `navigateToRunTarget`, which no-ops when the parsed
+  // target is already `null` (a well-formed link whose run failed to load, or dead params).
+  void router.replace({ query: applyBoardRunTarget(route.query, null) })
+}
+
+const dismissStaleDeepLink = () => { staleDeepLink.value = false }
+
+/**
+ * History-panel entry points. They navigate; the deep-link watcher performs the load, so a
+ * click, a refresh, and a pasted link cannot diverge.
+ *
+ * A verification trace is addressed by its own run, which the panel knows from the row it
+ * was clicked on. `runIdForOpenTrace` resolves it from already-loaded state so opening a
+ * trace never needs a separate lookup.
+ */
+const runIdForOpenTrace = (traceId: number): number | null => {
+  const openRunId = verificationResult.value?.historyPersistence?.runId
+  if (openRunId && verificationResult.value?.traces?.some(trace => trace.id === traceId)) {
+    return openRunId
+  }
+  for (const run of verificationRuns.value) {
+    if (run.counterexamples?.some(trace => trace.id === traceId)) return run.id
+  }
+  return null
+}
+
+const openVerificationRunFromHistory = (runId: number) =>
+  openRunTarget({ kind: 'verification', runId })
+
+const openVerificationTraceFromHistory = (traceId: number) => {
+  const runId = runIdForOpenTrace(traceId)
+  // Without an owning run the trace is not addressable; fall back to the direct load rather
+  // than writing a URL that cannot be reopened.
+  if (runId === null) return selectAndPlayVerificationTrace(traceId)
+  return openRunTarget({ kind: 'verification', runId, traceId })
+}
+
+const openSimulationRunFromHistory = (runId: number) =>
+  openRunTarget({ kind: 'simulation', runId })
+
+const openFuzzingRunFromHistory = (runId: number) =>
+  openRunTarget({ kind: 'exploration', runId })
+
+const openFuzzingFindingFromHistory = (findingId: number, runId?: number) => {
+  if (runId === undefined) return selectAndPlayFuzzingFinding(findingId)
+  return openRunTarget({ kind: 'exploration', runId, findingId })
+}
 const showCanvasEmptyState = computed(() =>
   isBoardDataReady.value
   && nodes.value.length === 0
@@ -12253,20 +12419,46 @@ const counterexampleTraceHelpText = computed(() => {
     @focusin="handleBoardFocusIn"
   >
     <!-- Navigation Bar - 与首页风格一致 -->
-    <nav class="board-nav-bar">
+    <nav class="board-nav-bar" :aria-label="t('app.title')">
       <div class="nav-content">
-        <button
-          type="button"
-          class="logo-left"
-          :aria-label="t('app.title')"
-          @click="router.push('/board')"
-        >
-          <span class="logo-wordmark">IoT-Verify</span>
-          <span class="logo-short" aria-hidden="true">IoT</span>
-          <sup class="logo-sup">®</sup>
-        </button>
+        <h1 class="board-title">
+          <button
+            type="button"
+            class="logo-left"
+            :aria-label="t('app.title')"
+            @click="router.push('/board')"
+          >
+            <span class="logo-wordmark">IoT-Verify</span>
+            <span class="logo-short" aria-hidden="true">IoT</span>
+            <sup class="logo-sup">®</sup>
+          </button>
+        </h1>
 
         <div class="nav-actions">
+          <!-- Board edit undo/redo. Availability comes from the server journal, so these are
+               disabled until it reports reversible history rather than after any local action. -->
+          <button
+            type="button"
+            class="nav-action-btn board-edit-history-btn"
+            data-testid="board-undo"
+            :aria-label="t('app.boardUndo')"
+            :title="t('app.boardUndo')"
+            :disabled="!canUndoBoardEdit || isApplyingBoardEditUndo"
+            @click="undoBoardEdit"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">undo</span>
+          </button>
+          <button
+            type="button"
+            class="nav-action-btn board-edit-history-btn"
+            data-testid="board-redo"
+            :aria-label="t('app.boardRedo')"
+            :title="t('app.boardRedo')"
+            :disabled="!canRedoBoardEdit || isApplyingBoardEditUndo"
+            @click="redoBoardEdit"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">redo</span>
+          </button>
           <ThemeToggle :tone="boardHeaderTone" compact />
           <LanguageToggle :tone="boardHeaderTone" compact />
           <input
@@ -12389,7 +12581,7 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="!isBoardDataReady && failedBoardDataKeys.length === 0"
-      class="fixed inset-x-0 top-14 z-[2200] flex h-9 items-center justify-center gap-2 border-b border-teal-200 bg-teal-50 text-xs font-semibold text-teal-900 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-100"
+      class="fixed inset-x-0 top-14 z-[var(--z-board-banner)] flex h-9 items-center justify-center gap-2 border-b border-teal-200 bg-teal-50 text-xs font-semibold text-teal-900 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-100"
       role="status"
       aria-live="polite"
       data-testid="board-data-loading"
@@ -12400,7 +12592,7 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="failedBoardDataKeys.length > 0"
-      class="pointer-events-none fixed left-1/2 top-16 z-[2300] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 shadow-lg dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 shadow-lg dark:border-red-800 dark:bg-red-950 dark:text-red-100"
       role="alert"
       data-testid="board-data-load-error"
     >
@@ -12417,6 +12609,28 @@ const counterexampleTraceHelpText = computed(() => {
       >
         <span class="material-symbols-outlined text-base" aria-hidden="true">refresh</span>
         {{ t('app.retry') }}
+      </button>
+    </div>
+
+    <!-- A shared link naming a run that is gone or not ours: persistent and dismissible,
+         because a toast disappears before the user can read why the board looks empty. -->
+    <div
+      v-if="staleDeepLink"
+      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-lg dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+      role="alert"
+      data-testid="board-deep-link-unavailable"
+    >
+      <span class="material-symbols-outlined shrink-0" aria-hidden="true">link_off</span>
+      <span class="min-w-0 flex-1 break-words">{{ t('app.deepLinkUnavailable') }}</span>
+      <button
+        type="button"
+        class="pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-md border border-amber-400 p-1.5 hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900"
+        :aria-label="t('app.deepLinkUnavailableDismiss')"
+        :title="t('app.deepLinkUnavailableDismiss')"
+        data-testid="dismiss-deep-link-unavailable"
+        @click="dismissStaleDeepLink"
+      >
+        <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
       </button>
     </div>
 
@@ -12441,7 +12655,7 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="templateInstanceDialogVisible"
-      class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
+      class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
       @click="cancelTemplateInstanceCreate"
       @keydown="handleTemplateInstanceDialogKeydown"
     >
@@ -12797,7 +13011,7 @@ const counterexampleTraceHelpText = computed(() => {
               />
             </svg>
 
-            <div class="absolute inset-0 border-2 border-primary/20 rounded pointer-events-none"></div>
+            <div class="absolute inset-0 border-2 rounded pointer-events-none" :style="{ borderColor: 'color-mix(in srgb, var(--iot-color-accent) 20%, transparent)' }"></div>
 
             <div v-if="canvasMapDots.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-400 dark:text-slate-500 text-xs">
               {{ t('app.noDevicesOnCanvas') }}
@@ -13014,12 +13228,11 @@ const counterexampleTraceHelpText = computed(() => {
                 ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100'
                 : 'bg-blue-700 hover:bg-blue-800'
             ]"
-            :title="isSimulating ? t('app.simulationRunning') : t('app.openSimulationSettings')"
           >
             <span v-if="isSimulating" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">play_circle</span>
             <span class="board-tool-label">{{ t('app.simulationTitle') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">
+            <span class="board-tool-tooltip" aria-hidden="true">
               {{ isSimulating ? t('app.simulationRunning') : (simulationAnimationState.visible ? t('app.simulationRunning') : t('app.openSimulationSettings')) }}
               <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">({{ t('app.active') }})</span>
             </span>
@@ -13043,14 +13256,11 @@ const counterexampleTraceHelpText = computed(() => {
                 ? 'cursor-not-allowed bg-indigo-300 disabled:hover:scale-100'
                 : showFuzzingPanel ? 'bg-indigo-800' : 'bg-indigo-700 hover:bg-indigo-800'
             ]"
-            :title="isSceneReplacementInProgress
-              ? t('app.sceneReplacementInProgress')
-              : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings')"
           >
             <span v-if="isFuzzing" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">radar</span>
             <span class="board-tool-label">{{ t('app.fuzzSearch') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">{{ isSceneReplacementInProgress
+            <span class="board-tool-tooltip" aria-hidden="true">{{ isSceneReplacementInProgress
               ? t('app.sceneReplacementInProgress')
               : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings') }}</span>
           </button>
@@ -13075,12 +13285,11 @@ const counterexampleTraceHelpText = computed(() => {
                 ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100'
                 : 'bg-green-700 hover:bg-green-800'
             ]"
-            :title="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
           >
             <span v-if="isVerifying" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">fact_check</span>
             <span class="board-tool-label">{{ t('app.verification') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">
+            <span class="board-tool-tooltip" aria-hidden="true">
               {{ isVerifying ? t('app.verifying') : t('app.openVerificationSettings') }}
               <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">({{ t('app.active') }})</span>
             </span>
@@ -13115,7 +13324,7 @@ const counterexampleTraceHelpText = computed(() => {
               data-testid="fuzz-unread-badge"
               aria-hidden="true"
             >{{ unreadFuzzNotificationCount > 99 ? '99+' : unreadFuzzNotificationCount }}</span>
-            <span class="board-tool-tooltip" role="tooltip">
+            <span class="board-tool-tooltip" aria-hidden="true">
               {{ unreadFuzzNotificationCount > 0
                 ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
                 : t('app.openRunHistory') }}
@@ -13147,12 +13356,11 @@ const counterexampleTraceHelpText = computed(() => {
                 ? 'bg-teal-300 cursor-not-allowed disabled:hover:scale-100'
                 : 'bg-teal-700 hover:bg-teal-800'
             ]"
-            :title="t('app.openScenarioRecommendations')"
           >
             <span v-if="isRecommendingScenario" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">account_tree</span>
             <span class="board-tool-label">{{ t('app.scenarioTool') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">
+            <span class="board-tool-tooltip" aria-hidden="true">
               {{ t('app.openScenarioRecommendations') }}
             </span>
           </button>
@@ -13176,12 +13384,11 @@ const counterexampleTraceHelpText = computed(() => {
                 ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100'
                 : 'bg-amber-700 hover:bg-amber-800'
             ]"
-            :title="t('app.openRuleRecommendations')"
           >
             <span v-if="isRecommendingRules" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">rule_settings</span>
             <span class="board-tool-label">{{ t('app.rulesTool') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">
+            <span class="board-tool-tooltip" aria-hidden="true">
               {{ t('app.openRuleRecommendations') }}
             </span>
           </button>
@@ -13205,12 +13412,11 @@ const counterexampleTraceHelpText = computed(() => {
                 ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100'
                 : 'bg-purple-700 hover:bg-purple-800'
             ]"
-            :title="t('app.openDeviceRecommendations')"
           >
             <span v-if="isRecommendingDevices" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">devices_other</span>
             <span class="board-tool-label">{{ t('app.devicesTool') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">
+            <span class="board-tool-tooltip" aria-hidden="true">
               {{ t('app.openDeviceRecommendations') }}
             </span>
           </button>
@@ -13234,12 +13440,11 @@ const counterexampleTraceHelpText = computed(() => {
                 ? 'bg-red-300 cursor-not-allowed disabled:hover:scale-100'
                 : 'bg-red-700 hover:bg-red-800'
             ]"
-            :title="t('app.openSpecificationRecommendations')"
           >
             <span v-if="isRecommendingSpecs" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">playlist_add_check</span>
             <span class="board-tool-label">{{ t('app.specificationsTool') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">
+            <span class="board-tool-tooltip" aria-hidden="true">
               {{ t('app.openSpecificationRecommendations') }}
             </span>
           </button>
@@ -13282,15 +13487,15 @@ const counterexampleTraceHelpText = computed(() => {
       @dismiss-verification-task="dismissVerificationTask"
       @dismiss-fuzzing-task="dismissFuzzingTask"
       @dismiss-simulation-task="dismissSimulationTask"
-      @open-verification-run="openVerificationRun"
+      @open-verification-run="openVerificationRunFromHistory"
       @delete-verification-run="deleteVerificationRun"
-      @view-verification-trace="selectAndPlayVerificationTrace"
+      @view-verification-trace="openVerificationTraceFromHistory"
       @fix-verification-trace="openFixForVerificationTrace"
-      @view-simulation-run="selectAndPlaySimulationTrace"
+      @view-simulation-run="openSimulationRunFromHistory"
       @delete-simulation-run="deleteSimulationRun"
-      @open-fuzzing-run="openFuzzingRun"
+      @open-fuzzing-run="openFuzzingRunFromHistory"
       @delete-fuzzing-run="deleteFuzzingRun"
-      @view-fuzzing-finding="selectAndPlayFuzzingFinding"
+      @view-fuzzing-finding="openFuzzingFindingFromHistory"
       @verify-fuzzing-finding="openFormalVerificationForFuzzFinding"
     />
 
@@ -13405,7 +13610,7 @@ const counterexampleTraceHelpText = computed(() => {
       :ref="setVerificationPanelRef"
       data-testid="verification-panel"
       class="board-floating-panel board-run-panel board-surface-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
-      role="dialog"
+      role="region"
       aria-labelledby="verification-panel-title"
       tabindex="-1"
       @keydown="handleVerificationPanelKeydown"
@@ -13437,7 +13642,7 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
       </div>
       <!-- Verification Options -->
-      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-green-50/30">
+      <div class="p-3 space-y-3">
         <section
           v-if="fuzzVerificationHandoff"
           data-testid="fuzz-verification-handoff"
@@ -13477,26 +13682,20 @@ const counterexampleTraceHelpText = computed(() => {
               {{ t('app.attackMode') }}
             </label>
             </div>
-            <button
-            type="button"
-            data-testid="verification-attack-toggle"
-            :disabled="isVerifying || (!verificationForm.isAttack && !hasModeledAttackEffect)"
-            :title="!hasModeledAttackEffect ? t('app.attackNoModeledEffect') : undefined"
-            @click="setVerificationAttackEnabled(!verificationForm.isAttack)"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            :class="verificationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
-          >
-            <span
-              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-              :style="{
-                transform: verificationForm.isAttack ? 'translateX(20px)' : 'translateX(4px)',
-                willChange: 'transform'
-              }"
+            <ToggleSwitch
+              :checked="verificationForm.isAttack"
+              :label="t('app.attackMode')"
+              tone="red"
+              test-id="verification-attack-toggle"
+              :disabled="isVerifying || (!verificationForm.isAttack && !hasModeledAttackEffect)"
+              :title="!hasModeledAttackEffect ? t('app.attackNoModeledEffect') : undefined"
+              :describedby-id="!hasModeledAttackEffect ? 'verification-attack-unavailable' : undefined"
+              @change="setVerificationAttackEnabled"
             />
-            </button>
           </div>
           <p
             v-if="!hasModeledAttackEffect"
+            id="verification-attack-unavailable"
             data-testid="verification-attack-unavailable"
             class="mt-2 text-[10px] leading-4 text-amber-700"
           >
@@ -13622,24 +13821,17 @@ const counterexampleTraceHelpText = computed(() => {
               test-id="verification-privacy-help"
             />
             </div>
-            <button
-            type="button"
-            data-testid="verification-privacy-toggle"
-            :disabled="isVerifying || hasPrivacySpecification"
-            @click="verificationForm.enablePrivacy = !verificationForm.enablePrivacy"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            :class="verificationForm.enablePrivacy ? 'bg-purple-500' : 'bg-slate-300'"
-          >
-            <span
-              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-              :style="{
-                transform: verificationForm.enablePrivacy ? 'translateX(20px)' : 'translateX(4px)',
-                willChange: 'transform'
-              }"
+            <ToggleSwitch
+              :checked="verificationForm.enablePrivacy"
+              :label="t('app.privacyAnalysis')"
+              tone="purple"
+              test-id="verification-privacy-toggle"
+              :disabled="isVerifying || hasPrivacySpecification"
+              :describedby-id="hasPrivacySpecification ? 'verification-privacy-required' : undefined"
+              @change="value => verificationForm.enablePrivacy = value"
             />
-            </button>
           </div>
-          <p v-if="hasPrivacySpecification" class="mt-2 text-[10px] font-semibold leading-4 text-purple-700" data-testid="verification-privacy-required">
+          <p v-if="hasPrivacySpecification" id="verification-privacy-required" class="mt-2 text-[10px] font-semibold leading-4 text-purple-700" data-testid="verification-privacy-required">
             {{ t('app.privacyModelRequiredStatus') }}
           </p>
         </div>
@@ -13742,7 +13934,7 @@ const counterexampleTraceHelpText = computed(() => {
       :ref="setScenarioRecommendationPanelRef"
       data-testid="scenario-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-[28rem] max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
-      role="dialog"
+      role="region"
       aria-labelledby="scenario-recommendation-panel-title"
       tabindex="-1"
       @keydown="handleScenarioRecommendationPanelKeydown"
@@ -13772,7 +13964,7 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
       </div>
 
-      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-teal-50/30 max-h-[560px] overflow-y-auto">
+      <div class="p-3 space-y-3 max-h-[560px] overflow-y-auto">
         <div class="grid grid-cols-1 gap-2 rounded-lg border border-teal-100 bg-white p-2 sm:grid-cols-3">
           <fieldset class="min-w-0">
             <legend class="text-xs font-semibold text-slate-700">{{ t('app.devicesTool') }}</legend>
@@ -14204,7 +14396,7 @@ const counterexampleTraceHelpText = computed(() => {
       :ref="setRuleRecommendationPanelRef"
       data-testid="rule-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
-      role="dialog"
+      role="region"
       aria-labelledby="rule-recommendation-panel-title"
       tabindex="-1"
       @keydown="handleRuleRecommendationPanelKeydown"
@@ -14237,7 +14429,7 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <!-- Recommendation Content -->
-      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-amber-50/30 max-h-[500px] overflow-y-auto">
+      <div class="p-3 space-y-3 max-h-[500px] overflow-y-auto">
         <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-amber-100 bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.category') }}
@@ -14514,7 +14706,7 @@ const counterexampleTraceHelpText = computed(() => {
       :ref="setDeviceRecommendationPanelRef"
       data-testid="device-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
-      role="dialog"
+      role="region"
       aria-labelledby="device-recommendation-panel-title"
       tabindex="-1"
       @keydown="handleDeviceRecommendationPanelKeydown"
@@ -14547,7 +14739,7 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <!-- Recommendation Content -->
-      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-purple-50/30 max-h-[500px] overflow-y-auto">
+      <div class="p-3 space-y-3 max-h-[500px] overflow-y-auto">
         <div class="rounded-lg border border-purple-100 bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.count') }}
@@ -14810,7 +15002,7 @@ const counterexampleTraceHelpText = computed(() => {
       :ref="setSpecRecommendationPanelRef"
       data-testid="spec-recommendation-panel"
       class="board-floating-panel board-recommendation-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
-      role="dialog"
+      role="region"
       aria-labelledby="spec-recommendation-panel-title"
       tabindex="-1"
       @keydown="handleSpecRecommendationPanelKeydown"
@@ -14843,7 +15035,7 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <!-- Recommendation Content -->
-      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-red-50/30 max-h-[500px] overflow-y-auto">
+      <div class="p-3 space-y-3 max-h-[500px] overflow-y-auto">
         <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-red-100 bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.category') }}
@@ -15118,7 +15310,7 @@ const counterexampleTraceHelpText = computed(() => {
       :ref="setSimulationPanelRef"
       data-testid="simulation-panel"
       class="board-floating-panel board-run-panel board-surface-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
-      role="dialog"
+      role="region"
       aria-labelledby="simulation-panel-title"
       tabindex="-1"
       @keydown="handleSimulationPanelKeydown"
@@ -15150,7 +15342,7 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
       </div>
       <!-- Simulation Content -->
-      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-indigo-50/30">
+      <div class="p-3 space-y-3">
         <!-- Steps -->
         <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
           <div class="mb-2 flex items-center justify-between gap-3">
@@ -15220,26 +15412,20 @@ const counterexampleTraceHelpText = computed(() => {
                 {{ t('app.attackMode') }}
               </label>
             </div>
-            <button
-              type="button"
-              data-testid="simulation-attack-toggle"
+            <ToggleSwitch
+              :checked="simulationForm.isAttack"
+              :label="t('app.attackMode')"
+              tone="red"
+              test-id="simulation-attack-toggle"
               :disabled="isSimulating || (!simulationForm.isAttack && !hasModeledAttackEffect)"
               :title="!hasModeledAttackEffect ? t('app.attackNoModeledEffect') : undefined"
-              @click="setSimulationAttackEnabled(!simulationForm.isAttack)"
-              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-              :class="simulationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
-            >
-              <span
-                class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-                :style="{
-                  transform: simulationForm.isAttack ? 'translateX(20px)' : 'translateX(4px)',
-                  willChange: 'transform'
-                }"
-              />
-            </button>
+              :describedby-id="!hasModeledAttackEffect ? 'simulation-attack-unavailable' : undefined"
+              @change="setSimulationAttackEnabled"
+            />
           </div>
           <p
             v-if="!hasModeledAttackEffect"
+            id="simulation-attack-unavailable"
             data-testid="simulation-attack-unavailable"
             class="mt-2 text-[10px] leading-4 text-amber-700"
           >
@@ -15295,22 +15481,14 @@ const counterexampleTraceHelpText = computed(() => {
                 test-id="simulation-privacy-help"
               />
             </div>
-            <button
-              type="button"
-              data-testid="simulation-privacy-toggle"
+            <ToggleSwitch
+              :checked="simulationForm.enablePrivacy"
+              :label="t('app.privacyAnalysis')"
+              tone="purple"
+              test-id="simulation-privacy-toggle"
               :disabled="isSimulating"
-              @click="simulationForm.enablePrivacy = !simulationForm.enablePrivacy"
-              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-              :class="simulationForm.enablePrivacy ? 'bg-purple-500' : 'bg-slate-300'"
-            >
-              <span
-                class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-                :style="{
-                  transform: simulationForm.enablePrivacy ? 'translateX(20px)' : 'translateX(4px)',
-                  willChange: 'transform'
-                }"
-              />
-            </button>
+              @change="value => simulationForm.enablePrivacy = value"
+            />
           </div>
         </div>
 
@@ -15366,25 +15544,18 @@ const counterexampleTraceHelpText = computed(() => {
                 {{ t('app.saveToHistory') }}
               </label>
             </div>
-            <button
-              type="button"
-              @click="simulationForm.saveToHistory = !simulationForm.saveToHistory"
-              data-testid="simulation-save-history"
+            <ToggleSwitch
+              :checked="simulationForm.isAsync || simulationForm.saveToHistory"
+              :label="t('app.saveToHistory')"
+              tone="cyan"
+              test-id="simulation-save-history"
               :disabled="simulationForm.isAsync || isSimulating"
-              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
-              :class="(simulationForm.isAsync || simulationForm.saveToHistory) ? 'bg-cyan-600' : 'bg-slate-300'"
               :title="simulationForm.isAsync ? t('app.asyncSimulationsSavedAutomatically') : t('app.saveSyncSimulationToHistory')"
-            >
-              <span
-                class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-                :style="{
-                  transform: (simulationForm.isAsync || simulationForm.saveToHistory) ? 'translateX(20px)' : 'translateX(4px)',
-                  willChange: 'transform'
-                }"
-              />
-            </button>
+              describedby-id="simulation-save-history-hint"
+              @change="value => simulationForm.saveToHistory = value"
+            />
           </div>
-          <p class="mt-2 pl-11 text-[11px] leading-snug text-slate-500">
+          <p id="simulation-save-history-hint" class="mt-2 pl-11 text-[11px] leading-snug text-slate-500">
             {{ simulationForm.isAsync ? t('app.asyncSimulationsSavedAutomatically') : t('app.saveSyncSimulationToHistory') }}
           </p>
         </div>
@@ -15532,7 +15703,7 @@ const counterexampleTraceHelpText = computed(() => {
     <Teleport to="body">
       <div
         v-if="renameDialogVisible"
-        class="fixed inset-0 z-[2400] flex items-center justify-center bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
+        class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
         @click.self="cancelRename"
         @keydown="handleRenameDialogKeydown"
       >
@@ -15583,7 +15754,7 @@ const counterexampleTraceHelpText = computed(() => {
     <Teleport to="body">
       <div
         v-if="deleteConfirmDialogVisible"
-        class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-3 backdrop-blur-[2px] dark:bg-slate-950/35 sm:p-4"
+        class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-3 backdrop-blur-[2px] dark:bg-slate-950/35 sm:p-4"
         @click.self="cancelDelete"
         @keydown="handleDeleteConfirmDialogKeydown"
       >
@@ -15697,7 +15868,7 @@ const counterexampleTraceHelpText = computed(() => {
     :error="fuzzingError"
     :action-locked="historyActionLocked"
     :board-drifted="fuzzingResultBoardDrifted"
-    @close="closeFuzzingResult"
+    @close="dismissFuzzingResult"
     @replay="selectAndPlayFuzzingFinding($event, fuzzingResult?.id)"
     @verify="openFormalVerificationForFuzzFinding"
     @verify-current-board="openFormalVerificationForCurrentBoard"
@@ -15708,8 +15879,8 @@ const counterexampleTraceHelpText = computed(() => {
   <div
     v-if="simulationResult || simulationError"
     data-testid="simulation-result-dialog"
-    class="fixed inset-0 z-[2400] bg-black/60 backdrop-blur-sm flex items-center justify-center"
-    @click="closeSimulationResultDialog"
+    class="fixed inset-0 z-[var(--z-modal)] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+    @click="dismissSimulationResultDialog"
     @keydown="handleSimulationResultDialogKeydown"
   >
     <div
@@ -15743,7 +15914,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="close-simulation-result"
             class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800"
             :aria-label="t('app.close')"
-            @click="closeSimulationResultDialog"
+            @click="dismissSimulationResultDialog"
           >
             <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
           </button>
@@ -15933,7 +16104,7 @@ const counterexampleTraceHelpText = computed(() => {
         <button
           type="button"
           class="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-300"
-          @click="closeSimulationResultDialog"
+          @click="dismissSimulationResultDialog"
         >
           {{ t('app.close') }}
         </button>
@@ -15945,8 +16116,8 @@ const counterexampleTraceHelpText = computed(() => {
   <div
     v-if="showResultDialog"
     data-testid="verification-result-dialog"
-    class="fixed inset-0 z-[2400] bg-black/60 backdrop-blur-sm flex items-center justify-center"
-    @click="closeResultDialog"
+    class="fixed inset-0 z-[var(--z-modal)] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+    @click="dismissResultDialog"
     @keydown="handleVerificationResultDialogKeydown"
   >
     <div
@@ -15975,7 +16146,7 @@ const counterexampleTraceHelpText = computed(() => {
           <button
             type="button"
             data-testid="close-verification-result"
-            @click="closeResultDialog"
+            @click="dismissResultDialog"
             :aria-label="t('app.close')"
             :title="t('app.close')"
             class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all"

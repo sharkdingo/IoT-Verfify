@@ -1037,14 +1037,21 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 }
             }
 
+            // These two notices are the audit record of failed, unconfirmed, and guard-stopped steps.
+            // They are appended to finalAnswer unconditionally, because that is what gets persisted:
+            // a transient unwritable connection must not erase "N steps failed" from the stored turn,
+            // which is the only place the user can still read it after a reload. A failed send is a
+            // disconnect, handled as one rather than ignored.
             String executionNotice = toolExecutionNotice(loopResult, preferChinese);
-            if (!executionNotice.isBlank() && sendSseChunk(emitter, executionNotice)) {
+            if (!executionNotice.isBlank()) {
                 finalAnswer.append(executionNotice);
+                if (!sendSseChunk(emitter, executionNotice)) isDisconnect.set(true);
             }
 
             String guardNotice = executionGuardNotice(loopResult, preferChinese);
-            if (!guardNotice.isBlank() && sendSseChunk(emitter, guardNotice)) {
+            if (!guardNotice.isBlank()) {
                 finalAnswer.append(guardNotice);
+                if (!sendSseChunk(emitter, guardNotice)) isDisconnect.set(true);
             }
 
             int replyStart = finalAnswer.length();
@@ -1366,9 +1373,17 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         });
     }
 
+    /**
+     * Shared by the planning and visible-reply prompts, which are otherwise deliberately different.
+     * Kept in one place so the platform's self-description cannot drift between the two rounds the
+     * model sees within a single turn.
+     */
+    private static final String ASSISTANT_IDENTITY_LINE =
+            "You are the intelligent expert assistant for the IoT-Verify platform. "
+                    + "This is a smart home simulation and formal verification platform based on NuSMV.";
+
     private LlmMessage buildToolPlanningSystemPrompt() {
-        String systemPromptContent = """
-        You are the intelligent expert assistant for the IoT-Verify platform. This is a smart home simulation and formal verification platform based on NuSMV.
+        String systemPromptContent = ASSISTANT_IDENTITY_LINE + "\n" + """
         Your behavior guidelines:
         0. Markdown format isolation principle:
           - Insert a blank line before all block-level elements (tables, lists, code blocks, headers).
@@ -1387,12 +1402,26 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
            specifications, simulation, verification, and status checks when their schemas and results support it.
            Continue until the objective is complete or a real confirmation, unavailable-result, or safety boundary
            requires a new user turn. Do not stop merely because one successful tool call finished.
-        9. ReAct activity summary:
-          - Whenever you return tool calls, also return a concise user-visible reasoning summary in the assistant
-            text for that planning round: what the current goal is, which observed facts matter, why the selected
-            action is the next useful step, and what remains afterward.
-          - This is an audit-friendly summary, not private hidden chain-of-thought. Never include opaque tokens,
-            internal ids, raw control context, or unsupported assumptions.
+        9. ReAct reasoning (do the thinking here, do not merely narrate the steps):
+          - Whenever you return tool calls, also return user-visible reasoning in the assistant text for that
+            planning round. Its job is to work the problem out, not to announce what you are about to call:
+            a reader who skips the tool list must still be able to follow, and disagree with, your argument.
+          - Decompose first. State the question you actually have to answer, and break it into the sub-questions
+            that decide it. A home is safe or unsafe for reasons; name them.
+          - Reason from the observed board, not from assumption. Cite the specific devices, rules, specifications,
+            variables, and results that constrain the answer, and say which of them you still do not know.
+          - When more than one action or interpretation is defensible, say so: name the alternative you did not
+            take and why this one is better for the user's stated goal. A single forced next step needs no
+            alternatives; a judgement call does.
+          - Check yourself before concluding. After a mutation, say what you expect the new state to be and
+            whether the returned result matches that expectation; if it does not, treat the difference as the
+            finding rather than smoothing it over. After a verification or exploration result, say what the
+            verdict does and does not cover.
+          - Write in the user's language, in short paragraphs or short labelled lines — structure is preserved, so
+            use it. Prefer device and rule names the user chose over any internal identifier.
+          - This is an audit-friendly explanation, not private hidden chain-of-thought. Never include opaque
+            tokens, internal ids, raw control context, or unsupported assumptions, and never claim a board read or
+            change that no tool result supports.
 
         Recommendation Guidelines:
         - The complete tool catalog is available in every planning round. Choose tools from their schemas and chain
@@ -1726,8 +1755,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 that no authoritative result was obtained and ask the user to retry or clarify the request.
                 """;
 
-        String systemPromptContent = """
-        You are the intelligent expert assistant for the IoT-Verify platform. This is a smart home simulation and formal verification platform based on NuSMV.
+        String systemPromptContent = ASSISTANT_IDENTITY_LINE + "\n" + """
 
         Visible response rules:
         - Stream only user-visible natural language or Markdown.
@@ -1784,6 +1812,16 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return finalMessages;
     }
 
+    /**
+     * Test-only convenience entry points. No production path calls these three — the SSE flow uses
+     * the full-arity overload below.
+     *
+     * <p>They bind both {@code shouldStop} and {@code forceStopCheck} to {@code isDisconnect}, which
+     * the real caller does not: there, a user's Stop (a database flag readable from any instance) and
+     * a transport disconnect are separate signals leading to different terminal statuses. Tests that
+     * go through here therefore cannot distinguish STOPPED from DISCONNECTED — do not read their
+     * coverage as evidence for that distinction.
+     */
     private ToolLoopResult executeToolLoop(Long userId,
                                            String sessionId,
                                            List<LlmMessage> messages,
@@ -2510,17 +2548,30 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return !root.has(field) || root.get(field).isBoolean();
     }
 
+    /**
+     * Whether a tool's write may already be in the database.
+     *
+     * <p>Fails toward "may have committed" on unreadable output. This is the only input to the
+     * uncertain-mutation count and to the notice that tells the model which steps reported no write,
+     * so a parse failure must not be reported as "nothing was written": a tool that did commit and
+     * then produced malformed or truncated JSON would otherwise be summarised as a no-op, and the
+     * model would retry it against state it never inspected.
+     */
     private boolean mutationMayHaveCommitted(String toolResult) {
         if (toolResult == null || toolResult.isBlank()) {
             return false;
         }
         try {
             JsonNode root = objectMapper.readTree(toolResult);
-            JsonNode value = root != null && root.isObject()
-                    ? root.get("mutationMayHaveCommitted") : null;
+            if (root == null || !root.isObject()) {
+                log.warn("Tool result was not a JSON object; treating the mutation as possibly committed");
+                return true;
+            }
+            JsonNode value = root.get("mutationMayHaveCommitted");
             return value != null && value.isBoolean() && value.booleanValue();
-        } catch (Exception ignore) {
-            return false;
+        } catch (Exception e) {
+            log.warn("Could not read a tool result's mutation outcome; treating it as possibly committed", e);
+            return true;
         }
     }
 

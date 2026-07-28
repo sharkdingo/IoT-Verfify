@@ -14,8 +14,9 @@ import type {
     StreamProgress,
     StreamTerminal
 } from "@/types/chat"
+import { STREAM_REFRESH_TARGETS } from '@/types/chat'
 import { useAuth } from '@/stores/auth'
-import { router } from '@/router'
+import { redirectToLogin } from '@/router/loginRedirect'
 
 export const CHAT_ACTIVITY_TIMEOUT_MS = 2500
 
@@ -111,15 +112,9 @@ const EXECUTION_GUARD_OUTCOMES: ReadonlySet<NonNullable<StreamProgress['outcome'
   'NO_PROGRESS',
   'EMERGENCY_LIMIT'
 ]);
-const STREAM_REFRESH_TARGETS: ReadonlySet<string> = new Set([
-  'device_list',
-  'environment_list',
-  'rule_list',
-  'spec_list',
-  'template_list',
-  'run_history',
-  'board_state'
-]);
+// Derived from the wire contract rather than repeated: a target added to types/chat.ts but missed
+// here would make the validator reject a frame the server is entitled to send.
+const REFRESH_TARGET_NAMES: ReadonlySet<string> = new Set(STREAM_REFRESH_TARGETS);
 
 const isStreamProgress = (value: unknown): value is StreamProgress => {
   if (!isRecord(value)
@@ -196,7 +191,7 @@ const validateStreamCommand = (value: unknown): StreamCommand => {
       || !isRecord(value.payload)
       || Object.keys(value.payload).length !== 1
       || typeof value.payload.target !== 'string'
-      || !STREAM_REFRESH_TARGETS.has(value.payload.target)) {
+      || !REFRESH_TARGET_NAMES.has(value.payload.target)) {
     throw new Error('Chat stream command is incomplete');
   }
   return value as unknown as StreamCommand;
@@ -250,14 +245,43 @@ const validateChatHistoryMessages = (
   return value as PersistedChatMessage[];
 };
 
+/**
+ * Validates one session row.
+ *
+ * `active` drives `hasAuthoritativeActiveSession` → `isAssistantBusy`, which is what stops a second
+ * assistant mutation from starting while one is still running server-side. A row missing the flag
+ * would read as `undefined` → falsy → idle, silently unlocking exactly the action the check exists
+ * to hold back. So an incomplete row is an error, not a default.
+ */
+const validateChatSession = (value: unknown, context: string): ChatSession => {
+  const session = value as Partial<ChatSession> | null;
+  if (!session
+      || typeof session.id !== 'string' || !session.id
+      || typeof session.userId !== 'number' || !Number.isFinite(session.userId)
+      // `title` is nullable on the DTO, and an omitted field carries the same information as an
+      // explicit null — rejecting only the absent form would throw away the whole session list over
+      // one untitled row.
+      || (session.title !== null && session.title !== undefined && typeof session.title !== 'string')
+      || typeof session.updatedAt !== 'string'
+      || typeof session.active !== 'boolean') {
+    throw new Error(`${context} is incomplete`);
+  }
+  return session as ChatSession;
+}
+
 export const getSessionList = async (): Promise<ChatSession[]> => {
   const response = await api.get<any>('/chat/sessions');
-  return unpack<ChatSession[]>(response);
+  const sessions = unpack<unknown>(response);
+  if (!Array.isArray(sessions)) {
+    throw new Error('Chat session list response is incomplete');
+  }
+  return sessions.map((session, index) =>
+    validateChatSession(session, `Chat session list row ${index}`));
 }
 
 export const createSession = async (signal?: AbortSignal): Promise<ChatSession> => {
   const response = await api.post<any>('/chat/sessions', null, { signal });
-  return unpack<ChatSession>(response);
+  return validateChatSession(unpack<unknown>(response), 'Created chat session');
 }
 
 export const getSessionHistory = async (
@@ -386,14 +410,7 @@ export const sendStreamChat = async (
         if (!response.ok) {
             if (response.status === 401) {
                 if (logoutIfTokenMatches(token)) {
-                    const currentRoute = router.currentRoute.value;
-                    if (currentRoute.path !== '/') {
-                        const query: Record<string, string> = { mode: 'login' };
-                        if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
-                            query.redirect = currentRoute.fullPath;
-                        }
-                        await router.push({ path: '/', query });
-                    }
+                    await redirectToLogin();
                 }
             }
             const detail = await readErrorDetail(response);

@@ -14,7 +14,7 @@
   top: 0;
   left: 0;
   right: 0;
-  z-index: 1000;
+  z-index: var(--z-board-nav);
   display: flex;
   height: var(--board-nav-height, 4.3125rem);
   box-sizing: border-box;
@@ -34,6 +34,17 @@
   width: 100%;
   max-width: 100%;
   padding: 0 1.5rem;
+}
+
+/* The workspace title is a real <h1> for document structure; the brand button inside it
+   carries all the visual styling, so the heading itself is layout-neutral. */
+.board-nav-bar .board-title {
+  display: flex;
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
 }
 
 .board-nav-bar .logo-left {
@@ -206,6 +217,52 @@
   font-size: 18px;
 }
 
+/* Board edit undo/redo. Icon-only and never collapsed into the overflow menu: undo has to stay
+   one press away at every width, unlike the scene commands. */
+.board-nav-bar .board-edit-history-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  background: var(--surface-control);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.board-nav-bar .board-edit-history-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--iot-color-accent) 14%, var(--surface-control));
+  border-color: color-mix(in srgb, var(--iot-color-accent) 45%, var(--border));
+  color: var(--iot-color-accent);
+}
+
+.board-nav-bar .board-edit-history-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.board-nav-bar .board-edit-history-btn:focus-visible {
+  outline: 2px solid rgba(147, 197, 253, 0.95);
+  outline-offset: 3px;
+}
+
+.board-nav-bar .board-edit-history-btn .material-symbols-outlined {
+  font-size: 20px;
+}
+
+@media (max-width: 1023.98px), (max-height: 599.98px) {
+  .board-nav-bar .board-edit-history-btn {
+    width: 2.75rem;
+    min-width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
 /* Logout 按钮样式 */
 .board-nav-bar .nav-logout-btn {
   display: flex;
@@ -231,7 +288,7 @@
   font-size: 20px;
 }
 
-@media (max-width: 1023px), (max-height: 599px) {
+@media (max-width: 1023.98px), (max-height: 599.98px) {
   .board-nav-bar {
     padding: 0.5rem;
   }
@@ -306,7 +363,7 @@
   display: none;
 }
 
-@media (max-width: 1023px), (max-height: 599px) {
+@media (max-width: 1023.98px), (max-height: 599.98px) {
   .canvas-fit-mobile {
     position: fixed;
     top: calc(var(--board-nav-height) + 1rem);
@@ -550,7 +607,7 @@
     max-width: min(32.5rem, 44vw);
 }
 
-@media (max-width: 1023px), (max-height: 599px) {
+@media (max-width: 1023.98px), (max-height: 599.98px) {
     .iot-board .modern-panel,
     .iot-board .glass-panel,
     .iot-board .board-side-panel {
@@ -580,7 +637,7 @@
  * Keep their controls above that banner so a failed initial load cannot trap a
  * user inside a panel that was already open. */
 .iot-board .board-recommendation-panel {
-    z-index: 2350;
+    z-index: var(--z-board-panel-above-alert);
 }
 
 .iot-board .board-floating-panel.fuzzing-panel {
@@ -1162,6 +1219,102 @@
     color: #a5f3fc !important;
 }
 
+/* Indigo / sky / fuchsia / emerald / teal complete the set above.
+ * `bg-white` is already remapped for these panels, so a light indigo/sky chip or a dark
+ * `text-indigo-800` label (the selected exploration-mode tab) previously stayed at its light-theme
+ * value on a dark card — unreadable in the worst case. Extend this file rather than adding
+ * per-component `dark:` variants: it is the single owner of panel-scoped colour remapping. */
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-indigo-50, .bg-indigo-100, .bg-indigo-200) {
+    background-color: color-mix(in srgb, #6366f1 13%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-indigo-600, .text-indigo-700, .text-indigo-800, .text-indigo-900) {
+    color: #c7d2fe !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-sky-50, .bg-sky-100, .bg-sky-200) {
+    background-color: color-mix(in srgb, #0ea5e9 13%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-sky-600, .text-sky-700, .text-sky-800, .text-sky-900) {
+    color: #bae6fd !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-fuchsia-50, .bg-fuchsia-100, .bg-fuchsia-200) {
+    background-color: color-mix(in srgb, #d946ef 13%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.text-fuchsia-600, .text-fuchsia-700, .text-fuchsia-800, .text-fuchsia-900) {
+    color: #f5d0fe !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(.bg-emerald-50, .bg-emerald-100, .bg-emerald-200, .bg-teal-50, .bg-teal-100, .bg-teal-200) {
+    background-color: color-mix(in srgb, #10b981 13%, var(--surface-panel)) !important;
+}
+
+.dark .iot-board :is(
+    .board-floating-panel,
+    .board-mini-tasks,
+    .modern-panel,
+    .glass-panel,
+    .board-side-panel,
+    .board-timeline
+) :is(
+    .text-emerald-600, .text-emerald-700, .text-emerald-800, .text-emerald-900,
+    .text-teal-600, .text-teal-700, .text-teal-800, .text-teal-900
+) {
+    color: #a7f3d0 !important;
+}
+
 .iot-board .board-floating-panel .bg-slate-100,
 .iot-board .board-mini-tasks .bg-slate-100,
 .iot-board .canvas-map .bg-slate-100,
@@ -1264,7 +1417,7 @@
     background-color: rgba(255, 255, 255, 0.16);
 }
 
-@media (max-width: 1023px), (max-height: 599px) {
+@media (max-width: 1023.98px), (max-height: 599.98px) {
     .iot-board .board-floating-panel {
         --board-floating-panel-max-width: 24rem;
         left: 50%;
@@ -1292,7 +1445,7 @@
     }
 }
 
-@media (max-width: 640px), (max-height: 599px) {
+@media (max-width: 639.98px), (max-height: 599.98px) {
     .iot-board {
         --board-nav-height: 3.8125rem;
     }
@@ -1337,7 +1490,7 @@
 
 /* Short landscape viewports cannot fit the vertical tool rail. Keep every
  * action in the first viewport by turning the compact rail into a small grid. */
-@media (min-width: 641px) and (max-height: 599px) {
+@media (min-width: 640px) and (max-height: 599.98px) {
     .iot-board .board-floating-actions {
         width: min(12rem, calc(100vw - var(--board-action-dock-right, 4rem) - 0.75rem));
         max-height: calc(100dvh - var(--board-nav-height) - 1rem);
@@ -1453,7 +1606,7 @@
     appearance: none;
 }
 
-@media (max-width: 380px), (max-height: 599px) and (max-width: 480px) {
+@media (max-width: 380px), (max-height: 599.98px) and (max-width: 480px) {
     .iot-board .canvas-map__header {
         align-items: flex-start;
         flex-wrap: wrap;
@@ -1497,7 +1650,7 @@
     color: var(--text);
 }
 
-@media (pointer: coarse), (max-width: 1023px), (max-height: 599px) {
+@media (pointer: coarse), (max-width: 1023.98px), (max-height: 599.98px) {
     .iot-board .canvas-map__tool {
         min-width: 2.75rem;
         min-height: 2.75rem;
@@ -1785,7 +1938,7 @@
     border-color: var(--border) !important;
 }
 
-@media (max-width: 1023px), (max-height: 599px) {
+@media (max-width: 1023.98px), (max-height: 599.98px) {
     .iot-board .board-playback-change-popover {
         top: calc(var(--board-nav-height) + var(--board-floating-gap));
         left: auto;
@@ -1821,7 +1974,7 @@
  * timeline without covering one of them. While both are visible, reserve a
  * right-hand column for the inspector and keep the timeline in the remaining
  * width. Dismissing the inspector restores the timeline's full width. */
-@media (min-width: 641px) and (max-height: 599px) {
+@media (min-width: 640px) and (max-height: 599.98px) {
     .iot-board.has-playback-change-popover .board-playback-change-popover {
         width: min(22rem, 42vw);
     }
@@ -2598,238 +2751,6 @@
     right: var(--resize-hit-offset, -1.375rem);
     bottom: var(--resize-hit-offset, -1.375rem);
     cursor: se-resize;
-}
-
-/* ========== 浮动卡片通用样式 ========== */
-/* 与首页风格一致的深蓝色玻璃态效果 */
-
-.iot-board .floating-card {
-    position: absolute;
-    background: linear-gradient(
-            145deg,
-            rgba(10, 25, 47, 0.4),
-            rgba(10, 25, 47, 0.7)
-    );
-    border-radius: var(--iot-radius-card);
-    box-shadow:
-            0 1.6rem 3.2rem rgba(0, 0, 0, 0.5),
-            0 0 0 1px rgba(100, 181, 246, 0.3);
-    backdrop-filter: blur(18px);
-    color: var(--iot-color-text);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    font-size: var(--iot-font-base);
-    max-height: calc(100vh - 6rem); /* 上下各留 2rem 空隙 */
-
-    transition: var(--iot-transition-dock);
-    z-index: 100; /* Standard floating z-index */
-    will-change: transform, left, top, width, height;
-}
-
-
-/* 卡片头部：标题栏，可拖动 */
-.iot-board .card-header {
-    padding: var(--iot-space-sm) var(--iot-space-md);
-    display: flex;
-    align-items: center;
-    gap: var(--iot-space-sm);
-    border-bottom: 1px solid var(--iot-color-card-border);
-    cursor: move;
-    background: radial-gradient(
-            circle at top left,
-            var(--iot-color-card-header-glow),
-            transparent 60%
-    );
-}
-
-/* 大标题：Input / Status 等 */
-.iot-board .card-title {
-    font-weight: 600;
-    font-size: var(--iot-font-title);
-    flex: 1;
-    color: var(--iot-color-title);
-}
-
-/* 子标题：折叠项标题（Devices / Rules / Specs） */
-.iot-board .card-subtitle {
-    font-size: var(--iot-font-subtitle);
-    font-weight: 500;
-    color: var(--iot-color-subtitle);
-}
-
-/* 标题右侧按钮（视图切换等） */
-.iot-board .card-header-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--iot-space-2xs);
-}
-
-/* 卡片主体内容区域：内部滚动 */
-.iot-board .card-body {
-    padding: var(--iot-space-md) var(--iot-space-md) var(--iot-space-lg);
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-}
-
-/* 折叠面板统一风格：背景透明，由卡片底色负责 */
-.iot-board .panel-collapse {
-    --el-collapse-header-bg-color: transparent;
-    --el-collapse-content-bg-color: transparent;
-    font-size: var(--iot-font-base);
-}
-
-/* 折叠标题行：标题 + 右侧图标按钮 */
-.iot-board .collapse-title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex: 1;
-    min-width: 0;
-}
-
-
-/* 分割线颜色弱一点，避免喧宾夺主 */
-.iot-board .input-card .el-divider {
-    border-color: var(--iot-color-divider);
-}
-
-/* ========== Element Plus 深色皮肤：输入 / 选择 / 表单 ========== */
-/* 对所有浮动卡片生效（InputCard + StatusCard），保证风格统一 */
-
-.iot-board .floating-card .el-input__wrapper,
-.iot-board .floating-card .el-select__wrapper {
-    background-color: var(--iot-color-input-bg);
-    box-shadow: 0 0 0 1px var(--iot-color-input-border);
-    border-radius: var(--iot-radius-input);
-}
-
-.iot-board .floating-card .el-textarea__inner {
-    background-color: var(--iot-color-input-bg);
-    border: 1px solid var(--iot-color-input-border-strong);
-    border-radius: var(--iot-radius-input);
-    color: var(--iot-color-text);
-    font-size: var(--iot-font-base);
-}
-
-/* 真实输入值 / 已选择的选项：用正常文字颜色 */
-.iot-board .floating-card .el-input__inner,
-.iot-board .floating-card .el-select__selected-item {
-    color: var(--iot-color-text);
-    font-size: var(--iot-font-base);
-}
-
-/* 占位符：改成偏灰，提示“这是提示词，尚未输入” */
-.iot-board .floating-card .el-input__inner::placeholder,
-.iot-board .floating-card .el-select__placeholder {
-    color: var(--iot-color-text-muted);
-    font-size: var(--iot-font-base);
-}
-
-.iot-board .floating-card .el-form-item__label {
-    color: var(--iot-color-text-muted);
-    font-size: var(--iot-font-base);
-}
-
-/* 表单项之间默认间距 */
-.iot-board .floating-card .el-form-item {
-    margin-bottom: 0.875rem;
-}
-
-/* --- Docked State --- */
-
-.iot-board .floating-card.is-docked {
-    width: var(--iot-dock-icon-size) !important;
-    height: var(--iot-dock-icon-size) !important;
-    min-height: 0 !important;
-    padding: 0;
-    border-radius: 50%; /* Make it circular or rounded square */
-    background: var(--iot-color-node-bg); /* Use solid bg when docked */
-    cursor: pointer;
-    z-index: 2000; /* Bring above everything else */
-    justify-content: center;
-    align-items: center;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.iot-board .floating-card.is-docked:hover {
-    transform: scale(1.1); /* Pop effect */
-    border-color: var(--iot-color-edge);
-}
-
-/* Docking Orientation Adjustments (Optional specific borders) */
-.iot-board .floating-card.dock-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
-.iot-board .floating-card.dock-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.iot-board .floating-card.dock-top { border-top-left-radius: 0; border-top-right-radius: 0; }
-.iot-board .floating-card.dock-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-
-/* --- Header & Buttons --- */
-
-.iot-board .card-header {
-    /* [Modified] Ensure header layout handles the close button */
-    padding: var(--iot-space-sm) var(--iot-space-md);
-    display: flex;
-    align-items: center;
-    justify-content: space-between; /* Push 'X' to right */
-    gap: var(--iot-space-sm);
-    border-bottom: 1px solid var(--iot-color-card-border);
-    cursor: pointer;
-    background: radial-gradient(
-            circle at top left,
-            var(--iot-color-card-header-glow),
-            transparent 60%
-    );
-    min-height: 2.5rem;
-}
-
-/* Hide normal header content when docked */
-.iot-board .floating-card.is-docked .card-header,
-.iot-board .floating-card.is-docked .card-body {
-    display: none;
-}
-
-/* The Icon visible ONLY when docked */
-.iot-board .docked-icon-container {
-    display: none; /* Hidden by default */
-    width: 100%;
-    height: 100%;
-    align-items: center;
-    justify-content: center;
-    color: var(--iot-color-edge);
-}
-
-.iot-board .floating-card.is-docked .docked-icon-container {
-    display: flex; /* Show when docked */
-}
-
-/* Close / Dock Button (The 'X') */
-.iot-board .dock-close-btn {
-    cursor: pointer;
-    opacity: 0.6;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    width: 1.5rem;
-    height: 1.5rem;
-    transition: all 0.2s;
-}
-
-.iot-board .dock-close-btn:hover {
-    opacity: 1;
-    background-color: rgba(255, 75, 75, 0.2);
-    color: #ff4d4f;
-}
-
-
-/* 核心修复：当处于拖拽状态时，立即移除所有过渡！
- * 这让卡片能 1:1 紧跟鼠标，没有任何延迟
- */
-.iot-board .floating-card.is-dragging {
-    transition: none !important;
-    user-select: none; /* 防止拖拽时选中文字 */
-    cursor: grabbing;
 }
 
 /* ========== New Layout Styles ========== */

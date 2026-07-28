@@ -6,8 +6,8 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.Map;
+import java.util.TreeMap;
 
 /** Canonical signature for the authored inputs from which a specification is rebuilt. */
 public final class SpecificationSemanticSignature {
@@ -17,15 +17,15 @@ public final class SpecificationSemanticSignature {
 
     public record Signature(
             String templateId,
-            Set<String> aConditions,
-            Set<String> ifConditions,
-            Set<String> thenConditions
+            Map<String, Long> aConditions,
+            Map<String, Long> ifConditions,
+            Map<String, Long> thenConditions
     ) {
     }
 
     public static Signature from(SpecificationDto specification) {
         if (specification == null) {
-            return new Signature("", Set.of(), Set.of(), Set.of());
+            return new Signature("", Map.of(), Map.of(), Map.of());
         }
         return new Signature(
                 normalize(specification.getTemplateId()),
@@ -38,8 +38,15 @@ public final class SpecificationSemanticSignature {
         return from(left).equals(from(right));
     }
 
-    private static Set<String> conditionKeys(List<SpecConditionDto> conditions) {
-        Set<String> keys = new TreeSet<>();
+    /**
+     * Canonical condition keys with their occurrence counts.
+     *
+     * <p>A multiset rather than a set: cardinality is part of a specification's identity, and this
+     * signature gates the "delete only if unchanged" and duplicate-spec checks. Collapsing a
+     * repeated condition let a delete land on a specification that had genuinely been edited.
+     */
+    private static Map<String, Long> conditionKeys(List<SpecConditionDto> conditions) {
+        Map<String, Long> keys = new TreeMap<>();
         if (conditions == null) {
             return keys;
         }
@@ -49,13 +56,13 @@ public final class SpecificationSemanticSignature {
             }
             String targetType = normalize(condition.getTargetType()).toLowerCase(Locale.ROOT);
             String relation = normalizeRelation(condition.getRelation());
-            keys.add(String.join("|",
+            keys.merge(String.join("|",
                     normalize(condition.getDeviceId()),
                     targetType,
                     normalize(condition.getPropertyScope()).toLowerCase(Locale.ROOT),
                     normalize(condition.getKey()),
                     relation,
-                    normalizeValue(condition.getValue(), relation, targetType)));
+                    normalizeValue(condition.getValue(), relation, targetType)), 1L, Long::sum);
         }
         return keys;
     }

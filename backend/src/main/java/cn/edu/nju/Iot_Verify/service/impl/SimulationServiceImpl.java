@@ -446,7 +446,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     // Service-internal: task creation is only reachable through submitSimulation and
     // the package-private async path below; it is no longer part of the public interface.
-    @Transactional
+    // Deliberately not @Transactional: self-invocation bypasses the proxy, so the annotation would
+    // never start one. The transaction lives in the private overload's transactionTemplate.
     Long createTask(Long userId, int requestedSteps,
                     AttackScenarioDto attackScenario, boolean enablePrivacy,
                     int devicePointCount, int linkPointCount,
@@ -511,7 +512,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     // Service-internal failure compensation, reachable only from the submit/async paths below.
-    @Transactional
+    // Deliberately not @Transactional: self-invocation bypasses the proxy. failTask owns the
+    // transaction.
     void failTaskById(Long taskId, String errorMessage) {
         simulationTaskRepository.findById(Objects.requireNonNull(taskId, "taskId must not be null"))
                 .ifPresent(task -> failTask(task, errorMessage, List.of(errorMessage)));
@@ -659,11 +661,15 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         String requestJson = buildRequestSnapshot(input.request());
         String templateSnapshotsJson = JsonUtils.toJson(input.templateManifests());
 
-        registerRunningTask(taskId, Thread.currentThread());
-        updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
-
         SimulationTaskPo task = null;
         try {
+            // Both of these must be inside the try: `updateTaskProgress` writes the in-memory map
+            // before its database write, so a database failure here would otherwise leave this
+            // thread registered as running the task. The pooled thread then picks up a different
+            // task, and a later cancel of *this* task interrupts that unrelated work.
+            registerRunningTask(taskId, Thread.currentThread());
+            updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
+
             // Check in-memory cancellation marker (fast path for same-instance cancellation).
             if (isTaskCancelled(taskId)) {
                 return;

@@ -73,7 +73,7 @@ public class ApplyFixTool extends AbstractAiTool {
         properties.put("preferredRangeSelections", preferredRangeSelectionsSchema());
         properties.put("impactToken", Map.of(
                 "type", "string",
-                "description", "Required only with confirmed=true. Copy the opaque impactToken from the latest apply_fix preview."));
+                "description", "Required only with confirmed=true. Copy the opaque impactToken from the latest apply_fix preview. On that call suggestion and preferredRangeSelections may be resent unchanged; they are ignored because the server uses its own stored proposal."));
 
         return LlmToolSpec.of(
                 getName(),
@@ -92,7 +92,10 @@ public class ApplyFixTool extends AbstractAiTool {
             }
 
             long traceId = positiveLongArg(args, "traceId");
-            boolean confirmed = requiredBoolean(args, "confirmed", "arguments");
+            // Omission degrades to a preview, matching every other confirmation-gated tool. Rejecting
+            // it instead spent a round on a VALIDATION_ERROR to reach the same no-write outcome, and
+            // the two behaviours diverged behind an identical schema.
+            boolean confirmed = booleanArg(args, "confirmed", false);
             if (confirmed) {
                 return applyConfirmed(userId, traceId, args);
             }
@@ -169,7 +172,12 @@ public class ApplyFixTool extends AbstractAiTool {
     }
 
     private String applyConfirmed(Long userId, long traceId, JsonNode args) throws Exception {
-        requireOnlyFields(args, "arguments", Set.of("traceId", "confirmed", "impactToken"));
+        // `suggestion` and `preferredRangeSelections` are accepted but ignored: the model reaches this
+        // call by resending the object it previewed with, and rejecting them cost a guaranteed wasted
+        // round on a VALIDATION_ERROR. They are not read — the proposal comes from the server-stored
+        // action below, which is what makes a confirmation unforgeable.
+        requireOnlyFields(args, "arguments",
+                Set.of("traceId", "confirmed", "impactToken", "suggestion", "preferredRangeSelections"));
         String impactToken = requiredTextField(args, "impactToken", "arguments");
         AiDestructiveActionGuard.ConsumeResult confirmation = destructiveActionGuard.consumeStoredAction(
                 userId, getName(), Long.toString(traceId), impactToken);
@@ -467,7 +475,9 @@ public class ApplyFixTool extends AbstractAiTool {
                 "type", "boolean",
                 "description", "Must be true; only a forward-verified suggestion can be applied."));
         return objectSchema(properties, List.copyOf(properties.keySet()),
-                "Copy one complete suggestion object exactly from fix_violation.");
+                "Required with confirmed=false. Copy one complete suggestion object exactly from "
+                        + "fix_violation. On the confirmed=true call it may be resent unchanged and is "
+                        + "ignored: the server applies its own stored proposal.");
     }
 
     private Map<String, Object> parameterAdjustmentSchema() {

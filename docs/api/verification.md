@@ -380,7 +380,8 @@ clients do not combine a percentage from one phase with a label from another pha
 `ModelGenerationIssueReasonCode` is one of
 `RULE_NO_TRIGGER_CONDITIONS`, `RULE_NULL_TRIGGER_CONDITION`,
 `RULE_UNRESOLVABLE_TRIGGER_CONDITION`, `RULE_NO_RESOLVABLE_TRIGGER_CONDITIONS`,
-`RULE_PROPERTY_PROPAGATION_UNAVAILABLE`, `SPEC_NO_CHECKABLE_CONDITIONS`,
+`RULE_PROPERTY_PROPAGATION_UNAVAILABLE`, `RULE_UNRESOLVABLE_COMMAND_ACTION`,
+`SPEC_NO_CHECKABLE_CONDITIONS`,
 `SPEC_PRIVACY_MODELING_DISABLED`, `SPEC_UNSUPPORTED_RELATION`,
 `SPEC_AMBIGUOUS_STATE`, `SPEC_UNDECLARED_SECURITY_PROPERTY`,
 `SPEC_UNKNOWN_DEVICE`, `SPEC_TEMPLATE_SHAPE_MISMATCH`, `SPEC_INVALID_VALUE`,
@@ -954,7 +955,7 @@ Fast, no NuSMV invocation. **Response**: `FaultLocalizationResultDto`
 | `targetActionLabel` | `String` | For `BUNDLED`, the canonical action token that clients may localize; for `CUSTOM`/`UNKNOWN`, the preserved display label |
 | `conflicting` | `boolean` | |
 | `conflictingRuleString` | `String` | Readable conflicting rule when `conflicting=true` |
-| `targetEndState` / `conflictingEndState` | `String` | Conflicting target outcomes when available |
+| `targetEndState` / `conflictingEndState` | `String` | Conflicting target outcomes when available. Reader-facing state names, never the raw manifest tuple; a multi-mode device's per-mode states are joined with `"; "`, which keeps each token translatable by the client's built-in token catalogue |
 | `reasonCode` | `String` | `TRIGGERED` or `CONFLICTING_END_STATES`; clients localize from this code |
 | `reason` | `String` | Backend-readable fallback explanation |
 | `modelTokenSource` | `BUNDLED \| CUSTOM \| UNKNOWN` | Frozen source for `targetActionLabel` and end-state tokens. Localize exact known tokens only for `BUNDLED`; preserve `CUSTOM` and `UNKNOWN` verbatim |
@@ -1060,7 +1061,11 @@ include the parameter strategy's separate post-solution refinement budget. Statu
 `SKIPPED_NO_SPEC`, `SKIPPED_NO_PARAMETERIZABLE_VALUES`, `SKIPPED_NO_FAULT_RULES`, `SKIPPED_UNSUPPORTED`, or
 `SKIPPED_INCOMPLETE_SOURCE_MODEL`. This distinguishes "no verified repair was found"
 from "the strategy started but did not finish" (`TIMED_OUT`) and "the strategy was
-not run" (`SKIPPED_*`). `FAILED_MODEL_GENERATION` means the strategy could not construct
+not run" (`SKIPPED_*`). The suggestion/attempt correspondence is checked in both
+directions: a `VERIFIED` attempt must carry its suggestion (a verified attempt with no
+suggestion is `NO_VERIFIED_SUGGESTION`, never `VERIFIED`), and each suggestion's
+`verified` flag must match its attempt's status. Checking only one direction let a
+response claim a repair passed forward verification while offering nothing to apply. `FAILED_MODEL_GENERATION` means the strategy could not construct
 a complete candidate model, for example because the persisted counterexample initial state
 could not be replayed. `FAILED_SOLVER_EXECUTION` covers NuSMV execution failure and missing,
 incomplete, or unparseable solver output. `SEARCH_BUDGET_EXHAUSTED` means unchecked candidates

@@ -11,7 +11,6 @@ import {
   CodeOutlined, ExperimentOutlined, DownOutlined
 } from '@ant-design/icons-vue';
 
-import { ElMessage, ElMessageBox } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import 'element-plus/es/components/message-box/style/css';
 
@@ -43,6 +42,7 @@ import { useChatStore } from '@/stores/chat';
 import { useAuth } from '@/stores/auth';
 import { localizedTextOrFallback } from '@/utils/userMessage';
 import { REQUEST_LIMITS } from '@/constants/requestLimits';
+import { confirmDestructive, notifyBlocked, notifyError, notifyInfo, notifySuccess } from '@/utils/feedback'
 
 type BoardChatContext = {
   deviceCount?: number;
@@ -74,6 +74,14 @@ const { state: authState } = useAuth();
 const authenticatedUserId = computed(() => authState.user?.userId ?? null);
 let chatAuthEpoch = 0;
 
+/**
+ * Legacy protocol residue, kept as a no-op safety net for persisted history.
+ *
+ * The backend no longer emits this prefix (nor the `CallEnd|>` marker stripped in `copyFullMessage`,
+ * `applyHistoryPage`, and the chunk handler) — both strings have zero hits in `backend/src/main`.
+ * Progress is a typed SSE frame now. Old rows in `chat_message` may still contain them, so the
+ * stripping stays; do not add new callers, and drop all of it once history is known to be clean.
+ */
 const loadingRegex = /^(正在执行指令|Executing command)[.\s\n]*/;
 const boardContext = ref<BoardChatContext | null>(null);
 
@@ -87,56 +95,52 @@ const joinNames = (items: Array<string | undefined | null> | undefined, fallback
           .map(item => (item ?? '').trim())
           .filter(Boolean)
   )).slice(0, limit);
-  return names.length > 0 ? names.join(locale.value === 'zh-CN' ? '、' : ', ') : fallback;
+  return names.length > 0 ? names.join(t('app.chat.presetTasks.listSeparator')) : fallback;
 };
 
 const presetTasks = computed(() => [
   ...(props.boardMode && boardContext.value
       ? (() => {
         const ctx = boardContext.value!;
-        const zh = locale.value === 'zh-CN';
+        const p = (key: string, args?: Record<string, unknown>) =>
+          t(`app.chat.presetTasks.${key}`, args ?? {});
         const deviceCount = ctx.deviceCount ?? 0;
         const ruleCount = ctx.ruleCount ?? 0;
         const specCount = ctx.specCount ?? 0;
         const templateCount = ctx.templateCount ?? 0;
-        const deviceNames = joinNames(ctx.devices?.map(device => device.label || device.templateName), zh ? '当前设备' : 'current devices');
-        const templateNames = joinNames(ctx.templates, zh ? '可用模板' : 'available templates', 5);
-        const ruleNames = joinNames(ctx.rules?.map(rule => rule.name || rule.description), zh ? '当前规则' : 'current rules', 3);
-        const specNames = joinNames(ctx.specs?.map(spec => spec.name || spec.formulaPreview), zh ? '当前规约' : 'current specs', 3);
+        const deviceNames = joinNames(
+            ctx.devices?.map(device => device.label || device.templateName), p('fallback.devices'));
+        const templateNames = joinNames(ctx.templates, p('fallback.templates'), 5);
+        const ruleNames = joinNames(
+            ctx.rules?.map(rule => rule.name || rule.description), p('fallback.rules'), 3);
+        const specNames = joinNames(
+            ctx.specs?.map(spec => spec.name || spec.formulaPreview), p('fallback.specs'), 3);
 
         if (deviceCount === 0) {
           return [
             {
               icon: ThunderboltOutlined,
-              title: zh ? '从模板搭场景' : 'Start from templates',
-              desc: zh ? `${templateCount} 个模板可用` : `${templateCount} templates available`,
-              text: zh
-                  ? `请基于当前可用模板（${templateNames}）设计一个可验证的 IoT 场景，控制在 5 到 8 个设备，并给出关键规则和规约。`
-                  : `Using the current templates (${templateNames}), design a verifiable IoT scenario with 5 to 8 devices, key rules, and specs.`
+              title: p('empty.fromTemplates.title'),
+              desc: p('empty.fromTemplates.desc', { count: templateCount }),
+              text: p('empty.fromTemplates.text', { templates: templateNames })
             },
             {
               icon: ExperimentOutlined,
-              title: zh ? '推荐起步设备' : 'Suggest starter devices',
-              desc: zh ? '先形成可验证闭环' : 'Build a verifiable loop first',
-              text: zh
-                  ? `我现在画布为空。请从模板（${templateNames}）里推荐一组起步设备，并说明每个设备在场景中的作用。`
-                  : `The board is empty. Recommend starter devices from these templates (${templateNames}) and explain each device's role.`
+              title: p('empty.starterDevices.title'),
+              desc: p('empty.starterDevices.desc'),
+              text: p('empty.starterDevices.text', { templates: templateNames })
             },
             {
               icon: SafetyCertificateOutlined,
-              title: zh ? '规划验证目标' : 'Plan verification goals',
-              desc: zh ? '先定义要防什么' : 'Define what to prevent',
-              text: zh
-                  ? '请帮我规划一个有意义、可由 IFTTT 规则检验的安全或隐私验证目标，并说明哪些结论必须运行正式验证后才能确认；不要预先保证会产生反例。'
-                  : 'Help me plan a meaningful safety or privacy goal that IFTTT rules can exercise. State what must be confirmed by formal verification, without promising a counterexample in advance.'
+              title: p('empty.planGoals.title'),
+              desc: p('empty.planGoals.desc'),
+              text: p('empty.planGoals.text')
             },
             {
               icon: CodeOutlined,
-              title: zh ? '生成搭建步骤' : 'Generate setup steps',
-              desc: zh ? '设备、规则、规约顺序' : 'Devices, rules, specs order',
-              text: zh
-                  ? '请按“模板导入设备 -> 创建规则 -> 配置规约 -> 运行验证”的顺序，给我一份简短可执行的搭建步骤。'
-                  : 'Give me concise setup steps in this order: add devices from templates, create rules, configure specs, run verification.'
+              title: p('empty.setupSteps.title'),
+              desc: p('empty.setupSteps.desc'),
+              text: p('empty.setupSteps.text')
             }
           ];
         }
@@ -144,47 +148,34 @@ const presetTasks = computed(() => [
         return [
           {
             icon: ThunderboltOutlined,
-            title: ruleCount === 0 ? (zh ? '补齐规则' : 'Add missing rules') : (zh ? '审查规则冲突' : 'Review rule conflicts'),
-            desc: zh ? `${deviceCount} 个设备，${ruleCount} 条规则` : `${deviceCount} devices, ${ruleCount} rules`,
+            title: ruleCount === 0 ? p('scene.addRules.title') : p('scene.reviewRules.title'),
+            desc: p('scene.rulesDesc', { devices: deviceCount, rules: ruleCount }),
             text: ruleCount === 0
-                ? (zh
-                    ? `当前画布有设备（${deviceNames}），但还没有规则。请基于这些设备推荐 3 条短小、可验证的 IFTTT 规则。`
-                    : `The board has devices (${deviceNames}) but no rules. Recommend 3 concise, verifiable IFTTT rules for them.`)
-                : (zh
-                    ? `请审查当前规则（${ruleNames}）和设备（${deviceNames}），找出可能导致循环触发、冲突状态或安全风险的地方。`
-                    : `Review the current rules (${ruleNames}) and devices (${deviceNames}) for loops, conflicting states, or safety risks.`)
+                ? p('scene.addRules.text', { devices: deviceNames })
+                : p('scene.reviewRules.text', { rules: ruleNames, devices: deviceNames })
           },
           {
             icon: ExperimentOutlined,
-            title: deviceCount < 5 ? (zh ? '补充关键设备' : 'Add key devices') : (zh ? '优化设备关系' : 'Refine device relations'),
-            desc: zh ? `当前设备：${deviceNames}` : `Devices: ${deviceNames}`,
+            title: deviceCount < 5 ? p('scene.addDevices.title') : p('scene.refineDevices.title'),
+            desc: p('scene.devicesDesc', { devices: deviceNames }),
             text: deviceCount < 5
-                ? (zh
-                    ? `当前画布设备偏少（${deviceNames}）。请根据现有设备推荐最多 3 个补充设备，并说明为什么需要它们。`
-                    : `The board has few devices (${deviceNames}). Recommend up to 3 additional devices and explain why they are needed.`)
-                : (zh
-                    ? `请根据当前设备（${deviceNames}）整理设备之间的触发链路，并指出哪些连线或规则最值得优先检查。`
-                    : `Summarize trigger chains among the current devices (${deviceNames}) and point out which links or rules to inspect first.`)
+                ? p('scene.addDevices.text', { devices: deviceNames })
+                : p('scene.refineDevices.text', { devices: deviceNames })
           },
           {
             icon: SafetyCertificateOutlined,
-            title: specCount === 0 ? (zh ? '生成规约' : 'Generate specs') : (zh ? '审查规约' : 'Review specs'),
-            desc: zh ? `${specCount} 条规约` : `${specCount} specs`,
+            title: specCount === 0 ? p('scene.generateSpecs.title') : p('scene.reviewSpecs.title'),
+            desc: p('scene.specsDesc', { count: specCount }),
             text: specCount === 0
-                ? (zh
-                    ? `请基于当前设备（${deviceNames}）和规则数量 ${ruleCount}，推荐 2 条容易验证且能暴露风险的规约。`
-                    : `Based on the current devices (${deviceNames}) and ${ruleCount} rules, recommend 2 easy-to-verify specs that can expose risks.`)
-                : (zh
-                    ? `请检查当前规约（${specNames}）是否真正覆盖了设备与规则风险，并给出需要补充的验证点。`
-                    : `Check whether the current specs (${specNames}) cover the device and rule risks, and suggest missing verification points.`)
+                ? p('scene.generateSpecs.text', { devices: deviceNames, rules: ruleCount })
+                : p('scene.reviewSpecs.text', { specs: specNames })
           },
           {
             icon: CodeOutlined,
-            title: zh ? '设计违规测试' : 'Design a violation test',
-            desc: zh ? '用于模拟和验证' : 'For simulation and verification',
-            text: zh
-                ? `请基于当前画布摘要：设备 ${deviceCount}、规则 ${ruleCount}、规约 ${specCount}，设计一个旨在暴露违规的候选测试路径，并说明必须通过仿真或正式验证确认它是否真的违规，不要保证结果。`
-                : `Using the current board summary of ${deviceCount} devices, ${ruleCount} rules, and ${specCount} specs, design a concise candidate path aimed at exposing a violation. Explain that simulation or formal verification must confirm the outcome; do not guarantee it.`
+            title: p('scene.violationTest.title'),
+            desc: p('scene.violationTest.desc'),
+            text: p('scene.violationTest.text',
+                { devices: deviceCount, rules: ruleCount, specs: specCount })
           }
         ];
       })()
@@ -259,6 +250,19 @@ const isAssistantBusy = computed(() =>
     || reconciliationRequired.value || hasAuthoritativeActiveSession.value);
 const isLoading = computed(() => isAssistantBusy.value || isLoadingHistory.value);
 const TOOL_LABEL_KEYS: Record<string, string> = {
+  edit_device: 'app.chat.toolLabels.editDevice',
+  apply_fix: 'app.chat.toolLabels.applyFix',
+  delete_verification_run: 'app.chat.toolLabels.deleteVerificationRun',
+  dismiss_verify_task: 'app.chat.toolLabels.dismissVerifyTask',
+  dismiss_simulate_task: 'app.chat.toolLabels.dismissSimulateTask',
+  fuzz_model_async: 'app.chat.toolLabels.fuzzModelAsync',
+  fuzz_task_status: 'app.chat.toolLabels.fuzzTaskStatus',
+  cancel_fuzz_task: 'app.chat.toolLabels.cancelFuzzTask',
+  list_fuzz_runs: 'app.chat.toolLabels.listFuzzRuns',
+  get_fuzz_run: 'app.chat.toolLabels.getFuzzRun',
+  get_fuzz_finding: 'app.chat.toolLabels.getFuzzFinding',
+  delete_fuzz_run: 'app.chat.toolLabels.deleteFuzzRun',
+  dismiss_fuzz_task: 'app.chat.toolLabels.dismissFuzzTask',
   add_device: 'app.chat.toolLabels.addDevice',
   delete_device: 'app.chat.toolLabels.deleteDevice',
   search_devices: 'app.chat.toolLabels.searchDevices',
@@ -327,6 +331,9 @@ const progressEventDetail = (progress: StreamProgress) => {
     return t('app.chat.progressPlanningDetail', { round });
   }
   if (progress.stage === 'REASONING') {
+    // An empty detail means the model returned no summary this round. Say that, rather than
+    // describing reasoning that did not happen — a canned "summarizing the goal…" line renamed
+    // the absence of reasoning as reasoning.
     return progress.detail || t('app.chat.progressReasoningFallback');
   }
   if (progress.stage === 'TOOL_EXECUTION') {
@@ -462,7 +469,43 @@ const messageExecutionTrace = (message: ChatMessage, index: number) =>
     isActiveAssistantMessage(index) ? streamProgressEvents.value : (message.executionTrace ?? []);
 const messageExecutionElapsed = (message: ChatMessage, index: number) =>
     isActiveAssistantMessage(index) ? streamElapsedSeconds.value : (message.executionElapsedSeconds ?? 0);
-const handleExecutionTraceToggle = (event: Event, active: boolean) => {
+/**
+ * Turns whose reasoning panel the user collapsed by hand, keyed by `turnId`.
+ *
+ * Reasoning used to shut the instant the turn ended, so anyone who was not watching the stream
+ * never read it. The newest turn now stays open once it completes — but a deliberate collapse is
+ * remembered, because re-expanding what the user just closed is worse than hiding it.
+ */
+const collapsedExecutionTraces = ref(new Set<string>());
+
+/**
+ * Identity a collapse is remembered under.
+ *
+ * `turnId` is optional on `ChatMessage`, and a row without one could record no collapse at all — so
+ * `:open` re-expanded the panel on the next render, discarding the user's deliberate close. Only the
+ * last message can be collapsed here, so its index is a stable enough fallback key.
+ */
+const executionTraceKey = (msg: ChatMessage, index: number) => msg.turnId ?? `index:${index}`;
+
+const isExecutionTraceOpen = (msg: ChatMessage, index: number) => {
+  if (isActiveAssistantMessage(index)) return true;
+  if (index !== messages.value.length - 1) return false;
+  return !collapsedExecutionTraces.value.has(executionTraceKey(msg, index));
+};
+
+const handleExecutionTraceToggle = (event: Event, active: boolean, msg?: ChatMessage, index?: number) => {
+  const target = event.currentTarget as HTMLDetailsElement | null;
+  if (msg && typeof index === 'number' && !active) {
+    const key = executionTraceKey(msg, index);
+    const collapsed = new Set(collapsedExecutionTraces.value);
+    if (target?.open) collapsed.delete(key);
+    else collapsed.add(key);
+    collapsedExecutionTraces.value = collapsed;
+  }
+  return handleExecutionTraceScroll(event, active);
+};
+
+const handleExecutionTraceScroll = (event: Event, active: boolean) => {
   const details = event.currentTarget as HTMLDetailsElement | null;
   if (!details?.open || active) return;
   nextTick(() => {
@@ -711,9 +754,9 @@ const copyFullMessage = async (content: string) => {
   try {
     const cleanContent = content.replace('CallEnd|>', '');
     await navigator.clipboard.writeText(cleanContent);
-    ElMessage.success({ message: t('app.chat.copied'), zIndex: 30000 });
+    notifySuccess(t('app.chat.copied'));
   } catch (err) {
-    ElMessage.error(t('app.chat.copyFailed'));
+    notifyError(t('app.chat.copyFailed'));
   }
 };
 
@@ -747,10 +790,32 @@ const formatStreamError = (error: unknown) => {
   return localizedTextOrFallback(message, t('app.chat.requestFailed'), locale.value);
 };
 
+/**
+ * The live recognizer, held so teardown can stop it.
+ *
+ * A function-local instance keeps the microphone open and keeps writing into `inputValue` after the
+ * component is gone (logout, or navigating off the board), because nothing can reach it to abort.
+ */
+let activeRecognition: any = null;
+
+const stopListening = () => {
+  if (!activeRecognition) return;
+  const recognition = activeRecognition;
+  activeRecognition = null;
+  // `abort` discards pending results rather than delivering them into a torn-down component; only
+  // fall back to `stop` when the engine has no `abort`. Chaining these with `??` ran both, because
+  // `abort()` returns undefined.
+  try {
+    if (typeof recognition.abort === 'function') recognition.abort();
+    else recognition.stop?.();
+  } catch { /* already ended */ }
+  isRecording.value = false;
+};
+
 const startListening = () => {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    ElMessage.warning(t('app.chat.speechUnsupported'));
+    notifyBlocked(t('app.chat.speechUnsupported'));
     return;
   }
   if (isRecording.value) return;
@@ -761,16 +826,24 @@ const startListening = () => {
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => { isRecording.value = true; ElMessage.info(t('app.chat.startSpeaking')); };
-    recognition.onend = () => { isRecording.value = false; };
-    recognition.onerror = () => { isRecording.value = false; ElMessage.error(t('app.chat.speechError')); };
+    recognition.onstart = () => { isRecording.value = true; notifyInfo(t('app.chat.startSpeaking')); };
+    recognition.onend = () => { activeRecognition = null; isRecording.value = false; };
+    recognition.onerror = () => {
+      activeRecognition = null;
+      isRecording.value = false;
+      notifyError(t('app.chat.speechError'));
+    };
     recognition.onresult = (event: any) => {
+      // A result that arrives after teardown has no field to write into.
+      if (activeRecognition !== recognition) return;
       const transcript = event.results[0][0].transcript;
       if (transcript) inputValue.value += transcript;
     };
+    activeRecognition = recognition;
     recognition.start();
   } catch (e) {
-    ElMessage.error(t('app.chat.speechStartFailed'));
+    activeRecognition = null;
+    notifyError(t('app.chat.speechStartFailed'));
     isRecording.value = false;
   }
 };
@@ -811,13 +884,13 @@ const invokeSystemCommand = async (command: StreamCommand): Promise<boolean> => 
 
 const markReconciliationRequired = () => {
   if (!reconciliationRequired.value) {
-    ElMessage.error(t('app.chat.reconciliationFailed'));
+    notifyError(t('app.chat.reconciliationFailed'));
   }
   reconciliationRequired.value = true;
 };
 
 const reconcileAuthoritativeState = async (
-    notifySuccess = false
+    announceSuccess = false
 ): Promise<boolean> => {
   if (reconciliationPromise) return reconciliationPromise;
   const reconciliationAuthEpoch = chatAuthEpoch;
@@ -835,7 +908,7 @@ const reconcileAuthoritativeState = async (
         return false;
       }
       reconciliationRequired.value = false;
-      if (notifySuccess) ElMessage.success(t('app.chat.reconciliationSucceeded'));
+      if (announceSuccess) notifySuccess(t('app.chat.reconciliationSucceeded'));
       return true;
     } finally {
       if (reconciliationPromise === ownedReconciliation) {
@@ -856,7 +929,7 @@ const executeStreamCommand = async (command: StreamCommand): Promise<boolean> =>
   if (command.type === 'REFRESH_DATA' && command.payload?.target !== 'board_state') {
     const reconciled = await reconcileAuthoritativeState();
     if (reconciled) {
-      ElMessage.warning(t('app.chat.targetRefreshRecovered'));
+      notifyBlocked(t('app.chat.targetRefreshRecovered'));
       return true;
     }
   } else if (command.type === 'REFRESH_DATA') {
@@ -868,7 +941,7 @@ const executeStreamCommand = async (command: StreamCommand): Promise<boolean> =>
 const retryAuthoritativeReconciliation = async () => {
   if (activeStreamSessionId.value) {
     const result = await settleActiveRequest(false);
-    if (result === 'ready') ElMessage.success(t('app.chat.reconciliationSucceeded'));
+    if (result === 'ready') notifySuccess(t('app.chat.reconciliationSucceeded'));
     return;
   }
   await reconcileAuthoritativeState(true);
@@ -912,7 +985,7 @@ const clearAuthoritativelyDeletedSession = (sessionId: string) => {
 
 const reportAuthoritativeSessionDeletion = (sessionId: string) => {
   clearAuthoritativelyDeletedSession(sessionId);
-  ElMessage.warning(t('app.chat.sessionRemovedExternally'));
+  notifyBlocked(t('app.chat.sessionRemovedExternally'));
 };
 
 const refreshPendingConfirmation = async (sessionId = currentSessionId.value, signal?: AbortSignal) => {
@@ -1063,7 +1136,7 @@ const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true)
   } catch (e) {
     if (authEpoch !== chatAuthEpoch) return '';
     console.error('创建会话失败:', e);
-    if (notifyOnFailure) ElMessage.error(t('app.chat.createSessionFailed'));
+    if (notifyOnFailure) notifyError(t('app.chat.createSessionFailed'));
     return null;
   }
 };
@@ -1084,31 +1157,25 @@ const onNewChatClick = async () => {
 };
 
 const handleDelete = async (sessionId: string) => {
+  const confirmed = await confirmDestructive({
+    title: t('app.chat.deleteSessionTitle'),
+    message: t('app.chat.deleteSessionMessage'),
+    confirmText: t('app.delete')
+  });
+  if (!confirmed) return;
+
   try {
-    await ElMessageBox.confirm(
-        t('app.chat.deleteSessionMessage'),
-        t('app.chat.deleteSessionTitle'),
-        {
-          confirmButtonText: t('app.delete'),
-          cancelButtonText: t('app.cancel'),
-          type: 'warning',
-          lockScroll: false,
-          appendTo: 'body'
-        }
-    );
     if (currentSessionId.value === sessionId || activeStreamSessionId.value === sessionId) {
       if (await settleActiveRequest(false) !== 'ready') return;
     }
     await deleteSession(sessionId);
     clearAuthoritativelyDeletedSession(sessionId);
-    ElMessage.success(t('app.chat.sessionDeleted'));
+    notifySuccess(t('app.chat.sessionDeleted'));
   } catch (error: any) {
-    if (error !== 'cancel') {
-      const reasonCode = error?.response?.data?.data?.reasonCode;
-      ElMessage.error(reasonCode === 'CHAT_SESSION_BUSY'
-          ? t('app.chat.sessionStillRunning')
-          : t('app.chat.deleteFailed'));
-    }
+    const reasonCode = error?.response?.data?.data?.reasonCode;
+    notifyError(reasonCode === 'CHAT_SESSION_BUSY'
+        ? t('app.chat.sessionStillRunning')
+        : t('app.chat.deleteFailed'));
   }
 };
 
@@ -1155,7 +1222,7 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
     if (requestEpoch !== historyRequestEpoch) return;
     if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
       historyLoadFailed.value = true;
-      ElMessage.error(t('app.chat.networkError'));
+      notifyError(t('app.chat.networkError'));
     }
   } finally {
     if (requestEpoch === historyRequestEpoch) {
@@ -1196,7 +1263,7 @@ const loadOlderHistory = async () => {
     if (viewport) viewport.scrollTop = viewport.scrollHeight - previousHeight + previousTop;
   } catch (error) {
     console.warn('[Chat] Failed to load older history:', error);
-    ElMessage.warning(t('app.chat.historyLoadOlderFailed'));
+    notifyBlocked(t('app.chat.historyLoadOlderFailed'));
   } finally {
     isLoadingOlderHistory.value = false;
   }
@@ -1413,7 +1480,7 @@ const settleActiveRequest = (
           retainActiveSession = true;
           reconciliationRequired.value = true;
           console.warn('[Chat] Failed to register explicit stop before aborting transport:', error);
-          ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
+          notifyBlocked(t('app.chat.stopOutcomeUnknown'));
           return outcome;
         } finally {
           detachedController?.abort();
@@ -1429,11 +1496,11 @@ const settleActiveRequest = (
           retainActiveSession = true;
           if (wasMonitoringRemoteExecution) {
             monitorSessionActivity(sessionId, true);
-            ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
+            notifyBlocked(t('app.chat.sessionStillRunningRetry'));
             return 'reconciliation-failed';
           }
           reconciliationRequired.value = true;
-          ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
+          notifyBlocked(t('app.chat.sessionStillRunningRetry'));
           return 'reconciliation-failed';
         }
       } catch (error) {
@@ -1467,10 +1534,10 @@ const settleActiveRequest = (
             historyLoadFailed.value = false;
             if (replaceHistoryWithoutTerminal && !hasTerminal) {
               restoreRetryDraftIfTurnWasNotAdmitted(history.messages, turnId);
-              ElMessage.warning(t('app.chat.incompleteStreamHistoryRestored'));
+              notifyBlocked(t('app.chat.incompleteStreamHistoryRestored'));
             }
           } else {
-            ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+            notifyBlocked(t('app.chat.historyTerminalRecordMissing'));
             retainActiveSession = true;
             reconciliationRequired.value = true;
             return 'reconciliation-failed';
@@ -1487,7 +1554,7 @@ const settleActiveRequest = (
           return reconciled ? 'ready' : 'reconciliation-failed';
         }
         console.error('[Chat] Failed to reload chat history after settlement:', error);
-        ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
+        notifyBlocked(t('app.chat.historyReloadAfterSettleFailed'));
         retainActiveSession = true;
         reconciliationRequired.value = true;
         return 'reconciliation-failed';
@@ -1495,7 +1562,7 @@ const settleActiveRequest = (
       if (!reconciled) return 'reconciliation-failed';
       if (outcome === 'outcome-unknown') {
         reconciliationRequired.value = true;
-        ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
+        notifyBlocked(t('app.chat.stopOutcomeUnknown'));
       }
       return outcome;
     } finally {
@@ -1568,6 +1635,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   abortActiveTransport(false);
+  stopListening();
   stopSessionActivityMonitor();
   settlementAbortController?.abort();
   settlementAbortController = null;
@@ -1588,12 +1656,12 @@ onUnmounted(() => {
 
 const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCommand) => {
   if (props.interactionLocked) {
-    ElMessage.warning(t('app.chat.boardInteractionLocked'));
+    notifyBlocked(t('app.chat.boardInteractionLocked'));
     return;
   }
   if (!content || isLoading.value) return;
   if (content.length > REQUEST_LIMITS.chatContentCharacters) {
-    ElMessage.warning(t('app.chat.contentTooLong', {
+    notifyBlocked(t('app.chat.contentTooLong', {
       limit: REQUEST_LIMITS.chatContentCharacters.toLocaleString()
     }));
     return;
@@ -1624,7 +1692,11 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
   let requestAccepted = false;
   let requestDispatched = false;
   let acceptedStreamFailed = false;
-  let aiMsgIndex = -1;
+  // The streaming row is owned by `turnId`, not by its position. "Load older messages" prepends a
+  // page, which shifts every index: an index-owned row would send subsequent chunks, the terminal
+  // status, and the execution trace into an unrelated archived message.
+  const activeAssistantMessage = () =>
+      messages.value.find(message => message.role === 'assistant' && message.turnId === turnId);
   streamProgressEvents.value = [];
   appendStreamProgress({ stage: 'CONTEXT_READY' });
   streamElapsedSeconds.value = 0;
@@ -1653,18 +1725,18 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
     activeStreamSessionId.value = targetSessionId;
 
     // 先插入一条空的 AI 消息占位
-    aiMsgIndex = messages.value.push({
+    messages.value.push({
       role: 'assistant',
       content: '',
       turnId,
       executionTrace: [...streamProgressEvents.value]
-    }) - 1;
+    });
     scrollToBottom(true);
 
     const renderStreamError = (error: unknown) => {
       if (requestEpoch !== streamRequestEpoch) return;
       streamErrorHandled = true;
-      const msg = messages.value[aiMsgIndex];
+      const msg = activeAssistantMessage();
       if (!msg) return;
 
       const prefix = error instanceof ChatStreamError && error.serverFrame
@@ -1694,7 +1766,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
             if (!cleanChunk) return;
 
             hasReceivedContent = true;
-            const msg = messages.value[aiMsgIndex];
+            const msg = activeAssistantMessage();
             if (!msg) return;
             // 直接追加，渲染器会自动处理 Markdown 格式
             msg.content += cleanChunk;
@@ -1712,7 +1784,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
           onProgress: (progress: StreamProgress) => {
             if (requestEpoch !== streamRequestEpoch) return;
             appendStreamProgress(progress);
-            const msg = messages.value[aiMsgIndex];
+            const msg = activeAssistantMessage();
             if (msg) msg.executionTrace = [...streamProgressEvents.value];
           },
           onError: (err: any) => {
@@ -1726,7 +1798,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
           },
           onFinish: (terminal: StreamTerminal) => {
             if (requestEpoch !== streamRequestEpoch) return;
-            const msg = messages.value[aiMsgIndex];
+            const msg = activeAssistantMessage();
             if (msg) msg.executionStatus = terminal.executionStatus;
             // Refresh title/time only after the server stream actually completed.
             void initSessions();
@@ -1757,9 +1829,9 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
         explicitStopRegistrationPending.value = false;
         activeStreamRetryDraft.value = '';
       }
-      ElMessage.error(t('app.chat.sendFailedWithReason', { reason: formatStreamError(error) }));
+      notifyError(t('app.chat.sendFailedWithReason', { reason: formatStreamError(error) }));
     } else if (!streamErrorHandled && !hasReceivedContent) {
-      ElMessage.error(t('app.chat.sendFailedWithReason', {
+      notifyError(t('app.chat.sendFailedWithReason', {
         reason: error instanceof Error ? error.message : String(error)
       }));
     }
@@ -1769,7 +1841,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
       if (requestEpoch !== streamRequestEpoch || !requestContextIsCurrent()) return;
       isStreaming.value = false;
       streamProgress.value = null;
-      const completedMessage = messages.value[aiMsgIndex];
+      const completedMessage = activeAssistantMessage();
       if (completedMessage) {
         completedMessage.executionTrace = [...streamProgressEvents.value];
         completedMessage.executionElapsedSeconds = streamElapsedSeconds.value;
@@ -1796,7 +1868,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
             if (!idle) {
               retainActiveSession = true;
               reconciliationRequired.value = true;
-              ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
+              notifyBlocked(t('app.chat.sessionStillRunningRetry'));
             } else {
               if (acceptedStreamFailed) {
                 await reconcileAuthoritativeState();
@@ -1811,10 +1883,10 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
                     applyHistoryPage(history, false);
                     if (acceptedStreamFailed && !hasTerminal) {
                       restoreRetryDraftIfTurnWasNotAdmitted(history.messages, completedTurnId);
-                      ElMessage.warning(t('app.chat.incompleteStreamHistoryRestored'));
+                      notifyBlocked(t('app.chat.incompleteStreamHistoryRestored'));
                     }
                   } else {
-                    ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+                    notifyBlocked(t('app.chat.historyTerminalRecordMissing'));
                     retainActiveSession = true;
                     reconciliationRequired.value = true;
                   }
@@ -1831,7 +1903,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
                     if (!reconciledDeletedSession) reconciliationRequired.value = true;
                   } else {
                     console.error('[Chat] Failed to reload authoritative history after stream completion:', error);
-                    ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
+                    notifyBlocked(t('app.chat.historyReloadAfterSettleFailed'));
                     retainActiveSession = true;
                     reconciliationRequired.value = true;
                   }
@@ -1848,7 +1920,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
           if (!requestContextIsCurrent()) return;
           reconciliationRequired.value = true;
           if (reconciled) {
-            ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
+            notifyBlocked(t('app.chat.stopOutcomeUnknown'));
           }
         } finally {
           if (requestContextIsCurrent()
@@ -1897,7 +1969,7 @@ const retryPendingConfirmation = () => {
 
 const handleTaskClick = (text: string) => {
   if (props.interactionLocked) {
-    ElMessage.warning(t('app.chat.boardInteractionLocked'));
+    notifyBlocked(t('app.chat.boardInteractionLocked'));
     return;
   }
   refreshBoardContext();
@@ -2200,12 +2272,12 @@ const scrollToBottom = (force = false) => {
                     <details
                       v-if="messageExecutionTrace(msg, index).length"
                       class="chat-execution-trace"
-                      :open="isActiveAssistantMessage(index)"
+                      :open="isExecutionTraceOpen(msg, index)"
                       :data-testid="isActiveAssistantMessage(index) ? 'chat-assistant-pending' : undefined"
                       :role="isActiveAssistantMessage(index) ? 'status' : undefined"
                       :aria-live="isActiveAssistantMessage(index) ? 'polite' : undefined"
                       aria-atomic="false"
-                      @toggle="handleExecutionTraceToggle($event, isActiveAssistantMessage(index))"
+                      @toggle="handleExecutionTraceToggle($event, isActiveAssistantMessage(index), msg, index)"
                     >
                       <summary class="chat-execution-header">
                         <span class="chat-execution-chevron" aria-hidden="true">
@@ -2269,7 +2341,9 @@ const scrollToBottom = (force = false) => {
                           <span class="chat-execution-step" aria-hidden="true">{{ progressIndex + 1 }}</span>
                           <div class="chat-execution-event-copy">
                             <strong>{{ progressEventTitle(progress) }}</strong>
-                            <p>{{ progressEventDetail(progress) }}</p>
+                            <!-- Reasoning keeps its line breaks: the backend preserves them
+                                 precisely so a decomposition does not read as one run-on line. -->
+                            <p :class="{ 'is-reasoning-copy': progress.stage === 'REASONING' }">{{ progressEventDetail(progress) }}</p>
                           </div>
                           <span
                             v-if="progressEventStatus(progress)"
@@ -2390,9 +2464,10 @@ const scrollToBottom = (force = false) => {
                   <button
                     type="button"
                     :class="['tool-icon', { active: isRecording }]"
-                    :aria-label="t('app.chat.startSpeaking')"
-                    :title="t('app.chat.startSpeaking')"
-                    @click="startListening"
+                    :aria-pressed="isRecording"
+                    :aria-label="isRecording ? t('app.chat.stopVoiceInput') : t('app.chat.startVoiceInput')"
+                    :title="isRecording ? t('app.chat.stopVoiceInput') : t('app.chat.startVoiceInput')"
+                    @click="isRecording ? stopListening() : startListening()"
                     :disabled="interactionLocked || isLoading || historyLoadFailed"
                   >
                     <AudioOutlined/>
@@ -2436,7 +2511,7 @@ const scrollToBottom = (force = false) => {
 .global-chat-wrapper {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: var(--z-chat-panel);
   pointer-events: none;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --chat-accent: #7c3aed;
@@ -3253,6 +3328,14 @@ const scrollToBottom = (force = false) => {
   color: var(--chat-muted);
   font-weight: 400;
   line-height: 1.45;
+}
+
+/* Reasoning is the one entry carrying an argument rather than a status, so it keeps the model's
+   paragraph and list breaks and reads at full contrast instead of as muted metadata. */
+.chat-execution-event-copy p.is-reasoning-copy {
+  white-space: pre-wrap;
+  color: var(--chat-text);
+  line-height: 1.55;
 }
 
 .chat-execution-meta {

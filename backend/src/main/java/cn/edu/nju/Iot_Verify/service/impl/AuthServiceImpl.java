@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.po.UserPo;
+import cn.edu.nju.Iot_Verify.repository.BoardEditJournalRepository;
 import cn.edu.nju.Iot_Verify.repository.BoardLayoutRepository;
 import cn.edu.nju.Iot_Verify.repository.BoardEnvironmentVariableRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
@@ -83,6 +84,7 @@ public class AuthServiceImpl implements AuthService {
     private final TraceRepository traceRepository;
     private final VerificationTaskRepository verificationTaskRepository;
     private final AiSessionStateRepository aiSessionStateRepository;
+    private final BoardEditJournalRepository boardEditJournalRepository;
 
     @Override
     @Transactional
@@ -198,6 +200,9 @@ public class AuthServiceImpl implements AuthService {
         specificationRepository.deleteByUserId(userId);
         boardLayoutRepository.deleteByUserId(userId);
         deviceTemplateRepository.deleteByUserId(userId);
+        // The undo journal stores full before/after snapshots of the account's rules and
+        // specifications, so leaving it behind would retain deleted users' board content.
+        boardEditJournalRepository.deleteByUserId(userId);
     }
 
     private ActiveTaskIds activeTaskIds(Long userId) {

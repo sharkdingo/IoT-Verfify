@@ -28,7 +28,35 @@ npm run dev        # dev server :3000, proxies /api → http://localhost:8080
 npm run build      # vue-tsc type-check + production build (run this to verify)
 npm run preview
 npm run test:unit  # Vitest
+npm run test:e2e   # Playwright; needs the backend on :8080
 ```
+
+`test:e2e` takes minutes — delegate it to a background subagent (see the root CLAUDE.md) instead of
+blocking on it, and keep reading source while it runs.
+
+E2E runs against a **production build** served by `vite preview`, not the dev server: on-demand
+module transforms made two parallel browsers exceed the board's load timeout, failing tests that had
+nothing wrong with them. Two consequences worth knowing before you debug an E2E result:
+
+- `vite.config.ts` needs its `/api` proxy declared under `preview` as well as `server` — `vite
+  preview` does not inherit `server.proxy`.
+- Port 3000 must be free. `reuseExistingServer` is off precisely so a leftover dev server cannot be
+  adopted silently, which would skip the build and test **stale code** while reporting green.
+- `AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR` (default 60) is read by the **backend** at startup and
+  counted in-memory per source, so exporting it in the Playwright shell does nothing — it has to be
+  set on the JVM you are testing against. A full run stays under the cap by design: `support/auth.ts`
+  hands most specs a worker-scoped `sharedReadOnlyAccount` (one registration per worker, not per
+  test), so ~58 `createAuthenticatedUser` sites produce far fewer registrations. The margin is
+  thinner than a green run suggests, though: the window is a rolling hour on a live counter, so
+  back-to-back full runs share it. For repeated runs, restart the backend with the value raised
+  rather than trusting the headroom.
+- **A route mock must satisfy the same validators as the real response.** `api/chat.ts` validates
+  every field it depends on, so a fixture returning a convenient subset is rejected at the boundary —
+  and the failure surfaces far from the cause. A session mock missing `active`/`userId`/`updatedAt`
+  made session creation throw, so the turn never sent, so a `REFRESH_DATA` command never arrived, and
+  the test failed on an unrelated undo-button assertion. When an E2E failure makes no sense, read the
+  browser console in the Playwright trace (`--trace=retain-on-failure`) before theorising: two rounds
+  of plausible guesses cost more than one look at the actual error.
 
 ## Codebase map
 
@@ -44,8 +72,13 @@ src/
               fuzzing.ts    default-export object: exploration tasks/runs/findings
   types/      TypeScript contracts (auth, device, node, edge, rule, spec, verify, fuzzing, fix, …)
   stores/     reactive state (auth, chat)
-  router/     routes + auth guard
+  router/     index.ts       routes + auth guard (reads the auth store, never localStorage)
+              loginRedirect.ts  the single owner of the "session gone → login" location
+  composables/ useTheme, useModalAccessibility, useBodyScrollLock, useRovingTablist
   views/      Landing / Board / NotFound
+              board/  Board.vue's extracted domain logic — pure, unit-tested modules with no
+                      component dependencies (deep links, semantic commit, assistant refresh
+                      targets, scene-import diagnostics, recommendation wording, portable scene)
   components/ CanvasBoard, ChatView, ControlCenter, SystemInspector,
               TraceHistoryPanel, SimulationTimeline, FixResultDialog,
               RuleBuilderDialog, DeviceDialog, AccountDeleteDialog, …
@@ -100,6 +133,91 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
 
 ## Gotchas (the "why")
 
+- **The board's URL owns "which run is open", and nothing else.** `run=<kind>:<id>` plus
+  `trace`/`finding` are the only deep-linked state; panel layout, widths, `activeSection`,
+  and canvas pan/zoom are persisted server-side per user via `BoardLayoutDto`, so putting
+  them in the URL would create a second authority. Openers navigate and a single watcher
+  applies the URL — never assign result state and the URL separately. Opening is `push`,
+  correcting/clearing is `replace`. Rules and the full inventory:
+  [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md).
+- **A disabled submit must say why, inline.** Derive the disabled state and the message from
+  one `*BlockedReason` computed and link it with `aria-describedby`; never also toast what the
+  form already shows. Result-surface closers come in pairs: `close*` for internal transitions
+  (which must not touch the URL) and `dismiss*` for a user-facing close (which clears the deep
+  link). Getting this backwards makes a replay strip its own link, or leaves `run=` behind so
+  the sync reopens the surface the user just closed.
+- **Validate response cross-field invariants in both directions.** A one-way check leaves the
+  mirror case free to fabricate: a `VERIFIED` strategy attempt with no suggestion passed because
+  `fixable` is derived from suggestions alone, and a scenario could apply a whole scene while
+  reporting zero inspected candidates because only the standalone path tied `validatedCount` to its
+  kept items. When a count or status claims evidence, assert the evidence exists — and prefer a
+  bound over an equality where a legitimate case differs (a synthesized adjustment adds an applied
+  item with no validated candidate behind it).
+- **Undo reverses a persisted board edit — nothing else.** It is not cancel, stop, delete-result,
+  dialog close, or browser Back; each of those has its own control. The server journal is the
+  authority: `useBoardUndo` keeps no snapshot stack, applies the authoritative collections the
+  response carries, and reads availability from `/board/edits/availability`. Never intercept
+  `Ctrl+Z` in an input, textarea, `contenteditable`, or during an IME composition
+  (`boardUndoShortcut.ts` owns that scoping). Reversible: rule/spec create+delete and rule reorder
+  (one button press = one edit, so its entry stores the previous *ordering*). Device deletion and
+  scene replace/clear clear the journal because their inverse is not a single record.
+- **Shrink `Board.vue` by extracting rules, not by adding layers.** Worthwhile moves take their
+  inputs as arguments (including `t`/`locale`) and land in `views/board/` or `utils/` with tests:
+  boundary parsing, wording, decision tables, freshness predicates. Do **not** extract code needing
+  many injected reactive getters — that trades size for indirection, the pass-through layer the root
+  CLAUDE.md forbids. Two things that look extractable but are not: the four recommendation panels
+  diverge in most of their markup (a shared component would need more slots than it saves), and the
+  fuzzing refs are interleaved with simulation and task-inbox state rather than contiguous.
+- **Every rule/spec mutation commits through `board/semanticCommit.ts`.** It applies the
+  authoritative collections and then everything derived from them — canvas edges, dangling
+  inspector focus, undo availability, verdict staleness — in a fixed order. Never hand-assemble
+  those follow-ups at a call site: that is what let reorder skip undo availability and undo skip
+  the canvas edges, each hidden by a later refresh that happened to repair the state. An undo is
+  itself a semantic mutation, so it uses this path and must match `isBoardMutationRequest`.
+- **A path that changes the undo journal must re-read it.** Journal-clearing commands (device
+  deletion, scene replace/clear) call `notifyUndoJournalCleared()`; a wholesale semantic reload
+  (`refreshBoardSnapshot`) re-reads availability explicitly at the end. A board invalidation does
+  **not** cover the publishing tab — `BroadcastChannel` never delivers to the context that posted,
+  and `publishBoardInvalidation` only calls `postMessage` — so the origin tab depends on that
+  explicit re-read, not on its own broadcast. The assistant relies on it, so an assistant-created
+  rule is as undoable as a user-created one (`views/board/assistantRefresh.ts` owns the target
+  table; verified against the real model in `e2e/live-ai-no-mock.spec.ts`). The assistant cannot
+  delete in one turn — destructive tool actions need a confirmation token, so do not write features
+  assuming otherwise.
+- **All user feedback goes through `utils/feedback.ts`.** Call sites state the intent
+  (`notifySuccess`/`notifyInfo`/`notifyBlocked`/`notifyError`, `confirmDestructive`,
+  `acknowledge`), never `ElMessage`/`ElMessageBox` directly — that is what kept 421 toast
+  call sites and three different confirmation styles from agreeing. A success whose result is
+  already visible on screen gets **no** toast. Field validation is inline, not a toast. A
+  failed load that leaves state unknown is a persistent banner, not a toast.
+- **One owner for "the session is gone".** The axios 401 interceptor, the SSE transport,
+  and `App.vue`'s auth watcher all route through `router/loginRedirect.ts`. Never build a
+  second `{ path: '/', query: { mode: 'login', redirect } }` literal, and never re-read
+  `localStorage` to decide whether the user is signed in — the auth store is authoritative
+  (it initializes from storage at module load, before the first guard runs). The route guard
+  calls `revalidateSession()`, which drops a session whose JWT expired while the tab stayed
+  open; `isLoggedIn` alone is only decided at load/login and would keep reading as true.
+- **Complementary media queries must split at one value.** Write
+  `max-width: 1023.98px` / `min-width: 1024px`, never `1023px` / `1024px`: a fractional
+  viewport width (routine on scaled displays) matches neither rule, so an element gets
+  neither the narrow nor the wide layout. The same applies to `max-height: 599.98px` and to
+  any hand-written breakpoint that must not overlap a Tailwind prefix — `sm:` starts at
+  640px, so its compact counterpart ends at 639.98px.
+- **`role="dialog"` implies a focus trap.** The board's floating tool panels
+  (verification, simulation, the four recommendation panels, fuzzing, run history) are
+  non-modal on purpose: the canvas stays live and `useModalAccessibility` is given
+  `trapFocus: false`. Those are `role="region"`. Anything that claims
+  `role="dialog"` + `aria-modal="true"` must keep the trap — and therefore also gets the
+  background scroll lock, which `useModalAccessibility` applies for exactly that case.
+- **Stacking order is a named scale, not a literal.** Add a layer to the `--z-*` block in
+  `styles/base.css` and reference it (`z-[var(--z-modal)]` in Tailwind,
+  `var(--z-modal)` in CSS). Values inside a component's own stacking context stay local
+  and small. A raw four-digit `z-index` is a bug.
+- **Side panels are optionally controlled.** `ControlCenter` / `SystemInspector` accept
+  `activeSection` but must not declare a default for it: a default makes the prop look
+  permanently "controlling", which silently discards internal selection changes when no
+  parent is managing it.
+
 - **Base URL comes from one place, relative by default.** Both `http.ts` (axios,
   appends `/api`) and `chat.ts` (SSE) read `import.meta.env.VITE_API_BASE_URL`. Empty
   (default) → relative `/api` via the Vite/Nginx proxy; set an absolute URL only for
@@ -117,6 +235,13 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
 - **Verification warnings are user-visible.** `disabledRuleCount`,
   `skippedSpecCount`, and `[rule-disabled]` / `[spec-skipped]` entries in `checkLogs`
   must be shown even when `safe === true`.
+- **Own a streaming row by identity, never by position.** The assistant's in-flight row is found by
+  `turnId`: "load older messages" prepends a page and shifts every array index, which sent chunks
+  and terminal status into an archived message. Browsing history during a stream is legitimate — do
+  not "fix" this class of bug by disabling the operation.
+- **Staleness belongs to the run, not to the dialog showing it.** `lastSimulationResult` survives
+  every dialog close while `simulationResult` does not, so flag and clear against the surviving run.
+  Closing a surface is not a fresh result and must not clear a stale flag; only a new run is.
 - **A displayed verdict only describes the model that was verified.** Any semantic board
   change (applying a fix, editing rules/specs/devices from the inspector or chat) makes an
   open verification result stale: `Board.vue` flags it from the single semantic-scene-change

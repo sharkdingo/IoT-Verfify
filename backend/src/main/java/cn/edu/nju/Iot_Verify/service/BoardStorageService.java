@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardUndoResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
@@ -75,9 +76,35 @@ public interface BoardStorageService {
     /** Atomically remove a rule only when its identity and authored semantics are unchanged. */
     CollectionMutationResultDto<RuleDto> removeRuleIfUnchanged(
             Long userId, long ruleId, RuleDto expected);
-    /** Atomically replace execution order only while the complete expected order still matches. */
-    List<RuleDto> reorderRules(
+    /**
+     * Atomically replace execution order only while the complete expected order still matches.
+     *
+     * <p>Reversible, so it returns the same mutation envelope as the other reversible edits and
+     * carries the resulting undo availability. Users reach reorder through explicit up/down
+     * buttons and read one press as one edit, so it must be undoable like any other.
+     */
+    CollectionMutationResultDto<RuleDto> reorderRules(
             Long userId, List<Long> expectedRuleIds, List<Long> ruleIds);
+
+    /**
+     * Reverses the newest reversible board edit that is still in effect.
+     *
+     * <p>Only rule and specification create/delete participate; see {@code BoardEditEntityType}
+     * for why devices and environment variables are excluded. Refuses when the affected record
+     * was changed by something else after the edit was recorded, so an undo can never silently
+     * discard newer work. Returns {@code applied=false} when there is no history left, which
+     * makes repeating the request idempotent.
+     */
+    BoardUndoResultDto undoLastEdit(Long userId);
+
+    /**
+     * Current undo availability, with no side effects. Lets a fresh page load restore the undo
+     * affordance from server state instead of guessing.
+     */
+    BoardUndoResultDto boardEditAvailability(Long userId);
+
+    /** Re-applies the oldest undone edit. Same conflict and idempotency rules as undo. */
+    BoardUndoResultDto redoLastUndoneEdit(Long userId);
 
     /**
      * Atomic read-modify-write of rules against the complete current model snapshot. The mutator's

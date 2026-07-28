@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 class BoardSemanticValidatorTest {
@@ -168,6 +170,76 @@ class BoardSemanticValidatorTest {
         assertEquals("COMMAND_PRESTATE_UNREACHABLE", issue.reasonCode());
     }
 
+    /**
+     * A shared environment variable that no template writes is NOT frozen at its pool value.
+     *
+     * <p>`SmvMainModuleBuilder.appendEnvTransitions` emits a final `TRUE: {<all declared values>}`
+     * branch for every enum environment variable, so the pool value is only `init` and any declared
+     * value is reachable on step 1. Narrowing these the way local variables are narrowed silently
+     * dropped the platform's flagship requests — "sound the alarm when smoke is detected" while the
+     * pool reads `clear` — into `filteredItems` as "legal but unreachable".
+     */
+    @Test
+    void keepsSharedEnvironmentEnumValuesReachableWhenNoTemplateWritesThem() {
+        BoardSemanticValidator.BoardContext context = sharedSensorContext("clear");
+
+        BoardSemanticValidator.GroupValidationIssue issue =
+                BoardSemanticValidator.validateRuleConditionGroup(context, List.of(
+                        ruleConditionOn("sensor-1", "variable", "smoke", "=", "detected")
+                ), null);
+
+        assertNull(issue, "a declared environment value must stay reachable from any pool value");
+    }
+
+    @Test
+    void stillRejectsAnUndeclaredSharedEnvironmentValue() {
+        BoardSemanticValidator.BoardContext context = sharedSensorContext("clear");
+
+        // Widening reachability must not stop rejecting a value outside the declared domain.
+        BoardSemanticValidator.GroupValidationIssue issue =
+                BoardSemanticValidator.validateRuleConditionGroup(context, List.of(
+                        ruleConditionOn("sensor-1", "variable", "smoke", "=", "smouldering")
+                ), null);
+
+        assertNotNull(issue, "domain/reachability outcome for an undeclared value");
+    }
+
+    /** A smoke sensor exposing a shared (IsInside=false) enum variable that nothing writes. */
+    private static BoardSemanticValidator.BoardContext sharedSensorContext(String poolValue) {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor-1");
+        node.setTemplateName("Smoke Sensor");
+        node.setLabel("Smoke Sensor");
+        node.setState("Working");
+
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Smoke Sensor")
+                .modes(List.of())
+                .workingStates(List.of(state("Working")))
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("smoke")
+                        .isInside(false)
+                        .falsifiableWhenCompromised(false)
+                        .trust("trusted")
+                        .privacy("public")
+                        .values(List.of("clear", "detected", "tested"))
+                        .build()))
+                .apis(List.of())
+                .build();
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Smoke Sensor");
+        template.setManifest(manifest);
+
+        BoardEnvironmentVariableDto environment = new BoardEnvironmentVariableDto();
+        environment.setName("smoke");
+        environment.setValue(poolValue);
+        environment.setTrust("trusted");
+        environment.setPrivacy("public");
+
+        return BoardSemanticValidator.recommendationContext(
+                List.of(node), List.of(template), List.of(environment));
+    }
+
     private static BoardSemanticValidator.BoardContext context() {
         DeviceNodeDto node = new DeviceNodeDto();
         node.setId("device-1");
@@ -210,6 +282,20 @@ class BoardSemanticValidatorTest {
                 .trust("trusted")
                 .privacy("public")
                 .dynamics(List.of())
+                .build();
+    }
+
+    private static RuleDto.Condition ruleConditionOn(String deviceId,
+                                                     String targetType,
+                                                     String attribute,
+                                                     String relation,
+                                                     String value) {
+        return RuleDto.Condition.builder()
+                .deviceName(deviceId)
+                .targetType(targetType)
+                .attribute(attribute)
+                .relation(relation)
+                .value(value)
                 .build();
     }
 

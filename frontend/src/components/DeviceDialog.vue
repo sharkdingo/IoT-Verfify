@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {ref, watch, computed, nextTick} from 'vue'
 import {useI18n} from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 import type {DeviceManifest, DeviceTemplate, InternalVariable} from '../types/device'
@@ -13,6 +12,7 @@ import { resolveImpactEnvironmentDefinition } from '@/utils/device'
 import { specTemplateDetails } from '@/assets/config/specTemplates'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
+import { confirmDestructive } from '@/utils/feedback'
 import {
   PRIVACY_OPTIONS,
   TRUST_OPTIONS,
@@ -335,21 +335,11 @@ const prepareClose = async (): Promise<boolean> => {
   if (!hasUnsavedRuntimeDraft.value) return true
   if (closeConfirmation) return closeConfirmation
 
-  closeConfirmation = ElMessageBox.confirm(
-    t('app.deviceRuntimeDiscardMessage'),
-    t('app.deviceRuntimeDiscardTitle'),
-    {
-      confirmButtonText: t('app.discardChanges'),
-      cancelButtonText: t('app.cancel'),
-      type: 'warning',
-      appendTo: 'body',
-      lockScroll: false
-    }
-  ).then(() => true).catch(error => {
-    if (error !== 'cancel' && error !== 'close') {
-      console.error('Device runtime discard confirmation failed:', error)
-    }
-    return false
+  // Single-flight: a second close attempt joins the confirmation already on screen.
+  closeConfirmation = confirmDestructive({
+    title: t('app.deviceRuntimeDiscardTitle'),
+    message: t('app.deviceRuntimeDiscardMessage'),
+    confirmText: t('app.discardChanges')
   }).finally(() => {
     closeConfirmation = null
   })
@@ -640,24 +630,35 @@ watch(
   { flush: 'post' }
 )
 
-const saveRuntime = () => {
+/**
+ * Why the runtime draft cannot be saved yet, or `null` when it is valid. Drives both the save
+ * button's disabled state and the inline message beside it, so the reason stays visible while
+ * the user fixes the fields instead of fading in a toast.
+ */
+const runtimeSaveBlockedReason = computed<string | null>(() => {
   const template = currentTemplate.value
-  const node = currentNode.value
-  if (!template || !node || !props.nodeId) return
-  if (hasRuntimeDraftConflict.value) {
-    ElMessage.warning(t('app.deviceRuntimeConflictUnresolved'))
-    return
-  }
+  if (!template || !currentNode.value || !props.nodeId) return null
+  // The schema/field conflict already renders its own detailed panel below.
+  if (hasRuntimeDraftConflict.value) return t('app.deviceRuntimeConflictUnresolved')
 
   const runtime = buildDeviceRuntimeConfig(template, runtimeDraft.value, {
     includeEmptyCollections: true,
     variableScope: 'local'
   }) || {}
-  const validationMessage = validateDeviceRuntimeConfig(template, runtime, t, { variableScope: 'local' })
-  if (validationMessage) {
-    ElMessage.warning(validationMessage)
-    return
-  }
+  return validateDeviceRuntimeConfig(template, runtime, t, { variableScope: 'local' }) || null
+})
+
+const saveRuntime = () => {
+  const template = currentTemplate.value
+  const node = currentNode.value
+  if (!template || !node || !props.nodeId) return
+  // Reported inline by `runtimeSaveBlockedReason`, which also disables the save button.
+  if (runtimeSaveBlockedReason.value) return
+
+  const runtime = buildDeviceRuntimeConfig(template, runtimeDraft.value, {
+    includeEmptyCollections: true,
+    variableScope: 'local'
+  }) || {}
 
   runtimeSaveSnapshot = {
     submitted: canonicalizeRuntimeDraft(runtimeDraft.value),
@@ -1032,7 +1033,7 @@ const deviceSpecs = computed(() => {
                   <span class="material-icons-round text-3xl text-blue-600">{{ getDeviceIcon(deviceName) }}</span>
                 </div>
                 <div class="min-w-0">
-                  <h1 id="device-dialog-title" class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') }}</h1>
+                  <h2 id="device-dialog-title" class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') }}</h2>
                   <div class="mt-1 flex min-w-0 items-center gap-2">
                     <p class="truncate text-sm font-medium text-slate-500" :title="label">{{ label }}</p>
                   </div>
@@ -1161,7 +1162,10 @@ const deviceSpecs = computed(() => {
                     type="button"
                     data-testid="device-runtime-save"
                     @click="saveRuntime"
-                    :disabled="runtimeSaving || hasRuntimeDraftConflict"
+                    :disabled="runtimeSaving || Boolean(runtimeSaveBlockedReason)"
+                    :aria-describedby="runtimeSaveBlockedReason && !hasRuntimeDraftConflict
+                      ? 'device-runtime-save-blocked-reason'
+                      : undefined"
                     class="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-purple-300"
                   >
                     <span v-if="runtimeSaving" class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
@@ -1169,6 +1173,18 @@ const deviceSpecs = computed(() => {
                     {{ t('app.saveInstanceConfig') }}
                   </button>
                 </div>
+
+                <!-- Validation reason. The schema/field conflict has its own richer panel
+                     below, so this only covers the remaining runtime validation failures. -->
+                <p
+                  v-if="runtimeSaveBlockedReason && !hasRuntimeDraftConflict"
+                  id="device-runtime-save-blocked-reason"
+                  role="status"
+                  data-testid="device-runtime-blocked-reason"
+                  class="mb-3 text-xs font-semibold leading-5 text-red-600"
+                >
+                  {{ runtimeSaveBlockedReason }}
+                </p>
 
                 <div
                   v-if="hasRuntimeDraftConflict"
@@ -1611,7 +1627,9 @@ const deviceSpecs = computed(() => {
 .device-dialog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2200;
+  /* A modal, so it must win over the board's banners and alerts. The previous raw 2200 was
+     numerically the banner layer, letting an alert paint over an open device dialog. */
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1621,7 +1639,9 @@ const deviceSpecs = computed(() => {
   backdrop-filter: blur(6px);
 }
 
-@media (max-width: 640px) {
+/* Ends just below Tailwind's `sm` (min-width: 640px) so the compact padding here and the
+   `sm:` utilities on the surface can never both apply at exactly 640px. */
+@media (max-width: 639.98px) {
   .device-dialog-overlay {
     padding: 0.75rem;
   }

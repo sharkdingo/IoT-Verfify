@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { reactive, computed, watch, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import type { DeviceNode } from '../types/node'
 import type { DeviceManifest, DeviceTemplate } from '../types/device'
@@ -10,6 +9,13 @@ import boardApi from '../api/board'
 import { duplicateRuleReasonKey, ruleSimilarityReasonKey } from '@/utils/rule'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
+import {
+  acknowledge,
+  confirmDestructive,
+  dismissOpenConfirmation,
+  notifyBlocked,
+  notifySuccess
+} from '@/utils/feedback'
 
 const { t } = useI18n()
 
@@ -479,7 +485,7 @@ const addSource = () => {
   // 添加源设备及其条件
   if (canAddSource.value && currentSource.itemType) {
     if (ruleData.sources.length >= REQUEST_LIMITS.ruleConditions) {
-      ElMessage.warning(t('app.itemLimitReached', {
+      notifyBlocked(t('app.itemLimitReached', {
         resource: t('app.ruleConditions'),
         limit: REQUEST_LIMITS.ruleConditions
       }))
@@ -506,14 +512,10 @@ const removeSource = (index: number) => {
   ruleData.sources.splice(index, 1)
 }
 
-const validateRuleDraft = () => {
-  if (!isRuleDraftComplete.value) {
-    ElMessage.warning(ruleDraftIncompleteReason.value)
-    return false
-  }
-
-  return true
-}
+// No toast here: `ruleDraftIncompleteReason` is already rendered inline, linked by aria-describedby,
+// and disables both submit buttons, so a toast would repeat text the user can see. The one path that
+// can reach this with a stale draft (validateAfterAsyncCheck) raises its own distinct message.
+const validateRuleDraft = () => isRuleDraftComplete.value
 
 const buildRuleDraft = (id = ruleData.id): RuleForm => ({
   ...ruleData,
@@ -530,7 +532,7 @@ const ruleDraftFingerprint = () => JSON.stringify({
 
 const validateAfterAsyncCheck = (fingerprint: string) => {
   if (fingerprint !== ruleDraftFingerprint()) {
-    ElMessage.warning(t('app.ruleChangedDuringCheck'))
+    notifyBlocked(t('app.ruleChangedDuringCheck'))
     return false
   }
   return validateRuleDraft()
@@ -569,12 +571,34 @@ const beginRuleAction = (): number => ++ruleActionEpoch
 const isRuleActionCurrent = (actionEpoch: number): boolean =>
   actionEpoch === ruleActionEpoch && props.modelValue
 
+/**
+ * Offers "save anyway" and re-checks the action epoch before honouring the answer.
+ *
+ * The re-check is the race guard: the dialog can be closed, reset, or re-opened for another rule
+ * while the confirmation is on screen, and a stale "yes" must not save into the new draft. All four
+ * check outcomes (duplicate-check failure, overlap, similarity-check failure, similarity) need
+ * exactly this, so it lives in one place — four copies meant a fix to the guard had to be applied
+ * four times.
+ */
+const confirmSaveAnyway = async (
+  title: string,
+  message: string,
+  actionEpoch: number
+): Promise<'save-anyway' | 'cancel'> => {
+  const saveAnyway = await confirmDestructive({
+    title,
+    message,
+    confirmText: t('app.saveAnyway')
+  })
+  return saveAnyway && isRuleActionCurrent(actionEpoch) ? 'save-anyway' : 'cancel'
+}
+
 const invalidatePendingRuleAction = () => {
   const hadPendingCheck = checkingDuplicate.value || checkingSimilarity.value
   ruleActionEpoch += 1
   checkingDuplicate.value = false
   checkingSimilarity.value = false
-  if (hadPendingCheck) ElMessageBox.close()
+  if (hadPendingCheck) dismissOpenConfirmation()
 }
 
 watch(
@@ -596,25 +620,8 @@ const runDuplicateCheck = async (
     } catch (error: any) {
       if (!isRuleActionCurrent(actionEpoch)) return 'cancel'
       console.error('Duplicate check failed:', error)
-      try {
-        await ElMessageBox.confirm(
-          t('app.duplicateCheckFailedCanStillSave'),
-          t('app.checkDuplicate'),
-          {
-            confirmButtonText: t('app.saveAnyway'),
-            cancelButtonText: t('app.cancel'),
-            type: 'warning',
-            appendTo: 'body',
-            lockScroll: false
-          }
-        )
-        return isRuleActionCurrent(actionEpoch) ? 'save-anyway' : 'cancel'
-      } catch (confirmError: any) {
-        if (!isRuleActionCurrent(actionEpoch)
-          || confirmError === 'cancel' || confirmError === 'close') return 'cancel'
-        console.error('Duplicate check failure confirmation failed:', confirmError)
-        return 'cancel'
-      }
+      return confirmSaveAnyway(
+        t('app.checkDuplicate'), t('app.duplicateCheckFailedCanStillSave'), actionEpoch)
     }
 
     if (!isRuleActionCurrent(actionEpoch)) return 'cancel'
@@ -628,23 +635,7 @@ const runDuplicateCheck = async (
           })
         : t('app.identicalRuleNotSaved')
 
-      try {
-        await ElMessageBox.alert(
-          message,
-          t('app.identicalRuleDetected'),
-          {
-            confirmButtonText: t('app.confirm'),
-            type: 'warning',
-            appendTo: 'body',
-            lockScroll: false
-          }
-        )
-      } catch (error: any) {
-        if (isRuleActionCurrent(actionEpoch)
-          && error !== 'cancel' && error !== 'close') {
-          console.error('Identical rule notice failed:', error)
-        }
-      }
+      await acknowledge({ title: t('app.identicalRuleDetected'), message })
       return 'cancel'
     }
 
@@ -657,25 +648,7 @@ const runDuplicateCheck = async (
           })
         : t('app.overlappingRuleMayExist', { reason })
 
-      try {
-        await ElMessageBox.confirm(
-          message,
-          t('app.overlappingRuleDetected'),
-          {
-            confirmButtonText: t('app.saveAnyway'),
-            cancelButtonText: t('app.cancel'),
-            type: 'warning',
-            appendTo: 'body',
-            lockScroll: false
-          }
-        )
-        return isRuleActionCurrent(actionEpoch) ? 'save-anyway' : 'cancel'
-      } catch (error: any) {
-        if (!isRuleActionCurrent(actionEpoch)
-          || error === 'cancel' || error === 'close') return 'cancel'
-        console.error('Overlap confirmation failed:', error)
-        return 'cancel'
-      }
+      return confirmSaveAnyway(t('app.overlappingRuleDetected'), message, actionEpoch)
     }
 
     return 'clear'
@@ -695,25 +668,8 @@ const runSimilarityCheck = async (
     } catch (error: any) {
       if (!isRuleActionCurrent(actionEpoch)) return 'cancel'
       console.error('AI similarity check failed:', error)
-      try {
-        await ElMessageBox.confirm(
-          t('app.aiSimilarityCheckFailedCanStillSave'),
-          t('app.aiRuleSimilarityDetected'),
-          {
-            confirmButtonText: t('app.saveAnyway'),
-            cancelButtonText: t('app.cancel'),
-            type: 'warning',
-            appendTo: 'body',
-            lockScroll: false
-          }
-        )
-        return isRuleActionCurrent(actionEpoch) ? 'save-anyway' : 'cancel'
-      } catch (confirmError: any) {
-        if (!isRuleActionCurrent(actionEpoch)
-          || confirmError === 'cancel' || confirmError === 'close') return 'cancel'
-        console.error('AI similarity failure confirmation failed:', confirmError)
-        return 'cancel'
-      }
+      return confirmSaveAnyway(
+        t('app.aiRuleSimilarityDetected'), t('app.aiSimilarityCheckFailedCanStillSave'), actionEpoch)
     }
 
     if (!isRuleActionCurrent(actionEpoch)) return 'cancel'
@@ -727,26 +683,7 @@ const runSimilarityCheck = async (
           })
         : t('app.aiSimilarRuleMayExist', { reason })
 
-      try {
-        await ElMessageBox.confirm(
-          message,
-          t('app.aiRuleSimilarityDetected'),
-          {
-            confirmButtonText: t('app.saveAnyway'),
-            cancelButtonText: t('app.cancel'),
-            type: 'warning',
-            appendTo: 'body',
-            lockScroll: false
-          }
-        )
-        return isRuleActionCurrent(actionEpoch) ? 'save-anyway' : 'cancel'
-      } catch (error: any) {
-        if (!isRuleActionCurrent(actionEpoch)
-          || error === 'cancel' || error === 'close') return 'cancel'
-        console.error('AI similarity confirmation failed:', error)
-        ElMessage.error(t('app.aiSimilarityCheckFailedCanStillSave'))
-        return 'cancel'
-      }
+      return confirmSaveAnyway(t('app.aiRuleSimilarityDetected'), message, actionEpoch)
     }
 
     return 'clear'
@@ -778,7 +715,7 @@ const handleCheckSimilarity = async () => {
   if (similarityResult === 'save-anyway') {
     await emitRuleSave()
   } else {
-    ElMessage.success(t('app.noSimilarRulesFound'))
+    notifySuccess(t('app.noSimilarRulesFound'))
   }
 }
 
@@ -935,7 +872,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
 <template>
   <div
     v-show="modelValue"
-    class="fixed inset-0 z-[2400] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm"
     @keydown="handleModalKeydown"
   >
     <div
@@ -955,10 +892,10 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
       <!-- Header -->
       <div class="px-[clamp(1rem,3vw,2rem)] py-[clamp(1rem,2vw,1.5rem)] border-b border-slate-100 dark:border-slate-700">
         <div class="flex items-center justify-between mb-4">
-          <h1 id="rule-builder-title" class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
+          <h2 id="rule-builder-title" class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
             <span class="material-icons-round text-blue-500" aria-hidden="true">auto_fix_high</span>
             {{ t('app.createNewRule') }}
-          </h1>
+          </h2>
           <button
             type="button"
             @click="handleClose"

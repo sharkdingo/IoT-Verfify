@@ -14,6 +14,7 @@ import org.springframework.aop.framework.ProxyFactory;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -92,6 +93,7 @@ class AbstractAsyncTaskServiceCancelTest {
     static class TestAsyncTaskService extends AbstractAsyncTaskService<TestTask> {
         private final TestTask task = new TestTask(7L, 1L);
         private int cancelUpdateResult = 1;
+        private boolean cancelUpdateThrows;
         private boolean setCancelledDuringAtomicCancel;
         private boolean markerVisibleDuringAtomicCancel;
         private int progressWriteCount;
@@ -114,6 +116,21 @@ class AbstractAsyncTaskServiceCancelTest {
             updateTaskProgress(task.id, progress, TaskProgressStage.STARTING);
         }
 
+        /** Mirrors a worker's finally block: record the cancellation, then clean up worker state. */
+        private void runWorkerFinally() {
+            handleCancellation(task);
+            removeRunningTask(task.id);
+            removeTaskProgress(task.id);
+        }
+
+        private void registerWorker(Thread thread) {
+            registerRunningTask(task.id, thread);
+        }
+
+        private boolean cancelWouldStopAWorker() {
+            return requestLocalExecutionStop(task.id);
+        }
+
         @Override
         protected Optional<TestTask> findTaskByIdAndUserId(Long id, Long userId) {
             return task.id.equals(id) && task.userId.equals(userId)
@@ -123,6 +140,9 @@ class AbstractAsyncTaskServiceCancelTest {
 
         @Override
         protected int atomicCancelTask(Long taskId, LocalDateTime completedAt) {
+            if (cancelUpdateThrows) {
+                throw new IllegalStateException("simulated database failure");
+            }
             markerVisibleDuringAtomicCancel = isTaskCancelled(taskId);
             if (setCancelledDuringAtomicCancel || cancelUpdateResult == 1) {
                 task.cancelled = true;
@@ -242,5 +262,22 @@ class AbstractAsyncTaskServiceCancelTest {
 
         assertEquals(2, service.progressWriteCount);
         assertEquals(13, service.task.progress);
+    }
+
+    @Test
+    void handleCancellation_databaseFailureStillLetsTheWorkerReleaseItsRegistration() {
+        TestAsyncTaskService service = new TestAsyncTaskService();
+        Thread worker = Thread.currentThread();
+        service.registerWorker(worker);
+        service.reportProgress(10);
+        service.cancelUpdateThrows = true;
+
+        // A worker's finally block records the cancellation before releasing its own registration.
+        // If recording throws, the cleanup must still run: otherwise this thread stays registered
+        // against a finished task, and a later cancel interrupts whatever the pooled thread picked
+        // up next.
+        assertDoesNotThrow(service::runWorkerFinally);
+        assertFalse(service.cancelWouldStopAWorker(),
+                "a finished task must not still resolve to a live worker thread");
     }
 }

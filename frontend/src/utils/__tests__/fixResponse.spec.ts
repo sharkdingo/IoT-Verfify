@@ -116,6 +116,19 @@ const fixResultFor = (suggestion: typeof parameterSuggestion | typeof conditionS
 })
 
 describe('automatic-fix response contracts', () => {
+  it('rejects a VERIFIED attempt that produced no suggestion', () => {
+    // The dialog renders the attempt's status and reason, so this payload claims a concrete
+    // suggestion passed forward verification while showing the no-suggestion empty state and no
+    // Apply control. `fixable` stays consistently false, so nothing else catches it.
+    const base = fixResultFor(parameterSuggestion)
+    expect(() => validateFixResult({
+      ...base,
+      fixable: false,
+      suggestions: []
+    }, 12, ['parameter'])).toThrow(/attempt/i)
+  })
+
+
   it('accepts itemized fault localization on a complete source model', () => {
     expect(validateFaultLocalizationResult(localization(), 12)).toEqual(localization())
   })

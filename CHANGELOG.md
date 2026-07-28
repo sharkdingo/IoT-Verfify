@@ -15,6 +15,595 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-29
+
+#### Added
+- **Board edit journal ordinals are fenced by the database.** `sequence` was allocated
+  read-max-then-add-one under an in-JVM per-user lock only, so two application instances could write
+  the same ordinal for one account — making "the newest edit still in effect" ambiguous and silently
+  stranding one reversible edit. `BoardEditJournalSequenceUniqueness` adds a unique
+  `(user_id, sequence)` constraint and `BoardEditJournal.record` retries against a freshly read
+  maximum on a duplicate key. The migration is idempotent, a no-op on non-MySQL, and renumbers any
+  pre-existing duplicates (oldest-first, preserving each account's relative order) rather than
+  refusing to start against real data. Rollback is
+  `DROP INDEX uk_board_edit_journal_user_sequence ON board_edit_journal`.
+
+#### Fixed
+- **A multi-mode conflicting end state is localized again.** `FaultLocalizer.describeEndState` joined
+  the per-mode states with `" / "`, but the frontend's `formatBuiltInModelToken` splits on `[;,|]` to
+  translate each token — so for a bundled template the whole string missed the catalogue and rendered
+  raw (`on / idle`) in a non-English UI. It now joins with `"; "`, and the test pins the exact string
+  rather than only asserting that the raw tuple is absent.
+- **A padded specification-condition key no longer fails generation after passing admission.** Rule
+  attributes and command actions were normalized at the storage boundary but the spec `key` was not,
+  while `buildVariableCondition` trimmed and `validateApiSignalExists` / `resolveApiUntrustedSource`
+  compared raw. The key is now stored trimmed and both comparison sites trim; the fixer's
+  `expandRuleIndices` also trims, where a padded key silently dropped an environment domain and
+  narrowed the fix search to fewer rules. `FuzzModel` now normalizes it in one accessor shared by
+  validation and evaluation, which previously disagreed: a padded key validated and then resolved to
+  no domain, changing what the explorer actually checked.
+- **Ctrl+Z no longer mutates the board behind an open dialog.** The accelerator is on `window`, and
+  `targetOwnsNativeUndo` exempts only text inputs — so the keystroke pressed while focus sat on a
+  modal's button undid a persisted edit underneath it, leaving the dialog showing a draft built from
+  the pre-undo collections. `useBodyScrollLock` now exposes the open-modal depth (every real modal
+  already registers there) and the board's undo-blocked predicate reads it.
+- **A conflicted undo stops inviting the same failure.** The 409 branch reported the conflict but
+  never re-read availability, so the button stayed enabled on an entry guaranteed to conflict again.
+  Availability reads also carry an epoch now, so one in flight across a mutation cannot restore the
+  pre-undo state.
+- **The undo boundary validates its enum fields.** `reasonCode` defaulted to `NOTHING_TO_APPLY` when
+  absent — contradicting `applied: true` — and `entityType`/`originalOperation` were cast unchecked,
+  so a renamed server code became a typed value no consumer branches on. The `rules` array is now
+  validated too: only `specs` was, though the function's own comment claimed both were, so a rule
+  missing `command` reached board state and the canvas edge projection with an empty target and id.
+- **A session list no longer fails over one untitled row.** `validateChatSession` accepted
+  `title: null` but rejected the field being absent, though the DTO's nullable `title` makes them the
+  same information.
+- **`stopListening` no longer calls both `abort` and `stop`.** `recognition.abort?.() ?? recognition.stop?.()`
+  always ran the right-hand side, because `abort()` returns `undefined`.
+- **A collapsed reasoning panel stays collapsed.** The collapse was keyed by `turnId`, which is
+  optional, so a row without one could record nothing and `:open` re-expanded it on the next render.
+- **The auth watcher no longer fights the route guard.** `revalidateSession()` inside `beforeEach`
+  flips `isLoggedIn`, and App.vue's `flush: 'sync'` watcher then navigated mid-guard — building
+  `redirect=` from the route being left and cancelling the in-flight navigation with an unhandled
+  NavigationAborted. The watcher now stands down while a navigation is resolving.
+- **`border-primary/20` rendered at full strength.** Tailwind cannot derive an alpha channel from an
+  arbitrary `var()`, so the canvas minimap border ignored its opacity modifier; it now uses
+  `color-mix`, and the config documents why the modifiers do not work on that token.
+- **The three MySQL-dependent undo tests run again.** They were `@Disabled` on the belief that H2
+  could not read back a rule restored through the native insert into a `JSON` column. Once the H2
+  fixture re-types those columns as text the restore round-trips correctly, so all twelve cases in
+  `BoardEditUndoIntegrationTest` now run with no skips; `BoardEditUndoMySqlIntegrationTest` re-asserts
+  the same path against a real MySQL, where the server's own JSON parsing returns the value unchanged.
+  Both MySQL-only classes skip themselves when no server is reachable, so the H2-only CI job is
+  unaffected. Two assertions in the re-enabled tests were also wrong: walking undo past the beginning
+  reverses the create as well, so the board legitimately ends empty.
+- **The rule dialog's "save anyway" confirmation is defined once.** Four copies of the same
+  confirm-plus-epoch-recheck differed only in wording, and the epoch re-check is the race guard that
+  stops a stale "yes" saving into a draft the user has since replaced — so a fix to it had to be
+  applied four times.
+- **Template-name rejections name the constraint that actually failed.** The rule was widened to allow
+  uncased non-ASCII, but both messages still said "Only printable ASCII characters are allowed" — false
+  for the now-accepted `温度传感器`, and misleading for a name rejected over a tab. `TemplateNameRule`
+  now returns the reason and both call sites render it.
+- **Case folding on the modeling path is locale-independent.** Several `toLowerCase()` calls on
+  `targetType` and on trust/privacy enum tokens used the default locale; under a Turkish locale
+  `"API"` folded to `"apı"`, matched nothing, and the rule was silently dropped from the model. All are
+  pinned to `Locale.ROOT`, matching `normalizeSpecTargetType`.
+- **An unreadable AI scenario draft no longer 500s a read-only request.** The lapsed-confirmation write
+  was guarded, but the sibling cleanup in `active()` was not, so the same `@Modifying` delete enlisted
+  in `getPendingConfirmation`'s `readOnly` transaction and failed at flush.
+- **A malformed journal entry is a conflict, not a 500.** `applyRuleJournalEntry` parsed the entity key
+  with a bare `Long.parseLong` where every sibling unreadable-payload case produced a typed
+  `ConflictException`. The same undo path also read the user's whole rule list to find one id; it now
+  looks the rule up directly.
+- **A non-numeric node id no longer leaks into user-visible reasoning.** The identifier redaction
+  required a digit in the tail to avoid rewriting English compounds ("rule-based"), which also let
+  `device_a` and `spec_x` through — the only mechanical guard behind a system-prompt rule. The
+  underscore form no longer requires a digit (English prose does not join words with underscores);
+  the hyphenated form still does.
+- **A null manifest API entry no longer NPEs during generation.** `DeviceSmvDataFactory.findApi` now
+  skips null entries like both sibling implementations, so malformed manifest data records a disabled
+  rule instead of failing the run.
+
+#### Changed
+- **Undo refuses a journal entry with no recorded position instead of appending.** Rule and
+  specification restore fell back to appending when `entity_order` was absent. Since execution order
+  decides which rule wins when guards overlap, appending silently restores a different board; such an
+  entry (only possible for rows written before the column existed) is now rejected with `409`.
+- **A preferred range disjoint from the device's limits is reported as unused.** It was marked as
+  matched before the empty-intersection check, telling the user their constraint held when nothing had
+  tested it. Step A likewise only retries the original value when it lies inside the effective bounds,
+  so a user who narrowed a range to exclude the original is not handed the original back labelled with
+  the range they asked for.
+
+### 2026-07-28
+
+#### Changed
+- **The COMPLETED terminal guard is now tested on the authoritative side.**
+  `hasCompletedToolEvidence` decides whether a turn may be persisted as COMPLETED — at both the live
+  terminal transition and history reload — and had no test of its own, only a tested mirror in
+  `api/chat.ts`. Its rules are now pinned: an execution must pair with a result of the same tool and
+  round, a failed or unconfirmable outcome disqualifies the turn however much usable work preceded it,
+  an execution-guard stop makes the turn PARTIAL, a tool left PARTIAL blocks completion until a later
+  round resolves that same tool, and a null frame makes the whole trace untrusted rather than
+  partially believed.
+- **The planning prompt's tool catalogue is now checked against the real registry.** The prompt
+  hand-lists every tool under "Available tools:" while the model is *also* sent the actual schema set
+  from `AiToolManager.getAllToolDefinitions()` — two independent sources of one fact, where adding a
+  tool without editing the prose left the catalogue describing a capability set the model could not
+  match, silently. A test now compares the list against the tool classes' own `getName()` literals and
+  names any tool missing from either side. The platform self-description that both the planning and
+  visible-reply prompts open with was duplicated verbatim in two text blocks; it is now one constant,
+  also asserted, so the two rounds the model sees within a turn cannot describe the platform
+  differently.
+- **The assistant's reasoning is now reasoning, not narration.** The planning prompt asked only for
+  "a concise summary" of goal, facts, next action, and remaining work — a well-written progress log
+  — so that is what the model produced. It is now asked to work the problem out: decompose the
+  question into the sub-questions that decide it, cite the specific devices, rules, and results that
+  constrain the answer (and name what is still unknown), state the alternative it rejected when the
+  call is a judgement rather than a forced step, and check the returned state against what it
+  expected before concluding.
+- **Reasoning is presented as an argument rather than a status line.** Its sanitizer had been
+  flattening every line break, so a three-part decomposition arrived as one run-on sentence; the
+  identifier redaction was case-insensitive and unanchored, rewriting ordinary English
+  ("rule-based", "device-level", "trace-driven") as `[internal reference]` mid-sentence; and an
+  800-character cut landed mid-word. Line structure is now preserved and rendered, the redaction
+  requires a digit in the identifier tail, the budget is 1600, and truncation lands on a sentence or
+  line boundary. The newest completed turn's panel also stays expanded — it used to shut the instant
+  the stream ended, so anyone not watching live never read the argument behind the answer — while a
+  deliberate collapse is remembered.
+- A round that returns no reasoning now says so, instead of showing "Summarizing the current goal,
+  observed facts, and next action" — wording that described reasoning which never happened.
+
+#### Fixed
+- **An unreadable tool result was reported to the model as "nothing was written".**
+  `mutationMayHaveCommitted` returned false when a tool's JSON could not be parsed, so a tool that had
+  committed and then produced truncated or non-object output was summarised as a no-op: the
+  uncertain-mutation count stayed 0 and the notice injected into the next planning round told the
+  model those steps reported no write, inviting a retry against state nobody had inspected. Unknown
+  now fails toward "may have committed".
+- **A transient unwritable connection could erase the execution audit from the stored turn.** The
+  "N steps failed" and execution-guard notices were appended to the persisted answer only if their
+  SSE send succeeded, so a failed send dropped them from the live stream *and* the database — the
+  only place the user could still read them after a reload. They are now appended unconditionally,
+  and a failed send is treated as the disconnect it is.
+- **A chat session row missing `active` was read as idle.** `getSessionList` and `createSession`
+  returned their payload unvalidated, unlike every other endpoint in `api/chat.ts`. Since `active`
+  gates `isAssistantBusy`, an absent flag became `undefined` → falsy → idle, unlocking a second
+  assistant mutation while one was still running server-side. Both now validate every row.
+- **`AiToolManager` swallowed an interruption along with the flag.** Its broad `catch (Exception)`
+  turned any failure into `TOOL_EXECUTION_ERROR` without re-arming the interrupt. The chat worker is
+  stopped cooperatively, so this is never the chat request's own cancel — but a tool delegating to
+  synchronous verification or simulation runs interruptible work, and a cleared flag leaves a later
+  interruptible call on that thread unable to see it.
+- **`apply_fix`'s confirmed call rejected the arguments it had just asked for.** The confirmation
+  branch allow-listed only `traceId`, `confirmed`, and `impactToken`, while the preview branch
+  *requires* `suggestion` — so the natural follow-up call, resending the previewed object plus the
+  token, spent a whole round on a guaranteed `VALIDATION_ERROR` that no description warned about.
+  Those two fields are now accepted and ignored; the write still comes from the server-stored
+  proposal, which is what makes a confirmation unforgeable. Omitting `confirmed` also degrades to a
+  preview now instead of failing validation, matching the other nine confirmation-gated tools —
+  identical schemas had two different behaviours.
+- **Undoing a specification deletion put it back at the end of the list.** Rule restore had been
+  taught to honour its recorded position, but the specification path still appended, and
+  `saveSpecsInternal` rewrites `list_order` from the list index — so undoing the deletion of the
+  first of three specifications silently moved it last. It now reuses the same `entity_order`
+  journal column, clamped when neighbours were deleted meanwhile.
+- **A restored rule whose id had been taken now says so.** `rules.id` is a single global primary key
+  (unlike `device_node`'s composite `(id, user_id)`), but the drift check only inspects the current
+  account's rows, so an id held by another account reached `insertWithId` and surfaced as a generic
+  primary-key conflict. The collision is now detected first and reported as what it is. The
+  transaction rolled back before and still does; only the message changes.
+- **A cancelled automatic-fix search could keep taking NuSMV permits.** Cancellation arrives as a
+  thread interrupt, but two paths consumed it. `FixStrategyUtils.forwardVerify` — the entry point
+  every strategy reaches NuSMV through — and `ParameterAdjustStrategy`'s refinement solver both had a
+  broad `catch (Exception)` that swallowed the `InterruptedException` and cleared the flag with it, so
+  `FixContext.isExpired()` stopped reporting the cancellation and the search ran its remaining
+  attempts for a request whose response had already been sent. Both now re-arm the flag. Relatedly,
+  `RuleFixer.fix` had started clearing the interrupt on entry, to guard against a flag leaked by a
+  previous task on the pooled thread; that guard was unnecessary — `ThreadPoolExecutor` already clears
+  interrupt status before each task — and actively harmful, because fault localization and context
+  loading run first, so it discarded a cancel that had already arrived. The clear was removed.
+- **Board undo raced ordinary board mutations.** `useBoardUndo` called the API directly, guarded only
+  against a second undo, while the shortcut listener is on `window` — so Ctrl+Z during an in-flight
+  rule delete issued two unordered requests and whichever response landed last won permanently,
+  leaving the rule list and the undo affordance describing a server state that no longer existed. Undo
+  now goes through the board mutation queue like every other mutation.
+- **Rule condition attributes and spec target types are now normalized identically at admission and
+  generation.** The same asymmetry behind the command-action defect below appeared three more times
+  on the same boundary: the request validator resolved a condition `attribute` trimmed while both
+  generator resolvers matched manifest variable, mode, and signal-API names untrimmed, and two of the
+  four spec target-type comparisons in `SmvSpecificationBuilder` trimmed before lowercasing while two
+  did not. A padded attribute therefore disabled a rule the validator had accepted, and a padded
+  target type passed the safety-shape check before falling through the expression builder's dispatch.
+  Normalization is now one helper per side, and `Locale.ROOT` is pinned so a Turkish default locale
+  cannot fold `I` out of a keyword.
+- **A rule whose command action had surrounding whitespace was silently omitted from the verified
+  model.** Both admission validators compared the action trimmed, while the generator's canonical
+  `findApi` compared it exactly, so such a rule passed validation and then resolved to no API at
+  generation time. Because that lookup is the only source of rule branches for state, property, and
+  probe assignments, the rule vanished from the model while `disabledRuleCount` stayed 0 and
+  `modelComplete` stayed true — a `SATISFIED` verdict for a scene whose automation was never
+  checked. Actions are now stored trimmed and compared trimmed everywhere, and an action that still
+  resolves to no API disables the rule with the new `RULE_UNRESOLVABLE_COMMAND_ACTION` reason code
+  instead of being skipped.
+- **A run pinned to chosen attack points no longer claims an exhaustive search.** History's
+  assumption chip inferred the attack mode from `attackBudget`, but the backend reports
+  `effectiveBudget() == points.size()` for an exact-points run — so two deliberately chosen points
+  rendered as "up to 2 of N compromised", inverting what the number means. The chip now
+  discriminates on `attackSelectionPolicy`, matching every other surface.
+- **A specification whose condition names a deleted device is refused inline.** Draft conditions
+  hold device references captured at save time; a device removed afterwards (canvas, another tab,
+  the assistant, an undo) left Create enabled, the backend refusing, and an opaque toast naming no
+  row. The create button now states the reason inline and the offending rows are struck through. A
+  deleted device also no longer renders identically to an unnamed one.
+- **The scene-import diagnostics were unreadable in dark theme.** Element Plus teleports its message
+  box to `<body>`, outside every `.dark`-scoped board override, so the hardcoded slate text that
+  explains *which* scene field was rejected rendered near-invisible on the dark box. It now uses
+  theme tokens, which follow the box itself.
+- **An open device dialog could be painted over.** Its overlay used a raw `2200` — numerically the
+  board *banner* layer, below alerts and below every other modal — and now uses `--z-modal`. The
+  chat wrapper's raw `1200` became `--z-chat-panel`; both were the values the tokens already hold,
+  but a literal stops the scale being authoritative the moment someone renumbers it.
+- **Keyboard focus was invisible on the seven spec-condition controls.** They declare
+  `focus:outline-none focus:border-red-400`, i.e. the border colour *is* the cue — but the dialog's
+  `border-color: … !important` skin outranks it, leaving nothing. An outline is a different property,
+  so it cannot be overridden the same way.
+- **The info tooltip's hover and focus did nothing in dark theme.** Its `[data-theme='dark']`
+  background override was more specific than `:hover, :focus-visible`, so it silently disabled both;
+  the base blend now uses `--surface-elevated` (which already differs per theme), the override is
+  gone, and focus gets a real ring instead of `outline: none`.
+- **Indigo, sky, fuchsia, emerald, and teal are now remapped for dark panels.** `bg-white` was
+  already remapped, so a `text-indigo-800` label on a dark card — the *selected* exploration-mode tab
+  — was dark navy on near-black, and a dozen light chips across the exploration, timeline, and
+  history panels stayed near-white inside dark surfaces.
+- **Three modal overlays butted against the viewport edge.** The fix, simulation-result, and
+  verification-result overlays centred their surface with no padding while every peer pads; all three
+  now use `p-3 sm:p-4`.
+- **A stale AI confirmation no longer turns "nothing pending" into a 500.** Both lazy-expiry
+  cleanups reachable from the read-only `GET /api/chat/sessions/{id}/confirmation` enlisted a
+  write in the caller's read-only transaction, failing the request at flush time. The state-store
+  delete now runs in its own transaction and the scenario-draft clear is opportunistic; the
+  scheduled expiry sweep remains the backstop.
+
+#### Changed
+- **Verification is staged by blast radius** (root `CLAUDE.md` / `AGENTS.md`). Narrow spec plus
+  mutation check per edit, type check per slice, full suite per completed area, E2E only at
+  session milestones or when touching routing/auth/deep links/cross-tab sync/backend contracts.
+  Running the whole suite after every isolated edit spent minutes for information the focused run
+  already gave, and encouraged skimming results instead of reading them.
+- Four tests strengthened after review found they could not fail: the preferred-range Reset guard
+  (its click landed on a disabled button, so neither half of the guard was exercised — both halves
+  are now checked independently), two `TraceHistoryPanel` assertions that matched raw i18n keys
+  rather than the rendered sentence, a `ControlCenter` mock that collapsed `notifyBlocked` and
+  `notifyInfo` onto one spy, and an E2E test whose title claimed assistant journalling it never
+  exercised.
+
+### 2026-07-27
+
+#### Added
+- **Board edit undo/redo.** `Ctrl/Meta+Z` undoes and `Ctrl/Meta+Shift+Z` (or `Ctrl+Y`) redoes a
+  persisted board edit, with matching nav-bar buttons. Reversible: **rule and specification
+  create/delete** — single-record edits whose inverse is unambiguous and can always reach a legal
+  board — and **rule reorder**, which changes no individual record but is reached through an
+  explicit up/down button, so users read one press as one edit and expect `Ctrl+Z` to take it
+  back. Its journal entry stores the previous *ordering* rather than a record snapshot, and is
+  refused when the current order or the rule set is no longer what that edit produced.
+  A per-user append-only journal (`board_edit_journal`) records each edit's before/after snapshot
+  **in the same transaction as the edit**, so an undo can never describe a state that never
+  existed. The server is the authority: the client keeps no snapshot stack, never inverts an edit
+  locally, and reads availability from the journal (so it survives reload, a second tab, and
+  another device). Undo is refused with a conflict when the affected record changed after the edit
+  was recorded, so it cannot overwrite newer work; a new edit discards the abandoned redo branch;
+  and "nothing to undo" is a normal, idempotent outcome.
+  Deliberately **not** undoable: device deletion and scene replace/clear (they rewrite or cascade
+  across collections, so no per-record inverse reaches a legal board — both clear the journal),
+  environment variables (a shared pool other readers depend on), and async verification/simulation/
+  exploration runs (those have cancel, stop, and delete-result, which are different operations).
+  Native undo is never intercepted in text fields, `contenteditable` editors, or during an IME
+  composition. Boundaries recorded in
+  [docs/guides/frontend-ui-conventions.md](docs/guides/frontend-ui-conventions.md).
+- **Deep-linkable run results.** The board's URL now carries `run=verification:<id>` /
+  `simulation:<id>` / `exploration:<id>`, plus `trace=<id>` for a counterexample and
+  `finding=<id>` for an exploration candidate. Refresh, Back/Forward, and a shared link all
+  restore the same surface. The URL is the single authority: openers navigate and one watcher
+  applies it, so component state cannot disagree with the address bar. Opening pushes;
+  correcting or clearing replaces. Invalid params are stripped, and a well-formed link to a
+  run this account cannot load degrades to the plain board with a persistent, dismissible
+  explanation instead of a fabricated empty verdict.
+  Panel layout, widths, `activeSection`, and canvas pan/zoom are deliberately **excluded** —
+  they are already persisted per user server-side via `BoardLayoutDto`.
+- **One feedback vocabulary (`utils/feedback.ts`).** All 421 toast call sites and every
+  confirmation now route through intent-named helpers (`notifySuccess`, `notifyInfo`,
+  `notifyBlocked`, `notifyError`, `confirmDestructive`, `acknowledge`,
+  `dismissAllNotifications`, `dismissOpenConfirmation`). No component imports `ElMessage` or
+  `ElMessageBox` any more, so severity, duration, danger-button styling, button order, and
+  scroll behaviour are decided in one file.
+- **Decision records** for both of the above:
+  [docs/guides/frontend-ui-conventions.md](docs/guides/frontend-ui-conventions.md).
+
+#### Fixed
+- **An undo did not invalidate other tabs.** `isBoardMutationRequest` did not match
+  `/board/edits/*`, so a second tab kept rendering rules and specifications the undo had already
+  changed — while every direct mutation correctly refreshed it. Undo/redo now classify as board
+  mutations; `edits/availability` stays a read.
+- **A restored rule had no canvas connection line.** `applyResult` replaced `rules`/`specs` but did
+  not rebuild the rule-derived edges the way every other rule mutation does. The line only
+  reappeared once an unrelated refresh happened to run — correct by accident. Now rebuilt in the
+  same step, alongside clearing an inspector focus that points at a record a redo just removed.
+- **The undo availability endpoint returned the full rule and spec lists.** A query shipped
+  collections on every board load, inviting callers to treat a read as an authoritative board
+  update. It now returns availability only, typed as `BoardUndoAvailability` on the client.
+- **Field validation was still delivered as a toast in the device runtime editor**, and the
+  schema-conflict case duplicated an inline panel that already disabled the save button. Now one
+  `runtimeSaveBlockedReason` drives the disabled state and an inline message.
+- **Login and registration showed a success toast while navigating to the workspace.** Arriving at
+  the board is the feedback; the toast repeated it.
+- **A replay or a surface handoff could reopen the run the user just left.** The result-surface
+  closers doubled as internal transitions (opening a counterexample replay hides the result
+  dialog), so making them clear the URL meant replaying a trace stripped the params describing
+  it — and closing a replay left `run=` behind, letting the sync reopen the result dialog over
+  the board. Split into `close*` (internal, URL untouched) and `dismiss*` (user-facing, clears
+  the deep link), with replay close counted as leaving the artifact.
+- **Field validation was delivered as toasts.** ~15 call sites announced "select a device",
+  "enter a device name", "add a condition for side A" and similar in a toast that fades while
+  the user is still fixing the field — and several were unreachable duplicates of an inline
+  error whose submit button was already disabled. Device create, batch create, device import,
+  the specification condition dialog, and specification create now derive one
+  `*BlockedReason` computed that drives both the disabled state and an inline `role="status"`
+  message linked by `aria-describedby`.
+- **Any query change remounted the whole board.** `App.vue` keyed the route component on
+  `route.fullPath`, so adding or clearing a query param destroyed and rebuilt the workspace,
+  discarding its state and re-running its entire load. Keyed on route identity + account
+  instead — the actual ownership boundary. This also made deep links impossible.
+- **A client-side `error.message` could reach the user**, exposing internal transport detail
+  (`connect ECONNREFUSED 127.0.0.1:8080`). Only the backend's own `message` is shown, and only
+  when it matches the active locale.
+- **Cancelling a confirmation was modelled as a thrown exception**, which every call site had
+  to catch and re-classify by comparing against the strings `'cancel'`/`'close'`.
+  `confirmDestructive` resolves a boolean, and the three stale catch branches are gone.
+- **Fuzzing preview freshness is now a tested rule (`utils/fuzzingConfig.ts`).** Whether a fetched
+  workload preview may be shown as describing the current form was an inline computed in
+  `Board.vue`; it is now `isFuzzingPreviewCurrent` alongside the bounds it already owned, with tests
+  for the case that matters: a preview requested before the user changed a budget field or edited the
+  board must not be rendered next to inputs it was never computed for. `hasValidFuzzingBudget`
+  replaced a second inline copy of the bounds check, so `Board.vue` no longer imports those
+  constants at all. The paper-domain preview keeps its own check on purpose — that payload has no
+  budget fields, so sharing the helper would mean weakening it.
+- **Two more pure slices out of `Board.vue` (`views/board/`).** `recommendationFilterText.ts` owns the
+  wording for filtered recommendation candidates, and `sceneImportDiagnostics.ts` owns the parsing of
+  scene-import validation rejections and stale-replacement previews. Both take `t`/`locale` as
+  arguments rather than reading a component, so 18 new tests pin rules that were previously
+  unreachable: that a backend `reason` is only shown when it matches the active locale, that
+  `devices[]` and `nodes[]` name the same collection, and that an incomplete replacement preview is
+  refused rather than shown with understated counts.
+- **One owner for board semantic mutation follow-ups (`views/board/semanticCommit.ts`).** Applying
+  a rule/specification mutation means replacing the authoritative collections and then rebuilding
+  everything derived from them — canvas edges, dangling inspector focus, undo availability, verdict
+  staleness — in a fixed order. Those four were previously hand-assembled at each of seven call
+  sites with slightly different omissions, which is the root cause of the two staleness bugs fixed
+  below: nothing detected them because a later unrelated refresh usually repaired the state. Call
+  sites now pass the result and the ordering is guaranteed in one tested place.
+- **Rule reorder returns the standard mutation envelope** (`CollectionMutationResultDto`) instead of
+  a bare list, so it reports undo availability like every other reversible edit.
+
+#### Changed
+- **Added `.claude/` hooks so a mechanical rule is enforced, not remembered.** Following the
+  official Claude Code guidance ("if a rule is mechanically checkable, convert it to a hook"), a
+  `PreToolUse` hook now blocks a Playwright command while port 3000 is held. That is the failure
+  that previously let the suite report green against stale code; the written rule is reduced to a
+  one-line pointer. Verified all three paths: blocks on a busy port, ignores unrelated commands,
+  honours the `E2E_BASE_URL` escape hatch.
+- **Reworked the agent instruction files (`CLAUDE.md`, `AGENTS.md`).** "No AI slop" and
+  "Maintainability and Change Discipline" had drifted into near-duplicates and were merged; added
+  explicit autonomy tiers (act / confirm / never without asking) and a single traceability check;
+  reframed verification around **reading the source first**, naming the three ways a green suite
+  misleads (correct-by-accident, a test that cannot fail, verifying stale artifacts); added the rule
+  to delegate long test/E2E/live-AI runs to background subagents rather than blocking the main
+  thread; and added a maintenance section with a dated change log so the file is pruned as it grows
+  instead of only appended to. Root file is 40 lines shorter net of the additions.
+
+#### Fixed
+- **AI recommendations silently dropped the platform's core requests.** The recommendation
+  reachability filter narrowed a variable's reachable values to "current value plus whatever some
+  template writes" — and applied that to *shared environment* variables too. But the generated model
+  gives every enum environment variable a final `TRUE: {<all declared values>}` branch, so the pool
+  value is only `init` and any declared value is reachable on step one. With the bundled sensor
+  templates (smoke, motion, soil moisture, weather — none of which any template writes), "recommend a
+  rule that sounds the alarm when smoke is detected" was filtered out as "legal but unreachable"
+  whenever the pool read `clear`, and the user's only workaround was to hand-edit the Environment
+  Pool first. The narrowing is kept for `IsInside=true` locals, which the model genuinely does hold
+  constant when nothing writes them.
+- **Device templates could not be named in Chinese, Japanese, or Korean.** Three duplicated copies of
+  a `^[ -~]+$` pattern rejected every non-ASCII template name, justified as keeping
+  `Locale.ROOT toLowerCase` and MySQL `LOWER()` in agreement for case-insensitive uniqueness. That
+  reasoning only covers *cased* letters; caseless scripts fold identically in both engines. Device
+  labels on the same board already accepted any Unicode. The three copies are now one
+  `TemplateNameRule` that permits caseless non-ASCII and still rejects cased non-ASCII and control
+  characters. Template names are display metadata — NuSMV identifier safety is enforced separately on
+  variable/mode/state tokens.
+- **`manage_rule` / `manage_spec` schemas described a field they reject.** `confirmed` was documented
+  as "Ignored for add", but an add carrying it fails `requireOnlyFields` with `VALIDATION_ERROR`, so a
+  model following the schema burned a round on a rejected create. The strict rejection is the intended
+  no-silent-coercion policy; the description now matches it.
+- **Account deletion left the undo journal behind.** `board_edit_journal` was missing from all three
+  places that have to know about a user-owned table: `deleteUserOwnedData`, and both
+  `USER_OWNED_TABLES` and `FOREIGN_KEYS` in `UserOwnedOrphanCleanup` — so there was no cascade
+  either. Since journal entries store complete before/after snapshots of a user's rules and
+  specifications, deleting an account left that content in the database, and `docs/api/auth.md`
+  claimed a cascade that did not hold for the table. A structural test now derives the expectation
+  from `USER_OWNED_TABLES` itself, so a newly added user-owned table cannot be forgotten again.
+- **A streaming assistant reply could be written into an archived message.** The active row was
+  owned by array index, but "load older messages" prepends a page and shifts every index, so
+  subsequent chunks, the terminal status, and the execution trace landed on an unrelated historical
+  message while the real placeholder stayed empty. The row is now found by its `turnId`, which the
+  message already carried. Browsing history mid-stream stays allowed — the ownership was the bug,
+  not the operation.
+- **A stale simulation verdict could be replayed after closing its dialog.** Staleness was set and
+  cleared against the run-details dialog ref, while replay admission is decided for the run, which
+  survives every close. So a board change while only the timeline was open never set the flag, and
+  closing the dialog cleared it — after which "view timeline" replayed an old trace over a changed
+  canvas. Both now key on the surviving run, and closing a dialog no longer counts as a fresh result.
+- **Closing the simulation timeline left `run=simulation:<id>` in the URL**, so a refresh or shared
+  link reopened the playback the user had deliberately closed and put the board back into read-only
+  playback mode. The counterexample path already cleared its deep link; this one now does too.
+- **Automatic-fix Reset destroyed the user's preferred ranges and then did nothing.** Neither
+  preference action was disabled during an in-flight search, and Reset cleared the rows *before*
+  the request silently returned — losing the typed bounds and hiding the returning result behind
+  "preferences changed, re-run". Both actions now derive their disabled state and a visible reason
+  from one computed value.
+- **Three surfaces could report evidence they did not have.** An AI scenario could apply a full
+  scene while the accounting strip read "raw 0, inspected 0, kept 0", because only the standalone
+  recommendation path tied `validatedCount` to its kept items. A `VERIFIED` automatic-fix attempt
+  with no suggestion rendered "passed forward verification" beside the no-suggestion empty state,
+  since only the suggestion-to-attempt direction was checked. And a counterexample's device summary
+  rendered a valueless variable as `name=` while the same step's change list said `N/A`.
+- **A drag and a resize could own one device node at once.** Each pointer gate checked only its own
+  gesture; `isPrimary` stops a second touch but a pen and a mouse are each primary within their own
+  type. The resize rewrote `node.position` while the drag read its origin from it, and the first
+  pointer to lift ended the layout interaction, dropping the board's ownership guard while the other
+  gesture was still writing geometry.
+- **A stale delete could land on an edited rule or specification.** Semantic signatures canonicalized
+  conditions into a `TreeSet`, so cardinality was invisible: a record edited from `[C, C]` to `[C]`
+  compared equal to its pre-edit snapshot. Because that predicate also gates `removeRuleIfUnchanged`,
+  the specification delete-if-unchanged path, and both undo/redo conflict checks, the "review the
+  current record before deleting it" guarantee did not hold — one user could confirm a deletion
+  against a rule another had changed underneath them. Both `exactlyMatches` implementations now
+  compare multisets, staying order-insensitive while counting occurrences.
+  `RuleSemanticSignature.Signature` deliberately keeps set semantics, since its only consumer
+  reasons about subset and overlap between *different* rules.
+- **A cancelled automatic-fix search kept running NuSMV.** The strategy loops exited only on the
+  deadline, and their broad `catch (Exception)` swallowed the `InterruptedException` that
+  `Semaphore.tryAcquire` throws on cancellation — clearing the interrupt flag with it. After a user
+  cancelled `/api/fix`, the worker therefore ran its remaining attempts (up to 20, each holding one
+  of the 6 shared NuSMV permits for up to 120s) against a request whose response had already been
+  sent, which could starve concurrent verification and simulation of solver capacity for the full
+  300s fix budget. `FixContext.isExpired()` now reports an interrupt as well as an expired deadline,
+  and `FixStrategyUtils.preserveInterrupt` re-arms the flag from those catches. Fixing `isExpired`
+  covers `RemoveRulesFixStrategy` too, since it shares the same guard.
+- **A cancel could interrupt an unrelated task.** In `VerificationServiceImpl` and
+  `SimulationServiceImpl`, `registerRunningTask` and `updateTaskProgress` sat *outside* the `try`
+  whose `finally` is the only place those registrations are removed — and `updateTaskProgress`
+  writes its in-memory map before its database write. A database blip during startup therefore left
+  the pooled worker thread registered against a task it was no longer running; cancelling that task
+  later interrupted whatever the thread had picked up next, and the victim was then failed by the
+  lease sweep with a message unrelated to its real cause. `FuzzServiceImpl` already had the correct
+  shape, which is what identified the other two as the deviation.
+- **The same leak on the cancellation path.** `handleCancellation` runs in every worker's `finally`
+  ahead of that cleanup and touches the database twice, so a failure there skipped the cleanup
+  entirely. It now catches and logs; the row is left to the user's own cancel or the expired-lease
+  sweep, both of which remain authoritative, so nothing is reported as success.
+- **The account-delete confirmation could never be satisfied on Android.** The typed-confirmation
+  gate required a preceding `keydown` with a printable `key`, but Android soft keyboards report
+  `Unidentified` and dropped text fires no `keydown` at all. The user typed their username
+  correctly, the hint showed no error because the text matched, and the delete button stayed
+  permanently disabled with nothing explaining why. Now keyed on `InputEvent.inputType`, which every
+  real edit carries and which programmatic autofill (a plain `Event`) does not — so the
+  password-manager protection the gate existed for is preserved.
+- **E2E could silently report green against stale code.** The production-build web server was
+  configured with `reuseExistingServer` on outside CI, so a dev server left running on :3000 was
+  adopted, the build step skipped, and the suite ran against whatever that process was serving —
+  a 2.7s run instead of 42s gave it away. It is now off, so a busy port fails loudly instead.
+- **Assistant refresh targets are pinned to the backend.** A test now parses the `REFRESH_DATA`
+  targets `ChatServiceImpl` actually emits and requires the frontend table to declare exactly those,
+  because a target the backend sends but the frontend does not declare is dropped as "unsupported" —
+  leaving the workspace stale after a successful tool run.
+- **Parallel E2E runs failed on tests that had nothing wrong with them.** Playwright served the app
+  through the Vite dev server, so two browsers loading the board at once could exceed the 30s
+  `board-root` wait — the failure moved between tests run to run, which is what gave it away. E2E now
+  runs against a production build via `vite preview` (with the `/api` proxy declared under `preview`,
+  which does not inherit `server.proxy`). The full suite is reliable at `--workers=2` and ~40%
+  faster than the serial workaround.
+- **A flaky auth test.** `validToken()` embeds a whole-second `exp`, so building the "same" token
+  twice across a second boundary produced two different strings and the cross-tab assertion failed
+  intermittently. The token is now built once.
+- **The undo button stayed enabled after a device deletion emptied the journal.** Deleting a device
+  cascades into the rules and specs referencing it, so the server drops the whole journal; the
+  client applied that mutation inline without re-reading availability, leaving a button that would
+  only report "nothing to undo". Both journal-clearing commands now go through one named
+  `notifyUndoJournalCleared`.
+- **Assistant `REFRESH_DATA` dispatch was duplicated and unvalidated.** `App.vue` carried a switch
+  mapping each target to a board method and to whether it invalidates other tabs, while `Board.vue`
+  held the same knowledge again; an unknown target fell through to a warning. Both now read one
+  table (`views/board/assistantRefresh.ts`), whose tests pin the method names against the board's
+  real `defineExpose` block so a typo cannot silently make the assistant report failure.
+  Investigating this confirmed — against the real model — that an assistant-created rule *is*
+  already as undoable as a user-created one (`e2e/live-ai-no-mock.spec.ts`), because publishing a
+  board invalidation reloads the snapshot and with it the undo availability.
+- **Expired token no longer passes the route guard** — replacing the guard's `localStorage`
+  read with the auth store lost the per-navigation expiry check. The store now owns
+  `revalidateSession()`, so a JWT that lapses while the tab stays open drops the session on
+  the next navigation instead of reading as authenticated until a request 401s.
+- **Fractional-width viewports fell between complementary media queries** — pairs written as
+  `max-width: 1023px` / `min-width: 1024px` (and `599px`/`600px`, `767px`/`768px`,
+  `1100px`/`1101px`) matched neither rule at e.g. 1023.5px, which is routine on scaled
+  displays. Each pair now splits at a single value. `DeviceDialog`'s compact overlay padding
+  also overlapped Tailwind's `sm:` at exactly 640px, applying both layouts at once.
+- **404 page dead link** — the "back home" button pointed at `/home`, which is not a route;
+  clicking it redirected back to `/404`, trapping the user.
+- **Recommendation panel self-close** — `openScenarioRecommendationPanel()` called its own
+  close handler, discarding the state it had just reset. The four panel openers are now one
+  table-driven function, so the mutual-exclusion invariant lives in a single place.
+- **Uncontrolled side-panel selection** — `ControlCenter` / `SystemInspector` declared a
+  default for the optional `activeSection` prop, so the prop was always "controlling" and an
+  uncontrolled mount silently ignored every selection change.
+- **Redundant Board remount after login** — a `router.afterEach` hook rewrote `/board?redirect=…`
+  to `/board` *after* navigation completed, which changed the route-keyed component key and
+  remounted the freshly mounted workspace. The login surface now navigates to a clean path.
+- **Hash-history deep links under a sub-path deployment** — the pre-router path rewrite
+  hardcoded a root-relative `/#…`, producing a 404 when the app is not served from `/`.
+
+#### Changed
+- **Route guard reads the auth store** instead of re-parsing `localStorage`, removing a second
+  source of truth for "is the user signed in". Guard logic is extracted as a pure function.
+- **401 redirect unified** — the axios interceptor, the SSE transport, and the app-level auth
+  watcher shared three copies of the same redirect construction; they now call one owner
+  (`router/loginRedirect.ts`).
+- **Document title** is now applied from `route.meta.title` (previously the meta field was
+  never read, so every page showed the static `index.html` title).
+- **Theme follows the OS by default** and the toggle cycles light → dark → follow-system.
+  The `resetThemeToSystem` / `followsSystem` capability existed but had no caller, so the
+  registered `prefers-color-scheme` listener was dead.
+- **Stacking order is a named scale** (`--z-board-nav` … `--z-toast` in `styles/base.css`).
+  The ad-hoc literals (100, 1000, 2000, 2200, 2350, 9999, 10000) gave no way to tell which
+  surface should win.
+- **Tailwind `primary` and the font stacks resolve to CSS tokens**, so utilities and
+  hand-written CSS cannot drift into different values for the same colour.
+
+#### Accessibility
+- Board run-setting switches are a shared `role="switch"` + `aria-checked` component; the five
+  hand-rolled variants exposed neither an accessible name nor state.
+- `ControlCenter`'s section tabs now use the same `role="tablist"` + roving-tabindex keyboard
+  model as `SystemInspector` (shared `useRovingTablist` composable).
+- The eight non-modal tool panels are `role="region"` rather than `role="dialog"`; they
+  deliberately do not trap focus, so the dialog role misdescribed them.
+- Modals lock background scroll (reference-counted for nested confirmations).
+- Heading hierarchy: the Board has an `<h1>`; two dialogs no longer claim page-level `<h1>`.
+- Named the six previously unnamed condition edit/remove icon buttons.
+- Removed seven duplicate native `title` tooltips that stacked on top of custom ones.
+
+#### Removed
+- `components/LogoutConfirm.vue` (superseded by `LogoutConfirmDialog.vue`; unreferenced).
+- `assets/auth-styles.css` — all of its class rules were unreachable; its `body` font
+  declaration moved to the shared style layer.
+- 232 lines of dead `board.css` (the `.floating-card` / docking block, whose markup no longer
+  exists) and six overridden gradient utilities.
+- `router`'s `clearInvalidTokens()` (triple-removed the same keys), an unreachable guard
+  branch, and the never-read `meta.usesOwnHeader`.
+
+#### Tests
+- Added `e2e/ui-contracts.spec.ts` (15 tests) covering the routing, session, theme, and
+  accessibility contracts that only a real browser can assert: expired-token refusal, clean
+  post-login URL, no-hash deep links, document titles, single `<h1>` per route, the
+  three-state theme cycle, switch role/name/state, focus restoration from a non-modal panel,
+  keyboard-driven tab strips, background scroll lock, that no board button lacks an
+  accessible name, and both sides of the 1023/1024 and 640px breakpoint boundaries.
+- Added a worker-scoped `sharedReadOnlyAccount` fixture. `accountCleanup` is per-test and
+  *deletes* the accounts a test registered, so a spec that cached one account across tests
+  handed later tests a token for a deleted user; sharing per worker also keeps a spec under
+  the backend's registrations-per-hour cap.
+
 ### 2026-07-26
 
 #### Fixed

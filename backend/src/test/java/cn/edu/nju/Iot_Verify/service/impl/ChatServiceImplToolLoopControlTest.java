@@ -356,7 +356,10 @@ class ChatServiceImplToolLoopControlTest {
 
     @Test
     void reactReasoning_shouldKeepMoreContextThanCompactToolResults() throws Exception {
-        String reasoning = "Goal and evidence. " + "remaining context ".repeat(30);
+        // Long enough to exceed the 1600-char reasoning budget, so the cap and the boundary cut are
+        // both exercised. The previous input was ~529 characters against a `<= 800` assertion, which
+        // could not fail and did not notice the budget moving.
+        String reasoning = "Goal and evidence. " + "remaining context ".repeat(120);
         LlmToolCall call = new LlmToolCall("tc_long", "board_overview", "{}");
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(LlmChatResponse.ofTextAndToolCalls(reasoning, List.of(call)))
@@ -383,7 +386,39 @@ class ChatServiceImplToolLoopControlTest {
                 .orElseThrow()
                 .getDetail();
         assertTrue(detail.length() > 240);
-        assertTrue(detail.length() <= 800);
+        // The reasoning budget is 1600, well above the tool-status budget it is contrasted with here.
+        assertTrue(detail.length() <= 1600, "reasoning budget: " + detail.length());
+        // Truncation cuts at a boundary and marks itself, rather than stopping mid-clause.
+        assertTrue(detail.endsWith("…"), detail.substring(Math.max(0, detail.length() - 40)));
+    }
+
+    @Test
+    void unreadableToolResult_isTreatedAsAMutationThatMayHaveCommitted() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "mutationMayHaveCommitted", String.class);
+        method.setAccessible(true);
+
+        // A tool that wrote to the database and then produced truncated or non-object output is an
+        // UNKNOWN outcome. Reading it as "nothing was written" is the one answer that is unsafe: the
+        // uncertain-mutation count would stay 0 and the notice injected into the next planning round
+        // would tell the model those steps reported no write, inviting a retry against state nobody
+        // inspected.
+        assertEquals(true, method.invoke(service, "{\"applied\":true,\"rules\":[{\"id\":1"));
+        assertEquals(true, method.invoke(service, "not json at all"));
+        assertEquals(true, method.invoke(service, "[]"));
+        assertEquals(true, method.invoke(service, "\"a bare string\""));
+
+        // A well-formed result is still authoritative in both directions, and absence of the flag on
+        // a readable object stays false — read-only tools must not be counted as uncertain writes.
+        assertEquals(true, method.invoke(service, "{\"mutationMayHaveCommitted\":true}"));
+        assertEquals(false, method.invoke(service, "{\"mutationMayHaveCommitted\":false}"));
+        assertEquals(false, method.invoke(service, "{\"count\":0}"));
+        // Non-boolean is not coerced: it is a malformed control field, not a claim of a write.
+        assertEquals(false, method.invoke(service, "{\"mutationMayHaveCommitted\":1}"));
+
+        // Nothing was ever sent, so there is nothing that could have committed.
+        assertEquals(false, method.invoke(service, ""));
+        assertEquals(false, method.invoke(service, (Object) null));
     }
 
     @Test
@@ -410,6 +445,164 @@ class ChatServiceImplToolLoopControlTest {
         assertEquals("Light", json.path("preview").path("items").get(0).path("name").asText());
     }
 
+    /**
+     * The planning prompt hand-lists every tool under "Available tools:", while the model is *also*
+     * sent the real schema set from {@code AiToolManager.getAllToolDefinitions()}. Two independent
+     * sources of the same fact: adding a tool without editing the prose leaves the catalogue claiming
+     * a capability set that does not match what the model can actually call, and nothing fails.
+     *
+     * <p>Compared against the tool classes' own {@code getName()} literals rather than a Spring
+     * context, so this stays a fast unit check.
+     */
+    /**
+     * {@code hasCompletedToolEvidence} is the only guard standing between a turn and a persisted
+     * COMPLETED status, at both the live terminal transition and history reload — and it had no test
+     * of its own. The frontend carries a mirror implementation in {@code api/chat.ts} that is tested;
+     * this pins the authoritative side.
+     */
+    @Test
+    void completedEvidenceRequiresAPairedUsableToolResult() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "hasCompletedToolEvidence", List.class);
+        method.setAccessible(true);
+
+        // A round that ran a tool and got a usable result back is the only shape that proves work.
+        assertEquals(true, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "list_rules", 1, null),
+                progressFrame("TOOL_RESULT", "list_rules", 1, "USABLE"))));
+
+        // No trace at all, or no tool work in it, is not evidence of completion.
+        assertEquals(false, method.invoke(service, List.of()));
+        assertEquals(false, method.invoke(service, (Object) null));
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("PLANNING", null, 1, null))));
+
+        // An execution with no result never landed: the outcome is unknown, not complete.
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "manage_rule", 1, null))));
+
+        // A result that does not pair with its execution means the trace is not trustworthy.
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "manage_rule", 1, null),
+                progressFrame("TOOL_RESULT", "list_rules", 1, "USABLE"))));
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "manage_rule", 1, null),
+                progressFrame("TOOL_RESULT", "manage_rule", 2, "USABLE"))));
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("TOOL_RESULT", "list_rules", 1, "USABLE"))));
+
+        // Two executions without an intervening result: the first one's outcome was never reported.
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "list_rules", 1, null),
+                progressFrame("TOOL_EXECUTION", "list_specs", 1, null))));
+
+        // A failed or unconfirmable outcome is not completion, however many usable ones precede it.
+        for (String outcome : List.of("FAILED", "RESULT_UNAVAILABLE", "CONFIRMATION_REQUIRED")) {
+            assertEquals(false, method.invoke(service, List.of(
+                    progressFrame("TOOL_EXECUTION", "list_rules", 1, null),
+                    progressFrame("TOOL_RESULT", "list_rules", 1, "USABLE"),
+                    progressFrame("TOOL_EXECUTION", "manage_rule", 2, null),
+                    progressFrame("TOOL_RESULT", "manage_rule", 2, outcome))), outcome);
+        }
+
+        // A guard stop means the loop was cut short, so the turn is PARTIAL regardless of prior work.
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "list_rules", 1, null),
+                progressFrame("TOOL_RESULT", "list_rules", 1, "USABLE"),
+                progressFrame("EXECUTION_GUARD", null, 2, "NO_PROGRESS"))));
+
+        // A tool left PARTIAL blocks completion until a later round resolves that same tool.
+        assertEquals(false, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "list_rules", 1, null),
+                progressFrame("TOOL_RESULT", "list_rules", 1, "USABLE"),
+                progressFrame("TOOL_EXECUTION", "manage_rule", 2, null),
+                progressFrame("TOOL_RESULT", "manage_rule", 2, "PARTIAL"))));
+        assertEquals(true, method.invoke(service, List.of(
+                progressFrame("TOOL_EXECUTION", "manage_rule", 1, null),
+                progressFrame("TOOL_RESULT", "manage_rule", 1, "PARTIAL"),
+                progressFrame("TOOL_EXECUTION", "manage_rule", 2, null),
+                progressFrame("TOOL_RESULT", "manage_rule", 2, "USABLE"))));
+
+        // A null frame makes the whole trace unreadable rather than partially trusted.
+        assertEquals(false, method.invoke(service, java.util.Arrays.asList(
+                progressFrame("TOOL_EXECUTION", "list_rules", 1, null),
+                progressFrame("TOOL_RESULT", "list_rules", 1, "USABLE"),
+                null)));
+    }
+
+    private StreamResponseDto.ProgressDto progressFrame(
+            String stage, String toolName, Integer round, String outcome) {
+        return new StreamResponseDto.ProgressDto(
+                stage, toolName, round, outcome, null, null, null, null);
+    }
+
+    @Test
+    void bothPromptsShareOneIdentityLine() throws Exception {
+        // The planning and visible-reply prompts are deliberately different documents, but the model
+        // sees both within one turn, so the platform's self-description must not drift between them.
+        // It used to be duplicated verbatim in two text blocks — edit one, and the two rounds
+        // describe the platform differently with nothing to catch it.
+        Method planningMethod = ChatServiceImpl.class.getDeclaredMethod("buildToolPlanningSystemPrompt");
+        planningMethod.setAccessible(true);
+        Method visibleMethod = ChatServiceImpl.class.getDeclaredMethod(
+                "buildVisibleReplySystemPrompt", boolean.class);
+        visibleMethod.setAccessible(true);
+
+        String planning = ((LlmMessage) planningMethod.invoke(service)).content();
+        String visible = ((LlmMessage) visibleMethod.invoke(service, false)).content();
+
+        java.lang.reflect.Field identity =
+                ChatServiceImpl.class.getDeclaredField("ASSISTANT_IDENTITY_LINE");
+        identity.setAccessible(true);
+        String identityLine = (String) identity.get(null);
+
+        assertFalse(identityLine.isBlank());
+        assertTrue(planning.startsWith(identityLine),
+                "the planning prompt must open with the shared identity line");
+        assertTrue(visible.startsWith(identityLine),
+                "the visible-reply prompt must open with the same shared line");
+    }
+
+    @Test
+    void planningPromptCatalogListsExactlyTheRegisteredTools() throws Exception {
+        Method planningMethod = ChatServiceImpl.class.getDeclaredMethod("buildToolPlanningSystemPrompt");
+        planningMethod.setAccessible(true);
+        String prompt = ((LlmMessage) planningMethod.invoke(service)).content();
+
+        String catalog = prompt.substring(prompt.indexOf("Available tools:"));
+        java.util.Set<String> listed = new java.util.TreeSet<>();
+        java.util.regex.Matcher listedMatcher = java.util.regex.Pattern
+                .compile("\\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\\b").matcher(catalog);
+        while (listedMatcher.find()) listed.add(listedMatcher.group(1));
+
+        java.util.Set<String> registered = new java.util.TreeSet<>();
+        java.nio.file.Path toolRoot = java.nio.file.Path.of(
+                "src/main/java/cn/edu/nju/Iot_Verify/component/aitool");
+        assertTrue(java.nio.file.Files.isDirectory(toolRoot), "tool source root not found");
+        try (var paths = java.nio.file.Files.walk(toolRoot)) {
+            for (java.nio.file.Path file : paths.filter(f -> f.toString().endsWith("Tool.java")).toList()) {
+                String body = java.nio.file.Files.readString(file);
+                java.util.regex.Matcher name = java.util.regex.Pattern
+                        .compile("public String getName\\(\\)\\s*\\{\\s*return \"([a-z0-9_]+)\"")
+                        .matcher(body);
+                if (name.find()) registered.add(name.group(1));
+            }
+        }
+        assertFalse(registered.isEmpty(), "no tool getName() literals were found");
+
+        java.util.Set<String> missingFromPrompt = new java.util.TreeSet<>(registered);
+        missingFromPrompt.removeAll(listed);
+        assertTrue(missingFromPrompt.isEmpty(),
+                "registered tools absent from the prompt catalog: " + missingFromPrompt);
+
+        // The catalog prose also mentions non-tool identifiers, so only flag snake_case names that
+        // look like tools but match no registration.
+        java.util.Set<String> unknownInPrompt = new java.util.TreeSet<>(listed);
+        unknownInPrompt.removeAll(registered);
+        assertTrue(unknownInPrompt.isEmpty(),
+                "prompt catalog names that are not registered tools: " + unknownInPrompt);
+    }
+
     @Test
     void assistantPrompts_requireRecommendationAccountingAndIncompleteModelDisclosure() throws Exception {
         Method planningMethod = ChatServiceImpl.class.getDeclaredMethod("buildToolPlanningSystemPrompt");
@@ -426,8 +619,14 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(planning.contains("inspect current Board state only when"));
         assertTrue(planning.contains("use list_templates only when"));
         assertTrue(planning.contains("use manage_rule directly"));
-        assertTrue(planning.contains("ReAct activity summary"));
-        assertTrue(planning.contains("audit-friendly summary, not private hidden chain-of-thought"));
+        // The reasoning channel must ask the model to *do* the analysis, not narrate the call list:
+        // decomposition, evidence, rejected alternatives, and self-check are each load-bearing.
+        assertTrue(planning.contains("do the thinking here, do not merely narrate the steps"));
+        assertTrue(planning.contains("Decompose first"));
+        assertTrue(planning.contains("Reason from the observed board"));
+        assertTrue(planning.contains("name the alternative you did not"));
+        assertTrue(planning.contains("Check yourself before concluding"));
+        assertTrue(planning.contains("audit-friendly explanation, not private hidden chain-of-thought"));
         assertTrue(planning.contains("Use recommend_scenario only"));
         assertTrue(planning.contains("call apply_scenario with confirmed=false"));
         assertTrue(planning.contains("call apply_fix with confirmed=false"));

@@ -15,9 +15,13 @@ const boardApiMocks = vi.hoisted(() => ({
   resetDefaultTemplates: vi.fn()
 }))
 
-const messageMocks = vi.hoisted(() => Object.assign(vi.fn(), {
+// Assert on the semantic feedback boundary, not on Element Plus option objects.
+const messageMocks = vi.hoisted(() => ({
   success: vi.fn(),
+  // `notifyBlocked` and `notifyInfo` are distinct boundaries: sharing one spy would let a
+  // blocked-action warning silently downgrade to an informational toast and still pass.
   warning: vi.fn(),
+  info: vi.fn(),
   error: vi.fn()
 }))
 
@@ -29,7 +33,12 @@ vi.mock('@/api/board', async () => {
   }
 })
 
-vi.mock('element-plus', () => ({ ElMessage: messageMocks }))
+vi.mock('@/utils/feedback', () => ({
+  notifySuccess: messageMocks.success,
+  notifyBlocked: messageMocks.warning,
+  notifyInfo: messageMocks.info,
+  notifyError: messageMocks.error
+}))
 
 const manifest = {
   Name: 'CustomSwitch',
@@ -169,9 +178,8 @@ describe('ControlCenter template authority recovery', () => {
     expect(wrapper.get('.control-center-delete-dialog').text()).toContain('Hall switch')
     expect(wrapper.get('.control-center-delete-dialog button:last-child').attributes('disabled')).toBeDefined()
     expect(boardApiMocks.getDeviceTemplates).not.toHaveBeenCalled()
-    expect(messageMocks.warning).toHaveBeenCalledWith(expect.objectContaining({
-      message: i18n.global.t('app.templateDeletePreviewChanged')
-    }))
+    expect(messageMocks.warning)
+      .toHaveBeenCalledWith(i18n.global.t('app.templateDeletePreviewChanged'))
     wrapper.unmount()
   })
 
@@ -192,15 +200,13 @@ describe('ControlCenter template authority recovery', () => {
     expect(boardApiMocks.getDeviceTemplates).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('replace-template-catalog')).toEqual([[[template]]])
     expect(wrapper.find('.control-center-delete-dialog').exists()).toBe(false)
-    expect(messageMocks.warning).not.toHaveBeenCalledWith(expect.objectContaining({
-      message: i18n.global.t('app.templateDeletePreviewChanged')
-    }))
-    expect(messageMocks).toHaveBeenCalledWith(expect.objectContaining({
-      message: i18n.global.t('app.deleteFailedWithReason', {
+    expect(messageMocks.warning)
+      .not.toHaveBeenCalledWith(i18n.global.t('app.templateDeletePreviewChanged'))
+    expect(messageMocks.error).toHaveBeenCalledWith(
+      i18n.global.t('app.deleteFailedWithReason', {
         reason: i18n.global.t('app.boardMutationResponseIncomplete')
-      }),
-      type: 'error'
-    }))
+      })
+    )
     wrapper.unmount()
   })
 
@@ -220,9 +226,8 @@ describe('ControlCenter template authority recovery', () => {
 
     expect(boardApiMocks.getDeviceTemplates).toHaveBeenCalledTimes(1)
     expect(wrapper.find('.control-center-delete-dialog').exists()).toBe(false)
-    expect(messageMocks.warning).not.toHaveBeenCalledWith(expect.objectContaining({
-      message: i18n.global.t('app.templateDeletePreviewChanged')
-    }))
+    expect(messageMocks.warning)
+      .not.toHaveBeenCalledWith(i18n.global.t('app.templateDeletePreviewChanged'))
     wrapper.unmount()
   })
 
@@ -241,7 +246,12 @@ describe('ControlCenter template authority recovery', () => {
 
     expect(boardApiMocks.getDeviceTemplates).toHaveBeenCalledTimes(1)
     expect(wrapper.find('.control-center-delete-dialog').exists()).toBe(false)
-    expect(messageMocks).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }))
+    // Assert *which* error, so a wrong or generic message cannot pass.
+    expect(messageMocks.error).toHaveBeenCalledWith(
+      i18n.global.t('app.deleteFailedWithReason', {
+        reason: i18n.global.t('app.boardMutationResponseIncomplete')
+      })
+    )
     wrapper.unmount()
   })
 })

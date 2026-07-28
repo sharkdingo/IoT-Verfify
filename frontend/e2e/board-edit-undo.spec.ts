@@ -1,0 +1,290 @@
+import path from 'node:path'
+import { type APIRequestContext, type Page } from '@playwright/test'
+import { apiBaseURL, createAuthenticatedUser, expect, test, type AuthUser } from './support/auth'
+
+/**
+ * Board edit undo/redo against a real backend.
+ *
+ * Undo here means "reverse a persisted board edit". These tests also pin the boundaries that keep
+ * it from being confused with the other reversal-shaped affordances on this screen: browser
+ * Back/Forward moves between run surfaces, and a text field keeps its own undo stack.
+ */
+
+test.describe.configure({ mode: 'serial' })
+test.setTimeout(180_000)
+
+const seedSession = async (page: Page, auth: AuthUser) => {
+  await page.addInitScript(({ token, user }) => {
+    window.localStorage.setItem('iot_verify_token', token)
+    window.localStorage.setItem('iot_verify_user', JSON.stringify(user))
+    window.localStorage.setItem('locale', 'en')
+    window.localStorage.setItem('iot_verify_theme', 'light')
+  }, {
+    token: auth.token,
+    user: { userId: auth.userId, phone: auth.phone, username: auth.username }
+  })
+}
+
+/** Imports a scene so there are real, device-referencing rules to delete and restore. */
+const openBoardWithScene = async (page: Page, request: APIRequestContext, auth: AuthUser) => {
+  await seedSession(page, auth)
+  await page.goto('/#/board')
+  await expect(page.locator('.iot-board')).toBeVisible({ timeout: 60_000 })
+
+  const scenePath = path.resolve(
+    process.cwd(), '..', 'docs', 'examples', 'default-climate-conflict-scene.json'
+  )
+  await page.getByTestId('scene-import-file').setInputFiles(scenePath)
+  await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+    .getByRole('button', { name: 'Replace in full' })
+    .click()
+  await expect.poll(async () => (await ruleIds(request, auth)).length,
+    { timeout: 60_000 }).toBeGreaterThan(0)
+}
+
+const ruleIds = async (request: APIRequestContext, auth: AuthUser): Promise<number[]> => {
+  const response = await request.get(`${apiBaseURL}/api/board/rules`, {
+    headers: { Authorization: `Bearer ${auth.token}` }
+  })
+  return ((await response.json())?.data ?? []).map((rule: any) => Number(rule.id))
+}
+
+const undoButton = (page: Page) => page.getByTestId('board-undo')
+const redoButton = (page: Page) => page.getByTestId('board-redo')
+
+/**
+ * Reorders the rules so execution order no longer matches ascending id.
+ *
+ * Without this the position assertion cannot fail: the ordering query breaks ties on id, so a
+ * restore that appended instead of honouring `entity_order` would still produce the original
+ * sequence, and the test would stay green with the feature reverted.
+ */
+const reverseRuleOrder = async (request: APIRequestContext, auth: AuthUser) => {
+  const current = await ruleIds(request, auth)
+  const response = await request.put(`${apiBaseURL}/api/board/rules/order`, {
+    headers: { Authorization: `Bearer ${auth.token}` },
+    data: { expectedRuleIds: current, ruleIds: [...current].reverse() }
+  })
+  expect(response.ok()).toBe(true)
+  return [...current].reverse()
+}
+
+/** Deletes the first rule through the inspector, confirming the destructive dialog. */
+const deleteFirstRule = async (page: Page) => {
+  await page.getByTestId('inspector-tab-rules').click()
+  await page.getByRole('button', { name: 'Delete Rule' }).first().click()
+  await page.locator('.el-message-box').getByRole('button', { name: /Delete|删除/ }).click()
+}
+
+test.describe('board edit undo and redo', () => {
+  test('restores a deleted rule, redoes it, and survives a refresh', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    // Nothing has been edited yet, so the server reports no reversible history.
+    await expect(undoButton(page)).toBeDisabled()
+    await expect(redoButton(page)).toBeDisabled()
+
+    const before = await ruleIds(request, auth)
+    await deleteFirstRule(page)
+    await expect.poll(async () => (await ruleIds(request, auth)).length)
+      .toBe(before.length - 1)
+    await expect(undoButton(page)).toBeEnabled()
+
+    const edgesAfterDelete = await page.locator('.edge-hitarea').count()
+
+    await undoButton(page).click()
+    // The restored rule keeps its original id, so references to it stay valid.
+    await expect.poll(async () => (await ruleIds(request, auth)).sort()).toEqual([...before].sort())
+    await expect(redoButton(page)).toBeEnabled()
+
+    // Canvas connection lines are derived from rules, so a restored rule must get its line back
+    // without waiting for an unrelated refresh.
+    await expect.poll(async () => page.locator('.edge-hitarea').count(), { timeout: 15_000 })
+      .toBeGreaterThan(edgesAfterDelete)
+
+    await redoButton(page).click()
+    await expect.poll(async () => (await ruleIds(request, auth)).length)
+      .toBe(before.length - 1)
+
+    // Availability is server state, so a reload restores the same affordance.
+    await page.reload()
+    await expect(page.locator('.iot-board')).toBeVisible({ timeout: 60_000 })
+    await expect(undoButton(page)).toBeEnabled()
+    await undoButton(page).click()
+    await expect.poll(async () => (await ruleIds(request, auth)).length).toBe(before.length)
+  })
+
+  test('restores a deleted rule to its original execution position', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    // Execution order is model semantics: the lower rule wins when guards overlap. Restoring the
+    // content but not the position hands back a board that verifies differently.
+    // Reverse first, so the expected sequence is descending by id and an append-at-the-end restore
+    // produces a visibly different order rather than accidentally the right one.
+    const before = await reverseRuleOrder(request, auth)
+    expect(before.length).toBeGreaterThan(1)
+    await expect.poll(async () => ruleIds(request, auth), { timeout: 30_000 }).toEqual(before)
+
+    // Delete the first rule: the survivor keeps order 1, so a restore that reuses the survivor count
+    // would land on 1 too and let the id tiebreak decide the ordering instead of the user.
+    await deleteFirstRule(page)
+    await expect.poll(async () => (await ruleIds(request, auth)).length).toBe(before.length - 1)
+    await expect(undoButton(page)).toBeEnabled()
+
+    await undoButton(page).click()
+    // Order-sensitive: the exact sequence must come back, not merely the same set of ids.
+    await expect.poll(async () => ruleIds(request, auth), { timeout: 30_000 }).toEqual(before)
+  })
+
+  test('drops the undo affordance when a device deletion clears the journal', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    await deleteFirstRule(page)
+    await expect(undoButton(page)).toBeEnabled()
+
+    // Deleting a device cascades into the rules and specs that referenced it, so restoring one of
+    // them in isolation could not reach a legal board: the server clears the journal. The button
+    // must follow that, not keep offering an undo that would report "nothing to undo".
+    // The node opens on a pointer sequence with drag detection, so wait for it to settle first.
+    const node = page.locator('.device-node').first()
+    await expect(node).toBeVisible()
+    await node.click();
+    const details = page.getByTestId('device-dialog')
+    await expect(details).toBeVisible({ timeout: 15_000 })
+    await details.getByTestId('device-delete').click()
+    const confirmation = page.getByRole('dialog', { name: 'Delete device' })
+    await confirmation.getByRole('button', { name: 'Delete Device', exact: true }).click()
+
+    await expect(undoButton(page)).toBeDisabled({ timeout: 60_000 })
+    await expect(redoButton(page)).toBeDisabled()
+  })
+
+  test('drops the undo affordance when a scene replacement clears the journal', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    await deleteFirstRule(page)
+    await expect(undoButton(page)).toBeEnabled()
+
+    // Replacing the scene rewrites every collection, so no per-record inverse can reach a legal
+    // board and the server clears the journal. The button must follow that server state rather
+    // than keep offering an undo that would report "nothing to undo".
+    const scenePath = path.resolve(
+      process.cwd(), '..', 'docs', 'examples', 'default-fire-evacuation-scene.json'
+    )
+    await page.getByTestId('scene-import-file').setInputFiles(scenePath)
+    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+
+    await expect(undoButton(page)).toBeDisabled({ timeout: 60_000 })
+    await expect(redoButton(page)).toBeDisabled()
+  })
+
+  test('reverses a rule reorder, which users read as one edit', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    await page.getByTestId('inspector-tab-rules').click()
+    const before = await ruleIds(request, auth)
+    expect(before.length).toBeGreaterThan(1)
+
+    // Reorder is reached through an explicit up/down button, so one press is one reversible edit —
+    // exactly what a user expects Ctrl+Z to take back.
+    await page.getByRole('button', { name: 'Move later' }).first().click()
+    await expect.poll(async () => ruleIds(request, auth)).not.toEqual(before)
+    await expect(undoButton(page)).toBeEnabled()
+
+    await undoButton(page).click()
+    await expect.poll(async () => ruleIds(request, auth)).toEqual(before)
+
+    await expect(redoButton(page)).toBeEnabled()
+    await redoButton(page).click()
+    await expect.poll(async () => ruleIds(request, auth)).not.toEqual(before)
+  })
+
+  test('keeps pressing undo past the end harmless', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    const before = await ruleIds(request, auth)
+    await deleteFirstRule(page)
+    await expect(undoButton(page)).toBeEnabled()
+
+    await undoButton(page).click()
+    await expect.poll(async () => (await ruleIds(request, auth)).length).toBe(before.length)
+
+    // Repeating an exhausted undo is idempotent: no error, no second restore, no duplicate rule.
+    await expect(undoButton(page)).toBeDisabled()
+    await page.keyboard.press('Control+z')
+    await page.keyboard.press('Control+z')
+    await expect.poll(async () => (await ruleIds(request, auth)).sort()).toEqual([...before].sort())
+  })
+
+  test('invalidates redo once a new edit happens after an undo', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    const before = await ruleIds(request, auth)
+    await deleteFirstRule(page)
+    await undoButton(page).click()
+    await expect.poll(async () => (await ruleIds(request, auth)).length).toBe(before.length)
+    await expect(redoButton(page)).toBeEnabled()
+
+    // A new edit makes the undone branch unreachable — redoing it would overwrite this edit.
+    await deleteFirstRule(page)
+    await expect(redoButton(page)).toBeDisabled()
+    const afterNewEdit = await ruleIds(request, auth)
+
+    await page.keyboard.press('Control+Shift+z')
+    await expect.poll(async () => (await ruleIds(request, auth)).sort())
+      .toEqual([...afterNewEdit].sort())
+  })
+})
+
+test.describe('undo boundaries', () => {
+  test('does not hijack Ctrl+Z inside a text field', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    const before = await ruleIds(request, auth)
+    await deleteFirstRule(page)
+    await expect(undoButton(page)).toBeEnabled()
+
+    // Typing in a board input and pressing Ctrl+Z must undo the typing, not the rule deletion.
+    await page.getByTestId('control-tab-devices').click()
+    const nameField = page.getByTestId('single-device-name')
+    await nameField.click()
+    await nameField.fill('undo-scope-probe')
+    await page.keyboard.press('Control+z')
+
+    await expect.poll(async () => (await ruleIds(request, auth)).length)
+      .toBe(before.length - 1)
+    await expect(undoButton(page)).toBeEnabled()
+  })
+
+  test('browser Back does not reverse a board edit', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+
+    const before = await ruleIds(request, auth)
+    await deleteFirstRule(page)
+    await expect.poll(async () => (await ruleIds(request, auth)).length)
+      .toBe(before.length - 1)
+    const afterDelete = await ruleIds(request, auth)
+
+    // Back/Forward is run-surface navigation (a `?run=` deep link), a different axis from the
+    // edit journal. Going back must not reverse the deletion.
+    await page.goto('/#/board?run=verification:999999')
+    await expect(page.getByTestId('board-deep-link-unavailable')).toBeVisible({ timeout: 60_000 })
+    await page.goBack()
+    await expect(page.locator('.iot-board')).toBeVisible({ timeout: 60_000 })
+
+    await expect.poll(async () => (await ruleIds(request, auth)).sort())
+      .toEqual([...afterDelete].sort())
+    await expect(undoButton(page)).toBeEnabled()
+  })
+})

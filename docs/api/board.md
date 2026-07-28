@@ -45,12 +45,15 @@ The replacement commits or rolls back as one transaction.
 | GET | `/api/board/environment` | → `BoardEnvironmentVariableDto[]` | Board-level environment pool; self-heals from current nodes/templates |
 | POST | `/api/board/environment` | `EnvironmentVariableUpdateRequestDto[]` → `EnvironmentMutationResultDto` | Atomically apply at most 200 name-keyed compare-and-set field patches; every item carries a complete `expected` baseline and a non-empty `desired` patch |
 | GET | `/api/board/rules` | → `RuleDto[]` | List rules in effective execution order |
-| POST | `/api/board/rules` | `RuleDto` → `CollectionMutationResultDto<RuleDto>` | Create exactly one validated rule; request `id` is ignored and the server assigns identity |
-| PUT | `/api/board/rules/order` | `{ expectedRuleIds: Long[], ruleIds: Long[] }` → `RuleDto[]` | Compare-and-set replacement of execution order only. Both lists accept at most 100 positive ids and must contain every current rule id exactly once. `expectedRuleIds` must match the current order element-for-element; stale, duplicate, or partial input is rejected without writing. |
-| DELETE | `/api/board/rules/{ruleId}` | `RuleDto` (the confirmed current snapshot) → `CollectionMutationResultDto<RuleDto>` | Delete only when the id and authored rule semantics still match; a stale snapshot returns `409` without writing, and a missing rule returns `404` |
+| POST | `/api/board/rules` | `RuleDto` → `CollectionMutationResultDto<RuleDto>` | Create exactly one validated rule; request `id` is ignored and the server assigns identity. Reversible: the result carries `canUndo`/`canRedo` |
+| PUT | `/api/board/rules/order` | `{ expectedRuleIds: Long[], ruleIds: Long[] }` → `CollectionMutationResultDto<RuleDto>` | Compare-and-set replacement of execution order only. Both lists accept at most 100 positive ids and must contain every current rule id exactly once. `expectedRuleIds` must match the current order element-for-element; stale, duplicate, or partial input is rejected without writing. Reversible: one button press is one edit, recorded as a `RULE_ORDER` journal entry holding the previous ordering, so the result carries `canUndo`/`canRedo` |
+| DELETE | `/api/board/rules/{ruleId}` | `RuleDto` (the confirmed current snapshot) → `CollectionMutationResultDto<RuleDto>` | Delete only when the id and authored rule semantics still match; a stale snapshot returns `409` without writing, and a missing rule returns `404`. Reversible: the result carries `canUndo`/`canRedo`. Undo restores the rule under its original id **and at its recorded execution position** (`entity_order` on the journal entry), clamped when neighbours were deleted meanwhile; surviving rules are renumbered contiguously so the deletion gap cannot leave two rules sharing an order. A journal entry with no recorded position (written before that column existed) is rejected with `409` rather than appended, because appending would restore the rule to a different board |
 | GET | `/api/board/specs` | → `SpecificationDto[]` | List specs in stable authored order |
-| POST | `/api/board/specs` | `SpecificationDto` → `CollectionMutationResultDto<SpecificationDto>` | Create exactly one validated specification |
-| DELETE | `/api/board/specs/{specId}` | `SpecificationDto` (the confirmed current snapshot) → `CollectionMutationResultDto<SpecificationDto>` | Delete only when the id and authored specification semantics still match; a stale snapshot returns `409` without writing, and a missing specification returns `404` |
+| POST | `/api/board/specs` | `SpecificationDto` → `CollectionMutationResultDto<SpecificationDto>` | Create exactly one validated specification. Reversible: the result carries `canUndo`/`canRedo` |
+| DELETE | `/api/board/specs/{specId}` | `SpecificationDto` (the confirmed current snapshot) → `CollectionMutationResultDto<SpecificationDto>` | Delete only when the id and authored specification semantics still match; a stale snapshot returns `409` without writing, and a missing specification returns `404`. Reversible: the result carries `canUndo`/`canRedo`, and undo restores the specification at its recorded list position (same `entity_order` mechanism as rules), clamped when neighbours were deleted meanwhile |
+| GET | `/api/board/edits/availability` | → `BoardUndoResultDto` (`applied: false`, `AVAILABILITY_ONLY`, empty `rules`/`specs`) | Current undo/redo availability from the per-user edit journal, with no side effects. Read `canUndo`/`canRedo` only — the empty collections are not an authoritative board state. Read on board load so the affordance survives reload, a second tab, and another device |
+| POST | `/api/board/edits/undo` | → `BoardUndoResultDto` | Reverse the newest reversible edit (rule/spec create or delete, or a rule reorder). Returns the authoritative rule and spec lists plus remaining availability. `applied: false` with `NOTHING_TO_APPLY` when there is no history — a normal, idempotent outcome. `409` when the affected record changed after the edit was recorded, leaving the board untouched. History is capped at the 50 most recent edits per account; device deletion and scene replacement/clear discard it wholesale, because their inverse is not a single record. Ordinal allocation is fenced by a unique `(user_id, sequence)` constraint, so a concurrent write fails and retries rather than producing two entries that share a position |
+| POST | `/api/board/edits/redo` | → `BoardUndoResultDto` | Re-apply the oldest undone edit. Same conflict and idempotency rules. A new edit discards the abandoned redo branch |
 | GET | `/api/board/replacement-preview` | → `BoardReplacementPreviewDto` | Return the opaque impact token and authoritative current counts that must be shown before a full scene replacement/clear |
 | POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Explicit atomic full-scene replacement** of complete `nodes` + `environmentVariables` + `rules` + `specs` plus exact `templateSnapshots`; requires the still-current preview `impactToken` |
 | GET | `/api/board/layout` | → `BoardLayoutDto` | Panel/canvas layout |
@@ -246,13 +249,17 @@ one localized external-deletion warning is shown, and keyboard focus moves to th
 Devices tab instead of remaining on a detached element.
 
 Rule/spec create/delete returns `CollectionMutationResultDto<T>`:
-`{ operation, affectedItem, currentItems, currentCount }`. This is deliberately richer
+`{ operation, affectedItem, currentItems, currentCount, canUndo, canRedo }`. This is deliberately richer
 than success/id/count so clients can explain exactly what changed and reconcile stale
 local state. A REST delete must include the complete item snapshot that the user confirmed
 (`RuleDto` or `SpecificationDto`); the backend compares the identity and authored semantic
 fields while holding the board write lock. It rejects a changed snapshot with `409` and
 performs no write, so a second tab cannot silently delete a newer edit. The returned
 `affectedItem` is the exact deleted snapshot and `currentItems` is authoritative.
+
+Rule reorder shares this envelope with one difference: it reports `operation: "reordered"` and a
+`null` `affectedItem`, because one up/down press changes no single record — the whole new ordering
+is in `currentItems`. Clients must not require `affectedItem` on that path.
 
 Board node mutations validate more than shape. Device ids must be unique and must not
 collide after NuSMV normalization (`AC 1` and `ac_1` are the same model id). For every
@@ -559,6 +566,19 @@ conditions require `Signal=true` APIs and boolean values; trust/privacy values m
 or state property key. Variable conditions must match declared enum `Values` or numeric
 `LowerBound..UpperBound` ranges when the template defines them; enum variables cannot
 use ordering comparisons.
+
+### `BoardUndoResultDto`
+
+Returned by `/api/board/edits/availability`, `/undo`, and `/redo`.
+
+| Field | Type | Meaning |
+| :--- | :--- | :--- |
+| `applied` | `boolean` | Whether an edit was actually reversed or re-applied. False is a normal idempotent outcome, not an error |
+| `entityType` | `String?` | `RULE`, `SPECIFICATION`, or `RULE_ORDER`. Absent when nothing was applied |
+| `originalOperation` | `String?` | `CREATE`, `UPDATE`, or `DELETE` — what the *original* edit did, not what this undo did. Absent when nothing was applied |
+| `reasonCode` | `String` | `UNDONE`, `REDONE`, `NOTHING_TO_APPLY`, or `AVAILABILITY_ONLY` |
+| `rules` / `specs` | `RuleDto[]` / `SpecificationDto[]` | Authoritative post-operation collections; replace local state outright. Empty for `AVAILABILITY_ONLY`, where they are **not** a board state |
+| `canUndo` / `canRedo` | `boolean` | Remaining availability from the journal, reported even when nothing was applied |
 
 ### `BoardLayoutDto`
 
@@ -985,6 +1005,10 @@ conflict freedom.
 > raw AI output, scenario `count` is not required to equal `validatedCount`; clients
 > verify `count` against `scene.devices + scene.environmentVariables + scene.rules +
 > scene.specs` instead. The raw-candidate identities still use `validatedCount`.
+> Every applied scene item must nonetheless be accounted for: clients require
+> `validatedCount + adjustedCount >= count`, so a response cannot hand over a scene while
+> reporting that it inspected no candidates. This is a floor rather than an equality
+> precisely because an adjustment is not obliged to add an item.
 > The response carries authoritative `objectiveTargets` (`{ minDevices, minRules,
 > minSpecs }`), `objectiveStatus=COMPLETE|PARTIAL`, and ordered `objectiveIssues[]`
 > (`{ code, message }`). The controller requires the echoed targets to match the submitted

@@ -1273,8 +1273,13 @@ class ParameterAdjustStrategyTest {
 
         assertNull(strategy.tryFix(context));
         assertEquals(2, context.parameterTargetsSnapshot().size());
-        assertEquals(java.util.Set.of(disjointTarget, usableTarget),
+        // A range disjoint from the device's own limits was never searched, so it must not be
+        // reported as honoured; it stays unmatched and the user is told why.
+        assertEquals(java.util.Set.of(usableTarget),
                 context.matchedPreferredRangeTargetIdsSnapshot());
+        assertTrue(context.diagnosticsSnapshot().stream()
+                        .anyMatch(d -> d.contains("60-70") && d.contains("left unchanged")),
+                context.diagnosticsSnapshot()::toString);
         assertEquals(java.util.Set.of("r0_c1"),
                 configCaptor.getValue().getParameterizedThresholds().keySet());
         ParameterizationConfig.ParamInfo usable =

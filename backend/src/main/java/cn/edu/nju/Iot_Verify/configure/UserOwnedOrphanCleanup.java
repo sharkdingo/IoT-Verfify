@@ -38,7 +38,8 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
             "rules",
             "specification",
             "board_layout",
-            "device_templates");
+            "device_templates",
+            "board_edit_journal");
 
     private static final List<ForeignKeySpec> FOREIGN_KEYS = List.of(
             userForeignKey("trace", "fk_trace_user"),
@@ -54,6 +55,7 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
             userForeignKey("specification", "fk_specification_user"),
             userForeignKey("board_layout", "fk_board_layout_user"),
             userForeignKey("device_templates", "fk_device_templates_user"),
+            userForeignKey("board_edit_journal", "fk_board_edit_journal_user"),
             new ForeignKeySpec(
                     "chat_message", List.of("session_id"),
                     "chat_session", List.of("id"), "fk_chat_message_session"),

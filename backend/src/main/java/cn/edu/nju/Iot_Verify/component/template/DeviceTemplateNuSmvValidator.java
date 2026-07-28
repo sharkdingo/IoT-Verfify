@@ -53,10 +53,6 @@ public class DeviceTemplateNuSmvValidator {
     private static final java.util.regex.Pattern SAFE_SMV_TOKEN =
             java.util.regex.Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
 
-    /** Template names must be printable ASCII (spaces allowed) so that
-     *  Locale.ROOT toLowerCase and MySQL LOWER() produce identical results. */
-    private static final java.util.regex.Pattern SAFE_TEMPLATE_NAME =
-            java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
     private static final int MAX_TEMPLATE_ICON_LENGTH = 262_144;
     private static final java.util.regex.Pattern SAFE_TEMPLATE_ICON =
             java.util.regex.Pattern.compile(

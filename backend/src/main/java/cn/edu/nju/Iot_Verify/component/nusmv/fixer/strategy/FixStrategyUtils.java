@@ -24,11 +24,13 @@ import cn.edu.nju.Iot_Verify.util.RuleSemanticSignature;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
+import cn.edu.nju.Iot_Verify.util.InterruptPreservation;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -118,13 +120,24 @@ public final class FixStrategyUtils {
                 recordSolverFailure(ctx, strategyName,
                         "NuSMV forward verification encountered an error: " + e.getMessage());
             }
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
+            // Every strategy reaches NuSMV through here, so this is where a cancellation delivered as
+            // an interrupt must survive the broad catch — otherwise ctx.isExpired() stops reporting it
+            // and the search keeps taking solver permits for an already-answered request.
+            preserveInterrupt(e);
             return false;
         } finally {
             cleanupTempDir(smvFile);
         }
+    }
+
+    /**
+     * Re-arms the interrupt flag if this exception was (or wrapped) an interruption.
+     *
+     * <p>Delegates to {@link InterruptPreservation}, which the chat tool loop shares — this stays as a
+     * package-local alias only because the strategies call it on nearly every catch.
+     */
+    static void preserveInterrupt(Exception e) {
+        InterruptPreservation.preserveInterrupt(e);
     }
 
     static void recordSolverFailure(FixContext ctx, String strategyName, String reason) {
@@ -313,10 +326,15 @@ public final class FixStrategyUtils {
                     specVarNames.add(varName);
                     DeviceSmvData smv = deviceSmvMap.get(varName);
                     collectImpactedDomains(smv, specDomains);
-                    if ("variable".equalsIgnoreCase(sc.getTargetType()) && sc.getKey() != null
+                    // Trimmed to match extractCandidateConditions and admission: a padded key
+                    // otherwise missed the env-variable lookup, dropped that domain from
+                    // specDomains, and silently narrowed the parameterization scope to fewer rules.
+                    String specKey = sc.getKey() == null ? null : sc.getKey().trim();
+                    String specTargetType = sc.getTargetType() == null ? null : sc.getTargetType().trim();
+                    if ("variable".equalsIgnoreCase(specTargetType) && specKey != null
                             && smv != null && smv.getEnvVariables() != null
-                            && smv.getEnvVariables().containsKey(sc.getKey())) {
-                        specDomains.add(sc.getKey());
+                            && smv.getEnvVariables().containsKey(specKey)) {
+                        specDomains.add(specKey);
                     }
                 }
             }
@@ -504,9 +522,12 @@ public final class FixStrategyUtils {
         Set<String> freeValueCandidateShapes = new HashSet<>();
 
         for (SpecConditionDto sc : allSpecConds) {
-            String targetType = sc.getTargetType();
-            if (targetType == null) continue;
-            targetType = targetType.toLowerCase();
+            // Trimmed and Locale.ROOT-pinned to match the generator, which resolves the attribute this
+            // candidate carries by equals() against manifest names. A padded key would produce a
+            // suggestion that can never resolve.
+            if (sc.getTargetType() == null) continue;
+            String targetType = sc.getTargetType().trim().toLowerCase(Locale.ROOT);
+            String specKey = sc.getKey() == null ? null : sc.getKey().trim();
 
             if (!"state".equals(targetType) && !"mode".equals(targetType)
                     && !"variable".equals(targetType) && !"api".equals(targetType)) continue;
@@ -522,7 +543,7 @@ public final class FixStrategyUtils {
                 }
                 candidate = RuleDto.Condition.builder()
                         .deviceName(deviceRef)
-                        .attribute(sc.getKey())
+                        .attribute(specKey)
                         .targetType(targetType)
                         .build();
             } else if ("state".equals(targetType)) {
@@ -536,7 +557,7 @@ public final class FixStrategyUtils {
             } else if ("mode".equals(targetType)) {
                 candidate = RuleDto.Condition.builder()
                         .deviceName(deviceRef)
-                        .attribute(sc.getKey())
+                        .attribute(specKey)
                         .targetType(targetType)
                         .relation(sc.getRelation())
                         .value(sc.getValue())
@@ -544,7 +565,7 @@ public final class FixStrategyUtils {
             } else {
                 candidate = RuleDto.Condition.builder()
                         .deviceName(deviceRef)
-                        .attribute(sc.getKey())
+                        .attribute(specKey)
                         .targetType(targetType)
                         .relation(sc.getRelation())
                         .value(sc.getValue())
@@ -622,7 +643,7 @@ public final class FixStrategyUtils {
             return null;
         }
 
-        String targetType = candidate.getTargetType().trim().toLowerCase();
+        String targetType = candidate.getTargetType().trim().toLowerCase(Locale.ROOT);
         String relation = SmvRelationUtils.normalizeRelation(candidate.getRelation());
         if ("mode".equals(targetType)) {
             if (!List.of("=", "!=", "in", "not in").contains(relation)) return null;
@@ -740,7 +761,7 @@ public final class FixStrategyUtils {
 
         String targetType = candidate.getTargetType() == null
                 ? ""
-                : candidate.getTargetType().trim().toLowerCase();
+                : candidate.getTargetType().trim().toLowerCase(Locale.ROOT);
         if ("mode".equals(targetType)) {
             int modeIndex = commandDevice.getModes() == null
                     ? -1
@@ -780,7 +801,7 @@ public final class FixStrategyUtils {
         String relation = SmvRelationUtils.normalizeRelation(candidate.getRelation());
         String targetType = candidate.getTargetType() == null
                 ? ""
-                : candidate.getTargetType().trim().toLowerCase();
+                : candidate.getTargetType().trim().toLowerCase(Locale.ROOT);
 
         if ("mode".equals(targetType)) {
             int modeIndex = commandDevice.getModes() == null
@@ -990,7 +1011,7 @@ public final class FixStrategyUtils {
         if (attr == null || attr.isBlank()) return false;
         String targetType = candidate.getTargetType();
         if (targetType == null || targetType.isBlank()) return false;
-        targetType = targetType.toLowerCase();
+        targetType = targetType.toLowerCase(Locale.ROOT);
         if (!"state".equals(targetType) && !"mode".equals(targetType)
                 && !"variable".equals(targetType) && !"api".equals(targetType)) {
             return false;
@@ -1183,7 +1204,7 @@ public final class FixStrategyUtils {
         String normVal = SmvRelationUtils.cleanRuleValueByRelation(normRel, c.getValue(), modeCount);
         if (normVal == null) normVal = "";
         String attr = c.getAttribute() != null ? c.getAttribute() : "";
-        String targetType = c.getTargetType() != null ? c.getTargetType().toLowerCase() : "";
+        String targetType = c.getTargetType() != null ? c.getTargetType().toLowerCase(Locale.ROOT) : "";
         return varName + "|" + targetType + "|" + attr + "|" + normRel + "|" + normVal;
     }
 
@@ -1195,7 +1216,7 @@ public final class FixStrategyUtils {
         if (varName == null) return null;
         String normRel = SmvRelationUtils.normalizeRelation(c.getRelation());
         String attr = c.getAttribute() != null ? c.getAttribute() : "";
-        String targetType = c.getTargetType() != null ? c.getTargetType().toLowerCase() : "";
+        String targetType = c.getTargetType() != null ? c.getTargetType().toLowerCase(Locale.ROOT) : "";
         return varName + "|" + targetType + "|" + attr + "|" + normRel;
     }
 }

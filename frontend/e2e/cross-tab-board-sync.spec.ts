@@ -400,3 +400,50 @@ test('a cross-tab board change marks an open verification verdict stale', async 
     await context.close()
   }
 })
+
+test('an undo refreshes another visible tab like any other board mutation', async ({ browser, request }) => {
+  const auth = await createAuthenticatedUser(request, { usernamePrefix: 'tabundo' })
+  const context = await browser.newContext()
+  const writer = await context.newPage()
+  await openWorkspace(writer, auth)
+
+  try {
+    // A scene gives both tabs real rules, so the deletion and its undo are observable.
+    const scenePath = path.resolve(
+      process.cwd(), '..', 'docs', 'examples', 'default-climate-conflict-scene.json'
+    )
+    await writer.getByTestId('scene-import-file').setInputFiles(scenePath)
+    await writer.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+    await writer.getByTestId('inspector-tab-rules').click()
+    const deleteRule = writer.getByRole('button', { name: 'Delete Rule' }).first()
+    await expect(deleteRule).toBeEnabled({ timeout: 60_000 })
+
+    await deleteRule.click()
+    await writer.locator('.el-message-box').getByRole('button', { name: /Delete|删除/ }).click()
+    await expect(writer.getByTestId('board-undo')).toBeEnabled({ timeout: 30_000 })
+
+    const observer = await context.newPage()
+    await openWorkspace(observer, auth)
+    await observer.getByTestId('inspector-tab-rules').click()
+    const observedRules = observer.getByRole('button', { name: 'Delete Rule' })
+    // Wait for the freshly opened tab's rule list to render before baselining. Counting immediately
+    // could capture 0 and turn a correct sync into a spurious failure.
+    await expect.poll(async () => observedRules.count(), { timeout: 30_000 }).toBeGreaterThan(0)
+    const afterDelete = await observedRules.count()
+
+    // Undo changes rules and specifications, so the other tab must be invalidated exactly as it
+    // is for a direct mutation — otherwise it keeps showing a board that no longer exists.
+    const observerRefresh = observer.waitForResponse(response =>
+      response.request().method() === 'GET'
+        && new URL(response.url()).pathname === '/api/board/snapshot')
+    await writer.getByTestId('board-undo').click()
+    await observerRefresh
+
+    await expect.poll(async () => observedRules.count(), { timeout: 30_000 })
+      .toBe(afterDelete + 1)
+  } finally {
+    await context.close()
+  }
+})

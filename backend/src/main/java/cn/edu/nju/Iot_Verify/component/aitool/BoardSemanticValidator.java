@@ -856,6 +856,17 @@ public final class BoardSemanticValidator {
             String deviceId,
             DeviceTemplateDto owningTemplate,
             DeviceTemplateDto.DeviceManifest.InternalVariable variable) {
+        // A shared environment variable is never frozen at its pool value: the generated model gives
+        // every enum environment variable a final `TRUE: {<all declared values>}` branch, so the
+        // pool value is only `init` and any declared value is reachable on the first step. Narrowing
+        // these the way local variables are narrowed rejected the platform's core requests — "alarm
+        // when smoke is detected" while the pool reads `clear` — as provably dead.
+        //
+        // The narrowing stays for IsInside=true locals, which the model really does hold constant
+        // (`TRUE: <device>.<var>`) when nothing writes them.
+        if (!Boolean.TRUE.equals(variable.getIsInside())) {
+            return null;
+        }
         String currentValue = currentVariableValue(context, deviceId, variable);
         if (!hasText(currentValue) || hasNonZeroRate(variable.getNaturalChangeRate())) {
             return null;

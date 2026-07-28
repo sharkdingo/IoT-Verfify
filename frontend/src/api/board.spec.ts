@@ -856,14 +856,77 @@ describe('board mutation response contracts', () => {
 
   it('sends the complete expected and desired rule order for compare-and-set reordering', async () => {
     const secondRule = { ...deletedRule, id: 8, ruleString: 'Second rule' }
-    vi.mocked(http.put).mockResolvedValue(resultEnvelope([secondRule, deletedRule]))
+    vi.mocked(http.put).mockResolvedValue(resultEnvelope({
+      operation: 'reordered',
+      affectedItem: null,
+      currentItems: [secondRule, deletedRule],
+      currentCount: 2,
+      canUndo: true,
+      canRedo: false
+    }))
 
-    await boardApi.reorderRules(['7', '8'], ['8', '7'])
+    // Reorder is reversible, so it reports the resulting undo availability like any other
+    // reversible mutation instead of returning a bare list.
+    await expect(boardApi.reorderRules(['7', '8'], ['8', '7'])).resolves.toMatchObject({
+      canUndo: true,
+      canRedo: false
+    })
 
     expect(vi.mocked(http.put)).toHaveBeenCalledWith('/board/rules/order', {
       expectedRuleIds: [7, 8],
       ruleIds: [8, 7]
     })
+  })
+
+  it('validates the rules an undo returns as strictly as a normal read', async () => {
+    // Specs were validated here but rules were not, though the same body from GET /board/rules is
+    // rejected: `fromBackendRuleDto` would silently yield `toId: ''` and `id: ''`, writing a rule with
+    // no target into board state and into the canvas edge projection.
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      applied: true,
+      reasonCode: 'UNDONE',
+      canUndo: false,
+      canRedo: true,
+      rules: [{ id: 7, userId: 1, conditions: [], ruleString: 'r' }],
+      specs: []
+    }))
+
+    await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow()
+  })
+
+  it('rejects an undo result whose reasonCode is missing or unknown', async () => {
+    // Defaulting an absent code to NOTHING_TO_APPLY produced `applied: true` beside a code
+    // contradicting it, and an unknown string became a typed value that lies — a consumer
+    // switching on it silently takes no branch.
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      applied: true,
+      canUndo: false,
+      canRedo: true,
+      rules: [],
+      specs: []
+    }))
+    await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow(/reasonCode/)
+
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      applied: true,
+      reasonCode: 'REVERTED',
+      canUndo: false,
+      canRedo: true,
+      rules: [],
+      specs: []
+    }))
+    await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow(/reasonCode/)
+
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      applied: true,
+      reasonCode: 'UNDONE',
+      entityType: 'NOT_A_TYPE',
+      canUndo: false,
+      canRedo: true,
+      rules: [],
+      specs: []
+    }))
+    await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow(/entityType/)
   })
 
   it('sends only authored specification fields with a confirmed deletion', async () => {

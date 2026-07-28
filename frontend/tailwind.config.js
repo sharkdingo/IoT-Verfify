@@ -8,12 +8,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: "#6366f1",
+        // Single source of truth lives in styles/base.css so Tailwind utilities and
+        // hand-written CSS cannot drift into two different "primary" colors.
+        //
+        // Because this is an arbitrary `var()` and not a channel triple, Tailwind cannot derive an
+        // alpha channel from it: opacity modifiers like `border-primary/20` do NOT work and silently
+        // render at full strength. For a translucent accent use
+        // `color-mix(in srgb, var(--iot-color-accent) N%, transparent)`.
+        primary: "var(--iot-color-accent)",
         secondary: "#C026D3",
       },
       fontFamily: {
-        display: ["Space Grotesk Variable", "Space Grotesk", "sans-serif"],
-        body: ["Inter Variable", "Inter", "sans-serif"],
+        display: ["var(--iot-font-display)"],
+        body: ["var(--iot-font-body)"],
       },
       borderRadius: {
         DEFAULT: "0.75rem",

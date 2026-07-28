@@ -67,13 +67,21 @@ class BoardSemanticFingerprintTest {
 
     @Test
     void identicalBoards_produceEqualFingerprint() {
-        List<DeviceVerificationDto> devices = List.of(device("sensor", "t1"));
-        List<SpecificationDto> specs = List.of(spec("s0", "30"));
         Map<String, DeviceSmvData> map = Map.of();
 
-        assertEquals(
-                BoardSemanticFingerprint.of(devices, specs, map),
-                BoardSemanticFingerprint.of(devices, specs, map));
+        // Separately constructed equal boards, not the same two references: calling `of` twice on one
+        // input only proves the method is deterministic, which holds even if it ignored its arguments
+        // and returned a constant.
+        String first = BoardSemanticFingerprint.of(
+                List.of(device("sensor", "t1")), List.of(spec("s0", "30")), map);
+        String second = BoardSemanticFingerprint.of(
+                List.of(device("sensor", "t1")), List.of(spec("s0", "30")), map);
+
+        assertEquals(first, second);
+        // …and a board that actually differs must not collide with it, which is what makes the
+        // equality above meaningful.
+        assertNotEquals(first, BoardSemanticFingerprint.of(
+                List.of(device("sensor", "t1")), List.of(spec("s0", "31")), map));
     }
 
     @Test

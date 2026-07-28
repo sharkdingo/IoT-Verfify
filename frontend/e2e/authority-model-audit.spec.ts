@@ -101,11 +101,28 @@ const openWorkspace = async (page: Page, auth: AuthUser) => {
   await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
 }
 
+/**
+ * Opens a Control Center section, tolerating a transient canvas overlap.
+ *
+ * After a reload the board can briefly settle into the narrow layout, where `canvas-inner` paints
+ * over the tab strip and intercepts pointer events. Retrying a plain `click()` cannot escape that —
+ * every attempt hits the same intercepted target until the timeout. So the retry waits for the tab
+ * to actually receive pointer events, and falls back to a keyboard activation, which is not subject
+ * to hit-testing at all.
+ */
 const openControlSection = async (page: Page, section: 'templates' | 'devices' | 'rules' | 'specs') => {
   const tab = page.getByTestId(`control-tab-${section}`)
   const panel = page.getByTestId(`control-section-${section}`)
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    await tab.click()
+    try {
+      // A short per-attempt timeout surfaces interception quickly instead of burning the whole
+      // 30s default on one doomed click.
+      await tab.click({ timeout: 5_000 })
+    } catch {
+      // Hit-testing is blocked. Activate via the keyboard, which bypasses the overlay entirely.
+      await tab.focus().catch(() => undefined)
+      await page.keyboard.press('Enter').catch(() => undefined)
+    }
     try {
       await expect(panel).toBeVisible({ timeout: 3_000 })
       return
@@ -574,13 +591,14 @@ const openHistoryPanel = async (page: Page) => {
   await openFloatingPanel(page, 'open-history-panel', 'trace-history-panel')
 }
 
-const ensureSwitchOn = async (page: Page, testId: string, onClass: string) => {
+// Assert the accessible state rather than a styling class so the check keeps working
+// when the switch's presentation changes.
+const ensureSwitchOn = async (page: Page, testId: string) => {
   const toggle = page.getByTestId(testId)
-  const enabled = await toggle.evaluate((element, className) =>
-    String(element.getAttribute('class') || '').includes(className), onClass)
-  if (!enabled) {
+  if (await toggle.getAttribute('aria-checked') !== 'true') {
     await toggle.click()
   }
+  await expect(toggle).toHaveAttribute('aria-checked', 'true')
 }
 
 const updateNodeLayouts = async (
@@ -610,7 +628,7 @@ const updateNodeLayouts = async (
 const runSyncSimulation = async (page: Page) => {
   const responsePromise = waitForApiPostResponse(page, '/api/simulate/traces')
   await openFloatingPanel(page, 'open-simulation-panel', 'simulation-panel')
-  await ensureSwitchOn(page, 'simulation-privacy-toggle', 'bg-purple-500')
+  await ensureSwitchOn(page, 'simulation-privacy-toggle')
   await page.getByTestId('simulation-mode-sync').click()
   await page.getByTestId('run-simulation').click()
   const response = await responsePromise
@@ -623,7 +641,7 @@ const runSyncSimulation = async (page: Page) => {
 const runSyncVerification = async (page: Page) => {
   const responsePromise = waitForApiPostResponse(page, '/api/verify')
   await openFloatingPanel(page, 'open-verification-panel', 'verification-panel')
-  await ensureSwitchOn(page, 'verification-privacy-toggle', 'bg-purple-500')
+  await ensureSwitchOn(page, 'verification-privacy-toggle')
   await page.getByTestId('verification-mode-sync').click()
   await page.getByTestId('run-verification').click()
   const response = await responsePromise

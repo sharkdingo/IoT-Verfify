@@ -35,6 +35,8 @@ import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
 import cn.edu.nju.Iot_Verify.repository.RuleRepository;
 import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.service.board.BoardEditJournal;
+import cn.edu.nju.Iot_Verify.service.board.BoardUndoAvailability;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
@@ -88,6 +90,11 @@ class BoardStorageServiceImplBatchTest {
     @Mock private RuleMapper ruleMapper;
     @Mock private SpecificationMapper specificationMapper;
     @Mock private UserRepository userRepository;
+    /**
+     * The journal commits with the edit it describes, so these tests only need it to exist; the
+     * ordering and invalidation rules are asserted in BoardEditJournalTest.
+     */
+    @Mock private BoardEditJournal editJournal;
 
     private BoardStorageServiceImpl service;
 
@@ -96,11 +103,15 @@ class BoardStorageServiceImplBatchTest {
         service = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         // Execute the transaction callback inline.
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv ->
                 ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
         lenient().when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(new UserPo()));
+        // The real journal always answers; reversible-mutation paths stamp this onto their result
+        // without a null check, so an unstubbed mock would not model the real collaborator.
+        lenient().when(editJournal.availability(anyLong()))
+                .thenReturn(new BoardUndoAvailability(false, false));
     }
 
     @Test
@@ -124,10 +135,17 @@ class BoardStorageServiceImplBatchTest {
                 confirmedBatch(service, new BoardBatchDto(List.of(node), List.of(rule), List.of(spec))));
 
         assertTrue(result != null);
-        // All three replaced within the single transaction.
+        // All three replaced within the single transaction. Rules are asserted through the mapper
+        // rather than a deleteByUserId: saveRulesInternal is identity-preserving, so it reconciles
+        // against the existing list instead of clearing it.
         verify(nodeRepo).deleteByUserId(1L);
         verify(specRepo).deleteByUserId(1L);
+        verify(ruleMapper).toEntity(rule, 1L);
         verify(transactionTemplate, times(2)).execute(any());
+        // Scene replacement rewrites every collection, so no recorded per-record inverse still
+        // describes a reachable state. Leaving the journal would let undo "restore" a rule into a
+        // scene the user replaced — an invariant that was previously untested at this layer.
+        verify(editJournal).clear(1L);
     }
 
     @Test
@@ -481,7 +499,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Thermostat")
@@ -553,7 +571,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest.InternalVariable slowTemperature =
                 DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
@@ -598,7 +616,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Sensor")
                 .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
@@ -630,7 +648,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Switch")
                 .modes(List.of("Power"))
@@ -686,7 +704,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Thermostat")
@@ -749,7 +767,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Thermostat")
@@ -803,7 +821,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Thermostat")
@@ -889,7 +907,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Climate")
@@ -967,7 +985,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("CurrentTemplate")
@@ -1016,7 +1034,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         ValidationException error = assertThrows(
                 ValidationException.class,
@@ -1041,7 +1059,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1")
                 .userId(1L)
@@ -1118,7 +1136,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Switch")
                 .modes(List.of("Power"))
@@ -1174,7 +1192,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1")
                 .userId(1L)
@@ -1243,7 +1261,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1").userId(1L).templateName("Switch").label("Hall switch")
                 .posX(10.0).posY(20.0).state("off").width(176).height(128)
@@ -1292,7 +1310,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, realMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceNodePo stored = DeviceNodePo.builder()
                 .id("switch_1").userId(1L).templateName("Switch").label("Hall switch")
                 .posX(10.0).posY(20.0).state(" off ").width(176).height(128)
@@ -1341,7 +1359,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Notification Service")
                 .modes(List.of("Status"))
@@ -1394,7 +1412,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest existingManifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Sensor")
@@ -1433,7 +1451,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Original Sensor")
@@ -1482,7 +1500,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Sensor")
@@ -1518,7 +1536,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
                 .name("Unused Sensor")
@@ -1595,8 +1613,10 @@ class BoardStorageServiceImplBatchTest {
         when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
         when(ruleMapper.toEntity(any(), anyLong())).thenAnswer(invocation -> new RulePo());
 
+        // Reorder is reversible, so it returns the same mutation envelope as the other
+        // reversible edits rather than a bare list.
         List<RuleDto> saved = service.reorderRules(
-                1L, List.of(1L, 2L), List.of(2L, 1L));
+                1L, List.of(1L, 2L), List.of(2L, 1L)).getCurrentItems();
 
         assertEquals(List.of(2L, 1L), saved.stream().map(RuleDto::getId).toList());
         ArgumentCaptor<RulePo> captor = ArgumentCaptor.forClass(RulePo.class);
@@ -1805,6 +1825,10 @@ class BoardStorageServiceImplBatchTest {
         assertEquals(preview.getImpactToken(), result.getImpactToken());
         verify(nodeRepo).deleteByUserId(1L);
         verify(specRepo).deleteByUserId(1L);
+        // Deleting a device cascades into every rule and spec that referenced it. Undo is per-record,
+        // so a surviving entry would restore a reference to a device that is gone; the journal must be
+        // dropped rather than offer an undo that cannot reach a legal board.
+        verify(editJournal).clear(1L);
     }
 
     @Test
@@ -1812,7 +1836,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceTemplateDto.DeviceManifest.InternalVariable temperature =
                 DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
@@ -1873,7 +1897,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceNodeDto node = boardNode("sensor1", "Temperature Sensor", "Hall sensor");
         DeviceNodePo nodePo = new DeviceNodePo();
@@ -1929,7 +1953,7 @@ class BoardStorageServiceImplBatchTest {
         BoardStorageServiceImpl serviceWithEnvironment = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
                 transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, new DeviceTemplateMapper(), null, userRepository);
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
 
         DeviceNodeDto target = boardNode("sensor1", "Temperature Sensor", "Hall sensor");
         DeviceNodeDto remaining = boardNode("sensor2", "Temperature Sensor", "Bedroom sensor");

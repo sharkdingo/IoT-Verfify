@@ -123,6 +123,20 @@ export const useAuth = () => {
   // 是否已登录
   const isAuthenticated = (): boolean => state.isLoggedIn;
 
+  /**
+   * Re-check the locally visible expiry of the current token and drop the session if it
+   * has lapsed. `isLoggedIn` is otherwise only decided at load/login, so a token that
+   * expires while the tab stays open would keep reading as authenticated.
+   *
+   * This is a UX precheck only — the backend remains the authentication authority.
+   */
+  const revalidateSession = (): boolean => {
+    if (state.isLoggedIn && !isLocallyUsableJwt(state.token)) {
+      logout();
+    }
+    return state.isLoggedIn;
+  };
+
   return {
     state: readonly(state),
     login,
@@ -130,6 +144,7 @@ export const useAuth = () => {
     logoutIfTokenMatches,
     getToken,
     getUser,
-    isAuthenticated
+    isAuthenticated,
+    revalidateSession
   };
 };

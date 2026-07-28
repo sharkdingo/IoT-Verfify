@@ -48,6 +48,9 @@ Verified against code on 2026-07-25.
 | POST | `/api/board/rules` | Create one automation rule | `docs/api/board.md` |
 | PUT | `/api/board/rules/order` | Atomically replace rule execution order | `docs/api/board.md` |
 | DELETE | `/api/board/rules/{ruleId}` | Delete one automation rule when its confirmed snapshot is still current | `docs/api/board.md` |
+| GET | `/api/board/edits/availability` | Current undo/redo availability from the per-user edit journal | `docs/api/board.md` |
+| POST | `/api/board/edits/undo` | Reverse the newest reversible board edit (rule/spec create or delete, or a rule reorder) | `docs/api/board.md` |
+| POST | `/api/board/edits/redo` | Re-apply the oldest undone board edit | `docs/api/board.md` |
 | GET | `/api/board/replacement-preview` | Preview authoritative current-scene counts and obtain the confirmation impact token | `docs/api/board.md` |
 | POST | `/api/board/batch` | Confirmed atomic full-scene replacement/clear with exact template snapshots | `docs/api/board.md` |
 | GET | `/api/board/snapshot` | Atomic initial Board semantic snapshot | `docs/api/board.md` |

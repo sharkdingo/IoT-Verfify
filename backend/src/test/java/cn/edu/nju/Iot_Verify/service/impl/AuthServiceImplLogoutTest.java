@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
+import cn.edu.nju.Iot_Verify.repository.BoardEditJournalRepository;
 import cn.edu.nju.Iot_Verify.repository.BoardLayoutRepository;
 import cn.edu.nju.Iot_Verify.repository.BoardEnvironmentVariableRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
@@ -84,6 +85,8 @@ class AuthServiceImplLogoutTest {
     @Mock private TraceRepository traceRepository;
     @Mock private VerificationTaskRepository verificationTaskRepository;
     @Mock private AiSessionStateRepository aiSessionStateRepository;
+    private final BoardEditJournalRepository boardEditJournalRepository =
+            mock(BoardEditJournalRepository.class);
 
     private AuthServiceImpl authService;
 
@@ -107,7 +110,8 @@ class AuthServiceImplLogoutTest {
                 deviceNodeRepository, deviceTemplateRepository, fuzzFindingRepository,
                 fuzzTaskRepository, ruleRepository,
                 simulationTaskRepository, simulationTraceRepository, specificationRepository,
-                traceRepository, verificationTaskRepository, aiSessionStateRepository
+                traceRepository, verificationTaskRepository, aiSessionStateRepository,
+                boardEditJournalRepository
         );
     }
 

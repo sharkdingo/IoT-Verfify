@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UserOwnedOrphanCleanupTest {
 
+    /** Tables this fixture seeds one generic orphan row into. */
     private static final List<String> GENERIC_USER_TABLES = List.of(
             "trace",
             "verification_task",
@@ -32,7 +33,34 @@ class UserOwnedOrphanCleanupTest {
             "rules",
             "specification",
             "board_layout",
-            "device_templates");
+            "device_templates",
+            "board_edit_journal");
+
+    /** Tables the fixture seeds by hand because their rows need specific shapes. */
+    private static final List<String> HAND_SEEDED_USER_TABLES = List.of(
+            "fuzz_finding",
+            "fuzz_task",
+            "chat_session",
+            "ai_session_state");
+
+    @Test
+    void everyProductionUserOwnedTableIsCoveredByThisFixture() throws Exception {
+        // The counting test below derives its expectation from this file's own table list, so adding a
+        // table to production and forgetting the fixture reproduces exactly the `board_edit_journal`
+        // omission it was written to prevent: the schema fixture never creates it, no orphan is seeded,
+        // and the arithmetic still balances. Reading the production list closes that.
+        java.lang.reflect.Field field =
+                UserOwnedOrphanCleanup.class.getDeclaredField("USER_OWNED_TABLES");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<String> production = (List<String>) field.get(null);
+
+        List<String> covered = new java.util.ArrayList<>(GENERIC_USER_TABLES);
+        covered.addAll(HAND_SEEDED_USER_TABLES);
+
+        assertEquals(java.util.Set.copyOf(production), java.util.Set.copyOf(covered),
+                "every user-owned table in production must be seeded by this fixture, and vice versa");
+    }
 
     @Test
     void migrate_repairsLegacyRowsAndEnforcesCascadeOwnership() throws Exception {
@@ -40,7 +68,17 @@ class UserOwnedOrphanCleanupTest {
         createSchemaAndRows(dataSource);
         UserOwnedOrphanCleanup migration = new UserOwnedOrphanCleanup(dataSource);
 
-        assertEquals(21, migration.migrate());
+        // Derived, not hardcoded: one orphan row per generic user-owned table plus the six
+        // chat/AI/fuzz rows the fixture seeds by hand. A literal here is how this fixture drifted out
+        // of step with the production table list in the first place — which is exactly the mistake
+        // that let `board_edit_journal` be forgotten.
+        // Each generic table seeds exactly one orphan (user_id 99); the chat/AI/fuzz tables seed 11
+        // between them (2 pre-admission stops, 2 messages, 3 AI states, 1 session, 1 fuzz task,
+        // 2 fuzz findings).
+        int handSeededOrphans = 11;
+        int expectedRepairs = GENERIC_USER_TABLES.size() + handSeededOrphans;
+        assertEquals(expectedRepairs, migration.migrate());
+        // Idempotent: a second pass finds nothing left to repair.
         assertEquals(0, migration.migrate());
 
         assertEquals(1, count(dataSource, "chat_session_pre_admission_stop"));

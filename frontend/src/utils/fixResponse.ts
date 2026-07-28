@@ -352,6 +352,16 @@ export const validateFixResult = (
       throw new FixResponseContractError(context, 'suggestion verification contradicts its strategy attempt')
     }
   })
+  // The reciprocal direction. Without it a VERIFIED attempt with no suggestion passes, because
+  // `fixable` is derived from the suggestions alone and stays consistently false — so the dialog
+  // reports that a concrete suggestion passed forward verification while showing the no-suggestion
+  // empty state and offering no Apply control.
+  attempts.forEach(attempt => {
+    if (attempt.status === 'VERIFIED' && !suggestionStrategies.has(attempt.strategy)) {
+      throw new FixResponseContractError(
+        context, 'a VERIFIED strategy attempt must carry its suggestion')
+    }
+  })
   const fixable = bool(result, 'fixable', context)
   if (fixable !== suggestions.some(suggestion => suggestion.verified)) {
     throw new FixResponseContractError(context, 'fixable must match verified suggestions')

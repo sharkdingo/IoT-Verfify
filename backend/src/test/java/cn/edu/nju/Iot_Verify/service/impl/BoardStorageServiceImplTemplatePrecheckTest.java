@@ -125,7 +125,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 boardLayoutMapper,
                 deviceTemplateMapper,
                 deviceTemplateSchemaValidator,
-                userRepository
+                userRepository,
+                null
         );
         lenient().when(userRepository.findByIdForUpdate(anyLong())).thenReturn(java.util.Optional.of(new UserPo()));
         lenient().when(userRepository.findById(anyLong())).thenReturn(java.util.Optional.of(new UserPo()));

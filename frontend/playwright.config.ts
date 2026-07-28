@@ -14,12 +14,24 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'on-first-retry'
   },
+  /**
+   * Serve a production build rather than the dev server.
+   *
+   * Vite's dev server transforms modules on demand, so two parallel browsers loading the board at
+   * once could exceed the 30s `board-root` wait and fail a test that has nothing wrong with it.
+   * A prebuilt bundle removes that variable, and it is also closer to what users run.
+   *
+   * `reuseExistingServer` is off deliberately. With it on, any process already holding the port —
+   * typically a dev server someone left running — is adopted silently, the build is skipped, and
+   * the suite reports green against stale code. Set `E2E_BASE_URL` to point at a server you are
+   * managing yourself instead.
+   */
   webServer: shouldStartFrontend
     ? {
-        command: 'npm run dev',
+        command: 'npm run build && npm run preview -- --port 3000 --strictPort',
         url: baseURL,
-        reuseExistingServer: !process.env.CI,
-        timeout: 120_000
+        reuseExistingServer: false,
+        timeout: 180_000
       }
     : undefined,
   projects: [

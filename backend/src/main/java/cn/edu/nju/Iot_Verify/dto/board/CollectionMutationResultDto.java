@@ -20,11 +20,28 @@ public class CollectionMutationResultDto<T> {
     private T affectedItem;
     private List<T> currentItems;
     private int currentCount;
+    /**
+     * Whether the account now has a reversible edit / a redoable one.
+     *
+     * Reported with the mutation so the client's undo affordance is driven by the server journal
+     * rather than a local guess. Null for mutations that do not participate in undo.
+     */
+    private Boolean canUndo;
+    private Boolean canRedo;
 
     public static <T> CollectionMutationResultDto<T> of(String operation,
                                                          T affectedItem,
                                                          List<T> currentItems) {
         List<T> items = currentItems != null ? currentItems : List.of();
-        return new CollectionMutationResultDto<>(operation, affectedItem, items, items.size());
+        // Undo availability is attached by the caller only where the mutation is reversible.
+        return new CollectionMutationResultDto<>(
+                operation, affectedItem, items, items.size(), null, null);
+    }
+
+    /** Attaches the post-mutation undo availability read from the edit journal. */
+    public CollectionMutationResultDto<T> withUndoAvailability(boolean canUndo, boolean canRedo) {
+        this.canUndo = canUndo;
+        this.canRedo = canRedo;
+        return this;
     }
 }

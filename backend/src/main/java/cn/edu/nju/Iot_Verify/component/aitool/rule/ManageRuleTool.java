@@ -104,7 +104,7 @@ public class ManageRuleTool extends AbstractAiTool {
         ));
         props.put("confirmed", Map.of(
                 "type", "boolean",
-                "description", "For delete: use false to preview the exact rule without changing it; use true only in a later turn after the user explicitly confirms that preview. Ignored for add."
+                "description", "For delete: use false to preview the exact rule without changing it; use true only in a later turn after the user explicitly confirms that preview. Omit it entirely for add, which accepts no confirmation fields."
         ));
         props.put("impactToken", Map.of(
                 "type", "string",
@@ -405,8 +405,9 @@ public class ManageRuleTool extends AbstractAiTool {
         List<Long> expectedRuleIds = positiveRuleIdsArg(args, "expectedRuleIds");
         List<Long> ruleIds = positiveRuleIdsArg(args, "ruleIds");
 
-        List<RuleDto> reordered = boardStorageService.reorderRules(
-                userId, expectedRuleIds, ruleIds);
+        List<RuleDto> reordered = boardStorageService
+                .reorderRules(userId, expectedRuleIds, ruleIds)
+                .getCurrentItems();
         List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
         List<Object> presented = new ArrayList<>();
         for (RuleDto rule : safeList(reordered)) {

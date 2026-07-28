@@ -105,7 +105,7 @@ public class ManageSpecTool extends AbstractAiTool {
         ));
         props.put("confirmed", Map.of(
                 "type", "boolean",
-                "description", "For delete: use false to preview the exact specification without changing it; use true only in a later turn after the user explicitly confirms that preview. Ignored for add."
+                "description", "For delete: use false to preview the exact specification without changing it; use true only in a later turn after the user explicitly confirms that preview. Omit it entirely for add, which accepts no confirmation fields."
         ));
         props.put("impactToken", Map.of(
                 "type", "string",

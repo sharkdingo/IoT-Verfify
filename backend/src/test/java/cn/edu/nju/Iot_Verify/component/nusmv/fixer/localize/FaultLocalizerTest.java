@@ -97,6 +97,35 @@ class FaultLocalizerTest {
     }
 
     @Test
+    void describesAMultiModeConflictInStateNamesRatherThanRawManifestTuples() {
+        RuleDto cool = rule(1L, "Start cooling", "ac_1", "cool");
+        RuleDto stop = rule(2L, "Stop the AC", "ac_1", "stop");
+        DeviceSmvData ac = multiModeDevice("ac_1", "Living-room AC", List.of(
+                api("cool", "Cool", "on;idle"),
+                api("stop", "Stop", "off;idle")));
+
+        List<FaultRuleDto> faults = localizer.localize(
+                List.of(state(1), state(2,
+                        trigger(0, "1", "Start cooling"),
+                        trigger(1, "2", "Stop the AC"))),
+                List.of(cool, stop),
+                Map.of("ac_1", ac));
+
+        assertEquals(2, faults.size());
+        assertTrue(faults.get(0).isConflicting());
+        // A reader must never see the raw manifest tuple (`on;idle`, unspaced and uncleaned). The
+        // per-mode states are joined with "; " instead: for a bundled template the frontend's
+        // formatBuiltInModelToken splits on [;,|] and localizes each token, so the delimiter has to
+        // stay in that set — joining with " / " renders the whole string raw in a non-English UI.
+        for (FaultRuleDto fault : faults) {
+            assertFalse(fault.getTargetEndState().contains(";idle"), fault.getTargetEndState());
+            assertFalse(fault.getConflictingEndState().contains(";idle"), fault.getConflictingEndState());
+        }
+        assertEquals("on; idle", faults.get(0).getTargetEndState());
+        assertEquals("off; idle", faults.get(0).getConflictingEndState());
+    }
+
+    @Test
     void recordsTheSameRuleOncePerTransition() {
         RuleDto rule = rule(1L, "Repeated rule", "light_1", "turn_on");
         DeviceSmvData light = device("light_1", "Hall light", List.of(
@@ -273,6 +302,13 @@ class FaultLocalizerTest {
                 .name("Light")
                 .apis(apis)
                 .build());
+        return device;
+    }
+
+    /** Two modes, so an API's end state is the `;`-joined internal tuple a real manifest stores. */
+    private DeviceSmvData multiModeDevice(String id, String label, List<DeviceManifest.API> apis) {
+        DeviceSmvData device = device(id, label, apis);
+        device.getModes().add("Fan");
         return device;
     }
 

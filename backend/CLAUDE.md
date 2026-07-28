@@ -103,6 +103,15 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   rejected) at persist time — they are cross-referenced by `.equals()`, so sanitizing
   them would break matching. Don't "fix" this by sanitizing them later. See
   [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
+- **Admission and generation must normalize the same string the same way.** Every rule/spec field
+  that names something in a device manifest — command `action`, condition `attribute`, `targetType`,
+  device refs — is resolved by `equals()` at generation time, so any trim/case difference between the
+  validator and the generator is a silent divergence, not a cosmetic one. This has bitten four times:
+  the command action passed validation trimmed and then resolved to no API, which dropped the rule
+  from state, property, *and* probe assignments while `disabledRuleCount` stayed 0 — a `SATISFIED` +
+  `modelComplete=true` verdict for a scene whose automation was never modeled. Normalize once per
+  side (trim at the storage boundary, trim at the top of the resolver), pin `Locale.ROOT` on any
+  `toLowerCase`, and when a lookup can still fail, record a disabled rule rather than `continue`.
 - **Environment domains are active-template and same-manifest scoped.** An
   `ImpactedVariables` name is defined by an external `InternalVariable` or
   `EnvironmentDomains` entry in that same manifest. Never scan the user's whole template
@@ -116,17 +125,88 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   Completion/failure transactions lock the task row before sampling their terminal time
   and persisting linked evidence. Cancellation remains user-authoritative. Do not replace
   these transitions with read-then-write, a pre-lock JVM timestamp, or global startup cleanup.
+  **A worker's own registration must be crash-safe.** `registerRunningTask` /
+  `updateTaskProgress` belong inside the `try` whose `finally` removes them, and
+  `handleCancellation` must not propagate: it runs ahead of that cleanup and touches the database.
+  A leaked `runningTasks` entry means a pooled thread stays registered against a finished task, so
+  a later cancel interrupts whatever unrelated task that thread moved on to. The database row
+  stays authoritative either way: the user's own cancel settles it, or the expired-lease sweep does —
+  and that sweep writes FAILED, not CANCELLED, so the residual case shows a cancelled run as failed.
+- **Semantic identity counts conditions; duplicate detection does not.** `exactlyMatches` on both
+  `RuleSemanticSignature` and `SpecificationSemanticSignature` compares condition *multisets*:
+  order carries no meaning in a conjunction, but cardinality does, and these predicates also gate
+  "delete only if unchanged" and undo/redo conflict checks. Collapsing conditions into a set let a
+  delete land on a record the user never reviewed. `RuleSemanticSignature.Signature` keeps set
+  semantics on purpose — `CheckDuplicateRuleTool` reasons about subset and overlap between
+  different rules, where dropping duplicates is correct. Derive both views from one canonical key
+  list so a normalization change cannot reach only one of them.
+- **A cancelled search must stop launching solver runs.** Cancellation reaches a fix/fuzz worker as
+  a thread interrupt, so every search loop exits on `FixContext.isExpired()`, which reports both an
+  expired deadline **and** an interrupt. A broad `catch (Exception)` in a strategy will swallow the
+  `InterruptedException` that `Semaphore.tryAcquire` throws — and clear the flag with it — so such a
+  catch must call `FixStrategyUtils.preserveInterrupt(e)`. Otherwise the search keeps running its
+  remaining attempts, each holding a NuSMV permit, for a request whose response was already sent.
+- **Validation must match what the generated model actually permits — no stricter.** The
+  recommendation reachability filter may narrow a variable's domain only for `IsInside=true` locals,
+  which the model holds constant (`TRUE: <device>.<var>`) when nothing writes them. Shared
+  environment variables get a `TRUE: {<all declared values>}` branch, so their pool value is only
+  `init` and every declared value is reachable immediately; narrowing them rejected legitimate
+  requests like "alarm when smoke is detected" as provably dead. Before adding a check that calls a
+  candidate impossible, confirm the model agrees. Likewise, a constraint's justification must cover
+  what it actually rejects: the template-name rule guards Java/MySQL case-folding parity, so it
+  restricts *cased* letters, not every non-ASCII character (see `TemplateNameRule`).
+- **A tool's schema description is part of its contract.** `requireOnlyFields` rejects unknown keys,
+  so a description promising a field is "ignored" for some action makes the model waste a round on a
+  guaranteed `VALIDATION_ERROR`. Keep the wording and the allowlist in step.
 - **Fuzz findings are not formal traces.** The bounded explorer supports only its
   documented finite safety subset, and budget exhaustion is never satisfaction. Keep
   `fuzz_finding` separate from NuSMV `trace`; direct automatic fix remains formal-only.
+- **Check the paper before calling modeling semantics a bug.** The modeling, fix, and exploration
+  semantics come from published algorithms ([../docs/architecture/theory-sources.md](../docs/architecture/theory-sources.md)).
+  A construct that looks unmotivated is usually deliberate: the ±1 at a numeric environment boundary
+  is MEDIC's environment disturbance (§3.1, Fig. 2b), not an unauthored step, and removing it makes
+  the model assume a physical quantity is perfectly observed — unsound in the unsafe direction.
+  An over-permissive model produces a false alarm the user can dismiss; an over-restrictive one hides
+  a real violation. When they conflict, prefer the paper and cite the section in a comment.
+- **An interrupt flag is thread state, not request state.** `FixStrategyUtils.preserveInterrupt`
+  re-arms `Thread.interrupt()` so a cancelled search stops launching solver runs, and
+  `FixContext.isExpired()` reports it. Re-arm freely inside a task — it is the search's only stop
+  signal, and `RuleFixer.fix` must never clear it mid-search — because
+  `ThreadPoolExecutor.runWorker` clears a worker's interrupt status before each task, so a re-armed
+  flag cannot reach the next request on that thread (pinned by `ThreadConfigTest`). What it *can*
+  reach is the rest of the current task: `ChatServiceImpl.synchronizeExecutionStop` reads
+  `isInterrupted()` and ends the turn as `DISCONNECTED`, so re-arming inside a chat tool aborts that
+  turn by design.
 - **NuSMV generation must fail closed and be observable.** Invalid/empty rule
   conditions must not become `TRUE`; route them through the request-scoped
   `SmvGenerationContext` so `checkLogs`, `disabledRuleCount`, and `skippedSpecCount`
   stay accurate without global mutable state.
+- **Reasoning is a different channel from a tool status line, and must be presented as one.**
+  `compactReasoningProgressDetail` deliberately diverges from `compactToolProgressDetail`: it keeps
+  line breaks (collapsing them turned a decomposition into one run-on line), cuts on a sentence or
+  line boundary, and gets a much larger budget. Its identifier redaction requires a digit in the
+  tail — without that it rewrote ordinary English ("rule-based", "device-level") as
+  `[internal reference]`, corrupting the very explanation it protected. The planning prompt asks the
+  model to *do* the reasoning — decompose, cite observed board state, name a rejected alternative on
+  a judgement call, verify its own outcome — not to narrate the calls it is about to make. A round
+  that returns no reasoning is reported as returning none; never substitute wording that implies
+  reasoning happened.
 - **AI rule/spec tools are node-id authoritative.** Recommendation prompts and parsed
   output must use canonical board device node ids (`deviceId` / `deviceName` DTO fields)
   for identity. Display labels are readability snapshots only. Specification
   recommendation `templateId` values must stay constrained to `"1"` through `"7"`.
+- **The board edit journal commits with the edit it describes.** `BoardEditJournal.record` must be
+  called inside the mutation's own transaction and per-user write lock, or a crash between the two
+  leaves an undo that does not match reality. Undo/redo apply the inverse through the same
+  validated write path, refuse when the affected record changed after the entry was written (never
+  overwrite newer work), discard the abandoned redo branch on a new edit, and treat "nothing to
+  apply" as a normal idempotent outcome. Restoring a deleted rule keeps its original id via a
+  native insert, because the id is IDENTITY-generated and references depend on it.
+  Reversibility follows the user's unit of work, not the storage shape: rule reorder changes no
+  single record, but one up/down press is one edit, so it records a `RULE_ORDER` entry holding the
+  previous ordering (`RuleOrderSnapshot`) and refuses when the current order or rule set no longer
+  matches what that edit produced. Reversible mutations return the `CollectionMutationResultDto`
+  envelope so the client mirrors server-reported availability instead of guessing.
 - **Redis is fail-open**: logout revocation degrades silently if Redis is down; do not
   make request flow hard-depend on it. Interactive recommendation/fix acquisition may use
   process-local tracking only when Redis is known unavailable before any ownership write is
@@ -168,12 +248,13 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 - Bounded exploration: [../docs/architecture/fuzzing-flow.md](../docs/architecture/fuzzing-flow.md)
 - Spec templates & P1–P5 validation: [../docs/architecture/spec-templates.md](../docs/architecture/spec-templates.md)
 - Auto-fix (Salus §4–§5): [../docs/architecture/auto-fix.md](../docs/architecture/auto-fix.md)
+- Which paper owns which semantics: [../docs/architecture/theory-sources.md](../docs/architecture/theory-sources.md)
 - Change history: [../CHANGELOG.md](../CHANGELOG.md)
 
 ## Data model
 
-17 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
-`board_environment_variable`, `rules`, `specification`, `board_layout`,
+18 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
+`board_environment_variable`, `rules`, `specification`, `board_layout`, `board_edit_journal`,
 `device_templates`, `verification_task`, `simulation_task`, `fuzz_task`, `trace`,
 `simulation_trace`, `fuzz_finding`, `chat_session`, `chat_session_pre_admission_stop`,
 `chat_message`, `ai_session_state`. Notable: `device_node` has a
@@ -199,5 +280,13 @@ database-clock timestamp for each turn-specific Stop fence, keeps at most 64 liv
 expires each one after two minutes before admission; the collection cascades when its owning
 session is deleted;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
+`board_edit_journal` is a per-user append-only record of reversible board edits (rule and
+specification create/delete, plus rule reorder as a `RULE_ORDER` entry holding the previous
+ordering), carrying the before/after snapshot, the deleted record's `entity_order` so a restore
+lands at its original position rather than at the end (rule execution order, specification list
+order), and an `undone` flag; entries are
+written in the mutating transaction, moved rather than deleted by undo/redo, and cleared wholesale
+by scene replacement and device deletion.
+
 Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
 `fuzz_finding` rows are heuristic candidate evidence, not formal traces.

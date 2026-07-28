@@ -410,7 +410,7 @@ public class DeviceSmvDataFactory {
      */
     public static String normalizeTrustPrivacy(String value) {
         if (value == null) return null;
-        return value.trim().toLowerCase();
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     // ==================== 静态工具方法（原 SmvUtils，供 builder 使用） ====================
@@ -487,11 +487,24 @@ public class DeviceSmvDataFactory {
         return sanitizeSmvToken(cleaned);
     }
 
-    /** 按名称查找 API 定义 */
+    /**
+     * Resolves a command action to its template API.
+     *
+     * <p>Trims the requested name, because the two validators that admit a rule
+     * ({@code NusmvRequestValidator} and {@code BoardStorageServiceImpl}) both compare trimmed.
+     * An exact-only comparison here made this lookup stricter than admission: an action with a
+     * trailing space passed validation and then resolved to nothing at generation time, silently
+     * dropping the rule from the model. API names may legally contain interior spaces, so only the
+     * surrounding whitespace is ignored.
+     */
     public static DeviceManifest.API findApi(DeviceManifest manifest, String actionName) {
         if (manifest == null || manifest.getApis() == null || actionName == null) return null;
+        String requested = actionName.trim();
         for (DeviceManifest.API api : manifest.getApis()) {
-            if (actionName.equals(api.getName())) return api;
+            // A null entry in Apis is malformed manifest data, not a match: skip it so generation
+            // records a disabled rule instead of failing with an NPE. Matches the null guard in
+            // BoardStorageServiceImpl.findApi and BoardSemanticValidator.findApi.
+            if (api != null && requested.equals(api.getName())) return api;
         }
         return null;
     }

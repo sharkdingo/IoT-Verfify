@@ -250,7 +250,7 @@ class UserWriteFenceIntegrationTest {
                 nodes, environment, null, null, null, templates, null,
                 new TransactionTemplate(transactionManager), null, null,
                 new SpecificationMapper(), new RuleMapper(), new DeviceNodeMapper(), null,
-                new DeviceTemplateMapper(), null, userRepository);
+                new DeviceTemplateMapper(), null, userRepository, null);
     }
 
     private <T> T inTransaction(java.util.function.Supplier<T> action) {

@@ -105,6 +105,55 @@ class ApplyFixToolTest {
     }
 
     @Test
+    void confirmedApply_acceptsThePreviewArgumentsResentUnchanged() throws Exception {
+        FixSuggestionDto suggestion = signedPublicRemovalSuggestion();
+        JsonNode preview = objectMapper.readTree(tool.execute(previewArgs(suggestion).toString()));
+
+        when(fixService.applyFix(
+                eq(7L), eq(31L), eq("remove"), eq(suggestion),
+                eq(suggestion.getSuggestionToken()), eq(null)))
+                .thenReturn(appliedResult(suggestion, 3, 2));
+
+        // The model reaches the confirmed call by resending the object it previewed with plus the
+        // token. Rejecting the carried-over fields spent a whole round on a guaranteed
+        // VALIDATION_ERROR while no description said they had to be dropped.
+        //
+        // Resend a TAMPERED copy, not the original: the confirmed path never re-verifies the
+        // signature (that happens only in preview), so if it read `suggestion` from the arguments
+        // instead of the stored payload, a caller could swap in a proposal the user never reviewed.
+        // Asserting against the pristine DTO is what makes that a red test rather than a silent pass.
+        ObjectNode confirmedArgs = previewArgs(suggestion);
+        ObjectNode tampered = (ObjectNode) confirmedArgs.get("suggestion");
+        tampered.set("removedRuleDescriptions",
+                objectMapper.createArrayNode().add("a rule the user never approved removing"));
+        confirmedArgs.put("confirmed", true);
+        confirmedArgs.put("impactToken", preview.path("impactToken").asText());
+
+        UserContextHolder.setDestructiveActionConfirmed(true);
+        JsonNode applied = objectMapper.readTree(tool.execute(confirmedArgs.toString()));
+
+        assertEquals("applied", applied.path("operation").asText());
+        // The stored proposal is what gets applied, so the tampered copy cannot influence the write.
+        verify(fixService).applyFix(
+                7L, 31L, "remove", suggestion, suggestion.getSuggestionToken(), null);
+    }
+
+    @Test
+    void omittedConfirmedPreviewsRatherThanFailingValidation() throws Exception {
+        FixSuggestionDto suggestion = signedPublicRemovalSuggestion();
+        ObjectNode args = previewArgs(suggestion);
+        args.remove("confirmed");
+
+        // Every other confirmation-gated tool defaults a missing `confirmed` to false. Failing here
+        // instead reached the same no-write outcome one wasted round later.
+        JsonNode result = objectMapper.readTree(tool.execute(args.toString()));
+
+        assertEquals("preview", result.path("operation").asText());
+        assertTrue(result.path("requiresUserConfirmation").asBoolean());
+        verifyNoInteractions(fixService);
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void definitionClosesRootAndNestedMutationArguments() {
         var definition = tool.getDefinition();

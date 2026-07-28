@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
+import cn.edu.nju.Iot_Verify.util.TemplateNameRule;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
@@ -31,10 +32,6 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class DeviceTemplateServiceImpl implements DeviceTemplateService {
-
-    /** Template names must be printable ASCII so that Locale.ROOT and MySQL LOWER() agree. */
-    private static final java.util.regex.Pattern SAFE_TEMPLATE_NAME =
-            java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
 
     private final DeviceTemplateRepository templateRepo;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
@@ -143,9 +140,11 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                         name = "Unknown";
                     }
 
-                    if (!SAFE_TEMPLATE_NAME.matcher(name).matches()) {
+                    String nameRejection = TemplateNameRule.rejectionReason(name);
+                    if (nameRejection != null) {
                         throw new InternalServerException("Bundled default template '" + name
-                                + "' has a non-ASCII name in " + resource.getFilename() + ".");
+                                + "' has an illegal name in " + resource.getFilename()
+                                + ": " + nameRejection + ".");
                     }
                     String normalizedName = name.trim().toLowerCase(Locale.ROOT);
                     if (!normalizedNames.add(normalizedName)) {

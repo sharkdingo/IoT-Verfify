@@ -13,7 +13,7 @@ const { t } = useI18n()
         :sub-title="t('app.notFound.subtitle')"
     >
       <template #extra>
-        <router-link to="/home">
+        <router-link to="/">
           <el-button type="primary">{{ t('app.notFound.home') }}</el-button>
         </router-link>
       </template>

@@ -53,6 +53,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | [docs/architecture/nusmv-model.md](architecture/nusmv-model.md) | ✅ ready | SMV modeling logic, identifier sanitization, user-input → model mapping | — |
 | [docs/architecture/spec-templates.md](architecture/spec-templates.md) | ✅ ready | 7 spec templates ↔ CTL/LTL, `templateId` mapping, P1–P5 | — |
 | [docs/architecture/auto-fix.md](architecture/auto-fix.md) | ✅ ready | Fault localization + parameter/condition/permanent-removal strategies + forward verification | — |
+| [docs/architecture/theory-sources.md](architecture/theory-sources.md) | ✅ ready | Which published algorithm owns which modeling/fix/exploration behaviour, with section citations | — |
 
 ### API
 
@@ -74,6 +75,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | [docs/guides/frontend-integration.md](guides/frontend-integration.md) | ✅ ready | How the frontend calls the backend (axios/SSE, real `boardApi`/`authApi` shape, type locations) | — |
 | [docs/guides/acceptance-demo.md](guides/acceptance-demo.md) | ✅ ready | End-to-end acceptance scene: three construction paths, simulation/verification animation, attack/privacy contrast, and verified repair | — |
 | [docs/guides/default-template-scenarios.md](guides/default-template-scenarios.md) | ✅ ready | Three additional importable default-template scenes covering fire response, rule priority, RFID trust/privacy, attack contrast, and verified repair | — |
+| [docs/guides/frontend-ui-conventions.md](guides/frontend-ui-conventions.md) | ✅ ready | Decision records: what belongs in the board's URL, and which feedback mechanism each situation gets | — |
 | [docs/guides/troubleshooting.md](guides/troubleshooting.md) | ✅ ready | FAQ (MySQL/Redis/CORS/NuSMV/timeout) | — |
 
 ### Module READMEs & Claude manuals

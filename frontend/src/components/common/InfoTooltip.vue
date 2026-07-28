@@ -50,7 +50,9 @@ withDefaults(defineProps<{
   justify-content: center;
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, currentColor 8%, white);
+  /* Theme token, not `white`: the hardcoded blend made the dark override below the only rule that
+     could set a usable background, which in turn outranked hover/focus and killed both cues. */
+  background: color-mix(in srgb, currentColor 8%, var(--surface-elevated));
   color: #475569;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
@@ -58,8 +60,14 @@ withDefaults(defineProps<{
 .iot-info-tooltip-trigger:hover,
 .iot-info-tooltip-trigger:focus-visible {
   border-color: currentColor;
-  background: color-mix(in srgb, currentColor 14%, white);
-  outline: none;
+  background: color-mix(in srgb, currentColor 22%, var(--surface-elevated));
+}
+
+/* A real focus ring: the hover background alone is too subtle to serve as the keyboard cue, and
+   suppressing the outline left keyboard users with nothing. */
+.iot-info-tooltip-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 75%, transparent);
+  outline-offset: 2px;
 }
 
 .iot-info-tooltip-trigger .material-symbols-outlined {
@@ -78,9 +86,9 @@ withDefaults(defineProps<{
   color: #b45309;
 }
 
-:global(:root[data-theme='dark'] .iot-info-tooltip-trigger) {
-  background: color-mix(in srgb, currentColor 14%, #0f172a);
-}
+/* No dark-theme background override is needed any more: `--surface-elevated` already differs per
+   theme. The old `[data-theme='dark']` rule was more specific than :hover/:focus-visible, so it
+   silently disabled both in dark mode. */
 
 :global(.iot-info-tooltip-popper) {
     max-width: min(24rem, calc(100vw - 2rem));

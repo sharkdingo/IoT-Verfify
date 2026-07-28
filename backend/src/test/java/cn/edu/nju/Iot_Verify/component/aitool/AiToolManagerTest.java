@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -100,5 +101,35 @@ class AiToolManagerTest {
         assertEquals("RESULT_UNAVAILABLE", result.path("resultStatus").asText());
         assertEquals("TOOL_RESULT_TOO_LARGE", result.path("errorCode").asText());
         assertTrue(result.path("mutationMayHaveCommitted").asBoolean());
+    }
+
+    @Test
+    void execute_wrappedInterrupt_isAlsoPreserved() throws Exception {
+        // `AiTool.execute` declares no checked exceptions, so an interruption can only reach this
+        // catch wrapped in a RuntimeException — which is precisely the shape that a plain
+        // `instanceof InterruptedException` check would miss. A tool delegating to synchronous
+        // verification or simulation runs interruptible work; swallowing the flag here would leave a
+        // later interruptible call on this same chat thread unable to see the cancellation.
+        when(knownTool.execute("{}"))
+                .thenThrow(new RuntimeException("wrapped", new InterruptedException("cancelled")));
+
+        JsonNode result = objectMapper.readTree(manager.execute("known_tool", "{}"));
+
+        assertTrue(Thread.currentThread().isInterrupted(),
+                "the interrupt must survive the broad catch");
+        // The failure is still reported as a failure, never as an empty success.
+        assertEquals("TOOL_EXECUTION_ERROR", result.path("errorCode").asText());
+        Thread.interrupted();
+    }
+
+    @Test
+    void execute_ordinaryFailure_doesNotFabricateAnInterrupt() throws Exception {
+        // A transient tool error must stay an ordinary failure; marking it as cancellation would
+        // abort work the user is still waiting for.
+        when(knownTool.execute("{}")).thenThrow(new IllegalStateException("boom"));
+
+        manager.execute("known_tool", "{}");
+
+        assertFalse(Thread.currentThread().isInterrupted());
     }
 }

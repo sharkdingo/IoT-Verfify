@@ -270,7 +270,7 @@ const frozenTargetScope = computed(() => {
   <section
     data-testid="fuzzing-panel"
     class="board-floating-panel fuzzing-panel board-surface-panel fixed top-20 z-30 flex w-[30rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-lg border shadow-2xl"
-    role="dialog"
+    role="region"
     aria-labelledby="fuzzing-panel-title"
     tabindex="-1"
     @keydown.esc.stop.prevent="closePanel"

@@ -515,12 +515,22 @@ public class SmvMainModuleBuilder {
         List<SelectedRuleBranch> branches = new ArrayList<>();
         List<EarlierRuleAction> earlierActions = new ArrayList<>();
         for (RuleDto rule : deviceRules) {
-            if (rule == null || rule.getCommand() == null || rule.getCommand().getAction() == null) {
+            if (rule == null || rule.getCommand() == null) {
                 continue;
             }
-            DeviceManifest.API api = DeviceSmvDataFactory.findApi(
-                    targetSmv.getManifest(), rule.getCommand().getAction());
+            // This method is the only source of rule branches for state, property, and probe
+            // assignments, so a rule that drops out here is absent from the whole model. Skipping it
+            // silently returned SATISFIED with modelComplete=true for a scene whose automation was
+            // never checked, so an unresolvable action is recorded as a disabled rule instead.
+            DeviceManifest.API api = rule.getCommand().getAction() == null ? null
+                    : DeviceSmvDataFactory.findApi(
+                            targetSmv.getManifest(), rule.getCommand().getAction());
             if (api == null) {
+                String reason = "Rule command action could not be resolved to a template API"
+                        + " and the rule was disabled during SMV generation";
+                log.warn(reason);
+                recordDisabledRule(context, rule,
+                        ModelGenerationIssueReasonCode.RULE_UNRESOLVABLE_COMMAND_ACTION, reason);
                 continue;
             }
             Set<Integer> affectedModes = affectedModeIndexes(targetSmv, api);
@@ -815,13 +825,17 @@ public class SmvMainModuleBuilder {
             // Avoid recursively defined next(target.*) when target rules read target state/vars.
             effectiveUseNext = false;
         }
-        String attr = condition.getAttribute();
-        if (attr == null || attr.isBlank()) {
+        if (condition.getAttribute() == null || condition.getAttribute().isBlank()) {
             log.warn("Rule condition has null/blank attribute for device '{}' and cannot be resolved", deviceId);
             return null;
         }
+        // Trimmed once here because every downstream comparison against a manifest variable, mode,
+        // or signal-API name uses equals(), and admission resolves the attribute trimmed. Leaving
+        // the two disagreeing rejected a rule the validator had already accepted. Manifest names may
+        // contain interior spaces, so only surrounding whitespace is dropped.
+        String attr = condition.getAttribute().trim();
         String targetType = condition.getTargetType() != null
-                ? condition.getTargetType().trim().toLowerCase()
+                ? condition.getTargetType().trim().toLowerCase(Locale.ROOT)
                 : null;
         if (targetType == null || !List.of("api", "variable", "mode", "state").contains(targetType)) {
             log.warn("Rule condition on device '{}' attribute '{}' has missing/unsupported targetType '{}'",
@@ -950,7 +964,7 @@ public class SmvMainModuleBuilder {
         if (manifest == null || manifest.getApis() == null) return null;
 
         for (DeviceManifest.API api : manifest.getApis()) {
-            if (!Boolean.TRUE.equals(api.getSignal()) || !api.getName().equals(condition.getAttribute())) {
+            if (!Boolean.TRUE.equals(api.getSignal()) || !api.getName().equals(attr)) {
                 continue;
             }
 
@@ -1285,6 +1299,14 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
         if (rateExpr != null) {
             // Impacted-rate branch: clamp every candidate to the declared range.
+            //
+            // The -1 / +1 terms are MEDIC's environment disturbance, not an accident. The paper models
+            // a shared environment variable as a self-loop with the constraint
+            // v' - v in [-1 + env.D.v, 1 + env.D.v] — "the value of v is increased by env.D.v with a
+            // slight disturbance in the range of [-1, 1] in each time step" (MEDIC §3.1, Fig. 2b). Do
+            // not remove them to make a boundary state hold: a numeric environment value is an
+            // imperfectly-observed physical quantity, so a verdict that assumes it can only move by a
+            // declared rate would be unsound in the unsafe direction.
             content.append("\t\t").append(smvVarName).append("=").append(upper)
                    .append("-(").append(rateExpr).append("): {")
                    .append(clampExpr("toint(" + smvVarName + ")-1+" + rateExpr, lower, upper))
@@ -1545,34 +1567,36 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                               String condVarName, DeviceManifest deviceManifest,
                                               PropertyDimension dim) {
         String targetType = condition.getTargetType() != null
-                ? condition.getTargetType().trim().toLowerCase()
+                ? condition.getTargetType().trim().toLowerCase(Locale.ROOT)
                 : null;
         if (targetType == null || !List.of("api", "variable", "mode", "state").contains(targetType)) {
             return null;
         }
+        // Trimmed to match the trigger resolver and admission; see buildRuleCondition. Returning null
+        // here silently drops the propagation constraint for a condition the guard itself accepted.
+        String attr = condition.getAttribute() == null ? null : condition.getAttribute().trim();
         if (condition.getRelation() == null) {
             if (!"api".equals(targetType)) {
                 return null;
             }
             if (deviceManifest.getApis() != null) {
                 for (DeviceManifest.API api : deviceManifest.getApis()) {
-                    if (api.getName().equals(condition.getAttribute()) && Boolean.TRUE.equals(api.getSignal())) {
+                    if (api.getName().equals(attr) && Boolean.TRUE.equals(api.getSignal())) {
                         return buildApiPropertyPredicate(condSmv, condVarName, dim, api.getEndState());
                     }
                 }
             }
         } else if ("variable".equals(targetType) && deviceManifest.getInternalVariables() != null) {
             for (DeviceManifest.InternalVariable var : deviceManifest.getInternalVariables()) {
-                if (var.getName().equals(condition.getAttribute())) {
+                if (var.getName().equals(attr)) {
                     return condVarName + "." + dim.prefix + var.getName() + "=" + dim.activeValue;
                 }
             }
         } else if ("mode".equals(targetType)) {
-            if (condSmv.getModes() == null || !condSmv.getModes().contains(condition.getAttribute())) {
+            if (condSmv.getModes() == null || !condSmv.getModes().contains(attr)) {
                 return null;
             }
-            return buildCurrentStatePropertyPredicate(
-                    condSmv, condVarName, dim, condition.getAttribute());
+            return buildCurrentStatePropertyPredicate(condSmv, condVarName, dim, attr);
         } else if ("state".equals(targetType)) {
             Set<String> referencedModes = resolveStateConditionModes(condition, condSmv);
             return referencedModes.isEmpty()

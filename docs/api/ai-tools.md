@@ -108,7 +108,13 @@ Recommendation validation also removes a condition group or command prestate onl
 the current runtime plus declared APIs, transitions, dynamics, and natural-change rates
 prove it unreachable. The analysis deliberately over-approximates triggers and open
 environment behavior, so uncertainty keeps a candidate instead of inventing a false
-negative. Direct user-requested targeted mutations retain the ordinary Board contract;
+negative. Concretely, value narrowing applies only to device-local (`IsInside=true`)
+variables, which the generated model holds constant when nothing writes them. Shared
+environment variables are never narrowed: the model gives every enum environment variable an
+unconstrained `TRUE: {<all declared values>}` branch, so the Environment Pool value is only
+the initial state and every declared value is reachable immediately. A sensor reading the
+user wants to reason about ("when smoke is detected") must therefore not be filtered out
+because the pool currently holds a different value. Direct user-requested targeted mutations retain the ordinary Board contract;
 this extra reachability filter governs AI recommendations.
 
 Usable successful tools are translated by the chat service into frontend refresh commands for
@@ -599,9 +605,11 @@ REST contract. Its first call uses `confirmed=false`, an exact returned suggesti
 the exact `preferredRangeSelections` used to generate it. The server verifies the
 suggestion signature before returning a no-write preview, then stores that exact request
 under the authenticated chat session for at most 15 minutes. A later explicitly confirmed
-call supplies only `traceId`, `confirmed=true`, and the preview `impactToken`; the tool
+call supplies `traceId`, `confirmed=true`, and the preview `impactToken`; `suggestion` and
+`preferredRangeSelections` may be resent unchanged and are ignored, because the tool
 consumes the stored request once and calls the same `FixService.applyFix` boundary as
-`POST /api/verify/traces/{id}/fix/apply`. Signature expiry, rule/template/specification/
+`POST /api/verify/traces/{id}/fix/apply`. Omitting `confirmed` degrades to a preview rather than a
+validation error, matching every other confirmation-gated tool. Signature expiry, rule/template/specification/
 device/environment drift, formal-operation admission, and the transaction commit fence
 therefore still fail closed exactly as described in
 [auto-fix.md](../architecture/auto-fix.md). A confirmation mismatch, replay, or expiry

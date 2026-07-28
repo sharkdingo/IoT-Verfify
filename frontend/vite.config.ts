@@ -30,6 +30,18 @@ export default defineConfig(({ command }) => ({
             }
         }
     },
+    // `vite preview` does not inherit `server.proxy`. E2E runs against a production build, so it
+    // needs the same `/api` proxy to reach the backend.
+    preview: {
+        host: '127.0.0.1',
+        port: 3000,
+        proxy: {
+            '/api': {
+                target: 'http://localhost:8080',
+                changeOrigin: true,
+            }
+        }
+    },
     resolve: {
         alias: {
             '@': fileURLToPath(new URL('./src', import.meta.url)),

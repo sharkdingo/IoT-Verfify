@@ -102,9 +102,11 @@ public class RuleFixer {
                             int maxAttempts,
                             Map<String, PreferredRange> preferredRanges) {
 
+        // Never clear the interrupt flag here: it is the search's only cancellation signal
+        // (FixContext.isExpired reads it), and cancellation can already have arrived — fault
+        // localization and context loading run before the strategy loops.
         AttackScenarioDto safeAttackScenario = Objects.requireNonNull(
                 attackScenario, "attackScenario is required");
-        // Step 1: Fault localization
         List<FaultRuleDto> faultRules = faultLocalizer.localize(states, rules, deviceSmvMap);
         log.info("Fault localization: found {} fault rule(s) for trace {}", faultRules.size(), traceId);
         if (strategies != null && strategies.isEmpty()) {

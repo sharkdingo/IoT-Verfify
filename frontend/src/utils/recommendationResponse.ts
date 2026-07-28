@@ -173,6 +173,15 @@ export const validateScenarioRecommendationResponse = <T>(
   requireArray(scene, 'templates', context)
   const finalItemCount = devices.length + environmentVariables.length + rules.length + specs.length
   validateAccounting(result, finalItemCount, context, true)
+  // Every applied scene item must be accounted for as either a validated candidate or a
+  // server-synthesized adjustment. Without this, a payload could hand over a full scene while
+  // reporting zero inspected candidates, and the accounting strip would contradict the canvas.
+  // Checked as a lower bound rather than an equality: an adjustment is not required to add an item.
+  const adjustedCount = requireCount(result, 'adjustedCount', context)
+  if (requireCount(result, 'validatedCount', context) + adjustedCount < finalItemCount) {
+    throw new RecommendationResponseContractError(
+      context, 'validatedCount plus adjustedCount must account for every applied scene item')
+  }
   if (typeof result.scenarioName !== 'string' || typeof result.rationale !== 'string') {
     throw new RecommendationResponseContractError(context, 'scenarioName and rationale are required')
   }

@@ -165,8 +165,10 @@ is treated as a definite rejection and leaves the deletion form available for co
   `(user_id, session_id)` constraint against their chat session. They cannot be attached to
   another user's session and cascade when that session is deleted.
 - Deletes the current user's board layout, device nodes, rules, specifications,
-  device templates, verification traces/tasks, simulation traces/tasks, exploration
-  findings/tasks, AI continuation/confirmation/draft state, and AI chat sessions/messages.
+  device templates, the board edit (undo) journal, verification traces/tasks, simulation
+  traces/tasks, exploration findings/tasks, AI continuation/confirmation/draft state, and AI
+  chat sessions/messages. The undo journal stores the rule and specification
+  snapshots each reversible edit needs, so it is user content and is removed with the account.
 - Deletes the `app_user` row last.
 
 `JwtAuthenticationFilter` also checks that the token's user id still exists before

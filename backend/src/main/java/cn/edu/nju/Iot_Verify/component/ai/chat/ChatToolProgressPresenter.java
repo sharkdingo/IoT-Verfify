@@ -21,6 +21,13 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class ChatToolProgressPresenter {
 
+    /**
+     * Budget for one round's user-visible reasoning. Larger than a tool status line because this is
+     * the channel that has to carry a decomposition, the alternatives considered, and the check —
+     * the provider caps its own summary at 2000, so this is the binding limit on explanation.
+     */
+    private static final int REASONING_MAX_CHARS = 1600;
+
     private final ObjectMapper objectMapper;
 
     /**
@@ -269,17 +276,74 @@ public class ChatToolProgressPresenter {
         return sanitizeProgressDetail(value, 240);
     }
 
+    /**
+     * Sanitizes the model's user-visible reasoning while keeping it readable <em>as</em> reasoning.
+     *
+     * <p>Deliberately different from {@link #compactToolProgressDetail}, which formats a one-line
+     * status. Reasoning is the only channel carrying actual analysis, so three things that are
+     * right for a status line are wrong here:
+     *
+     * <ul>
+     *   <li><b>Line structure is preserved.</b> Collapsing all whitespace turned a decomposition
+     *       ("Goal … / Observed … / Next …") into one run-on line.</li>
+     *   <li><b>Prose is left alone.</b> Identifier redaction is anchored to real identifier shapes,
+     *       so ordinary hyphenated English — "rule-based", "device-level", "trace-driven" — is no
+     *       longer replaced by a redaction marker mid-sentence.</li>
+     *   <li><b>The budget is larger and the cut lands on a boundary</b>, not mid-clause.</li>
+     * </ul>
+     */
     public String compactReasoningProgressDetail(String value) {
-        return sanitizeProgressDetail(value, 800);
+        if (value == null) return null;
+        // Collapse horizontal runs and excess blank lines, but keep single newlines.
+        String structured = redactIdentifiers(value)
+                .replaceAll("[ \\t\\x0B\\f\\r]+", " ")
+                .replaceAll(" ?\\n ?", "\n")
+                .replaceAll("\\n{3,}", "\n\n")
+                .trim();
+        return truncateAtBoundary(structured, REASONING_MAX_CHARS);
+    }
+
+    /**
+     * Cuts at the last sentence end or line break inside the budget, so the user never reads a
+     * sentence that stops mid-clause. Falls back to a hard cut only when no usable boundary exists.
+     */
+    private String truncateAtBoundary(String value, int maxChars) {
+        if (value.length() <= maxChars) return value;
+        String head = value.substring(0, maxChars);
+        int boundary = -1;
+        for (String terminator : new String[] {"\n", ". ", "。", "; ", "；"}) {
+            boundary = Math.max(boundary, head.lastIndexOf(terminator));
+        }
+        // Only honour a boundary in the last third; earlier would discard usable reasoning. A short
+        // decomposition followed by one long unbroken paragraph therefore takes the hard cut — that is
+        // the intended trade: losing two thirds of the explanation to end on a period reads worse than
+        // an ellipsis mid-clause.
+        if (boundary > maxChars / 3 * 2) {
+            return head.substring(0, boundary).trim() + " …";
+        }
+        return head.substring(0, Math.max(0, maxChars - 2)).trim() + " …";
     }
 
     private String sanitizeProgressDetail(String value, int maxChars) {
         if (value == null) return null;
-        String sanitized = value
+        return compactProgressDetail(redactIdentifiers(value), maxChars);
+    }
+
+    /**
+     * Removes confirmation tokens and internal identifiers.
+     *
+     * <p>The hyphenated form requires a digit in the tail, which is what distinguishes a generated id
+     * ({@code rule-4a}) from an English compound adjective ({@code rule-based}, {@code device-level});
+     * without it, the redaction corrupted the explanation it was protecting. The underscore form needs
+     * no digit: English prose does not join words with underscores, so {@code device_a} is an id too —
+     * requiring a digit there leaked every non-numeric node id past the only mechanical guard.
+     */
+    private String redactIdentifiers(String value) {
+        return value
                 .replaceAll("(?i)(impactToken|confirmationToken|domainImpactToken|suggestionToken)\\s*[:=]\\s*[^,;\\s]+", "$1=[hidden]")
                 .replaceAll("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b", "[internal reference]")
-                .replaceAll("(?i)\\b(?:device|node|rule|spec|task|trace|simulation)[_-][a-z0-9_-]+\\b", "[internal reference]")
+                .replaceAll("(?i)\\b(?:device|node|rule|spec|task|trace|simulation)_[a-z0-9_-]+\\b", "[internal reference]")
+                .replaceAll("(?i)\\b(?:device|node|rule|spec|task|trace|simulation)-[a-z0-9_-]*[0-9][a-z0-9_-]*\\b", "[internal reference]")
                 .replaceAll("(?i)\\b(?:device|node|rule|spec(?:ification)?|task|trace|simulation|session|user)\\s+id\\s*[:=#]?\\s*[a-z0-9_-]+", "[internal reference]");
-        return compactProgressDetail(sanitized, maxChars);
     }
 }

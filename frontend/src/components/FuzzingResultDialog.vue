@@ -135,7 +135,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 <template>
   <div
     v-if="visible"
-    class="fixed inset-0 z-[2400] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
     data-testid="fuzzing-result-dialog"
     @keydown="handleModalKeydown"
   >

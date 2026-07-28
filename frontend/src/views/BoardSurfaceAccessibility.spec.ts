@@ -93,7 +93,7 @@ describe('Board surface accessibility contracts', () => {
       boardCss.indexOf('A short landscape viewport cannot stack the change inspector'),
       boardCss.indexOf('/* ==========', boardCss.indexOf('A short landscape viewport cannot stack the change inspector'))
     )
-    expect(shortLandscapePlayback).toContain('@media (min-width: 641px) and (max-height: 599px)')
+    expect(shortLandscapePlayback).toContain('@media (min-width: 640px) and (max-height: 599.98px)')
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-playback-change-popover')
     expect(shortLandscapePlayback).toContain('width: min(22rem, 42vw)')
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-timeline-host')

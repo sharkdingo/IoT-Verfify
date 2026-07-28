@@ -18,49 +18,44 @@ const mountDialog = () => mount(AccountDeleteDialog, {
   }
 })
 
-describe('AccountDeleteDialog', () => {
-  it('does not enable permanent deletion from autofilled values or navigation keys', async () => {
+const confirmationField = 'input[name="delete-account-confirmation"]'
+
+/**
+ * Edits the field the way a real user does: an `InputEvent` carrying an `inputType`. Programmatic
+ * autofill assigns `.value` and fires a plain `Event` with no `inputType`, which `setValue`
+ * reproduces — so the two cases stay distinguishable here rather than assumed equivalent.
+ */
+const typeInto = async (element: Element, value: string) => {
+  (element as HTMLInputElement).value = value
+  element.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }))
+  await Promise.resolve()
+}
+
+describe('AccountDeleteDialog confirmation gate', () => {
+  it('refuses a confirmation the user did not enter', async () => {
     const wrapper = mountDialog()
-    const confirmation = wrapper.get('input[name="delete-account-confirmation"]')
-    const password = wrapper.get('input[type="password"]')
+    // `setValue` fires a plain `input` Event with no `inputType`, as autofill does.
+    await wrapper.get(confirmationField).setValue('alice')
+    await wrapper.get('input[type="password"]').setValue('Password123')
 
-    await confirmation.setValue('alice')
-    await password.setValue('Password123')
-
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
-
-    await confirmation.trigger('keydown', { key: 'Tab' })
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
-
-    await confirmation.trigger('keydown', { key: 'e' })
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
-
-    await confirmation.setValue('alice')
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('button.danger').attributes('disabled')).toBe('')
+    wrapper.unmount()
   })
 
-  it('treats deletion and IME composition as deliberate text editing', async () => {
+  it('accepts text the user typed, including on keyboards that report no printable key', async () => {
     const wrapper = mountDialog()
-    const confirmation = wrapper.get('input[name="delete-account-confirmation"]')
-    const password = wrapper.get('input[type="password"]')
+    // Android soft keyboards report `key` as `Unidentified`, and dropped text fires no keydown at
+    // all; both still produce an InputEvent. Gating on printable keys disabled the button forever.
+    await typeInto(wrapper.get(confirmationField).element, 'alice')
+    await wrapper.get('input[type="password"]').setValue('Password123')
 
-    await confirmation.setValue('alice')
-    await password.setValue('Password123')
-    await confirmation.trigger('keydown', { key: 'ArrowLeft' })
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
-
-    await confirmation.trigger('compositionstart')
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
-
-    await confirmation.setValue('alice')
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('button.danger').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
   })
 
-  it('emits the normalized confirmation after deliberate editing', async () => {
+  it('normalizes the confirmation it emits', async () => {
     const wrapper = mountDialog()
-    const confirmation = wrapper.get('input[name="delete-account-confirmation"]')
-    await confirmation.trigger('paste')
-    await confirmation.setValue('  alice  ')
+    await typeInto(wrapper.get(confirmationField).element, '  alice  ')
     await wrapper.get('input[type="password"]').setValue('Password123')
 
     await wrapper.get('form').trigger('submit')
@@ -68,5 +63,6 @@ describe('AccountDeleteDialog', () => {
     expect(wrapper.emitted('confirm')).toEqual([[
       { password: 'Password123', confirmation: 'alice' }
     ]])
+    wrapper.unmount()
   })
 })

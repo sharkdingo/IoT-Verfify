@@ -132,15 +132,22 @@ public class ParameterAdjustStrategy implements FixStrategy {
                 PreferredRange preferred = (ctx.getPreferredRanges() != null)
                         ? ctx.getPreferredRanges().get(targetId) : null;
                 if (preferred != null) {
-                    ctx.markPreferredRangeTargetMatched(targetId);
                     int prefLower = Math.max(bounds[0], preferred.getLower());
                     int prefUpper = Math.min(bounds[1], preferred.getUpper());
                     if (prefLower > prefUpper) {
+                        // Deliberately *not* marked as matched: a range disjoint from the device's own
+                        // domain was never searched, so reporting it as honoured would tell the user
+                        // their constraint held when nothing tested it. Leaving it unmatched surfaces it
+                        // in `unusedPreferredRangeSelections`, and the diagnostic says why.
                         preferredRangeEmptyIntersections++;
+                        ctx.addDiagnostic("Preferred range " + preferred.getLower() + "-" + preferred.getUpper()
+                                + " lies outside the device's own limits " + bounds[0] + "-" + bounds[1]
+                                + "; that parameter was left unchanged.");
                         log.warn("Preferred range [{},{}] has no intersection with template bounds [{},{}] for {}, skipping",
                                 preferred.getLower(), preferred.getUpper(), bounds[0], bounds[1], key);
                         continue;
                     }
+                    ctx.markPreferredRangeTargetMatched(targetId);
                     bounds = new int[]{prefLower, prefUpper};
                 }
 
@@ -364,9 +371,11 @@ public class ParameterAdjustStrategy implements FixStrategy {
                     ctx.recordStrategyGenerationFailure(NAME, reason);
                     return null;
                 }
+                FixStrategyUtils.preserveInterrupt(e);
                 FixStrategyUtils.recordSolverFailure(ctx, NAME,
                         "Parameter search encountered an execution error: " + e.getMessage());
-                // Continue to next attempt — exception may be transient or INVAR-dependent
+                // Continue to next attempt — exception may be transient or INVAR-dependent, but a
+                // restored interrupt makes `ctx.isExpired()` stop the loop on the next pass.
             } finally {
                 FixStrategyUtils.cleanupTempDir(smvFile);
             }
@@ -796,8 +805,15 @@ public class ParameterAdjustStrategy implements FixStrategy {
             int best = current;
             long bestDist = distance(best, original);
 
-            // Step A: Try original value (other params changed, original may now work; not counted in budget)
-            if (bestDist > 0) {
+            // Step A: Try original value (other params changed, original may now work; not counted in budget).
+            //
+            // Only when the original still lies inside this target's effective bounds. Those bounds are
+            // already the intersection of the manifest domain with the user's preferred range, so a user
+            // who narrowed the range to exclude the original must not be handed the original back
+            // labelled with the range they asked for.
+            boolean originalWithinBounds =
+                    original >= paramInfo.getLowerBound() && original <= paramInfo.getUpperBound();
+            if (bestDist > 0 && originalWithinBounds) {
                 List<RuleDto> testRules = FixStrategyUtils.deepCopyRules(allRules);
                 for (Map.Entry<String, ParameterizationConfig.ParamInfo> e : thresholds.entrySet()) {
                     String value;
@@ -815,6 +831,9 @@ public class ParameterAdjustStrategy implements FixStrategy {
                         bestDist = 0;
                     }
                 } catch (Exception e) {
+                    // forwardVerify re-arms the flag itself, but keep the guard at the catch so a
+                    // future call added inside this block cannot silently swallow a cancellation.
+                    FixStrategyUtils.preserveInterrupt(e);
                     log.warn("refineToClosest: original-value test failed: {}", e.getMessage());
                 }
             }
@@ -899,6 +918,7 @@ public class ParameterAdjustStrategy implements FixStrategy {
                                 originalRetried = true;
                             }
                         } catch (Exception e) {
+                            FixStrategyUtils.preserveInterrupt(e);
                             if (cand == original && !originalRetried) {
                                 exclusionValues.remove(cand);
                                 seen.remove(cand);
@@ -1011,6 +1031,11 @@ public class ParameterAdjustStrategy implements FixStrategy {
 
         } catch (Exception e) {
             log.warn("nusmvSolveForRefine: exception: {}", e.getMessage(), e);
+            // executeWithinDeadline declares InterruptedException, and this catch is broad enough to
+            // consume it — clearing the flag with it. Without re-arming, ctx.isExpired() stops
+            // reporting the cancellation and the refine loop keeps taking NuSMV permits for a request
+            // whose response was already sent.
+            FixStrategyUtils.preserveInterrupt(e);
             if (!(e instanceof cn.edu.nju.Iot_Verify.exception.SmvGenerationException)) {
                 FixStrategyUtils.recordSolverFailure(ctx, NAME,
                         "Parameter refinement encountered an execution error: " + e.getMessage());
@@ -1049,6 +1074,9 @@ public class ParameterAdjustStrategy implements FixStrategy {
         try {
             smv = DeviceReferenceResolver.resolve(deviceId, deviceSmvMap);
         } catch (Exception e) {
+            // An unresolvable device reference legitimately means "no parameterizable bounds here", so
+            // the null is the honest answer — but a cancellation must not be read as that answer.
+            FixStrategyUtils.preserveInterrupt(e);
             return null;
         }
         if (smv == null) return null;

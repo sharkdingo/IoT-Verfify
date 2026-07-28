@@ -6,6 +6,7 @@ export type GenerationIssueReasonKey =
   | 'app.generationIssueRuleUnresolvableTrigger'
   | 'app.generationIssueRuleNoResolvableTriggers'
   | 'app.generationIssueRulePropertyUnavailable'
+  | 'app.generationIssueRuleUnresolvableAction'
   | 'app.generationIssueSpecNoConditions'
   | 'app.generationIssueSpecPrivacyDisabled'
   | 'app.generationIssueSpecUnsupportedRelation'
@@ -23,6 +24,7 @@ const reasonKeys: Record<ModelGenerationIssueReasonCode, GenerationIssueReasonKe
   RULE_UNRESOLVABLE_TRIGGER_CONDITION: 'app.generationIssueRuleUnresolvableTrigger',
   RULE_NO_RESOLVABLE_TRIGGER_CONDITIONS: 'app.generationIssueRuleNoResolvableTriggers',
   RULE_PROPERTY_PROPAGATION_UNAVAILABLE: 'app.generationIssueRulePropertyUnavailable',
+  RULE_UNRESOLVABLE_COMMAND_ACTION: 'app.generationIssueRuleUnresolvableAction',
   SPEC_NO_CHECKABLE_CONDITIONS: 'app.generationIssueSpecNoConditions',
   SPEC_PRIVACY_MODELING_DISABLED: 'app.generationIssueSpecPrivacyDisabled',
   SPEC_UNSUPPORTED_RELATION: 'app.generationIssueSpecUnsupportedRelation',

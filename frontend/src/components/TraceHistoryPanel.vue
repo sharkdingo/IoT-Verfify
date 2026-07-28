@@ -271,6 +271,36 @@ const emitDeleteResult = (item: ResultItem) => {
 const generationIssuesFor = (item: { generationIssues?: ModelGenerationIssue[] }) =>
   Array.isArray(item.generationIssues) ? item.generationIssues : []
 
+/**
+ * The assumptions that decide what a verdict actually covers.
+ *
+ * A verdict alone is not comparable between runs: attack modeling off and exhaustive compromise up
+ * to a budget produce identical badges and identical device/rule/spec counts. History is the surface
+ * users scan to decide whether their home is safe, so the scope has to be legible here and not only
+ * one click away in the opened result.
+ */
+const runAssumptions = (run: AvailableVerificationRunSummary): string[] => {
+  const assumptions: string[] = []
+  const points = run.modelSemantics?.modeledAttackPointCount
+  if (!run.isAttack) {
+    assumptions.push(t('app.runAssumptionNoAttack'))
+  } else if (run.modelSemantics?.attackSelectionPolicy === 'EXACT_ATTACK_POINTS') {
+    // The mode comes from the policy, never from `attackBudget`: the backend reports
+    // `effectiveBudget() == points.size()` for an exact-points run, so inferring the mode from a
+    // positive budget would label two pinned points as an exhaustive search over two.
+    assumptions.push(t('app.runAssumptionAttackPoints', {
+      count: typeof points === 'number' ? points : (run.attackBudget ?? '?')
+    }))
+  } else if (typeof run.attackBudget === 'number' && run.attackBudget > 0) {
+    assumptions.push(t('app.runAssumptionAttackBudget', {
+      count: run.attackBudget,
+      total: typeof points === 'number' ? points : '?'
+    }))
+  }
+  if (run.enablePrivacy) assumptions.push(t('app.runAssumptionPrivacy'))
+  return assumptions
+}
+
 const verificationOutcomeBadge = (run: AvailableVerificationRunSummary) => {
   if (run.outcome === 'VIOLATED') {
     return {
@@ -330,7 +360,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
   <div
     class="board-floating-panel history-panel board-surface-panel fixed top-20 z-30 flex w-[480px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border shadow-2xl"
     data-testid="trace-history-panel"
-    role="dialog"
+    role="region"
     aria-labelledby="trace-history-title"
     tabindex="-1"
     @keydown.esc.stop.prevent="emit('close')"
@@ -669,6 +699,31 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       specs: item.run.modelSnapshot.specificationCount
                     }) }}
                   </p>
+                  <ul
+                    v-if="runAssumptions(item.run).length"
+                    class="mt-1 flex flex-wrap gap-1"
+                    :aria-label="t('app.runAssumptionsLabel')"
+                    :data-testid="`verification-run-assumptions-${item.run.id}`"
+                  >
+                    <li
+                      v-for="assumption in runAssumptions(item.run)"
+                      :key="assumption"
+                      class="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] text-slate-600 dark:border-slate-600 dark:text-slate-300"
+                    >{{ assumption }}</li>
+                  </ul>
+                  <!-- A run reopened from history has no client submission to compare against, so its
+                       board-comparison chip reads "not compared" while Fix stays enabled. The backend's
+                       drift guards make that fail safe, but an enabled button reads as "this repair
+                       applies to my current board" — say otherwise up front. Stated once per run: one
+                       warning per counterexample would be the same sentence repeated N times. -->
+                  <p
+                    v-if="item.run.counterexamples.length"
+                    :id="`historical-fix-caveat-${item.run.id}`"
+                    :data-testid="`historical-fix-caveat-${item.run.id}`"
+                    class="mt-1 text-[10px] text-amber-700"
+                  >
+                    {{ t('app.historicalFixMayFailIfBoardChanged') }}
+                  </p>
                   <p class="mt-1 text-[11px] text-slate-400">{{ formatDate(item.run.completedAt) }}</p>
                 </div>
                 <div class="flex shrink-0 flex-wrap justify-end gap-1">
@@ -752,6 +807,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                         :data-testid="`fix-verification-trace-${trace.id}`"
                         class="min-h-11 rounded bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-200 disabled:opacity-50"
                         :disabled="actionLocked || !trace.dataAvailable"
+                        :aria-describedby="trace.dataAvailable ? `historical-fix-caveat-${item.run.id}` : undefined"
                         @click="emit('fix-verification-trace', trace)"
                       >
                         {{ t('app.fix') }}

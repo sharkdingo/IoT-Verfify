@@ -37,7 +37,7 @@ public class JpaAiSessionStateStore implements AiSessionStateStore {
         if (state == null) return Optional.empty();
         long version = state.getVersion() == null ? 0L : state.getVersion();
         if (!state.getExpiresAt().isAfter(now)) {
-            repository.deleteByStateKeyAndVersion(stateKey, version);
+            discardUnusableState(stateKey, version);
             return Optional.empty();
         }
         try {
@@ -46,10 +46,36 @@ public class JpaAiSessionStateStore implements AiSessionStateStore {
                     state.getExpiresAt(),
                     version));
         } catch (Exception e) {
-            repository.deleteByStateKeyAndVersion(stateKey, version);
+            discardUnusableState(stateKey, version);
             log.error("Removed unreadable AI session state: key={}, kind={}, exception={}",
                     stateKey, kind, e.getClass().getName());
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Drops an expired or unreadable row in its own transaction.
+     *
+     * <p>{@code get} is called from read paths — {@code getPendingConfirmation} is
+     * {@code @Transactional(readOnly = true)} — so enlisting a {@code @Modifying} delete in the
+     * caller's transaction made the whole request fail at flush time: a stale pending preview turned
+     * a "nothing pending" answer into a 500. The cleanup is opportunistic housekeeping, not part of
+     * the read's contract, so a failure here must not reach the caller either. The scheduled
+     * {@code purgeExpired} sweep is the backstop, but only once the row expires: an unreadable row
+     * whose delete keeps failing stays until {@code expiresAt}, logging on every {@code get} until
+     * then or until a {@code put} on the same key overwrites it. That window is bounded by the TTL
+     * and never returns usable state, so it is accepted rather than papered over with a retry.
+     */
+    private void discardUnusableState(String stateKey, long version) {
+        try {
+            TransactionTemplate independentTransaction = new TransactionTemplate(
+                    transactionTemplate.getTransactionManager());
+            independentTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            independentTransaction.executeWithoutResult(status ->
+                    repository.deleteByStateKeyAndVersion(stateKey, version));
+        } catch (Exception e) {
+            log.warn("Could not discard unusable AI session state: key={}, exception={}",
+                    stateKey, e.getClass().getName());
         }
     }
 

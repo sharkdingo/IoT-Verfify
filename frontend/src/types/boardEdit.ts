@@ -1,0 +1,61 @@
+import type { RuleForm } from './rule'
+import type { Specification } from './spec'
+
+/**
+ * Board edits that participate in undo.
+ *
+ * Deliberately narrow — see `BoardEditEntityType` on the backend for why devices and environment
+ * variables are excluded. Undo is a *board edit* command: it is not how you cancel a run, close a
+ * dialog, or go back in browser history.
+ *
+ * `RULE_ORDER` is one up/down press: it changes no single record, so its journal entry holds the
+ * previous ordering rather than a record snapshot.
+ */
+export const BOARD_EDIT_ENTITY_TYPES = ['RULE', 'SPECIFICATION', 'RULE_ORDER'] as const
+
+export type BoardEditEntityType = typeof BOARD_EDIT_ENTITY_TYPES[number]
+
+/** What the original edit did. The undo performs its inverse. */
+export const BOARD_EDIT_OPERATIONS = ['CREATE', 'UPDATE', 'DELETE'] as const
+
+export type BoardEditOperation = typeof BOARD_EDIT_OPERATIONS[number]
+
+export const BOARD_UNDO_REASON_CODES = [
+  'UNDONE', 'REDONE', 'NOTHING_TO_APPLY', 'AVAILABILITY_ONLY'
+] as const
+
+export type BoardUndoReasonCode = typeof BOARD_UNDO_REASON_CODES[number]
+
+// Runtime guards, because the boundary parser must reject an unknown value rather than cast it: a
+// renamed server code would otherwise become a typed value no consumer branches on.
+export const isBoardEditEntityType = (value: unknown): value is BoardEditEntityType =>
+  BOARD_EDIT_ENTITY_TYPES.includes(value as BoardEditEntityType)
+
+export const isBoardEditOperation = (value: unknown): value is BoardEditOperation =>
+  BOARD_EDIT_OPERATIONS.includes(value as BoardEditOperation)
+
+export const isBoardUndoReasonCode = (value: unknown): value is BoardUndoReasonCode =>
+  BOARD_UNDO_REASON_CODES.includes(value as BoardUndoReasonCode)
+
+/** Whether the account currently has an edit to undo and/or one to redo. */
+export interface BoardUndoAvailability {
+  canUndo: boolean
+  canRedo: boolean
+}
+
+/**
+ * Outcome of an undo or redo.
+ *
+ * `applied: false` with `NOTHING_TO_APPLY` is a normal result, not a failure: the user pressed the
+ * shortcut once more than there is history. `rules`/`specs` are the authoritative post-operation
+ * collections, so the client replaces its local state rather than inverting anything itself, and
+ * `canUndo`/`canRedo` come from the server journal so the UI never guesses from a local stack.
+ */
+export interface BoardUndoResult extends BoardUndoAvailability {
+  applied: boolean
+  entityType?: BoardEditEntityType
+  originalOperation?: BoardEditOperation
+  reasonCode: BoardUndoReasonCode
+  rules: RuleForm[]
+  specs: Specification[]
+}

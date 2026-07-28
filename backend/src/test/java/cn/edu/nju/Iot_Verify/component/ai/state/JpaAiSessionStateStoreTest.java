@@ -105,4 +105,40 @@ class JpaAiSessionStateStoreTest {
         assertNull(cleanupFailure.get());
         assertTrue(repository.findAll().isEmpty());
     }
+
+    /**
+     * The lazy-expiry delete must run in its own transaction.
+     *
+     * <p>`getPendingConfirmation` is `@Transactional(readOnly = true)`, so enlisting a
+     * `@Modifying` delete in the caller's transaction failed the whole request at flush time — a
+     * stale pending preview turned an honest "nothing pending" answer into a 500.
+     *
+     * <p>Asserted by the one consequence that is observable here: the caller's transaction rolls
+     * back, and the cleanup still committed. An enlisted delete would roll back with it.
+     */
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void theLazyExpiryDeleteCommitsIndependentlyOfTheReadingTransaction() {
+        ChatExecutionLeaseGuard leaseGuard = mock(ChatExecutionLeaseGuard.class);
+        JpaAiSessionStateStore store = new JpaAiSessionStateStore(
+                repository, new ObjectMapper(), leaseGuard, transactionTemplate);
+        Instant now = Instant.parse("2026-07-17T00:00:00Z");
+        store.put(4L, "session-ro", AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                JsonNodeFactory.instance.objectNode().put("token", "stale"),
+                now.plusSeconds(30));
+        assertFalse(repository.findAll().isEmpty());
+
+        TransactionTemplate reader = new TransactionTemplate(
+                transactionTemplate.getTransactionManager());
+        assertTrue(Boolean.TRUE.equals(reader.execute(status -> {
+            boolean absent = store.get(
+                    4L, "session-ro", AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                    now.plusSeconds(120)).isEmpty();
+            status.setRollbackOnly();
+            return absent;
+        })));
+
+        assertTrue(repository.findAll().isEmpty(),
+                "the expired row must be gone even though the reading transaction rolled back");
+    }
 }

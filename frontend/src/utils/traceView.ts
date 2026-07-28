@@ -192,6 +192,11 @@ export const formatPlaybackSecurityLabel = (
     : formatToken(label)
 }
 
+const playbackValue = (value: unknown): string => {
+  if (value === null || value === undefined || String(value).trim() === '') return 'N/A'
+  return String(value)
+}
+
 export const playbackDeviceSummaryParts = (
   device: PlaybackDevice,
   formatToken: (value: string) => string = value => value
@@ -201,8 +206,12 @@ export const playbackDeviceSummaryParts = (
   if (device.mode?.trim() && device.mode.trim() !== device.state?.trim()) {
     parts.push(formatToken(device.mode.trim()))
   }
+  // Through `playbackValue`, so an absent value reads `N/A` here exactly as it does in the step's
+  // change list. The backend's parser creates a variable row before its value is parsed, so a
+  // missing value is reachable — and rendering it as `name=` shows unknown data as blank while the
+  // other surface for the same step says `N/A`.
   ;(device.variables || []).forEach(variable => parts.push(
-    `${formatToken(variable.name)}=${formatToken(variable.value)}`
+    `${formatToken(variable.name)}=${formatToken(playbackValue(variable.value))}`
   ))
   return parts
 }
@@ -251,11 +260,6 @@ export const playbackDeviceChanged = (
   previous: PlaybackComparableDevice | null | undefined
 ): boolean => previous != null
   && JSON.stringify(sortedPlaybackFacts(current)) !== JSON.stringify(sortedPlaybackFacts(previous))
-
-const playbackValue = (value: unknown): string => {
-  if (value === null || value === undefined || String(value).trim() === '') return 'N/A'
-  return String(value)
-}
 
 const playbackBooleanValue = (value: boolean): string => value ? 'true' : 'false'
 

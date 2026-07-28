@@ -1,38 +1,40 @@
-import { createRouter, createWebHashHistory, RouteRecordRaw } from 'vue-router';
-import { isLocallyUsableJwt } from '@/utils/jwt';
+import {
+  createRouter,
+  createWebHashHistory,
+  type RouteLocationNormalized,
+  type RouteLocationRaw,
+  type RouteRecordRaw
+} from 'vue-router';
+import { useAuth } from '@/stores/auth';
 
-const TOKEN_KEY = 'iot_verify_token';
+declare module 'vue-router' {
+  interface RouteMeta {
+    /** Reachable without a session. Everything else requires authentication. */
+    public?: boolean;
+    /** Document title for the route. Absent on pure redirect records. */
+    title?: string;
+  }
+}
 
+// `base: './'` (the default in vite.config.ts) yields a relative BASE_URL, which tells us
+// nothing about where the app is mounted. Only an absolute base can be stripped from a
+// direct deep link; otherwise treat the whole pathname as the route, as before.
+const APP_BASE = import.meta.env.BASE_URL.startsWith('/') ? import.meta.env.BASE_URL : '/';
+
+/**
+ * The app is served from hash history, so a deep link written without the `#`
+ * (`/board`) has to be folded back into `/#/board` before the router boots.
+ */
 const normalizeDirectPathForHashHistory = () => {
-  if (window.location.hash || window.location.pathname === '/' || window.location.pathname.endsWith('/index.html')) {
-    return;
-  }
+  const { hash, pathname, search } = window.location;
+  if (hash) return;
 
-  const path = window.location.pathname.replace(/\/+$/, '') || '/';
-  const search = window.location.search || '';
-  window.history.replaceState(null, '', `/#${path}${search}`);
-};
+  const base = APP_BASE.endsWith('/') ? APP_BASE : `${APP_BASE}/`;
+  const withoutBase = pathname.startsWith(base) ? pathname.slice(base.length - 1) : pathname;
+  const route = withoutBase.replace(/\/index\.html$/, '').replace(/\/+$/, '') || '/';
+  if (route === '/') return;
 
-// 同步检查是否已登录（避免响应式状态时序问题）
-const checkAuthSync = (): boolean => {
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (isLocallyUsableJwt(token)) return true;
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem('iot_verify_user');
-  return false;
-};
-
-// 在应用启动时清除可能的无效token，确保从登录页面开始
-const clearInvalidTokens = () => {
-  // 如果当前页面不是公开页面但没有token，清除所有认证相关数据
-  const currentPath = (window.location.hash.replace('#', '') || '/').split('?')[0];
-  const isPublicPath = ['/', '/404'].includes(currentPath);
-
-  if (!isPublicPath && !checkAuthSync()) {
-    // 清除可能的无效认证数据
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem('iot_verify_user');
-  }
+  window.history.replaceState(null, '', `${base}#${route}${search}`);
 };
 
 normalizeDirectPathForHashHistory();
@@ -48,13 +50,13 @@ const routes: RouteRecordRaw[] = [
     path: '/board',
     name: 'board',
     component: () => import('../views/Board.vue'),
-    meta: { title: 'IoT-Verify', usesOwnHeader: true }
+    meta: { title: 'IoT-Verify' }
   },
   {
     path: '/404',
     name: '404',
     component: () => import('../views/NotFound.vue'),
-    meta: { title: '404', public: true }
+    meta: { title: 'IoT-Verify · 404', public: true }
   },
   {
     path: '/:catchAll(.*)',
@@ -63,55 +65,61 @@ const routes: RouteRecordRaw[] = [
 ];
 
 const router = createRouter({
+  // No argument: vue-router derives the hash base from location.pathname, which is
+  // correct for both root and sub-path deployments. Passing a relative base breaks it.
   history: createWebHashHistory(),
   routes
 });
 
-// 应用启动时清除无效token
-clearInvalidTokens();
+// The auth store derives its initial state from localStorage at module load, so it is
+// already authoritative here — the guard must not re-read storage and risk disagreeing
+// with the state the rest of the app renders from.
+let navigationInProgress = false;
 
-// 路由守卫 - 使用同步检查避免时序问题
+export const resolveAuthenticatedEntry = (
+  to: Pick<RouteLocationNormalized, 'path' | 'fullPath' | 'meta'>,
+  isLoggedIn: boolean
+): RouteLocationRaw | undefined => {
+  if (to.meta.public) {
+    return isLoggedIn && to.path === '/' ? '/board' : undefined;
+  }
+  return isLoggedIn ? undefined : { path: '/', query: { mode: 'login', redirect: to.fullPath } };
+};
+
 router.beforeEach((to, _from, next) => {
-  // 使用同步检查（直接从localStorage读取，避免响应式状态时序问题）
-  const isLoggedIn = checkAuthSync();
-  const isPublic = to.meta.public as boolean | undefined;
-
-  // 如果是公开页面，直接放行
-  if (isPublic) {
-    // 如果已登录且访问 landing 页，跳转到 board
-    if (isLoggedIn && to.path === '/') {
-      next('/board');
-    } else {
+  // `revalidateSession()` drops a session whose token expired while the tab was open, so
+  // a stale tab cannot navigate into a private route and only then discover it is signed
+  // out. The store stays the single source of truth for that decision.
+  //
+  // It can also flip `isLoggedIn`, which App.vue watches with `flush: 'sync'` — so without this
+  // flag its `router.replace` would run *inside* this guard, building `redirect=` from the route
+  // being left rather than from `to`, and cancelling the in-flight navigation with an unhandled
+  // NavigationAborted. The resolution below already produces the right target from `to`.
+  navigationInProgress = true;
+  try {
+    const target = resolveAuthenticatedEntry(to, useAuth().revalidateSession());
+    if (target === undefined) {
       next();
+      return;
     }
-    return;
-  }
-
-  // 特殊处理根路径重定向
-  if (to.path === '/' || to.path === '') {
-    if (isLoggedIn) {
-      next('/board');
-    } else {
-      next('/'); // 跳转到 Landing 页面
-    }
-    return;
-  }
-
-  // 保护页面需要登录
-  if (!isLoggedIn) {
-    next({ path: '/', query: { mode: 'login', redirect: to.fullPath } });
-  } else {
-    next();
+    next(target);
+  } finally {
+    navigationInProgress = false;
   }
 });
 
-// 路由跳转后清理 URL（移除 ?redirect= 参数）
-router.afterEach((to) => {
-  // 如果刚跳转到 /board 且有 redirect 参数，重定向到纯净的 /board
-  if (to.path === '/board' && to.query.redirect) {
-    router.replace('/board');
-  }
+router.afterEach(to => {
+  if (to.meta.title) document.title = to.meta.title;
 });
+
+/**
+ * True while `beforeEach` is resolving a navigation.
+ *
+ * Read by App.vue's auth watcher: the guard's own `revalidateSession()` can flip `isLoggedIn`
+ * synchronously, and a competing `router.replace` from that watcher would both misbuild `redirect=`
+ * (from the route being left) and abort the navigation the guard is about to answer correctly.
+ */
+export const isNavigationInProgress = () => navigationInProgress;
 
 export { router };
 export default router;

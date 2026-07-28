@@ -376,7 +376,7 @@ Progress stages and outcomes:
 | `CONTEXT_READY` | Request accepted; conversation and Board context are available | — |
 | `TASK_RESUMED` | A confirmed step is resuming the stored original objective; `detail` contains its bounded user-authored summary | — |
 | `PLANNING` | The model is choosing the next tool step for `round` | — |
-| `REASONING` | Before tool execution, `detail` carries the model's bounded, sanitized user-visible summary of the current goal, observed facts, next action, and remaining work | — |
+| `REASONING` | Before tool execution, `detail` carries the model's bounded, sanitized user-visible reasoning: the decomposed question, the observed board facts that constrain it, any alternative rejected and why, and the check of the outcome against what was expected. **Line structure is preserved** and the budget is larger than a tool status line, because this is the only frame carrying an argument rather than a status | — |
 | `TOOL_EXECUTION` | `toolName` has started | — |
 | `TOOL_RESULT` | The tool returned and cumulative counters were updated | **Required:** `USABLE`, `PARTIAL`, `FAILED`, `RESULT_UNAVAILABLE`, or `CONFIRMATION_REQUIRED` |
 | `EXECUTION_GUARD` | Duplicate no-progress execution or the emergency runaway ceiling stopped further calls | **Required:** `NO_PROGRESS` or `EMERGENCY_LIMIT` |
@@ -401,8 +401,15 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   usable evidence.
 - Progress frames arrive before and between potentially slow model/tool calls. They let the UI
   show a full-width ReAct-style record of sanitized reasoning summaries, localized actions,
-  observations, confirmation points, cumulative outcomes, and elapsed time. `REASONING` is an
-  audit-oriented summary requested from the model, not the provider's private hidden chain-of-thought.
+  observations, confirmation points, cumulative outcomes, and elapsed time. `REASONING` is
+  audit-oriented reasoning requested from the model, not the provider's private hidden chain-of-thought.
+  It is asked to *work the problem out* — decompose, cite observed state, name a rejected alternative
+  when the call is a judgement, and verify its own result — rather than narrate the steps it is about
+  to take; a round that returns nothing is reported as such and never replaced with canned wording
+  implying reasoning happened. Sanitization removes confirmation tokens and generated identifiers
+  while leaving ordinary prose intact: the identifier pattern requires a digit, so a compound
+  adjective like "rule-based" is no longer redacted mid-sentence, and over-long reasoning is cut at a
+  sentence or line boundary rather than mid-clause.
   Compatible-provider fields explicitly named as safe summaries (`reasoning_summary`,
   `reasoningSummary`, `reasoning_summary_content`, `analysis_summary`, or
   `analysisSummary`) are accepted through the provider adapter. Raw `reasoning_content`

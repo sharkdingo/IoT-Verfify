@@ -11,11 +11,12 @@ import type { Specification } from '../types/spec'
 import { specTemplateDetails } from '../assets/config/specTemplates'
 import { useI18n } from 'vue-i18n'
 import { buildSpecFormula } from '@/utils/spec'
-import { ElMessage } from 'element-plus'
 import { resolveImpactEnvironmentDefinition } from '@/utils/device'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { hasModeledStateMachine, resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
+import { useRovingTablist } from '@/composables/useRovingTablist'
+import { notifyBlocked } from '@/utils/feedback'
 
 const { t, te } = useI18n()
 
@@ -45,7 +46,6 @@ const props = withDefaults(defineProps<Props>(), {
   rules: () => [],
   specifications: () => [],
   width: 320,
-  activeSection: 'devices',
   readOnly: false,
   readOnlyMessage: '',
   environmentSaving: false,
@@ -54,10 +54,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const ensureWritable = (): boolean => {
   if (!props.readOnly) return true
-  ElMessage.warning({
-    message: props.readOnlyMessage || t('app.playbackReadOnlyCloseFirst'),
-    type: 'warning'
-  })
+  notifyBlocked(props.readOnlyMessage || t('app.playbackReadOnlyCloseFirst'))
   return false
 }
 
@@ -127,6 +124,9 @@ const panelWidth = computed(() => {
 })
 
 const activeSection = computed<InspectorSection>({
+  // `activeSection` is optional: when a parent controls it, the prop is authoritative;
+  // when it is absent the panel owns its own selection. Without this the uncontrolled
+  // case silently ignored every selection change.
   get: () => isInspectorSection(props.activeSection) ? props.activeSection : localActiveSection.value,
   set: (value: InspectorSection) => {
     localActiveSection.value = value
@@ -611,22 +611,11 @@ const inspectorTabs = computed(() => [
   }
 ])
 
-const handleInspectorTabKeydown = (event: KeyboardEvent, section: InspectorSection) => {
-  const currentIndex = inspectorTabs.value.findIndex(tab => tab.id === section)
-  let nextIndex: number | null = null
-  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % inspectorTabs.value.length
-  if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + inspectorTabs.value.length) % inspectorTabs.value.length
-  if (event.key === 'Home') nextIndex = 0
-  if (event.key === 'End') nextIndex = inspectorTabs.value.length - 1
-  if (nextIndex === null) return
-
-  event.preventDefault()
-  const nextTab = inspectorTabs.value[nextIndex]
-  if (!nextTab) return
-  activeSection.value = nextTab.id
-  const tablist = (event.currentTarget as HTMLElement).closest('[role="tablist"]')
-  tablist?.querySelector<HTMLElement>(`#inspector-tab-${nextTab.id}`)?.focus()
-}
+const { handleTablistKeydown: handleInspectorTabKeydown } = useRovingTablist<InspectorSection>({
+  tabIds: () => inspectorTabs.value.map(tab => tab.id),
+  select: id => { activeSection.value = id },
+  tabElementId: id => `inspector-tab-${id}`
+})
 
 // Methods
 const handleDeleteDevice = (deviceId: string) => {

@@ -47,6 +47,49 @@ describe('App route lifecycle', () => {
     auth.logout()
   })
 
+  it('keeps a private route mounted across query changes within the same view', async () => {
+    const boardMounted = vi.fn()
+    const boardUnmounted = vi.fn()
+    const BoardRoute = defineComponent({
+      setup() {
+        onMounted(boardMounted)
+        onBeforeUnmount(boardUnmounted)
+        return () => h('div', 'board')
+      },
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/board', name: 'board', component: BoardRoute }],
+    })
+    const auth = useAuth()
+    auth.login('alice-token', {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice',
+    })
+
+    await router.push('/board')
+    await router.isReady()
+    const wrapper = mount(App, { global: { plugins: [router, i18n] } })
+    await flushPromises()
+    expect(boardMounted).toHaveBeenCalledOnce()
+
+    // Query params address content *within* a view (the board's open run). Remounting on
+    // every param change would discard the state the URL exists to restore.
+    await router.push('/board?run=verification:12')
+    await flushPromises()
+    await router.push('/board?run=verification:12&trace=34')
+    await flushPromises()
+    await router.push('/board')
+    await flushPromises()
+
+    expect(boardUnmounted).not.toHaveBeenCalled()
+    expect(boardMounted).toHaveBeenCalledOnce()
+
+    wrapper.unmount()
+    auth.logout()
+  })
+
   it('remounts a private route when the authenticated user changes', async () => {
     const boardMounted = vi.fn()
     const boardUnmounted = vi.fn()

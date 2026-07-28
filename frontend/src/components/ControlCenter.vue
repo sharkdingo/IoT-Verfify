@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onBeforeUnmount, onMounted, useAttrs, watch } from 'vue'
-import { ElMessage as ElMessageRaw } from 'element-plus'
 import { 
   specTemplateDetails, 
   relationOperators, 
@@ -51,12 +50,14 @@ import { localizedErrorMessage } from '@/utils/userMessage'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
+import { notifyBlocked, notifyError, notifySuccess } from '@/utils/feedback'
+import { useRovingTablist } from '@/composables/useRovingTablist'
+import InfoTooltip from '@/components/common/InfoTooltip.vue'
 
 defineOptions({ inheritAttrs: false })
 const attrs = useAttrs()
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
-const ElMessage = ElMessageRaw as any
 const { t, locale } = useI18n()
 
 const targetTypeLabelKeys: Record<string, string> = {
@@ -102,17 +103,13 @@ const props = withDefaults(defineProps<Props>(), {
   canvasPan: () => ({ x: 0, y: 0 }),
   canvasZoom: 1,
   width: 320,
-  activeSection: 'templates',
   templatesLoading: false,
   readOnly: false
 })
 
 const ensureWritable = (): boolean => {
   if (!props.readOnly) return true
-  ElMessage.warning({
-    message: props.readOnlyMessage || t('app.playbackReadOnlyCloseFirst'),
-    type: 'warning'
-  })
+  notifyBlocked(props.readOnlyMessage || t('app.playbackReadOnlyCloseFirst'))
   return false
 }
 
@@ -984,7 +981,7 @@ const openConditionDialog = (side: SpecSide, index: number = -1) => {
   if (!ensureWritable()) return
   if (creatingSpecification.value) return
   if (index < 0 && getConditionsForSide(side).length >= REQUEST_LIMITS.specificationConditions) {
-    ElMessage.warning(t('app.itemLimitReached', {
+    notifyBlocked(t('app.itemLimitReached', {
       resource: t('app.specificationConditions'),
       limit: REQUEST_LIMITS.specificationConditions
     }))
@@ -1015,61 +1012,39 @@ const openConditionDialog = (side: SpecSide, index: number = -1) => {
   showSpecDialog.value = true
 }
 
+/**
+ * Why the condition cannot be saved yet, or `null` when it is valid. Drives both the submit
+ * button's disabled state and the inline message, so the two can never disagree — and so the
+ * reason appears next to the form instead of in a toast the user must read before it fades.
+ */
+const specConditionBlockedReason = computed<string | null>(() => {
+  const draft = editingConditionData
+  if (!draft.deviceId) return t('app.selectDevice')
+  if (!draft.targetType) return t('app.selectType')
+  if (draft.targetType !== 'state' && !draft.key?.trim()) return t('app.selectProperty')
+  if ((draft.targetType === 'trust' || draft.targetType === 'privacy')
+    && !['state', 'variable'].includes(draft.propertyScope || '')) {
+    return t('app.selectProperty')
+  }
+  // An API condition only records that the API was called, so it carries no value.
+  if (draft.targetType !== 'api' && !draft.value?.trim()) return t('app.enterValue')
+  return null
+})
+
 // Save condition from dialog
 const saveCondition = () => {
   if (!ensureWritable()) return
-  if (!editingConditionData.deviceId) {
-    ElMessage.warning({
-      message: t('app.selectDevice'),
-      center: true
-    })
-    return
-  }
-  if (!editingConditionData.targetType) {
-    ElMessage.warning({
-      message: t('app.selectType'),
-      center: true
-    })
-    return
-  }
-  if (editingConditionData.targetType !== 'state' && !editingConditionData.key) {
-    ElMessage.warning({
-      message: t('app.selectProperty'),
-      center: true
-    })
-    return
-  }
-  if ((editingConditionData.targetType === 'trust' || editingConditionData.targetType === 'privacy')
-    && !['state', 'variable'].includes(editingConditionData.propertyScope || '')) {
-    ElMessage.warning({ message: t('app.selectProperty'), center: true })
-    return
-  }
-
-  // value 不能为空，否则后端验证会失败
-  // 但 API 类型只需要检查 API 是否被调用，不需要具体的 value
-  if (editingConditionData.targetType !== 'api') {
-    if (!editingConditionData.value || !editingConditionData.value.trim()) {
-      ElMessage.warning({
-        message: t('app.enterValue'),
-        center: true
-      })
-      return
-    }
-  }
+  // Reported inline by `specConditionBlockedReason`, which also disables the submit button.
+  if (specConditionBlockedReason.value) return
+  const deviceId = editingConditionData.deviceId
+  if (!deviceId) return
 
   // key 不能为空，否则后端验证会失败。
   // 对于 full-state 条件，key 固定为 state；mode/variable/api/trust/privacy 都必须选择具体属性。
+  // A blank key is already reported inline above, so there is no toast here.
   const keyValue = editingConditionData.targetType === 'state'
     ? 'state'
-    : (editingConditionData.key || '')
-
-  if (!keyValue.trim()) {
-    ElMessage.warning({
-      message: t('app.selectProperty'),
-      center: true
-    })
-    return
-  }
+    : (editingConditionData.key || '').trim()
 
   const device = deviceNodes.value.find(n => n.id === editingConditionData.deviceId)
 
@@ -1082,8 +1057,8 @@ const saveCondition = () => {
   const condition: SpecCondition = {
     id: editingConditionData.id || generateConditionId(),
     side: editingConditionSide.value,
-    deviceId: editingConditionData.deviceId,
-    deviceLabel: device?.label || editingConditionData.deviceId,
+    deviceId,
+    deviceLabel: device?.label || deviceId,
     targetType: editingConditionData.targetType || 'state',
     key: keyValue,
     ...((editingConditionData.targetType === 'trust' || editingConditionData.targetType === 'privacy')
@@ -1141,7 +1116,10 @@ const removeCondition = (side: SpecSide, index: number) => {
 // Get device display name
 const getDeviceLabel = (deviceId: string) => {
   const device = deviceNodes.value.find(n => n.id === deviceId)
-  return device?.label || t('app.unknownModelItem')
+  // A deleted device and a device with no label are different problems, and only the first is the
+  // user's to fix, so they must not render identically.
+  if (!device) return t('app.deletedModelItem')
+  return device.label || t('app.unknownModelItem')
 }
 
 // Get device template
@@ -1599,32 +1577,47 @@ const handleTemplateChange = () => {
   }
 }
 
-// Validate specification before creation
-const validateSpecification = () => {
-  if (!specForm.templateId) {
-    ElMessage.warning({
-      message: t('app.selectSpecTemplate'),
-      center: true
-    })
-    return false
-  }
-  
+/**
+ * Why the specification cannot be created yet, or `null` when it is complete. Drives both the
+ * create button's disabled state and the inline message beneath it, so the requirement is
+ * visible while the user works instead of flashing past in a toast.
+ */
+/**
+ * Draft conditions hold `deviceId` references captured when the condition was saved. A device
+ * deleted afterwards — from the canvas, another tab, the assistant, or an undo — leaves the row
+ * pointing at nothing. Without this the Create button stayed enabled, the backend refused the
+ * request, and the user got an opaque toast naming no row.
+ */
+const specConditionsMissingDevices = computed(() => Array.from(new Set(
+  [...specForm.aConditions, ...specForm.ifConditions, ...specForm.thenConditions]
+    .map(condition => condition.deviceId)
+    .filter(deviceId => deviceId && !deviceNodes.value.some(node => node.id === deviceId))
+)))
+
+const isSpecConditionDeviceMissing = (deviceId: string) =>
+  Boolean(deviceId) && !deviceNodes.value.some(node => node.id === deviceId)
+
+const specificationBlockedReason = computed<string | null>(() => {
+  if (!specForm.templateId) return t('app.selectSpecTemplate')
   const template = currentTemplateDetail.value
-  if (!template) return false
-  
-  // Check required conditions
+  if (!template) return t('app.selectSpecTemplate')
   for (const side of template.requiredSides) {
-    const conditions = getConditionsForSide(side)
-    if (conditions.length === 0) {
-      ElMessage.warning({
-        message: t('app.addConditionForSide', { side: side.toUpperCase() }),
-        center: true
-      })
-      return false
+    if (getConditionsForSide(side).length === 0) {
+      return t('app.addConditionForSide', { side: side.toUpperCase() })
     }
   }
-  
-  return true
+  if (specConditionsMissingDevices.value.length > 0) {
+    return t('app.specConditionDeviceMissing', {
+      count: specConditionsMissingDevices.value.length
+    })
+  }
+  return null
+})
+
+// Validate specification before creation
+const validateSpecification = () => {
+  // Reported inline by `specificationBlockedReason`, which also disables the create button.
+  return specificationBlockedReason.value === null
 }
 
 // Create specification
@@ -1671,25 +1664,12 @@ const resetSpecForm = () => {
 const handleCreateDevice = async () => {
   if (!ensureWritable()) return
   if (creatingSingleDevice.value) return
-  if (!deviceForm.name.trim()) {
-    ElMessage({
-      message: t('app.enterDeviceName'),
-      type: 'warning',
-      center: true
-    })
-    return
-  }
-  if (singleDeviceNameConflict.value) {
-    ElMessage({ message: t('app.deviceNameAlreadyExists'), type: 'warning', center: true })
-    return
-  }
+  // Name problems are reported inline next to the field, and the submit button is disabled
+  // while either holds, so there is nothing left to announce here.
+  if (!deviceForm.name.trim() || singleDeviceNameConflict.value) return
 
   if (!deviceForm.type) {
-    ElMessage({
-      message: t('app.selectDeviceTemplate'),
-      type: 'warning',
-      center: true
-    })
+    notifyBlocked(t('app.selectDeviceTemplate'))
     return
   }
 
@@ -1706,13 +1686,9 @@ const handleCreateDevice = async () => {
   }
 
   if (!template) {
-    ElMessage({
-      message: props.templatesLoading
+    notifyError(props.templatesLoading
         ? t('app.loadingDeviceTemplates')
-        : t('app.templateNotFoundWithName', { name: deviceForm.type || t('app.unknown') }),
-      type: 'error',
-      center: true
-    })
+        : t('app.templateNotFoundWithName', { name: deviceForm.type || t('app.unknown') }))
     return
   }
 
@@ -1738,24 +1714,12 @@ const handleCreateDevice = async () => {
 const handleCreateBatchDevices = async () => {
   if (!ensureWritable()) return
   if (creatingMultipleDevices.value) return
-  if (batchDeviceCountError.value) {
-    ElMessage({ message: batchDeviceCountError.value, type: 'warning', center: true })
-    return
-  }
-  if (!batchDeviceForm.type) {
-    ElMessage({ message: t('app.selectDeviceTemplate'), type: 'warning', center: true })
-    return
-  }
-  if (!normalizeName(batchDeviceForm.prefix)) {
-    ElMessage({ message: t('app.enterDeviceNamePrefix'), type: 'warning', center: true })
-    return
-  }
+  // The count error is shown inline, and an empty preview (missing template, blank prefix, or
+  // an invalid count) already disables the submit button, so nothing needs announcing here.
+  if (batchDeviceCountError.value) return
 
   const items = batchDevicePreview.value
-  if (items.length === 0) {
-    ElMessage({ message: t('app.noDevicesToCreate'), type: 'warning', center: true })
-    return
-  }
+  if (items.length === 0) return
 
   creatingMultipleDevices.value = true
   await new Promise<boolean>(resolve => emit('create-devices', { items, complete: resolve }))
@@ -1765,26 +1729,12 @@ const handleCreateBatchDevices = async () => {
 const handleCreateImportedDevices = async () => {
   if (!ensureWritable()) return
   if (creatingMultipleDevices.value) return
-  if (!importDeviceForm.text.trim()) {
-    ElMessage({ message: t('app.pasteDeviceImportList'), type: 'warning', center: true })
-    return
-  }
-  if (importedEnvironmentMerge.value.conflicts.length > 0) {
-    ElMessage({
-      message: formatImportedEnvironmentConflict(importedEnvironmentMerge.value.conflicts[0]),
-      type: 'warning',
-      center: true
-    })
-    return
-  }
-  if (importedDevicesHaveErrors.value) {
-    ElMessage({ message: t('app.fixDeviceImportErrors'), type: 'warning', center: true })
-    return
-  }
-  if (validImportedDevices.value.length === 0) {
-    ElMessage({ message: t('app.noDevicesToCreate'), type: 'warning', center: true })
-    return
-  }
+  // Per-row parse errors and environment conflicts are already listed above the button, which
+  // stays disabled while any of them holds — so there is nothing left to announce.
+  if (!importDeviceForm.text.trim()
+    || importedEnvironmentMerge.value.conflicts.length > 0
+    || importedDevicesHaveErrors.value
+    || validImportedDevices.value.length === 0) return
 
   creatingMultipleDevices.value = true
   await new Promise<boolean>(resolve => {
@@ -1811,13 +1761,13 @@ const handleDeviceImportFile = async (event: Event) => {
   }
   try {
     if (file.size > MAX_DEVICE_IMPORT_BYTES) {
-      ElMessage.error({ message: t('app.importFileTooLarge', { size: '4 MiB' }), type: 'error' })
+      notifyError(t('app.importFileTooLarge', { size: '4 MiB' }))
       return
     }
     importDeviceForm.text = await file.text()
   } catch (error) {
     console.error('Failed to read device import file:', error)
-    ElMessage.error({ message: t('app.invalidJsonFile'), type: 'error' })
+    notifyError(t('app.invalidJsonFile'))
   } finally {
     target.value = ''
   }
@@ -1859,11 +1809,29 @@ const isCollapsed = computed({
 })
 
 const activeSection = computed<ControlCenterSection>({
+  // `activeSection` is optional: when a parent controls it, the prop is authoritative;
+  // when it is absent the panel owns its own selection. Without this the uncontrolled
+  // case silently ignored every selection change.
   get: () => isControlCenterSection(props.activeSection) ? props.activeSection : localActiveSection.value,
   set: (value: ControlCenterSection) => {
     localActiveSection.value = value
     emit('update:active-section', value)
   }
+})
+
+// Mirrors SystemInspector's tab strip so both side panels expose the same tablist
+// semantics and keyboard model.
+const controlTabs = computed(() => [
+  { id: 'templates' as const, label: t('app.templates'), icon: 'inventory_2', activeClass: 'bg-orange-700 text-white shadow-md' },
+  { id: 'devices' as const, label: t('app.devices'), icon: 'devices', activeClass: 'bg-purple-700 text-white shadow-md' },
+  { id: 'rules' as const, label: t('app.rules'), icon: 'rule', activeClass: 'bg-blue-700 text-white shadow-md' },
+  { id: 'specs' as const, label: t('app.specifications'), icon: 'verified', activeClass: 'bg-red-700 text-white shadow-md' }
+])
+
+const { handleTablistKeydown: handleControlTabKeydown } = useRovingTablist<ControlCenterSection>({
+  tabIds: () => controlTabs.value.map(tab => tab.id),
+  select: id => { activeSection.value = id },
+  tabElementId: id => `control-tab-${id}`
 })
 
 const panelWidth = computed(() => {
@@ -1951,7 +1919,7 @@ const handleImportTemplate = async (event: Event) => {
   if (!file) return
 
   if (file.size > MAX_TEMPLATE_IMPORT_BYTES) {
-    ElMessage.error({ message: t('app.importFileTooLarge', { size: '512 KiB' }), type: 'error' })
+    notifyError(t('app.importFileTooLarge', { size: '512 KiB' }))
     target.value = ''
     return
   }
@@ -1964,7 +1932,7 @@ const handleImportTemplate = async (event: Event) => {
     requestedName = String(manifest?.Name || '').trim()
   } catch (error: any) {
     const message = templateMutationErrorMessage(error, t('app.invalidJsonFile'))
-    ElMessage.error({ message, type: 'error' })
+    notifyError(message)
     target.value = ''
     return
   }
@@ -1982,26 +1950,23 @@ const handleImportTemplate = async (event: Event) => {
       await boardApi.addDeviceTemplate({ name: requestedName, manifest })
       const current = await boardApi.getDeviceTemplates()
       emit('replace-template-catalog', current)
-      ElMessage.success({ message: t('app.templateImportedSuccessfully'), type: 'success' })
+      notifySuccess(t('app.templateImportedSuccessfully'))
     } catch (error: any) {
       if (!isDefinitiveTemplateMutationRejection(error)) {
         const current = await refreshTemplateCatalogForReconciliation()
         if (!current) {
           emit('authoritative-state-unavailable', ['templates'])
-          ElMessage.warning({ message: t('app.templateMutationOutcomeUnknownRefreshFailed'), type: 'warning' })
+          notifyBlocked(t('app.templateMutationOutcomeUnknownRefreshFailed'))
         } else if (current.some(template =>
           String(template.name || template.manifest?.Name || '').trim().toLocaleLowerCase()
             === requestedName.toLocaleLowerCase())) {
-          ElMessage.warning({
-            message: t('app.templateImportOutcomeRefreshed', { name: requestedName }),
-            type: 'warning'
-          })
+          notifyBlocked(t('app.templateImportOutcomeRefreshed', { name: requestedName }))
         } else {
-          ElMessage.warning({ message: t('app.templateImportOutcomeUnconfirmedAfterRefresh'), type: 'warning' })
+          notifyBlocked(t('app.templateImportOutcomeUnconfirmedAfterRefresh'))
         }
       } else {
         const message = templateMutationErrorMessage(error, t('app.invalidJsonFile'))
-        ElMessage.error({ message, type: 'error' })
+        notifyError(message)
       }
     }
   })
@@ -2022,7 +1987,7 @@ const downloadTemplateSchema = async () => {
     URL.revokeObjectURL(url)
   } catch (error) {
     console.error('Failed to download template schema:', error)
-    ElMessage.error({ message: t('app.downloadSchemaFailed'), type: 'error' })
+    notifyError(t('app.downloadSchemaFailed'))
   }
 }
 
@@ -2045,7 +2010,7 @@ const openDeleteConfirm = async (template: any) => {
   closeTemplatePreview()
   const templateId = Number(template?.id)
   if (!Number.isSafeInteger(templateId) || templateId <= 0) {
-    ElMessage.error(t('app.invalidTemplateId'))
+    notifyError(t('app.invalidTemplateId'))
     return
   }
   isLoadingTemplateDeletePreview.value = true
@@ -2057,10 +2022,7 @@ const openDeleteConfirm = async (template: any) => {
     showDeleteConfirmDialog.value = true
   } catch (error: any) {
     console.error('Failed to preview template deletion:', error)
-    ElMessage.error({
-      message: templateMutationErrorMessage(error, t('app.templateDeletePreviewFailed')),
-      type: 'error'
-    })
+    notifyError(templateMutationErrorMessage(error, t('app.templateDeletePreviewFailed')))
   } finally {
     isLoadingTemplateDeletePreview.value = false
   }
@@ -2095,10 +2057,7 @@ const openResetDefaultsConfirm = async () => {
     showResetDefaultsConfirmDialog.value = true
   } catch (error: any) {
     console.error('Failed to preview default template reset:', error)
-    ElMessage.error({
-      message: templateMutationErrorMessage(error, t('app.defaultTemplateResetPreviewFailed')),
-      type: 'error'
-    })
+    notifyError(templateMutationErrorMessage(error, t('app.defaultTemplateResetPreviewFailed')))
   } finally {
     isLoadingDefaultTemplateResetPreview.value = false
   }
@@ -2121,14 +2080,11 @@ const confirmResetDefaultTemplates = async () => {
         const successMessageKey = defaultTemplateResetChangesBoardModel(result)
           ? 'app.defaultTemplatesResetSuccessReverificationRequired'
           : 'app.defaultTemplatesResetSuccess'
-        ElMessage.success({
-          message: t(successMessageKey, {
+        notifySuccess(t(successMessageKey, {
             types: result.templateChanges.length,
             devices: result.affectedDevices.length,
             variables: result.environmentChanges.length
-          }),
-          center: true
-        })
+          }))
         closeResetDefaultsConfirm(true)
       } catch (error: any) {
         console.error('Failed to reset default templates:', error)
@@ -2139,27 +2095,24 @@ const confirmResetDefaultTemplates = async () => {
               boardApi.getEnvironment()
             ])
             emit('replace-template-state', { templates, environmentVariables })
-            ElMessage.warning({ message: t('app.templateResetOutcomeRefreshed'), center: true })
+            notifyBlocked(t('app.templateResetOutcomeRefreshed'))
             closeResetDefaultsConfirm(true)
           } catch (refreshError) {
             console.error('Failed to reconcile default template reset:', refreshError)
             emit('authoritative-state-unavailable', ['templates', 'environment'])
-            ElMessage.warning({ message: t('app.templateMutationOutcomeUnknownRefreshFailed'), center: true })
+            notifyBlocked(t('app.templateMutationOutcomeUnknownRefreshFailed'))
           }
         } else if (Number(error?.response?.status) === 409) {
           try {
             defaultTemplateResetPreview.value = await boardApi.previewDefaultTemplateReset()
-            ElMessage.warning({ message: t('app.defaultTemplateResetPreviewChanged'), center: true })
+            notifyBlocked(t('app.defaultTemplateResetPreviewChanged'))
           } catch (previewError) {
             console.error('Failed to refresh default template reset preview:', previewError)
-            ElMessage.error({ message: t('app.defaultTemplateResetPreviewFailed'), center: true })
+            notifyError(t('app.defaultTemplateResetPreviewFailed'))
           }
         } else {
           const errorMessage = templateMutationErrorMessage(error, t('app.unknownError'))
-          ElMessage.error({
-            message: t('app.resetDefaultTemplatesFailedWithReason', { reason: errorMessage }),
-            center: true
-          })
+          notifyError(t('app.resetDefaultTemplatesFailedWithReason', { reason: errorMessage }))
         }
       }
     })
@@ -2249,12 +2202,12 @@ const confirmDeleteTemplate = async () => {
   const templateId = Number(templateToDelete.value.id)
   const templateName = String(templateToDelete.value.name || templateToDelete.value.manifest?.Name || '').trim()
   if (!Number.isSafeInteger(templateId) || templateId <= 0) {
-    ElMessage.error(t('app.invalidTemplateId'))
+    notifyError(t('app.invalidTemplateId'))
     return
   }
 
   if (!templateDeletePreview.value.canDelete) {
-    ElMessage.warning(t('app.templateDeleteBlocked'))
+    notifyBlocked(t('app.templateDeleteBlocked'))
     return
   }
 
@@ -2267,11 +2220,7 @@ const confirmDeleteTemplate = async () => {
         templateDeletePreview.value!.impactToken
       )
       emit('replace-template-catalog', result.currentTemplates)
-      ElMessage({
-        message: t('app.templateDeleted', { name: result.deletedTemplate?.name || templateName }),
-        type: 'success',
-        center: true
-      })
+      notifySuccess(t('app.templateDeleted', { name: result.deletedTemplate?.name || templateName }))
       closeTemplateDeleteConfirm(true)
     } catch (error: any) {
       console.error('Failed to delete template:', error)
@@ -2279,39 +2228,28 @@ const confirmDeleteTemplate = async () => {
       if (conflict.preview) {
         templateDeletePreview.value = conflict.preview
         templateToDelete.value = conflict.preview.template
-        ElMessage.warning({ message: t('app.templateDeletePreviewChanged'), center: true })
+        notifyBlocked(t('app.templateDeletePreviewChanged'))
         return
       }
       if (conflict.conflictPayload || !isDefinitiveTemplateMutationRejection(error)) {
         const current = await refreshTemplateCatalogForReconciliation()
         if (!current) {
           emit('authoritative-state-unavailable', ['templates'])
-          ElMessage.warning({ message: t('app.templateMutationOutcomeUnknownRefreshFailed'), center: true })
+          notifyBlocked(t('app.templateMutationOutcomeUnknownRefreshFailed'))
           if (conflict.conflictPayload) closeTemplateDeleteConfirm(true)
         } else if (!current.some(template => Number(template.id) === templateId)) {
-          ElMessage.warning({
-            message: t('app.templateDeleteOutcomeRefreshed', { name: templateName }),
-            center: true
-          })
+          notifyBlocked(t('app.templateDeleteOutcomeRefreshed', { name: templateName }))
           closeTemplateDeleteConfirm(true)
         } else if (conflict.conflictPayload) {
           const errorMessage = t('app.boardMutationResponseIncomplete')
-          ElMessage({
-            message: t('app.deleteFailedWithReason', { reason: errorMessage }),
-            type: 'error',
-            center: true
-          })
+          notifyError(t('app.deleteFailedWithReason', { reason: errorMessage }))
           closeTemplateDeleteConfirm(true)
         } else {
-          ElMessage.warning({ message: t('app.templateDeleteOutcomeUnconfirmedAfterRefresh'), center: true })
+          notifyBlocked(t('app.templateDeleteOutcomeUnconfirmedAfterRefresh'))
         }
       } else {
         const errorMessage = templateMutationErrorMessage(error, t('app.unknownError'))
-        ElMessage({
-          message: t('app.deleteFailedWithReason', { reason: errorMessage }),
-          type: 'error',
-          center: true
-        })
+        notifyError(t('app.deleteFailedWithReason', { reason: errorMessage }))
       }
     }
     })
@@ -2334,16 +2272,10 @@ const exportTemplate = (template: any) => {
     linkElement.setAttribute('download', exportFileDefaultName)
     linkElement.click()
 
-    ElMessage.success({
-      message: t('app.templateDownloadStarted'),
-      center: true
-    })
+    notifySuccess(t('app.templateDownloadStarted'))
   } catch (error) {
     console.error('Failed to export template:', error)
-    ElMessage.error({
-      message: t('app.exportFailed'),
-      center: true
-    })
+    notifyError(t('app.exportFailed'))
   }
 }
 
@@ -2410,62 +2342,33 @@ watch(() => props.readOnly, readOnly => {
 
     <!-- Section tabs (only when expanded) -->
     <div v-if="!isCollapsed" class="board-panel-tabs px-4 py-3 border-b">
-      <div class="board-segmented grid grid-cols-4 gap-2 p-1 rounded-xl border shadow-sm">
+      <div
+        class="board-segmented grid grid-cols-4 gap-2 p-1 rounded-xl border shadow-sm"
+        role="tablist"
+        :aria-label="t('app.boardTools')"
+      >
         <button
-          @click="activeSection = 'templates'"
-          data-testid="control-tab-templates"
+          v-for="tab in controlTabs"
+          :key="tab.id"
+          :id="`control-tab-${tab.id}`"
+          type="button"
+          role="tab"
+          :data-testid="`control-tab-${tab.id}`"
+          :aria-selected="activeSection === tab.id"
+          :aria-controls="activeSection === tab.id ? `control-section-${tab.id}` : undefined"
+          :tabindex="activeSection === tab.id ? 0 : -1"
+          @click="activeSection = tab.id"
+          @keydown="handleControlTabKeydown($event, tab.id)"
           :class="[
             'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
-            activeSection === 'templates'
-              ? 'bg-orange-700 text-white shadow-md'
+            activeSection === tab.id
+              ? tab.activeClass
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
-          :title="t('app.templates')"
+          :title="tab.label"
         >
-          <span class="material-symbols-outlined text-sm">inventory_2</span>
-          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.templates') }}</span>
-        </button>
-        <button
-          @click="activeSection = 'devices'"
-          data-testid="control-tab-devices"
-          :class="[
-            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
-            activeSection === 'devices'
-              ? 'bg-purple-700 text-white shadow-md'
-              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
-          ]"
-          :title="t('app.devices')"
-        >
-          <span class="material-symbols-outlined text-sm">devices</span>
-          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.devices') }}</span>
-        </button>
-        <button
-          @click="activeSection = 'rules'"
-          data-testid="control-tab-rules"
-          :class="[
-            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
-            activeSection === 'rules'
-              ? 'bg-blue-700 text-white shadow-md'
-              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
-          ]"
-          :title="t('app.rules')"
-        >
-          <span class="material-symbols-outlined text-sm">rule</span>
-          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.rules') }}</span>
-        </button>
-        <button
-          @click="activeSection = 'specs'"
-          data-testid="control-tab-specs"
-          :class="[
-            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
-            activeSection === 'specs'
-              ? 'bg-red-700 text-white shadow-md'
-              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
-          ]"
-          :title="t('app.specifications')"
-        >
-          <span class="material-symbols-outlined text-sm">verified</span>
-          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.specifications') }}</span>
+          <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
+          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ tab.label }}</span>
         </button>
       </div>
     </div>
@@ -2475,7 +2378,14 @@ watch(() => props.readOnly, readOnly => {
       class="board-panel-body flex-1 overflow-y-auto custom-scrollbar transition-all duration-300 max-h-[calc(100vh-140px)] p-2"
     >
       <!-- Devices -->
-      <details v-if="activeSection === 'devices'" data-testid="control-section-devices" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+      <div
+        v-if="activeSection === 'devices'"
+        id="control-section-devices"
+        role="tabpanel"
+        aria-labelledby="control-tab-devices"
+        data-testid="control-section-devices"
+      >
+        <details class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-purple-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-purple-500 rounded-xl flex items-center justify-center">
@@ -2556,10 +2466,18 @@ watch(() => props.readOnly, readOnly => {
                     : 'border-slate-200 focus:border-purple-400 focus:ring-purple-100/50'"
                   :placeholder="t('app.deviceNamePlaceholder')"
                   :title="deviceForm.name || t('app.deviceNamePlaceholder')"
+                  :aria-invalid="singleDeviceNameConflict ? 'true' : undefined"
+                  :aria-describedby="singleDeviceNameConflict ? 'single-device-name-conflict' : undefined"
                   type="text"
                 />
               </div>
-              <p v-if="singleDeviceNameConflict" class="mt-1 text-[10px] font-semibold text-red-600" data-testid="single-device-name-conflict">
+              <p
+                v-if="singleDeviceNameConflict"
+                id="single-device-name-conflict"
+                role="alert"
+                class="mt-1 text-[10px] font-semibold text-red-600"
+                data-testid="single-device-name-conflict"
+              >
                 {{ t('app.deviceNameAlreadyExists') }}
               </p>
             </div>
@@ -2735,8 +2653,15 @@ watch(() => props.readOnly, readOnly => {
                   type="number"
                   min="1"
                   :max="MAX_BATCH_DEVICE_COUNT"
+                  :aria-invalid="batchDeviceCountError ? 'true' : undefined"
+                  :aria-describedby="batchDeviceCountError ? 'batch-device-count-error' : undefined"
                 />
-                <p v-if="batchDeviceCountError" class="mt-1 text-[10px] font-semibold leading-4 text-red-600">
+                <p
+                  v-if="batchDeviceCountError"
+                  id="batch-device-count-error"
+                  role="alert"
+                  class="mt-1 text-[10px] font-semibold leading-4 text-red-600"
+                >
                   {{ batchDeviceCountError }}
                 </p>
               </div>
@@ -2781,16 +2706,12 @@ watch(() => props.readOnly, readOnly => {
               <span class="min-w-0 flex-1 truncate" :title="t('app.deviceImportShortHint')">
                 {{ t('app.deviceImportShortHint') }}
               </span>
-              <button
-                type="button"
-                class="device-import-help__trigger"
-                :aria-label="t('app.deviceImportHelpTitle')"
-              >
-                <span class="material-symbols-outlined text-sm" aria-hidden="true">help</span>
-                <span class="device-import-help__tooltip" role="tooltip">
-                  {{ t('app.deviceImportHint') }}
-                </span>
-              </button>
+              <InfoTooltip
+                :text="t('app.deviceImportHint')"
+                :label="t('app.deviceImportHelpTitle')"
+                placement="bottom-end"
+                test-id="device-import-help"
+              />
             </div>
             <div class="flex items-center justify-between gap-2">
               <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-purple-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-purple-700 transition-colors hover:bg-purple-50">
@@ -2840,7 +2761,7 @@ watch(() => props.readOnly, readOnly => {
             <button
               @click="handleCreateImportedDevices"
               data-testid="device-import-create"
-              :disabled="validImportedDevices.length === 0 || importedDevicesHaveErrors || creatingMultipleDevices"
+              :disabled="validImportedDevices.length === 0 || importedDevicesHaveErrors || importedEnvironmentMerge.conflicts.length > 0 || creatingMultipleDevices"
               class="w-full py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-300 disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
             >
               <span class="material-symbols-outlined text-sm">library_add</span>
@@ -2849,9 +2770,17 @@ watch(() => props.readOnly, readOnly => {
           </fieldset>
         </div>
       </details>
+      </div>
 
       <!-- Templates -->
-      <div v-if="activeSection === 'templates'" data-testid="control-section-templates" class="space-y-3">
+      <div
+        v-if="activeSection === 'templates'"
+        id="control-section-templates"
+        role="tabpanel"
+        aria-labelledby="control-tab-templates"
+        data-testid="control-section-templates"
+        class="space-y-3"
+      >
         <details data-testid="control-template-create" class="group rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
           <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-orange-50 transition-all list-none select-none">
             <div class="flex items-center gap-3">
@@ -3092,7 +3021,14 @@ watch(() => props.readOnly, readOnly => {
       </div>
 
       <!-- Rules -->
-      <details v-if="activeSection === 'rules'" data-testid="control-section-rules" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+      <div
+        v-if="activeSection === 'rules'"
+        id="control-section-rules"
+        role="tabpanel"
+        aria-labelledby="control-tab-rules"
+        data-testid="control-section-rules"
+      >
+        <details class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-blue-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center">
@@ -3131,9 +3067,17 @@ watch(() => props.readOnly, readOnly => {
           </button>
         </div>
       </details>
+      </div>
 
       <!-- Specs -->
-      <details v-if="activeSection === 'specs'" data-testid="control-section-specs" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+      <div
+        v-if="activeSection === 'specs'"
+        id="control-section-specs"
+        role="tabpanel"
+        aria-labelledby="control-tab-specs"
+        data-testid="control-section-specs"
+      >
+        <details class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-red-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-red-500 rounded-xl flex items-center justify-center">
@@ -3220,7 +3164,13 @@ watch(() => props.readOnly, readOnly => {
                         </svg>
                       </div>
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
-                        <span class="text-[10px] text-slate-700 font-medium truncate min-w-0" :title="getDeviceLabel(condition.deviceId)">
+                        <span
+                          class="text-[10px] font-medium truncate min-w-0"
+                          :class="isSpecConditionDeviceMissing(condition.deviceId)
+                            ? 'text-red-600 line-through dark:text-red-300'
+                            : 'text-slate-700'"
+                          :title="getDeviceLabel(condition.deviceId)"
+                        >
                           {{ getDeviceLabel(condition.deviceId) }}
                         </span>
                         <span class="text-slate-300 flex-shrink-0">·</span>
@@ -3234,12 +3184,24 @@ watch(() => props.readOnly, readOnly => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button @click="openConditionDialog('a', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" :title="t('app.edit')">
+                      <button
+                        type="button"
+                        @click="openConditionDialog('a', index)"
+                        class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                        :title="t('app.edit')"
+                        :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
+                      >
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
                       </button>
-                      <button @click="removeCondition('a', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" :title="t('app.delete')">
+                      <button
+                        type="button"
+                        @click="removeCondition('a', index)"
+                        class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                        :title="t('app.delete')"
+                        :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
+                      >
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                         </svg>
@@ -3287,7 +3249,13 @@ watch(() => props.readOnly, readOnly => {
                         </svg>
                       </div>
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
-                        <span class="text-[10px] text-slate-700 font-medium truncate min-w-0" :title="getDeviceLabel(condition.deviceId)">
+                        <span
+                          class="text-[10px] font-medium truncate min-w-0"
+                          :class="isSpecConditionDeviceMissing(condition.deviceId)
+                            ? 'text-red-600 line-through dark:text-red-300'
+                            : 'text-slate-700'"
+                          :title="getDeviceLabel(condition.deviceId)"
+                        >
                           {{ getDeviceLabel(condition.deviceId) }}
                         </span>
                         <span class="text-slate-300 flex-shrink-0">·</span>
@@ -3301,12 +3269,24 @@ watch(() => props.readOnly, readOnly => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button @click="openConditionDialog('if', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" :title="t('app.edit')">
+                      <button
+                        type="button"
+                        @click="openConditionDialog('if', index)"
+                        class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                        :title="t('app.edit')"
+                        :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
+                      >
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
                       </button>
-                      <button @click="removeCondition('if', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" :title="t('app.delete')">
+                      <button
+                        type="button"
+                        @click="removeCondition('if', index)"
+                        class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                        :title="t('app.delete')"
+                        :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
+                      >
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                         </svg>
@@ -3354,7 +3334,13 @@ watch(() => props.readOnly, readOnly => {
                         </svg>
                       </div>
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
-                        <span class="text-[10px] text-slate-700 font-medium truncate min-w-0" :title="getDeviceLabel(condition.deviceId)">
+                        <span
+                          class="text-[10px] font-medium truncate min-w-0"
+                          :class="isSpecConditionDeviceMissing(condition.deviceId)
+                            ? 'text-red-600 line-through dark:text-red-300'
+                            : 'text-slate-700'"
+                          :title="getDeviceLabel(condition.deviceId)"
+                        >
                           {{ getDeviceLabel(condition.deviceId) }}
                         </span>
                         <span class="text-slate-300 flex-shrink-0">·</span>
@@ -3368,12 +3354,24 @@ watch(() => props.readOnly, readOnly => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button @click="openConditionDialog('then', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" :title="t('app.edit')">
+                      <button
+                        type="button"
+                        @click="openConditionDialog('then', index)"
+                        class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                        :title="t('app.edit')"
+                        :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
+                      >
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
                       </button>
-                      <button @click="removeCondition('then', index)" class="p-1 text-slate-400 hover:text-yellow-500 hover:bg-yellow-50 rounded transition-colors" :title="t('app.delete')">
+                      <button
+                        type="button"
+                        @click="removeCondition('then', index)"
+                        class="p-1 text-slate-400 hover:text-yellow-500 hover:bg-yellow-50 rounded transition-colors"
+                        :title="t('app.delete')"
+                        :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
+                      >
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                         </svg>
@@ -3412,10 +3410,20 @@ watch(() => props.readOnly, readOnly => {
             </div>
 
             <!-- Create Button -->
+            <p
+              v-if="specificationBlockedReason"
+              id="spec-create-blocked-reason"
+              role="status"
+              class="mb-2 text-[10px] font-semibold leading-4 text-red-600"
+              data-testid="spec-create-blocked-reason"
+            >
+              {{ specificationBlockedReason }}
+            </p>
             <button
               @click="createSpecification"
               data-testid="spec-create"
-              :disabled="!specForm.templateId || creatingSpecification"
+              :disabled="Boolean(specificationBlockedReason) || creatingSpecification"
+              :aria-describedby="specificationBlockedReason ? 'spec-create-blocked-reason' : undefined"
               class="w-full py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100 flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3426,6 +3434,7 @@ watch(() => props.readOnly, readOnly => {
           </fieldset>
         </div>
       </details>
+      </div>
 
 
     </div>
@@ -3436,7 +3445,7 @@ watch(() => props.readOnly, readOnly => {
   <div
     v-if="showSpecDialog"
     data-testid="spec-condition-dialog"
-    class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4"
+    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4"
     @click="closeSpecDialog"
     @keydown="handleSpecDialogKeydown"
   >
@@ -3641,7 +3650,16 @@ watch(() => props.readOnly, readOnly => {
       </div>
 
       <!-- Footer Actions -->
-      <div class="control-center-dialog-footer flex shrink-0 justify-end gap-3 border-t px-6 py-4">
+      <div class="control-center-dialog-footer flex shrink-0 flex-wrap items-center justify-end gap-3 border-t px-6 py-4">
+        <p
+          v-if="specConditionBlockedReason"
+          id="spec-condition-blocked-reason"
+          role="status"
+          class="mr-auto text-xs font-semibold text-red-600"
+          data-testid="spec-condition-blocked-reason"
+        >
+          {{ specConditionBlockedReason }}
+        </p>
         <button
           @click="closeSpecDialog"
           class="px-5 py-2.5 text-sm font-bold text-black bg-white border-2 border-slate-300 rounded-lg hover:bg-slate-50 hover:border-slate-400 transition-all"
@@ -3652,7 +3670,8 @@ watch(() => props.readOnly, readOnly => {
           @click="saveCondition"
           data-testid="spec-condition-save"
           class="px-5 py-2.5 text-sm font-bold text-black bg-gradient-to-r from-red-500 to-red-600 rounded-lg hover:from-red-600 hover:to-red-700 transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="props.readOnly || !editingConditionData.deviceId || !editingConditionData.targetType || (editingConditionData.targetType !== 'state' && !editingConditionData.key)"
+          :disabled="props.readOnly || Boolean(specConditionBlockedReason)"
+          :aria-describedby="specConditionBlockedReason ? 'spec-condition-blocked-reason' : undefined"
         >
           <svg class="w-4 h-4" :fill="editingConditionIndex >= 0 ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="editingConditionIndex >= 0 ? 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' : 'M12 4v16m8-8H4'"/>
@@ -3733,7 +3752,7 @@ watch(() => props.readOnly, readOnly => {
   <!-- Delete Confirmation Dialog -->
   <div
     v-if="showDeleteConfirmDialog"
-    class="fixed inset-0 z-[2400] flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
+    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
     @click="closeTemplateDeleteConfirm()"
     @keydown="handleTemplateDeleteDialogKeydown"
   >
@@ -3809,7 +3828,7 @@ watch(() => props.readOnly, readOnly => {
   <!-- Reset Default Templates Confirmation Dialog -->
   <div
     v-if="showResetDefaultsConfirmDialog"
-    class="fixed inset-0 z-[2400] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
     @click="closeResetDefaultsConfirm()"
     @keydown="handleResetDefaultsDialogKeydown"
   >
@@ -4066,58 +4085,6 @@ details > summary::-webkit-details-marker {
   line-height: 1.2;
 }
 
-.device-import-help__trigger {
-  position: relative;
-  display: inline-flex;
-  width: 1.45rem;
-  height: 1.45rem;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--iot-color-accent, #8b5cf6) 28%, var(--board-border, #e2e8f0));
-  border-radius: 999px;
-  background: var(--board-card-bg, #ffffff);
-  color: var(--iot-color-accent, #7c3aed);
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.device-import-help__trigger:hover,
-.device-import-help__trigger:focus-visible {
-  border-color: var(--iot-color-accent, #7c3aed);
-  background: color-mix(in srgb, var(--board-card-bg, #ffffff) 86%, var(--iot-color-accent, #7c3aed) 14%);
-  outline: none;
-}
-
-.device-import-help__tooltip {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 0.5rem);
-  z-index: 40;
-  width: min(18rem, calc(100vw - 2rem));
-  max-width: min(18rem, calc(var(--control-panel-width, 20rem) - 2.5rem));
-  border: 1px solid var(--board-border, #e2e8f0);
-  border-radius: 0.65rem;
-  background: var(--board-card-bg, #ffffff);
-  box-shadow: var(--shadow-elevated, 0 16px 40px rgba(15, 23, 42, 0.18));
-  color: var(--board-text, #0f172a);
-  font-size: 0.7rem;
-  font-weight: 650;
-  line-height: 1.45;
-  opacity: 0;
-  padding: 0.7rem 0.8rem;
-  pointer-events: none;
-  text-align: left;
-  transform: translateY(-0.2rem);
-  transition: opacity 0.15s ease, transform 0.15s ease;
-  white-space: normal;
-}
-
-.device-import-help__trigger:hover .device-import-help__tooltip,
-.device-import-help__trigger:focus-visible .device-import-help__tooltip {
-  opacity: 1;
-  transform: translateY(0);
-}
-
 .device-preview-box__header {
   display: flex;
   align-items: center;
@@ -4307,6 +4274,14 @@ details > summary::-webkit-details-marker {
   background: var(--board-card-bg, var(--field-bg, #ffffff)) !important;
   border-color: var(--board-border, var(--field-border, #cbd5e1)) !important;
   color: var(--board-text, var(--text, #0f172a)) !important;
+}
+
+/* These controls declare `focus:outline-none focus:border-red-400`, i.e. the border colour is meant
+   to be the focus cue — but the `!important` border-colour above wins, leaving keyboard users with
+   no indicator at all. An outline is a different property, so it cannot be overridden the same way. */
+.control-center-dialog-surface :is(input, select, textarea):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--iot-color-accent) 85%, transparent);
+  outline-offset: 1px;
 }
 
 .control-center-dialog-surface :is(.bg-white, .bg-slate-50, .bg-slate-100, .bg-slate-200) {

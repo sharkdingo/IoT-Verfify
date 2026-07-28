@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.util.TemplateNameRule;
 import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateNuSmvValidator;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
@@ -12,6 +13,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardUndoResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
@@ -61,6 +63,12 @@ import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.service.board.BoardEditJournal;
+import cn.edu.nju.Iot_Verify.service.board.BoardUndoAvailability;
+import cn.edu.nju.Iot_Verify.service.board.RuleOrderSnapshot;
+import cn.edu.nju.Iot_Verify.po.BoardEditEntityType;
+import cn.edu.nju.Iot_Verify.po.BoardEditJournalPo;
+import cn.edu.nju.Iot_Verify.po.BoardEditOperation;
 import cn.edu.nju.Iot_Verify.util.RuleSemanticSignature;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import cn.edu.nju.Iot_Verify.util.SpecificationSemanticSignature;
@@ -81,6 +89,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
@@ -109,11 +118,23 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceTemplateMapper deviceTemplateMapper;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     private final UserRepository userRepository;
+    private final BoardEditJournal editJournal;
 
-    /** Template names must be printable ASCII (spaces allowed) so that
-     *  Locale.ROOT toLowerCase and MySQL LOWER() produce identical results. */
-    private static final java.util.regex.Pattern SAFE_TEMPLATE_NAME =
-            java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
+    /**
+     * Rule ordering is a single per-user concern rather than one record, so every reorder entry
+     * shares this key.
+     */
+    private static final String RULE_ORDER_ENTITY_KEY = "rule-order";
+
+    /**
+     * Reported whenever a journal entry cannot be trusted to describe a reversible edit: an unreadable
+     * payload, a non-numeric entity key, or a missing recorded position. All are the same thing to the
+     * user — the edit's saved details no longer support reversing it — and none may be confused with the
+     * legal "record already gone" case, which skips the drift check.
+     */
+    private static final String UNREADABLE_JOURNAL_ENTRY_MESSAGE =
+            "This edit can no longer be reversed because its saved details are unreadable.";
+
     private ChatExecutionLeaseGuard chatExecutionLeaseGuard;
 
     @Autowired
@@ -482,6 +503,12 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<RuleDto> savedRules = saveRulesInternal(userId, nextRules);
                 List<SpecificationDto> savedSpecs = saveSpecsInternal(userId, nextSpecs, savedNodes);
                 List<BoardEnvironmentVariableDto> savedEnvironment = getEnvironmentVariablesInternal(userId);
+
+                // Deleting a device cascades into the rules and specifications that referenced it.
+                // Undo is per-record, so restoring one of those in isolation would recreate a
+                // reference to a device that no longer exists. Drop the journal rather than offer
+                // an undo that cannot reach a legal board.
+                editJournal.clear(userId);
 
                 return DeviceDeletionResultDto.builder()
                         .operation("deleted")
@@ -921,7 +948,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .filter(candidate -> Objects.equals(candidate.getId(), spec.getId()))
                         .findFirst()
                         .orElse(spec);
-                return CollectionMutationResultDto.of("created", created, saved);
+                editJournal.record(userId, BoardEditEntityType.SPECIFICATION,
+                        BoardEditOperation.CREATE, created.getId(), null, created);
+                return withUndoAvailability(
+                        userId, CollectionMutationResultDto.of("created", created, saved));
             });
         }
     }
@@ -946,9 +976,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     throw new ConflictException(
                             "The specification changed after confirmation. Review the current specification before deleting it.");
                 }
+                // Record the list position too, for the same reason rule deletion does: saveSpecsInternal
+                // rewrites list_order from list index, so restoring by appending puts the specification
+                // somewhere the user did not delete it from.
+                int removedAt = indexOfSpecification(existing, specId);
                 existing.removeIf(candidate -> specId.equals(candidate.getId()));
                 List<SpecificationDto> saved = saveSpecsInternal(userId, existing, currentNodes);
-                return CollectionMutationResultDto.of("deleted", removed, saved);
+                editJournal.record(userId, BoardEditEntityType.SPECIFICATION,
+                        BoardEditOperation.DELETE, specId, removed, null, removedAt);
+                return withUndoAvailability(
+                        userId, CollectionMutationResultDto.of("deleted", removed, saved));
             });
         }
     }
@@ -1082,7 +1119,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     .filter(Objects::nonNull)
                     .map(condition -> RuleDto.Condition.builder()
                             .deviceName(condition.getDeviceName())
-                            .attribute(condition.getAttribute())
+                            // Trimmed for the same reason as the command action below: admission
+                            // resolves the attribute trimmed, generation matches manifest variable,
+                            // mode, and signal-API names by equals().
+                            .attribute(trimToNull(condition.getAttribute()))
                             .targetType(canonicalRuleTargetTypeOrOriginal(condition.getTargetType()))
                             .relation(canonicalRelationOrOriginal(condition.getRelation()))
                             .value(condition.getValue())
@@ -1093,7 +1133,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         if (command != null) {
             target.setCommand(RuleDto.Command.builder()
                     .deviceName(command.getDeviceName())
-                    .action(command.getAction())
+                    // Stored trimmed: the action is cross-referenced against template API names by
+                    // equals() at generation time, and admission compares trimmed. Persisting the
+                    // untrimmed form left those two disagreeing.
+                    .action(trimToNull(command.getAction()))
                     .contentDevice(command.getContentDevice())
                     .content(command.getContent())
                     .build());
@@ -1138,7 +1181,13 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     copy.setDeviceLabel(labelsById.getOrDefault(
                             condition.getDeviceId(), condition.getDeviceLabel()));
                     copy.setTargetType(targetType);
-                    copy.setKey(condition.getKey());
+                    // Trimmed for the same reason as a rule condition's attribute: generation matches
+                    // manifest variable, mode, and signal-API names by equals(), and some spec paths
+                    // (buildVariableCondition, resolveModeName) trim while others
+                    // (validateApiSignalExists, resolveApiUntrustedSource) compare raw. Storing the
+                    // untrimmed key let a padded API condition pass admission and then fail
+                    // generation with InvalidConditionException.
+                    copy.setKey(trimToNull(condition.getKey()));
                     copy.setPropertyScope(("trust".equals(targetType) || "privacy".equals(targetType))
                             ? normalizePropertyScope(condition.getPropertyScope())
                             : null);
@@ -1251,6 +1300,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<SpecificationDto> savedSpecs = saveSpecsInternal(userId, batch.getSpecs(), savedNodes);
                 BoardBatchDto result = new BoardBatchDto(savedNodes, savedEnvironment, savedRules, savedSpecs);
                 result.setCreatedTemplates(createdTemplates);
+                // Scene replacement rewrites every collection at once, so no per-record inverse
+                // recorded before it still describes a reachable state. Dropping the journal is
+                // safer than leaving entries that would "restore" a rule into a different scene.
+                editJournal.clear(userId);
                 return result;
             });
         }
@@ -3644,13 +3697,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 po.setExecutionOrder(nextRules.size() - 1);
                 RulePo saved = ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
                 RuleDto created = ruleMapper.toDto(saved);
-                return CollectionMutationResultDto.of("created", created, getRulesInternal(userId));
+                editJournal.record(userId, BoardEditEntityType.RULE, BoardEditOperation.CREATE,
+                        String.valueOf(saved.getId()), null, created);
+                return withUndoAvailability(userId,
+                        CollectionMutationResultDto.of("created", created, getRulesInternal(userId)));
             });
         }
     }
 
     @Override
-    public List<RuleDto> reorderRules(
+    public CollectionMutationResultDto<RuleDto> reorderRules(
             Long userId, List<Long> expectedRuleIds, List<Long> ruleIds) {
         synchronized (getUserWriteLock(userId)) {
             return transactionTemplate.execute(status -> {
@@ -3678,7 +3734,14 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 }
 
                 List<RuleDto> reordered = requested.stream().map(currentById::get).toList();
-                return saveRulesInternal(userId, reordered);
+                List<RuleDto> saved = saveRulesInternal(userId, reordered);
+                // Reversing a reorder means restoring the previous ordering, so the journal stores
+                // the id lists rather than a record snapshot. Same transaction as the write.
+                editJournal.record(userId, BoardEditEntityType.RULE_ORDER,
+                        BoardEditOperation.UPDATE, RULE_ORDER_ENTITY_KEY,
+                        new RuleOrderSnapshot(expected), new RuleOrderSnapshot(requested));
+                return withUndoAvailability(userId,
+                        CollectionMutationResultDto.of("reordered", null, saved));
             });
         }
     }
@@ -3816,10 +3879,342 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                             "The rule changed after confirmation. Review the current rule before deleting it.");
                 }
                 ruleRepo.deleteById(ruleId);
+                // Same transaction as the delete: an undo entry that could commit without its
+                // edit (or the reverse) would describe a state that never existed.
+                // The position goes in the entry, not in RuleDto: undo must restore where the rule sat,
+                // because execution order decides which rule wins when guards overlap.
+                editJournal.record(userId, BoardEditEntityType.RULE, BoardEditOperation.DELETE,
+                        String.valueOf(ruleId), current, null, removed.getExecutionOrder());
                 List<RuleDto> remaining = getRulesInternal(userId);
-                return CollectionMutationResultDto.of("deleted", current, remaining);
+                return withUndoAvailability(
+                        userId, CollectionMutationResultDto.of("deleted", current, remaining));
             });
         }
+    }
+
+    @Override
+    public BoardUndoResultDto undoLastEdit(Long userId) {
+        return applyJournalDirection(userId, true);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public BoardUndoResultDto boardEditAvailability(Long userId) {
+        // Availability only. Deliberately does not return the rule/spec lists: this is a query, and
+        // shipping collections here would invite a client to treat a read as a board update.
+        BoardUndoAvailability availability = editJournal.availability(userId);
+        BoardUndoResultDto result = new BoardUndoResultDto();
+        result.setApplied(false);
+        // Not NOTHING_TO_APPLY: that means "you pressed undo and there was no history", which would
+        // contradict canUndo=true in this same object. Nothing was attempted here.
+        result.setReasonCode("AVAILABILITY_ONLY");
+        result.setRules(List.of());
+        result.setSpecs(List.of());
+        result.setCanUndo(availability.canUndo());
+        result.setCanRedo(availability.canRedo());
+        return result;
+    }
+
+    @Override
+    public BoardUndoResultDto redoLastUndoneEdit(Long userId) {
+        return applyJournalDirection(userId, false);
+    }
+
+    /**
+     * Applies one journal entry in the requested direction.
+     *
+     * <p>Runs under the same per-user write lock and transaction as ordinary board mutations, so
+     * the inverse edit, its validation, and the journal flag commit together. Undo reaches the
+     * entry's {@code before} state; redo reaches its {@code after} state — which means both are
+     * expressed as "make this record look like this snapshot", and a single code path can serve
+     * them.
+     */
+    private BoardUndoResultDto applyJournalDirection(Long userId, boolean undo) {
+        synchronized (getUserWriteLock(userId)) {
+            return transactionTemplate.execute(status -> {
+                requireActiveUserForWrite(userId);
+
+                BoardEditJournalPo entry = (undo
+                        ? editJournal.nextToUndo(userId)
+                        : editJournal.nextToRedo(userId)).orElse(null);
+                if (entry == null) {
+                    // Nothing left in that direction. Not an error: the user simply pressed the
+                    // shortcut once more than there is history.
+                    return journalResult(userId, false, null, null, "NOTHING_TO_APPLY");
+                }
+
+                String targetJson = undo ? entry.getBeforeJson() : entry.getAfterJson();
+                String expectedJson = undo ? entry.getAfterJson() : entry.getBeforeJson();
+
+                switch (entry.getEntityType()) {
+                    case RULE -> applyRuleJournalEntry(userId, entry, targetJson, expectedJson);
+                    case SPECIFICATION ->
+                            applySpecJournalEntry(userId, entry, targetJson, expectedJson);
+                    case RULE_ORDER -> applyRuleOrderJournalEntry(userId, targetJson, expectedJson);
+                }
+
+                editJournal.markUndone(entry, undo);
+                return journalResult(userId, true, entry, undo, undo ? "UNDONE" : "REDONE");
+            });
+        }
+    }
+
+    private BoardUndoResultDto journalResult(
+            Long userId, boolean applied, BoardEditJournalPo entry, Boolean undo, String reasonCode) {
+        BoardUndoAvailability availability = editJournal.availability(userId);
+        BoardUndoResultDto result = new BoardUndoResultDto();
+        result.setApplied(applied);
+        result.setReasonCode(reasonCode);
+        if (entry != null) {
+            result.setEntityType(entry.getEntityType().name());
+            result.setOriginalOperation(entry.getOperation().name());
+        }
+        result.setRules(getRulesInternal(userId));
+        result.setSpecs(getSpecsInternal(userId));
+        result.setCanUndo(availability.canUndo());
+        result.setCanRedo(availability.canRedo());
+        return result;
+    }
+
+    /**
+     * Restores a rule execution ordering.
+     *
+     * <p>Refuses when the current ordering is not the one this edit produced, or when the rule set
+     * itself changed — in either case some later work intervened and re-imposing the old order
+     * would discard it.
+     */
+    private void applyRuleOrderJournalEntry(Long userId, String targetJson, String expectedJson) {
+        RuleOrderSnapshot target = editJournal.readJson(targetJson, RuleOrderSnapshot.class);
+        RuleOrderSnapshot expected = editJournal.readJson(expectedJson, RuleOrderSnapshot.class);
+        if (target == null || expected == null) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+
+        List<RuleDto> current = getRulesInternal(userId);
+        List<Long> currentIds = current.stream().map(RuleDto::getId).toList();
+        if (!currentIds.equals(expected.ruleIds())) {
+            throw new ConflictException(
+                    "The rule order changed after this edit, so reversing it would discard newer work.");
+        }
+
+        Map<Long, RuleDto> byId = current.stream()
+                .filter(rule -> rule != null && rule.getId() != null)
+                .collect(Collectors.toMap(RuleDto::getId, rule -> rule, (first, ignored) -> first,
+                        LinkedHashMap::new));
+        // Defence in depth: the order check above already fails whenever the rule set differs, because
+        // journal entries are applied newest-first and any create/delete since this reorder is a newer
+        // entry that must be undone first. Keep this so a future change to that walk order cannot
+        // silently re-impose an ordering that drops or resurrects a rule.
+        if (!byId.keySet().equals(new LinkedHashSet<>(target.ruleIds()))) {
+            throw new ConflictException(
+                    "The rule list changed after this edit, so its order can no longer be reversed.");
+        }
+
+        saveRulesInternal(userId, target.ruleIds().stream().map(byId::get).toList());
+    }
+
+    /**
+     * Moves one rule to the state the journal entry describes.
+     *
+     * <p>{@code expectedJson} is what the record must currently look like for the entry to still
+     * be meaningful. If reality differs, something else edited (or already restored) that rule
+     * since, and applying the inverse would discard that work — so this refuses with a conflict.
+     * A null target means "must not exist"; a null expected means "did not exist".
+     */
+    private void applyRuleJournalEntry(
+            Long userId, BoardEditJournalPo entry, String targetJson, String expectedJson) {
+        RuleDto target = editJournal.readJson(targetJson, RuleDto.class);
+        RuleDto expected = editJournal.readJson(expectedJson, RuleDto.class);
+        // An unreadable payload on either side is an unknown prior state, not a verified one. Without
+        // this, a null `expected` from a parse failure reads as the legal "record already gone" case
+        // and skips the drift check below entirely.
+        if ((targetJson != null && target == null) || (expectedJson != null && expected == null)) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+
+        long ruleId;
+        try {
+            ruleId = Long.parseLong(entry.getEntityKey());
+        } catch (NumberFormatException e) {
+            // Same class as an unreadable payload: the entry does not identify a rule, so the inverse
+            // cannot be applied. A typed conflict, not the NumberFormatException 500 this used to throw.
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        RuleDto current = ruleRepo.findById(ruleId)
+                .filter(rule -> Objects.equals(rule.getUserId(), userId))
+                .map(ruleMapper::toDto)
+                .orElse(null);
+
+        if (expected == null) {
+            if (current != null) {
+                throw new ConflictException(
+                        "This rule was recreated after the change, so it can no longer be reversed.");
+            }
+        } else if (current == null || !sameRuleDeletionSnapshot(expected, current)) {
+            throw new ConflictException(
+                    "This rule changed after the edit, so reversing it would discard newer work.");
+        }
+
+        if (target == null) {
+            ruleRepo.deleteById(ruleId);
+            return;
+        }
+
+        // Restoring keeps the original id, so anything referencing it — including later journal
+        // entries naming the same rule — stays valid.
+        RuleDto restored = canonicalizeRuleRelationsForStorage(target);
+        restored.setId(ruleId);
+        List<RuleDto> nextRules = new ArrayList<>(getRulesInternal(userId));
+        nextRules.removeIf(rule -> Objects.equals(rule.getId(), ruleId));
+        // Reinsert at the recorded position. getRulesInternal returns execution order, so the index is
+        // a list position, and clamping covers an entry whose neighbours were deleted since.
+        // Every DELETE entry records the position, so a missing one is a journal row written before the
+        // column existed. Appending instead would silently restore the rule to a different board —
+        // execution order decides which rule wins when guards overlap — so reject it rather than
+        // guessing (there is no released compatibility contract for pre-change development data).
+        if (entry.getEntityOrder() == null) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        int restoreAt = Math.min(Math.max(entry.getEntityOrder(), 0), nextRules.size());
+        nextRules.add(restoreAt, restored);
+        List<DeviceNodeDto> currentNodes = getNodesInternal(userId);
+        requireAdditionalCapacity("rules", nextRules.size() - 1, 1, RequestLimits.MAX_RULES);
+        validateNoIdenticalRules(nextRules, currentNodes);
+        validateBoardReferences(userId, currentNodes, nextRules, null);
+
+        RulePo po = ruleMapper.toEntity(restored, userId);
+        po.setId(ruleId);
+        // Restore the recorded position rather than appending: execution order decides which rule wins
+        // when guards overlap, so the end of the list is a different board.
+        po.setExecutionOrder(restoreAt);
+        // Deletion leaves a gap in execution_order, so the restored index can collide with a survivor.
+        // A collision is resolved by the id tiebreak in the ordering query rather than by intent, which
+        // would give a third ordering. Renumbering the survivors contiguously removes the ambiguity.
+        renumberSurvivingRules(userId, nextRules, ruleId);
+        if (current == null) {
+            // `rules.id` is a single global primary key, unlike device_node's composite (id, user_id),
+            // but the drift check above only sees this account's rows. If another account now holds the
+            // id, insertWithId would fail on the primary key and surface as a generic conflict. Say what
+            // actually happened instead; the transaction rolls back either way and the entry stays.
+            if (ruleRepo.existsById(ruleId)) {
+                throw new ConflictException(
+                        "This rule's original id is no longer available, so it cannot be restored under "
+                                + "the id its references depend on.");
+            }
+            // IDENTITY-generated, so neither save() nor persist() can write an explicit one.
+            ruleRepo.insertWithId(
+                    ruleId,
+                    userId,
+                    po.getConditionsJson(),
+                    po.getCommandJson(),
+                    po.getRuleString(),
+                    po.getExecutionOrder(),
+                    // A restored rule gets a fresh creation time: RuleMapper deliberately never copies
+                    // createdAt off the DTO ("never trust client value"), so the journal snapshot's
+                    // original is not available here. The id is what references depend on.
+                    LocalDateTime.now());
+            return;
+        }
+        ruleRepo.save(po);
+    }
+
+    /**
+     * Moves one specification to the state the journal entry describes. Specifications persist by
+     * rewriting the whole per-user collection, so this edits the list and re-saves it through the
+     * same validated path an ordinary mutation uses.
+     */
+    /**
+     * Renumbers the rules that survived a deletion so the restored rule's position is unambiguous.
+     *
+     * <p>{@code deleteById} leaves a gap in {@code execution_order}, so reinserting at the recorded
+     * index can duplicate a survivor's order. The ordering query then breaks the tie by id, which is
+     * not the user's intent. Writing contiguous positions from the intended list removes the tie.
+     */
+    private void renumberSurvivingRules(Long userId, List<RuleDto> intendedOrder, long restoredRuleId) {
+        Map<Long, RulePo> existing = ruleRepo.findByUserId(userId).stream()
+                .filter(rule -> rule.getId() != null)
+                .collect(Collectors.toMap(RulePo::getId, rule -> rule, (a, b) -> a));
+        for (int index = 0; index < intendedOrder.size(); index++) {
+            Long id = intendedOrder.get(index).getId();
+            if (id == null || id == restoredRuleId) continue;
+            RulePo survivor = existing.get(id);
+            if (survivor != null && !Objects.equals(survivor.getExecutionOrder(), index)) {
+                survivor.setExecutionOrder(index);
+                ruleRepo.save(survivor);
+            }
+        }
+    }
+
+    /**
+     * Moves one specification to the state the journal entry describes. Specifications persist by
+     * rewriting the whole per-user collection, so this edits the list and re-saves it through the
+     * same validated path an ordinary mutation uses.
+     */
+    private void applySpecJournalEntry(
+            Long userId, BoardEditJournalPo entry, String targetJson, String expectedJson) {
+        SpecificationDto target = editJournal.readJson(targetJson, SpecificationDto.class);
+        SpecificationDto expected = editJournal.readJson(expectedJson, SpecificationDto.class);
+        // See applyRuleJournalEntry: an unreadable `expected` is an unknown prior state, and must not
+        // pass for the legal "record already gone" case that skips the drift check.
+        if ((targetJson != null && target == null) || (expectedJson != null && expected == null)) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+
+        String specId = entry.getEntityKey();
+        List<DeviceNodeDto> currentNodes = getNodesInternal(userId);
+        List<SpecificationDto> existing = new ArrayList<>(getSpecsInternal(userId));
+        SpecificationDto current = existing.stream()
+                .filter(candidate -> specId.equals(candidate.getId()))
+                .findFirst()
+                .orElse(null);
+
+        if (expected == null) {
+            if (current != null) {
+                throw new ConflictException(
+                        "This specification was recreated after the change, so it can no longer be reversed.");
+            }
+        } else if (current == null || !sameSpecificationDeletionSnapshot(expected, current)) {
+            throw new ConflictException(
+                    "This specification changed after the edit, so reversing it would discard newer work.");
+        }
+
+        existing.removeIf(candidate -> specId.equals(candidate.getId()));
+        if (target != null) {
+            target.setId(specId);
+            requireAdditionalCapacity(
+                    "specifications", existing.size(), 1, RequestLimits.MAX_SPECS);
+            // Reinsert at the recorded list position, clamped for neighbours deleted since. As in
+            // applyRuleJournalEntry, a missing position means a pre-column journal row: appending would
+            // restore the specification to a different place in the evaluated order, so reject it.
+            if (entry.getEntityOrder() == null) {
+                throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+            }
+            int restoreAt = Math.min(Math.max(entry.getEntityOrder(), 0), existing.size());
+            existing.add(restoreAt, target);
+            validateBoardReferences(userId, currentNodes, null, existing);
+        }
+        saveSpecsInternal(userId, existing, currentNodes);
+    }
+
+    /** List position of a specification, or the end when it is absent. */
+    private int indexOfSpecification(List<SpecificationDto> specs, String specId) {
+        for (int index = 0; index < specs.size(); index++) {
+            SpecificationDto candidate = specs.get(index);
+            if (candidate != null && specId.equals(candidate.getId())) return index;
+        }
+        return specs.size();
+    }
+
+    /**
+     * Stamps a reversible mutation's result with the account's current undo availability.
+     *
+     * Read from the journal inside the same transaction, so the client's undo affordance reflects
+     * exactly the history that just committed rather than a guess made on either side.
+     */
+    private <T> CollectionMutationResultDto<T> withUndoAvailability(
+            Long userId, CollectionMutationResultDto<T> result) {
+        BoardUndoAvailability availability = editJournal.availability(userId);
+        return result.withUndoAvailability(availability.canUndo(), availability.canRedo());
     }
 
     private boolean sameRuleDeletionSnapshot(RuleDto expected, RuleDto current) {
@@ -3896,10 +4291,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
 
         final String canonicalName = rawName;
-        if (!SAFE_TEMPLATE_NAME.matcher(canonicalName).matches()) {
+        String nameRejection = TemplateNameRule.rejectionReason(canonicalName);
+        if (nameRejection != null) {
             throw new BadRequestException(
-                    "Template name '" + canonicalName
-                    + "' contains non-ASCII characters. Only printable ASCII characters are allowed.");
+                    "Template name '" + canonicalName + "' " + nameRejection + ".");
         }
         safeDto.setName(canonicalName);
         safeDto.getManifest().setName(canonicalName);

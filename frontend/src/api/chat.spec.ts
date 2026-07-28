@@ -28,9 +28,11 @@ vi.mock('@/api/http', () => ({
 
 import http from '@/api/http'
 import {
+  createSession,
   getPendingConfirmation,
   getSessionActivity,
   getSessionHistory,
+  getSessionList,
   requestSessionStop,
   sendStreamChat
 } from './chat'
@@ -1105,5 +1107,55 @@ describe('chat stream lifecycle semantics', () => {
     )).rejects.toMatchObject({ kind: 'INCOMPLETE_STREAM' })
 
     expect(onAccepted).toHaveBeenCalledOnce()
+  })
+})
+
+describe('chat session list contract', () => {
+  const session = (over: Record<string, unknown> = {}) => ({
+    id: 'session-1',
+    userId: 7,
+    title: null,
+    updatedAt: '2026-07-28T00:00:00Z',
+    active: false,
+    ...over
+  })
+
+  it('accepts a complete session list', async () => {
+    vi.mocked(http.get).mockResolvedValue({ data: { data: [session(), session({ id: 's2', active: true })] } })
+
+    const sessions = await getSessionList()
+
+    expect(sessions.map(s => s.active)).toEqual([false, true])
+  })
+
+  it('rejects a row missing `active` instead of reading it as idle', async () => {
+    // `active` gates isAssistantBusy, which stops a second assistant mutation while one is still
+    // running server-side. Absent -> undefined -> falsy would silently unlock that action, so the
+    // row must be refused rather than defaulted.
+    const { active: _dropped, ...withoutActive } = session()
+    vi.mocked(http.get).mockResolvedValue({ data: { data: [withoutActive] } })
+
+    await expect(getSessionList()).rejects.toThrow(/incomplete/)
+  })
+
+  it('rejects a non-boolean `active`', async () => {
+    vi.mocked(http.get).mockResolvedValue({ data: { data: [session({ active: 'true' })] } })
+
+    await expect(getSessionList()).rejects.toThrow(/incomplete/)
+  })
+
+  it('rejects a list payload that is not an array', async () => {
+    vi.mocked(http.get).mockResolvedValue({ data: { data: { sessions: [] } } })
+
+    await expect(getSessionList()).rejects.toThrow(/incomplete/)
+  })
+
+  it('validates a newly created session the same way', async () => {
+    vi.mocked(http.post).mockResolvedValue({ data: { data: session({ id: 'fresh' }) } })
+    await expect(createSession()).resolves.toMatchObject({ id: 'fresh', active: false })
+
+    const { active: _dropped, ...withoutActive } = session()
+    vi.mocked(http.post).mockResolvedValue({ data: { data: withoutActive } })
+    await expect(createSession()).rejects.toThrow(/incomplete/)
   })
 })

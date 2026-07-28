@@ -1265,9 +1265,12 @@ final class FuzzModel {
         if (relation == null || !hasText(condition.getValue())) {
             throw error("Specification conditions require a supported relation and value.");
         }
+        // Trimmed once, for the same reason as the NuSMV path: every lookup below matches a manifest
+        // mode, API, or variable name by exact equality, and admission stores the key trimmed.
+        String key = conditionKey(condition);
         if ("state".equals(type)) {
             requireEnumRelation(relation, "state");
-            if (!"state".equalsIgnoreCase(condition.getKey())) {
+            if (!"state".equalsIgnoreCase(key)) {
                 throw error("State specification conditions must use key 'state'.");
             }
             stateCandidates(device, condition.getValue(), relation);
@@ -1275,19 +1278,19 @@ final class FuzzModel {
         }
         if ("mode".equals(type)) {
             requireEnumRelation(relation, "mode");
-            int modeIndex = device.modeIndex(condition.getKey());
+            int modeIndex = device.modeIndex(key);
             for (String value : splitCandidates(condition.getValue(), relation, false)) {
                 if (!device.legalModeValues.get(modeIndex).contains(cleanState(value))) {
-                    throw error("Illegal value '" + value + "' for mode '" + condition.getKey() + "'.");
+                    throw error("Illegal value '" + value + "' for mode '" + key + "'.");
                 }
             }
             return;
         }
         if ("api".equals(type)) {
             requireEnumRelation(relation, "API");
-            DeviceManifest.API api = device.apis.get(condition.getKey());
+            DeviceManifest.API api = device.apis.get(key);
             if (api == null || !Boolean.TRUE.equals(api.getSignal())) {
-                throw error("API '" + condition.getKey() + "' is not an observable signal.");
+                throw error("API '" + key + "' is not an observable signal.");
             }
             for (String value : splitCandidates(condition.getValue(), relation, false)) {
                 if (!isBoolean(value)) {
@@ -1297,15 +1300,15 @@ final class FuzzModel {
             return;
         }
         if ("variable".equals(type)) {
-            ValueDomain domain = device.localDomains.get(condition.getKey());
-            if (domain == null && device.readableEnvironment.contains(condition.getKey())) {
-                domain = environmentDomains.get(condition.getKey());
+            ValueDomain domain = device.localDomains.get(key);
+            if (domain == null && device.readableEnvironment.contains(key)) {
+                domain = environmentDomains.get(key);
             }
             if (domain == null) {
-                throw error("Variable '" + condition.getKey() + "' is not visible to device '" + device.id + "'.");
+                throw error("Variable '" + key + "' is not visible to device '" + device.id + "'.");
             }
             domain.validateConditionValue(relation, condition.getValue(),
-                    "Specification variable '" + condition.getKey() + "'");
+                    "Specification variable '" + key + "'");
             return;
         }
         throw error("Unsupported fuzz condition type '" + condition.getTargetType() + "'.");
@@ -1358,9 +1361,9 @@ final class FuzzModel {
             return 0.0;
         }
         String actual = resolveConditionValue(device, deviceState, state, condition, type);
-        ValueDomain domain = device.localDomains.get(condition.getKey());
+        ValueDomain domain = device.localDomains.get(conditionKey(condition));
         if (domain == null) {
-            domain = environmentDomains.get(condition.getKey());
+            domain = environmentDomains.get(conditionKey(condition));
         }
         return domain == null ? 0.0 : domain.numericSatisfaction(actual, condition.getRelation(), condition.getValue());
     }
@@ -1375,12 +1378,24 @@ final class FuzzModel {
         DeviceModel device = devicesById.get(condition.getDeviceId());
         DeviceState deviceState = state.devices.get(device.id);
         String actual = resolveConditionValue(device, deviceState, state, condition, "variable");
-        ValueDomain domain = device.localDomains.get(condition.getKey());
+        ValueDomain domain = device.localDomains.get(conditionKey(condition));
         if (domain == null) {
-            domain = environmentDomains.get(condition.getKey());
+            domain = environmentDomains.get(conditionKey(condition));
         }
         return domain == null ? 1.0
                 : domain.numericFalsificationDistance(actual, condition.getRelation(), condition.getValue());
+    }
+
+    /**
+     * A specification condition's key as every lookup must see it.
+     *
+     * <p>Manifest mode, API, and variable names are matched by exact equality and admission stores the
+     * key trimmed, so validation and evaluation have to normalize identically — otherwise a padded key
+     * validates and then resolves to no domain, silently changing what the explorer checks.
+     */
+    private static String conditionKey(SpecConditionDto condition) {
+        String key = condition.getKey();
+        return key == null ? null : key.trim();
     }
 
     private String resolveConditionValue(
@@ -1390,13 +1405,13 @@ final class FuzzModel {
             SpecConditionDto condition,
             String type) {
         if ("mode".equals(type)) {
-            return deviceState.modes[device.modeIndex(condition.getKey())];
+            return deviceState.modes[device.modeIndex(conditionKey(condition))];
         }
         if ("api".equals(type)) {
-            return deviceState.apiSignals.contains(condition.getKey()) ? "TRUE" : "FALSE";
+            return deviceState.apiSignals.contains(conditionKey(condition)) ? "TRUE" : "FALSE";
         }
-        String value = deviceState.locals.get(condition.getKey());
-        return value != null ? value : state.environment.get(condition.getKey());
+        String value = deviceState.locals.get(conditionKey(condition));
+        return value != null ? value : state.environment.get(conditionKey(condition));
     }
 
     private boolean compareState(DeviceModel device, DeviceState state, String rawRelation, String rawValue) {
@@ -2648,6 +2663,11 @@ final class FuzzModel {
                 return nextCandidates(current, 0, null, true);
             }
 
+            // The ±1 at the boundaries is MEDIC's environment disturbance, mirroring the SMV
+            // generator's numeric environment transition: a shared environment variable moves by the
+            // device effect "with a slight disturbance in the range of [-1, 1] in each time step"
+            // (MEDIC §3.1, Fig. 2b). The explorer must offer the same candidates as the formal model,
+            // or a scene the checker can violate would be unreachable here.
             long upperBoundary = (long) upper - impactRate;
             if (currentValue == upperBoundary) {
                 return numericCandidates(

@@ -66,11 +66,19 @@ public class FixContext {
     private final Set<String> matchedPreferredRangeTargetIds = new LinkedHashSet<>();
 
     /**
-     * Returns true if the fix deadline has passed.
-     * Returns false if no deadline was set (null = no timeout).
+     * Returns true when the search must stop: the deadline has passed, or this worker was
+     * interrupted because the request was cancelled.
+     *
+     * <p>Interruption is checked here rather than left to each strategy loop. A strategy's broad
+     * {@code catch (Exception)} consumes the {@code InterruptedException} that
+     * {@code Semaphore.tryAcquire} throws — which also clears the flag — so a loop that only
+     * watched the deadline would keep launching NuSMV runs for a request whose response was already
+     * sent, holding permits from the shared executor semaphore the whole time. {@code isInterrupted}
+     * is non-clearing, so asking here does not hide the signal from anyone else.
      */
     public boolean isExpired() {
-        return deadline != null && Instant.now().isAfter(deadline);
+        return Thread.currentThread().isInterrupted()
+                || (deadline != null && Instant.now().isAfter(deadline));
     }
 
     /** Remaining wall-clock budget for a child NuSMV call, in whole milliseconds. */

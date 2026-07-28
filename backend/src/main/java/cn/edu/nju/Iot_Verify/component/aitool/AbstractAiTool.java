@@ -170,6 +170,16 @@ public abstract class AbstractAiTool implements AiTool {
         return parsed.longValue();
     }
 
+    /**
+     * Reads an optional boolean, rejecting a non-boolean rather than coercing it.
+     *
+     * <p>Every confirmation-gated tool calls this for {@code confirmed} with {@code false} as the
+     * default, even though all of them also list {@code confirmed} in their schema's {@code required}
+     * array. That is deliberate and uniform: the schema states the intent so the model always sends
+     * it, while the default keeps the *safe* branch reachable — an omitted flag yields a no-write
+     * preview instead of spending a round on a VALIDATION_ERROR to reach the same outcome. A missing
+     * flag must never be read as consent, which is why the default is false and not true.
+     */
     protected final boolean booleanArg(JsonNode args,
                                        String field,
                                        boolean defaultValue) throws ArgValidationException {

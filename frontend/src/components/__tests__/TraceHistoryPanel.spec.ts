@@ -14,6 +14,15 @@ const i18n = createI18n({
     en: {
       app: {
         runHistory: 'Run History',
+        // Real copy, so assertions read the sentence the user sees rather than a raw key: with
+        // these absent, `t()` echoed the key and the tests passed on untranslated output.
+        runAssumptionsLabel: 'Run assumptions',
+        runAssumptionNoAttack: 'No attack modeled',
+        runAssumptionAttackBudget: 'Up to {count} of {total} compromised',
+        runAssumptionAttackPoints: '{count} chosen attack points',
+        runAssumptionPrivacy: 'Privacy modeled',
+        historicalFixMayFailIfBoardChanged:
+          'This fix was found for the board as it was; it may no longer apply.',
         runHistorySubtitle: 'Task status and completed results',
         close: 'Close',
         taskStatusLayer: 'Task Status',
@@ -133,7 +142,7 @@ const baseProps = {
 }
 
 describe('TraceHistoryPanel two-layer semantics', () => {
-  it('exposes a labelled dialog, focuses close, and closes on Escape', async () => {
+  it('exposes a labelled non-modal region, focuses close, and closes on Escape', async () => {
     const wrapper = mount(TraceHistoryPanel, {
       attachTo: document.body,
       props: { ...baseProps, activeLayer: 'tasks' },
@@ -141,7 +150,10 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     })
 
     const panel = wrapper.get('[data-testid="trace-history-panel"]')
-    expect(panel.attributes('role')).toBe('dialog')
+    // Non-modal tool panel: the canvas behind it stays interactive, so it is a region
+    // rather than a dialog.
+    expect(panel.attributes('role')).toBe('region')
+    expect(panel.attributes('aria-modal')).toBeUndefined()
     expect(panel.attributes('aria-labelledby')).toBe('trace-history-title')
     expect(wrapper.get('[data-testid="history-layer-tasks"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.get('[data-testid="history-layer-results"]').attributes('aria-pressed')).toBe('false')
@@ -244,6 +256,118 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(progressbar.attributes('aria-label')).toBe('Verification Progress')
     expect(progressbar.attributes('aria-valuenow')).toBe('40')
     expect(wrapper.text()).toContain('7/13/2026')
+  })
+
+  it('distinguishes what each passing run actually covered, and warns before a historical fix', () => {
+    // Two green runs with identical counts used to render identical rows: attack modeling off and
+    // exhaustive compromise up to a budget are very different safety claims.
+    const base = {
+      createdAt: '2026-07-13T10:00:00',
+      startedAt: '2026-07-13T10:00:00',
+      completedAt: '2026-07-13T10:00:02',
+      modelSnapshot: snapshot(2),
+      outcome: 'SATISFIED' as const,
+      modelComplete: true,
+      violatedSpecCount: 0,
+      counterexampleCount: 0,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      generationIssues: [],
+      dataAvailable: true as const,
+      counterexamples: []
+    }
+    const noAttack: VerificationRunSummary = {
+      ...base, id: 11, isAttack: false, attackBudget: 0, enablePrivacy: false,
+      modelSemantics: semantics
+    }
+    const budgeted: VerificationRunSummary = {
+      ...base, id: 12, isAttack: true, attackBudget: 2, enablePrivacy: true,
+      modelSemantics: {
+        ...semantics,
+        attackSelectionPolicy: 'UP_TO_ATTACK_BUDGET_NONDETERMINISTIC',
+        modeledAttackPointCount: 5
+      }
+    }
+    // An exact-points run arrives with attackBudget == points.size(), so only the policy
+    // distinguishes "these two points" from "any two of five".
+    const pinned: VerificationRunSummary = {
+      ...base, id: 13, isAttack: true, attackBudget: 2, enablePrivacy: false,
+      modelSemantics: {
+        ...semantics,
+        attackSelectionPolicy: 'EXACT_ATTACK_POINTS',
+        modeledAttackPointCount: 2
+      }
+    }
+
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'results',
+        verificationRuns: [noAttack, budgeted, pinned]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const plain = wrapper.get('[data-testid="verification-run-assumptions-11"]')
+    expect(plain.text()).toContain('No attack modeled')
+    expect(plain.attributes('aria-label')).toBe('Run assumptions')
+
+    const attacked = wrapper.get('[data-testid="verification-run-assumptions-12"]')
+    expect(attacked.text()).toContain('Up to 2 of 5 compromised')
+    expect(attacked.text()).toContain('Privacy modeled')
+
+    const exact = wrapper.get('[data-testid="verification-run-assumptions-13"]')
+    expect(exact.text()).toContain('2 chosen attack points')
+    // Must not claim an exhaustive search the run never performed.
+    expect(exact.text()).not.toContain('Up to')
+
+    // The rows must no longer read identically.
+    expect(new Set([plain.text(), attacked.text(), exact.text()]).size).toBe(3)
+    wrapper.unmount()
+  })
+
+  it('tells the user a historical fix may not apply to the current board', () => {
+    const run: VerificationRunSummary = {
+      id: 30,
+      createdAt: '2026-07-13T10:00:00',
+      startedAt: '2026-07-13T10:00:00',
+      completedAt: '2026-07-13T10:00:02',
+      isAttack: false,
+      attackBudget: 0,
+      enablePrivacy: false,
+      modelSemantics: semantics,
+      modelSnapshot: snapshot(2),
+      outcome: 'VIOLATED',
+      modelComplete: true,
+      violatedSpecCount: 1,
+      counterexampleCount: 1,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      generationIssues: [],
+      dataAvailable: true,
+      counterexamples: []
+    }
+    run.counterexamples = [{
+      id: 41,
+      verificationTaskId: 30,
+      violatedSpecId: 'spec_1',
+      stateCount: 3,
+      createdAt: '2026-07-13T10:00:02',
+      dataAvailable: true
+    } as TraceSummary]
+
+    const wrapper = mount(TraceHistoryPanel, {
+      props: { ...baseProps, activeLayer: 'results', verificationRuns: [run] },
+      global: { plugins: [i18n] }
+    })
+
+    // An enabled Fix button reads as "this applies to my board now"; the caveat has to be adjacent
+    // and programmatically linked, not left as an unused translation.
+    const caveat = wrapper.get('[data-testid="historical-fix-caveat-30"]')
+    expect(caveat.text()).toContain('it may no longer apply')
+    expect(wrapper.get('[data-testid="fix-verification-trace-41"]').attributes('aria-describedby'))
+      .toBe('historical-fix-caveat-30')
+    wrapper.unmount()
   })
 
   it('groups counterexamples under one verification result and distinguishes violations from replayable evidence', () => {

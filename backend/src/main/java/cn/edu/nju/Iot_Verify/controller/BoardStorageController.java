@@ -14,6 +14,7 @@ import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardUndoResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
@@ -233,7 +234,7 @@ public class BoardStorageController {
     }
 
     @PutMapping("/rules/order")
-    public Result<List<RuleDto>> reorderRules(
+    public Result<CollectionMutationResultDto<RuleDto>> reorderRules(
             @CurrentUser Long userId,
             @NotNull @Valid @RequestBody RuleOrderRequestDto request) {
         return Result.success(boardService.reorderRules(
@@ -246,6 +247,36 @@ public class BoardStorageController {
             @PathVariable long ruleId,
             @NotNull @Valid @RequestBody RuleDto expected) {
         return Result.success(boardService.removeRuleIfUnchanged(userId, ruleId, expected));
+    }
+
+    /**
+     * Current undo availability for this account.
+     *
+     * <p>Separate from the board snapshot so a page load can restore the undo affordance without
+     * the client inferring it from actions it happens to remember. Undo history is server state,
+     * so it survives reload, a second tab, and a different device.
+     */
+    @GetMapping("/edits/availability")
+    public Result<BoardUndoResultDto> boardEditAvailability(@CurrentUser Long userId) {
+        return Result.success(boardService.boardEditAvailability(userId));
+    }
+
+    /**
+     * Reverses the newest reversible board edit for this account.
+     *
+     * <p>Undo is a board *edit* command, not a navigation or dialog action: it is deliberately not
+     * bound to browser history, deep links, or run cancellation. The journal on the server is the
+     * authority for what is reversible, so the client sends no local history.
+     */
+    @PostMapping("/edits/undo")
+    public Result<BoardUndoResultDto> undoLastEdit(@CurrentUser Long userId) {
+        return Result.success(boardService.undoLastEdit(userId));
+    }
+
+    /** Re-applies the oldest undone edit. */
+    @PostMapping("/edits/redo")
+    public Result<BoardUndoResultDto> redoLastUndoneEdit(@CurrentUser Long userId) {
+        return Result.success(boardService.redoLastUndoneEdit(userId));
     }
 
     /**

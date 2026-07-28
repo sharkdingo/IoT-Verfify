@@ -61,7 +61,9 @@ public class FaultLocalizer {
                         .targetDeviceLabel(displayDeviceLabel(targetSmv, targetDeviceName))
                         .targetActionId(action)
                         .targetActionLabel(displayActionLabel(matchedApi, action))
-                        .targetEndState(matchedApi.getEndState())
+                        // Same reader-facing rendering as the conflict labels: the two are shown side by
+                        // side in one sentence, so they must not mix raw tuples with cleaned names.
+                        .targetEndState(describeEndState(targetSmv, matchedApi.getEndState()))
                         .reasonCode("TRIGGERED")
                         .build());
             }
@@ -132,25 +134,30 @@ public class FaultLocalizer {
 
                 String secondDescription = describeRule(rules, second.getRuleIndex());
                 String firstDescription = describeRule(rules, first.getRuleIndex());
+                // A multi-mode manifest stores the end state as a `;`-joined internal tuple. The
+                // comparison above already reads it per mode through `cleanStateName`; the sentence the
+                // user reads must use that same vocabulary rather than the raw token.
+                String firstLabel = describeEndState(smv, firstEndState);
+                String secondLabel = describeEndState(smv, secondEndState);
                 first.setConflicting(true);
                 first.setConflictWithRuleIndex(second.getRuleIndex());
                 first.setConflictingRuleString(secondDescription);
-                first.setConflictingEndState(secondEndState);
+                first.setConflictingEndState(secondLabel);
                 first.setReasonCode("CONFLICTING_END_STATES");
                 first.setReason("Conflicts with " + secondDescription
                         + ": both change " + first.getTargetDeviceLabel()
-                        + " to different states (" + firstEndState + " and "
-                        + secondEndState + ").");
+                        + " to different states (" + firstLabel + " and "
+                        + secondLabel + ").");
 
                 second.setConflicting(true);
                 second.setConflictWithRuleIndex(first.getRuleIndex());
                 second.setConflictingRuleString(firstDescription);
-                second.setConflictingEndState(firstEndState);
+                second.setConflictingEndState(firstLabel);
                 second.setReasonCode("CONFLICTING_END_STATES");
                 second.setReason("Conflicts with " + firstDescription
                         + ": both change " + second.getTargetDeviceLabel()
-                        + " to different states (" + secondEndState + " and "
-                        + firstEndState + ").");
+                        + " to different states (" + secondLabel + " and "
+                        + firstLabel + ").");
             }
         }
 
@@ -168,9 +175,11 @@ public class FaultLocalizer {
         if (smv.getModes() == null || firstEndState == null || secondEndState == null) {
             return false;
         }
+        String[] firstTargets = firstEndState.split(";", -1);
+        String[] secondTargets = secondEndState.split(";", -1);
         for (int modeIndex = 0; modeIndex < smv.getModes().size(); modeIndex++) {
-            String firstTarget = targetForMode(firstEndState, modeIndex);
-            String secondTarget = targetForMode(secondEndState, modeIndex);
+            String firstTarget = targetForMode(firstTargets, modeIndex);
+            String secondTarget = targetForMode(secondTargets, modeIndex);
             if (firstTarget != null && secondTarget != null
                     && !firstTarget.equals(secondTarget)) {
                 return true;
@@ -179,8 +188,35 @@ public class FaultLocalizer {
         return false;
     }
 
-    private String targetForMode(String endState, int modeIndex) {
+    /**
+     * The end state as a reader should see it: one cleaned state for a single-mode device, and the
+     * per-mode states joined with a separator a person can parse for a multi-mode one. Blank slots are
+     * dropped because they mean "this mode is unaffected", not a state named "".
+     *
+     * <p>The separator must stay one of {@code ; , |}: for a bundled template the frontend's
+     * {@code formatBuiltInModelToken} splits on those and localizes each token, so any other joiner
+     * (e.g. {@code " / "}) makes the whole string miss the catalogue and render raw in a non-English UI.
+     */
+    private String describeEndState(DeviceSmvData smv, String endState) {
+        if (endState == null || endState.isBlank()) {
+            return endState;
+        }
+        int modeCount = smv.getModes() == null ? 1 : Math.max(1, smv.getModes().size());
         String[] targets = endState.split(";", -1);
+        List<String> labels = new ArrayList<>();
+        for (int modeIndex = 0; modeIndex < modeCount; modeIndex++) {
+            String target = targetForMode(targets, modeIndex);
+            if (target != null && !target.isBlank()) {
+                labels.add(target);
+            }
+        }
+        // Nothing recognizable: keep the cleaned original rather than inventing a label.
+        return labels.isEmpty()
+                ? DeviceSmvDataFactory.cleanStateName(endState)
+                : String.join("; ", labels);
+    }
+
+    private String targetForMode(String[] targets, int modeIndex) {
         if (modeIndex >= targets.length || targets[modeIndex].isBlank()) {
             return null;
         }

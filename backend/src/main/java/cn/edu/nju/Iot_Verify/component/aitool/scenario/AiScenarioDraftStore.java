@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Autowired;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -22,6 +23,7 @@ import java.util.Optional;
  * can be much larger than the chat context window, and a confirmation must never depend on the
  * model copying the scene or an impact token back from a truncated tool result.</p>
  */
+@Slf4j
 @Component
 public class AiScenarioDraftStore {
 
@@ -100,7 +102,17 @@ public class AiScenarioDraftStore {
             return Optional.empty();
         }
         if (!entry.pendingExpiresAt().isAfter(clock.instant())) {
-            save(scope(userId, sessionId), entry.withPending(null, null));
+            // Clearing the lapsed confirmation is housekeeping, not part of this read's contract:
+            // `getPendingConfirmation` is `@Transactional(readOnly = true)` and holds no chat
+            // execution lease, so letting the write's failure escape turned an honest "nothing
+            // pending" answer into a 500. The answer below is correct either way, and the state
+            // store's own expiry sweep is the backstop.
+            try {
+                save(scope(userId, sessionId), entry.withPending(null, null));
+            } catch (Exception e) {
+                log.warn("Could not clear an expired scenario confirmation: exception={}",
+                        e.getClass().getName());
+            }
             return Optional.empty();
         }
         return Optional.of(toPending(entry));
@@ -149,8 +161,17 @@ public class AiScenarioDraftStore {
                     : null;
             return new Entry(scenarioName, scene.deepCopy(), snapshot.expiresAt(), preview, pendingExpiresAt);
         } catch (Exception e) {
-            stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.SCENARIO_DRAFT,
-                    snapshot.version());
+            // Same reasoning as the lapsed-confirmation cleanup in pendingApplication: discarding an
+            // unreadable draft is housekeeping, and this runs under the readOnly transaction of
+            // getPendingConfirmation, where letting the delete's failure escape would turn an honest
+            // "no usable draft" answer into a 500. JpaAiSessionStateStore sweeps the row itself.
+            try {
+                stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.SCENARIO_DRAFT,
+                        snapshot.version());
+            } catch (Exception cleanupFailure) {
+                log.warn("Could not discard an unreadable scenario draft: exception={}",
+                        cleanupFailure.getClass().getName());
+            }
             return null;
         }
     }

@@ -234,6 +234,7 @@ public class ConditionAdjustStrategy implements FixStrategy {
                     ctx.recordStrategyGenerationFailure(NAME, reason);
                     return null;
                 }
+                FixStrategyUtils.preserveInterrupt(e);
                 FixStrategyUtils.recordSolverFailure(ctx, NAME,
                         "Condition search encountered an execution error: " + e.getMessage());
             } finally {

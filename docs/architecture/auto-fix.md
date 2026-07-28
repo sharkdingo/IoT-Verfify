@@ -121,10 +121,12 @@ any model that disables a rule or skips a specification.
   opaque selector scoped to the trace/fix context; it keeps zero-based rule/condition
   locators out of REST and AI-tool requests, and the parameter strategy matches it
   against the currently available adjustment targets.
-  A selection is considered used as soon as it matches an eligible target, regardless of
-  whether that constrained search finds a verified suggestion. Only selections that match
-  no parameterizable condition are reported in
-  `FixResultDto.unusedPreferredRangeSelections`.
+  A selection counts as used once it matches an eligible target *and* that target was actually
+  searched, regardless of whether the constrained search found a verified suggestion.
+  `FixResultDto.unusedPreferredRangeSelections` therefore reports both a selection that matched
+  no parameterizable condition and one whose range does not intersect the device's own limits —
+  the latter was never tested, so calling it honoured would tell the user a constraint held when
+  nothing exercised it; an accompanying diagnostic names the conflicting bounds.
   The Board UI labels each choice with the fault rule text, condition context, attribute,
   and relation so users do not type or infer internal parameter locators.
   It can turn a parameter into an explicit no-change constraint by locking its preferred

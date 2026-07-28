@@ -60,9 +60,9 @@ const reloadPage = () => window.location.reload()
   justify-content: center;
   gap: 12px;
   padding: 32px;
-  color: var(--text-primary, #172033);
+  color: var(--text, #172033);
   text-align: center;
-  background: var(--surface-primary, #ffffff);
+  background: var(--surface, #ffffff);
 }
 
 .error-boundary-fallback__icon {
@@ -78,7 +78,7 @@ const reloadPage = () => window.location.reload()
 
 .error-boundary-fallback p {
   max-width: 520px;
-  color: var(--text-secondary, #526071);
+  color: var(--text-muted, #526071);
 }
 
 .error-boundary-fallback__actions {

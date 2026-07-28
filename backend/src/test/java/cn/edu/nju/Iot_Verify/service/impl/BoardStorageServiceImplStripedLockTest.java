@@ -1,104 +1,140 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.po.UserPo;
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.support.TransactionTemplate;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for striped lock implementation in BoardStorageServiceImpl.
- * Verifies the lock mapping logic without requiring full service integration.
+ * Per-user serialization of board writes.
+ *
+ * <p>Deliberately behavioural rather than reflective. An earlier version of this class only read
+ * {@code userWriteLocks} and {@code getUserWriteLock} through reflection and asserted that the array
+ * had 1024 non-null slots and that a userId mapped to the same slot twice. Every one of those
+ * assertions restates the field initializer or the determinism of an array read, so all 25
+ * {@code synchronized (getUserWriteLock(userId))} blocks in the service could be deleted and the file
+ * stayed green — it pinned the lock *table*, never the locking.
  */
 class BoardStorageServiceImplStripedLockTest {
 
-    @Test
-    @DisplayName("Striped lock: same userId always maps to same lock object")
-    void sameUserId_sameStripe() throws Exception {
-        BoardStorageServiceImpl service = createMinimalService();
-        Method getLock = BoardStorageServiceImpl.class.getDeclaredMethod("getUserWriteLock", Long.class);
-        getLock.setAccessible(true);
+    private static final long LOCK_STRIPES = 1024L;
 
-        Long userId = 42L;
-        Object lock1 = getLock.invoke(service, userId);
-        Object lock2 = getLock.invoke(service, userId);
+    private final ExecutorService threads = Executors.newFixedThreadPool(2);
 
-        assertSame(lock1, lock2, "Same userId should always return the same lock object");
+    @AfterEach
+    void tearDown() {
+        threads.shutdownNow();
     }
 
     @Test
-    @DisplayName("Striped lock: hash collision maps to same stripe")
-    void hashCollision_sameStripe() throws Exception {
-        BoardStorageServiceImpl service = createMinimalService();
-        Method getLock = BoardStorageServiceImpl.class.getDeclaredMethod("getUserWriteLock", Long.class);
-        getLock.setAccessible(true);
+    @DisplayName("Two writers for the same user cannot be inside the critical section at once")
+    void sameUser_writesAreSerialized() throws Exception {
+        Overlap overlap = runTwoConcurrentSnapshots(7L, 7L);
 
-        // userId1 and userId2 map to same stripe (userId % 1024)
-        Long userId1 = 1L;
-        Long userId2 = 1025L; // 1025 % 1024 = 1
-
-        Object lock1 = getLock.invoke(service, userId1);
-        Object lock2 = getLock.invoke(service, userId2);
-
-        assertSame(lock1, lock2, "Hash collision should map to the same lock stripe");
+        assertFalse(overlap.observed(),
+                "a second writer entered the transaction while the first was still inside it");
     }
 
     @Test
-    @DisplayName("Striped lock: different userIds without collision map to different stripes")
-    void differentUserId_differentStripe() throws Exception {
-        BoardStorageServiceImpl service = createMinimalService();
-        Method getLock = BoardStorageServiceImpl.class.getDeclaredMethod("getUserWriteLock", Long.class);
-        getLock.setAccessible(true);
+    @DisplayName("Users sharing a stripe are serialized too — collision is safe, not a bug")
+    void collidingUsers_areAlsoSerialized() throws Exception {
+        // 1 and 1025 both map to stripe 1. Sharing a lock costs concurrency, never correctness.
+        Overlap overlap = runTwoConcurrentSnapshots(1L, 1L + LOCK_STRIPES);
 
-        Long userId1 = 1L;
-        Long userId2 = 2L;
-
-        Object lock1 = getLock.invoke(service, userId1);
-        Object lock2 = getLock.invoke(service, userId2);
-
-        assertNotSame(lock1, lock2, "Different userIds (no collision) should map to different lock stripes");
+        assertFalse(overlap.observed(),
+                "users sharing a stripe must still exclude each other");
     }
 
     @Test
-    @DisplayName("Striped lock: array has exactly 1024 stripes")
-    void stripedLock_has1024Stripes() throws Exception {
-        BoardStorageServiceImpl service = createMinimalService();
-        Field locksField = BoardStorageServiceImpl.class.getDeclaredField("userWriteLocks");
-        locksField.setAccessible(true);
+    @DisplayName("Users on different stripes are not serialized against each other")
+    void differentStripes_runConcurrently() throws Exception {
+        // The point of striping: without it a single global lock would serialize unrelated accounts.
+        Overlap overlap = runTwoConcurrentSnapshots(1L, 2L, true);
 
-        Object[] locks = (Object[]) locksField.get(service);
-
-        assertEquals(1024, locks.length, "Lock array should have exactly 1024 stripes");
-        for (int i = 0; i < locks.length; i++) {
-            assertNotNull(locks[i], "Lock stripe " + i + " should be initialized");
-        }
-    }
-
-    @Test
-    @DisplayName("Striped lock: modulo mapping is deterministic")
-    void stripedLock_deterministicMapping() throws Exception {
-        BoardStorageServiceImpl service = createMinimalService();
-        Method getLock = BoardStorageServiceImpl.class.getDeclaredMethod("getUserWriteLock", Long.class);
-        getLock.setAccessible(true);
-
-        // Test multiple userIds to verify deterministic mapping
-        for (long userId = 0; userId < 10000; userId += 100) {
-            Object lock1 = getLock.invoke(service, userId);
-            Object lock2 = getLock.invoke(service, userId);
-            assertSame(lock1, lock2, "userId " + userId + " should always map to the same lock");
-        }
+        assertTrue(overlap.observed(),
+                "different stripes must allow concurrent writes, or striping buys nothing");
     }
 
     /**
-     * Create a minimal BoardStorageServiceImpl instance for testing lock logic only.
-     * All dependencies are null since we only test getUserWriteLock().
+     * Runs {@code getSemanticSnapshot} for two user ids on two threads, with each transaction held
+     * open until both have had a chance to enter, and reports whether they were ever inside together.
      */
-    private BoardStorageServiceImpl createMinimalService() {
+    private Overlap runTwoConcurrentSnapshots(long firstUserId, long secondUserId) throws Exception {
+        return runTwoConcurrentSnapshots(firstUserId, secondUserId, false);
+    }
+
+    /**
+     * Runs {@code getSemanticSnapshot} for two user ids on two threads, with each transaction held
+     * open until both have had a chance to enter, and reports whether they were ever inside together.
+     *
+     * <p>{@code expectConcurrency} decides how long the first arrival waits for the second. For the
+     * serialized cases the wait must be short and best-effort, because the second thread *cannot*
+     * arrive until the first leaves — waiting for it would deadlock. For the concurrent case the wait
+     * has to be generous instead: a fixed 300 ms window made the assertion a race against the
+     * scheduler, so on a loaded machine (the one also running NuSMV subprocesses) the pair missed each
+     * other and the failure blamed the lock design rather than the timing.
+     */
+    private Overlap runTwoConcurrentSnapshots(long firstUserId, long secondUserId,
+                                              boolean expectConcurrency) throws Exception {
+        AtomicInteger inside = new AtomicInteger();
+        AtomicBoolean overlapObserved = new AtomicBoolean(false);
+        CountDownLatch bothEntered = new CountDownLatch(2);
+        CountDownLatch done = new CountDownLatch(2);
+
+        UserRepository userRepository = mock(UserRepository.class);
+        when(userRepository.findByIdForUpdate(anyLong())).thenReturn(Optional.of(new UserPo()));
+
+        TransactionTemplate transactionTemplate = mock(TransactionTemplate.class);
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            if (inside.incrementAndGet() > 1) overlapObserved.set(true);
+            bothEntered.countDown();
+            bothEntered.await(expectConcurrency ? 5000 : 300, TimeUnit.MILLISECONDS);
+            inside.decrementAndGet();
+            // The callback's own result is irrelevant here; only the entry/exit window is under test.
+            return null;
+        });
+
+        BoardStorageServiceImpl service = serviceWith(userRepository, transactionTemplate);
+
+        for (long userId : new long[] {firstUserId, secondUserId}) {
+            threads.execute(() -> {
+                try {
+                    service.getSemanticSnapshot(userId);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "both writers must complete");
+        return new Overlap(overlapObserved.get());
+    }
+
+    private BoardStorageServiceImpl serviceWith(UserRepository userRepository,
+                                                TransactionTemplate transactionTemplate) {
         return new BoardStorageServiceImpl(
                 null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null
-        );
+                transactionTemplate, null, null, null, null, null, null, null, null,
+                userRepository, null);
+    }
+
+    private record Overlap(boolean observed) {
     }
 }

@@ -119,7 +119,10 @@ export const createAuthenticatedUser = async (
   return loginBody.data as AuthUser
 }
 
-export const test = base.extend<{ accountCleanup: void }>({
+export const test = base.extend<
+  { accountCleanup: void },
+  { sharedReadOnlyAccount: AuthUser }
+>({
   accountCleanup: [async ({ request }, use) => {
     const accounts = new Map<string, TestAccountCredentials>()
     trackedAccounts.set(request, accounts)
@@ -139,7 +142,33 @@ export const test = base.extend<{ accountCleanup: void }>({
         throw new Error(`Failed to clean up ${errors.length} E2E test account(s):\n${errors.join('\n')}`)
       }
     }
-  }, { auto: true }]
+  }, { auto: true }],
+
+  /**
+   * One account per worker, for specs whose tests do not mutate account state.
+   *
+   * `accountCleanup` is per-test and *deletes* the accounts a test registered, so a
+   * file-level cache of `createAuthenticatedUser` would hand later tests a token for a
+   * deleted user. This fixture owns its own request context and cleanup instead, which
+   * also keeps a spec well under the backend's registrations-per-hour limit.
+   */
+  sharedReadOnlyAccount: [async ({ playwright }, use) => {
+    const request = await playwright.request.newContext()
+    const accounts = new Map<string, TestAccountCredentials>()
+    trackedAccounts.set(request, accounts)
+    try {
+      await use(await createAuthenticatedUser(request))
+    } finally {
+      trackedAccounts.delete(request)
+      try {
+        for (const credentials of [...accounts.values()].reverse()) {
+          await deleteTrackedAccount(request, credentials)
+        }
+      } finally {
+        await request.dispose()
+      }
+    }
+  }, { scope: 'worker' }]
 })
 
 export { expect }

@@ -446,7 +446,7 @@ class ManageRuleToolTest {
         RuleDto first = RuleDto.builder().id(2L).ruleString("Rule two").build();
         RuleDto second = RuleDto.builder().id(1L).ruleString("Rule one").build();
         when(boardStorageService.reorderRules(1L, List.of(1L, 2L), List.of(2L, 1L)))
-                .thenReturn(List.of(first, second));
+                .thenReturn(CollectionMutationResultDto.of("reordered", null, List.of(first, second)));
 
         JsonNode json = objectMapper().readTree(tool.execute(
                 "{\"action\":\"reorder\",\"expectedRuleIds\":[1,2],\"ruleIds\":[2,1]}"));

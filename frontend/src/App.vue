@@ -6,6 +6,12 @@ import { useChatStore } from "@/stores/chat";
 import { useAuth } from "@/stores/auth";
 import { publishBoardInvalidation } from "@/utils/boardInvalidation";
 import AppErrorBoundary from "./components/AppErrorBoundary.vue";
+import { loginRedirectTarget } from "@/router/loginRedirect";
+import { isNavigationInProgress } from "@/router";
+import {
+  assistantRefreshEffects,
+  isAssistantRefreshTarget
+} from "@/views/board/assistantRefresh";
 
 const route = useRoute();
 const router = useRouter();
@@ -18,18 +24,23 @@ const { state: authState, getUser } = useAuth();
 // Authentication is a hard ownership boundary. Remount private route components when
 // the subject changes so no request, timer, or subscription from the previous account
 // can write into the next account's workspace.
+//
+// Keyed on the route *identity*, not `fullPath`: query params address content within a
+// view (e.g. the board's open run), and remounting on every param change would discard
+// the view's state and re-run its whole load — the very state the URL is meant to restore.
 const routeAuthScopeKey = computed(() =>
-  `${route.fullPath}:${route.meta.public ? 'public' : (authState.user?.userId ?? 'anonymous')}`
+  `${String(route.name ?? route.path)}:${route.meta.public ? 'public' : (authState.user?.userId ?? 'anonymous')}`
 );
 const canRenderCurrentRoute = computed(() => Boolean(route.meta.public) || authState.isLoggedIn);
 
 watch(() => authState.isLoggedIn, authenticated => {
   if (authenticated || route.meta.public) return;
-  const redirect = route.fullPath;
-  void router.replace({
-    path: '/',
-    query: { mode: 'login', ...(redirect !== '/' ? { redirect } : {}) }
-  });
+  // The route guard's own `revalidateSession()` flips this flag mid-navigation; it resolves the
+  // redirect from the *incoming* route itself, so stepping in here would use the stale current route
+  // and abort the navigation it is already handling.
+  if (isNavigationInProgress()) return;
+  const target = loginRedirectTarget(route);
+  if (target) void router.replace(target);
 }, { flush: 'sync' });
 
 // Load the assistant lazily on first open, then keep it mounted while hidden. Closing a
@@ -72,30 +83,19 @@ const invokeBoardRefresh = async (methodName: string): Promise<boolean> => {
 
 const handleSystemCommand = async (cmd: StreamCommand): Promise<boolean> => {
   if (cmd.type === 'REFRESH_DATA') {
-    const target = cmd.payload?.target as string | undefined;
-    if (!target) {
+    const target = cmd.payload?.target;
+    // An unknown target is a contract mismatch, not something to guess at.
+    if (!isAssistantRefreshTarget(target)) {
+      if (target) console.warn(`Unsupported REFRESH_DATA target: ${String(target)}`);
       return false;
     }
 
-    switch (target) {
-      case 'device_list':
-        return await invokeBoardRefresh('refreshDevices');
-      case 'environment_list':
-        return await invokeBoardRefresh('refreshEnvironmentVariables');
-      case 'rule_list':
-        return await invokeBoardRefresh('refreshRules');
-      case 'spec_list':
-        return await invokeBoardRefresh('refreshSpecifications');
-      case 'template_list':
-        return await invokeBoardRefresh('refreshDeviceTemplates');
-      case 'run_history':
-        return await invokeViewMethod('refreshRunHistory');
-      case 'board_state':
-        return await invokeBoardRefresh('refreshAllBoardState');
-      default:
-        console.warn(`Unsupported REFRESH_DATA target: ${target}`);
-        return false;
-    }
+    // One table owns which board method a target reloads and whether it changed persisted state,
+    // so this dispatch and the board's own follow-ups cannot disagree.
+    const effects = assistantRefreshEffects(target);
+    return effects.invalidatesOtherTabs
+      ? await invokeBoardRefresh(effects.method)
+      : await invokeViewMethod(effects.method);
   }
 
   return false;
@@ -127,7 +127,7 @@ const routerViewProps = computed(() => isBoardChat.value
         </AppErrorBoundary>
       </router-view>
 
-      <AppErrorBoundary v-if="shouldMountChat" :reset-key="route.fullPath">
+      <AppErrorBoundary v-if="shouldMountChat" :reset-key="routeAuthScopeKey">
         <ChatView
           ref="chatViewRef"
           :board-mode="isBoardChat"

@@ -281,15 +281,32 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
     }
 
     /**
-     * 处理取消收尾。子类可 override 添加额外清理逻辑（如日志）。
+     * Records the cancellation of a task whose worker has stopped.
      *
-     * <p>逻辑来源：VerificationServiceImpl:L758-769, SimulationServiceImpl:L515-526
+     * <p>Called from every worker's {@code finally} block, ahead of the worker-state cleanup, so it
+     * must not propagate: {@link #currentTaskTime()} and the cancel update both touch the database.
+     * A failure here used to skip {@code removeRunningTask} / {@code removeTaskProgress}, leaving
+     * this thread registered against the finished task — a later cancel would then interrupt
+     * whatever unrelated task the pooled thread had moved on to.
+     *
+     * <p>Swallowing is safe only because the database row remains authoritative: the user's cancel
+     * already committed the CANCELLED status, or the lease expires and the recovery sweep resolves
+     * the row. Nothing here reports success to a caller.
      */
     protected void handleCancellation(T task) {
         log.info("Handling cancellation for {}: {}", taskResourceType, task.getId());
-        int updated = atomicCancelTask(task.getId(), currentTaskTime());
-        if (updated == 0) {
-            log.info("{} {} already finished (COMPLETED/FAILED), skipping cancel", taskResourceType, task.getId());
+        try {
+            int updated = atomicCancelTask(task.getId(), currentTaskTime());
+            if (updated == 0) {
+                log.info("{} {} already finished (COMPLETED/FAILED), skipping cancel", taskResourceType, task.getId());
+            }
+        } catch (Exception e) {
+            // The row is left for the user's own cancel to settle, or failing that the expired-lease
+            // sweep — which writes FAILED, not CANCELLED. So in this residual case the user can see a
+            // run they cancelled reported as failed. That is honest about an unknown outcome; what it
+            // must never do is propagate and skip the removeRunningTask cleanup in the caller.
+            log.warn("Failed to record cancellation for {} {}; leaving the row to the recovery sweep",
+                    taskResourceType, task.getId(), e);
         }
     }
 

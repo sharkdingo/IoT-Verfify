@@ -14,10 +14,22 @@ withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const { theme, toggleTheme } = useTheme()
+const { theme, followsSystem, cycleThemeMode } = useTheme()
 
-const nextThemeLabel = computed(() => theme.value === 'dark' ? t('app.lightTheme') : t('app.darkTheme'))
-const iconName = computed(() => theme.value === 'dark' ? 'light_mode' : 'dark_mode')
+// Three-state control: the label names the *current* mode so the state is readable,
+// while aria-label names the next mode so the action is announced.
+const currentModeLabel = computed(() => {
+  if (followsSystem.value) return t('app.systemTheme')
+  return theme.value === 'dark' ? t('app.darkTheme') : t('app.lightTheme')
+})
+const currentModeDescription = computed(() => {
+  if (followsSystem.value) return t('app.themeModeSystem')
+  return theme.value === 'dark' ? t('app.themeModeDark') : t('app.themeModeLight')
+})
+const iconName = computed(() => {
+  if (followsSystem.value) return 'brightness_auto'
+  return theme.value === 'dark' ? 'dark_mode' : 'light_mode'
+})
 </script>
 
 <template>
@@ -28,12 +40,12 @@ const iconName = computed(() => theme.value === 'dark' ? 'light_mode' : 'dark_mo
       `theme-toggle--${tone}`,
       { 'theme-toggle--compact': compact }
     ]"
-    :title="t('app.switchTheme')"
-    :aria-label="t('app.switchTheme')"
-    @click="toggleTheme"
+    :title="`${currentModeDescription} — ${t('app.switchTheme')}`"
+    :aria-label="`${currentModeDescription} — ${t('app.switchTheme')}`"
+    @click="cycleThemeMode"
   >
-    <span class="material-symbols-outlined theme-toggle__icon">{{ iconName }}</span>
-    <span class="theme-toggle__label">{{ nextThemeLabel }}</span>
+    <span class="material-symbols-outlined theme-toggle__icon" aria-hidden="true">{{ iconName }}</span>
+    <span class="theme-toggle__label">{{ currentModeLabel }}</span>
   </button>
 </template>
 
