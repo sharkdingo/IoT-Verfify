@@ -949,7 +949,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .findFirst()
                         .orElse(spec);
                 editJournal.record(userId, BoardEditEntityType.SPECIFICATION,
-                        BoardEditOperation.CREATE, created.getId(), null, created);
+                        BoardEditOperation.CREATE, created.getId(), null, created,
+                        indexOfSpecification(saved, created.getId()));
                 return withUndoAvailability(
                         userId, CollectionMutationResultDto.of("created", created, saved));
             });
@@ -3698,7 +3699,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 RulePo saved = ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
                 RuleDto created = ruleMapper.toDto(saved);
                 editJournal.record(userId, BoardEditEntityType.RULE, BoardEditOperation.CREATE,
-                        String.valueOf(saved.getId()), null, created);
+                        String.valueOf(saved.getId()), null, created, nextRules.size() - 1);
                 return withUndoAvailability(userId,
                         CollectionMutationResultDto.of("created", created, getRulesInternal(userId)));
             });

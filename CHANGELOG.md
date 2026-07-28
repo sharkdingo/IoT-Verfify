@@ -111,6 +111,10 @@ history into a technical spec. The spec content itself now lives under
   specification restore fell back to appending when `entity_order` was absent. Since execution order
   decides which rule wins when guards overlap, appending silently restores a different board; such an
   entry (only possible for rows written before the column existed) is now rejected with `409`.
+  Creates record their position too, so redo of a create restores the rule or specification instead of
+  hitting that guard: they carried no `entity_order` (nothing preceded them), which made every redo of
+  a create fail with a false "saved details are unreadable" conflict while leaving `canRedo` true, so
+  the button stayed armed and the user could retry indefinitely.
 - **A preferred range disjoint from the device's limits is reported as unused.** It was marked as
   matched before the empty-intersection check, telling the user their constraint held when nothing had
   tested it. Step A likewise only retries the original value when it lies inside the effective bounds,

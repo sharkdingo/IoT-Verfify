@@ -32,7 +32,8 @@ import java.sql.Statement;
  *
  * <p><b>Rollback.</b> {@code DROP INDEX uk_board_edit_journal_user_sequence ON board_edit_journal;}
  * The renumbering is not reversible, but it only ever rewrites rows that were already ambiguous, and
- * it preserves each account's relative ordering.
+ * it preserves each account's relative ordering. It commits as one transaction, so a crash cannot
+ * leave an account half-renumbered.
  */
 @Slf4j
 @Component
@@ -116,6 +117,24 @@ public class BoardEditJournalSequenceUniqueness implements SmartInitializingSing
 
         log.warn("Renumbering board edit journal sequences for {} account(s) with duplicates: {}",
                 affected.size(), affected);
+        // Both passes commit together per account. On autocommit a crash between them would leave that
+        // account's sequences parked in the staging range: still ordered and still unique, but a third
+        // state no rollback note describes and no operator would expect.
+        boolean autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            renumberAccounts(connection, affected);
+            connection.commit();
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(autoCommit);
+        }
+    }
+
+    private void renumberAccounts(Connection connection, java.util.List<Long> affected)
+            throws SQLException {
         for (Long userId : affected) {
             java.util.List<Long> ids = new java.util.ArrayList<>();
             try (PreparedStatement select = connection.prepareStatement(

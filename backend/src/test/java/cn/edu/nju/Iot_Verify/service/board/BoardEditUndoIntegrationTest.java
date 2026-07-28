@@ -303,6 +303,34 @@ class BoardEditUndoIntegrationTest {
     }
 
     @Test
+    void redoOfACreateRestoresTheRuleRatherThanReportingItUnreadable() {
+        // A CREATE entry records no execution position — there was nothing there before it — so the
+        // "missing recorded position" guard must not fire on this path. It used to, making every redo
+        // of a create fail with a false "saved details are unreadable" conflict while leaving canRedo
+        // true, so the button stayed armed and the user could retry forever.
+        Long ruleId = service.addRule(userId, newRule("r1")).getAffectedItem().getId();
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertTrue(service.getRules(userId).isEmpty());
+
+        BoardUndoResultDto redone = service.redoLastUndoneEdit(userId);
+
+        assertTrue(redone.isApplied(), "redo of a create must re-apply it");
+        assertEquals("REDONE", redone.getReasonCode());
+        assertEquals(1, service.getRules(userId).size());
+        assertEquals(ruleId, service.getRules(userId).get(0).getId());
+    }
+
+    @Test
+    void redoOfASpecificationCreateRestoresIt() {
+        service.addSpec(userId, newSpec("on"));
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertTrue(service.getSpecs(userId).isEmpty());
+
+        assertTrue(service.redoLastUndoneEdit(userId).isApplied());
+        assertEquals(1, service.getSpecs(userId).size());
+    }
+
+    @Test
     void aNewEditAfterAnUndoMakesRedoUnreachable() {
         Long first = service.addRule(userId, newRule("r1")).getAffectedItem().getId();
         service.removeRuleIfUnchanged(userId, first,
