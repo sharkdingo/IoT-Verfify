@@ -2,6 +2,7 @@ import type { VNode } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { i18n } from '@/assets/i18n'
+import { registerModalSurface } from '@/composables/useBodyScrollLock'
 
 /**
  * The one place user feedback is produced.
@@ -75,6 +76,10 @@ const BASE_BOX = { appendTo: 'body', lockScroll: false } as const
  * outcome, never an exception the caller has to catch.
  */
 export const confirmDestructive = async (options: ConfirmOptions): Promise<boolean> => {
+  // Counts as an open modal for the duration. A MessageBox is modal to the user but takes no scroll
+  // lock, so without this a `window`-level accelerator (the board's Ctrl+Z) still reached the surface
+  // behind the confirmation and mutated it.
+  const releaseModalSurface = registerModalSurface()
   try {
     await ElMessageBox.confirm(options.message, options.title, {
       ...BASE_BOX,
@@ -92,6 +97,8 @@ export const confirmDestructive = async (options: ConfirmOptions): Promise<boole
       console.error('Confirmation dialog failed:', error)
     }
     return false
+  } finally {
+    releaseModalSurface()
   }
 }
 
@@ -108,6 +115,7 @@ export const dismissOpenConfirmation = () => {
 export const acknowledge = async (
   options: Omit<ConfirmOptions, 'cancelText'> & { tone?: 'warning' | 'error' }
 ): Promise<void> => {
+  const releaseModalSurface = registerModalSurface()
   try {
     await ElMessageBox.alert(options.message, options.title, {
       ...BASE_BOX,
@@ -116,5 +124,7 @@ export const acknowledge = async (
     })
   } catch {
     // Dismissing an acknowledgement is equivalent to confirming it.
+  } finally {
+    releaseModalSurface()
   }
 }

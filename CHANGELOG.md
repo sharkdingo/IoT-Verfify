@@ -45,8 +45,12 @@ history into a technical spec. The spec content itself now lives under
 - **Ctrl+Z no longer mutates the board behind an open dialog.** The accelerator is on `window`, and
   `targetOwnsNativeUndo` exempts only text inputs — so the keystroke pressed while focus sat on a
   modal's button undid a persisted edit underneath it, leaving the dialog showing a draft built from
-  the pre-undo collections. `useBodyScrollLock` now exposes the open-modal depth (every real modal
-  already registers there) and the board's undo-blocked predicate reads it.
+  the pre-undo collections. `useBodyScrollLock` now exposes the open-modal depth and the board's
+  undo-blocked predicate reads it. Confirmations raised through `utils/feedback.ts` register that depth
+  too: an Element Plus `MessageBox` is modal to the user but passes `lockScroll: false` (the board
+  shell is a fixed `100vh` surface), so tying depth to the scroll lock alone left every
+  `confirmDestructive` window unguarded — pressing Ctrl+Z while a "delete this rule?" prompt was open
+  still reversed the previous edit behind it.
 - **A conflicted undo stops inviting the same failure.** The 409 branch reported the conflict but
   never re-read availability, so the button stayed enabled on an entry guaranteed to conflict again.
   Availability reads also carry an epoch now, so one in flight across a mutation cannot restore the

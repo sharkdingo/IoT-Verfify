@@ -24,6 +24,7 @@ import {
   notifySuccess
 } from '../feedback'
 import { i18n } from '@/assets/i18n'
+import { openModalDepth } from '@/composables/useBodyScrollLock'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -103,6 +104,50 @@ describe('confirmDestructive', () => {
     const options = elementPlus.box.confirm.mock.calls[0][2] as Record<string, unknown>
     expect(options.lockScroll).toBe(false)
     expect(options.appendTo).toBe('body')
+  })
+})
+
+describe('modal depth registration', () => {
+  // A MessageBox is modal to the user but takes no scroll lock (the board shell is a fixed 100vh
+  // surface), so it does not register through `useModalAccessibility` like a `role="dialog"` panel.
+  // Without counting here, the board's window-level Ctrl+Z stayed unblocked and undid an edit on the
+  // surface behind an open confirmation.
+  it('counts an open confirmation as a modal surface and releases it on settle', async () => {
+    expect(openModalDepth.value).toBe(0)
+
+    let settle!: () => void
+    elementPlus.box.confirm.mockImplementationOnce(() => new Promise<void>(resolve => {
+      settle = resolve
+    }))
+    const pending = confirmDestructive({ title: 'Delete', message: 'Sure?' })
+    expect(openModalDepth.value).toBe(1)
+
+    settle()
+    await pending
+    expect(openModalDepth.value).toBe(0)
+  })
+
+  it('releases the count when the confirmation is cancelled or fails', async () => {
+    elementPlus.box.confirm.mockRejectedValueOnce('cancel')
+    await confirmDestructive({ title: 'Delete', message: 'Sure?' })
+    expect(openModalDepth.value).toBe(0)
+
+    elementPlus.box.confirm.mockRejectedValueOnce(new Error('boom'))
+    await confirmDestructive({ title: 'Delete', message: 'Sure?' })
+    expect(openModalDepth.value).toBe(0)
+  })
+
+  it('counts an acknowledgement too', async () => {
+    let settle!: () => void
+    elementPlus.box.alert.mockImplementationOnce(() => new Promise<void>(resolve => {
+      settle = resolve
+    }))
+    const pending = acknowledge({ title: 'Heads up', message: 'Done' })
+    expect(openModalDepth.value).toBe(1)
+
+    settle()
+    await pending
+    expect(openModalDepth.value).toBe(0)
   })
 })
 

@@ -16,10 +16,33 @@ const openModalCount = ref(0)
  *
  * Exposed because a `window`-level keyboard accelerator cannot tell on its own that a dialog is
  * covering the board: `event.target` is the modal's own button, which owns no native undo, so the
- * keystroke leaks through to the surface behind it. Every modal already registers here via
- * `useModalAccessibility`, so this is the one place that knows.
+ * keystroke leaks through to the surface behind it.
+ *
+ * Registration is deliberately separate from the scroll lock. Element Plus `MessageBox`
+ * confirmations (`utils/feedback.ts`) are modal for the user but pass `lockScroll: false`, because
+ * the board shell is a fixed `100vh` surface that Element Plus's scrollbar compensation would
+ * shift — so they must count here without taking the lock. Wiring depth to the lock alone left
+ * every `confirmDestructive` window unguarded.
  */
 export const openModalDepth = readonly(openModalCount)
+
+/**
+ * Registers a modal surface that manages its own scrolling, and returns the release function.
+ *
+ * For surfaces outside the Vue component lifecycle (an awaited `MessageBox`), where a composable
+ * with `onBeforeUnmount` does not apply.
+ */
+export const registerModalSurface = (): (() => void) => {
+  openModalCount.value += 1
+  let released = false
+  return () => {
+    // Idempotent: a confirmation can settle through confirm, cancel, or dismiss, and the caller
+    // releases in a `finally` that must not double-decrement.
+    if (released) return
+    released = true
+    openModalCount.value = Math.max(0, openModalCount.value - 1)
+  }
+}
 
 const acquire = () => {
   openModalCount.value += 1
