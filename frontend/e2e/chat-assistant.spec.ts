@@ -305,18 +305,19 @@ test('a rule_list refresh command makes the workspace re-read undo availability'
   // A real scene gives us device-referencing rules to delete.
   await page.getByTestId('scene-import-file').setInputFiles(path.resolve(
     process.cwd(), '..', 'docs', 'examples', 'default-climate-conflict-scene.json'))
-  // The disabled state is applied locally the instant the journal is cleared, while the confirming
-  // availability GET is still in flight (`notifyUndoJournalCleared` fires it fire-and-forget). Arm the
-  // wait *before* confirming the replacement, then let it land before editing out-of-band below:
-  // otherwise it can resolve after the delete, legitimately report canUndo=true, and re-enable the
-  // button — failing the negative assertion further down for a fixture-ordering reason.
-  const availabilityAfterClear = page.waitForResponse(response =>
-    response.url().includes('/api/board/edits/availability') && response.ok(),
-    { timeout: 60_000 })
+  // The disabled state is applied locally the instant the journal is cleared, while confirming
+  // availability GETs are still in flight — and a full scene replacement triggers several (the
+  // journal-cleared re-read, the snapshot reload, the data-ready hook). Any of them can resolve after
+  // the out-of-band delete below, legitimately report canUndo=true, and re-enable the button — failing
+  // the negative assertion for a fixture-ordering reason rather than a product one. Waiting on the
+  // *server's* view of availability is the deterministic barrier: once it reports an empty journal,
+  // every in-flight read can only be reporting the same thing.
   await page.getByRole('dialog').getByRole('button', { name: /Replace in full|全量替换/ }).click()
   // Scene replacement clears the journal, so this is a clean baseline.
   await expect(page.getByTestId('board-undo')).toBeDisabled({ timeout: 60_000 })
-  await availabilityAfterClear
+  await expect.poll(async () => (await unwrap<{ canUndo: boolean }>(
+    await request.get(`${apiBaseURL}/api/board/edits/availability`, { headers }))).canUndo,
+    { timeout: 60_000 }).toBe(false)
   await expect.poll(async () => (await unwrap<any[]>(await request.get(rulesUrl, { headers }))).length,
     { timeout: 60_000 }).toBeGreaterThan(0)
   const rules = await unwrap<any[]>(await request.get(rulesUrl, { headers }))

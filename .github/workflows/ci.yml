@@ -113,6 +113,11 @@ jobs:
       IOT_VERIFY_TIME_ZONE: UTC
       SERVER_PORT: 8080
       NUSMV_MAX_CONCURRENT: 1
+      # The suite registers a worker-scoped account per spec file plus per-test accounts, and every
+      # retry registers again — so a genuine failure plus its retry can push the run past the default
+      # 60/hour source cap. The rest of the run then fails with 429 instead of its real result, which
+      # buries the one failure that mattered. Raised so a red run points at its actual cause.
+      AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR: 2000
       E2E_API_BASE_URL: http://127.0.0.1:8080
       PLAYWRIGHT_HTML_OPEN: never
     steps:
