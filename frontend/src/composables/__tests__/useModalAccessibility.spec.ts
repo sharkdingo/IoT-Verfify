@@ -147,4 +147,33 @@ describe('useModalAccessibility', () => {
 
     expect(document.activeElement).toBe(fallback)
   })
+
+  it('closes a trapping modal on Escape even before focus has reached it', async () => {
+    // The element-bound handler only sees the key once focus is inside the dialog, and focus moves
+    // there in a nextTick after a post-flush watcher. A deep link that opens the surface on load —
+    // or a fast user — presses Escape inside that window, and the keystroke used to be dropped
+    // silently, leaving the dialog open with no indication why.
+    const { wrapper } = mountPanel(true)
+    // Deliberately no `await nextTick()`: focus is still outside the dialog here.
+    document.body.focus()
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await nextTick()
+
+    expect(wrapper.find('section').exists()).toBe(false)
+  })
+
+  it('leaves Escape to a non-modal panel rather than closing it from the document', async () => {
+    // The board's floating tool panels are non-modal on purpose and own their own Escape behaviour;
+    // one keypress must not close all of them.
+    const { wrapper } = mountPanel(false)
+    document.body.focus()
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await nextTick()
+
+    expect(wrapper.find('section').exists()).toBe(true)
+  })
 })

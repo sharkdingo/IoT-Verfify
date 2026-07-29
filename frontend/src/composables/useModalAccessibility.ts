@@ -1,4 +1,4 @@
-import { nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 
 import { useBodyScrollLock } from './useBodyScrollLock'
 
@@ -127,6 +127,31 @@ export const useModalAccessibility = (
       restoreFocus()
     }
   }, { flush: 'post', immediate: true })
+
+  /**
+   * Document-level Escape fallback.
+   *
+   * `handleModalKeydown` is bound on the modal's own element, so it only sees the key once focus is
+   * inside the dialog — and focus is moved there in a `nextTick` after a `flush: 'post'` watcher. A
+   * user (or a deep link that opens the surface on load) can press Escape inside that window, and the
+   * keystroke was silently dropped: the dialog stayed open with no indication why. Escape must close a
+   * modal whenever it is open, not only once focus has caught up.
+   *
+   * Scoped to focus-trapping surfaces: the board's non-modal tool panels own their own Escape
+   * behaviour and must not all close on one keypress.
+   */
+  const handleDocumentEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !isOpen.value || options.trapFocus === false) return
+    // Already handled by the modal's own listener, which runs first when focus is inside it.
+    if (event.defaultPrevented) return
+    const dialog = dialogRef.value
+    if (dialog && dialog.contains(document.activeElement)) return
+    event.preventDefault()
+    close()
+  }
+
+  onMounted(() => document.addEventListener('keydown', handleDocumentEscape))
+  onBeforeUnmount(() => document.removeEventListener('keydown', handleDocumentEscape))
 
   onBeforeUnmount(restoreFocus)
 

@@ -208,7 +208,18 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   non-modal on purpose: the canvas stays live and `useModalAccessibility` is given
   `trapFocus: false`. Those are `role="region"`. Anything that claims
   `role="dialog"` + `aria-modal="true"` must keep the trap — and therefore also gets the
-  background scroll lock, which `useModalAccessibility` applies for exactly that case.
+  background scroll lock, which `useModalAccessibility` applies for exactly that case. A trapping
+  modal also gets a document-level Escape fallback: the element-bound handler only sees the key once
+  focus is inside the dialog, and focus arrives a tick later, so a deep link that opens the surface on
+  load had its first Escape silently dropped. Non-modal panels are excluded — one keypress must not
+  close several of them.
+- **"Modal to the user" is not the same as "takes the scroll lock".** `openModalDepth`
+  (`useBodyScrollLock`) is what tells window-level accelerators such as the board's Ctrl+Z that a
+  surface is covering the board. Element Plus `MessageBox` confirmations pass `lockScroll: false` on
+  purpose — the board shell is a fixed `100vh` surface that Element Plus's scrollbar compensation
+  would shift — so they register depth through `registerModalSurface()` in `utils/feedback.ts`
+  instead. Wiring depth to the scroll lock alone left every `confirmDestructive` window unguarded,
+  and Ctrl+Z reversed the previous edit behind the prompt.
 - **Stacking order is a named scale, not a literal.** Add a layer to the `--z-*` block in
   `styles/base.css` and reference it (`z-[var(--z-modal)]` in Tailwind,
   `var(--z-modal)` in CSS). Values inside a component's own stacking context stay local

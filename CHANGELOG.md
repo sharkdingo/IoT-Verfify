@@ -42,6 +42,12 @@ history into a technical spec. The spec content itself now lives under
   narrowed the fix search to fewer rules. `FuzzModel` now normalizes it in one accessor shared by
   validation and evaluation, which previously disagreed: a padded key validated and then resolved to
   no domain, changing what the explorer actually checked.
+- **Escape closes a deep-linked modal on the first press.** `useModalAccessibility` bound its Escape
+  handler to the modal's own element, so the key only worked once focus was inside the dialog — and
+  focus arrives in a `nextTick` after a post-flush watcher. Opening a surface from a deep link on page
+  load left a window in which the first Escape was silently dropped and the dialog just stayed open. A
+  document-level fallback now covers it, scoped to focus-trapping surfaces so one keypress cannot close
+  several of the board's non-modal tool panels at once.
 - **Ctrl+Z no longer mutates the board behind an open dialog.** The accelerator is on `window`, and
   `targetOwnsNativeUndo` exempts only text inputs — so the keystroke pressed while focus sat on a
   modal's button undid a persisted edit underneath it, leaving the dialog showing a draft built from
