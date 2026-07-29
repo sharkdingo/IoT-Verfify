@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
+import cn.edu.nju.Iot_Verify.po.BoardEditJournalPo;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.po.UserPo;
@@ -300,6 +301,37 @@ class BoardEditUndoIntegrationTest {
         assertEquals("NOTHING_TO_APPLY", exhausted.getReasonCode());
         assertFalse(exhausted.isCanUndo());
         assertTrue(service.getRules(userId).isEmpty(), "no duplicate rule was created");
+    }
+
+    @Test
+    void aRuleAddedAfterDeletionsSortsLastAndItsJournalledPositionMatches() {
+        // Deleting a rule does not renumber the survivors, so `execution_order` has gaps. Setting a new
+        // rule's order to the list *count* then places it before an existing rule — and execution order
+        // decides which rule wins when guards overlap, so this is semantic rather than cosmetic. Two
+        // deletions are needed: with one, the id tiebreak hides it.
+        // The Light template offers only on/off, so two semantically distinct rules is the maximum on
+        // one device. Deleting the first leaves the survivor at execution_order 1 with 0 free, so an
+        // added rule taking the list count (1) collides with it — and the id tiebreak then decides.
+        Long first = service.addRule(userId, newRule("r1", "on", "off")).getAffectedItem().getId();
+        Long second = service.addRule(userId, newRule("r2", "off", "on")).getAffectedItem().getId();
+        service.removeRuleIfUnchanged(userId, first, ruleById(first));
+
+        Long added = service.addRule(userId, newRule("r3", "on", "off")).getAffectedItem().getId();
+
+        assertEquals(List.of(second, added), ruleIdsInOrder(),
+                "a newly added rule must sort after the rules already on the board");
+        // The CREATE entry must describe the position the create actually produced, or undo-then-redo
+        // reconstructs a different board than the create did.
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        assertEquals(String.valueOf(added), entry.getEntityKey());
+        assertEquals(1, entry.getEntityOrder(),
+                "the journalled position must match the rule's real index");
+    }
+
+    private RuleDto ruleById(Long ruleId) {
+        return service.getRules(userId).stream()
+                .filter(rule -> rule.getId().equals(ruleId))
+                .findFirst().orElseThrow();
     }
 
     @Test

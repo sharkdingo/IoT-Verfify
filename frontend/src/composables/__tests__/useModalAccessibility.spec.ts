@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useModalAccessibility } from '../useModalAccessibility'
+import { registerModalSurface } from '../useBodyScrollLock'
 
 const mountedWrappers: Array<ReturnType<typeof mount>> = []
 
@@ -175,5 +176,34 @@ describe('useModalAccessibility', () => {
     await nextTick()
 
     expect(wrapper.find('section').exists()).toBe(true)
+  })
+
+  it('leaves Escape to a confirmation stacked on top of a trapping modal', async () => {
+    // An Element Plus MessageBox closes on Escape without calling preventDefault (its focus-trap
+    // emits `release-requested` instead), so the defaultPrevented check cannot see it. Without the
+    // depth comparison the same press also ran this dialog's close, discarding the draft the
+    // confirmation was asking the user about.
+    const { wrapper } = mountPanel(true)
+    await nextTick()
+    const release = registerModalSurface()
+    // Move focus out of the dialog, as it is while a MessageBox on top of it holds focus — that is
+    // the case the document fallback exists for, and the one the depth guard has to decline. `blur()`
+    // rather than `document.body.focus()`, which jsdom ignores, leaving focus on the dialog's own
+    // button so the `contains` early-return would mask the guard entirely.
+    ;(document.activeElement as HTMLElement | null)?.blur()
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await nextTick()
+    expect(wrapper.find('section').exists()).toBe(true)
+
+    // Once the confirmation is gone, Escape belongs to this dialog again. Focus is inside the dialog
+    // by now, so the document fallback defers to the element-bound handler — which is what actually
+    // closes it, and what this asserts through.
+    release()
+    wrapper.get('section').element.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await nextTick()
+    expect(wrapper.find('section').exists()).toBe(false)
   })
 })

@@ -9816,6 +9816,11 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
 
     closeHistoryPanel(false)
     lastSimulationResult.value = result
+    // Staleness belongs to the run being shown. This is a freshly loaded run, so it cannot have been
+    // invalidated by an edit made against an earlier one — the other two writers of
+    // `lastSimulationResult` clear the flag for the same reason, as does `openVerificationRun`.
+    // Without this, whether a historical run shows the re-run banner depended on unrelated history.
+    simulationResultStale.value = false
     simulationResult.value = null
     savedSimulationStates.value = [...trace.states]
     openSimulationAnimationFromSavedStates()

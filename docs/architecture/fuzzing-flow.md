@@ -128,7 +128,12 @@ Canvas coordinates and dimensions do not invalidate a semantic preview.
    monitor FSMs. The paper-compatible score combines BFS graph distance to a violation
    state with satisfaction of the next shortest-path transition conditions. It recursively
    resolves predecessor rule conditions (`GetPrevConditions`) and weights them by solver
-   level across a fixed three-level chain. Every atomic proposition uses the paper's
+   level across a fixed three-level chain. The per-level weight is
+   `2^(l_up-l) / (2^l_up - 1)`, which **deliberately differs** from the `2^(l_up-l) / 2^(l_up-1)`
+   printed in Algorithm 1 line 25: the printed denominator makes the weights sum to `1.75`
+   at `l_up = 3` instead of 1, so `Dist_cond` can exceed the integer `Dist_graph` and drive
+   the returned `Dist_graph - Dist_cond` negative. `SeedSelection` takes the *minimum*
+   distance, so a negative score inverts the ranking the metri...[truncated 121 chars] Every atomic proposition uses the paper's
    explicit binary satisfaction (`1` when true, `0` otherwise), including numeric
     predicates. Conjunctions average all constituent conditions and disjunctions take
     their maximum satisfaction. Predecessors are resolved for rule-produced state,

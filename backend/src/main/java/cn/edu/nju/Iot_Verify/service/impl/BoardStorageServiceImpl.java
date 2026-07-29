@@ -3703,7 +3703,15 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 validateNoIdenticalRules(nextRules, currentNodes);
                 validateBoardReferences(userId, currentNodes, nextRules, null);
                 RulePo po = ruleMapper.toEntity(canonicalRule, userId);
-                po.setExecutionOrder(nextRules.size() - 1);
+                // After deletions, execution_order has gaps — the list size is no longer the next available
+                // slot. Finding the maximum ensures the new rule sorts last, which is what the journal entry
+                // at nextRules.size() - 1 describes. Without this, a rule added after two deletions could sort
+                // before an existing rule, inverting their evaluation order — semantic, not cosmetic.
+                int maxOrder = ruleRepo.findByUserId(userId).stream()
+                        .filter(r -> r.getExecutionOrder() != null)
+                        .mapToInt(RulePo::getExecutionOrder)
+                        .max().orElse(-1);
+                po.setExecutionOrder(maxOrder + 1);
                 RulePo saved = ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
                 RuleDto created = ruleMapper.toDto(saved);
                 editJournal.record(userId, BoardEditEntityType.RULE, BoardEditOperation.CREATE,

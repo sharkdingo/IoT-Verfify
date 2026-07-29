@@ -1,6 +1,6 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 
-import { useBodyScrollLock } from './useBodyScrollLock'
+import { openModalDepth, useBodyScrollLock } from './useBodyScrollLock'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -119,8 +119,21 @@ export const useModalAccessibility = (
     }
   }
 
+  /**
+   * Modal depth this surface itself accounts for; anything above it is a surface stacked on top,
+   * which owns Escape while it is up.
+   *
+   * A trapping surface takes the scroll lock through `useBodyScrollLock`, whose watcher is
+   * `flush: 'sync'` — so by the time this `flush: 'post'` watcher runs, the count already includes
+   * this surface. Recording the value verbatim would leave the guard permanently true and this
+   * dialog unable to close on Escape at all.
+   */
+  const ownedDepth = options.trapFocus === false ? 0 : 1
+  let ownModalDepth = 0
+
   watch(isOpen, open => {
     if (open) {
+      ownModalDepth = Math.max(openModalDepth.value, ownedDepth)
       previousActiveElement = document.activeElement as HTMLElement | null
       void nextTick(focusInitialElement)
     } else {
@@ -144,6 +157,11 @@ export const useModalAccessibility = (
     if (event.key !== 'Escape' || !isOpen.value || options.trapFocus === false) return
     // Already handled by the modal's own listener, which runs first when focus is inside it.
     if (event.defaultPrevented) return
+    // A confirmation opened *on top* of this dialog owns the keystroke. Element Plus's MessageBox
+    // closes on Escape without calling preventDefault (its focus-trap emits `release-requested`
+    // instead), so the check above cannot see it — and without this the same press also ran this
+    // dialog's `close`, discarding the draft the user was being asked about.
+    if (openModalDepth.value > ownModalDepth) return
     const dialog = dialogRef.value
     if (dialog && dialog.contains(document.activeElement)) return
     event.preventDefault()

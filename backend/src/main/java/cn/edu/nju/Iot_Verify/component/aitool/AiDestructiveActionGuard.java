@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Autowired;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Optional;
 
 /** Session-scoped, single-use authorization for destructive AI tool calls. */
+@Slf4j
 @Component
 public class AiDestructiveActionGuard {
 
@@ -239,8 +241,20 @@ public class AiDestructiveActionGuard {
                     payload.hasNonNull("actionPayload")
                             ? payload.path("actionPayload").deepCopy() : null);
         } catch (RuntimeException e) {
-            stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
-                    snapshot.version());
+            // Best-effort cleanup only. `pendingContext` is reached from a read-only query
+            // (`GET /api/chat/sessions/{id}/confirmation`), and `remove` runs with the default
+            // propagation — so enlisting this delete in the caller's read-only transaction turns the
+            // honest "nothing pending" answer into a 500 at flush, leaving the client unable to learn
+            // whether a protected action is outstanding. The row is unreadable either way; the
+            // `purgeExpired` sweep is the backstop, bounded by the TTL. Same reasoning as
+            // `JpaAiSessionStateStore.discardUnusableState` and `AiScenarioDraftStore.active`.
+            try {
+                stateStore.remove(scope.userId(), scope.sessionId(),
+                        AiSessionStateStore.Kind.DESTRUCTIVE_ACTION, snapshot.version());
+            } catch (RuntimeException cleanupFailure) {
+                log.warn("Could not discard an unreadable pending destructive action: exception={}",
+                        cleanupFailure.getClass().getName());
+            }
             return null;
         }
     }

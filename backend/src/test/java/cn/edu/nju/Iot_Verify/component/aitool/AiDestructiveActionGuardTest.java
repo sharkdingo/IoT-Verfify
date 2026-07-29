@@ -1,8 +1,12 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.component.ai.state.AiSessionStateStore;
 import cn.edu.nju.Iot_Verify.component.ai.state.InMemoryAiSessionStateStore;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -162,6 +166,28 @@ class AiDestructiveActionGuardTest {
     }
 
     @Test
+    void pendingContext_reportsNothingPendingWhenDiscardingAnUnreadableRowFails() {
+        // `pendingContext` is reached from a read-only query, where the store's `remove` runs with the
+        // caller's propagation. A cleanup that throws there used to escape and turn the honest
+        // "nothing pending" answer into a 500, so the client could not learn whether a protected
+        // action was outstanding. Cleanup is best-effort; the TTL sweep is the backstop.
+        InMemoryAiSessionStateStore backing = new InMemoryAiSessionStateStore();
+        AiSessionStateStore refusingRemove = new RemoveRefusingStore(backing);
+        AiDestructiveActionGuard guardOverRefusingStore =
+                new AiDestructiveActionGuard(new ObjectMapper(), refusingRemove);
+        // A structurally invalid payload: parsing it throws, which is what triggers the cleanup.
+        ObjectNode unreadable = JsonNodeFactory.instance.objectNode();
+        unreadable.put("token", "t");
+        unreadable.put("toolName", "delete_device");
+        // targetKey missing -> requireText throws during parsePending.
+        backing.put(1L, "session-1", AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                unreadable, Instant.now().plusSeconds(600));
+
+        assertTrue(guardOverRefusingStore.pendingContext(1L, "session-1").isEmpty(),
+                "an unreadable pending action must read as nothing pending, not propagate a failure");
+    }
+
+    @Test
     void anotherGuardInstanceCanConsumeThePersistedSingleUseConfirmation() {
         InMemoryAiSessionStateStore sharedState = new InMemoryAiSessionStateStore();
         Clock clock = Clock.fixed(Instant.parse("2026-07-17T00:00:00Z"), ZoneOffset.UTC);
@@ -219,5 +245,43 @@ class AiDestructiveActionGuardTest {
         assertFalse(result.approved());
         assertEquals("CONFIRMATION_MISSING", result.errorCode());
         assertEquals(null, result.actionPayload());
+    }
+
+    /**
+     * Delegates everything but the versioned {@code remove}, which throws the way an enlisted delete
+     * does inside a read-only transaction. {@code InMemoryAiSessionStateStore} is final, so this
+     * wraps rather than extends it.
+     */
+    private record RemoveRefusingStore(InMemoryAiSessionStateStore delegate) implements AiSessionStateStore {
+
+        @Override
+        public java.util.Optional<Snapshot> get(Long userId, String sessionId, Kind kind, Instant now) {
+            return delegate.get(userId, sessionId, kind, now);
+        }
+
+        @Override
+        public void put(Long userId, String sessionId, Kind kind, JsonNode payload, Instant expiresAt) {
+            delegate.put(userId, sessionId, kind, payload, expiresAt);
+        }
+
+        @Override
+        public boolean remove(Long userId, String sessionId, Kind kind, long expectedVersion) {
+            throw new IllegalStateException("Connection is read-only");
+        }
+
+        @Override
+        public void remove(Long userId, String sessionId, Kind kind) {
+            delegate.remove(userId, sessionId, kind);
+        }
+
+        @Override
+        public void removeSession(Long userId, String sessionId) {
+            delegate.removeSession(userId, sessionId);
+        }
+
+        @Override
+        public void removeUser(Long userId) {
+            delegate.removeUser(userId);
+        }
     }
 }
