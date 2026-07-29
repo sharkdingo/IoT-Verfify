@@ -175,8 +175,9 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   the canvas edges, each hidden by a later refresh that happened to repair the state. An undo is
   itself a semantic mutation, so it uses this path and must match `isBoardMutationRequest`.
 - **A path that changes the undo journal must re-read it.** Journal-clearing commands (device
-  deletion, scene replace/clear) call `notifyUndoJournalCleared()`; a wholesale semantic reload
-  (`refreshBoardSnapshot`) re-reads availability explicitly at the end. A board invalidation does
+  deletion, scene replace/clear, applying a fix) call `notifyUndoJournalCleared()`; a wholesale
+  semantic reload (`refreshBoardSnapshot`) re-reads availability explicitly at the end. A board
+  invalidation does
   **not** cover the publishing tab — `BroadcastChannel` never delivers to the context that posted,
   and `publishBoardInvalidation` only calls `postMessage` — so the origin tab depends on that
   explicit re-read, not on its own broadcast. The assistant relies on it, so an assistant-created

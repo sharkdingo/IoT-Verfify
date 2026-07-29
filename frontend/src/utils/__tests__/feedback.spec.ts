@@ -137,6 +137,23 @@ describe('modal depth registration', () => {
     expect(openModalDepth.value).toBe(0)
   })
 
+  it('releases the count when a confirmation is dismissed programmatically', async () => {
+    // `ElMessageBox.close()` closes the surface without settling its promise, so the helper's own
+    // `finally` never runs. Without an explicit release the count leaked and the board's Ctrl+Z — which
+    // reads this depth — stayed blocked for the rest of the session while the toolbar button still
+    // looked enabled. Reachable when a rule dialog closes underneath its own "save anyway" prompt.
+    elementPlus.box.confirm.mockImplementationOnce(() => new Promise<void>(() => {
+      // never settles, matching Element Plus's programmatic close
+    }))
+    void confirmDestructive({ title: 'Delete', message: 'Sure?' })
+    expect(openModalDepth.value).toBe(1)
+
+    dismissOpenConfirmation()
+
+    expect(elementPlus.box.close).toHaveBeenCalled()
+    expect(openModalDepth.value).toBe(0)
+  })
+
   it('counts an acknowledgement too', async () => {
     let settle!: () => void
     elementPlus.box.alert.mockImplementationOnce(() => new Promise<void>(resolve => {

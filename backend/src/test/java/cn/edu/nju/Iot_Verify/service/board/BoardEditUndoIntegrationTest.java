@@ -303,6 +303,26 @@ class BoardEditUndoIntegrationTest {
     }
 
     @Test
+    void aWholesaleRuleRewriteDiscardsTheJournal() {
+        // `updateRulesAgainstSnapshot` is the fix-apply path: it rewrites the whole collection, so it
+        // can delete or edit the very rule a journal entry names. Leaving the journal alone made undo
+        // throw a conflict on every press while availability kept reporting canUndo=true — the button
+        // stayed armed on an entry that could never apply. Its inverse is not a single record, so the
+        // journal is dropped, exactly as for device deletion and scene replacement.
+        Long ruleId = service.addRule(userId, newRule("r1")).getAffectedItem().getId();
+        assertTrue(journal.availability(userId).canUndo());
+
+        service.updateRulesAgainstSnapshot(userId, snapshot -> List.of());
+
+        assertTrue(service.getRules(userId).isEmpty());
+        assertFalse(journal.availability(userId).canUndo(),
+                "a rewrite whose inverse is not a single record must not leave a reversible entry");
+        assertFalse(journal.availability(userId).canRedo());
+        assertEquals(0, journalRepo.countByUserId(userId));
+        assertNotNull(ruleId);
+    }
+
+    @Test
     void redoOfASpecificationDeleteRemovesItAgain() {
         // Closes the last cell of the {rule, spec, order} x {create, delete} x {undo, redo} matrix.
         // The create/redo cell is where a false "unreadable" conflict hid, so the rest are pinned too.

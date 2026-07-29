@@ -79,7 +79,7 @@ export const confirmDestructive = async (options: ConfirmOptions): Promise<boole
   // Counts as an open modal for the duration. A MessageBox is modal to the user but takes no scroll
   // lock, so without this a `window`-level accelerator (the board's Ctrl+Z) still reached the surface
   // behind the confirmation and mutated it.
-  const releaseModalSurface = registerModalSurface()
+  const releaseModalSurface = trackModalSurface()
   try {
     await ElMessageBox.confirm(options.message, options.title, {
       ...BASE_BOX,
@@ -103,19 +103,44 @@ export const confirmDestructive = async (options: ConfirmOptions): Promise<boole
 }
 
 /**
+ * Releases still held by confirmations that have not settled.
+ *
+ * `ElMessageBox.close()` closes the surface *without* resolving or rejecting its promise: Element
+ * Plus's `doClose` only emits `action` when one was already set, which a programmatic close never
+ * does. So the `finally` in the helpers below never runs for a dismissed confirmation, and the
+ * modal-surface count it holds would leak — permanently blocking the board's Ctrl+Z, which reads that
+ * count. Tracking the releases here lets `dismissOpenConfirmation` settle them itself.
+ */
+const outstandingModalReleases = new Set<() => void>()
+
+const trackModalSurface = (): (() => void) => {
+  const release = registerModalSurface()
+  const settle = () => {
+    outstandingModalReleases.delete(settle)
+    release()
+  }
+  outstandingModalReleases.add(settle)
+  return settle
+}
+
+/**
  * Dismisses whatever confirmation is on screen. Needed when the surface that raised it goes
  * away underneath it (its owning dialog closes), which would otherwise leave a confirmation
- * asking about state the user can no longer see. Resolves the pending call as cancelled.
+ * asking about state the user can no longer see.
+ *
+ * The pending promise is left unsettled by Element Plus, so the caller's `await` never resumes; what
+ * this does guarantee is that the surface is gone and its modal-surface registration is released.
  */
 export const dismissOpenConfirmation = () => {
   ElMessageBox.close()
+  for (const release of [...outstandingModalReleases]) release()
 }
 
 /** Acknowledgement of something the user cannot act on further. */
 export const acknowledge = async (
   options: Omit<ConfirmOptions, 'cancelText'> & { tone?: 'warning' | 'error' }
 ): Promise<void> => {
-  const releaseModalSurface = registerModalSurface()
+  const releaseModalSurface = trackModalSurface()
   try {
     await ElMessageBox.alert(options.message, options.title, {
       ...BASE_BOX,

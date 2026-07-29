@@ -6503,6 +6503,12 @@ const resetScenarioRecommendationResults = () => {
 // and `lastSimulationResult` outlive every dialog, and reopening one must still warn that the canvas
 // changed under it. Only a new run clears the flag.
 function closeResultSurfaces() {
+  // Every in-flight run-detail load has to be invalidated, not just the fuzzing epoch: the only
+  // staleness guard in `openVerificationRun` and `selectAndPlaySimulationTrace` is
+  // `historyDetailRequests.isCurrent`, which stays true for the newest request — so a load resolving
+  // after this ran would repopulate the surface it just cleared. Same defect that let a dismissed
+  // verification dialog reopen itself.
+  historyDetailRequests.invalidate()
   fuzzingResultRequestEpoch += 1
   verificationResult.value = null
   verificationError.value = null
@@ -10329,6 +10335,10 @@ const cancelAsyncFuzzing = async () => {
 let pendingFixRefreshPromise: Promise<boolean> | null = null
 
 const handleFixApplied = (result: FixApplyResult) => {
+  // Applying a fix rewrites the whole rule collection server-side, which discards the edit journal
+  // (its inverse is not a single record). Without this the button stays enabled against a journal that
+  // no longer exists, and pressing it can only answer "nothing to undo".
+  notifyUndoJournalCleared()
   const refreshPromise = enqueueBoardMutation(async () => {
     const refreshed = await refreshRules()
     if (refreshed) return true

@@ -1053,7 +1053,15 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         next,
                         snapshot.specifications(),
                         templateManifestMap(snapshot.deviceTemplates()));
-                return saveRulesInternal(userId, next);
+                List<RuleDto> saved = saveRulesInternal(userId, next);
+                // This rewrites the whole rule collection — it deletes omitted ids and renumbers
+                // execution_order — so no per-record inverse recorded before it still describes a
+                // reachable state. Its caller is fix-apply, which can delete or edit the very rule a
+                // journal entry names; leaving the journal alone made undo throw a conflict forever
+                // while availability kept reporting canUndo=true, so the button stayed armed on an
+                // entry that could never apply. Same reasoning as device deletion and scene replace.
+                editJournal.clear(userId);
+                return saved;
             });
         }
     }

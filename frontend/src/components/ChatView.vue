@@ -1362,6 +1362,9 @@ const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
   sessions.value = [];
   currentSessionId.value = '';
   messages.value = [];
+  // The fallback key is positional (`index:<n>`), so a collapse recorded for one account's last row
+  // would apply to an unrelated message at the same index after the subject changes.
+  collapsedExecutionTraces.value = new Set();
   inputValue.value = '';
   pendingConfirmationKinds.value = [];
   pendingConfirmationLoadFailed.value = false;

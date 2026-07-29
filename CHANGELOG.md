@@ -42,6 +42,21 @@ history into a technical spec. The spec content itself now lives under
   narrowed the fix search to fewer rules. `FuzzModel` now normalizes it in one accessor shared by
   validation and evaluation, which previously disagreed: a padded key validated and then resolved to
   no domain, changing what the explorer actually checked.
+- **Applying a fix no longer leaves a permanently-conflicting undo.** `updateRulesAgainstSnapshot` —
+  the fix-apply path — rewrites the whole rule collection, deleting omitted ids and renumbering
+  execution order, but it neither recorded a journal entry nor cleared the journal. So an applied fix
+  could delete the very rule an entry named: undo then threw a conflict on every press while
+  availability kept reporting `canUndo: true`, leaving the button armed on an entry that could never
+  apply. The journal is now discarded there, as it already was for device deletion and scene
+  replacement, and the board re-reads availability when a fix is applied.
+- **A dismissed confirmation no longer disables board undo for the session.** `ElMessageBox.close()`
+  closes the surface without settling its promise, so the modal-surface count taken by
+  `confirmDestructive` was never released — and since the board's Ctrl+Z reads that count, undo stayed
+  silently blocked while the toolbar button still looked enabled. Reachable whenever a rule dialog
+  closes underneath its own "save anyway" prompt. Each occurrence leaked another count.
+- **Closing every result surface at once invalidates its in-flight loads.** `closeResultSurfaces`
+  bumped only the exploration epoch, so a verification or simulation run detail still loading could
+  repopulate a surface it had just cleared — the same defect as the dismissed-dialog one below.
 - **A dismissed run dialog no longer reopens itself.** `dismissResultDialog` cleared the result and the
   deep link but left the in-flight history-detail request running, and `openVerificationRun` only
   guards on "is this still the newest request" — so a load that resolved just after the user pressed

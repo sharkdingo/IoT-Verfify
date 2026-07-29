@@ -125,7 +125,7 @@ class AccountDeletionCoverageTest {
     void theDerivedRepositoryNameResolutionWorks() throws IOException {
         // Guards the test's own mechanism: a wrong derivation would make the assertions vacuous.
         assertEquals("boardEditJournalRepository", repositoryFieldFor("board_edit_journal"));
-        assertEquals("ruleRepository".length() > 0 ? repositoryFieldFor("rules") : "",
-                repositoryFieldFor("rules"));
+        // Both a multi-word and a single-word table name, since the derivation splits on underscores.
+        assertEquals("ruleRepository", repositoryFieldFor("rules"));
     }
 }
