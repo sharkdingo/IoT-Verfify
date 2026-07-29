@@ -49,6 +49,33 @@ const ruleIds = async (request: APIRequestContext, auth: AuthUser): Promise<numb
   return ((await response.json())?.data ?? []).map((rule: any) => Number(rule.id))
 }
 
+type RawBoardSnapshot = {
+  nodes: Array<{ id: string }>
+  environmentVariables: Array<{ name: string; value: string; trust: string; privacy: string }>
+  rules: Array<{ id: number }>
+  specifications: Array<{ id: string }>
+}
+
+const boardSnapshot = async (
+  request: APIRequestContext,
+  auth: AuthUser
+): Promise<RawBoardSnapshot> => {
+  const response = await request.get(`${apiBaseURL}/api/board/snapshot`, {
+    headers: { Authorization: `Bearer ${auth.token}` }
+  })
+  expect(response.ok()).toBe(true)
+  return (await response.json()).data
+}
+
+const snapshotIdentity = (snapshot: RawBoardSnapshot) => ({
+  deviceIds: snapshot.nodes.map(node => node.id).sort(),
+  environmentVariables: snapshot.environmentVariables
+    .map(variable => ({ ...variable }))
+    .sort((left, right) => left.name.localeCompare(right.name)),
+  ruleIds: snapshot.rules.map(rule => Number(rule.id)),
+  specificationIds: snapshot.specifications.map(specification => specification.id)
+})
+
 const undoButton = (page: Page) => page.getByTestId('board-undo')
 const redoButton = (page: Page) => page.getByTestId('board-redo')
 
@@ -138,28 +165,76 @@ test.describe('board edit undo and redo', () => {
     await expect.poll(async () => ruleIds(request, auth), { timeout: 30_000 }).toEqual(before)
   })
 
-  test('drops the undo affordance when a device deletion clears the journal', async ({ page, request }) => {
+  test('reconciles undo availability when a committed edit response is incomplete', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openBoardWithScene(page, request, auth)
+    const before = await ruleIds(request, auth)
+
+    await page.route('**/api/board/rules/*', async route => {
+      if (route.request().method() !== 'DELETE') {
+        await route.continue()
+        return
+      }
+      const response = await route.fetch()
+      expect(response.ok()).toBe(true)
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 200, message: 'success', data: { operation: 'deleted' } })
+      })
+    })
+
+    await deleteFirstRule(page)
+
+    await expect.poll(async () => (await ruleIds(request, auth)).length)
+      .toBe(before.length - 1)
+    await expect(undoButton(page)).toBeEnabled()
+    await undoButton(page).click()
+    await expect.poll(async () => (await ruleIds(request, auth)).length).toBe(before.length)
+  })
+
+  test('undoes and redoes a device deletion with its cascades and environment state', async ({ page, request }) => {
     const auth = await createAuthenticatedUser(request)
     await openBoardWithScene(page, request, auth)
 
-    await deleteFirstRule(page)
-    await expect(undoButton(page)).toBeEnabled()
+    const before = snapshotIdentity(await boardSnapshot(request, auth))
+    await expect(page.locator('.el-message')).toHaveCount(0, { timeout: 10_000 })
 
-    // Deleting a device cascades into the rules and specs that referenced it, so restoring one of
-    // them in isolation could not reach a legal board: the server clears the journal. The button
-    // must follow that, not keep offering an undo that would report "nothing to undo".
-    // The node opens on a pointer sequence with drag detection, so wait for it to settle first.
-    const node = page.locator('.device-node').first()
+    // ac_1 owns the humidity domain and participates in every rule/spec in this fixture, so this
+    // one action proves the compound snapshot rather than only the device row.
+    const node = page.locator('[data-node-id="ac_1"]')
     await expect(node).toBeVisible()
-    await node.click();
+    await node.click()
     const details = page.getByTestId('device-dialog')
     await expect(details).toBeVisible({ timeout: 15_000 })
     await details.getByTestId('device-delete').click()
     const confirmation = page.getByRole('dialog', { name: 'Delete device' })
     await confirmation.getByRole('button', { name: 'Delete Device', exact: true }).click()
 
-    await expect(undoButton(page)).toBeDisabled({ timeout: 60_000 })
-    await expect(redoButton(page)).toBeDisabled()
+    await expect(page.locator('.el-message').filter({
+      hasText: /Deleted .*Living-room Air Conditioner/
+    })).toBeVisible()
+    await expect(page.locator('.el-message').filter({
+      hasText: 'The device change also removed from the Environment Pool:'
+    })).toHaveCount(0)
+    await expect.poll(async () => (await boardSnapshot(request, auth)).nodes
+      .some(candidate => candidate.id === 'ac_1')).toBe(false)
+    const afterDelete = snapshotIdentity(await boardSnapshot(request, auth))
+    expect(afterDelete.ruleIds.length).toBeLessThan(before.ruleIds.length)
+    expect(afterDelete.specificationIds.length).toBeLessThan(before.specificationIds.length)
+    expect(afterDelete.environmentVariables.length).toBeLessThan(before.environmentVariables.length)
+    await expect(undoButton(page)).toBeEnabled()
+
+    await undoButton(page).click()
+    await expect.poll(async () => snapshotIdentity(await boardSnapshot(request, auth)), {
+      timeout: 30_000
+    }).toEqual(before)
+    await expect(redoButton(page)).toBeEnabled()
+
+    await redoButton(page).click()
+    await expect.poll(async () => snapshotIdentity(await boardSnapshot(request, auth)), {
+      timeout: 30_000
+    }).toEqual(afterDelete)
   })
 
   test('drops the undo affordance when a scene replacement clears the journal', async ({ page, request }) => {
@@ -176,7 +251,9 @@ test.describe('board edit undo and redo', () => {
       process.cwd(), '..', 'docs', 'examples', 'default-fire-evacuation-scene.json'
     )
     await page.getByTestId('scene-import-file').setInputFiles(scenePath)
-    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+    const confirmation = page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+    await expect(confirmation).toContainText('1 undo/redo history')
+    await confirmation
       .getByRole('button', { name: 'Replace in full' })
       .click()
 

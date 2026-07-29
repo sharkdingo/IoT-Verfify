@@ -202,11 +202,23 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   overwrite newer work), discard the abandoned redo branch on a new edit, and treat "nothing to
   apply" as a normal idempotent outcome. Restoring a deleted rule keeps its original id via a
   native insert, because the id is IDENTITY-generated and references depend on it.
+  Every entry is validated as an operation-specific, non-no-op transition before any inverse write:
+  snapshot identity, payload presence, collection position, and reorder membership must agree with
+  its metadata, or the entry returns `409` without being consumed. Collection positions are exact:
+  an index that cannot be inserted into the current ordered collection is rejected, never clamped or
+  appended into a different rule/specification order.
   Reversibility follows the user's unit of work, not the storage shape: rule reorder changes no
   single record, but one up/down press is one edit, so it records a `RULE_ORDER` entry holding the
   previous ordering (`RuleOrderSnapshot`) and refuses when the current order or rule set no longer
-  matches what that edit produced. Reversible mutations return the `CollectionMutationResultDto`
-  envelope so the client mirrors server-reported availability instead of guessing.
+  matches what that edit produced. Device layout/runtime/rename, direct Environment Pool updates,
+  and automatic-fix rule-set replacement are likewise one entry per user action; semantic no-ops
+  write no history. Reversible mutations return authoritative availability so the client mirrors
+  server state instead of guessing. Confirmed scene replacement/clear, template deletion, and
+  bundled-template reset are history boundaries because they can remove or replace manifest
+  semantics that device snapshots depend on. Their previews report the affected history count and
+  bind the impact token to the exact journal; success clears it in the same transaction. Explicit
+  history clear uses an impact token over
+  the complete journal, so a confirmation cannot delete entries changed by another tab meanwhile.
 - **Redis is fail-open**: logout revocation degrades silently if Redis is down; do not
   make request flow hard-depend on it. Interactive recommendation/fix acquisition may use
   process-local tracking only when Redis is known unavailable before any ownership write is
@@ -280,13 +292,13 @@ database-clock timestamp for each turn-specific Stop fence, keeps at most 64 liv
 expires each one after two minutes before admission; the collection cascades when its owning
 session is deleted;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
-`board_edit_journal` is a per-user append-only record of reversible board edits (rule and
-specification create/delete, plus rule reorder as a `RULE_ORDER` entry holding the previous
-ordering), carrying the before/after snapshot, the deleted record's `entity_order` so a restore
-lands at its original position rather than at the end (rule execution order, specification list
-order), and an `undone` flag; entries are
-written in the mutating transaction, moved rather than deleted by undo/redo, and cleared wholesale
-by scene replacement and device deletion.
+`board_edit_journal` is a per-user append-only record of reversible Board edits: device
+create/update/rename/delete, direct Environment Pool update, rule/specification create/delete, rule
+reorder, and automatic-fix ordered rule-set replacement. Device entries hold the affected devices,
+cascaded rules/specifications and positions, and exact Environment Pool state; rule/specification
+create/delete uses `entity_order` so restore lands at its original position. Entries are written in
+the mutating transaction, moved rather than deleted by undo/redo, and cleared wholesale by confirmed
+scene replacement/clear or the explicit history-clear command.
 
 Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
 `fuzz_finding` rows are heuristic candidate evidence, not formal traces.

@@ -113,7 +113,7 @@ public class ManageRuleTool extends AbstractAiTool {
         props.put("ruleIds", Map.of(
                 "type", "array",
                 "items", Map.of("type", "integer"),
-                "description", "Required for 'reorder'. The complete new execution order as rule IDs (from list_rules). Must contain every current rule id exactly once; the first id runs first. Reorder is a reversible full-list replacement and needs no confirmation."
+                "description", "Required for 'reorder'. The complete new execution order as rule IDs (from list_rules). Must contain every current rule id exactly once, must differ from expectedRuleIds, and the first id runs first. Reorder is a reversible full-list replacement and needs no confirmation."
         ));
         props.put("expectedRuleIds", Map.of(
                 "type", "array",

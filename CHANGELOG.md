@@ -15,6 +15,71 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-30
+
+#### Fixed
+- **Destructive template and scene confirmations now cover undo/redo history.** Full-scene
+  replacement, device-type deletion, and bundled-default reset previews report the exact edit-history
+  count and bind their impact token to the complete journal. A concurrent edit, undo, or redo now
+  makes an old confirmation return `409` without writing; immutable journal identity also prevents a
+  clear-and-recreate cycle from reviving an old token. Successful template deletion/reset clears
+  history atomically because retained device snapshots may depend on the removed manifest semantics;
+  the UI states this impact before confirmation and refreshes availability only after the outcome is
+  authoritative. If a scene write response is lost or rejected but reconciliation confirms the
+  requested replacement, the same history, scene-generation, and recommendation boundary now runs.
+  A stale confirmation refresh now invalidates verification and recommendations only when the
+  semantic-scene fingerprint changed; history-only drift no longer makes a valid verdict look stale.
+- **Undo/redo now matches the user's visible unit of work across the Board.** Device layout,
+  runtime, and rename edits; direct Environment Pool edits; and automatic-fix rule-set replacement
+  are each recorded as one reversible action. Semantic no-ops create no history, rename no longer
+  rewrites unrelated nullable runtime fields, and malformed device-update entries cannot change a
+  template or combine multiple edit kinds. Fix apply now returns authoritative undo availability
+  instead of discarding earlier history. A conflicted, unusable journal can be cleared only through
+  an explicit confirmation; that command leaves the current Board unchanged and disables both undo
+  and redo. Its preview token binds the confirmation to the exact journal, so a newer edit/undo/redo
+  from another tab makes the clear return `409` instead of deleting history the user did not review.
+  Unconfirmed ordinary mutation responses now refresh journal availability together with Board data.
+  Confirmed full-scene replacement/clear remains the deliberate history boundary because it can also
+  replace template snapshots outside the four visible semantic collections.
+- **Device creation and deletion now undo and redo as complete user actions.** Manual batch creation
+  records one entry for the request instead of one entry per device, assistant-created devices use
+  the same journal path, and deletion records the device plus every cascaded rule/specification at
+  its original position. Both sides also snapshot the exact Environment Pool, so undo followed by
+  redo is symmetric and refuses genuine newer edits instead of reporting success after a no-op.
+  Operation-specific transition checks also reject malformed or no-op device journal entries without
+  consuming them. Restored cascaded rules keep their original ids, including across the native-insert
+  path.
+- **All board-edit journal types now fail closed on malformed or no-op transitions.** Rule and
+  specification entries validate operation, payload presence, snapshot identity, and collection
+  position; rule-order entries validate their metadata, unique positive ids, unchanged membership,
+  and an actual ordering change. Submitting an unchanged rule order now returns `400` before writing
+  rules or history. A recorded rule, specification, or compound-device position that cannot
+  reconstruct the exact ordered collection now returns `409` instead of being silently clamped to
+  the end and reported as a successful but different Board. Rejected or unconfirmed undo/redo responses make the frontend reconcile the
+  complete authoritative snapshot through its mutation queue, and refresh failure is reported as
+  an unknown outcome instead of claiming the board was unchanged.
+- **Undo responses now carry all authoritative semantic collections.** Nodes and Environment Pool
+  values join rules and specifications in undo/redo results; availability-only responses return all
+  four as empty non-state collections. The frontend validates every item, uniqueness, enum, direction,
+  `applied`/`reasonCode`, supported entity/operation pairing, and entity-metadata invariant before
+  committing the snapshot. Applied undo/redo and `NOTHING_TO_APPLY` must also agree with the
+  direction's inverse/availability invariant. Every reversible device/rule/specification/reorder
+  response must also report `canUndo: true` and `canRedo: false`; missing or contradictory availability is rejected
+  instead of silently disabling the affordance. Assistant device refreshes re-read journal availability.
+  A mutation's authoritative availability now also invalidates older in-flight reads, and concurrent
+  refreshes use the latest-started response, so a delayed query cannot roll the buttons back. Device
+  undo also clears inspector focus when the focused device no longer exists.
+- **Device deletion emits one success notification.** Per-variable Environment Pool notifications
+  are suppressed for the committed delete because its summary already reports the environment,
+  rule, and specification impact.
+- **Authoritative Board updates keep selection and keyboard ownership coherent.** Ordinary targeted
+  device, Environment Pool, rule, and specification responses now use one semantic commit path;
+  explicit server no-ops preserve a current verification verdict. Partial refresh, full
+  reconciliation, and cross-tab reload clear inspector focus only when their authoritative
+  collection no longer contains the selected item, including a device deletion whose response was
+  lost. In nested dialogs, one `Escape` now closes only the innermost surface instead of bubbling
+  into and closing its ancestor too.
+
 ### 2026-07-29
 
 #### Added
@@ -22,9 +87,10 @@ history into a technical spec. The spec content itself now lives under
   read-max-then-add-one under an in-JVM per-user lock only, so two application instances could write
   the same ordinal for one account — making "the newest edit still in effect" ambiguous and silently
   stranding one reversible edit. `BoardEditJournalSequenceUniqueness` adds a unique
-  `(user_id, sequence)` constraint and `BoardEditJournal.record` retries against a freshly read
-  maximum on a duplicate key. The migration is idempotent, a no-op on non-MySQL, and renumbers any
-  pre-existing duplicates (oldest-first, preserving each account's relative order) rather than
+  `(user_id, sequence)` constraint. A duplicate-key race fails and rolls back the complete Board
+  mutation; it is not retried inside the already rollback-only transaction. The migration is
+  idempotent, a no-op on non-MySQL, and renumbers any pre-existing duplicates (oldest-first,
+  preserving each account's relative order) rather than
   refusing to start against real data. Rollback is
   `DROP INDEX uk_board_edit_journal_user_sequence ON board_edit_journal`.
 

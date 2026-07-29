@@ -200,8 +200,8 @@ public class AuthServiceImpl implements AuthService {
         specificationRepository.deleteByUserId(userId);
         boardLayoutRepository.deleteByUserId(userId);
         deviceTemplateRepository.deleteByUserId(userId);
-        // The undo journal stores full before/after snapshots of the account's rules and
-        // specifications, so leaving it behind would retain deleted users' board content.
+        // The undo journal stores before/after snapshots of the account's board content, so
+        // leaving it behind would retain deleted users' data.
         boardEditJournalRepository.deleteByUserId(userId);
     }
 

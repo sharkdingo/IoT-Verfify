@@ -13,6 +13,8 @@ import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEditHistoryClearPreviewDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEditHistoryClearRequestDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardUndoResultDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
@@ -277,6 +279,21 @@ public class BoardStorageController {
     @PostMapping("/edits/redo")
     public Result<BoardUndoResultDto> redoLastUndoneEdit(@CurrentUser Long userId) {
         return Result.success(boardService.redoLastUndoneEdit(userId));
+    }
+
+    /** Exact edit-history impact the client must present for explicit confirmation. */
+    @GetMapping("/edits/clear-preview")
+    public Result<BoardEditHistoryClearPreviewDto> previewBoardEditHistoryClear(
+            @CurrentUser Long userId) {
+        return Result.success(boardService.previewBoardEditHistoryClear(userId));
+    }
+
+    /** Discards only the edit history represented by the confirmed preview token. */
+    @PostMapping("/edits/clear")
+    public Result<BoardUndoResultDto> clearBoardEditHistory(
+            @CurrentUser Long userId,
+            @Valid @RequestBody BoardEditHistoryClearRequestDto request) {
+        return Result.success(boardService.clearBoardEditHistory(userId, request.getImpactToken()));
     }
 
     /**

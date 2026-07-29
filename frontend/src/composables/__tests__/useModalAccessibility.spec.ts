@@ -206,4 +206,40 @@ describe('useModalAccessibility', () => {
     await nextTick()
     expect(wrapper.find('section').exists()).toBe(false)
   })
+
+  it('closes only the innermost nested dialog on one bubbled Escape', async () => {
+    const NestedDialogs = defineComponent({
+      setup() {
+        const outerOpen = ref(true)
+        const innerOpen = ref(true)
+        const outer = useModalAccessibility(outerOpen, () => { outerOpen.value = false })
+        const inner = useModalAccessibility(innerOpen, () => { innerOpen.value = false })
+        return () => outerOpen.value
+          ? h('section', {
+              ref: outer.setDialogRef,
+              tabindex: -1,
+              'data-testid': 'outer-dialog',
+              onKeydown: outer.handleModalKeydown
+            }, innerOpen.value
+              ? [h('section', {
+                  ref: inner.setDialogRef,
+                  tabindex: -1,
+                  'data-testid': 'inner-dialog',
+                  onKeydown: inner.handleModalKeydown
+                }, [h('button', 'Close inner')])]
+              : [h('button', 'Outer remains')])
+          : null
+      }
+    })
+    const wrapper = mount(NestedDialogs, { attachTo: document.body })
+    mountedWrappers.push(wrapper)
+    await nextTick()
+
+    wrapper.get('[data-testid="inner-dialog"]').element.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="inner-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="outer-dialog"]').exists()).toBe(true)
+  })
 })

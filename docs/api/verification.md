@@ -1192,6 +1192,12 @@ changed; apply does not repeat the expensive strategy search.
 | `previousRuleCount` / `currentRuleCount` | `int` | Rule-set size before/after the atomic write; particularly important for the destructive `remove` strategy |
 | `message` | `String` | English API summary for logs and non-localized callers; the frontend uses the structured fields above to render a localized, scope-qualified result instead of treating this text as an unconditional guarantee |
 | `rules` | `RuleDto[]` | The full persisted rule list after applying. The frontend validates its count and directly replaces the Board rule collection from this authoritative snapshot; it refreshes separately only when the apply response itself is unconfirmed. |
+| `canUndo` / `canRedo` | `boolean` | Required authoritative Board-edit availability. A successful apply is one reversible `RULE_SET/UPDATE` edit and returns `true` / `false` |
+
+Applying a suggestion is one user action even when it edits, reorders, adds, or removes multiple
+rules. Undo restores the exact ordered pre-fix rule collection under the original rule ids; redo
+re-applies the saved fixed collection. A later rule change that no longer matches the expected side
+returns `409` rather than discarding newer work.
 
 Effect per strategy: `parameter` overwrites the target condition's value (and relation);
 `condition` adds/removes conditions; `remove` permanently deletes the flagged rules. A condition fix

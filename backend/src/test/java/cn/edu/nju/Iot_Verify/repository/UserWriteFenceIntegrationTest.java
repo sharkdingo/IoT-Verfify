@@ -12,12 +12,15 @@ import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.service.FormalOperationFence;
 import cn.edu.nju.Iot_Verify.service.UserOperationGuard;
+import cn.edu.nju.Iot_Verify.service.board.BoardEditJournal;
 import cn.edu.nju.Iot_Verify.service.impl.BoardStorageServiceImpl;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceTemplateMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.RuleMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -77,6 +80,9 @@ class UserWriteFenceIntegrationTest {
     private BoardEnvironmentVariableRepository environment;
 
     @Autowired
+    private BoardEditJournalRepository journalEntries;
+
+    @Autowired
     private PlatformTransactionManager transactionManager;
 
     // This class runs with Propagation.NOT_SUPPORTED so its saveAndFlush calls COMMIT rather than
@@ -85,6 +91,7 @@ class UserWriteFenceIntegrationTest {
     @AfterEach
     void clearCommittedRows() {
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            journalEntries.deleteAllInBatch();
             environment.deleteAllInBatch();
             nodes.deleteAllInBatch();
             templates.deleteAllInBatch();
@@ -246,11 +253,13 @@ class UserWriteFenceIntegrationTest {
     }
 
     private BoardStorageServiceImpl boardServiceInstance(UserRepository userRepository) {
+        BoardEditJournal editJournal = new BoardEditJournal(journalEntries,
+                new ObjectMapper().registerModule(new JavaTimeModule()));
         return new BoardStorageServiceImpl(
                 nodes, environment, null, null, null, templates, null,
                 new TransactionTemplate(transactionManager), null, null,
                 new SpecificationMapper(), new RuleMapper(), new DeviceNodeMapper(), null,
-                new DeviceTemplateMapper(), null, userRepository, null);
+                new DeviceTemplateMapper(), null, userRepository, editJournal);
     }
 
     private <T> T inTransaction(java.util.function.Supplier<T> action) {

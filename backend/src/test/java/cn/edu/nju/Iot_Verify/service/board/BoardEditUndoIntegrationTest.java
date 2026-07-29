@@ -1,13 +1,24 @@
 package cn.edu.nju.Iot_Verify.service.board;
 
 import cn.edu.nju.Iot_Verify.dto.board.BoardUndoResultDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableUpdateRequestDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceJournalSnapshot;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeConfigDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeUpdateDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.po.BoardEditJournalPo;
+import cn.edu.nju.Iot_Verify.po.BoardEditOperation;
+import cn.edu.nju.Iot_Verify.po.BoardEnvironmentVariablePo;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.po.UserPo;
@@ -37,7 +48,7 @@ import javax.sql.DataSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Undo/redo of rule edits against a real database.
+ * Undo/redo of board edits against a real database.
  *
  * Covers what only a live persistence layer can show: that the journal entry and the edit commit
  * together, that a restored rule keeps its original id, that repeating an exhausted undo is
@@ -64,6 +75,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class BoardEditUndoIntegrationTest {
 
     @Autowired private DeviceNodeRepository nodes;
+    @Autowired private BoardEnvironmentVariableRepository environments;
     @Autowired private RuleRepository rules;
     @Autowired private SpecificationRepository specs;
     @Autowired private DeviceTemplateRepository templates;
@@ -93,6 +105,7 @@ class BoardEditUndoIntegrationTest {
      */
     private void relaxJsonColumnsForH2() {
         Map<String, List<String>> jsonColumns = Map.of(
+                "device_node", List.of("variables_json", "privacies_json"),
                 "rules", List.of("conditions_json", "command_json"),
                 "specification", List.of("a_conditions", "if_conditions", "then_conditions", "devices_json"));
         try (Connection connection = dataSource.getConnection();
@@ -116,7 +129,7 @@ class BoardEditUndoIntegrationTest {
         journal = new BoardEditJournal(journalRepo,
                 new ObjectMapper().registerModule(new JavaTimeModule()));
         service = new BoardStorageServiceImpl(
-                nodes, null, specs, rules, null, templates, null,
+                nodes, environments, specs, rules, null, templates, null,
                 new TransactionTemplate(transactionManager), null, null,
                 new SpecificationMapper(), new RuleMapper(), new DeviceNodeMapper(), null,
                 new DeviceTemplateMapper(), null, users, journal);
@@ -159,6 +172,379 @@ class BoardEditUndoIntegrationTest {
                 .label("Light 1")
                 .posX(0.0).posY(0.0).state("on").width(176).height(128)
                 .build());
+        environments.saveAndFlush(BoardEnvironmentVariablePo.builder()
+                .userId(owner)
+                .name("illuminance")
+                .value("10")
+                .trust("untrusted")
+                .privacy("public")
+                .build());
+    }
+
+    private DeviceNodeDto newDevice(String id, String label, double x) {
+        DeviceNodeDto device = new DeviceNodeDto();
+        device.setId(id);
+        device.setTemplateName("Light");
+        device.setLabel(label);
+        DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+        position.setX(x);
+        position.setY(20.0);
+        device.setPosition(position);
+        device.setState("on");
+        device.setWidth(176);
+        device.setHeight(128);
+        return device;
+    }
+
+    @Test
+    void batchDeviceCreationIsOneEditAndRoundTripsItsEnvironmentPatch() {
+        DeviceNodeDto second = newDevice("light-2", "Light 2", 100.0);
+        DeviceNodeDto third = newDevice("light-3", "Light 3", 200.0);
+        BoardEnvironmentVariableDto patchedEnvironment = new BoardEnvironmentVariableDto(
+                "illuminance", "37", "trusted", "private");
+
+        var created = service.addNodes(
+                userId, List.of(second, third), List.of(patchedEnvironment));
+
+        assertEquals(3, created.getCurrentNodes().size());
+        assertEquals("37", service.getEnvironmentVariables(userId).get(0).getValue());
+        assertEquals(1, journalRepo.countByUserId(userId),
+                "one batch request must be one undoable user action");
+
+        BoardUndoResultDto undone = service.undoLastEdit(userId);
+        assertTrue(undone.isApplied());
+        assertEquals(List.of("light-1"), service.getNodes(userId).stream()
+                .map(DeviceNodeDto::getId).toList());
+        assertEquals(new BoardEnvironmentVariableDto(
+                "illuminance", "10", "untrusted", "public"),
+                service.getEnvironmentVariables(userId).get(0));
+
+        BoardUndoResultDto redone = service.redoLastUndoneEdit(userId);
+        assertTrue(redone.isApplied());
+        assertEquals(List.of("light-1", "light-2", "light-3"), service.getNodes(userId).stream()
+                .map(DeviceNodeDto::getId).toList());
+        assertEquals(patchedEnvironment, service.getEnvironmentVariables(userId).get(0));
+    }
+
+    @Test
+    void deviceJournalRejectsAnOutOfRangeRecordedPositionWithoutPartiallyRestoring() throws Exception {
+        service.addNodes(userId, List.of(
+                newDevice("light-2", "Light 2", 100.0),
+                newDevice("light-3", "Light 3", 200.0)), List.of());
+        assertTrue(service.undoLastEdit(userId).isApplied());
+
+        BoardEditJournalPo entry = journal.nextToRedo(userId).orElseThrow();
+        DeviceJournalSnapshot target = journal.readJson(
+                entry.getAfterJson(), DeviceJournalSnapshot.class);
+        target.getDevices().get(1).setPosition(99);
+        entry.setAfterJson(new ObjectMapper()
+                .registerModule(new JavaTimeModule())
+                .writeValueAsString(target));
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.redoLastUndoneEdit(userId));
+
+        assertEquals(List.of("light-1"), service.getNodes(userId).stream()
+                .map(DeviceNodeDto::getId).toList(),
+                "the transaction must roll back the earlier valid insertion too");
+        assertTrue(journal.availability(userId).canRedo(),
+                "an invalid compound entry must remain unconsumed");
+    }
+
+    @Test
+    void targetedDeviceCreationUsesTheSameJournalAsManualCreation() {
+        service.createNode(userId, current -> newDevice("ai-light", "AI Light", 100.0));
+
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        assertEquals("DEVICE", entry.getEntityType().name());
+        assertEquals("CREATE", entry.getOperation().name());
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertFalse(nodes.existsByUserIdAndId(userId, "ai-light"));
+        assertTrue(service.redoLastUndoneEdit(userId).isApplied());
+        assertTrue(nodes.existsByUserIdAndId(userId, "ai-light"));
+    }
+
+    @Test
+    void layoutUpdateIsOneEditAndNoOpLayoutCreatesNoHistory() {
+        DeviceLayoutDto moved = layout(90.0, 45.0, 190, 140);
+
+        var updated = service.updateNodeLayout(userId, "light-1", moved);
+
+        assertEquals("updated", updated.getOperation());
+        assertEquals(Boolean.TRUE, updated.getCanUndo());
+        assertEquals(Boolean.FALSE, updated.getCanRedo());
+        assertEquals(1, journalRepo.countByUserId(userId));
+        assertEquals(90.0, service.getNodes(userId).get(0).getPosition().getX());
+        DeviceJournalSnapshot recordedAfter = journal.readJson(
+                journal.nextToUndo(userId).orElseThrow().getAfterJson(),
+                DeviceJournalSnapshot.class);
+        assertEquals(recordedAfter.getDevices().get(0).getDevice(), service.getNodes(userId).get(0),
+                "the journal must record the exact authoritative post-update device");
+
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertEquals(0.0, service.getNodes(userId).get(0).getPosition().getX());
+        assertTrue(service.redoLastUndoneEdit(userId).isApplied());
+        assertEquals(90.0, service.getNodes(userId).get(0).getPosition().getX());
+
+        clearHistory();
+        var unchanged = service.updateNodeLayout(userId, "light-1", moved);
+        assertEquals("unchanged", unchanged.getOperation());
+        assertNull(unchanged.getCanUndo());
+        assertNull(unchanged.getCanRedo());
+        assertEquals(0, journalRepo.countByUserId(userId));
+    }
+
+    private DeviceLayoutDto layout(double x, double y, int width, int height) {
+        DeviceLayoutDto layout = new DeviceLayoutDto();
+        DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+        position.setX(x);
+        position.setY(y);
+        layout.setPosition(position);
+        layout.setWidth(width);
+        layout.setHeight(height);
+        return layout;
+    }
+
+    @Test
+    void runtimeUpdateRoundTripsAsOneDeviceEdit() {
+        DeviceRuntimeConfigDto expected = new DeviceRuntimeConfigDto();
+        expected.setState("on");
+        DeviceRuntimeConfigDto desired = new DeviceRuntimeConfigDto();
+        desired.setState("off");
+
+        var updated = service.updateNodeRuntime(
+                userId, "light-1", new DeviceRuntimeUpdateDto(expected, desired));
+
+        assertEquals("updated", updated.getOperation());
+        assertEquals(Boolean.TRUE, updated.getCanUndo());
+        assertEquals("off", service.getNodes(userId).get(0).getState());
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertEquals("on", service.getNodes(userId).get(0).getState());
+        assertTrue(service.redoLastUndoneEdit(userId).isApplied());
+        assertEquals("off", service.getNodes(userId).get(0).getState());
+    }
+
+    @Test
+    void renameUndoRestoresDeviceAndSpecificationDisplayCaches() {
+        service.addSpec(userId, newSpec("on"));
+        long beforeRenameHistory = journalRepo.countByUserId(userId);
+
+        var renamed = service.renameNode(userId, "light-1", "Kitchen Light", "Light 1");
+
+        assertEquals(Boolean.TRUE, renamed.getCanUndo());
+        assertEquals("Kitchen Light", service.getNodes(userId).get(0).getLabel());
+        assertEquals("Kitchen Light", service.getSpecs(userId).get(0)
+                .getDevices().get(0).getDeviceLabel());
+        assertEquals(beforeRenameHistory + 1, journalRepo.countByUserId(userId));
+
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertEquals("Light 1", service.getNodes(userId).get(0).getLabel());
+        assertEquals("Light 1", service.getSpecs(userId).get(0)
+                .getDevices().get(0).getDeviceLabel());
+        assertTrue(service.redoLastUndoneEdit(userId).isApplied());
+        assertEquals("Kitchen Light", service.getSpecs(userId).get(0)
+                .getDevices().get(0).getDeviceLabel());
+
+        long historyAfterRename = journalRepo.countByUserId(userId);
+        assertThrows(BadRequestException.class,
+                () -> service.renameNode(userId, "light-1", "Kitchen Light", "Kitchen Light"));
+        assertEquals(historyAfterRename, journalRepo.countByUserId(userId));
+    }
+
+    @Test
+    void directEnvironmentEditRoundTripsAndAnUnchangedPatchCreatesNoHistory() {
+        EnvironmentVariableUpdateRequestDto update = new EnvironmentVariableUpdateRequestDto(
+                "illuminance",
+                new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                        "10", "untrusted", "public"),
+                new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                        "37", "trusted", "private"));
+
+        EnvironmentMutationResultDto changed =
+                service.saveEnvironmentVariables(userId, List.of(update));
+
+        assertEquals("updated", changed.getOperation());
+        assertEquals(Boolean.TRUE, changed.getCanUndo());
+        assertEquals(Boolean.FALSE, changed.getCanRedo());
+        assertEquals("37", service.getEnvironmentVariables(userId).get(0).getValue());
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        assertEquals("10", service.getEnvironmentVariables(userId).get(0).getValue());
+        assertTrue(service.redoLastUndoneEdit(userId).isApplied());
+        assertEquals("37", service.getEnvironmentVariables(userId).get(0).getValue());
+
+        clearHistory();
+        EnvironmentVariableUpdateRequestDto noOp = new EnvironmentVariableUpdateRequestDto(
+                "illuminance",
+                new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                        "37", "trusted", "private"),
+                new EnvironmentVariableUpdateRequestDto.DesiredPatch("37", null, null));
+        EnvironmentMutationResultDto unchanged =
+                service.saveEnvironmentVariables(userId, List.of(noOp));
+        assertEquals("unchanged", unchanged.getOperation());
+        assertNull(unchanged.getCanUndo());
+        assertEquals(0, journalRepo.countByUserId(userId));
+    }
+
+    @Test
+    void environmentJournalRejectsUnsupportedMetadataWithoutChangingThePool() {
+        EnvironmentVariableUpdateRequestDto update = new EnvironmentVariableUpdateRequestDto(
+                "illuminance",
+                new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                        "10", "untrusted", "public"),
+                new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                        "37", "trusted", "private"));
+        service.saveEnvironmentVariables(userId, List.of(update));
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        entry.setOperation(BoardEditOperation.DELETE);
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.undoLastEdit(userId));
+
+        assertEquals("37", service.getEnvironmentVariables(userId).get(0).getValue());
+        assertTrue(journal.availability(userId).canUndo(),
+                "an invalid Environment Pool entry must remain unconsumed");
+    }
+
+    @Test
+    void clearingHistoryChangesNoBoardStateAndDisablesBothDirections() {
+        service.updateNodeLayout(userId, "light-1", layout(50.0, 20.0, 176, 128));
+        assertTrue(journal.availability(userId).canUndo());
+        DeviceNodeDto beforeClear = service.getNodes(userId).get(0);
+
+        BoardUndoResultDto cleared = clearHistory();
+
+        assertFalse(cleared.isApplied());
+        assertEquals("HISTORY_CLEARED", cleared.getReasonCode());
+        assertFalse(cleared.isCanUndo());
+        assertFalse(cleared.isCanRedo());
+        assertEquals(beforeClear, service.getNodes(userId).get(0));
+        assertEquals(0, journalRepo.countByUserId(userId));
+    }
+
+    @Test
+    void clearingHistoryRejectsAConfirmationThatPredatesANewerEdit() {
+        service.updateNodeLayout(userId, "light-1", layout(50.0, 20.0, 176, 128));
+        var stalePreview = service.previewBoardEditHistoryClear(userId);
+
+        DeviceRuntimeConfigDto expected = new DeviceRuntimeConfigDto();
+        expected.setState("on");
+        DeviceRuntimeConfigDto desired = new DeviceRuntimeConfigDto();
+        desired.setState("off");
+        service.updateNodeRuntime(
+                userId, "light-1", new DeviceRuntimeUpdateDto(expected, desired));
+
+        assertThrows(ConflictException.class,
+                () -> service.clearBoardEditHistory(userId, stalePreview.getImpactToken()));
+
+        assertEquals(2, journalRepo.countByUserId(userId));
+        assertTrue(journal.availability(userId).canUndo());
+        assertEquals("off", service.getNodes(userId).get(0).getState());
+    }
+
+    private BoardUndoResultDto clearHistory() {
+        var preview = service.previewBoardEditHistoryClear(userId);
+        return service.clearBoardEditHistory(userId, preview.getImpactToken());
+    }
+
+    @Test
+    void deviceJournalRejectsANoOpTransitionWithoutMarkingItUndone() {
+        service.createNode(userId, current -> newDevice("ai-light", "AI Light", 100.0));
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        entry.setBeforeJson(entry.getAfterJson());
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.undoLastEdit(userId));
+        assertTrue(nodes.existsByUserIdAndId(userId, "ai-light"));
+        assertTrue(journal.availability(userId).canUndo(),
+                "an invalid transition must leave the entry retryable");
+    }
+
+    @Test
+    void deviceUpdateJournalCannotRewriteTheDeviceTemplate() throws Exception {
+        String originalTemplate = service.getNodes(userId).get(0).getTemplateName();
+        service.updateNodeLayout(userId, "light-1", layout(50.0, 20.0, 176, 128));
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        DeviceJournalSnapshot before = journal.readJson(
+                entry.getBeforeJson(), DeviceJournalSnapshot.class);
+        before.getDevices().get(0).getDevice().setTemplateName("tampered-template");
+        entry.setBeforeJson(new ObjectMapper()
+                .registerModule(new JavaTimeModule())
+                .writeValueAsString(before));
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.undoLastEdit(userId));
+
+        assertEquals(originalTemplate, service.getNodes(userId).get(0).getTemplateName());
+        assertEquals(50.0, service.getNodes(userId).get(0).getPosition().getX());
+        assertTrue(journal.availability(userId).canUndo(),
+                "an invalid update must remain unconsumed");
+    }
+
+    @Test
+    void ruleJournalRejectsAnUnsupportedOperationWithoutDeletingTheRule() {
+        Long ruleId = service.addRule(userId, newRule("r1")).getAffectedItem().getId();
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        entry.setOperation(BoardEditOperation.UPDATE);
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.undoLastEdit(userId));
+
+        assertEquals(List.of(ruleId), ruleIdsInOrder());
+        assertTrue(journal.availability(userId).canUndo(),
+                "an unsupported operation must not consume the entry");
+    }
+
+    @Test
+    void deviceDeletionRoundTripsItsCascadeIdsOrderAndEnvironment() {
+        Long ruleId = service.addRule(userId, newRule("r1")).getAffectedItem().getId();
+        String specId = service.addSpec(userId, newSpec("on")).getAffectedItem().getId();
+        var preview = service.previewNodeDeletion(userId, "light-1");
+
+        service.deleteNodeCascade(userId, "light-1", preview.getImpactToken());
+        assertTrue(service.getNodes(userId).isEmpty());
+        assertTrue(service.getRules(userId).isEmpty());
+        assertTrue(service.getSpecs(userId).isEmpty());
+        assertTrue(service.getEnvironmentVariables(userId).isEmpty());
+
+        BoardUndoResultDto undone = service.undoLastEdit(userId);
+        assertTrue(undone.isApplied());
+        assertEquals(List.of("light-1"), undone.getNodes().stream().map(DeviceNodeDto::getId).toList());
+        assertEquals(List.of(ruleId), undone.getRules().stream().map(RuleDto::getId).toList());
+        assertEquals(List.of(specId), undone.getSpecs().stream().map(SpecificationDto::getId).toList());
+        assertEquals("10", undone.getEnvironmentVariables().get(0).getValue());
+        DeviceJournalSnapshot restoredSnapshot = journal.readJson(
+                journal.nextToRedo(userId).orElseThrow().getBeforeJson(), DeviceJournalSnapshot.class);
+        assertEquals(restoredSnapshot.getDevices().get(0).getDevice(), undone.getNodes().get(0));
+        assertEquals(restoredSnapshot.getEnvironmentVariables(), undone.getEnvironmentVariables());
+
+        BoardUndoResultDto redone = service.redoLastUndoneEdit(userId);
+        assertTrue(redone.isApplied());
+        assertTrue(redone.getNodes().isEmpty());
+        assertTrue(redone.getRules().isEmpty());
+        assertTrue(redone.getSpecs().isEmpty());
+        assertTrue(redone.getEnvironmentVariables().isEmpty());
+    }
+
+    @Test
+    void newDeviceEditAfterUndoDiscardsTheAbandonedDeletionRedo() {
+        var preview = service.previewNodeDeletion(userId, "light-1");
+        service.deleteNodeCascade(userId, "light-1", preview.getImpactToken());
+        service.undoLastEdit(userId);
+
+        DeviceLayoutDto changed = new DeviceLayoutDto();
+        DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+        position.setX(99.0);
+        position.setY(20.0);
+        changed.setPosition(position);
+        changed.setWidth(176);
+        changed.setHeight(128);
+        service.updateNodeLayout(userId, "light-1", changed);
+
+        assertFalse(service.redoLastUndoneEdit(userId).isApplied());
+        assertTrue(nodes.existsByUserIdAndId(userId, "light-1"));
+        assertFalse(journal.availability(userId).canRedo(),
+                "a new edit after undo must discard the abandoned redo branch");
+        assertTrue(journal.availability(userId).canUndo(), "the new layout edit must be undoable");
     }
 
     /** A minimal rule that passes board validation against the Light template. */
@@ -335,23 +721,48 @@ class BoardEditUndoIntegrationTest {
     }
 
     @Test
-    void aWholesaleRuleRewriteDiscardsTheJournal() {
-        // `updateRulesAgainstSnapshot` is the fix-apply path: it rewrites the whole collection, so it
-        // can delete or edit the very rule a journal entry names. Leaving the journal alone made undo
-        // throw a conflict on every press while availability kept reporting canUndo=true — the button
-        // stayed armed on an entry that could never apply. Its inverse is not a single record, so the
-        // journal is dropped, exactly as for device deletion and scene replacement.
+    void anAutomaticFixIsOneReversibleRuleSetEditAndPreservesOlderHistory() {
         Long ruleId = service.addRule(userId, newRule("r1")).getAffectedItem().getId();
         assertTrue(journal.availability(userId).canUndo());
 
-        service.updateRulesAgainstSnapshot(userId, snapshot -> List.of());
+        CollectionMutationResultDto<RuleDto> fixed =
+                service.updateRulesAgainstSnapshot(userId, snapshot -> List.of());
 
         assertTrue(service.getRules(userId).isEmpty());
-        assertFalse(journal.availability(userId).canUndo(),
-                "a rewrite whose inverse is not a single record must not leave a reversible entry");
+        assertEquals(Boolean.TRUE, fixed.getCanUndo());
+        assertEquals(Boolean.FALSE, fixed.getCanRedo());
+        assertTrue(journal.availability(userId).canUndo());
         assertFalse(journal.availability(userId).canRedo());
-        assertEquals(0, journalRepo.countByUserId(userId));
-        assertNotNull(ruleId);
+        assertEquals(2, journalRepo.countByUserId(userId),
+                "the fix entry must sit above, not erase, the earlier create");
+
+        BoardUndoResultDto undone = service.undoLastEdit(userId);
+        assertEquals("RULE_SET", undone.getEntityType());
+        assertEquals(List.of(ruleId), ruleIdsInOrder());
+
+        BoardUndoResultDto redone = service.redoLastUndoneEdit(userId);
+        assertEquals("RULE_SET", redone.getEntityType());
+        assertTrue(service.getRules(userId).isEmpty());
+    }
+
+    @Test
+    void automaticFixNoOpAndMalformedHistoryCannotMasqueradeAsApplied() {
+        service.addRule(userId, newRule("r1"));
+        long beforeNoOp = journalRepo.countByUserId(userId);
+        assertThrows(BadRequestException.class,
+                () -> service.updateRulesAgainstSnapshot(userId, snapshot -> snapshot.rules()));
+        assertEquals(beforeNoOp, journalRepo.countByUserId(userId));
+
+        service.updateRulesAgainstSnapshot(userId, snapshot -> List.of());
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        entry.setEntityKey("not-the-rule-set");
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.undoLastEdit(userId));
+
+        assertTrue(service.getRules(userId).isEmpty());
+        assertTrue(journal.availability(userId).canUndo(),
+                "an invalid automatic-fix entry must remain unconsumed");
     }
 
     @Test
@@ -375,10 +786,8 @@ class BoardEditUndoIntegrationTest {
 
     @Test
     void redoOfACreateRestoresTheRuleRatherThanReportingItUnreadable() {
-        // A CREATE entry records no execution position — there was nothing there before it — so the
-        // "missing recorded position" guard must not fire on this path. It used to, making every redo
-        // of a create fail with a false "saved details are unreadable" conflict while leaving canRedo
-        // true, so the button stayed armed and the user could retry forever.
+        // CREATE records the position the rule occupied after insertion. Redo must use that position
+        // rather than treating the absent before-snapshot as an absent ordering contract.
         Long ruleId = service.addRule(userId, newRule("r1")).getAffectedItem().getId();
         assertTrue(service.undoLastEdit(userId).isApplied());
         assertTrue(service.getRules(userId).isEmpty());
@@ -392,6 +801,20 @@ class BoardEditUndoIntegrationTest {
     }
 
     @Test
+    void ruleJournalRejectsAnOutOfRangeRecordedPositionOnRedo() {
+        service.addRule(userId, newRule("r1"));
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        BoardEditJournalPo entry = journal.nextToRedo(userId).orElseThrow();
+        entry.setEntityOrder(1);
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.redoLastUndoneEdit(userId));
+
+        assertTrue(service.getRules(userId).isEmpty());
+        assertTrue(journal.availability(userId).canRedo());
+    }
+
+    @Test
     void redoOfASpecificationCreateRestoresIt() {
         service.addSpec(userId, newSpec("on"));
         assertTrue(service.undoLastEdit(userId).isApplied());
@@ -399,6 +822,36 @@ class BoardEditUndoIntegrationTest {
 
         assertTrue(service.redoLastUndoneEdit(userId).isApplied());
         assertEquals(1, service.getSpecs(userId).size());
+    }
+
+    @Test
+    void specificationJournalRejectsAnOutOfRangeRecordedPositionOnRedo() {
+        service.addSpec(userId, newSpec("on"));
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        BoardEditJournalPo entry = journal.nextToRedo(userId).orElseThrow();
+        entry.setEntityOrder(1);
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.redoLastUndoneEdit(userId));
+
+        assertTrue(service.getSpecs(userId).isEmpty());
+        assertTrue(journal.availability(userId).canRedo());
+    }
+
+    @Test
+    void specificationJournalRejectsAnIdentityMismatchOnRedo() {
+        String specId = service.addSpec(userId, newSpec("on")).getAffectedItem().getId();
+        assertTrue(service.undoLastEdit(userId).isApplied());
+        BoardEditJournalPo entry = journal.nextToRedo(userId).orElseThrow();
+        entry.setEntityKey(specId + "-other");
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.redoLastUndoneEdit(userId));
+
+        assertTrue(service.getSpecs(userId).isEmpty(),
+                "a snapshot must not be restored under a different identity");
+        assertTrue(journal.availability(userId).canRedo(),
+                "an invalid entry must remain unconsumed");
     }
 
     @Test
@@ -466,6 +919,36 @@ class BoardEditUndoIntegrationTest {
     }
 
     @Test
+    void unchangedRuleOrderIsRejectedWithoutWritingHistory() {
+        Long first = service.addRule(userId, newRule("r1", "on", "off")).getAffectedItem().getId();
+        Long second = service.addRule(userId, newRule("r2", "off", "on")).getAffectedItem().getId();
+        long journalCount = journalRepo.countByUserId(userId);
+
+        assertThrows(BadRequestException.class, () ->
+                service.reorderRules(userId, List.of(first, second), List.of(first, second)));
+
+        assertEquals(List.of(first, second), ruleIdsInOrder());
+        assertEquals(journalCount, journalRepo.countByUserId(userId),
+                "a no-op command must not become undo history");
+    }
+
+    @Test
+    void ruleOrderJournalRejectsAnUnsupportedOperationWithoutReordering() {
+        Long first = service.addRule(userId, newRule("r1", "on", "off")).getAffectedItem().getId();
+        Long second = service.addRule(userId, newRule("r2", "off", "on")).getAffectedItem().getId();
+        service.reorderRules(userId, List.of(first, second), List.of(second, first));
+        BoardEditJournalPo entry = journal.nextToUndo(userId).orElseThrow();
+        entry.setOperation(BoardEditOperation.DELETE);
+        journalRepo.saveAndFlush(entry);
+
+        assertThrows(ConflictException.class, () -> service.undoLastEdit(userId));
+
+        assertEquals(List.of(second, first), ruleIdsInOrder());
+        assertTrue(journal.availability(userId).canUndo(),
+                "an invalid reorder entry must remain unconsumed");
+    }
+
+    @Test
     void reorderUndoIsRefusedWhenTheRuleSetChangedAfterwards() {
         Long first = service.addRule(userId, newRule("r1", "on", "off")).getAffectedItem().getId();
         Long second = service.addRule(userId, newRule("r2", "off", "on")).getAffectedItem().getId();
@@ -502,6 +985,8 @@ class BoardEditUndoIntegrationTest {
         assertFalse(availability.isApplied());
         // Availability is a read. Shipping the collections here would invite a client to treat a
         // query response as an authoritative board update.
+        assertTrue(availability.getNodes().isEmpty());
+        assertTrue(availability.getEnvironmentVariables().isEmpty());
         assertTrue(availability.getRules().isEmpty());
         assertTrue(availability.getSpecs().isEmpty());
         // And it must not consume the history it reports on.

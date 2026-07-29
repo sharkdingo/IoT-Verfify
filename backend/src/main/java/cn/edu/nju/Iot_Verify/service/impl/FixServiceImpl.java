@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResol
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
@@ -223,34 +224,36 @@ public class FixServiceImpl implements FixService {
         // locked write, letting apply overwrite freshly-saved rules with a stale list. The drift check
         // runs on the exact snapshot that gets written.
         int[] before = {0};
-        List<RuleDto> saved = boardStorageService.updateRulesAgainstSnapshot(userId, boardSnapshot -> {
-            // The rule write happens in BoardStorageService's transactionTemplate. Register the
-            // fence from inside that transaction so a lease loss cannot commit this public REST
-            // entry after another formal operation has claimed the user.
-            formalOperationAdmission.registerCurrentLeaseCommitFence();
-            List<RuleDto> boardRules = boardSnapshot.rules();
-            before[0] = boardRules.size();
-            ModelInputSnapshot currentSnapshot = boardDataConverter.toModelInputSnapshot(boardSnapshot);
-            assertTemplatesUnchanged(ctx, currentSnapshot.templateManifests());
-            // Spec/device drift guard: run inside the same per-user write lock as the final save, so a
-            // concurrent spec/device edit cannot slip in after the check but before persistence.
-            CurrentBoardSemanticContext currentBoard = assertSpecsAndDevicesUnchanged(
-                    currentSnapshot, ctx, deviceSmvMap);
-            // Guard against board drift: the snapshot the fix was computed against must still line up
-            // with the current board rules by ordered fingerprint. Internal fix coordinates must never
-            // be allowed to target a different rule or condition after the board changes.
-            assertBoardAlignedWithSnapshot(boardRules, snapshotRules, deviceSmvMap);
-            // Apply the exact signed suggestion shown to the user. Snapshot checks above ensure its
-            // existing NuSMV evidence still describes the model being changed.
-            Map<String, String> persistenceDeviceRefs = buildPersistenceDeviceRefAliases(
-                    currentSnapshot.nodes(), deviceSmvMap, currentBoard.currentDeviceSmvMap());
-            Map<String, String> displayDeviceNames = "remove".equals(validatedStrategy)
-                    ? Map.of()
-                    : buildDisplayDeviceNames(currentSnapshot.nodes());
-            return FixStrategyApplier.apply(
-                    validatedStrategy, suggestionToApply, boardRules, deviceSmvMap,
-                    persistenceDeviceRefs, displayDeviceNames);
-        });
+        CollectionMutationResultDto<RuleDto> mutation =
+                boardStorageService.updateRulesAgainstSnapshot(userId, boardSnapshot -> {
+                    // The rule write happens in BoardStorageService's transactionTemplate. Register the
+                    // fence from inside that transaction so a lease loss cannot commit this public REST
+                    // entry after another formal operation has claimed the user.
+                    formalOperationAdmission.registerCurrentLeaseCommitFence();
+                    List<RuleDto> boardRules = boardSnapshot.rules();
+                    before[0] = boardRules.size();
+                    ModelInputSnapshot currentSnapshot = boardDataConverter.toModelInputSnapshot(boardSnapshot);
+                    assertTemplatesUnchanged(ctx, currentSnapshot.templateManifests());
+                    // Spec/device drift guard: run inside the same per-user write lock as the final save, so a
+                    // concurrent spec/device edit cannot slip in after the check but before persistence.
+                    CurrentBoardSemanticContext currentBoard = assertSpecsAndDevicesUnchanged(
+                            currentSnapshot, ctx, deviceSmvMap);
+                    // Guard against board drift: the snapshot the fix was computed against must still line up
+                    // with the current board rules by ordered fingerprint. Internal fix coordinates must never
+                    // be allowed to target a different rule or condition after the board changes.
+                    assertBoardAlignedWithSnapshot(boardRules, snapshotRules, deviceSmvMap);
+                    // Apply the exact signed suggestion shown to the user. Snapshot checks above ensure its
+                    // existing NuSMV evidence still describes the model being changed.
+                    Map<String, String> persistenceDeviceRefs = buildPersistenceDeviceRefAliases(
+                            currentSnapshot.nodes(), deviceSmvMap, currentBoard.currentDeviceSmvMap());
+                    Map<String, String> displayDeviceNames = "remove".equals(validatedStrategy)
+                            ? Map.of()
+                            : buildDisplayDeviceNames(currentSnapshot.nodes());
+                    return FixStrategyApplier.apply(
+                            validatedStrategy, suggestionToApply, boardRules, deviceSmvMap,
+                            persistenceDeviceRefs, displayDeviceNames);
+                });
+        List<RuleDto> saved = mutation.getCurrentItems();
         log.info("Applied '{}' fix for trace {} (user {}): {} rule(s) -> {} rule(s)",
                 validatedStrategy, traceId, userId, before[0], saved.size());
 
@@ -264,6 +267,8 @@ public class FixServiceImpl implements FixService {
                 .currentRuleCount(saved.size())
                 .message(buildApplyMessage(validatedStrategy, suggestionToApply, before[0], saved.size()))
                 .rules(saved)
+                .canUndo(Boolean.TRUE.equals(mutation.getCanUndo()))
+                .canRedo(Boolean.TRUE.equals(mutation.getCanRedo()))
                 .build();
     }
 

@@ -59,6 +59,7 @@ class ResetDefaultTemplatesToolTest {
         JsonNode first = objectMapper.readTree(tool.execute("{\"confirmed\":false}"));
 
         assertTrue(first.path("requiresUserConfirmation").asBoolean());
+        assertEquals(3, first.path("preview").path("editHistoryEntryCount").asInt());
         JsonNode environmentChange = first.path("preview").path("environmentChanges").get(0);
         assertEquals("temperature", environmentChange.path("name").asText());
         assertEquals("UPDATED", environmentChange.path("changeType").asText());
@@ -95,6 +96,7 @@ class ResetDefaultTemplatesToolTest {
                 .operation("preview")
                 .impactToken(token)
                 .canApply(canApply)
+                .editHistoryEntryCount(3)
                 .templateChanges(List.of(DefaultTemplateResetChangeDto.builder()
                         .templateName("Air Conditioner")
                         .changeType(DefaultTemplateResetChangeDto.ChangeType.REFRESH_DEFAULT)

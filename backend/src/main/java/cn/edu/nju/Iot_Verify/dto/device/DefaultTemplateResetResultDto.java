@@ -19,6 +19,7 @@ public class DefaultTemplateResetResultDto {
     @ToString.Exclude
     private String impactToken;
     private boolean canApply;
+    private int editHistoryEntryCount;
     @Builder.Default
     private List<DefaultTemplateResetChangeDto> templateChanges = List.of();
     @Builder.Default

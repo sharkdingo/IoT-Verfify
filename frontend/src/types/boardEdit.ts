@@ -1,17 +1,20 @@
+import type { DeviceNode } from './node'
+import type { ModelEnvironmentVariable } from './model'
 import type { RuleForm } from './rule'
 import type { Specification } from './spec'
 
 /**
  * Board edits that participate in undo.
  *
- * Deliberately narrow — see `BoardEditEntityType` on the backend for why devices and environment
- * variables are excluded. Undo is a *board edit* command: it is not how you cancel a run, close a
- * dialog, or go back in browser history.
+ * Now includes devices: deletion records the device plus every cascaded rule and specification,
+ * so undo can atomically restore the entire state. Creation records just the device.
  *
  * `RULE_ORDER` is one up/down press: it changes no single record, so its journal entry holds the
  * previous ordering rather than a record snapshot.
  */
-export const BOARD_EDIT_ENTITY_TYPES = ['RULE', 'SPECIFICATION', 'RULE_ORDER'] as const
+export const BOARD_EDIT_ENTITY_TYPES = [
+  'DEVICE', 'ENVIRONMENT', 'RULE', 'SPECIFICATION', 'RULE_ORDER', 'RULE_SET'
+] as const
 
 export type BoardEditEntityType = typeof BOARD_EDIT_ENTITY_TYPES[number]
 
@@ -21,7 +24,7 @@ export const BOARD_EDIT_OPERATIONS = ['CREATE', 'UPDATE', 'DELETE'] as const
 export type BoardEditOperation = typeof BOARD_EDIT_OPERATIONS[number]
 
 export const BOARD_UNDO_REASON_CODES = [
-  'UNDONE', 'REDONE', 'NOTHING_TO_APPLY', 'AVAILABILITY_ONLY'
+  'UNDONE', 'REDONE', 'NOTHING_TO_APPLY', 'AVAILABILITY_ONLY', 'HISTORY_CLEARED'
 ] as const
 
 export type BoardUndoReasonCode = typeof BOARD_UNDO_REASON_CODES[number]
@@ -47,15 +50,17 @@ export interface BoardUndoAvailability {
  * Outcome of an undo or redo.
  *
  * `applied: false` with `NOTHING_TO_APPLY` is a normal result, not a failure: the user pressed the
- * shortcut once more than there is history. `rules`/`specs` are the authoritative post-operation
- * collections, so the client replaces its local state rather than inverting anything itself, and
- * `canUndo`/`canRedo` come from the server journal so the UI never guesses from a local stack.
+ * shortcut once more than there is history. `nodes`/`environmentVariables`/`rules`/`specs` are the
+ * authoritative post-operation collections, so the client replaces its local state rather than
+ * inverting anything itself, and `canUndo`/`canRedo` come from the server journal.
  */
 export interface BoardUndoResult extends BoardUndoAvailability {
   applied: boolean
   entityType?: BoardEditEntityType
   originalOperation?: BoardEditOperation
   reasonCode: BoardUndoReasonCode
+  nodes: DeviceNode[]
+  environmentVariables: ModelEnvironmentVariable[]
   rules: RuleForm[]
   specs: Specification[]
 }

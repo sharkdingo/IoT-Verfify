@@ -9,7 +9,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
@@ -70,7 +74,7 @@ public class BoardEditJournal {
         record(userId, entityType, operation, entityKey, before, after, null);
     }
 
-    /** As {@link #record}, additionally preserving a deleted rule's execution-order position. */
+    /** As {@link #record}, additionally preserving a rule or specification's collection position. */
     public void record(
             Long userId,
             BoardEditEntityType entityType,
@@ -150,10 +154,57 @@ public class BoardEditJournal {
                 journalRepo.countByUserIdAndUndoneTrue(userId) > 0);
     }
 
+    /** Complete journal revision used by the clear-history preview/confirmation fence. */
+    public BoardEditHistoryState historyState(Long userId) {
+        List<BoardEditJournalPo> entries = journalRepo.findByUserIdOrderBySequenceAsc(userId);
+        long undoCount = entries.stream().filter(entry -> !entry.isUndone()).count();
+        long redoCount = entries.size() - undoCount;
+        List<HistoryTokenEntry> tokenEntries = entries.stream()
+                .map(entry -> new HistoryTokenEntry(
+                        entry.getId(),
+                        entry.getSequence(),
+                        entry.getEntityType(),
+                        entry.getOperation(),
+                        entry.getEntityKey(),
+                        entry.getBeforeJson(),
+                        entry.getAfterJson(),
+                        entry.getEntityOrder(),
+                        entry.isUndone()))
+                .toList();
+        try {
+            byte[] canonical = objectMapper.writeValueAsString(tokenEntries)
+                    .getBytes(StandardCharsets.UTF_8);
+            String impactToken = HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(canonical));
+            return new BoardEditHistoryState(
+                    entries.size(),
+                    new BoardUndoAvailability(undoCount > 0, redoCount > 0),
+                    impactToken);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not serialize board edit history state", e);
+        }
+    }
+
+    private record HistoryTokenEntry(
+            Long journalId,
+            long sequence,
+            BoardEditEntityType entityType,
+            BoardEditOperation operation,
+            String entityKey,
+            String beforeJson,
+            String afterJson,
+            Integer entityOrder,
+            boolean undone
+    ) {
+    }
+
     /**
-     * Drops the whole journal. Used when the board is replaced or cleared wholesale: those
-     * commands rewrite every collection at once, so no per-record inverse recorded before them
-     * still describes a reachable state.
+     * Drops the whole journal after a token-confirmed destructive preview: explicit history clear,
+     * full-scene replacement, template deletion, or bundled-template reset. Each operation can make
+     * retained snapshots semantically invalid, so keeping a partial journal would offer an inverse
+     * that no longer describes the complete previous state.
      */
     public void clear(Long userId) {
         journalRepo.deleteByUserId(userId);

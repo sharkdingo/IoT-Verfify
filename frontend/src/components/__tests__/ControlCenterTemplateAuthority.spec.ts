@@ -62,6 +62,7 @@ const resetPreview = {
   operation: 'preview' as const,
   impactToken: 'reset-impact-token',
   canApply: true,
+  editHistoryEntryCount: 3,
   templateChanges: [],
   affectedDevices: [],
   blockers: [],
@@ -74,6 +75,7 @@ const deletionPreview = {
   operation: 'preview' as const,
   impactToken: 'delete-impact-token',
   canDelete: true,
+  editHistoryEntryCount: 2,
   template,
   blockers: [],
   currentTemplates: [template]
@@ -102,6 +104,42 @@ afterEach(() => {
 })
 
 describe('ControlCenter template authority recovery', () => {
+  it('shows the exact undo-history impact before template reset and deletion', async () => {
+    boardApiMocks.previewDefaultTemplateReset.mockResolvedValue(resetPreview)
+    boardApiMocks.previewDeviceTemplateDeletion.mockResolvedValue(deletionPreview)
+    const wrapper = mountTemplates()
+
+    await wrapper.get('[data-testid="reset-default-templates"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.template-reset-dialog').text()).toContain('3 undo/redo history')
+    await wrapper.get('.template-reset-dialog__btn.secondary').trigger('click')
+
+    await wrapper.get('.template-card__action--danger').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.control-center-delete-dialog').text()).toContain('2 undo/redo history')
+    wrapper.unmount()
+  })
+
+  it('reports the history boundary only after a confirmed template mutation succeeds', async () => {
+    boardApiMocks.previewDeviceTemplateDeletion.mockResolvedValue(deletionPreview)
+    boardApiMocks.deleteDeviceTemplate.mockResolvedValue({
+      ...deletionPreview,
+      operation: 'deleted',
+      deletedTemplate: template,
+      currentTemplates: []
+    })
+    const wrapper = mountTemplates()
+
+    await wrapper.get('.template-card__action--danger').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('edit-history-cleared')).toBeUndefined()
+    await wrapper.get('.control-center-delete-dialog button:last-child').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('edit-history-cleared')).toEqual([[]])
+    wrapper.unmount()
+  })
+
   it('marks the template catalog unavailable when import outcome and refresh are both unknown', async () => {
     boardApiMocks.addDeviceTemplate.mockRejectedValue(new Error('response lost'))
     boardApiMocks.getDeviceTemplates.mockRejectedValue(new Error('refresh failed'))

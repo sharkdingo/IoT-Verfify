@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.ConditionAdjustment;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultLocalizationResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
@@ -143,7 +144,9 @@ class FixServiceImplTest {
     private void stubUpdateRules(List<RuleDto> currentRules) {
         when(boardStorageService.updateRulesAgainstSnapshot(anyLong(), any())).thenAnswer(inv -> {
             java.util.function.Function<BoardSemanticSnapshotDto, List<RuleDto>> mutator = inv.getArgument(1);
-            return mutator.apply(storageSnapshot(currentRules));
+            List<RuleDto> saved = mutator.apply(storageSnapshot(currentRules));
+            return CollectionMutationResultDto.of("updated", null, saved)
+                    .withUndoAvailability(true, false);
         });
     }
 
@@ -657,8 +660,10 @@ class FixServiceImplTest {
             java.util.function.Function<BoardSemanticSnapshotDto, List<RuleDto>> mutator = inv.getArgument(1);
             insideUpdateRules.set(true);
             try {
-                return mutator.apply(storageSnapshot(
+                List<RuleDto> saved = mutator.apply(storageSnapshot(
                         new java.util.ArrayList<>(List.of(boardRuleMatchingSnapshot()))));
+                return CollectionMutationResultDto.of("updated", null, saved)
+                        .withUndoAvailability(true, false);
             } finally {
                 insideUpdateRules.set(false);
             }

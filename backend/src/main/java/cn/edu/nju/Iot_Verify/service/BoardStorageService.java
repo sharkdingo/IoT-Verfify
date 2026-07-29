@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEditHistoryClearPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
@@ -81,7 +82,8 @@ public interface BoardStorageService {
      *
      * <p>Reversible, so it returns the same mutation envelope as the other reversible edits and
      * carries the resulting undo availability. Users reach reorder through explicit up/down
-     * buttons and read one press as one edit, so it must be undoable like any other.
+     * buttons and read one press as one edit, so it must be undoable like any other. A requested
+     * order identical to the expected order is rejected rather than recorded as an edit.
      */
     CollectionMutationResultDto<RuleDto> reorderRules(
             Long userId, List<Long> expectedRuleIds, List<Long> ruleIds);
@@ -89,11 +91,12 @@ public interface BoardStorageService {
     /**
      * Reverses the newest reversible board edit that is still in effect.
      *
-     * <p>Only rule and specification create/delete participate; see {@code BoardEditEntityType}
-     * for why devices and environment variables are excluded. Refuses when the affected record
-     * was changed by something else after the edit was recorded, so an undo can never silently
-     * discard newer work. Returns {@code applied=false} when there is no history left, which
-     * makes repeating the request idempotent.
+     * <p>Device create/update/rename/delete, direct Environment Pool update, rule/specification
+     * create/delete, rule reorder, and automatic-fix rule-set replacement participate. A device
+     * deletion entry is compound: it includes its Environment Pool state and every cascaded
+     * rule/specification. Refuses when any affected state changed after the edit was recorded, so
+     * undo cannot silently discard newer work. Returns {@code applied=false} when there is no
+     * history left, which makes repeating the request idempotent.
      */
     BoardUndoResultDto undoLastEdit(Long userId);
 
@@ -106,11 +109,17 @@ public interface BoardStorageService {
     /** Re-applies the oldest undone edit. Same conflict and idempotency rules as undo. */
     BoardUndoResultDto redoLastUndoneEdit(Long userId);
 
+    /** Returns the exact journal impact token and count for destructive confirmation. */
+    BoardEditHistoryClearPreviewDto previewBoardEditHistoryClear(Long userId);
+
+    /** Discards only the undo/redo history matched by the confirmed token; board state is unchanged. */
+    BoardUndoResultDto clearBoardEditHistory(Long userId, String expectedImpactToken);
+
     /**
      * Atomic read-modify-write of rules against the complete current model snapshot. The mutator's
      * decision and the persisted rule list share one lock and transaction; exceptions roll back.
      */
-    List<RuleDto> updateRulesAgainstSnapshot(
+    CollectionMutationResultDto<RuleDto> updateRulesAgainstSnapshot(
             Long userId,
             java.util.function.Function<BoardSemanticSnapshotDto, List<RuleDto>> mutator);
 

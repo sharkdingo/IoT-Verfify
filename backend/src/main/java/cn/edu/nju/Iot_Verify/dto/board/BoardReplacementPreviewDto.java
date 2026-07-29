@@ -14,4 +14,5 @@ public class BoardReplacementPreviewDto {
     private int environmentVariableCount;
     private int ruleCount;
     private int specificationCount;
+    private int editHistoryEntryCount;
 }

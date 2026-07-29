@@ -1,8 +1,10 @@
+import type { DeviceNode } from '@/types/node'
+import type { ModelEnvironmentVariable } from '@/types/model'
 import type { RuleForm } from '@/types/rule'
 import type { Specification } from '@/types/spec'
 
 /**
- * The follow-ups every rule/specification mutation owes the rest of the board.
+ * The follow-ups every device/rule/specification mutation owes the rest of the board.
  *
  * These four were previously hand-assembled at each of ~10 call sites, in slightly different
  * orders and with slightly different omissions — rule reorder never reported undo availability,
@@ -13,15 +15,42 @@ import type { Specification } from '@/types/spec'
  * one and a missing dependency is a type error rather than a silent staleness bug.
  */
 export interface BoardSemanticScene {
+  /** Authoritative device list, when the mutation returned one. */
+  nodes?: DeviceNode[]
+  /** Authoritative Environment Pool, when a device mutation changed its required variables. */
+  environmentVariables?: ModelEnvironmentVariable[]
   /** Authoritative rule list, when the mutation returned one. */
   rules?: RuleForm[]
   /** Authoritative specification list, when the mutation returned one. */
   specs?: Specification[]
   /** Undo availability the server reported, when this mutation is reversible. */
   availability?: { canUndo?: boolean; canRedo?: boolean }
+  /** False only when the server explicitly confirmed that the request changed no model state. */
+  semanticChanged?: boolean
 }
 
+export interface BoardFocusState {
+  nodeId: string | null
+  ruleId: string | null
+  specId: string | null
+}
+
+/** Keeps inspector selection aligned with whichever authoritative collections were refreshed. */
+export const reconcileBoardFocus = (
+  focus: BoardFocusState,
+  scene: Pick<BoardSemanticScene, 'nodes' | 'rules' | 'specs'>
+): BoardFocusState => ({
+  nodeId: scene.nodes && focus.nodeId
+    && !scene.nodes.some(node => node.id === focus.nodeId) ? null : focus.nodeId,
+  ruleId: scene.rules && focus.ruleId
+    && !scene.rules.some(rule => String(rule.id ?? '') === focus.ruleId) ? null : focus.ruleId,
+  specId: scene.specs && focus.specId
+    && !scene.specs.some(spec => spec.id === focus.specId) ? null : focus.specId
+})
+
 export interface BoardSemanticCommitPorts {
+  setNodes: (nodes: DeviceNode[]) => void
+  setEnvironmentVariables: (variables: ModelEnvironmentVariable[]) => void
   setRules: (rules: RuleForm[]) => void
   setSpecs: (specs: Specification[]) => void
   /** Canvas connection lines are derived from rules, so they are rebuilt whenever rules change. */
@@ -31,13 +60,13 @@ export interface BoardSemanticCommitPorts {
    *
    * Mutations that run inside the board mutation queue are already marked stale by its
    * fingerprint comparison, so for them this is a harmless second call. It is load-bearing for
-   * undo/redo, which applies an authoritative result *outside* the queue.
+   * undo/redo, whose queue deliberately opts out of a second fingerprint comparison.
    */
   markVerificationResultStale: () => void
   /** Mirrors server-reported undo availability. Omitted availability must not clear real history. */
   syncUndoAvailability: (availability: { canUndo?: boolean; canRedo?: boolean }) => void
   /** Drops an inspector focus whose target no longer exists in the authoritative collections. */
-  clearDanglingFocus: (scene: { rules?: RuleForm[]; specs?: Specification[] }) => void
+  clearDanglingFocus: (scene: { nodes?: DeviceNode[]; rules?: RuleForm[]; specs?: Specification[] }) => void
 }
 
 /**
@@ -48,6 +77,8 @@ export interface BoardSemanticCommitPorts {
  */
 export const createBoardSemanticCommit = (ports: BoardSemanticCommitPorts) =>
   (scene: BoardSemanticScene): void => {
+    if (scene.nodes) ports.setNodes(scene.nodes)
+    if (scene.environmentVariables) ports.setEnvironmentVariables(scene.environmentVariables)
     if (scene.rules) ports.setRules(scene.rules)
     if (scene.specs) ports.setSpecs(scene.specs)
 
@@ -62,7 +93,7 @@ export const createBoardSemanticCommit = (ports: BoardSemanticCommitPorts) =>
     // mutation that omits them cannot clear real server history.
     if (scene.availability) ports.syncUndoAvailability(scene.availability)
 
-    ports.markVerificationResultStale()
+    if (scene.semanticChanged !== false) ports.markVerificationResultStale()
   }
 
 export type BoardSemanticCommit = ReturnType<typeof createBoardSemanticCommit>

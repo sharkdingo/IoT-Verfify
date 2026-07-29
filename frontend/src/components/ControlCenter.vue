@@ -159,6 +159,7 @@ const emit = defineEmits<{
     templates: DeviceTemplate[]
     environmentVariables: ModelEnvironmentVariable[]
   }]
+  'edit-history-cleared': []
   'authoritative-state-unavailable': [keys: Array<'templates' | 'environment'>]
   'verify': []
   'simulate': [data: {
@@ -2077,6 +2078,7 @@ const confirmResetDefaultTemplates = async () => {
           templates: result.currentTemplates,
           environmentVariables: result.environmentVariables
         })
+        emit('edit-history-cleared')
         const successMessageKey = defaultTemplateResetChangesBoardModel(result)
           ? 'app.defaultTemplatesResetSuccessReverificationRequired'
           : 'app.defaultTemplatesResetSuccess'
@@ -2220,6 +2222,7 @@ const confirmDeleteTemplate = async () => {
         templateDeletePreview.value!.impactToken
       )
       emit('replace-template-catalog', result.currentTemplates)
+      emit('edit-history-cleared')
       notifySuccess(t('app.templateDeleted', { name: result.deletedTemplate?.name || templateName }))
       closeTemplateDeleteConfirm(true)
     } catch (error: any) {
@@ -3802,7 +3805,9 @@ watch(() => props.readOnly, readOnly => {
       </div>
 
       <p v-else-if="templateDeletePreview" class="mb-5 text-center text-xs leading-5 text-slate-600">
-        {{ t('app.templateDeleteNoReferences') }}
+        {{ t('app.templateDeleteNoReferences', {
+          historyEntries: templateDeletePreview.editHistoryEntryCount
+        }) }}
       </p>
 
       <div class="flex justify-center gap-3">
@@ -3932,7 +3937,9 @@ watch(() => props.readOnly, readOnly => {
         </div>
 
         <p class="mt-3 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-          {{ t('app.resetDefaultTemplatesNotice') }}
+          {{ t('app.resetDefaultTemplatesNotice', {
+            historyEntries: defaultTemplateResetPreview.editHistoryEntryCount
+          }) }}
         </p>
         <p
           v-if="defaultTemplateResetChangesBoardModel(defaultTemplateResetPreview)"

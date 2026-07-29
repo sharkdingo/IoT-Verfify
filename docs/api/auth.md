@@ -4,7 +4,7 @@ Field-level contract for `/api/auth`. The `Result<T>` envelope, the `Bearer` sch
 and error codes are defined once in [overview.md](overview.md); this doc covers the
 request/response bodies only.
 
-Verified against code on 2026-07-25. Source: `controller/AuthController.java`,
+Verified against code on 2026-07-30. Source: `controller/AuthController.java`,
 `service/impl/AuthServiceImpl.java`, and `dto/auth/`.
 
 ---
@@ -167,8 +167,8 @@ is treated as a definite rejection and leaves the deletion form available for co
 - Deletes the current user's board layout, device nodes, rules, specifications,
   device templates, the board edit (undo) journal, verification traces/tasks, simulation
   traces/tasks, exploration findings/tasks, AI continuation/confirmation/draft state, and AI
-  chat sessions/messages. The undo journal stores the rule and specification
-  snapshots each reversible edit needs, so it is user content and is removed with the account.
+  chat sessions/messages. The [Board edit journal](board.md#boardundoresultdto) contains user
+  snapshots required for reversible edits, so it is user content and is removed with the account.
 - Deletes the `app_user` row last.
 
 `JwtAuthenticationFilter` also checks that the token's user id still exists before

@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEditHistoryClearPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
@@ -30,6 +31,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DefaultTemplateResetBlockerDto;
 import cn.edu.nju.Iot_Verify.dto.device.DefaultTemplateResetChangeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DefaultTemplateResetResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceDeletionResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceJournalSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDeletionBlockerDto;
@@ -64,7 +66,10 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.board.BoardEditJournal;
+import cn.edu.nju.Iot_Verify.service.board.BoardEditHistoryState;
 import cn.edu.nju.Iot_Verify.service.board.BoardUndoAvailability;
+import cn.edu.nju.Iot_Verify.service.board.EnvironmentJournalSnapshot;
+import cn.edu.nju.Iot_Verify.service.board.RuleCollectionJournalSnapshot;
 import cn.edu.nju.Iot_Verify.service.board.RuleOrderSnapshot;
 import cn.edu.nju.Iot_Verify.po.BoardEditEntityType;
 import cn.edu.nju.Iot_Verify.po.BoardEditJournalPo;
@@ -125,6 +130,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
      * shares this key.
      */
     private static final String RULE_ORDER_ENTITY_KEY = "rule-order";
+    private static final String ENVIRONMENT_ENTITY_KEY = "environment-pool";
+    private static final String RULE_SET_ENTITY_KEY = "rule-set";
 
     /**
      * Reported whenever a journal entry cannot be trusted to describe a reversible edit: an unreadable
@@ -235,14 +242,31 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         : getEnvironmentVariablesInternal(userId);
                 requireTotalCapacity("environment variables", savedEnvironment.size(),
                         RequestLimits.MAX_ENVIRONMENT_VARIABLES);
-                Set<String> createdIds = nodes.stream()
+                List<String> createdIds = nodes.stream()
                         .map(DeviceNodeDto::getId)
                         .filter(Objects::nonNull)
-                        .collect(Collectors.toCollection(LinkedHashSet::new));
+                        .map(String::trim)
+                        .distinct()
+                        .toList();
                 List<DeviceNodeDto> created = savedNodes.stream()
                         .filter(node -> createdIds.contains(node.getId()))
                         .toList();
+                if (created.size() != createdIds.size()) {
+                    throw new InternalServerException(
+                            "Device creation did not return every persisted device in the batch");
+                }
 
+                DeviceJournalSnapshot before = deviceJournalSnapshot(
+                        createdIds, List.of(), List.of(), List.of(), previousEnvironment);
+                DeviceJournalSnapshot after = deviceJournalSnapshot(
+                        createdIds,
+                        positionedDevices(savedNodes, new LinkedHashSet<>(createdIds)),
+                        List.of(), List.of(), savedEnvironment);
+                // One request is one user action, including its Environment Pool patches.
+                editJournal.record(userId, BoardEditEntityType.DEVICE, BoardEditOperation.CREATE,
+                        createdIds.get(0), before, after);
+
+                BoardUndoAvailability availability = editJournal.availability(userId);
                 return DeviceMutationResultDto.builder()
                         .operation("created")
                         .affectedDevices(created)
@@ -251,6 +275,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .environmentChanges(diffEnvironmentVariables(previousEnvironment, savedEnvironment))
                         .currentSpecifications(currentSpecs)
                         .currentCount(savedNodes.size())
+                        .canUndo(availability.canUndo())
+                        .canRedo(availability.canRedo())
                         .build();
             });
         }
@@ -362,11 +388,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<DeviceNodeDto> currentNodes = new ArrayList<>(getNodesInternal(userId));
                 List<BoardEnvironmentVariableDto> previousEnvironment = getEnvironmentVariablesInternal(userId);
                 DeviceNodeDto target = requireNode(currentNodes, targetId);
+                int targetPosition = indexOfNode(currentNodes, targetId);
+                DeviceNodeDto previousDevice = copyDeviceNode(target);
                 String previousLabel = target.getLabel();
                 if (!Objects.equals(expectedLabel, previousLabel)) {
                     throw new ConflictException(
                             "The device name changed after the rename dialog was opened. "
                                     + "Review the current device name before renaming it.");
+                }
+                if (Objects.equals(label, previousLabel)) {
+                    throw new BadRequestException("The new device name must differ from the current name");
                 }
                 List<DeviceNodeDto> otherNodes = currentNodes.stream()
                         .filter(Objects::nonNull)
@@ -379,17 +410,44 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 target.setLabel(label);
 
                 List<RuleDto> currentRules = getRulesInternal(userId);
+                List<SpecificationDto> previousSpecs = getSpecsInternal(userId);
                 List<SpecificationDto> currentSpecs = new ArrayList<>(getSpecsInternal(userId));
                 int updatedSpecCount = updateSpecificationDeviceLabels(currentSpecs, targetId, label);
                 List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, currentNodes);
                 validateBoardReferences(userId, canonicalNodes, currentRules, currentSpecs);
 
-                List<DeviceNodeDto> savedNodes = saveNodesInternal(userId, canonicalNodes);
+                DeviceNodePo entity = nodeRepo.findById(new DeviceNodeId(targetId, userId))
+                        .orElseThrow(() -> new ResourceNotFoundException("Device", targetId));
+                entity.setLabel(label);
+                DeviceNodeDto renamed = Objects.requireNonNull(
+                        deviceNodeMapper.toDto(nodeRepo.save(entity)),
+                        "renamed device must not be null");
+                List<DeviceNodeDto> savedNodes = new ArrayList<>(currentNodes);
+                savedNodes.set(targetPosition, renamed);
+                savedNodes = List.copyOf(savedNodes);
                 List<SpecificationDto> savedSpecs = updatedSpecCount > 0
                         ? saveSpecsInternal(userId, currentSpecs, savedNodes)
                         : currentSpecs;
-                DeviceNodeDto renamed = requireNode(savedNodes, targetId);
                 List<BoardEnvironmentVariableDto> savedEnvironment = getEnvironmentVariablesInternal(userId);
+                Set<String> updatedSpecIds = currentSpecs.stream()
+                        .filter(spec -> previousSpecs.stream()
+                                .filter(previous -> Objects.equals(previous.getId(), spec.getId()))
+                                .findFirst()
+                                .map(previous -> !Objects.equals(previous, spec))
+                                .orElse(false))
+                        .map(SpecificationDto::getId)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+                DeviceJournalSnapshot before = deviceJournalSnapshot(
+                        List.of(targetId),
+                        List.of(new DeviceJournalSnapshot.DeviceWithPosition(previousDevice, targetPosition)),
+                        List.of(), positionedSpecs(previousSpecs, updatedSpecIds), previousEnvironment);
+                DeviceJournalSnapshot after = deviceJournalSnapshot(
+                        List.of(targetId),
+                        List.of(new DeviceJournalSnapshot.DeviceWithPosition(renamed, targetPosition)),
+                        List.of(), positionedSpecs(savedSpecs, updatedSpecIds), savedEnvironment);
+                editJournal.record(userId, BoardEditEntityType.DEVICE, BoardEditOperation.UPDATE,
+                        targetId, before, after);
+                BoardUndoAvailability availability = editJournal.availability(userId);
                 return DeviceMutationResultDto.builder()
                         .operation("renamed")
                         .affectedDevices(List.of(renamed))
@@ -400,6 +458,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .previousLabel(previousLabel)
                         .updatedSpecificationCount(updatedSpecCount)
                         .currentCount(savedNodes.size())
+                        .canUndo(availability.canUndo())
+                        .canRedo(availability.canRedo())
                         .build();
             });
         }
@@ -466,6 +526,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<DeviceNodeDto> currentNodes = new ArrayList<>(getNodesInternal(userId));
                 List<BoardEnvironmentVariableDto> previousEnvironment = getEnvironmentVariablesInternal(userId);
                 DeviceNodeDto deleted = requireNode(currentNodes, targetId);
+                int deviceIndex = indexOfNode(currentNodes, targetId);
                 currentNodes.removeIf(node -> targetId.equals(node.getId()));
 
                 List<RuleDto> currentRules = getRulesInternal(userId);
@@ -504,12 +565,32 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<SpecificationDto> savedSpecs = saveSpecsInternal(userId, nextSpecs, savedNodes);
                 List<BoardEnvironmentVariableDto> savedEnvironment = getEnvironmentVariablesInternal(userId);
 
-                // Deleting a device cascades into the rules and specifications that referenced it.
-                // Undo is per-record, so restoring one of those in isolation would recreate a
-                // reference to a device that no longer exists. Drop the journal rather than offer
-                // an undo that cannot reach a legal board.
-                editJournal.clear(userId);
+                Set<Long> removedRuleIds = removedRules.stream()
+                        .map(RuleDto::getId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+                Set<String> removedSpecIds = removedSpecs.stream()
+                        .map(SpecificationDto::getId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+                DeviceNodeDto restorableDeleted = copyDeviceNode(deleted);
+                canonicalizeNodes(userId, List.of(restorableDeleted));
+                // The mapper persists absent local collections as JSON arrays. Snapshot that same
+                // observable shape so an immediate redo does not mistake null -> [] for newer work.
+                restorableDeleted = deviceNodeMapper.toDto(
+                        deviceNodeMapper.toEntity(restorableDeleted, userId));
+                DeviceJournalSnapshot before = deviceJournalSnapshot(
+                        List.of(targetId),
+                        List.of(new DeviceJournalSnapshot.DeviceWithPosition(restorableDeleted, deviceIndex)),
+                        positionedRules(currentRules, removedRuleIds),
+                        positionedSpecs(currentSpecs, removedSpecIds),
+                        previousEnvironment);
+                DeviceJournalSnapshot after = deviceJournalSnapshot(
+                        List.of(targetId), List.of(), List.of(), List.of(), savedEnvironment);
+                editJournal.record(userId, BoardEditEntityType.DEVICE, BoardEditOperation.DELETE,
+                        targetId, before, after);
 
+                BoardUndoAvailability availability = editJournal.availability(userId);
                 return DeviceDeletionResultDto.builder()
                         .operation("deleted")
                         .impactToken(actualImpactToken)
@@ -521,6 +602,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .environmentChanges(diffEnvironmentVariables(previousEnvironment, savedEnvironment))
                         .currentRules(savedRules)
                         .currentSpecifications(savedSpecs)
+                        .canUndo(availability.canUndo())
+                        .canRedo(availability.canRedo())
                         .build();
             });
         }
@@ -534,6 +617,57 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             }
         }
         return -1;
+    }
+
+    private DeviceJournalSnapshot deviceJournalSnapshot(
+            List<String> deviceIds,
+            List<DeviceJournalSnapshot.DeviceWithPosition> devices,
+            List<DeviceJournalSnapshot.RuleWithPosition> rules,
+            List<DeviceJournalSnapshot.SpecWithPosition> specs,
+            List<BoardEnvironmentVariableDto> environmentVariables) {
+        return DeviceJournalSnapshot.builder()
+                .deviceIds(List.copyOf(deviceIds))
+                .devices(List.copyOf(devices))
+                .rules(List.copyOf(rules))
+                .specs(List.copyOf(specs))
+                .environmentVariables(List.copyOf(environmentVariables))
+                .build();
+    }
+
+    private List<DeviceJournalSnapshot.DeviceWithPosition> positionedDevices(
+            List<DeviceNodeDto> devices, Set<String> includedIds) {
+        List<DeviceJournalSnapshot.DeviceWithPosition> positioned = new ArrayList<>();
+        for (int index = 0; index < devices.size(); index++) {
+            DeviceNodeDto device = devices.get(index);
+            if (device != null && includedIds.contains(device.getId())) {
+                positioned.add(new DeviceJournalSnapshot.DeviceWithPosition(device, index));
+            }
+        }
+        return List.copyOf(positioned);
+    }
+
+    private List<DeviceJournalSnapshot.RuleWithPosition> positionedRules(
+            List<RuleDto> rules, Set<Long> includedIds) {
+        List<DeviceJournalSnapshot.RuleWithPosition> positioned = new ArrayList<>();
+        for (int index = 0; index < rules.size(); index++) {
+            RuleDto rule = rules.get(index);
+            if (rule != null && includedIds.contains(rule.getId())) {
+                positioned.add(new DeviceJournalSnapshot.RuleWithPosition(rule, index));
+            }
+        }
+        return List.copyOf(positioned);
+    }
+
+    private List<DeviceJournalSnapshot.SpecWithPosition> positionedSpecs(
+            List<SpecificationDto> specs, Set<String> includedIds) {
+        List<DeviceJournalSnapshot.SpecWithPosition> positioned = new ArrayList<>();
+        for (int index = 0; index < specs.size(); index++) {
+            SpecificationDto spec = specs.get(index);
+            if (spec != null && includedIds.contains(spec.getId())) {
+                positioned.add(new DeviceJournalSnapshot.SpecWithPosition(spec, index));
+            }
+        }
+        return List.copyOf(positioned);
     }
 
     private void validateDeviceLayout(DeviceLayoutDto layout) {
@@ -602,6 +736,21 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             changedFields = changedDeviceUpdateFields(previous, saved, mutationType);
         }
         current.set(index, saved);
+        BoardUndoAvailability availability = null;
+        if (!changedFields.isEmpty()) {
+            List<BoardEnvironmentVariableDto> environment = getEnvironmentVariablesInternal(userId);
+            DeviceJournalSnapshot before = deviceJournalSnapshot(
+                    List.of(previous.getId()),
+                    List.of(new DeviceJournalSnapshot.DeviceWithPosition(previous, index)),
+                    List.of(), List.of(), environment);
+            DeviceJournalSnapshot after = deviceJournalSnapshot(
+                    List.of(saved.getId()),
+                    List.of(new DeviceJournalSnapshot.DeviceWithPosition(saved, index)),
+                    List.of(), List.of(), environment);
+            editJournal.record(userId, BoardEditEntityType.DEVICE, BoardEditOperation.UPDATE,
+                    saved.getId(), before, after);
+            availability = editJournal.availability(userId);
+        }
         return DeviceUpdateResultDto.builder()
                 .operation(changedFields.isEmpty() ? "unchanged" : "updated")
                 .mutationType(mutationType)
@@ -610,6 +759,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .currentDevice(saved)
                 .currentNodes(List.copyOf(current))
                 .currentCount(current.size())
+                .canUndo(availability != null ? availability.canUndo() : null)
+                .canRedo(availability != null ? availability.canRedo() : null)
                 .build();
     }
 
@@ -866,7 +1017,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         refreshEnvironmentVariablesInternal(userId, currentNodes));
                 List<BoardEnvironmentVariableDto> mutated = mutator.apply(current);
                 List<BoardEnvironmentVariableDto> next = mutated != null ? mutated : current;
-                return saveEnvironmentVariablesInternal(userId, currentNodes, next, true);
+                List<BoardEnvironmentVariableDto> saved =
+                        saveEnvironmentVariablesInternal(userId, currentNodes, next, true);
+                recordEnvironmentUpdate(userId, current, saved);
+                return saved;
             });
         }
     }
@@ -895,6 +1049,15 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 requireTotalCapacity("environment variables", savedEnvironment.size(),
                         RequestLimits.MAX_ENVIRONMENT_VARIABLES);
                 DeviceNodeDto created = requireNode(savedNodes, createdDraft.getId());
+                DeviceJournalSnapshot before = deviceJournalSnapshot(
+                        List.of(created.getId()), List.of(), List.of(), List.of(), previousEnvironment);
+                DeviceJournalSnapshot after = deviceJournalSnapshot(
+                        List.of(created.getId()),
+                        positionedDevices(savedNodes, Set.of(created.getId())),
+                        List.of(), List.of(), savedEnvironment);
+                editJournal.record(userId, BoardEditEntityType.DEVICE, BoardEditOperation.CREATE,
+                        created.getId(), before, after);
+                BoardUndoAvailability availability = editJournal.availability(userId);
                 return DeviceMutationResultDto.builder()
                         .operation("created")
                         .affectedDevices(List.of(created))
@@ -903,6 +1066,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .environmentChanges(diffEnvironmentVariables(previousEnvironment, savedEnvironment))
                         .currentSpecifications(currentSpecs)
                         .currentCount(savedNodes.size())
+                        .canUndo(availability.canUndo())
+                        .canRedo(availability.canRedo())
                         .build();
             });
         }
@@ -1037,7 +1202,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
-    public List<RuleDto> updateRulesAgainstSnapshot(
+    public CollectionMutationResultDto<RuleDto> updateRulesAgainstSnapshot(
             Long userId,
             java.util.function.Function<BoardSemanticSnapshotDto, List<RuleDto>> mutator) {
         Objects.requireNonNull(mutator, "rule snapshot mutator must not be null");
@@ -1054,14 +1219,15 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         snapshot.specifications(),
                         templateManifestMap(snapshot.deviceTemplates()));
                 List<RuleDto> saved = saveRulesInternal(userId, next);
-                // This rewrites the whole rule collection — it deletes omitted ids and renumbers
-                // execution_order — so no per-record inverse recorded before it still describes a
-                // reachable state. Its caller is fix-apply, which can delete or edit the very rule a
-                // journal entry names; leaving the journal alone made undo throw a conflict forever
-                // while availability kept reporting canUndo=true, so the button stayed armed on an
-                // entry that could never apply. Same reasoning as device deletion and scene replace.
-                editJournal.clear(userId);
-                return saved;
+                if (sameOrderedRuleCollection(snapshot.rules(), saved)) {
+                    throw new BadRequestException("The selected automatic fix did not change any rule");
+                }
+                editJournal.record(userId, BoardEditEntityType.RULE_SET, BoardEditOperation.UPDATE,
+                        RULE_SET_ENTITY_KEY,
+                        new RuleCollectionJournalSnapshot(snapshot.rules()),
+                        new RuleCollectionJournalSnapshot(saved));
+                return withUndoAvailability(
+                        userId, CollectionMutationResultDto.of("updated", null, saved));
             });
         }
     }
@@ -1356,13 +1522,15 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         List<BoardEnvironmentVariableDto> environmentVariables = getEnvironmentVariablesInternal(userId);
         List<RuleDto> rules = getRulesInternal(userId);
         List<SpecificationDto> specifications = getSpecsInternal(userId);
+        BoardEditHistoryState editHistory = editJournal.historyState(userId);
 
         Map<String, Object> impact = new LinkedHashMap<>();
-        impact.put("contract", "board-replacement-v1");
+        impact.put("contract", "board-replacement-v2");
         impact.put("nodes", nodes);
         impact.put("environmentVariables", environmentVariables);
         impact.put("rules", rules);
         impact.put("specifications", specifications);
+        impact.put("editHistoryImpactToken", editHistory.impactToken());
         String source = JsonUtils.toJson(impact);
         try {
             String impactToken = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
@@ -1373,6 +1541,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     .environmentVariableCount(environmentVariables.size())
                     .ruleCount(rules.size())
                     .specificationCount(specifications.size())
+                    .editHistoryEntryCount(editHistory.entryCount())
                     .build();
         } catch (NoSuchAlgorithmException e) {
             throw new InternalServerException("Unable to create board-replacement impact token", e);
@@ -1851,7 +2020,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 patches, materializedBefore, required);
         validateEnvironmentVariables(merged, required);
         List<BoardEnvironmentVariableDto> saved = replaceEnvironmentVariablesInternal(userId, merged);
-        List<EnvironmentVariableChangeDto> changes = diffEnvironmentVariables(persistedBefore, saved);
+        List<EnvironmentVariableChangeDto> changes = diffEnvironmentVariables(materializedBefore, saved);
 
         return EnvironmentMutationResultDto.builder()
                 .operation(changes.isEmpty() ? "unchanged" : "updated")
@@ -1873,15 +2042,33 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 updates, materializedBefore, required);
         validateEnvironmentVariables(merged, required);
         List<BoardEnvironmentVariableDto> saved = replaceEnvironmentVariablesInternal(userId, merged);
-        List<EnvironmentVariableChangeDto> changes = diffEnvironmentVariables(persistedBefore, saved);
+        List<EnvironmentVariableChangeDto> changes = diffEnvironmentVariables(materializedBefore, saved);
+        BoardUndoAvailability availability = recordEnvironmentUpdate(userId, materializedBefore, saved);
 
         return EnvironmentMutationResultDto.builder()
-                .operation(changes.isEmpty() ? "unchanged" : "updated")
+                .operation(availability == null ? "unchanged" : "updated")
                 .patchResults(describeEnvironmentVariableCasPatches(updates, materializedBefore, saved))
                 .environmentVariables(saved)
                 .environmentChanges(changes)
                 .currentCount(saved.size())
+                .canUndo(availability != null ? availability.canUndo() : null)
+                .canRedo(availability != null ? availability.canRedo() : null)
                 .build();
+    }
+
+    /** Records a direct Environment Pool edit only when its materialized semantic state changed. */
+    private BoardUndoAvailability recordEnvironmentUpdate(
+            Long userId,
+            List<BoardEnvironmentVariableDto> before,
+            List<BoardEnvironmentVariableDto> after) {
+        if (environmentDtoMap(before).equals(environmentDtoMap(after))) {
+            return null;
+        }
+        editJournal.record(userId, BoardEditEntityType.ENVIRONMENT, BoardEditOperation.UPDATE,
+                ENVIRONMENT_ENTITY_KEY,
+                new EnvironmentJournalSnapshot(before),
+                new EnvironmentJournalSnapshot(after));
+        return editJournal.availability(userId);
     }
 
     private void validateEnvironmentPatchFields(List<BoardEnvironmentVariableDto> patches) {
@@ -3749,6 +3936,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     throw new ConflictException(
                             "The rule list changed before its execution order was saved. Refresh the board and try again.");
                 }
+                if (requested.equals(expected)) {
+                    throw new BadRequestException(
+                            "Rule execution order must change at least one position.");
+                }
 
                 List<RuleDto> reordered = requested.stream().map(currentById::get).toList();
                 List<RuleDto> saved = saveRulesInternal(userId, reordered);
@@ -3917,24 +4108,66 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional(readOnly = true)
     public BoardUndoResultDto boardEditAvailability(Long userId) {
-        // Availability only. Deliberately does not return the rule/spec lists: this is a query, and
+        // Availability only. Deliberately does not return board collections: this is a query, and
         // shipping collections here would invite a client to treat a read as a board update.
         BoardUndoAvailability availability = editJournal.availability(userId);
-        BoardUndoResultDto result = new BoardUndoResultDto();
-        result.setApplied(false);
         // Not NOTHING_TO_APPLY: that means "you pressed undo and there was no history", which would
         // contradict canUndo=true in this same object. Nothing was attempted here.
-        result.setReasonCode("AVAILABILITY_ONLY");
-        result.setRules(List.of());
-        result.setSpecs(List.of());
-        result.setCanUndo(availability.canUndo());
-        result.setCanRedo(availability.canRedo());
-        return result;
+        return journalStatusResult("AVAILABILITY_ONLY", availability);
     }
 
     @Override
     public BoardUndoResultDto redoLastUndoneEdit(Long userId) {
         return applyJournalDirection(userId, false);
+    }
+
+    @Override
+    public BoardEditHistoryClearPreviewDto previewBoardEditHistoryClear(Long userId) {
+        synchronized (getUserWriteLock(userId)) {
+            return transactionTemplate.execute(status -> {
+                requireActiveUserForWrite(userId);
+                BoardEditHistoryState state = editJournal.historyState(userId);
+                return BoardEditHistoryClearPreviewDto.builder()
+                        .impactToken(state.impactToken())
+                        .entryCount(state.entryCount())
+                        .canUndo(state.availability().canUndo())
+                        .canRedo(state.availability().canRedo())
+                        .build();
+            });
+        }
+    }
+
+    @Override
+    public BoardUndoResultDto clearBoardEditHistory(Long userId, String expectedImpactToken) {
+        synchronized (getUserWriteLock(userId)) {
+            return transactionTemplate.execute(status -> {
+                requireActiveUserForWrite(userId);
+                BoardEditHistoryState state = editJournal.historyState(userId);
+                if (!hasText(expectedImpactToken) || !MessageDigest.isEqual(
+                        state.impactToken().getBytes(StandardCharsets.UTF_8),
+                        expectedImpactToken.trim().getBytes(StandardCharsets.UTF_8))) {
+                    throw new ConflictException(
+                            "Undo history changed after confirmation. Review it before clearing.");
+                }
+                editJournal.clear(userId);
+                return journalStatusResult(
+                        "HISTORY_CLEARED", new BoardUndoAvailability(false, false));
+            });
+        }
+    }
+
+    private BoardUndoResultDto journalStatusResult(
+            String reasonCode, BoardUndoAvailability availability) {
+        BoardUndoResultDto result = new BoardUndoResultDto();
+        result.setApplied(false);
+        result.setReasonCode(reasonCode);
+        result.setNodes(List.of());
+        result.setEnvironmentVariables(List.of());
+        result.setRules(List.of());
+        result.setSpecs(List.of());
+        result.setCanUndo(availability.canUndo());
+        result.setCanRedo(availability.canRedo());
+        return result;
     }
 
     /**
@@ -3963,11 +4196,17 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 String targetJson = undo ? entry.getBeforeJson() : entry.getAfterJson();
                 String expectedJson = undo ? entry.getAfterJson() : entry.getBeforeJson();
 
+                if (entry.getEntityType() == null || entry.getOperation() == null) {
+                    throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+                }
                 switch (entry.getEntityType()) {
+                    case DEVICE -> applyDeviceJournalEntry(userId, entry, undo);
+                    case ENVIRONMENT -> applyEnvironmentJournalEntry(userId, entry, undo);
                     case RULE -> applyRuleJournalEntry(userId, entry, targetJson, expectedJson);
                     case SPECIFICATION ->
                             applySpecJournalEntry(userId, entry, targetJson, expectedJson);
-                    case RULE_ORDER -> applyRuleOrderJournalEntry(userId, targetJson, expectedJson);
+                    case RULE_ORDER -> applyRuleOrderJournalEntry(userId, entry, undo);
+                    case RULE_SET -> applyRuleCollectionJournalEntry(userId, entry, undo);
                 }
 
                 editJournal.markUndone(entry, undo);
@@ -3986,6 +4225,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             result.setEntityType(entry.getEntityType().name());
             result.setOriginalOperation(entry.getOperation().name());
         }
+        result.setNodes(getNodesInternal(userId));
+        result.setEnvironmentVariables(getEnvironmentVariablesInternal(userId));
         result.setRules(getRulesInternal(userId));
         result.setSpecs(getSpecsInternal(userId));
         result.setCanUndo(availability.canUndo());
@@ -4000,12 +4241,17 @@ public class BoardStorageServiceImpl implements BoardStorageService {
      * itself changed — in either case some later work intervened and re-imposing the old order
      * would discard it.
      */
-    private void applyRuleOrderJournalEntry(Long userId, String targetJson, String expectedJson) {
-        RuleOrderSnapshot target = editJournal.readJson(targetJson, RuleOrderSnapshot.class);
-        RuleOrderSnapshot expected = editJournal.readJson(expectedJson, RuleOrderSnapshot.class);
-        if (target == null || expected == null) {
+    private void applyRuleOrderJournalEntry(
+            Long userId, BoardEditJournalPo entry, boolean undo) {
+        RuleOrderSnapshot before = editJournal.readJson(
+                entry.getBeforeJson(), RuleOrderSnapshot.class);
+        RuleOrderSnapshot after = editJournal.readJson(
+                entry.getAfterJson(), RuleOrderSnapshot.class);
+        if (!validRuleOrderJournalTransition(entry, before, after)) {
             throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
         }
+        RuleOrderSnapshot target = undo ? before : after;
+        RuleOrderSnapshot expected = undo ? after : before;
 
         List<RuleDto> current = getRulesInternal(userId);
         List<Long> currentIds = current.stream().map(RuleDto::getId).toList();
@@ -4030,6 +4276,518 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         saveRulesInternal(userId, target.ruleIds().stream().map(byId::get).toList());
     }
 
+    private boolean validRuleOrderJournalTransition(
+            BoardEditJournalPo entry,
+            RuleOrderSnapshot before,
+            RuleOrderSnapshot after) {
+        if (entry.getOperation() != BoardEditOperation.UPDATE
+                || !RULE_ORDER_ENTITY_KEY.equals(entry.getEntityKey())
+                || entry.getEntityOrder() != null
+                || !validRuleOrderSnapshot(before)
+                || !validRuleOrderSnapshot(after)
+                || before.ruleIds().equals(after.ruleIds())) {
+            return false;
+        }
+        return new LinkedHashSet<>(before.ruleIds())
+                .equals(new LinkedHashSet<>(after.ruleIds()));
+    }
+
+    private boolean validRuleOrderSnapshot(RuleOrderSnapshot snapshot) {
+        if (snapshot == null || snapshot.ruleIds().isEmpty()) return false;
+        return snapshot.ruleIds().stream().allMatch(id -> id != null && id > 0)
+                && new LinkedHashSet<>(snapshot.ruleIds()).size() == snapshot.ruleIds().size();
+    }
+
+    private void applyEnvironmentJournalEntry(
+            Long userId, BoardEditJournalPo entry, boolean undo) {
+        EnvironmentJournalSnapshot before = editJournal.readJson(
+                entry.getBeforeJson(), EnvironmentJournalSnapshot.class);
+        EnvironmentJournalSnapshot after = editJournal.readJson(
+                entry.getAfterJson(), EnvironmentJournalSnapshot.class);
+        if (entry.getOperation() != BoardEditOperation.UPDATE
+                || !ENVIRONMENT_ENTITY_KEY.equals(entry.getEntityKey())
+                || entry.getEntityOrder() != null
+                || !validEnvironmentJournalSnapshot(before)
+                || !validEnvironmentJournalSnapshot(after)
+                || environmentDtoMap(before.environmentVariables())
+                        .equals(environmentDtoMap(after.environmentVariables()))) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        EnvironmentJournalSnapshot target = undo ? before : after;
+        EnvironmentJournalSnapshot expected = undo ? after : before;
+        List<BoardEnvironmentVariableDto> current = getEnvironmentVariablesInternal(userId);
+        if (!environmentDtoMap(current).equals(environmentDtoMap(expected.environmentVariables()))) {
+            throw new ConflictException(
+                    "The Environment Pool changed after this edit, so reversing it would discard newer work.");
+        }
+        List<BoardEnvironmentVariableDto> saved = saveEnvironmentVariablesInternal(
+                userId, getNodesInternal(userId), target.environmentVariables(), false);
+        if (!environmentDtoMap(saved).equals(environmentDtoMap(target.environmentVariables()))) {
+            throw new ConflictException(
+                    "The saved Environment Pool no longer supports this edit, so it cannot be reversed safely.");
+        }
+    }
+
+    private boolean validEnvironmentJournalSnapshot(EnvironmentJournalSnapshot snapshot) {
+        if (snapshot == null || snapshot.environmentVariables() == null) return false;
+        Set<String> names = new HashSet<>();
+        for (BoardEnvironmentVariableDto variable : snapshot.environmentVariables()) {
+            if (variable == null || !hasText(variable.getName()) || !hasText(variable.getValue())
+                    || !("trusted".equals(variable.getTrust()) || "untrusted".equals(variable.getTrust()))
+                    || !("public".equals(variable.getPrivacy()) || "private".equals(variable.getPrivacy()))
+                    || !names.add(variable.getName())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void applyRuleCollectionJournalEntry(
+            Long userId, BoardEditJournalPo entry, boolean undo) {
+        RuleCollectionJournalSnapshot before = editJournal.readJson(
+                entry.getBeforeJson(), RuleCollectionJournalSnapshot.class);
+        RuleCollectionJournalSnapshot after = editJournal.readJson(
+                entry.getAfterJson(), RuleCollectionJournalSnapshot.class);
+        if (entry.getOperation() != BoardEditOperation.UPDATE
+                || !RULE_SET_ENTITY_KEY.equals(entry.getEntityKey())
+                || entry.getEntityOrder() != null
+                || !validRuleCollectionJournalSnapshot(before)
+                || !validRuleCollectionJournalSnapshot(after)
+                || sameOrderedRuleCollection(before.rules(), after.rules())) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        RuleCollectionJournalSnapshot target = undo ? before : after;
+        RuleCollectionJournalSnapshot expected = undo ? after : before;
+        if (!sameOrderedRuleCollection(getRulesInternal(userId), expected.rules())) {
+            throw new ConflictException(
+                    "The rule list changed after this automatic fix, so reversing it would discard newer work.");
+        }
+        List<RuleDto> saved = saveRulesForJournal(userId, target.rules());
+        if (!sameOrderedRuleCollection(saved, target.rules())) {
+            throw new ConflictException(
+                    "The original rule identities are no longer available, so this automatic fix cannot be reversed.");
+        }
+    }
+
+    private boolean validRuleCollectionJournalSnapshot(RuleCollectionJournalSnapshot snapshot) {
+        if (snapshot == null || snapshot.rules() == null) return false;
+        Set<Long> ids = new HashSet<>();
+        for (RuleDto rule : snapshot.rules()) {
+            if (rule == null || rule.getId() == null || rule.getId() <= 0
+                    || !ids.add(rule.getId()) || rule.getConditions() == null
+                    || rule.getConditions().isEmpty() || rule.getCommand() == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean sameOrderedRuleCollection(List<RuleDto> first, List<RuleDto> second) {
+        if (first == null || second == null || first.size() != second.size()) return false;
+        for (int index = 0; index < first.size(); index++) {
+            if (!sameRuleDeletionSnapshot(first.get(index), second.get(index))) return false;
+        }
+        return true;
+    }
+
+    /** Applies either side of a compound device edit after proving the expected side still exists. */
+    private void applyDeviceJournalEntry(Long userId, BoardEditJournalPo entry, boolean undo) {
+        DeviceJournalSnapshot before = editJournal.readJson(
+                entry.getBeforeJson(), DeviceJournalSnapshot.class);
+        DeviceJournalSnapshot after = editJournal.readJson(
+                entry.getAfterJson(), DeviceJournalSnapshot.class);
+        if (!validDeviceJournalTransition(entry, before, after)) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        DeviceJournalSnapshot target = undo ? before : after;
+        DeviceJournalSnapshot expected = undo ? after : before;
+
+        List<DeviceNodeDto> currentNodes = getNodesInternal(userId);
+        List<RuleDto> currentRules = getRulesInternal(userId);
+        List<SpecificationDto> currentSpecs = getSpecsInternal(userId);
+        List<BoardEnvironmentVariableDto> currentEnvironment = getEnvironmentVariablesInternal(userId);
+        Set<String> affectedDeviceIds = new LinkedHashSet<>(target.getDeviceIds());
+        Set<Long> affectedRuleIds = unionRuleIds(target, expected);
+        Set<String> affectedSpecIds = unionSpecIds(target, expected);
+
+        if (!matchesExpectedDevices(currentNodes, expected, affectedDeviceIds)
+                || !matchesExpectedRules(currentRules, expected, affectedRuleIds)
+                || !matchesExpectedSpecs(currentSpecs, expected, affectedSpecIds)
+                || !environmentDtoMap(currentEnvironment)
+                        .equals(environmentDtoMap(expected.getEnvironmentVariables()))) {
+            throw new ConflictException(
+                    "The Board changed after this device edit, so reversing it would discard newer work.");
+        }
+
+        List<DeviceNodeDto> nextNodes = replacePositionedDevices(
+                currentNodes, affectedDeviceIds, target.getDevices());
+        List<RuleDto> nextRules = replacePositionedRules(
+                currentRules, affectedRuleIds, target.getRules());
+        List<SpecificationDto> nextSpecs = replacePositionedSpecs(
+                currentSpecs, affectedSpecIds, target.getSpecs());
+
+        requireTotalCapacity("devices", nextNodes.size(), RequestLimits.MAX_DEVICES);
+        requireTotalCapacity("rules", nextRules.size(), RequestLimits.MAX_RULES);
+        requireTotalCapacity("specifications", nextSpecs.size(), RequestLimits.MAX_SPECS);
+        requireTotalCapacity("environment variables", target.getEnvironmentVariables().size(),
+                RequestLimits.MAX_ENVIRONMENT_VARIABLES);
+
+        List<DeviceNodeDto> canonicalNodes = canonicalizeNodes(userId, nextNodes);
+        validateBoardReferences(userId, canonicalNodes, nextRules, nextSpecs);
+        if (entry.getOperation() == BoardEditOperation.UPDATE) {
+            applyTargetedDeviceJournalUpdate(
+                    userId, canonicalNodes, target, nextSpecs, affectedSpecIds);
+            return;
+        }
+        List<DeviceNodeDto> savedNodes = saveNodesInternal(userId, canonicalNodes);
+        if (!affectedRuleIds.isEmpty()) {
+            saveRulesForJournal(userId, nextRules);
+        }
+        if (!affectedSpecIds.isEmpty()) {
+            saveSpecsInternal(userId, nextSpecs, savedNodes);
+        }
+        saveEnvironmentVariablesInternal(
+                userId, savedNodes, target.getEnvironmentVariables(), false);
+    }
+
+    /** Restores one device update without normalizing untouched nullable JSON fields. */
+    private void applyTargetedDeviceJournalUpdate(
+            Long userId,
+            List<DeviceNodeDto> canonicalNodes,
+            DeviceJournalSnapshot target,
+            List<SpecificationDto> nextSpecs,
+            Set<String> affectedSpecIds) {
+        String deviceId = target.getDeviceIds().get(0);
+        DeviceNodeDto desired = requireNode(canonicalNodes, deviceId);
+        DeviceNodePo entity = nodeRepo.findById(new DeviceNodeId(deviceId, userId))
+                .orElseThrow(() -> new ConflictException(
+                        "The device no longer exists, so this edit cannot be reversed."));
+        DeviceNodePo mapped = Objects.requireNonNull(
+                deviceNodeMapper.toEntity(desired, userId),
+                "device journal target entity must not be null");
+        entity.setTemplateName(mapped.getTemplateName());
+        entity.setLabel(mapped.getLabel());
+        entity.setPosX(mapped.getPosX());
+        entity.setPosY(mapped.getPosY());
+        entity.setState(mapped.getState());
+        entity.setWidth(mapped.getWidth());
+        entity.setHeight(mapped.getHeight());
+        entity.setCurrentStateTrust(mapped.getCurrentStateTrust());
+        entity.setCurrentStatePrivacy(mapped.getCurrentStatePrivacy());
+        entity.setVariablesJson(desired.getVariables() == null ? null : mapped.getVariablesJson());
+        entity.setPrivaciesJson(desired.getPrivacies() == null ? null : mapped.getPrivaciesJson());
+        nodeRepo.save(entity);
+
+        if (!affectedSpecIds.isEmpty()) {
+            saveSpecsInternal(userId, nextSpecs, getNodesInternal(userId));
+        }
+    }
+
+    private boolean validDeviceJournalTransition(
+            BoardEditJournalPo entry,
+            DeviceJournalSnapshot before,
+            DeviceJournalSnapshot after) {
+        if (!validDeviceJournalSnapshot(before) || !validDeviceJournalSnapshot(after)
+                || !before.getDeviceIds().equals(after.getDeviceIds())
+                || !Objects.equals(entry.getEntityKey(), before.getDeviceIds().get(0))
+                || entry.getEntityOrder() != null) {
+            return false;
+        }
+        List<String> deviceIds = before.getDeviceIds();
+        return switch (entry.getOperation()) {
+            case CREATE -> affectedDeviceStateIsEmpty(before)
+                    && after.getDevices().size() == deviceIds.size()
+                    && after.getRules().isEmpty()
+                    && after.getSpecs().isEmpty();
+            case DELETE -> before.getDevices().size() == deviceIds.size()
+                    && affectedDeviceStateIsEmpty(after)
+                    && before.getRules().stream().allMatch(item -> deviceIds.stream()
+                            .anyMatch(id -> ruleReferencesNode(item.getRule(), id)))
+                    && before.getSpecs().stream().allMatch(item -> deviceIds.stream()
+                            .anyMatch(id -> specificationReferencesNode(item.getSpec(), id)));
+            case UPDATE -> before.getDevices().size() == deviceIds.size()
+                    && deviceIds.size() == 1
+                    && after.getDevices().size() == deviceIds.size()
+                    && before.getRules().isEmpty()
+                    && after.getRules().isEmpty()
+                    && positionedDeviceOrder(before).equals(positionedDeviceOrder(after))
+                    && positionedSpecOrder(before).equals(positionedSpecOrder(after))
+                    && environmentDtoMap(before.getEnvironmentVariables())
+                            .equals(environmentDtoMap(after.getEnvironmentVariables()))
+                    && validDeviceUpdateJournalTransition(before, after);
+        };
+    }
+
+    /** Proves a device UPDATE is exactly one supported user action, never a template rewrite. */
+    private boolean validDeviceUpdateJournalTransition(
+            DeviceJournalSnapshot before,
+            DeviceJournalSnapshot after) {
+        DeviceNodeDto previous = before.getDevices().get(0).getDevice();
+        DeviceNodeDto current = after.getDevices().get(0).getDevice();
+        if (!Objects.equals(previous.getId(), current.getId())
+                || !Objects.equals(previous.getTemplateName(), current.getTemplateName())) {
+            return false;
+        }
+
+        boolean labelChanged = !Objects.equals(previous.getLabel(), current.getLabel());
+        boolean layoutChanged = !Objects.equals(previous.getPosition(), current.getPosition())
+                || !Objects.equals(previous.getWidth(), current.getWidth())
+                || !Objects.equals(previous.getHeight(), current.getHeight());
+        boolean runtimeChanged = !Objects.equals(previous.getState(), current.getState())
+                || !Objects.equals(previous.getCurrentStateTrust(), current.getCurrentStateTrust())
+                || !Objects.equals(previous.getCurrentStatePrivacy(), current.getCurrentStatePrivacy())
+                || !Objects.equals(previous.getVariables(), current.getVariables())
+                || !Objects.equals(previous.getPrivacies(), current.getPrivacies());
+        if ((labelChanged ? 1 : 0) + (layoutChanged ? 1 : 0) + (runtimeChanged ? 1 : 0) != 1) {
+            return false;
+        }
+
+        if (!labelChanged) {
+            return before.getSpecs().isEmpty() && after.getSpecs().isEmpty();
+        }
+        for (int index = 0; index < before.getSpecs().size(); index++) {
+            SpecificationDto previousSpec = before.getSpecs().get(index).getSpec();
+            SpecificationDto currentSpec = after.getSpecs().get(index).getSpec();
+            if (!Objects.equals(previousSpec.getId(), currentSpec.getId())
+                    || !SpecificationSemanticSignature.exactlyMatches(previousSpec, currentSpec)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Map<String, Integer> positionedDeviceOrder(DeviceJournalSnapshot snapshot) {
+        return snapshot.getDevices().stream().collect(Collectors.toMap(
+                item -> item.getDevice().getId(),
+                DeviceJournalSnapshot.DeviceWithPosition::getPosition));
+    }
+
+    private Map<String, Integer> positionedSpecOrder(DeviceJournalSnapshot snapshot) {
+        return snapshot.getSpecs().stream().collect(Collectors.toMap(
+                item -> item.getSpec().getId(),
+                DeviceJournalSnapshot.SpecWithPosition::getPosition));
+    }
+
+    private boolean affectedDeviceStateIsEmpty(DeviceJournalSnapshot snapshot) {
+        return snapshot.getDevices().isEmpty()
+                && snapshot.getRules().isEmpty()
+                && snapshot.getSpecs().isEmpty();
+    }
+
+    private boolean validDeviceJournalSnapshot(DeviceJournalSnapshot snapshot) {
+        if (snapshot == null || snapshot.getDeviceIds() == null || snapshot.getDeviceIds().isEmpty()
+                || snapshot.getDevices() == null || snapshot.getRules() == null
+                || snapshot.getSpecs() == null || snapshot.getEnvironmentVariables() == null) {
+            return false;
+        }
+        Set<String> deviceIds = new LinkedHashSet<>();
+        for (String id : snapshot.getDeviceIds()) {
+            if (!hasText(id) || !deviceIds.add(id)) return false;
+        }
+        Set<String> presentDeviceIds = new HashSet<>();
+        Set<Integer> devicePositions = new HashSet<>();
+        for (DeviceJournalSnapshot.DeviceWithPosition item : snapshot.getDevices()) {
+            if (item == null || item.getDevice() == null || item.getPosition() < 0
+                    || !deviceIds.contains(item.getDevice().getId())
+                    || !presentDeviceIds.add(item.getDevice().getId())
+                    || !devicePositions.add(item.getPosition())) return false;
+        }
+        Set<Long> ruleIds = new HashSet<>();
+        Set<Integer> rulePositions = new HashSet<>();
+        for (DeviceJournalSnapshot.RuleWithPosition item : snapshot.getRules()) {
+            if (item == null || item.getRule() == null || item.getRule().getId() == null
+                    || item.getPosition() < 0 || !ruleIds.add(item.getRule().getId())
+                    || !rulePositions.add(item.getPosition())) return false;
+        }
+        Set<String> specIds = new HashSet<>();
+        Set<Integer> specPositions = new HashSet<>();
+        for (DeviceJournalSnapshot.SpecWithPosition item : snapshot.getSpecs()) {
+            if (item == null || item.getSpec() == null || !hasText(item.getSpec().getId())
+                    || item.getPosition() < 0 || !specIds.add(item.getSpec().getId())
+                    || !specPositions.add(item.getPosition())) return false;
+        }
+        Set<String> environmentNames = new HashSet<>();
+        for (BoardEnvironmentVariableDto variable : snapshot.getEnvironmentVariables()) {
+            if (variable == null || !hasText(variable.getName())
+                    || !environmentNames.add(variable.getName())) return false;
+        }
+        return true;
+    }
+
+    private boolean matchesExpectedDevices(
+            List<DeviceNodeDto> current,
+            DeviceJournalSnapshot expected,
+            Set<String> affectedIds) {
+        Map<String, DeviceNodeDto> currentById = current.stream()
+                .filter(Objects::nonNull)
+                .filter(node -> affectedIds.contains(node.getId()))
+                .collect(Collectors.toMap(DeviceNodeDto::getId, node -> node));
+        Map<String, DeviceNodeDto> expectedById = expected.getDevices().stream()
+                .collect(Collectors.toMap(item -> item.getDevice().getId(),
+                        DeviceJournalSnapshot.DeviceWithPosition::getDevice));
+        if (!currentById.keySet().equals(expectedById.keySet())) return false;
+        return expectedById.entrySet().stream()
+                .allMatch(item -> sameDeviceForUndo(item.getValue(), currentById.get(item.getKey())));
+    }
+
+    private boolean matchesExpectedRules(
+            List<RuleDto> current,
+            DeviceJournalSnapshot expected,
+            Set<Long> affectedIds) {
+        Map<Long, DeviceJournalSnapshot.RuleWithPosition> expectedById = expected.getRules().stream()
+                .collect(Collectors.toMap(item -> item.getRule().getId(), item -> item));
+        for (Long id : affectedIds) {
+            int currentPosition = indexOfRule(current, id);
+            DeviceJournalSnapshot.RuleWithPosition expectedItem = expectedById.get(id);
+            if (expectedItem == null) {
+                if (currentPosition >= 0) return false;
+            } else if (currentPosition != expectedItem.getPosition()
+                    || !sameRuleDeletionSnapshot(expectedItem.getRule(), current.get(currentPosition))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean matchesExpectedSpecs(
+            List<SpecificationDto> current,
+            DeviceJournalSnapshot expected,
+            Set<String> affectedIds) {
+        Map<String, DeviceJournalSnapshot.SpecWithPosition> expectedById = expected.getSpecs().stream()
+                .collect(Collectors.toMap(item -> item.getSpec().getId(), item -> item));
+        for (String id : affectedIds) {
+            int currentPosition = indexOfSpecOrMissing(current, id);
+            DeviceJournalSnapshot.SpecWithPosition expectedItem = expectedById.get(id);
+            if (expectedItem == null) {
+                if (currentPosition >= 0) return false;
+            } else if (currentPosition != expectedItem.getPosition()
+                    || !Objects.equals(expectedItem.getSpec(), current.get(currentPosition))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private List<DeviceNodeDto> replacePositionedDevices(
+            List<DeviceNodeDto> current,
+            Set<String> affectedIds,
+            List<DeviceJournalSnapshot.DeviceWithPosition> target) {
+        List<DeviceNodeDto> next = current.stream()
+                .filter(node -> !affectedIds.contains(node.getId()))
+                .collect(Collectors.toCollection(ArrayList::new));
+        target.stream().sorted(Comparator.comparingInt(DeviceJournalSnapshot.DeviceWithPosition::getPosition))
+                .forEach(item -> insertAtRecordedPosition(next, item.getPosition(), item.getDevice()));
+        return next;
+    }
+
+    private List<RuleDto> replacePositionedRules(
+            List<RuleDto> current,
+            Set<Long> affectedIds,
+            List<DeviceJournalSnapshot.RuleWithPosition> target) {
+        List<RuleDto> next = current.stream()
+                .filter(rule -> !affectedIds.contains(rule.getId()))
+                .collect(Collectors.toCollection(ArrayList::new));
+        target.stream().sorted(Comparator.comparingInt(DeviceJournalSnapshot.RuleWithPosition::getPosition))
+                .forEach(item -> insertAtRecordedPosition(next, item.getPosition(), item.getRule()));
+        return next;
+    }
+
+    private List<SpecificationDto> replacePositionedSpecs(
+            List<SpecificationDto> current,
+            Set<String> affectedIds,
+            List<DeviceJournalSnapshot.SpecWithPosition> target) {
+        List<SpecificationDto> next = current.stream()
+                .filter(spec -> !affectedIds.contains(spec.getId()))
+                .collect(Collectors.toCollection(ArrayList::new));
+        target.stream().sorted(Comparator.comparingInt(DeviceJournalSnapshot.SpecWithPosition::getPosition))
+                .forEach(item -> insertAtRecordedPosition(next, item.getPosition(), item.getSpec()));
+        return next;
+    }
+
+    /** Rejects a journal position that cannot reconstruct the recorded collection exactly. */
+    private <T> void insertAtRecordedPosition(List<T> collection, int position, T item) {
+        if (position < 0 || position > collection.size()) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        collection.add(position, item);
+    }
+
+    private List<RuleDto> saveRulesForJournal(Long userId, List<RuleDto> desired) {
+        validateNoIdenticalRules(desired, getNodesInternal(userId));
+        Map<Long, RulePo> existing = ruleRepo.findByUserId(userId).stream()
+                .collect(Collectors.toMap(RulePo::getId, rule -> rule));
+        Set<Long> desiredIds = desired.stream().map(RuleDto::getId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (desiredIds.contains(null) || desiredIds.size() != desired.size()) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        for (Long id : desiredIds) {
+            if (!existing.containsKey(id) && ruleRepo.existsById(id)) {
+                throw new ConflictException(
+                        "A rule's original id is no longer available, so this edit cannot be reversed.");
+            }
+        }
+
+        for (int position = 0; position < desired.size(); position++) {
+            RuleDto canonical = canonicalizeRuleRelationsForStorage(desired.get(position));
+            RulePo persisted = existing.get(canonical.getId());
+            if (persisted == null) continue;
+            RulePo replacement = ruleMapper.toEntity(canonical, userId);
+            replacement.setExecutionOrder(position);
+            replacement.setCreatedAt(persisted.getCreatedAt());
+            ruleRepo.save(replacement);
+        }
+        existing.keySet().stream().filter(id -> !desiredIds.contains(id)).forEach(ruleRepo::deleteById);
+        for (int position = 0; position < desired.size(); position++) {
+            RuleDto canonical = canonicalizeRuleRelationsForStorage(desired.get(position));
+            if (existing.containsKey(canonical.getId())) continue;
+            RulePo po = ruleMapper.toEntity(canonical, userId);
+            ruleRepo.insertWithId(canonical.getId(), userId, po.getConditionsJson(), po.getCommandJson(),
+                    po.getRuleString(), position, LocalDateTime.now());
+        }
+        return getRulesInternal(userId);
+    }
+
+    private boolean sameDeviceForUndo(DeviceNodeDto expected, DeviceNodeDto current) {
+        return Objects.equals(expected.getId(), current.getId())
+                && Objects.equals(expected.getTemplateName(), current.getTemplateName())
+                && Objects.equals(expected.getLabel(), current.getLabel())
+                && Objects.equals(expected.getPosition(), current.getPosition())
+                && Objects.equals(expected.getState(), current.getState())
+                && Objects.equals(expected.getWidth(), current.getWidth())
+                && Objects.equals(expected.getHeight(), current.getHeight())
+                && Objects.equals(expected.getCurrentStateTrust(), current.getCurrentStateTrust())
+                && Objects.equals(expected.getCurrentStatePrivacy(), current.getCurrentStatePrivacy())
+                && Objects.equals(expected.getVariables(), current.getVariables())
+                && Objects.equals(expected.getPrivacies(), current.getPrivacies());
+    }
+
+    private int indexOfRule(List<RuleDto> rules, Long ruleId) {
+        for (int index = 0; index < rules.size(); index++) {
+            if (Objects.equals(rules.get(index).getId(), ruleId)) return index;
+        }
+        return -1;
+    }
+
+    private int indexOfSpecOrMissing(List<SpecificationDto> specs, String specId) {
+        for (int index = 0; index < specs.size(); index++) {
+            if (Objects.equals(specs.get(index).getId(), specId)) return index;
+        }
+        return -1;
+    }
+
+    private Set<Long> unionRuleIds(DeviceJournalSnapshot first, DeviceJournalSnapshot second) {
+        return Stream.concat(first.getRules().stream(), second.getRules().stream())
+                .map(item -> item.getRule().getId())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private Set<String> unionSpecIds(DeviceJournalSnapshot first, DeviceJournalSnapshot second) {
+        return Stream.concat(first.getSpecs().stream(), second.getSpecs().stream())
+                .map(item -> item.getSpec().getId())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
     /**
      * Moves one rule to the state the journal entry describes.
      *
@@ -4045,7 +4803,9 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         // An unreadable payload on either side is an unknown prior state, not a verified one. Without
         // this, a null `expected` from a parse failure reads as the legal "record already gone" case
         // and skips the drift check below entirely.
-        if ((targetJson != null && target == null) || (expectedJson != null && expected == null)) {
+        if (!validSingleRecordJournalTransition(entry)
+                || (targetJson != null && target == null)
+                || (expectedJson != null && expected == null)) {
             throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
         }
 
@@ -4055,6 +4815,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         } catch (NumberFormatException e) {
             // Same class as an unreadable payload: the entry does not identify a rule, so the inverse
             // cannot be applied. A typed conflict, not the NumberFormatException 500 this used to throw.
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
+        if (ruleId <= 0
+                || (target != null && !Objects.equals(target.getId(), ruleId))
+                || (expected != null && !Objects.equals(expected.getId(), ruleId))) {
             throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
         }
         RuleDto current = ruleRepo.findById(ruleId)
@@ -4084,7 +4849,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         List<RuleDto> nextRules = new ArrayList<>(getRulesInternal(userId));
         nextRules.removeIf(rule -> Objects.equals(rule.getId(), ruleId));
         // Reinsert at the recorded position. getRulesInternal returns execution order, so the index is
-        // a list position, and clamping covers an entry whose neighbours were deleted since.
+        // a list position. A position that no longer fits is drift or malformed history, not permission
+        // to append the rule to a semantically different execution order.
         // Every DELETE entry records the position, so a missing one is a journal row written before the
         // column existed. Appending instead would silently restore the rule to a different board —
         // execution order decides which rule wins when guards overlap — so reject it rather than
@@ -4092,8 +4858,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         if (entry.getEntityOrder() == null) {
             throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
         }
-        int restoreAt = Math.min(Math.max(entry.getEntityOrder(), 0), nextRules.size());
-        nextRules.add(restoreAt, restored);
+        int restoreAt = entry.getEntityOrder();
+        insertAtRecordedPosition(nextRules, restoreAt, restored);
         List<DeviceNodeDto> currentNodes = getNodesInternal(userId);
         requireAdditionalCapacity("rules", nextRules.size() - 1, 1, RequestLimits.MAX_RULES);
         validateNoIdenticalRules(nextRules, currentNodes);
@@ -4136,11 +4902,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     /**
-     * Moves one specification to the state the journal entry describes. Specifications persist by
-     * rewriting the whole per-user collection, so this edits the list and re-saves it through the
-     * same validated path an ordinary mutation uses.
-     */
-    /**
      * Renumbers the rules that survived a deletion so the restored rule's position is unambiguous.
      *
      * <p>{@code deleteById} leaves a gap in {@code execution_order}, so reinserting at the recorded
@@ -4173,11 +4934,18 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         SpecificationDto expected = editJournal.readJson(expectedJson, SpecificationDto.class);
         // See applyRuleJournalEntry: an unreadable `expected` is an unknown prior state, and must not
         // pass for the legal "record already gone" case that skips the drift check.
-        if ((targetJson != null && target == null) || (expectedJson != null && expected == null)) {
+        if (!validSingleRecordJournalTransition(entry)
+                || (targetJson != null && target == null)
+                || (expectedJson != null && expected == null)) {
             throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
         }
 
         String specId = entry.getEntityKey();
+        if (!hasText(specId)
+                || (target != null && !Objects.equals(target.getId(), specId))
+                || (expected != null && !Objects.equals(expected.getId(), specId))) {
+            throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
+        }
         List<DeviceNodeDto> currentNodes = getNodesInternal(userId);
         List<SpecificationDto> existing = new ArrayList<>(getSpecsInternal(userId));
         SpecificationDto current = existing.stream()
@@ -4200,17 +4968,27 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             target.setId(specId);
             requireAdditionalCapacity(
                     "specifications", existing.size(), 1, RequestLimits.MAX_SPECS);
-            // Reinsert at the recorded list position, clamped for neighbours deleted since. As in
-            // applyRuleJournalEntry, a missing position means a pre-column journal row: appending would
-            // restore the specification to a different place in the evaluated order, so reject it.
+            // Reinsert at the recorded list position. As in applyRuleJournalEntry, a missing or
+            // impossible position is not safe to reinterpret as append: that would report success for
+            // a different ordered collection.
             if (entry.getEntityOrder() == null) {
                 throw new ConflictException(UNREADABLE_JOURNAL_ENTRY_MESSAGE);
             }
-            int restoreAt = Math.min(Math.max(entry.getEntityOrder(), 0), existing.size());
-            existing.add(restoreAt, target);
+            insertAtRecordedPosition(existing, entry.getEntityOrder(), target);
             validateBoardReferences(userId, currentNodes, null, existing);
         }
         saveSpecsInternal(userId, existing, currentNodes);
+    }
+
+    private boolean validSingleRecordJournalTransition(BoardEditJournalPo entry) {
+        if (entry.getEntityOrder() == null || entry.getEntityOrder() < 0) return false;
+        boolean hasBefore = hasText(entry.getBeforeJson());
+        boolean hasAfter = hasText(entry.getAfterJson());
+        return switch (entry.getOperation()) {
+            case CREATE -> !hasBefore && hasAfter;
+            case DELETE -> hasBefore && !hasAfter;
+            case UPDATE -> false;
+        };
     }
 
     /** List position of a specification, or the end when it is absent. */
@@ -4369,7 +5147,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         expectedImpactToken.trim().getBytes(StandardCharsets.UTF_8))) {
                     throw new TemplateDeletionConflictException(
                             "TEMPLATE_DELETION_PREVIEW_STALE",
-                            "The device type or its usage changed after preview. Review the current impact before deleting.",
+                            "The device type, its usage, or undo history changed after preview. "
+                                    + "Review the current impact before deleting.",
                             preview);
                 }
                 if (!preview.isCanDelete()) {
@@ -4381,10 +5160,12 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
                 deviceTemplateRepo.delete(plan.templatePo());
                 deviceTemplateRepo.flush();
+                editJournal.clear(userId);
                 return DeviceTemplateDeletionResultDto.builder()
                         .operation("deleted")
                         .impactToken(preview.getImpactToken())
                         .canDelete(true)
+                        .editHistoryEntryCount(preview.getEditHistoryEntryCount())
                         .template(preview.getTemplate())
                         .deletedTemplate(preview.getTemplate())
                         .blockers(List.of())
@@ -4415,11 +5196,13 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .build())
                 .toList();
         List<DeviceTemplateDto> currentTemplates = getDeviceTemplatesInternal(userId);
-        String impactToken = templateDeletionImpactToken(target, blockers);
+        BoardEditHistoryState editHistory = editJournal.historyState(userId);
+        String impactToken = templateDeletionImpactToken(target, blockers, editHistory);
         DeviceTemplateDeletionResultDto preview = DeviceTemplateDeletionResultDto.builder()
                 .operation("preview")
                 .impactToken(impactToken)
                 .canDelete(blockers.isEmpty())
+                .editHistoryEntryCount(editHistory.entryCount())
                 .template(target)
                 .blockers(blockers)
                 .currentTemplates(currentTemplates)
@@ -4428,11 +5211,14 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     private String templateDeletionImpactToken(
-            DeviceTemplateDto template, List<DeviceTemplateDeletionBlockerDto> blockers) {
+            DeviceTemplateDto template,
+            List<DeviceTemplateDeletionBlockerDto> blockers,
+            BoardEditHistoryState editHistory) {
         Map<String, Object> impact = new LinkedHashMap<>();
-        impact.put("contract", "device-template-deletion-v1");
+        impact.put("contract", "device-template-deletion-v2");
         impact.put("template", template);
         impact.put("blockers", blockers != null ? blockers : List.of());
+        impact.put("editHistoryImpactToken", editHistory.impactToken());
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(JsonUtils.toJson(impact).getBytes(StandardCharsets.UTF_8)));
@@ -4466,7 +5252,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 DefaultTemplateResetPlan plan = buildDefaultTemplateResetPlan(userId);
                 if (!Objects.equals(plan.preview().getImpactToken(), expectedImpactToken.trim())) {
                     throw new ConflictException(
-                            "The device types or board changed after the reset preview. Review the current impact before resetting.");
+                            "The device types, board, or undo history changed after the reset preview. "
+                                    + "Review the current impact before resetting.");
                 }
                 if (!plan.validationErrors().isEmpty()) {
                     throw new ValidationException(plan.validationErrors());
@@ -4500,12 +5287,14 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<DeviceTemplateDto> currentTemplates = deviceTemplateRepo.findByUserId(userId).stream()
                         .map(deviceTemplateMapper::toDto)
                         .toList();
+                editJournal.clear(userId);
 
                 DefaultTemplateResetResultDto preview = plan.preview();
                 return DefaultTemplateResetResultDto.builder()
                         .operation("reset")
                         .impactToken(preview.getImpactToken())
                         .canApply(true)
+                        .editHistoryEntryCount(preview.getEditHistoryEntryCount())
                         .templateChanges(preview.getTemplateChanges())
                         .affectedDevices(preview.getAffectedDevices())
                         .blockers(List.of())
@@ -4645,14 +5434,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
         List<DefaultTemplateResetBlockerDto> blockers = resetBlockers(
                 validationErrors, nodes, rules, specs);
+        BoardEditHistoryState editHistory = editJournal.historyState(userId);
         String impactToken = defaultTemplateResetImpactToken(
                 currentTemplates, defaultDtos, nodes, rules, specs, previousEnvironment,
-                changes, environmentChanges, validationErrors);
+                changes, environmentChanges, validationErrors, editHistory);
 
         DefaultTemplateResetResultDto preview = DefaultTemplateResetResultDto.builder()
                 .operation("preview")
                 .impactToken(impactToken)
                 .canApply(validationErrors.isEmpty())
+                .editHistoryEntryCount(editHistory.entryCount())
                 .templateChanges(List.copyOf(changes))
                 .affectedDevices(affectedDevices)
                 .blockers(blockers)
@@ -4835,8 +5626,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             List<BoardEnvironmentVariableDto> environment,
             List<DefaultTemplateResetChangeDto> changes,
             List<EnvironmentVariableChangeDto> environmentChanges,
-            Map<String, String> validationErrors) {
+            Map<String, String> validationErrors,
+            BoardEditHistoryState editHistory) {
         Map<String, Object> impact = new LinkedHashMap<>();
+        impact.put("contract", "default-template-reset-v2");
         impact.put("currentTemplates", currentTemplates);
         impact.put("defaultTemplates", defaultTemplates);
         impact.put("nodes", nodes);
@@ -4846,6 +5639,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         impact.put("templateChanges", changes);
         impact.put("environmentChanges", environmentChanges);
         impact.put("validationErrors", validationErrors);
+        impact.put("editHistoryImpactToken", editHistory.impactToken());
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(JsonUtils.toJson(impact).getBytes(StandardCharsets.UTF_8)));

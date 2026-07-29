@@ -22,4 +22,8 @@ public class EnvironmentMutationResultDto {
     @Builder.Default
     private List<EnvironmentVariableChangeDto> environmentChanges = List.of();
     private int currentCount;
+    /** Present only when an actual Environment Pool update was committed and journalled. */
+    private Boolean canUndo;
+    /** Present only when an actual Environment Pool update was committed and journalled. */
+    private Boolean canRedo;
 }

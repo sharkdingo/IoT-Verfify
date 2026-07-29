@@ -158,9 +158,17 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   authority: `useBoardUndo` keeps no snapshot stack, applies the authoritative collections the
   response carries, and reads availability from `/board/edits/availability`. Never intercept
   `Ctrl+Z` in an input, textarea, `contenteditable`, or during an IME composition
-  (`boardUndoShortcut.ts` owns that scoping). Reversible: rule/spec create+delete and rule reorder
-  (one button press = one edit, so its entry stores the previous *ordering*). Device deletion and
-  scene replace/clear clear the journal because their inverse is not a single record.
+  (`boardUndoShortcut.ts` owns that scoping). Reversible: device create/update/rename/delete, direct
+  Environment Pool edits, rule/spec create+delete, rule reorder, and automatic-fix apply. Device
+  deletion is one compound entry containing its cascades and Environment Pool state; automatic fix
+  is one ordered rule-set entry. Confirmed scene replace/clear, template deletion, and default-template
+  reset are history boundaries because they can remove or replace manifest semantics used by snapshots.
+  Show the server-reported history count before confirmation and re-read availability afterward.
+  Clearing an unusable journal is separately confirmed and
+  carries the exact `/board/edits/clear-preview` token; stale confirmation must preserve history.
+  A non-`409` undo/redo failure is an unconfirmed mutation outcome, not proof that the board stayed
+  unchanged: reconcile the complete snapshot through the mutation queue before reporting it. A
+  `409` wrote nothing but still triggers reconciliation because the local board may be stale.
 - **Shrink `Board.vue` by extracting rules, not by adding layers.** Worthwhile moves take their
   inputs as arguments (including `t`/`locale`) and land in `views/board/` or `utils/` with tests:
   boundary parsing, wording, decision tables, freshness predicates. Do **not** extract code needing
@@ -168,23 +176,28 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   CLAUDE.md forbids. Two things that look extractable but are not: the four recommendation panels
   diverge in most of their markup (a shared component would need more slots than it saves), and the
   fuzzing refs are interleaved with simulation and task-inbox state rather than contiguous.
-- **Every rule/spec mutation commits through `board/semanticCommit.ts`.** It applies the
+- **Every ordinary targeted device/Environment Pool/rule/spec mutation commits through
+  `board/semanticCommit.ts`.** It applies the
   authoritative collections and then everything derived from them — canvas edges, dangling
   inspector focus, undo availability, verdict staleness — in a fixed order. Never hand-assemble
   those follow-ups at a call site: that is what let reorder skip undo availability and undo skip
   the canvas edges, each hidden by a later refresh that happened to repair the state. An undo is
-  itself a semantic mutation, so it uses this path and must match `isBoardMutationRequest`.
-- **A path that changes the undo journal must re-read it.** Journal-clearing commands (device
-  deletion, scene replace/clear, applying a fix) call `notifyUndoJournalCleared()`; a wholesale
+  itself a semantic mutation, so it uses this path and must match `isBoardMutationRequest`. Pass
+  `semanticChanged: false` only for an explicit server-confirmed no-op; it still reconciles state and
+  availability without making a current verdict stale. Authoritative partial/full refreshes are not
+  mutations, but they must reuse `reconcileBoardFocus` so removed items cannot remain selected.
+- **A path that changes the undo journal must re-read it.** Scene replace/clear calls
+  `notifyUndoJournalCleared()`; reversible mutations carry availability or reload it, and a wholesale
   semantic reload (`refreshBoardSnapshot`) re-reads availability explicitly at the end. A board
   invalidation does
   **not** cover the publishing tab — `BroadcastChannel` never delivers to the context that posted,
   and `publishBoardInvalidation` only calls `postMessage` — so the origin tab depends on that
   explicit re-read, not on its own broadcast. The assistant relies on it, so an assistant-created
-  rule is as undoable as a user-created one (`views/board/assistantRefresh.ts` owns the target
+  device or rule is as undoable as a user-created one (`views/board/assistantRefresh.ts` owns the target
   table; verified against the real model in `e2e/live-ai-no-mock.spec.ts`). The assistant cannot
   delete in one turn — destructive tool actions need a confirmation token, so do not write features
-  assuming otherwise.
+  assuming otherwise. Availability reads run outside the mutation queue: every mutation response
+  carrying availability must invalidate older reads, and only the latest concurrent read may land.
 - **All user feedback goes through `utils/feedback.ts`.** Call sites state the intent
   (`notifySuccess`/`notifyInfo`/`notifyBlocked`/`notifyError`, `confirmDestructive`,
   `acknowledge`), never `ElMessage`/`ElMessageBox` directly — that is what kept 421 toast
@@ -213,7 +226,8 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   modal also gets a document-level Escape fallback: the element-bound handler only sees the key once
   focus is inside the dialog, and focus arrives a tick later, so a deep link that opens the surface on
   load had its first Escape silently dropped. Non-modal panels are excluded — one keypress must not
-  close several of them.
+  close several of them. Element-bound handlers must also ignore an already-default-prevented event,
+  so an Escape consumed by a nested modal cannot bubble on and close its ancestor.
 - **"Modal to the user" is not the same as "takes the scroll lock".** `openModalDepth`
   (`useBodyScrollLock`) is what tells window-level accelerators such as the board's Ctrl+Z that a
   surface is covering the board. Element Plus `MessageBox` confirmations pass `lockScroll: false` on

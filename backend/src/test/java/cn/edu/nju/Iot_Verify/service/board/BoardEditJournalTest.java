@@ -110,6 +110,17 @@ class BoardEditJournalTest {
     }
 
     @Test
+    void historyTokenChangesWhenIdenticalHistoryIsClearedAndRecreated() {
+        recordRuleDelete("1", "first");
+        String originalToken = journal.historyState(USER).impactToken();
+
+        journal.clear(USER);
+        recordRuleDelete("1", "first");
+
+        assertNotEquals(originalToken, journal.historyState(USER).impactToken());
+    }
+
+    @Test
     void anUnreadablePayloadIsReportedAsUnusableRatherThanThrowing() {
         BoardEditJournalPo entry = repository.save(BoardEditJournalPo.builder()
                 .userId(USER).sequence(1L)

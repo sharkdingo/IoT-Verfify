@@ -17,6 +17,7 @@ public class DeviceTemplateDeletionResultDto {
     @ToString.Exclude
     private String impactToken;
     private boolean canDelete;
+    private int editHistoryEntryCount;
     private DeviceTemplateDto template;
     private DeviceTemplateDto deletedTemplate;
     @Builder.Default

@@ -94,7 +94,7 @@ ends up destroying work.
 
 | Intent | Mechanism | Scope |
 | :--- | :--- | :--- |
-| Reverse a persisted board edit | **Undo** (`Ctrl/Meta+Z`), server journal | Rule + specification create/delete, rule reorder |
+| Reverse a persisted board edit | **Undo** (`Ctrl/Meta+Z`), server journal | Device create/update/rename/delete, Environment Pool edits, rule/spec create/delete, rule reorder, automatic-fix apply |
 | Re-apply an undone edit | **Redo** (`Ctrl/Meta+Shift+Z`, `Ctrl+Y`) | Same |
 | Stop work that is still running | **Cancel / Stop** on the task | Verification, simulation, exploration, fix search |
 | Discard a finished run's record | **Delete** in run history | Completed runs (not reversible) |
@@ -111,11 +111,21 @@ ends up destroying work.
   its edit (or vice versa) would offer an undo to a state that never existed.
 - **Undo never overwrites newer work.** If the affected record changed after the edit was recorded,
   the undo is refused with a conflict and the board is left untouched.
+- **A failed undo response is not proof that no write committed.** A non-`409` transport or response-
+  contract failure is an unconfirmed outcome. Reconcile the complete authoritative snapshot through
+  the board-mutation queue before reporting it; if refresh also fails, say the outcome is unknown
+  and do not invite an immediate retry. A `409` proves this request wrote nothing but still requires
+  refresh because the conflict proves the local board may be stale.
 - **A new edit invalidates redo.** Redoing an abandoned branch would silently overwrite the new
   edit, so the branch is discarded rather than left as a trap.
 - **Nothing to undo is a normal outcome**, not an error, which makes repeated presses idempotent.
-- **Wholesale rewrites clear the journal.** Scene replace/clear and device deletion (which cascades
-  into rules and specs) leave no per-record inverse that can reach a legal board.
+  A successful undo must make redo available, a successful redo must make undo available, and a
+  `NOTHING_TO_APPLY` response must mark the requested direction unavailable; reject a response that
+  contradicts these invariants instead of rendering impossible button state.
+- **Confirmed scene replacement/clear is a history boundary.** It can also replace template
+  snapshots, so an inverse over only the four visible collections would leave hidden catalog
+  effects behind. Automatic-fix apply is different: it owns one ordered rule-set transition and is
+  reversible as one user action.
 - **Async runs are not undoable.** Cancel, stop, and delete-result are separate, and none of them
   is spelled "undo".
 - **Never intercept a keystroke in a text field, a `contenteditable` region, or during an IME
@@ -123,27 +133,43 @@ ends up destroying work.
 - **Undoability follows the user's unit of work, not the storage shape.** Rule reorder changes no
   individual record — only their order — but it is reached through an explicit up/down button, so
   one press is one edit the user expects `Ctrl+Z` to take back. Its journal entry stores the
-  previous *ordering* (`RuleOrderSnapshot`) instead of a record snapshot. Conversely, a change the
+  previous *ordering* (`RuleOrderSnapshot`) instead of a record snapshot. Device deletion spans a
+  device, cascaded rules/specifications, their positions, and Environment Pool changes, but the user
+  confirmed one deletion, so it is one compound journal entry. Conversely, a change the
   user never performed as a discrete action is not a candidate just because it is easy to invert.
-- **Every semantic mutation goes through one owner.** `board/semanticCommit.ts` applies the
+- **Every ordinary targeted semantic mutation goes through one owner.** `board/semanticCommit.ts` applies the
   authoritative collections and then everything derived from them — canvas edges, dangling focus,
   undo availability, verdict staleness — in a fixed order. Call sites pass the result; they do not
   hand-assemble the follow-ups. That scattering is exactly what let reorder skip undo availability
   and let undo skip the canvas edges, each masked by a later refresh that happened to repair it.
-  Reaching the right state "because some later refresh runs" is correct by accident.
+  Reaching the right state "because some later refresh runs" is correct by accident. A server-
+  confirmed semantic no-op still reconciles its authoritative collection and availability but does
+  not stale a valid verdict. Partial and full refreshes reuse the same focus reconciliation rule, so
+  an item removed by another tab or by a response-lost mutation cannot remain selected.
 - **Whoever changes the journal must re-read it.** The journal is the authority for what is
   reversible, so a path that changes it without carrying availability in its own response has to
-  re-read it. Two mechanisms cover this: the commands that *clear* the journal (device deletion,
-  scene replace/clear) call `notifyUndoJournalCleared()`, and any wholesale semantic reload
+  re-read it. Two mechanisms cover this: scene replace/clear calls
+  `notifyUndoJournalCleared()`, while reversible mutations either carry availability in their
+  response or explicitly reload it; any wholesale semantic reload
   (`refreshBoardSnapshot`) re-reads availability explicitly at the end. Note that a board
   invalidation does **not** cover the publishing tab: `BroadcastChannel` does not deliver a message
   to the context that posted it, and `publishBoardInvalidation` only calls `postMessage` — other
   tabs reload, the origin tab relies on its own explicit re-read. The assistant relies on that
-  explicit path: its rule/spec tools use the same journal-recording service methods the UI does, so
-  an assistant-created rule is exactly as reversible as a user-created one. Verified end-to-end
+  explicit path: its device/rule/spec tools use the same journal-recording service methods the UI
+  does, so an assistant-created device or rule is exactly as reversible as a user-created one.
+  Verified end-to-end
   against the real model in `e2e/live-ai-no-mock.spec.ts`.
+- **Clearing unusable history is explicit.** After an undo/redo conflict, the UI may offer to clear
+  the journal only after explaining that the current Board stays unchanged and all undo/redo entries
+  will be removed. It first reads `/board/edits/clear-preview`; `POST /board/edits/clear` carries that
+  opaque impact token, so another tab's edit/undo/redo during confirmation causes `409` instead of
+  deleting newly changed history. A successful clear returns empty collections and both availability
+  flags false; it is not itself an undoable Board edit.
 - **The assistant cannot silently delete.** Destructive AI tool actions are gated behind an explicit
   two-step confirmation token (`AiDestructiveActionGuard`), so a single turn can create a rule but
   not remove one. Do not write tests or features that assume otherwise.
 - **Availability is a query.** `GET /board/edits/availability` returns the two booleans and empty
-  collections; it must never be treated as an authoritative board update.
+  node, Environment Pool, rule, and specification collections; it must never be treated as an
+  authoritative board update. Because this read runs outside the mutation queue, an authoritative
+  mutation response invalidates every read already in flight, and only the latest-started concurrent
+  read may update the affordance.

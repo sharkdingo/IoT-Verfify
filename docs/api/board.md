@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-25. Source:
+Verified against code on 2026-07-30. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -27,7 +27,11 @@ uses it only after an authoritative `GET /api/board/replacement-preview` and exp
 user confirmation for scene import or scene clear. All four semantic collections and the
 exact template-snapshot dependency set are required complete desired collections; omitted
 or `null` collections are rejected rather than interpreted as hidden partial preservation.
-The replacement commits or rolls back as one transaction.
+The replacement commits or rolls back as one transaction. Its preview also reports the
+current `editHistoryEntryCount`; the opaque token binds both the complete scene and the
+exact undo/redo journal. A successful replacement discards that journal because its
+recorded inverses no longer describe the replacement scene. If only the journal changes
+after confirmation, the request still returns `409` and writes nothing.
 
 ---
 
@@ -36,25 +40,27 @@ The replacement commits or rolls back as one transaction.
 | Method | Path | Body / Response | Notes |
 | :--- | :--- | :--- | :--- |
 | GET | `/api/board/nodes` | → `DeviceNodeDto[]` | List device instances |
-| POST | `/api/board/nodes` | `DeviceBatchCreateRequestDto` → `DeviceMutationResultDto` | Atomically append one or more device instances; every `templateName` must exist. Optional environment patches commit with the devices. |
-| PUT | `/api/board/nodes/{nodeId}/layout` | `DeviceLayoutDto` → `DeviceUpdateResultDto` | Replace only the complete canvas layout subresource (`position`, `width`, `height`); device identity and modeled runtime are preserved |
-| PUT | `/api/board/nodes/{nodeId}/runtime` | `DeviceRuntimeUpdateDto` → `DeviceUpdateResultDto` | Replace only the complete device-local modeled runtime subresource; identity, type, display name, and canvas layout are preserved |
-| PATCH | `/api/board/nodes/{nodeId}/label` | `{ label, expectedLabel }` → `DeviceMutationResultDto` | Rename one instance and update specification display labels atomically; stable references remain `nodeId`. `expectedLabel` must equal the label originally edited or stale submission returns `409` without writing. |
+| POST | `/api/board/nodes` | `DeviceBatchCreateRequestDto` → `DeviceMutationResultDto` | Atomically append one or more device instances; every `templateName` must exist. Optional environment patches commit with the devices. Reversible as one user action regardless of batch size; the result carries `canUndo`/`canRedo` |
+| PUT | `/api/board/nodes/{nodeId}/layout` | `DeviceLayoutDto` → `DeviceUpdateResultDto` | Replace only the complete canvas layout subresource (`position`, `width`, `height`); device identity and modeled runtime are preserved. A real change is one reversible edit and returns `canUndo`/`canRedo`; an unchanged command writes no history and omits both fields |
+| PUT | `/api/board/nodes/{nodeId}/runtime` | `DeviceRuntimeUpdateDto` → `DeviceUpdateResultDto` | Replace only the complete device-local modeled runtime subresource; identity, type, display name, and canvas layout are preserved. Same changed/unchanged undo contract as layout |
+| PATCH | `/api/board/nodes/{nodeId}/label` | `{ label, expectedLabel }` → `DeviceMutationResultDto` | Rename one instance and update specification display labels atomically as one reversible edit; stable references remain `nodeId`. `expectedLabel` must equal the label originally edited or stale submission returns `409` without writing. The new label must differ from the current label |
 | GET | `/api/board/nodes/{nodeId}/deletion-preview` | → `DeviceDeletionResultDto` | Read-only authoritative preview of the device, every referencing rule/spec, and each Environment Pool item that would be removed |
-| POST | `/api/board/nodes/{nodeId}/delete` | `DeviceDeleteRequestDto` → `DeviceDeletionResultDto` | Delete one instance plus every previewed consequence atomically. The opaque `impactToken` from the latest preview must still match the complete server-calculated impact or the server returns `409` before writing. |
+| POST | `/api/board/nodes/{nodeId}/delete` | `DeviceDeleteRequestDto` → `DeviceDeletionResultDto` | Delete one instance plus every previewed consequence atomically. The opaque `impactToken` from the latest preview must still match the complete server-calculated impact or the server returns `409` before writing. Reversible as one compound edit containing the device, cascaded records with their positions, and exact Environment Pool state; the result carries `canUndo`/`canRedo` |
 | GET | `/api/board/environment` | → `BoardEnvironmentVariableDto[]` | Board-level environment pool; self-heals from current nodes/templates |
-| POST | `/api/board/environment` | `EnvironmentVariableUpdateRequestDto[]` → `EnvironmentMutationResultDto` | Atomically apply at most 200 name-keyed compare-and-set field patches; every item carries a complete `expected` baseline and a non-empty `desired` patch |
+| POST | `/api/board/environment` | `EnvironmentVariableUpdateRequestDto[]` → `EnvironmentMutationResultDto` | Atomically apply at most 200 name-keyed compare-and-set field patches; every item carries a complete `expected` baseline and a non-empty `desired` patch. All changed items form one reversible Environment Pool edit; a semantic no-op writes no history |
 | GET | `/api/board/rules` | → `RuleDto[]` | List rules in effective execution order |
 | POST | `/api/board/rules` | `RuleDto` → `CollectionMutationResultDto<RuleDto>` | Create exactly one validated rule; request `id` is ignored and the server assigns identity. Reversible: the result carries `canUndo`/`canRedo`, and the journal entry records the execution position so a redo re-creates the rule where it was |
-| PUT | `/api/board/rules/order` | `{ expectedRuleIds: Long[], ruleIds: Long[] }` → `CollectionMutationResultDto<RuleDto>` | Compare-and-set replacement of execution order only. Both lists accept at most 100 positive ids and must contain every current rule id exactly once. `expectedRuleIds` must match the current order element-for-element; stale, duplicate, or partial input is rejected without writing. Reversible: one button press is one edit, recorded as a `RULE_ORDER` journal entry holding the previous ordering, so the result carries `canUndo`/`canRedo` |
+| PUT | `/api/board/rules/order` | `{ expectedRuleIds: Long[], ruleIds: Long[] }` → `CollectionMutationResultDto<RuleDto>` | Compare-and-set replacement of execution order only. Both lists accept at most 100 positive ids and must contain every current rule id exactly once. `expectedRuleIds` must match the current order element-for-element; stale, duplicate, partial, or unchanged input is rejected without writing (`400` for unchanged order). Reversible: one button press is one edit, recorded as a `RULE_ORDER` journal entry holding the previous ordering, so the result carries `canUndo`/`canRedo` |
 | DELETE | `/api/board/rules/{ruleId}` | `RuleDto` (the confirmed current snapshot) → `CollectionMutationResultDto<RuleDto>` | Delete only when the id and authored rule semantics still match; a stale snapshot returns `409` without writing, and a missing rule returns `404`. Reversible: the result carries `canUndo`/`canRedo`. Undo restores the rule under its original id **and at its recorded execution position** (`entity_order` on the journal entry), clamped when neighbours were deleted meanwhile; surviving rules are renumbered contiguously so the deletion gap cannot leave two rules sharing an order. A journal entry with no recorded position (written before that column existed) is rejected with `409` rather than appended, because appending would restore the rule to a different board |
 | GET | `/api/board/specs` | → `SpecificationDto[]` | List specs in stable authored order |
 | POST | `/api/board/specs` | `SpecificationDto` → `CollectionMutationResultDto<SpecificationDto>` | Create exactly one validated specification. Reversible: the result carries `canUndo`/`canRedo`, and the journal entry records the list position so a redo re-creates it where it was |
 | DELETE | `/api/board/specs/{specId}` | `SpecificationDto` (the confirmed current snapshot) → `CollectionMutationResultDto<SpecificationDto>` | Delete only when the id and authored specification semantics still match; a stale snapshot returns `409` without writing, and a missing specification returns `404`. Reversible: the result carries `canUndo`/`canRedo`, and undo restores the specification at its recorded list position (same `entity_order` mechanism as rules), clamped when neighbours were deleted meanwhile |
-| GET | `/api/board/edits/availability` | → `BoardUndoResultDto` (`applied: false`, `AVAILABILITY_ONLY`, empty `rules`/`specs`) | Current undo/redo availability from the per-user edit journal, with no side effects. Read `canUndo`/`canRedo` only — the empty collections are not an authoritative board state. Read on board load so the affordance survives reload, a second tab, and another device |
-| POST | `/api/board/edits/undo` | → `BoardUndoResultDto` | Reverse the newest reversible edit (rule/spec create or delete, or a rule reorder). Returns the authoritative rule and spec lists plus remaining availability. `applied: false` with `NOTHING_TO_APPLY` when there is no history — a normal, idempotent outcome. `409` when the affected record changed after the edit was recorded, leaving the board untouched. History is capped at the 50 most recent edits per account; device deletion, scene replacement/clear, and applying a fix discard it wholesale, because their inverse is not a single record. Ordinal allocation is fenced by a unique `(user_id, sequence)` constraint, so a concurrent write fails and retries rather than producing two entries that share a position |
+| GET | `/api/board/edits/availability` | → `BoardUndoResultDto` (`applied: false`, `AVAILABILITY_ONLY`, all four semantic collections empty) | Current undo/redo availability from the per-user edit journal, with no side effects. Read `canUndo`/`canRedo` only — the empty collections are not an authoritative board state. Read on board load so the affordance survives reload, a second tab, and another device |
+| POST | `/api/board/edits/undo` | → `BoardUndoResultDto` | Reverse the newest reversible edit: device create/update/rename/delete, Environment Pool update, rule/spec create/delete, rule reorder, or automatic-fix rule-set update. Returns authoritative nodes, Environment Pool, rules, specs, and remaining availability. Device deletion restores the complete cascade under the original rule ids and collection positions. `applied: false` with `NOTHING_TO_APPLY` when there is no history — a normal, idempotent outcome. `409` when any affected state changed after the edit was recorded, leaving the board untouched. History is capped at the 50 most recent edits per account; confirmed scene replacement/clear is a history boundary. Ordinal allocation is fenced by a unique `(user_id, sequence)` constraint, so a concurrent write fails rather than producing two entries that share a position |
 | POST | `/api/board/edits/redo` | → `BoardUndoResultDto` | Re-apply the oldest undone edit. Same conflict and idempotency rules. A new edit discards the abandoned redo branch |
-| GET | `/api/board/replacement-preview` | → `BoardReplacementPreviewDto` | Return the opaque impact token and authoritative current counts that must be shown before a full scene replacement/clear |
+| GET | `/api/board/edits/clear-preview` | → `BoardEditHistoryClearPreviewDto` | Return the current entry count, availability, and opaque impact token that must be shown/bound to an explicit history-clear confirmation |
+| POST | `/api/board/edits/clear` | `BoardEditHistoryClearRequestDto` → `BoardUndoResultDto` (`applied: false`, `HISTORY_CLEARED`, empty collections, both availability flags false) | Explicitly discard unusable undo/redo history without changing any Board collection. The SHA-256 `impactToken` from the preview is required; if any entry is added, undone, redone, changed, or removed before submit, stale confirmation returns `409` and preserves all history |
+| GET | `/api/board/replacement-preview` | → `BoardReplacementPreviewDto` | Return the opaque impact token plus authoritative current scene counts and `editHistoryEntryCount` that must be shown before a full scene replacement/clear |
 | POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Explicit atomic full-scene replacement** of complete `nodes` + `environmentVariables` + `rules` + `specs` plus exact `templateSnapshots`; requires the still-current preview `impactToken` |
 | GET | `/api/board/layout` | → `BoardLayoutDto` | Panel/canvas layout |
 | POST | `/api/board/layout` | `BoardLayoutDto` → `BoardLayoutDto` | |
@@ -107,7 +113,9 @@ must contain 1–100 items, must keep the resulting Board at no more than 100 de
 `environmentVariablePatches` may contain at most 200.
 `DeviceMutationResultDto` returns `operation`, `affectedDevices`,
 `currentNodes`, `environmentVariables`, `environmentChanges`, `currentSpecifications`,
-`previousLabel`, `updatedSpecificationCount`, and `currentCount`. Callers should use the
+`previousLabel`, `updatedSpecificationCount`, `currentCount`, `canUndo`, and `canRedo`.
+The availability fields are required for `operation=created` and `operation=renamed`.
+Callers should use the
 returned current collections rather than assuming their local optimistic state won.
 `environmentChanges[]` is structured as `{ changeType: ADDED|UPDATED|REMOVED, name,
 previousValue, currentValue, previousModelTokenSource, currentModelTokenSource }` and
@@ -199,7 +207,9 @@ snapshot but does not reopen the details surface.
 
 Both update commands return `DeviceUpdateResultDto`: `{ operation: updated|unchanged,
 mutationType: layout|runtime, changedFields, previousDevice, currentDevice, currentNodes,
-currentCount }`. `changedFields` is restricted to the selected subresource and is derived
+currentCount, canUndo?, canRedo? }`. A real update records one `DEVICE/UPDATE` edit and must
+return `canUndo: true`, `canRedo: false`; an unchanged command writes no history and must omit both
+availability fields. `changedFields` is restricted to the selected subresource and is derived
 from the before/after snapshots. The frontend rejects a response that changes a preserved
 field, disagrees with the request, omits the updated device, or contradicts its own
 `changedFields`/`currentCount`; it then reconciles from the server instead of announcing
@@ -217,7 +227,9 @@ the proposed name changes are shown for review.
 deletion preview. `DeviceDeletionResultDto` uses `operation=preview` for the read-only preview and
 `operation=deleted` after commit; it returns the deleted device, exact `removedRules` /
 `removedSpecifications`, itemized `environmentChanges`, and authoritative
-`currentNodes` / `environmentVariables` / `currentRules` / `currentSpecifications`.
+`currentNodes` / `environmentVariables` / `currentRules` / `currentSpecifications`. A committed
+deletion also returns required `canUndo` / `canRedo`; previews omit them because they do not edit
+the journal.
 The preview's opaque `impactToken` binds the complete server-calculated device, rule,
 specification, and Environment Pool effect; it intentionally does not require clients to
 submit internal rule/spec ids. If any actual impact set differs from the preview, the endpoint returns
@@ -256,10 +268,22 @@ local state. A REST delete must include the complete item snapshot that the user
 fields while holding the board write lock. It rejects a changed snapshot with `409` and
 performs no write, so a second tab cannot silently delete a newer edit. The returned
 `affectedItem` is the exact deleted snapshot and `currentItems` is authoritative.
+Every committed reversible mutation, including device create/update/rename/delete, Environment Pool
+update, rule/spec create/delete, rule reorder, and automatic-fix apply, returns
+`canUndo: true` and `canRedo: false`: the newly recorded entry is reversible and it discards any
+abandoned redo branch. Clients reject missing or contradictory values instead of guessing.
 
 Rule reorder shares this envelope with one difference: it reports `operation: "reordered"` and a
 `null` `affectedItem`, because one up/down press changes no single record — the whole new ordering
-is in `currentItems`. Clients must not require `affectedItem` on that path.
+is in `currentItems`. Clients must not require `affectedItem` on that path. The desired order must
+differ from `expectedRuleIds`; an identical order is rejected with `400` before either the rules or
+the edit journal is written.
+
+Before applying any journal entry, the backend validates that its entity type, operation, business
+key, before/after payload shape, and recorded position form one supported, non-no-op transition.
+Rule/specification snapshot ids must match the journal key, and reorder snapshots must contain the
+same unique positive ids in different orders. A malformed entry returns `409` without changing the
+board or consuming the entry.
 
 Board node mutations validate more than shape. Device ids must be unique and must not
 collide after NuSMV normalization (`AC 1` and `ac_1` are the same model id). For every
@@ -315,7 +339,10 @@ persistence. Accepted scalar values are trimmed, and trust/privacy labels are st
 their canonical lower-case form.
 
 `EnvironmentMutationResultDto` contains `{ operation: updated|unchanged, patchResults,
-environmentVariables, environmentChanges, currentCount }`. Each `patchResults[]` row is
+environmentVariables, environmentChanges, currentCount, canUndo?, canRedo? }`. An `updated`
+result records the complete materialized pool as one `ENVIRONMENT/UPDATE` edit and must return
+`canUndo: true`, `canRedo: false`; an `unchanged` result writes no history and omits both fields.
+Each `patchResults[]` row is
 `{ name, suppliedFields, changedFields, preservedFields, previousValue, currentValue }`;
 field names are `value`, `trust`, or `privacy`. It explains every submitted item,
 including a valid no-change selection. `environmentVariables` is the authoritative full
@@ -547,8 +574,9 @@ created manual or AI-recommended rule is appended last. The endpoint is a target
 identity-preserving compare-and-set reorder, not a scene replacement. The client sends the
 complete order it displayed as `expectedRuleIds` together with the desired `ruleIds`, so a
 concurrent reorder returns `409` instead of being overwritten. It returns the authoritative
-ordered collection. Changing order can change verification/simulation results, so the
-client asks the user to run them again.
+ordered collection. Submitting the displayed order unchanged returns `400` and creates no undo
+history. Changing order can change verification/simulation results, so the client asks the user to
+run them again.
 
 The database-only `rules.execution_order` column stores this behavior but is not a
 portable identifier or an authored DTO field. Standard scene files carry the same
@@ -569,16 +597,32 @@ use ordering comparisons.
 
 ### `BoardUndoResultDto`
 
-Returned by `/api/board/edits/availability`, `/undo`, and `/redo`.
+Returned by `/api/board/edits/availability`, `/undo`, `/redo`, and `/clear`.
 
 | Field | Type | Meaning |
 | :--- | :--- | :--- |
 | `applied` | `boolean` | Whether an edit was actually reversed or re-applied. False is a normal idempotent outcome, not an error |
-| `entityType` | `String?` | `RULE`, `SPECIFICATION`, or `RULE_ORDER`. Absent when nothing was applied |
+| `entityType` | `String?` | `DEVICE`, `ENVIRONMENT`, `RULE`, `SPECIFICATION`, `RULE_ORDER`, or `RULE_SET`. Absent when nothing was applied |
 | `originalOperation` | `String?` | `CREATE`, `UPDATE`, or `DELETE` — what the *original* edit did, not what this undo did. Absent when nothing was applied |
-| `reasonCode` | `String` | `UNDONE`, `REDONE`, `NOTHING_TO_APPLY`, or `AVAILABILITY_ONLY` |
-| `rules` / `specs` | `RuleDto[]` / `SpecificationDto[]` | Authoritative post-operation collections; replace local state outright. Empty for `AVAILABILITY_ONLY`, where they are **not** a board state |
+| `reasonCode` | `String` | `UNDONE`, `REDONE`, `NOTHING_TO_APPLY`, `AVAILABILITY_ONLY`, or `HISTORY_CLEARED` |
+| `nodes` / `environmentVariables` | `DeviceNodeDto[]` / `BoardEnvironmentVariableDto[]` | Authoritative post-operation collections; replace local state outright |
+| `rules` / `specs` | `RuleDto[]` / `SpecificationDto[]` | Authoritative post-operation collections; replace local state outright. All four collections are empty for `AVAILABILITY_ONLY`, where they are **not** a board state |
 | `canUndo` / `canRedo` | `boolean` | Remaining availability from the journal, reported even when nothing was applied |
+
+An applied undo always reports `canRedo=true`, and an applied redo always reports
+`canUndo=true`, because the operation just made its inverse available. `NOTHING_TO_APPLY`
+reports the requested direction as unavailable.
+
+Undo/redo validates that a journal entry describes a real transition for its recorded operation.
+An unreadable, malformed, or no-op entry returns `409 Conflict`, leaves the board unchanged, and is
+not consumed, so availability does not claim that an unverified edit was applied. Recorded rule,
+specification, and compound-device positions are exact reconstruction data: if a position cannot be
+inserted into the current ordered collection, the entry is rejected rather than clamped or appended.
+After such a conflict, the UI may offer an explicit history clear. Clearing requires confirmation,
+does not mutate Board data, and always returns both availability flags as false. The confirmation
+uses `BoardEditHistoryClearPreviewDto`: `{ impactToken, entryCount, canUndo, canRedo }`. Empty history
+has count zero and both flags false; non-empty history must have at least one available direction.
+`BoardEditHistoryClearRequestDto` is `{ impactToken }`, copied opaquely from that preview.
 
 ### `BoardLayoutDto`
 
@@ -638,10 +682,14 @@ them from a pre-migration backup or explicit legacy metadata before deleting the
 | GET | `/api/board/templates` | → `DeviceTemplateDto[]` | Side-effect-free read of the current user's type catalog; an empty catalog stays empty |
 | GET | `/api/board/templates/schema` | → JSON Schema | Returns the authoritative `backend/device-template-schema.json` for UI download/inspection |
 | POST | `/api/board/templates` | `DeviceTemplateDto` → `DeviceTemplateDto` | Create a custom template (validates `manifest` against `backend/device-template-schema.json`, then runs NuSMV-specific validation and a probe pre-check) |
-| GET | `/api/board/templates/{id}/deletion-preview` | → `DeviceTemplateDeletionResultDto` (`operation=preview`) | No-write preview with exact device-instance blockers and an opaque impact token |
-| POST | `/api/board/templates/{id}/delete` | `DeviceTemplateDeletionRequestDto { impactToken }` → `DeviceTemplateDeletionResultDto` (`operation=deleted`) | Deletes only if the preview is still current and has no blockers |
-| GET | `/api/board/templates/defaults/reset-preview` | → `DefaultTemplateResetResultDto` (`operation=preview`) | Computes exact type, device, and Environment Pool effects without writing |
-| POST | `/api/board/templates/defaults/reset` | `DefaultTemplateResetRequestDto { impactToken }` → `DefaultTemplateResetResultDto` (`operation=reset`) | Atomically applies the unchanged preview and returns authoritative final snapshots |
+| GET | `/api/board/templates/{id}/deletion-preview` | → `DeviceTemplateDeletionResultDto` (`operation=preview`) | No-write preview with exact device-instance blockers, `editHistoryEntryCount`, and an opaque impact token |
+| POST | `/api/board/templates/{id}/delete` | `DeviceTemplateDeletionRequestDto { impactToken }` → `DeviceTemplateDeletionResultDto` (`operation=deleted`) | Deletes only if the complete preview, including edit history, is still current and has no blockers; success clears undo/redo history |
+| GET | `/api/board/templates/defaults/reset-preview` | → `DefaultTemplateResetResultDto` (`operation=preview`) | Computes exact type, device, Environment Pool, and edit-history effects without writing |
+| POST | `/api/board/templates/defaults/reset` | `DefaultTemplateResetRequestDto { impactToken }` → `DefaultTemplateResetResultDto` (`operation=reset`) | Atomically applies the unchanged preview, clears undo/redo history, and returns authoritative final snapshots |
+
+Destructive-preview tokens include immutable journal row identity as well as entry payload,
+ordering, and undo/redo state. Clearing and recreating content-identical history therefore cannot
+make an already reviewed confirmation current again.
 
 ### `DeviceTemplateDto`
 
@@ -676,16 +724,19 @@ name-collision is replaced by a bundled definition: the old and new snapshots ca
 different provenance even though the variable name is unchanged.
 
 The POST accepts only the opaque `impactToken` from that preview. Under the per-user
-write lock it recomputes the preview; board/type drift returns `409` and performs no
+write lock it recomputes the preview; board/type/edit-history drift returns `409` and performs no
 write. It then deletes replaced/obsolete defaults, imports **all** bundled definitions,
 runs template and NuSMV pre-checks, validates the existing device instances, rules, and
 specifications against the new manifests, and updates the Environment Pool in one
 transaction. Existing environment values outside a new domain are reset to that
 definition's explicit default and appear as `environmentChanges`; they are not silently
 retained or dropped. Any resource, validation, import, or pre-check failure rolls back
-the complete reset.
+the complete reset. A successful reset clears the previewed undo/redo journal in that
+same transaction: prior device/environment/rule/spec inverses were recorded against the
+old manifest semantics and cannot safely be replayed under the refreshed definitions.
 
 `DefaultTemplateResetResultDto` contains `{ operation, impactToken, canApply,
+editHistoryEntryCount,
 templateChanges, affectedDevices, blockers, environmentChanges, currentTemplates,
 environmentVariables }`. `affectedDevices` carries stable `deviceId` plus the
 user-facing `deviceLabel` and `templateName`; the ordinary UI displays the labels, not
@@ -705,18 +756,23 @@ board that looks valid in the UI but cannot be consumed by NuSMV, AI recommendat
 fix logic.
 
 Template deletion is a two-step command, not a one-click `DELETE`. The preview response
-contains `{ operation, impactToken, canDelete, template, blockers, currentTemplates }`.
+contains `{ operation, impactToken, canDelete, editHistoryEntryCount, template, blockers,
+currentTemplates }`.
 Each blocker is `{ reasonCode, itemId, itemLabel, reason }`; ordinary UI shows the
 device label and localizes `DEVICE_INSTANCE_USES_TEMPLATE`, while the internal id and
 English diagnostic stay in technical detail. A blocked preview has `canDelete=false`
 and cannot be committed.
 
 The commit request accepts only the preview's opaque `impactToken`. Under the per-user
-write lock and transaction, the backend recomputes the template and blocker set. A stale
+write lock and transaction, the backend recomputes the template, blocker set, and exact
+edit journal. A stale
 token returns `409` with `reasonCode=TEMPLATE_DELETION_PREVIEW_STALE` and
 `currentPreview`; a still-in-use template returns `TEMPLATE_DELETION_BLOCKED`. Neither
 case writes. A successful result includes `deletedTemplate` and authoritative
-`currentTemplates`, which the client uses directly instead of guessing local state.
+`currentTemplates`, which the client uses directly instead of guessing local state, and
+clears undo/redo history in the same transaction. Deletion is a history boundary even
+when no current device uses the type: a redo snapshot may still contain a device whose
+semantics depend on the deleted manifest.
 Both preview and commit scope lookup by `templateId + userId`. A missing id and a
 template owned by another account therefore return the same `404`, without revealing
 whether another user's resource exists.

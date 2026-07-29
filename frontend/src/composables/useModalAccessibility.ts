@@ -85,7 +85,9 @@ export const useModalAccessibility = (
   }
 
   const handleModalKeydown = (event: KeyboardEvent) => {
-    if (!isOpen.value) return
+    // A nested trapping surface handles the event first. preventDefault propagates with the event,
+    // so respecting it keeps one Escape/Tab press from also acting on an ancestor dialog.
+    if (!isOpen.value || event.defaultPrevented) return
 
     if (event.key === 'Escape') {
       event.preventDefault()

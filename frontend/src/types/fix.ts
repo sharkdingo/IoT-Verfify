@@ -160,4 +160,6 @@ export interface FixApplyResult {
   currentRuleCount: number
   message: string
   rules: RuleForm[]
+  canUndo: boolean
+  canRedo: boolean
 }

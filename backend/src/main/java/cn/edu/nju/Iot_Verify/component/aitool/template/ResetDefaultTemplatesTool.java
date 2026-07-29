@@ -138,6 +138,7 @@ public class ResetDefaultTemplatesTool extends AbstractAiTool {
     private Map<String, Object> previewView(DefaultTemplateResetResultDto preview) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("canApply", preview.isCanApply());
+        result.put("editHistoryEntryCount", preview.getEditHistoryEntryCount());
         result.put("templateChanges", safeList(preview.getTemplateChanges()).stream()
                 .map(this::templateChangeView)
                 .toList());

@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createBoardSemanticCommit, type BoardSemanticCommitPorts } from './semanticCommit'
+import {
+  createBoardSemanticCommit,
+  reconcileBoardFocus,
+  type BoardSemanticCommitPorts
+} from './semanticCommit'
 
 const ports = (): BoardSemanticCommitPorts & { calls: string[] } => {
   const calls: string[] = []
   return {
     calls,
+    setNodes: vi.fn(() => { calls.push('setNodes') }),
+    setEnvironmentVariables: vi.fn(() => { calls.push('setEnvironmentVariables') }),
     setRules: vi.fn(() => { calls.push('setRules') }),
     setSpecs: vi.fn(() => { calls.push('setSpecs') }),
     syncRuleDerivedEdges: vi.fn(() => { calls.push('syncRuleDerivedEdges') }),
@@ -35,11 +41,16 @@ describe('board semantic commit', () => {
 
   it('replaces collections before anything derived from them is computed', () => {
     const p = ports()
-    createBoardSemanticCommit(p)({ rules: [], specs: [], availability: { canUndo: true } })
+    createBoardSemanticCommit(p)({
+      environmentVariables: [], rules: [], specs: [], availability: { canUndo: true }
+    })
 
     // Any derived value computed before the collections land would be stale.
     expect(p.calls.indexOf('setRules')).toBeLessThan(p.calls.indexOf('syncRuleDerivedEdges'))
     expect(p.calls.indexOf('setSpecs')).toBeLessThan(p.calls.indexOf('clearDanglingFocus'))
+    expect(p.calls.indexOf('setEnvironmentVariables')).toBeLessThan(
+      p.calls.indexOf('clearDanglingFocus')
+    )
   })
 
   it('always marks a displayed verdict stale, because the model changed', () => {
@@ -47,6 +58,15 @@ describe('board semantic commit', () => {
     createBoardSemanticCommit(p)({ specs: [] })
 
     expect(p.markVerificationResultStale).toHaveBeenCalledOnce()
+  })
+
+  it('does not stale a verdict when the server explicitly confirms a semantic no-op', () => {
+    const p = ports()
+    createBoardSemanticCommit(p)({ nodes: [], semanticChanged: false })
+
+    expect(p.setNodes).toHaveBeenCalledOnce()
+    expect(p.clearDanglingFocus).toHaveBeenCalledOnce()
+    expect(p.markVerificationResultStale).not.toHaveBeenCalled()
   })
 
   it('mirrors reported undo availability but never invents it', () => {
@@ -63,11 +83,31 @@ describe('board semantic commit', () => {
 
   it('hands the applied scene to the focus port, which owns the dangling check', () => {
     const p = ports()
-    const scene = { rules: [{ id: '2' } as any] }
+    const scene = { nodes: [{ id: 'device-1' } as any], rules: [{ id: '2' } as any] }
     createBoardSemanticCommit(p)(scene)
 
     // The commit does not decide what is dangling; it guarantees the port is called with the
     // authoritative post-mutation scene, so no caller has to remember this follow-up.
     expect(p.clearDanglingFocus).toHaveBeenCalledWith(scene)
+  })
+})
+
+describe('board focus reconciliation', () => {
+  const focus = { nodeId: 'device-1', ruleId: '2', specId: 'spec-3' }
+
+  it('clears only targets missing from refreshed authoritative collections', () => {
+    expect(reconcileBoardFocus(focus, {
+      nodes: [],
+      rules: [{ id: '2' } as any],
+      specs: []
+    })).toEqual({ nodeId: null, ruleId: '2', specId: null })
+  })
+
+  it('preserves focus owned by collections that were not part of a partial refresh', () => {
+    expect(reconcileBoardFocus(focus, { rules: [] })).toEqual({
+      nodeId: 'device-1',
+      ruleId: null,
+      specId: 'spec-3'
+    })
   })
 })

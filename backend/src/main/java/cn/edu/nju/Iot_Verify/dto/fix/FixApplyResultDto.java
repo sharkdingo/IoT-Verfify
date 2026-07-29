@@ -41,4 +41,10 @@ public class FixApplyResultDto {
 
     /** 落库后的完整规则列表（前端据此刷新，无需再拉一次）。 */
     private List<RuleDto> rules;
+
+    /** Post-commit server-journal availability. */
+    private boolean canUndo;
+
+    /** Post-commit server-journal availability. */
+    private boolean canRedo;
 }

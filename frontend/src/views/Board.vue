@@ -512,7 +512,11 @@ import {
   parseBoardRunTarget,
   type BoardRunTarget
 } from './board/runDeepLink'
-import { createBoardSemanticCommit } from './board/semanticCommit'
+import {
+  createBoardSemanticCommit,
+  reconcileBoardFocus,
+  type BoardSemanticScene
+} from './board/semanticCommit'
 import {
   formatRecommendationFilteredItem as formatFilteredItem,
   formatRecommendationFilteredType as formatFilteredType
@@ -928,8 +932,10 @@ const formatEnvironmentChange = (change: EnvironmentVariableChange): string => {
 
 const reportEnvironmentChanges = (
   changes: EnvironmentVariableChange[] | null | undefined,
-  bundledNames: readonly string[] = bundledBoardEnvironmentNames.value
+  bundledNames: readonly string[] = bundledBoardEnvironmentNames.value,
+  silent = false
 ) => {
+  if (silent) return
   const values = Array.isArray(changes) ? changes : []
   const added = values.filter(change => change.changeType === 'ADDED')
     .map(change => formatEnvironmentSnapshot(change.currentValue, bundledNames))
@@ -1326,6 +1332,18 @@ const rulesReordering = ref(false)
 const focusedNodeId = ref<string | null>(null)
 const focusedRuleId = ref<string | null>(null)
 const focusedSpecId = ref<string | null>(null)
+const reconcileDanglingBoardFocus = (
+  scene: Pick<BoardSemanticScene, 'nodes' | 'rules' | 'specs'>
+) => {
+  const reconciled = reconcileBoardFocus({
+    nodeId: focusedNodeId.value,
+    ruleId: focusedRuleId.value,
+    specId: focusedSpecId.value
+  }, scene)
+  focusedNodeId.value = reconciled.nodeId
+  focusedRuleId.value = reconciled.ruleId
+  focusedSpecId.value = reconciled.specId
+}
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const sceneActionsMenuRef = ref<HTMLDetailsElement | null>(null)
 const sceneActionsMenuOpen = ref(false)
@@ -2370,10 +2388,13 @@ const createDeviceInstanceAt = async (
     }
     try {
       const mutation = await boardApi.addNodes([node])
-      replaceNodesFromServer(mutation.currentNodes)
-      environmentVariables.value = mutation.environmentVariables
+      commitSemanticScene({
+        nodes: mutation.currentNodes,
+        environmentVariables: mutation.environmentVariables,
+        specs: mutation.currentSpecifications,
+        availability: mutation
+      })
       reportEnvironmentChanges(mutation.environmentChanges)
-      syncRuleDerivedEdges()
       const created = mutation.affectedDevices[0]
       notifyConfirmedCreate()
       await focusCreatedDeviceNode(created)
@@ -2384,6 +2405,7 @@ const createDeviceInstanceAt = async (
           refreshDevices(),
           refreshEnvironmentVariables()
         ])
+        await reloadUndoAvailability()
         const created = nodes.value.find(candidate => candidate.id === node.id)
         if (nodesRefreshed && environmentRefreshed && created) {
           notifyConfirmedCreate()
@@ -2522,17 +2544,21 @@ const handleNodeMovedOrResized = async (nodeId: string) => {
   await enqueueBoardMutation(async () => {
     try {
       const mutation = await boardApi.updateNodeLayout(nodeId, layout)
-      replaceNodesFromServer(mutation.currentNodes)
+      commitSemanticScene({
+        nodes: mutation.currentNodes,
+        availability: mutation,
+        semanticChanged: mutation.operation === 'updated'
+      })
       const pending = pendingNodeLayouts.get(nodeId)
       if (pending?.version === version) {
         pendingNodeLayouts.delete(nodeId)
       }
-      syncRuleDerivedEdges()
     } catch (error: any) {
       const pending = pendingNodeLayouts.get(nodeId)
       if (pending?.version !== version) return
       pendingNodeLayouts.delete(nodeId)
       const refreshed = await refreshDevices()
+      await reloadUndoAvailability()
       if (!isDefinitiveMutationRejection(error)
         && refreshed
         && deviceLayoutMatches(nodes.value.find(candidate => candidate.id === nodeId), layout)) {
@@ -2589,6 +2615,7 @@ const handleAddRule = async (request: {
         console.error('addRule error', error)
         if (!isDefinitiveMutationRejection(error) && attemptedRule) {
           const refreshed = await refreshRules()
+          await reloadUndoAvailability()
           if (refreshed && ruleExists(attemptedRule)) {
             notifyBlocked(t('app.ruleCreateOutcomeRefreshed'))
             saved = true
@@ -2762,6 +2789,7 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
     if (!isDefinitiveMutationRejection(error) && attemptedRule) {
       const refreshed = await refreshRules()
       if (!isCurrentBoardAuthScope(applyAuthScopeEpoch)) return
+      await reloadUndoAvailability()
       if (refreshed && ruleExists(attemptedRule)) {
         recommendationConfirmedApplied = true
         if (recommendationEpoch === ruleRecommendationRequestEpoch
@@ -3045,11 +3073,13 @@ const handleRenameDevice = async (
 
     try {
       const mutation = await boardApi.renameNode(nodeId, newLabel, expectedLabel)
-      replaceNodesFromServer(mutation.currentNodes)
-      environmentVariables.value = mutation.environmentVariables
-      specifications.value = mutation.currentSpecifications
+      commitSemanticScene({
+        nodes: mutation.currentNodes,
+        environmentVariables: mutation.environmentVariables,
+        specs: mutation.currentSpecifications,
+        availability: mutation
+      })
       reportEnvironmentChanges(mutation.environmentChanges)
-      syncRuleDerivedEdges()
       notifySuccess(t('app.renameSuccess'))
       return true
     } catch (error: any) {
@@ -3059,6 +3089,7 @@ const handleRenameDevice = async (
           refreshSpecifications(),
           refreshEnvironmentVariables()
         ])
+        await reloadUndoAvailability()
         const currentNode = nodes.value.find(candidate => candidate.id === nodeId)
         if (nodesRefreshed && specsRefreshed && environmentRefreshed && currentNode) {
           if (currentNode.label === newLabel) {
@@ -3081,6 +3112,7 @@ const handleRenameDevice = async (
           refreshSpecifications(),
           refreshEnvironmentVariables()
         ])
+        await reloadUndoAvailability()
         const renamed = nodes.value.find(candidate => candidate.id === nodeId && candidate.label === newLabel)
         if (nodesRefreshed && specsRefreshed && environmentRefreshed && renamed) {
           notifyBlocked(t('app.deviceRenameOutcomeRefreshed', { name: newLabel }))
@@ -3123,8 +3155,11 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
           expected: expectedRuntime,
           desired: runtimeRequest
         })
-        replaceNodesFromServer(mutation.currentNodes)
-        syncRuleDerivedEdges()
+        commitSemanticScene({
+          nodes: mutation.currentNodes,
+          availability: mutation,
+          semanticChanged: mutation.operation === 'updated'
+        })
         notifySuccess(mutation.operation === 'updated'
           ? t('app.instanceConfigSaved')
           : t('app.instanceConfigUnchanged'))
@@ -3132,6 +3167,7 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
         console.error('保存设备实例配置失败', error)
         if (error?.response?.data?.data?.reasonCode === 'DEVICE_RUNTIME_STALE') {
           const refreshed = await refreshDevices()
+          await reloadUndoAvailability()
           if (refreshed) {
             const persisted = nodes.value.find(candidate => candidate.id === nodeId)
             notifyBlocked(deviceRuntimeMatches(persisted, runtimeRequest, template)
@@ -3144,6 +3180,7 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
         }
         if (!isDefinitiveMutationRejection(error)) {
           const nodesRefreshed = await refreshDevices()
+          await reloadUndoAvailability()
           const persisted = nodes.value.find(candidate => candidate.id === nodeId)
           if (nodesRefreshed && deviceRuntimeMatches(persisted, runtimeRequest, template)) {
             notifyBlocked(t('app.deviceRuntimeOutcomeRefreshed'))
@@ -3298,20 +3335,23 @@ const forceDeleteNode = async (
     const bundledEnvironmentNamesBeforeDelete = [...bundledBoardEnvironmentNames.value]
     try {
       const mutation = await boardApi.deleteNode(nodeId, impactToken)
-      replaceNodesFromServer(mutation.currentNodes)
-      environmentVariables.value = mutation.environmentVariables
-      rules.value = mutation.currentRules
-      specifications.value = mutation.currentSpecifications
-      reportEnvironmentChanges(mutation.environmentChanges, bundledEnvironmentNamesBeforeDelete)
-      syncRuleDerivedEdges()
-      // The cascade made every recorded inverse unreachable, so the server cleared the journal.
-      notifyUndoJournalCleared()
+      commitSemanticScene({
+        nodes: mutation.currentNodes,
+        environmentVariables: mutation.environmentVariables,
+        rules: mutation.currentRules,
+        specs: mutation.currentSpecifications,
+        availability: mutation
+      })
+      // Suppress individual environment change notifications; the summary notification below
+      // already includes the environment variable count, so separate toasts would be redundant.
+      reportEnvironmentChanges(mutation.environmentChanges, bundledEnvironmentNamesBeforeDelete, true)
       return { responseConfirmed: true }
     } catch (error: any) {
       console.error('删除设备失败', error)
       const message = extractApiErrorMessage(error, t('app.deleteDeviceFailedRetry'))
       if (error?.response?.status === 409) {
         await Promise.all([refreshDevices(), refreshEnvironmentVariables(), refreshRules(), refreshSpecifications()])
+        await reloadUndoAvailability()
         notifyBlocked(message)
         return { responseConfirmed: false, stalePreview: true }
       } else if (error?.response?.status === 404) {
@@ -3664,6 +3704,7 @@ const deleteRule = async (ruleId: string) => {
       } catch (error: any) {
         console.error('删除规则失败', error)
         const refreshed = await refreshRules()
+        await reloadUndoAvailability()
         if (refreshed && !rules.value.some(rule => rule.id === ruleId)) {
           notifyBlocked(t('app.ruleDeleteOutcomeRefreshed'))
           return
@@ -3701,6 +3742,7 @@ const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
       } catch (error: any) {
         console.error('规则执行顺序保存失败', error)
         const refreshed = await refreshRules()
+        await reloadUndoAvailability()
         const currentOrder = rules.value.map(rule => String(rule.id || ''))
         if (!isDefinitiveMutationRejection(error)
           && refreshed && currentOrder.length === requestedOrder.length
@@ -3762,6 +3804,7 @@ const deleteSpecification = async (specId: string) => {
       } catch (error: any) {
         console.error('删除规约失败', error)
         const refreshed = await refreshSpecifications()
+        await reloadUndoAvailability()
         if (refreshed && !specifications.value.some(spec => spec.id === specId)) {
           notifyBlocked(t('app.specDeleteOutcomeRefreshed'))
           return
@@ -4087,11 +4130,13 @@ const replaceTemplateState = (state: {
   environmentVariables.value = state.environmentVariables
   boardDataLoadState.templates = 'ready'
   boardDataLoadState.environment = 'ready'
+  void reloadUndoAvailability()
 }
 
 const replaceTemplateCatalog = (templates: DeviceTemplate[]) => {
   deviceTemplates.value = templates
   boardDataLoadState.templates = 'ready'
+  void reloadUndoAvailability()
 }
 
 const handleAuthoritativeBoardStateUnavailable = (
@@ -4116,6 +4161,7 @@ const refreshDevices = async (): Promise<boolean> => {
   try {
     const loadedNodes = await boardApi.getNodes()
     replaceNodesFromServer(loadedNodes)
+    reconcileDanglingBoardFocus({ nodes: nodes.value })
     syncRuleDerivedEdges()
     boardDataLoadState.nodes = 'ready'
     return true
@@ -4151,12 +4197,17 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
     environmentVariables.value = snapshot.environmentVariables
     rules.value = snapshot.rules
     specifications.value = snapshot.specifications
+    reconcileDanglingBoardFocus({
+      nodes: nodes.value,
+      rules: snapshot.rules,
+      specs: snapshot.specifications
+    })
     syncRuleDerivedEdges()
     hydratedBoardAuthScopeEpoch = authScopeEpoch
     allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'ready' })
     void refreshCurrentFuzzingModelFingerprint()
-    // Undo history is server state and some commands reset it (scene replacement, device
-    // deletion, another tab's work). A wholesale reload must re-read it too, or the button
+    // Undo history is server state and some commands reset or advance it (scene replacement,
+    // automatic fixes, another tab's work). A wholesale reload must re-read it too, or the button
     // would keep offering an undo the journal no longer has. Called explicitly rather than left to
     // the isBoardDataReady watcher: that only fires because this function flips every load-state key
     // through 'loading' first, so availability would break silently if that flicker ever stopped.
@@ -4249,7 +4300,11 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
     await enqueueBoardMutation(async () => {
       try {
         const mutation = await boardApi.saveEnvironment(patches)
-        environmentVariables.value = mutation.environmentVariables
+        commitSemanticScene({
+          environmentVariables: mutation.environmentVariables,
+          availability: mutation,
+          semanticChanged: mutation.operation === 'updated'
+        })
         const changedPatches = mutation.patchResults.filter(result => result.changedFields.length > 0)
         if (changedPatches.length > 0) {
           notifySuccess(t('app.environmentPatchApplied', {
@@ -4271,12 +4326,14 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
           // template which sourced this variable. Reconcile the full semantic
           // snapshot so the inspector cannot keep ghost entries.
           const refreshed = await refreshBoardSnapshot()
+          await reloadUndoAvailability()
           if (refreshed) markVerificationResultStale()
           notifyBlocked(refreshed
             ? t('app.environmentVariableStaleRefreshed')
             : t('app.environmentVariableStaleRefreshFailed'))
         } else if (!isDefinitiveMutationRejection(e)) {
           const refreshed = await refreshBoardSnapshot()
+          await reloadUndoAvailability()
           if (refreshed) markVerificationResultStale()
           notifyBlocked(refreshed
             ? t('app.environmentSaveOutcomeRefreshed')
@@ -4433,15 +4490,25 @@ const refreshSceneForReconciliation = async (): Promise<boolean> => {
 const reportBoardReplacementDrift = async (error: any): Promise<boolean> => {
   const preview = readBoardReplacementStalePreview(error)
   if (!preview) return false
+  const previousSceneFingerprint = getCurrentRecommendationSceneFingerprint(boardAuthScopeEpoch)
   const refreshed = await refreshSceneForReconciliation()
-  if (refreshed) markVerificationResultStale()
+  const currentSceneFingerprint = refreshed
+    ? getCurrentRecommendationSceneFingerprint(boardAuthScopeEpoch)
+    : null
+  if (refreshed && (previousSceneFingerprint === null
+    || currentSceneFingerprint === null
+    || previousSceneFingerprint !== currentSceneFingerprint)) {
+    markVerificationResultStale()
+    invalidateRecommendationsForSceneChange({ notify: true })
+  }
   notifyBlocked(t(
     refreshed ? 'app.sceneReplacementChangedBeforeApply' : 'app.sceneReplacementChangedRefreshFailed',
     {
       devices: preview.deviceCount,
       variables: preview.environmentVariableCount,
       rules: preview.ruleCount,
-      specs: preview.specificationCount
+      specs: preview.specificationCount,
+      historyEntries: preview.editHistoryEntryCount
     }
   ))
   return true
@@ -4526,6 +4593,7 @@ const importScene = async (
         currentVariables: replacementPreview.environmentVariableCount,
         currentRules: replacementPreview.ruleCount,
         currentSpecs: replacementPreview.specificationCount,
+        historyEntries: replacementPreview.editHistoryEntryCount,
         devices: scene.devices.length,
         variables: scene.environmentVariables.length,
         rules: scene.rules.length,
@@ -4537,7 +4605,6 @@ const importScene = async (
     if (!isAdmitted()) return false
 
     return await enqueueBoardMutation(async () => {
-      invalidateForFullSceneReplacement()
       let saved: Awaited<ReturnType<typeof boardApi.saveBoardBatch>>
       try {
         saved = await boardApi.saveBoardBatch({
@@ -4567,6 +4634,7 @@ const importScene = async (
           return false
         }
         if (currentBoardMatchesScene(scene)) {
+          invalidateForFullSceneReplacement()
           await resetSceneSelectionAfterReplacement()
           notifyBlocked(t('app.sceneImportCurrentMatchesAfterUnconfirmedResponse'))
           return true
@@ -4575,6 +4643,7 @@ const importScene = async (
         return false
       }
 
+      invalidateForFullSceneReplacement()
       replaceNodesFromServer(saved.nodes)
       environmentVariables.value = saved.environmentVariables
       rules.value = saved.rules
@@ -4643,13 +4712,13 @@ const clearScene = async () => {
         devices: replacementPreview.deviceCount,
         variables: replacementPreview.environmentVariableCount,
         rules: replacementPreview.ruleCount,
-        specs: replacementPreview.specificationCount
+        specs: replacementPreview.specificationCount,
+        historyEntries: replacementPreview.editHistoryEntryCount
       }),
       confirmText: t('app.sceneClearConfirmAction'),
       customClass: 'scene-replacement-confirm'
     })) return
 
-    invalidateForFullSceneReplacement()
     await enqueueBoardMutation(async () => {
       try {
         const saved = await boardApi.saveBoardBatch({
@@ -4664,6 +4733,7 @@ const clearScene = async () => {
           || saved.rules.length > 0 || saved.specs.length > 0) {
           throw new Error('Scene clear response still contained board items')
         }
+        invalidateForFullSceneReplacement()
         replaceNodesFromServer(saved.nodes)
         environmentVariables.value = saved.environmentVariables
         rules.value = saved.rules
@@ -4694,6 +4764,7 @@ const clearScene = async () => {
           && rules.value.length === 0
           && specifications.value.length === 0
         if (isEmpty) {
+          invalidateForFullSceneReplacement()
           await resetSceneSelectionAfterReplacement()
           notifyBlocked(t('app.sceneClearCurrentEmptyAfterUnconfirmedResponse'))
         } else {
@@ -4754,6 +4825,7 @@ const refreshRules = async (): Promise<boolean> => {
     // 只获取规则列表
     const rulesData = await boardApi.getRules()
     rules.value = rulesData
+    reconcileDanglingBoardFocus({ rules: rulesData })
     // 动态生成 edges
     syncRuleDerivedEdges()
     boardDataLoadState.rules = 'ready'
@@ -4769,7 +4841,9 @@ const refreshRules = async (): Promise<boolean> => {
 const refreshSpecifications = async (): Promise<boolean> => {
   boardDataLoadState.specs = 'loading'
   try {
-    specifications.value = await boardApi.getSpecs()
+    const specsData = await boardApi.getSpecs()
+    specifications.value = specsData
+    reconcileDanglingBoardFocus({ specs: specsData })
     boardDataLoadState.specs = 'ready'
     return true
   } catch(e) {
@@ -5375,8 +5449,12 @@ const handleCreateDevice = async (data: {
       }
       requestedNode = node
       const mutation = await boardApi.addNodes([node])
-      replaceNodesFromServer(mutation.currentNodes)
-      environmentVariables.value = mutation.environmentVariables
+      commitSemanticScene({
+        nodes: mutation.currentNodes,
+        environmentVariables: mutation.environmentVariables,
+        specs: mutation.currentSpecifications,
+        availability: mutation
+      })
       reportEnvironmentChanges(mutation.environmentChanges)
       const created = mutation.affectedDevices[0]
       await focusCreatedDeviceNode(created)
@@ -5388,6 +5466,7 @@ const handleCreateDevice = async (data: {
           refreshDevices(),
           refreshEnvironmentVariables()
         ])
+        await reloadUndoAvailability()
         const created = nodes.value.find(candidate => candidate.id === requestedNode?.id)
         if (nodesRefreshed && environmentRefreshed && created) {
           await focusCreatedDeviceNode(created)
@@ -5475,10 +5554,13 @@ const handleCreateDevices = async (data: {
 
     try {
       const mutation = await boardApi.addNodes(createdNodes, data.environmentVariables || [])
-      replaceNodesFromServer(mutation.currentNodes)
-      environmentVariables.value = mutation.environmentVariables
+      commitSemanticScene({
+        nodes: mutation.currentNodes,
+        environmentVariables: mutation.environmentVariables,
+        specs: mutation.currentSpecifications,
+        availability: mutation
+      })
       reportEnvironmentChanges(mutation.environmentChanges)
-      syncRuleDerivedEdges()
       const lastCreated = mutation.affectedDevices[mutation.affectedDevices.length - 1]
       await focusCreatedDeviceNode(lastCreated)
       notifySuccess(t('app.devicesAddedWithCount', { count: createdNodes.length }))
@@ -5490,6 +5572,7 @@ const handleCreateDevices = async (data: {
           refreshDevices(),
           refreshEnvironmentVariables()
         ])
+        await reloadUndoAvailability()
         const allPresent = createdNodes.length > 0
           && createdNodes.every(created => nodes.value.some(candidate => candidate.id === created.id))
         if (nodesRefreshed && environmentRefreshed && allPresent) {
@@ -5581,6 +5664,7 @@ const handleAddSpec = async (data: {
         console.error('[Board] Failed to add specification:', error)
         if (!isDefinitiveMutationRejection(error) && attemptedSpec) {
           const refreshed = await refreshSpecifications()
+          await reloadUndoAvailability()
           if (refreshed && specifications.value.some(spec => isSameSpecification(spec, attemptedSpec!))) {
             notifyBlocked(t('app.specCreateOutcomeRefreshed'))
             saved = true
@@ -5735,9 +5819,7 @@ onBeforeUnmount(() => {
   activeNodeLayoutInteractions.clear()
 })
 
-const refreshDevicesFromChat = async () => enqueueBoardMutation(() => refreshDevices())
-const refreshEnvironmentFromChat = async () => enqueueBoardMutation(() => refreshEnvironmentVariables())
-// An assistant rule/spec edit goes through the journal-recording write path, so it changes undo
+// Assistant device/environment/rule/spec edits go through journal-recording write paths, so they change undo
 // availability — but these refreshes only reload one collection, and the `isBoardDataReady` watcher
 // that reloads availability fires on the *aggregate* state changing. When the other keys are already
 // 'ready', that flag never leaves `true`, the watcher never runs, and the affordance silently depends
@@ -5747,6 +5829,16 @@ const refreshEnvironmentFromChat = async () => enqueueBoardMutation(() => refres
 // `const` does not hoist.
 let reloadUndoAvailability: () => Promise<void> = async () => undefined
 
+const refreshDevicesFromChat = async () => enqueueBoardMutation(async () => {
+  const ok = await refreshDevices()
+  await reloadUndoAvailability()
+  return ok
+})
+const refreshEnvironmentFromChat = async () => enqueueBoardMutation(async () => {
+  const ok = await refreshEnvironmentVariables()
+  await reloadUndoAvailability()
+  return ok
+})
 const refreshRulesFromChat = async () => enqueueBoardMutation(async () => {
   const ok = await refreshRules()
   await reloadUndoAvailability()
@@ -5757,7 +5849,11 @@ const refreshSpecificationsFromChat = async () => enqueueBoardMutation(async () 
   await reloadUndoAvailability()
   return ok
 })
-const refreshTemplatesFromChat = async () => enqueueBoardMutation(() => refreshDeviceTemplates())
+const refreshTemplatesFromChat = async () => enqueueBoardMutation(async () => {
+  const ok = await refreshDeviceTemplates()
+  await reloadUndoAvailability()
+  return ok
+})
 const refreshRunHistoryFromChat = async () => refreshRunHistory()
 const refreshAllBoardStateFromChat = async () => enqueueBoardMutation(() => refreshAllBoardState())
 
@@ -5831,29 +5927,22 @@ const markVerificationResultStale = () => {
 }
 
 /**
- * Single owner of everything a rule/specification mutation owes the rest of the board.
+ * Single owner of everything a semantic device/rule/specification mutation owes the board.
  *
  * Every semantic mutation calls this instead of hand-assembling the same four follow-ups, which
  * is what previously let rule reorder skip undo availability and undo skip the canvas edges.
  * See `board/semanticCommit.ts` for the ordering guarantee.
  */
 const commitSemanticScene = createBoardSemanticCommit({
+  setNodes: next => { replaceNodesFromServer(next) },
+  setEnvironmentVariables: next => { environmentVariables.value = next },
   setRules: next => { rules.value = next },
   setSpecs: next => { specifications.value = next },
   syncRuleDerivedEdges: () => syncRuleDerivedEdges(),
   markVerificationResultStale: () => markVerificationResultStale(),
   // Declared later in setup; both are only reached from async handlers, never during setup.
   syncUndoAvailability: availability => syncBoardUndoAvailability(availability),
-  clearDanglingFocus: scene => {
-    if (scene.rules && focusedRuleId.value
-      && !scene.rules.some(rule => String(rule.id || '') === focusedRuleId.value)) {
-      focusedRuleId.value = null
-    }
-    if (scene.specs && focusedSpecId.value
-      && !scene.specs.some(spec => spec.id === focusedSpecId.value)) {
-      focusedSpecId.value = null
-    }
-  }
+  clearDanglingFocus: scene => reconcileDanglingBoardFocus(scene)
 })
 
 type RunSubmission<T> = { request: T; signature: string; taskId?: number }
@@ -7274,11 +7363,8 @@ const invalidateForFullSceneReplacement = () => {
 }
 
 /**
- * Some commands make every recorded inverse unreachable, so the server drops the whole undo
- * journal: scene replace/clear (they rewrite all collections) and device deletion (it cascades
- * into the rules and specs referencing that device). The journal is the authority for what is
- * reversible, so those commands must re-read it — otherwise the button keeps offering an undo that
- * would only report "nothing to undo".
+ * Whole-scene replacement/clear can also replace template snapshots, so the server drops the
+ * journal. The journal is authoritative; re-read it so the UI cannot offer an unreachable undo.
  */
 const notifyUndoJournalCleared = () => {
   // The server discarded the whole journal, so nothing is reversible — applied locally at once
@@ -7506,6 +7592,7 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
         console.error('Failed to save specification:', error)
         if (!isDefinitiveMutationRejection(error)) {
           const refreshed = await refreshSpecifications()
+          await reloadUndoAvailability()
           if (refreshed && specifications.value.some(spec => isSameSpecification(spec, newSpec))) {
             recommendationConfirmedApplied = true
             if (recommendationEpoch === specRecommendationRequestEpoch) {
@@ -10340,10 +10427,9 @@ const cancelAsyncFuzzing = async () => {
 let pendingFixRefreshPromise: Promise<boolean> | null = null
 
 const handleFixApplied = (result: FixApplyResult) => {
-  // Applying a fix rewrites the whole rule collection server-side, which discards the edit journal
-  // (its inverse is not a single record). Without this the button stays enabled against a journal that
-  // no longer exists, and pressing it can only answer "nothing to undo".
-  notifyUndoJournalCleared()
+  // A fix is one user action even when it edits/removes several rules. The server journals the
+  // complete ordered rule collection, so availability comes from the committed response.
+  syncBoardUndoAvailability(result)
   const refreshPromise = enqueueBoardMutation(async () => {
     const refreshed = await refreshRules()
     if (refreshed) return true
@@ -10369,6 +10455,7 @@ const handleFixOutcomeUncertain = async () => {
   pendingFixRefreshPromise = refreshPromise
   try {
     const refreshed = await refreshPromise
+    await reloadUndoAvailability()
     notifyBlocked(refreshed
       ? t('app.fixApplyOutcomeUnconfirmedAfterRefresh')
       : t('app.fixApplyOutcomeUnknownRefreshFailed'))
@@ -10541,7 +10628,8 @@ const isAnimationLocked = computed(() =>
 const isModelPlaybackActive = isAnimationLocked
 
 /* ===== Board edit undo/redo =====
- * Reverses a persisted *board edit* (rule/specification create or delete). Deliberately separate
+ * Reverses one persisted user action: device edits, Environment Pool edits, rule/spec edits,
+ * rule reorder, or automatic-fix apply. Deliberately separate
  * from every other "go back" affordance on this screen: browser Back/Forward and deep links move
  * between run surfaces, dialog close/dismiss hides a surface, and run cancellation stops a job —
  * none of those touch the edit journal, and undo does not touch them.
@@ -10557,6 +10645,8 @@ const isBoardUndoBlocked = () => isModelPlaybackActive.value
   || !isBoardDataReady.value
   || openModalDepth.value > 0
 
+let offerClearUnusableUndoHistory: () => Promise<void> = async () => undefined
+
 const {
   canUndo: canUndoBoardEdit,
   canRedo: canRedoBoardEdit,
@@ -10569,6 +10659,8 @@ const {
   // An undo *is* a semantic board mutation, so it owes the same follow-ups as any other and goes
   // through the same owner. `canUndo`/`canRedo` come from the response, not from a local guess.
   applyResult: result => commitSemanticScene({
+    nodes: result.nodes,
+    environmentVariables: result.environmentVariables,
     rules: result.rules,
     specs: result.specs,
     availability: result
@@ -10580,6 +10672,9 @@ const {
     admissionGuard: () => !isBoardUndoBlocked(),
     trackSemanticChange: false
   }),
+  // A rejected response does not prove the mutation failed before commit. Reconcile in the same
+  // queue so no later board mutation can race the authoritative refresh.
+  reconcile: () => enqueueBoardMutation(refreshBoardSnapshot),
   // An undo *is* a semantic scene change, so it owes recommendation invalidation too.
   // `commitSemanticScene` owns staleness but not this — the mutation queue's own
   // `onSemanticChange` is skipped by `trackSemanticChange: false`.
@@ -10587,7 +10682,7 @@ const {
   isIgnorableError: error => isPollingAbortedError(error)
     || error instanceof BoardMutationAdmissionCancelledError,
   isBlocked: isBoardUndoBlocked,
-  report: (reasonCode, direction, error) => {
+  report: (reasonCode, direction, error, reconciled) => {
     if (reasonCode === 'blocked') {
       notifyBlocked(t('app.boardUndoBlocked'))
       return
@@ -10599,15 +10694,63 @@ const {
       return
     }
     if (reasonCode === 'conflict') {
-      // The board is unchanged; reload so the user sees the state that actually won.
-      notifyBlocked(t('app.boardUndoConflict'))
-      void refreshBoardSnapshot()
+      notifyBlocked(t(reconciled
+        ? 'app.boardUndoConflict'
+        : 'app.boardUndoConflictRefreshFailed'))
+      void offerClearUnusableUndoHistory()
       return
     }
     console.error('Board edit undo failed:', error)
-    notifyError(t('app.boardUndoFailed'))
+    notifyBlocked(t(reconciled
+      ? 'app.boardUndoOutcomeRefreshed'
+      : 'app.boardUndoOutcomeUnknownRefreshFailed'))
   }
 })
+
+let clearUndoHistoryConfirmationPending = false
+offerClearUnusableUndoHistory = async () => {
+  if (clearUndoHistoryConfirmationPending) return
+  clearUndoHistoryConfirmationPending = true
+  try {
+    const preview = await enqueueBoardMutation(
+      () => boardApi.previewBoardEditHistoryClear(),
+      {
+        admissionGuard: () => !isBoardUndoBlocked(),
+        trackSemanticChange: false
+      }
+    )
+    if (preview.entryCount === 0) {
+      syncBoardUndoAvailability(preview)
+      notifyInfo(t('app.boardUndoHistoryAlreadyEmpty'))
+      return
+    }
+    if (!await confirmDestructive({
+      title: t('app.boardUndoClearHistoryTitle'),
+      message: t('app.boardUndoClearHistoryMessage', { count: preview.entryCount }),
+      confirmText: t('app.boardUndoClearHistoryAction')
+    })) return
+    const availability = await enqueueBoardMutation(
+      () => boardApi.clearBoardEditHistory(preview.impactToken),
+      {
+        admissionGuard: () => !isBoardUndoBlocked(),
+        trackSemanticChange: false
+      }
+    )
+    syncBoardUndoAvailability(availability)
+    notifyInfo(t('app.boardUndoHistoryCleared'))
+  } catch (error) {
+    if (isPollingAbortedError(error)
+      || error instanceof BoardMutationAdmissionCancelledError) return
+    await loadBoardUndoAvailability()
+    if ((error as { response?: { status?: number } })?.response?.status === 409) {
+      notifyBlocked(t('app.boardUndoClearHistoryStale'))
+      return
+    }
+    notifyError(extractApiErrorMessage(error, t('app.boardUndoClearHistoryFailed')))
+  } finally {
+    clearUndoHistoryConfirmationPending = false
+  }
+}
 
 // Bind the late reference the assistant refresh helpers above call, now that it exists.
 reloadUndoAvailability = loadBoardUndoAvailability
@@ -12892,6 +13035,7 @@ const counterexampleTraceHelpText = computed(() => {
       @add-spec="handleAddSpec"
       @replace-template-catalog="replaceTemplateCatalog"
       @replace-template-state="replaceTemplateState"
+      @edit-history-cleared="notifyUndoJournalCleared"
       @authoritative-state-unavailable="handleAuthoritativeBoardStateUnavailable"
       @update:collapsed="handleControlCollapsedUpdate"
       @update:active-section="handleControlActiveSectionUpdate"

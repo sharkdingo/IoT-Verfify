@@ -36,7 +36,9 @@ const completeDeviceCreation = () => ({
   environmentChanges: [],
   currentSpecifications: [],
   updatedSpecificationCount: 0,
-  currentCount: 1
+  currentCount: 1,
+  canUndo: true,
+  canRedo: false
 })
 
 const completeDeviceRename = (overrides: Record<string, unknown> = {}) => {
@@ -51,6 +53,8 @@ const completeDeviceRename = (overrides: Record<string, unknown> = {}) => {
     previousLabel: 'Hall sensor',
     updatedSpecificationCount: 0,
     currentCount: 1,
+    canUndo: true,
+    canRedo: false,
     ...overrides
   }
 }
@@ -121,7 +125,50 @@ const completeDeviceDeletion = (operation: 'preview' | 'deleted') => ({
     currentModelTokenSource: 'UNKNOWN'
   }],
   currentRules: operation === 'preview' ? [deletedRule] : [],
-  currentSpecifications: operation === 'preview' ? [deletedSpecification] : []
+  currentSpecifications: operation === 'preview' ? [deletedSpecification] : [],
+  ...(operation === 'deleted' ? { canUndo: true, canRedo: false } : {})
+})
+
+const completeBoardUndo = (overrides: Record<string, unknown> = {}) => ({
+  applied: true,
+  entityType: 'DEVICE',
+  originalOperation: 'DELETE',
+  reasonCode: 'UNDONE',
+  nodes: [device],
+  environmentVariables: [environmentVariable],
+  rules: [deletedRule],
+  specs: [deletedSpecification],
+  canUndo: false,
+  canRedo: true,
+  ...overrides
+})
+
+const completeBoardUndoAvailability = (overrides: Record<string, unknown> = {}) => ({
+  applied: false,
+  reasonCode: 'AVAILABILITY_ONLY',
+  nodes: [],
+  environmentVariables: [],
+  rules: [],
+  specs: [],
+  canUndo: true,
+  canRedo: false,
+  ...overrides
+})
+
+const completeClearedBoardUndoHistory = (overrides: Record<string, unknown> = {}) =>
+  completeBoardUndoAvailability({
+    reasonCode: 'HISTORY_CLEARED',
+    canUndo: false,
+    canRedo: false,
+    ...overrides
+  })
+
+const completeBoardEditHistoryClearPreview = (overrides: Record<string, unknown> = {}) => ({
+  impactToken: 'a'.repeat(64),
+  entryCount: 2,
+  canUndo: true,
+  canRedo: true,
+  ...overrides
 })
 
 const template = {
@@ -135,6 +182,7 @@ const completeTemplateDeletion = (operation: 'preview' | 'deleted') => ({
   operation,
   impactToken: 'template-delete-impact-token',
   canDelete: true,
+  editHistoryEntryCount: 2,
   template,
   ...(operation === 'deleted' ? { deletedTemplate: template } : {}),
   blockers: [],
@@ -145,6 +193,7 @@ const completeTemplateResetPreview = () => ({
   operation: 'preview',
   impactToken: 'reset-impact-token',
   canApply: true,
+  editHistoryEntryCount: 3,
   templateChanges: [{
     templateName: 'Sensor',
     changeType: 'REFRESH_DEFAULT',
@@ -169,6 +218,27 @@ describe('board mutation response contracts', () => {
 
     expect(result.affectedDevices).toEqual([device])
     expect(result.currentNodes).toEqual([device])
+  })
+
+  it('rejects device creation when undo availability is missing', async () => {
+    const incomplete = completeDeviceCreation() as Record<string, unknown>
+    delete incomplete.canUndo
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(incomplete))
+
+    await expect(boardApi.addNodes([device])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  it('rejects device creation that is reported as not undoable', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeDeviceCreation(),
+      canUndo: false
+    }))
+
+    await expect(boardApi.addNodes([device])).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
   })
 
   it('rejects a successful HTTP response that omits environment effects', async () => {
@@ -246,7 +316,9 @@ describe('board mutation response contracts', () => {
       previousDevice: device,
       currentDevice: moved,
       currentNodes: [moved],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }
     vi.mocked(http.put).mockResolvedValue(resultEnvelope(response))
 
@@ -323,7 +395,9 @@ describe('board mutation response contracts', () => {
       previousDevice: device,
       currentDevice: configured,
       currentNodes: [configured],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }
     vi.mocked(http.put).mockResolvedValue(resultEnvelope(response))
 
@@ -366,7 +440,9 @@ describe('board mutation response contracts', () => {
       previousDevice: device,
       currentDevice: configured,
       currentNodes: [configured],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }
     vi.mocked(http.put).mockResolvedValue(resultEnvelope(response))
 
@@ -438,6 +514,29 @@ describe('board mutation response contracts', () => {
       operation: 'deleted',
       currentNodes: []
     }))
+  })
+
+  it('rejects a committed device deletion when undo availability is missing', async () => {
+    const incomplete = completeDeviceDeletion('deleted') as Record<string, unknown>
+    delete incomplete.canRedo
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(incomplete))
+
+    await expect(boardApi.deleteNode(
+      device.id,
+      'device-delete-impact-token'
+    )).rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
+  })
+
+  it('rejects a committed device deletion that retains stale redo history', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      ...completeDeviceDeletion('deleted'),
+      canRedo: true
+    }))
+
+    await expect(boardApi.deleteNode(
+      device.id,
+      'device-delete-impact-token'
+    )).rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
   })
 
   it.each([
@@ -703,7 +802,8 @@ describe('board mutation response contracts', () => {
       deviceCount: 2,
       environmentVariableCount: 1,
       ruleCount: 3,
-      specificationCount: 4
+      specificationCount: 4,
+      editHistoryEntryCount: 5
     }
     vi.mocked(http.get).mockResolvedValue(resultEnvelope(preview))
 
@@ -763,7 +863,9 @@ describe('board mutation response contracts', () => {
       operation: 'created',
       affectedItem: specification,
       currentItems: [specification],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }))
 
     await boardApi.addSpec(specification)
@@ -783,12 +885,28 @@ describe('board mutation response contracts', () => {
     })
   })
 
+  it('rejects a reversible specification mutation without undo availability', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      operation: 'created',
+      affectedItem: deletedSpecification,
+      currentItems: [deletedSpecification],
+      currentCount: 1,
+      canUndo: true
+    }))
+
+    await expect(boardApi.addSpec(deletedSpecification)).rejects.toMatchObject({
+      code: BOARD_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
   it('rejects a specification mutation whose affected item is malformed', async () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({
       operation: 'created',
       affectedItem: {},
       currentItems: [deletedSpecification],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }))
 
     await expect(boardApi.addSpec({
@@ -809,7 +927,9 @@ describe('board mutation response contracts', () => {
       operation: 'created',
       affectedItem: { ...deletedSpecification, id: 'spec-2' },
       currentItems: [{ ...deletedSpecification, id: 'spec-2' }],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }))
 
     await expect(boardApi.addSpec(deletedSpecification)).rejects.toMatchObject({
@@ -822,7 +942,9 @@ describe('board mutation response contracts', () => {
       operation: 'deleted',
       affectedItem: {},
       currentItems: [deletedRule],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }))
 
     await expect(boardApi.removeRule(confirmedRule)).rejects.toMatchObject({
@@ -835,7 +957,9 @@ describe('board mutation response contracts', () => {
       operation: 'deleted',
       affectedItem: { ...deletedRule, id: 8 },
       currentItems: [],
-      currentCount: 0
+      currentCount: 0,
+      canUndo: true,
+      canRedo: false
     }))
 
     await expect(boardApi.removeRule(confirmedRule)).rejects.toMatchObject({
@@ -878,54 +1002,208 @@ describe('board mutation response contracts', () => {
     })
   })
 
+  it('rejects a rule reorder that omits authoritative undo availability', async () => {
+    const secondRule = { ...deletedRule, id: 8, ruleString: 'Second rule' }
+    vi.mocked(http.put).mockResolvedValue(resultEnvelope({
+      operation: 'reordered',
+      affectedItem: null,
+      currentItems: [secondRule, deletedRule],
+      currentCount: 2,
+      canUndo: true
+    }))
+
+    await expect(boardApi.reorderRules(['7', '8'], ['8', '7']))
+      .rejects.toMatchObject({ code: BOARD_RESPONSE_INCOMPLETE_CODE })
+  })
+
   it('validates the rules an undo returns as strictly as a normal read', async () => {
     // Specs were validated here but rules were not, though the same body from GET /board/rules is
     // rejected: `fromBackendRuleDto` would silently yield `toId: ''` and `id: ''`, writing a rule with
     // no target into board state and into the canvas edge projection.
-    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
-      applied: true,
-      reasonCode: 'UNDONE',
-      canUndo: false,
-      canRedo: true,
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo({
       rules: [{ id: 7, userId: 1, conditions: [], ruleString: 'r' }],
       specs: []
-    }))
+    })))
 
     await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow()
+  })
+
+  it('accepts and maps all authoritative collections from a device undo', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo()))
+
+    await expect(boardApi.applyBoardEditUndo('undo')).resolves.toMatchObject({
+      applied: true,
+      entityType: 'DEVICE',
+      nodes: [device],
+      environmentVariables: [environmentVariable],
+      rules: [expect.objectContaining({ id: '7', toId: device.id })],
+      specs: [deletedSpecification]
+    })
+  })
+
+  it('accepts a side-effect-free availability payload', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(completeBoardUndoAvailability()))
+
+    await expect(boardApi.getBoardEditAvailability()).resolves.toEqual({
+      canUndo: true,
+      canRedo: false
+    })
+  })
+
+  it('clears only edit history and returns disabled availability', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeClearedBoardUndoHistory()))
+
+    await expect(boardApi.clearBoardEditHistory('a'.repeat(64))).resolves.toEqual({
+      canUndo: false,
+      canRedo: false
+    })
+    expect(http.post).toHaveBeenCalledWith('/board/edits/clear', {
+      impactToken: 'a'.repeat(64)
+    })
+  })
+
+  it('validates the exact undo-history impact before confirmation', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(
+      completeBoardEditHistoryClearPreview()
+    ))
+
+    await expect(boardApi.previewBoardEditHistoryClear()).resolves.toEqual(
+      completeBoardEditHistoryClearPreview()
+    )
+    expect(http.get).toHaveBeenCalledWith('/board/edits/clear-preview')
+  })
+
+  it.each([
+    ['a malformed token', { impactToken: 'not-a-token' }],
+    ['a fractional count', { entryCount: 1.5 }],
+    ['empty history with available undo', { entryCount: 0, canUndo: true, canRedo: false }],
+    ['non-empty history with no direction available', {
+      entryCount: 1, canUndo: false, canRedo: false
+    }]
+  ])('rejects a clear-history preview with %s', async (_label, overrides) => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(
+      completeBoardEditHistoryClearPreview(overrides)
+    ))
+
+    await expect(boardApi.previewBoardEditHistoryClear()).rejects.toThrow()
+  })
+
+  it.each([
+    ['an available undo', { canUndo: true }],
+    ['an available redo', { canRedo: true }],
+    ['board state', { nodes: [device] }],
+    ['edit metadata', { entityType: 'DEVICE', originalOperation: 'UPDATE' }]
+  ])('rejects cleared-history payloads that retain %s', async (_label, overrides) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(
+      completeClearedBoardUndoHistory(overrides)
+    ))
+
+    await expect(boardApi.clearBoardEditHistory('a'.repeat(64))).rejects.toThrow()
+  })
+
+  it.each([
+    ['duplicate nodes', { nodes: [device, { ...device }] }],
+    ['duplicate environment variables', {
+      environmentVariables: [environmentVariable, { ...environmentVariable }]
+    }],
+    ['duplicate specifications', {
+      specs: [deletedSpecification, { ...deletedSpecification }]
+    }]
+  ])('rejects an undo result with %s', async (_label, overrides) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo(overrides)))
+
+    await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow()
+  })
+
+  it.each([
+    ['an applied result with a non-applied reason', {
+      reasonCode: 'NOTHING_TO_APPLY'
+    }],
+    ['an applied undo without entity metadata', {
+      entityType: null,
+      originalOperation: null
+    }],
+    ['an undo result for the wrong direction', {
+      reasonCode: 'REDONE'
+    }]
+  ])('rejects %s', async (_label, overrides) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo(overrides)))
+
+    await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow()
+  })
+
+  it.each([
+    ['undo', { canRedo: false }],
+    ['redo', { reasonCode: 'REDONE', canUndo: false, canRedo: true }]
+  ] as const)('rejects an applied %s that does not make its inverse available', async (
+    direction,
+    overrides
+  ) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo(overrides)))
+
+    await expect(boardApi.applyBoardEditUndo(direction)).rejects.toThrow(/inverse available/)
+  })
+
+  it.each([
+    ['undo', { applied: false, reasonCode: 'NOTHING_TO_APPLY', canUndo: true, canRedo: false }],
+    ['redo', { applied: false, reasonCode: 'NOTHING_TO_APPLY', canUndo: false, canRedo: true }]
+  ] as const)('rejects NOTHING_TO_APPLY when %s is still reported available', async (
+    direction,
+    overrides
+  ) => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo(overrides)))
+
+    await expect(boardApi.applyBoardEditUndo(direction)).rejects.toThrow(/NOTHING_TO_APPLY/)
+  })
+
+  it('rejects availability payloads that claim to have applied an edit', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(completeBoardUndoAvailability({
+      applied: true
+    })))
+
+    await expect(boardApi.getBoardEditAvailability()).rejects.toThrow()
+  })
+
+  it('rejects availability payloads that masquerade non-empty collections as board state', async () => {
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope(completeBoardUndoAvailability({
+      nodes: [device]
+    })))
+
+    await expect(boardApi.getBoardEditAvailability()).rejects.toThrow(/must be empty/)
+  })
+
+  it('rejects an unsupported entity and operation pairing', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo({
+      entityType: 'RULE',
+      originalOperation: 'UPDATE'
+    })))
+
+    await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow(/supported reversible edit/)
   })
 
   it('rejects an undo result whose reasonCode is missing or unknown', async () => {
     // Defaulting an absent code to NOTHING_TO_APPLY produced `applied: true` beside a code
     // contradicting it, and an unknown string became a typed value that lies — a consumer
     // switching on it silently takes no branch.
-    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
-      applied: true,
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo({
       canUndo: false,
       canRedo: true,
-      rules: [],
-      specs: []
-    }))
+      reasonCode: undefined
+    })))
     await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow(/reasonCode/)
 
-    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
-      applied: true,
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo({
       reasonCode: 'REVERTED',
       canUndo: false,
-      canRedo: true,
-      rules: [],
-      specs: []
-    }))
+      canRedo: true
+    })))
     await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow(/reasonCode/)
 
-    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
-      applied: true,
-      reasonCode: 'UNDONE',
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope(completeBoardUndo({
       entityType: 'NOT_A_TYPE',
       canUndo: false,
-      canRedo: true,
-      rules: [],
-      specs: []
-    }))
+      canRedo: true
+    })))
     await expect(boardApi.applyBoardEditUndo('undo')).rejects.toThrow(/entityType/)
   })
 
@@ -934,7 +1212,9 @@ describe('board mutation response contracts', () => {
       operation: 'deleted',
       affectedItem: deletedSpecification,
       currentItems: [],
-      currentCount: 0
+      currentCount: 0,
+      canUndo: true,
+      canRedo: false
     }))
 
     await expect(boardApi.removeSpec(deletedSpecification)).resolves.toMatchObject({
@@ -972,7 +1252,9 @@ describe('board mutation response contracts', () => {
         previousValue: before,
         currentValue: after
       }],
-      currentCount: 1
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
     }
     vi.mocked(http.post).mockResolvedValue(resultEnvelope(response))
 
@@ -1208,6 +1490,8 @@ describe('board mutation response contracts', () => {
   it.each([
     ['the wrong operation', { operation: 'deleted' }],
     ['a blank impact token', { impactToken: ' ' }],
+    ['a missing edit-history count', { editHistoryEntryCount: undefined }],
+    ['a negative edit-history count', { editHistoryEntryCount: -1 }],
     ['a different target identity', {
       template: { ...template, id: 5 },
       currentTemplates: [{ ...template, id: 5 }]
@@ -1304,6 +1588,20 @@ describe('board mutation response contracts', () => {
       code: BOARD_RESPONSE_INCOMPLETE_CODE
     })
   })
+
+  it.each([undefined, -1, 1.5])(
+    'rejects a default-device-type reset preview with invalid edit-history count %s',
+    async (editHistoryEntryCount) => {
+      vi.mocked(http.get).mockResolvedValue(resultEnvelope({
+        ...completeTemplateResetPreview(),
+        editHistoryEntryCount
+      }))
+
+      await expect(boardApi.previewDefaultTemplateReset()).rejects.toMatchObject({
+        code: BOARD_RESPONSE_INCOMPLETE_CODE
+      })
+    }
+  )
 
   it('accepts a complete default-device-type reset preview', async () => {
     vi.mocked(http.get).mockResolvedValue(resultEnvelope(completeTemplateResetPreview()))
@@ -1451,6 +1749,8 @@ describe('board mutation response contracts', () => {
       previousRuleCount: 2,
       currentRuleCount: 1,
       message: 'Recomputed, verified, and removed one rule.',
+      canUndo: true,
+      canRedo: false,
       rules: [{
         id: 9,
         conditions: [{

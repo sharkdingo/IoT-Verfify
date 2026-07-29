@@ -23,4 +23,8 @@ public class DeviceUpdateResultDto {
     @Builder.Default
     private List<DeviceNodeDto> currentNodes = List.of();
     private int currentCount;
+    /** Present only when an actual update was committed and journalled. */
+    private Boolean canUndo;
+    /** Present only when an actual update was committed and journalled. */
+    private Boolean canRedo;
 }

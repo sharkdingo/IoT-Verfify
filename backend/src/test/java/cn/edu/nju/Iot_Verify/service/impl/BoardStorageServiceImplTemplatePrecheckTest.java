@@ -28,6 +28,9 @@ import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateNuSmvValidator;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.service.board.BoardEditHistoryState;
+import cn.edu.nju.Iot_Verify.service.board.BoardEditJournal;
+import cn.edu.nju.Iot_Verify.service.board.BoardUndoAvailability;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceTemplateMapper;
@@ -96,6 +99,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     private TransactionTemplate transactionTemplate;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private BoardEditJournal editJournal;
 
     private BoardStorageServiceImpl service;
 
@@ -126,7 +131,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 deviceTemplateMapper,
                 deviceTemplateSchemaValidator,
                 userRepository,
-                null
+                editJournal
         );
         lenient().when(userRepository.findByIdForUpdate(anyLong())).thenReturn(java.util.Optional.of(new UserPo()));
         lenient().when(userRepository.findById(anyLong())).thenReturn(java.util.Optional.of(new UserPo()));
@@ -134,6 +139,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 .thenAnswer(inv -> JsonUtils.toJson(inv.getArgument(0)));
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv ->
                 ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
+        lenient().when(editJournal.historyState(anyLong()))
+                .thenReturn(historyState(0, "0"));
     }
 
     @Test
@@ -172,8 +179,67 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         assertEquals(DefaultTemplateResetChangeDto.ChangeType.REFRESH_DEFAULT,
                 preview.getTemplateChanges().get(0).getChangeType());
         assertFalse(preview.getTemplateChanges().get(0).isSemanticsChanged());
+        assertEquals(0, preview.getEditHistoryEntryCount());
         verify(deviceTemplateRepo, never()).deleteDefaultsForReset(anyLong(), anyList());
         verify(deviceTemplateRepo, never()).saveAllAndFlush(anyList());
+    }
+
+    @Test
+    void resetDefaultTemplates_rejectsWhenOnlyUndoHistoryChanged() {
+        DeviceTemplatePo bundled = templatePo("Sensor", """
+                {"Name":"Sensor","Modes":[],"InitState":"","WorkingStates":[],
+                 "InternalVariables":[],"EnvironmentDomains":[],"ImpactedVariables":[],
+                 "Transitions":[],"APIs":[],"Contents":[]}
+                """);
+        bundled.setId(null);
+        bundled.setDefaultTemplate(true);
+        DeviceTemplatePo current = templatePo("Sensor", bundled.getManifestJson());
+        current.setDefaultTemplate(true);
+        when(deviceTemplateService.getDefaultTemplateDefinitions(1L)).thenReturn(List.of(bundled));
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(current));
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of());
+        when(editJournal.historyState(1L))
+                .thenReturn(historyState(1, "a"), historyState(2, "b"));
+
+        DefaultTemplateResetResultDto preview = service.previewDefaultTemplateReset(1L);
+        ConflictException error = assertThrows(ConflictException.class,
+                () -> service.resetDefaultTemplates(1L, preview.getImpactToken()));
+
+        assertEquals(1, preview.getEditHistoryEntryCount());
+        org.assertj.core.api.Assertions.assertThat(error.getMessage()).contains("undo history changed");
+        verify(deviceTemplateRepo, never()).deleteDefaultsForReset(anyLong(), anyList());
+        verify(editJournal, never()).clear(anyLong());
+    }
+
+    @Test
+    void resetDefaultTemplates_clearsThePreviewedUndoHistoryAfterCommit() {
+        DeviceTemplatePo bundled = templatePo("Sensor", """
+                {"Name":"Sensor","Modes":[],"InitState":"","WorkingStates":[],
+                 "InternalVariables":[],"EnvironmentDomains":[],"ImpactedVariables":[],
+                 "Transitions":[],"APIs":[],"Contents":[]}
+                """);
+        bundled.setId(null);
+        bundled.setDefaultTemplate(true);
+        DeviceTemplatePo current = templatePo("Sensor", bundled.getManifestJson());
+        current.setDefaultTemplate(true);
+        when(deviceTemplateService.getDefaultTemplateDefinitions(1L)).thenReturn(List.of(bundled));
+        when(deviceTemplateRepo.findByUserId(1L))
+                .thenReturn(List.of(current), List.of(current), List.of(bundled));
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of());
+        when(deviceTemplateRepo.deleteDefaultsForReset(anyLong(), anyList())).thenReturn(1);
+        when(deviceTemplateRepo.saveAllAndFlush(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(editJournal.historyState(1L)).thenReturn(historyState(3, "c"));
+
+        DefaultTemplateResetResultDto preview = service.previewDefaultTemplateReset(1L);
+        DefaultTemplateResetResultDto result = service.resetDefaultTemplates(1L, preview.getImpactToken());
+
+        assertEquals("reset", result.getOperation());
+        assertEquals(3, result.getEditHistoryEntryCount());
+        verify(editJournal).clear(1L);
     }
 
     @Test
@@ -513,6 +579,48 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         assertFalse(ex.getCurrentPreview().isCanDelete());
         assertEquals("living_light", ex.getCurrentPreview().getBlockers().get(0).getItemId());
         verify(deviceTemplateRepo, never()).delete(any());
+    }
+
+    @Test
+    void deleteDeviceTemplate_clearsThePreviewedUndoHistoryAfterCommit() {
+        DeviceTemplatePo template = templatePo("Light", "{\"Name\":\"Light\"}");
+        template.setId(10L);
+        template.setDefaultTemplate(false);
+        when(deviceTemplateRepo.findByIdAndUserId(10L, 1L)).thenReturn(java.util.Optional.of(template));
+        when(deviceTemplateRepo.findByUserId(1L))
+                .thenReturn(List.of(template), List.of(template), List.of());
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
+        when(editJournal.historyState(1L)).thenReturn(historyState(4, "d"));
+
+        var preview = service.previewDeviceTemplateDeletion(1L, 10L);
+        var result = service.deleteDeviceTemplate(1L, 10L, preview.getImpactToken());
+
+        assertEquals("deleted", result.getOperation());
+        assertEquals(4, result.getEditHistoryEntryCount());
+        verify(deviceTemplateRepo).delete(template);
+        verify(editJournal).clear(1L);
+    }
+
+    @Test
+    void deleteDeviceTemplate_rejectsWhenOnlyUndoHistoryChanged() {
+        DeviceTemplatePo template = templatePo("Light", "{\"Name\":\"Light\"}");
+        template.setId(10L);
+        template.setDefaultTemplate(false);
+        when(deviceTemplateRepo.findByIdAndUserId(10L, 1L)).thenReturn(java.util.Optional.of(template));
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
+        when(editJournal.historyState(1L))
+                .thenReturn(historyState(1, "a"), historyState(2, "b"));
+
+        var preview = service.previewDeviceTemplateDeletion(1L, 10L);
+        TemplateDeletionConflictException error = assertThrows(
+                TemplateDeletionConflictException.class,
+                () -> service.deleteDeviceTemplate(1L, 10L, preview.getImpactToken()));
+
+        assertEquals("TEMPLATE_DELETION_PREVIEW_STALE", error.getReasonCode());
+        assertEquals(2, error.getCurrentPreview().getEditHistoryEntryCount());
+        verify(deviceTemplateRepo, never()).delete(any());
+        verify(editJournal, never()).clear(anyLong());
     }
 
     @Test
@@ -1125,5 +1233,12 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         dto.setName(name);
         dto.setManifest(manifest);
         return dto;
+    }
+
+    private static BoardEditHistoryState historyState(int entryCount, String tokenCharacter) {
+        return new BoardEditHistoryState(
+                entryCount,
+                new BoardUndoAvailability(entryCount > 0, false),
+                tokenCharacter.repeat(64));
     }
 }

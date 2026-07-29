@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-25.
+Verified against code on 2026-07-30.
 
 ---
 
@@ -49,8 +49,10 @@ Verified against code on 2026-07-25.
 | PUT | `/api/board/rules/order` | Atomically replace rule execution order | `docs/api/board.md` |
 | DELETE | `/api/board/rules/{ruleId}` | Delete one automation rule when its confirmed snapshot is still current | `docs/api/board.md` |
 | GET | `/api/board/edits/availability` | Current undo/redo availability from the per-user edit journal | `docs/api/board.md` |
-| POST | `/api/board/edits/undo` | Reverse the newest reversible board edit (rule/spec create or delete, or a rule reorder) | `docs/api/board.md` |
+| POST | `/api/board/edits/undo` | Reverse the newest reversible Board edit, including device updates, Environment Pool edits, and automatic fixes | `docs/api/board.md` |
 | POST | `/api/board/edits/redo` | Re-apply the oldest undone board edit | `docs/api/board.md` |
+| GET | `/api/board/edits/clear-preview` | Preview the exact undo/redo history impact for confirmation | `docs/api/board.md` |
+| POST | `/api/board/edits/clear` | Token-confirmed discard of undo/redo history without changing Board data | `docs/api/board.md` |
 | GET | `/api/board/replacement-preview` | Preview authoritative current-scene counts and obtain the confirmation impact token | `docs/api/board.md` |
 | POST | `/api/board/batch` | Confirmed atomic full-scene replacement/clear with exact template snapshots | `docs/api/board.md` |
 | GET | `/api/board/snapshot` | Atomic initial Board semantic snapshot | `docs/api/board.md` |

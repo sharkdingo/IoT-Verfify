@@ -351,13 +351,21 @@ export interface CollectionMutationResult<T> {
     affectedItem: T;
     currentItems: T[];
     currentCount: number;
-    /**
-     * Undo availability after this mutation, present only for reversible ones (rule and
-     * specification create/delete). The server journal is the authority, so the client mirrors
-     * this rather than inferring availability from its own actions.
-     */
-    canUndo?: boolean;
-    canRedo?: boolean;
+    /** Undo availability after this reversible mutation, as reported by the server journal. */
+    canUndo: true;
+    canRedo: false;
+}
+
+type CommittedDeviceMutationResult = DeviceMutationResult & {
+    operation: 'created';
+    canUndo: true;
+    canRedo: false;
+}
+
+type CommittedDeviceDeletionResult = DeviceDeletionResult & {
+    operation: 'deleted';
+    canUndo: true;
+    canRedo: false;
 }
 
 export interface DuplicateRuleCheckResult {
@@ -428,6 +436,8 @@ export interface EnvironmentMutationResult {
     environmentVariables: ModelEnvironmentVariable[];
     environmentChanges: EnvironmentVariableChange[];
     currentCount: number;
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
 
 export interface DeviceMutationResult {
@@ -440,6 +450,8 @@ export interface DeviceMutationResult {
     previousLabel?: string;
     updatedSpecificationCount: number;
     currentCount: number;
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
 
 export interface DeviceLayout {
@@ -473,6 +485,8 @@ export interface DeviceUpdateResult {
     currentDevice: DeviceNode;
     currentNodes: DeviceNode[];
     currentCount: number;
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
 
 export interface DeviceDeletionResult {
@@ -486,6 +500,8 @@ export interface DeviceDeletionResult {
     environmentChanges: EnvironmentVariableChange[];
     currentRules: RuleForm[];
     currentSpecifications: Specification[];
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
 
 export interface BoardReplacementPreview {
@@ -494,6 +510,12 @@ export interface BoardReplacementPreview {
     environmentVariableCount: number;
     ruleCount: number;
     specificationCount: number;
+    editHistoryEntryCount: number;
+}
+
+export interface BoardEditHistoryClearPreview extends BoardUndoAvailability {
+    impactToken: string;
+    entryCount: number;
 }
 
 export interface BoardReplacementStaleData {
@@ -518,6 +540,7 @@ export interface DefaultTemplateResetResult {
     operation: 'preview' | 'reset';
     impactToken: string;
     canApply: boolean;
+    editHistoryEntryCount: number;
     templateChanges: Array<{
         templateName: string;
         changeType: DefaultTemplateResetChangeType;
@@ -542,6 +565,7 @@ export interface DeviceTemplateDeletionResult {
     operation: 'preview' | 'deleted';
     impactToken: string;
     canDelete: boolean;
+    editHistoryEntryCount: number;
     template: DeviceTemplate;
     deletedTemplate?: DeviceTemplate;
     blockers: Array<{
@@ -761,6 +785,24 @@ const validateDeviceMutationResult = (
         throw new BoardResponseContractError(context, 'currentSpecifications contains duplicate ids')
     }
     requireCurrentCount(result, currentNodes, context)
+    if ((expectedOperation === 'created' || expectedOperation === 'renamed')
+        && (typeof result.canUndo !== 'boolean' || typeof result.canRedo !== 'boolean')) {
+        throw new BoardResponseContractError(
+            context,
+            'committed device mutations must report boolean canUndo and canRedo values'
+        )
+    }
+    if ((result.canUndo !== undefined && result.canUndo !== null && typeof result.canUndo !== 'boolean')
+        || (result.canRedo !== undefined && result.canRedo !== null && typeof result.canRedo !== 'boolean')) {
+        throw new BoardResponseContractError(context, 'canUndo and canRedo must be booleans when present')
+    }
+    if ((expectedOperation === 'created' || expectedOperation === 'renamed')
+        && (!result.canUndo || result.canRedo)) {
+        throw new BoardResponseContractError(
+            context,
+            'a committed device mutation must be undoable and must clear redo history'
+        )
+    }
 
     if (!Number.isSafeInteger(result.updatedSpecificationCount)
         || result.updatedSpecificationCount < 0) {
@@ -920,6 +962,20 @@ const validateDeviceUpdateResult = (
     if ((result.operation === 'unchanged') !== (result.changedFields.length === 0)) {
         throw new BoardResponseContractError(context, 'operation must agree with changedFields')
     }
+    if (result.operation === 'updated') {
+        if (result.canUndo !== true || result.canRedo !== false) {
+            throw new BoardResponseContractError(
+                context,
+                'a committed device update must be undoable and must clear redo history'
+            )
+        }
+    } else if ((result.canUndo !== undefined && result.canUndo !== null)
+        || (result.canRedo !== undefined && result.canRedo !== null)) {
+        throw new BoardResponseContractError(
+            context,
+            'an unchanged device update must not report new undo availability'
+        )
+    }
 
     const preservedFields = mutationType === 'layout'
         ? DEVICE_RUNTIME_FIELDS
@@ -1068,6 +1124,20 @@ const validateEnvironmentMutationResult = (
     requireCurrentCount(result, environmentVariables, context)
     if ((result.operation === 'unchanged') !== (environmentChanges.length === 0)) {
         throw new BoardResponseContractError(context, 'operation must agree with environmentChanges')
+    }
+    if (result.operation === 'updated') {
+        if (result.canUndo !== true || result.canRedo !== false) {
+            throw new BoardResponseContractError(
+                context,
+                'a committed Environment Pool update must be undoable and must clear redo history'
+            )
+        }
+    } else if ((result.canUndo !== undefined && result.canUndo !== null)
+        || (result.canRedo !== undefined && result.canRedo !== null)) {
+        throw new BoardResponseContractError(
+            context,
+            'an unchanged Environment Pool update must not report new undo availability'
+        )
     }
     if (patchResults.length !== patches.length) {
         throw new BoardResponseContractError(context, 'patchResults must explain every submitted patch')
@@ -1345,6 +1415,23 @@ const validateDeviceDeletionResult = (
     if (new Set(environmentChanges.map(change => change.name)).size !== environmentChanges.length) {
         throw new BoardResponseContractError(context, 'environmentChanges contains duplicate names')
     }
+    if (expectedOperation === 'deleted'
+        && (typeof result.canUndo !== 'boolean' || typeof result.canRedo !== 'boolean')) {
+        throw new BoardResponseContractError(
+            context,
+            'device deletion must report boolean canUndo and canRedo values'
+        )
+    }
+    if ((result.canUndo !== undefined && result.canUndo !== null && typeof result.canUndo !== 'boolean')
+        || (result.canRedo !== undefined && result.canRedo !== null && typeof result.canRedo !== 'boolean')) {
+        throw new BoardResponseContractError(context, 'canUndo and canRedo must be booleans when present')
+    }
+    if (expectedOperation === 'deleted' && (!result.canUndo || result.canRedo)) {
+        throw new BoardResponseContractError(
+            context,
+            'a committed device deletion must be undoable and must clear redo history'
+        )
+    }
     return {
         ...result,
         deletedDevice,
@@ -1368,6 +1455,18 @@ const validateCollectionMutationResult = <T>(
 ): CollectionMutationResult<T> => {
     const result = requireResponseRecord(value, context)
     requireOperation(result, expectedOperation, context)
+    if (typeof result.canUndo !== 'boolean' || typeof result.canRedo !== 'boolean') {
+        throw new BoardResponseContractError(
+            context,
+            'reversible collection mutations must report boolean canUndo and canRedo values'
+        )
+    }
+    if (!result.canUndo || result.canRedo) {
+        throw new BoardResponseContractError(
+            context,
+            'a committed collection mutation must be undoable and must clear redo history'
+        )
+    }
     if (!result.affectedItem || typeof result.affectedItem !== 'object' || Array.isArray(result.affectedItem)) {
         throw new BoardResponseContractError(context, 'affectedItem is required')
     }
@@ -1404,11 +1503,13 @@ const validateCollectionMutationResult = <T>(
 /**
  * Validates an undo/redo/availability payload at the boundary.
  *
- * The rule and specification lists are the authoritative post-operation collections, so they get
- * the same validation as a normal read: a malformed one must be rejected rather than written into
- * board state.
+ * All four semantic collections are authoritative post-operation state, so they get the same
+ * validation as a normal read: malformed or contradictory data must not enter board state.
  */
-const parseBoardUndoResult = (value: unknown): BoardUndoResult => {
+const parseBoardUndoResult = (
+    value: unknown,
+    expectedKind: 'availability' | 'undo' | 'redo' | 'clear'
+): BoardUndoResult => {
     const context = 'Board edit undo'
     const raw = requireResponseRecord(value, context)
     if (typeof raw.applied !== 'boolean'
@@ -1417,12 +1518,32 @@ const parseBoardUndoResult = (value: unknown): BoardUndoResult => {
         throw new BoardResponseContractError(
             context, 'applied, canUndo and canRedo must be booleans')
     }
+    const nodes = requireResponseArray<DeviceNode>(raw, context, 'nodes')
+        .map((node, index) => validateBoardNodeResult(node, `${context}.nodes[${index}]`))
+    requireUniqueIdentities(nodes, node => node.id, context, 'nodes')
+
+    const environmentVariables = requireResponseArray<ModelEnvironmentVariable>(
+        raw,
+        context,
+        'environmentVariables'
+    ).map((variable, index) => validateEnvironmentVariable(
+        variable,
+        `${context}.environmentVariables[${index}]`
+    ))
+    requireUniqueIdentities(
+        environmentVariables,
+        variable => variable.name,
+        context,
+        'environmentVariables'
+    )
+
     const rules = requireResponseArray<BackendRuleDto>(raw, context, 'rules')
         .map((rule, index) => validateBackendRuleResult(rule, `${context}.rules[${index}]`))
     requireUniqueIdentities(rules, rule => Number(rule.id), context, 'rules')
 
     const specs = requireResponseArray<Specification>(raw, context, 'specs')
         .map((spec, index) => validateBoardSpecificationResult(spec, `${context}.specs[${index}]`))
+    requireUniqueIdentities(specs, spec => spec.id, context, 'specs')
     // Validated rather than cast: defaulting an absent reasonCode to 'NOTHING_TO_APPLY' produced
     // `applied: true` alongside a code contradicting it, and an unknown string became a typed value
     // that lies — a consumer switching on it silently takes no branch.
@@ -1440,11 +1561,82 @@ const parseBoardUndoResult = (value: unknown): BoardUndoResult => {
         throw new BoardResponseContractError(
             context, `originalOperation must be one of ${BOARD_EDIT_OPERATIONS.join(', ')}`)
     }
+    const hasEntityMetadata = raw.entityType !== undefined && raw.entityType !== null
+        && raw.originalOperation !== undefined && raw.originalOperation !== null
+    const hasAnyEntityMetadata = raw.entityType !== undefined && raw.entityType !== null
+        || raw.originalOperation !== undefined && raw.originalOperation !== null
+    if (expectedKind === 'availability' || expectedKind === 'clear') {
+        const expectedReason = expectedKind === 'availability'
+            ? 'AVAILABILITY_ONLY'
+            : 'HISTORY_CLEARED'
+        if (raw.applied || raw.reasonCode !== expectedReason || hasAnyEntityMetadata) {
+            throw new BoardResponseContractError(
+                context,
+                `${expectedKind} must be unapplied, use ${expectedReason}, and omit entity metadata`
+            )
+        }
+        if (nodes.length || environmentVariables.length || rules.length || specs.length) {
+            throw new BoardResponseContractError(
+                context,
+                `${expectedKind} collections must be empty because they are not a board snapshot`
+            )
+        }
+        if (expectedKind === 'clear' && (raw.canUndo || raw.canRedo)) {
+            throw new BoardResponseContractError(
+                context,
+                'cleared history must report canUndo=false and canRedo=false'
+            )
+        }
+    } else if (raw.applied) {
+        const expectedReason = expectedKind === 'undo' ? 'UNDONE' : 'REDONE'
+        if (raw.reasonCode !== expectedReason || !hasEntityMetadata) {
+            throw new BoardResponseContractError(
+                context,
+                `an applied ${expectedKind} must use ${expectedReason} and include entity metadata`
+            )
+        }
+        const validOperation = raw.entityType === 'RULE' || raw.entityType === 'SPECIFICATION'
+            ? raw.originalOperation === 'CREATE' || raw.originalOperation === 'DELETE'
+            : raw.entityType === 'RULE_ORDER'
+                || raw.entityType === 'RULE_SET'
+                || raw.entityType === 'ENVIRONMENT'
+                ? raw.originalOperation === 'UPDATE'
+                : raw.entityType === 'DEVICE'
+                    && (raw.originalOperation === 'CREATE'
+                        || raw.originalOperation === 'UPDATE'
+                        || raw.originalOperation === 'DELETE')
+        if (!validOperation) {
+            throw new BoardResponseContractError(
+                context,
+                'entityType and originalOperation do not describe a supported reversible edit'
+            )
+        }
+        if ((expectedKind === 'undo' && !raw.canRedo)
+            || (expectedKind === 'redo' && !raw.canUndo)) {
+            throw new BoardResponseContractError(
+                context,
+                `an applied ${expectedKind} must make its inverse available`
+            )
+        }
+    } else if (raw.reasonCode !== 'NOTHING_TO_APPLY' || hasAnyEntityMetadata) {
+        throw new BoardResponseContractError(
+            context,
+            'an unapplied undo/redo must use NOTHING_TO_APPLY and omit entity metadata'
+        )
+    } else if ((expectedKind === 'undo' && raw.canUndo)
+        || (expectedKind === 'redo' && raw.canRedo)) {
+        throw new BoardResponseContractError(
+            context,
+            `NOTHING_TO_APPLY must report ${expectedKind === 'undo' ? 'canUndo' : 'canRedo'}=false`
+        )
+    }
     return {
         applied: raw.applied,
         entityType: raw.entityType ?? undefined,
         originalOperation: raw.originalOperation ?? undefined,
         reasonCode: raw.reasonCode,
+        nodes,
+        environmentVariables,
         rules: rules.map(fromBackendRuleDto),
         specs,
         canUndo: raw.canUndo,
@@ -1512,13 +1704,38 @@ const validateBoardReplacementPreview = (value: unknown): BoardReplacementPrevie
         'deviceCount',
         'environmentVariableCount',
         'ruleCount',
-        'specificationCount'
+        'specificationCount',
+        'editHistoryEntryCount'
     ]) {
         if (!Number.isSafeInteger(result[field]) || result[field] < 0) {
             throw new BoardResponseContractError(context, `${field} must be a non-negative integer`)
         }
     }
     return result as BoardReplacementPreview
+}
+
+const validateBoardEditHistoryClearPreview = (
+    value: unknown
+): BoardEditHistoryClearPreview => {
+    const context = 'Undo-history clear preview'
+    const result = requireResponseRecord(value, context)
+    if (typeof result.impactToken !== 'string'
+        || !/^[0-9a-f]{64}$/.test(result.impactToken)) {
+        throw new BoardResponseContractError(context, 'impactToken must be a SHA-256 token')
+    }
+    if (!Number.isSafeInteger(result.entryCount) || result.entryCount < 0) {
+        throw new BoardResponseContractError(context, 'entryCount must be a non-negative integer')
+    }
+    if (typeof result.canUndo !== 'boolean' || typeof result.canRedo !== 'boolean') {
+        throw new BoardResponseContractError(context, 'canUndo and canRedo must be booleans')
+    }
+    if ((result.entryCount === 0) !== (!result.canUndo && !result.canRedo)) {
+        throw new BoardResponseContractError(
+            context,
+            'entryCount must agree with undo/redo availability'
+        )
+    }
+    return result as unknown as BoardEditHistoryClearPreview
 }
 
 const validateDeviceTemplateResult = (value: unknown, context: string): DeviceTemplate => {
@@ -1579,6 +1796,9 @@ const validateDeviceTemplateDeletionResult = (
     }
     if (typeof result.canDelete !== 'boolean') {
         throw new BoardResponseContractError(context, 'canDelete must be boolean')
+    }
+    if (!Number.isSafeInteger(result.editHistoryEntryCount) || result.editHistoryEntryCount < 0) {
+        throw new BoardResponseContractError(context, 'editHistoryEntryCount must be a non-negative integer')
     }
     if (!Number.isSafeInteger(expectedTemplateId) || expectedTemplateId <= 0) {
         throw new BoardResponseContractError(context, 'the requested template id is invalid')
@@ -1849,6 +2069,9 @@ const validateDefaultTemplateResetResult = (
     if (typeof result.canApply !== 'boolean') {
         throw new BoardResponseContractError(context, 'canApply must be boolean')
     }
+    if (!Number.isSafeInteger(result.editHistoryEntryCount) || result.editHistoryEntryCount < 0) {
+        throw new BoardResponseContractError(context, 'editHistoryEntryCount must be a non-negative integer')
+    }
     const templateChanges = requireResponseArray<any>(result, context, 'templateChanges')
     const affectedDevices = requireResponseArray<any>(result, context, 'affectedDevices')
     const blockers = requireResponseArray<any>(result, context, 'blockers')
@@ -1996,6 +2219,12 @@ const validateFixApplyResult = (
     if (typeof result.message !== 'string' || !result.message.trim()) {
         throw new BoardResponseContractError(context, 'message is required')
     }
+    if (result.canUndo !== true || result.canRedo !== false) {
+        throw new BoardResponseContractError(
+            context,
+            'an applied automatic fix must be undoable and must clear redo history'
+        )
+    }
     return { ...result, rules } as Omit<FixApplyResult, 'rules'> & { rules: BackendRuleDto[] }
 }
 
@@ -2055,7 +2284,7 @@ export default {
     addNodes: async (
         devices: DeviceNode[],
         environmentVariablePatches: ModelEnvironmentVariable[] = []
-    ): Promise<DeviceMutationResult> => {
+    ): Promise<CommittedDeviceMutationResult> => {
         const result = unpack<unknown>(await api.post('/board/nodes', {
             devices,
             environmentVariablePatches
@@ -2065,7 +2294,7 @@ export default {
             'created',
             devices.map(device => device.id),
             'Device creation'
-        )
+        ) as CommittedDeviceMutationResult
     },
     updateNodeLayout: async (nodeId: string, layout: DeviceLayout): Promise<DeviceUpdateResult> => {
         return validateDeviceUpdateResult(
@@ -2121,7 +2350,7 @@ export default {
     deleteNode: async (
         nodeId: string,
         impactToken: string
-    ): Promise<DeviceDeletionResult> => {
+    ): Promise<CommittedDeviceDeletionResult> => {
         const result = validateDeviceDeletionResult(
             unpack<unknown>(await api.post(`/board/nodes/${encodeURIComponent(nodeId)}/delete`, {
                 impactToken
@@ -2138,7 +2367,7 @@ export default {
             ...result,
             removedRules: result.removedRules.map(fromBackendRuleDto),
             currentRules: result.currentRules.map(fromBackendRuleDto)
-        };
+        } as CommittedDeviceDeletionResult;
     },
 
     // ==== 环境变量池 ====
@@ -2230,7 +2459,7 @@ export default {
     reorderRules: async (
         expectedRuleIds: string[],
         ruleIds: string[]
-    ): Promise<{ rules: RuleForm[]; canUndo?: boolean; canRedo?: boolean }> => {
+    ): Promise<{ rules: RuleForm[]; canUndo: true; canRedo: false }> => {
         const toPersistedIds = (ids: string[], field: string) => ids.map(ruleId => {
             const numericId = Number(ruleId)
             if (!Number.isSafeInteger(numericId) || numericId <= 0) {
@@ -2249,6 +2478,10 @@ export default {
             })),
             'Rule reorder'
         )
+        requireOperation(envelope, 'reordered', 'Rule reorder')
+        if (envelope.affectedItem !== null) {
+            throw new BoardResponseContractError('Rule reorder', 'affectedItem must be null')
+        }
         const result = requireResponseArray<BackendRuleDto>(envelope, 'Rule reorder', 'currentItems')
             .map((rule, index) => validateBackendRuleResult(rule, `Rule reorder[${index}]`))
         if (result.length !== persistedIds.length
@@ -2258,10 +2491,17 @@ export default {
                 'the authoritative order must match the requested rule ids'
             )
         }
+        requireCurrentCount(envelope, result, 'Rule reorder')
+        if (envelope.canUndo !== true || envelope.canRedo !== false) {
+            throw new BoardResponseContractError(
+                'Rule reorder',
+                'a committed reorder must be undoable and must clear redo history'
+            )
+        }
         return {
             rules: result.map(fromBackendRuleDto),
-            canUndo: typeof envelope.canUndo === 'boolean' ? envelope.canUndo : undefined,
-            canRedo: typeof envelope.canRedo === 'boolean' ? envelope.canRedo : undefined
+            canUndo: envelope.canUndo,
+            canRedo: envelope.canRedo
         }
     },
     removeRule: async (rule: RuleForm): Promise<CollectionMutationResult<RuleForm>> => {
@@ -2298,18 +2538,28 @@ export default {
      *
      * Read on board load so the affordance is restored from server state — undo history survives a
      * reload, a second tab, and a different device, so it must not be inferred from local actions.
-     * Returns availability only; the rule/spec lists are empty because this is a query, not an
-     * update, and callers must not apply them.
+     * Returns availability only; all semantic collections are empty because this is a query, not
+     * an update, and callers must not apply them.
      */
     getBoardEditAvailability: async (): Promise<BoardUndoAvailability> => {
         const result = parseBoardUndoResult(
-            unpack<unknown>(await api.get('/board/edits/availability')))
+            unpack<unknown>(await api.get('/board/edits/availability')), 'availability')
         return { canUndo: result.canUndo, canRedo: result.canRedo }
     },
 
     applyBoardEditUndo: async (direction: 'undo' | 'redo'): Promise<BoardUndoResult> =>
         parseBoardUndoResult(
-            unpack<unknown>(await api.post(`/board/edits/${direction}`))),
+            unpack<unknown>(await api.post(`/board/edits/${direction}`)), direction),
+
+    previewBoardEditHistoryClear: async (): Promise<BoardEditHistoryClearPreview> =>
+        validateBoardEditHistoryClearPreview(
+            unpack<unknown>(await api.get('/board/edits/clear-preview'))),
+
+    clearBoardEditHistory: async (impactToken: string): Promise<BoardUndoAvailability> => {
+        const result = parseBoardUndoResult(
+            unpack<unknown>(await api.post('/board/edits/clear', { impactToken })), 'clear')
+        return { canUndo: result.canUndo, canRedo: result.canRedo }
+    },
 
     /** Returns the authoritative current-board impact that the user must confirm. */
     previewBoardReplacement: async (): Promise<BoardReplacementPreview> => {

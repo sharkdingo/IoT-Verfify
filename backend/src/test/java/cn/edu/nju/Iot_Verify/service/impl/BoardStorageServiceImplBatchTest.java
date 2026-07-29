@@ -24,6 +24,8 @@ import cn.edu.nju.Iot_Verify.exception.DeviceRuntimeConflictException;
 import cn.edu.nju.Iot_Verify.exception.EnvironmentVariableConflictException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.BoardEnvironmentVariablePo;
+import cn.edu.nju.Iot_Verify.po.BoardEditEntityType;
+import cn.edu.nju.Iot_Verify.po.BoardEditOperation;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.po.RulePo;
@@ -36,6 +38,7 @@ import cn.edu.nju.Iot_Verify.repository.RuleRepository;
 import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.board.BoardEditJournal;
+import cn.edu.nju.Iot_Verify.service.board.BoardEditHistoryState;
 import cn.edu.nju.Iot_Verify.service.board.BoardUndoAvailability;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
@@ -65,6 +68,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -112,6 +116,8 @@ class BoardStorageServiceImplBatchTest {
         // without a null check, so an unstubbed mock would not model the real collaborator.
         lenient().when(editJournal.availability(anyLong()))
                 .thenReturn(new BoardUndoAvailability(false, false));
+        lenient().when(editJournal.historyState(anyLong()))
+                .thenReturn(historyState(0, "0"));
     }
 
     @Test
@@ -349,6 +355,26 @@ class BoardStorageServiceImplBatchTest {
         verify(environmentRepo, never()).deleteByUserId(anyLong());
         verify(ruleRepo, never()).saveAll(any());
         verify(specRepo, never()).deleteByUserId(anyLong());
+    }
+
+    @Test
+    void saveBoardBatch_rejectsPreviewWhenOnlyUndoHistoryChanged() {
+        when(editJournal.historyState(1L))
+                .thenReturn(historyState(1, "a"), historyState(2, "b"));
+
+        var preview = service.previewBoardReplacement(1L);
+        BoardBatchDto replacement = new BoardBatchDto(List.of(), List.of(), List.of(), List.of());
+        replacement.setImpactToken(preview.getImpactToken());
+
+        BoardReplacementStaleException error = assertThrows(
+                BoardReplacementStaleException.class,
+                () -> service.saveBoardBatch(1L, replacement));
+
+        assertEquals(1, preview.getEditHistoryEntryCount());
+        assertEquals(2, error.getCurrentPreview().getEditHistoryEntryCount());
+        assertTrue(!preview.getImpactToken().equals(error.getCurrentPreview().getImpactToken()));
+        verify(editJournal, never()).clear(anyLong());
+        verify(nodeRepo, never()).deleteByUserId(anyLong());
     }
 
     @Test
@@ -697,6 +723,13 @@ class BoardStorageServiceImplBatchTest {
     private static BoardBatchDto confirmedBatch(BoardStorageServiceImpl target, BoardBatchDto batch) {
         batch.setImpactToken(target.previewBoardReplacement(1L).getImpactToken());
         return batch;
+    }
+
+    private static BoardEditHistoryState historyState(int entryCount, String tokenCharacter) {
+        return new BoardEditHistoryState(
+                entryCount,
+                new BoardUndoAvailability(entryCount > 0, false),
+                tokenCharacter.repeat(64));
     }
 
     @Test
@@ -1825,10 +1858,10 @@ class BoardStorageServiceImplBatchTest {
         assertEquals(preview.getImpactToken(), result.getImpactToken());
         verify(nodeRepo).deleteByUserId(1L);
         verify(specRepo).deleteByUserId(1L);
-        // Deleting a device cascades into every rule and spec that referenced it. Undo is per-record,
-        // so a surviving entry would restore a reference to a device that is gone; the journal must be
-        // dropped rather than offer an undo that cannot reach a legal board.
-        verify(editJournal).clear(1L);
+        // The complete cascade is one compound journal entry; individual rule/spec entries remain
+        // behind it and cannot be reached until the device deletion itself has been undone.
+        verify(editJournal).record(eq(1L), eq(BoardEditEntityType.DEVICE),
+                eq(BoardEditOperation.DELETE), eq("sensor1"), any(), any());
     }
 
     @Test

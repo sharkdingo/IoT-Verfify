@@ -15,6 +15,8 @@ import type { BoardUndoResult } from '@/types/boardEdit'
 const result = (over: Partial<BoardUndoResult> = {}): BoardUndoResult => ({
   applied: true,
   reasonCode: 'UNDONE',
+  nodes: [],
+  environmentVariables: [],
   rules: [],
   specs: [],
   canUndo: false,
@@ -28,6 +30,7 @@ const mountUndo = (options: {
   isBlocked?: () => boolean
   applyResult?: (r: BoardUndoResult) => void
   submit?: <T>(work: () => Promise<T>) => Promise<T>
+  reconcile?: () => Promise<boolean>
   onApplied?: () => void
   isIgnorableError?: (error: unknown) => boolean
   report?: Harness extends never ? never : any
@@ -38,6 +41,7 @@ const mountUndo = (options: {
       api = useBoardUndo({
         applyResult: options.applyResult ?? (() => undefined),
         submit: options.submit ?? (work => work()),
+        reconcile: options.reconcile ?? (async () => true),
         onApplied: options.onApplied,
         isIgnorableError: options.isIgnorableError,
         isBlocked: options.isBlocked ?? (() => false),
@@ -80,6 +84,43 @@ describe('availability', () => {
     api.syncAvailability({})
     expect(api.canUndo.value).toBe(true)
     expect(api.canRedo.value).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('ignores an availability read superseded by an ordinary mutation result', async () => {
+    const { api, wrapper } = mountUndo()
+    let resolveAvailability!: (value: { canUndo: boolean, canRedo: boolean }) => void
+    boardApi.getBoardEditAvailability.mockImplementationOnce(() => new Promise(resolve => {
+      resolveAvailability = resolve
+    }))
+
+    const staleRead = api.loadAvailability()
+    api.syncAvailability({ canUndo: true, canRedo: false })
+    resolveAvailability({ canUndo: false, canRedo: false })
+    await staleRead
+
+    expect(api.canUndo.value).toBe(true)
+    expect(api.canRedo.value).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('lets the latest availability refresh win when reads complete out of order', async () => {
+    const { api, wrapper } = mountUndo()
+    let resolveFirst!: (value: { canUndo: boolean, canRedo: boolean }) => void
+    let resolveSecond!: (value: { canUndo: boolean, canRedo: boolean }) => void
+    boardApi.getBoardEditAvailability
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveSecond = resolve }))
+
+    const first = api.loadAvailability()
+    const second = api.loadAvailability()
+    resolveSecond({ canUndo: true, canRedo: false })
+    await second
+    resolveFirst({ canUndo: false, canRedo: false })
+    await first
+
+    expect(api.canUndo.value).toBe(true)
+    expect(api.canRedo.value).toBe(false)
     wrapper.unmount()
   })
 
@@ -140,19 +181,37 @@ describe('applying', () => {
     wrapper.unmount()
   })
 
-  it('re-reads availability after a conflict so the button cannot invite the same failure', async () => {
-    // A conflict leaves the entry in the journal, so availability is unchanged and the affordance
-    // would stay enabled on an entry guaranteed to conflict again.
+  it('reconciles after a conflict and mirrors the retained journal entry', async () => {
+    // A conflict is a rejected write, but it also says the local board may be stale. The server
+    // deliberately retains the entry, so availability remains true after reconciliation.
     const report = vi.fn()
-    const { api, wrapper } = mountUndo({ report })
-    boardApi.getBoardEditAvailability.mockResolvedValue({ canUndo: false, canRedo: false })
+    const reconcile = vi.fn(async () => true)
+    const { api, wrapper } = mountUndo({ report, reconcile })
+    boardApi.getBoardEditAvailability.mockResolvedValue({ canUndo: true, canRedo: false })
 
     boardApi.applyBoardEditUndo.mockRejectedValueOnce({ response: { status: 409 } })
     await api.undo()
 
-    expect(report.mock.calls[0][0]).toBe('conflict')
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(report).toHaveBeenCalledWith('conflict', 'undo', expect.anything(), true)
     expect(boardApi.getBoardEditAvailability).toHaveBeenCalled()
-    expect(api.canUndo.value).toBe(false)
+    expect(api.canUndo.value).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reconciles an unconfirmed failure before reporting it', async () => {
+    const report = vi.fn()
+    const reconcile = vi.fn(async () => true)
+    const { api, wrapper } = mountUndo({ report, reconcile })
+    boardApi.getBoardEditAvailability.mockResolvedValue({ canUndo: false, canRedo: true })
+    const failure = new Error('response contract rejected')
+    boardApi.applyBoardEditUndo.mockRejectedValue(failure)
+
+    await api.redo()
+
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(report).toHaveBeenCalledWith('failed', 'redo', failure, true)
+    expect(api.canRedo.value).toBe(true)
     wrapper.unmount()
   })
 
@@ -174,6 +233,26 @@ describe('applying', () => {
     await pending
 
     expect(api.canUndo.value).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('invalidates availability reads started before an unconfirmed mutation', async () => {
+    const { api, wrapper } = mountUndo({ reconcile: async () => true })
+    let resolveStale!: (value: { canUndo: boolean, canRedo: boolean }) => void
+    boardApi.getBoardEditAvailability
+      .mockImplementationOnce(() => new Promise(resolve => { resolveStale = resolve }))
+      .mockResolvedValueOnce({ canUndo: false, canRedo: true })
+
+    const staleRead = api.loadAvailability()
+    boardApi.applyBoardEditUndo.mockRejectedValueOnce(new Error('response lost'))
+    await api.undo()
+    expect(api.canRedo.value).toBe(true)
+
+    resolveStale({ canUndo: true, canRedo: false })
+    await staleRead
+
+    expect(api.canUndo.value).toBe(false)
+    expect(api.canRedo.value).toBe(true)
     wrapper.unmount()
   })
 
@@ -237,8 +316,8 @@ describe('keyboard scope', () => {
     api.syncAvailability({ canUndo: true, canRedo: true })
     expect(api.canUndo.value).toBe(true)
 
-    // Scene replacement and device deletion clear the journal server-side. A wholesale board
-    // reload must re-read it, or the button keeps offering an undo that no longer exists.
+    // Confirmed scene replacement clears the journal server-side. A wholesale board reload must
+    // re-read it, or the button keeps offering an undo that no longer exists.
     boardApi.getBoardEditAvailability.mockResolvedValue({ canUndo: false, canRedo: false })
     await api.loadAvailability()
 
@@ -331,12 +410,17 @@ describe('keyboard scope', () => {
 
   it('still reports a genuine transport failure', async () => {
     const report = vi.fn()
+    const reconcile = vi.fn(async () => false)
     boardApi.applyBoardEditUndo.mockRejectedValue(new Error('offline'))
 
-    const { api, wrapper } = mountUndo({ report, isIgnorableError: () => false })
+    const { api, wrapper } = mountUndo({
+      report,
+      reconcile,
+      isIgnorableError: () => false
+    })
     await api.undo()
 
-    expect(report).toHaveBeenCalledWith('failed', 'undo', expect.anything())
+    expect(report).toHaveBeenCalledWith('failed', 'undo', expect.anything(), false)
     wrapper.unmount()
   })
 })

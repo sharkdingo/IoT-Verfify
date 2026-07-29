@@ -4,9 +4,10 @@ import { STREAM_REFRESH_TARGETS } from '@/types/chat'
  * Which board state an assistant `REFRESH_DATA` command invalidates.
  *
  * The assistant mutates the board through the same service methods the UI uses, so its edits carry
- * the same consequences — including undo availability, because its rule and specification tools go
- * through the journal-recording write path. Routing every target through one table keeps that
- * parity explicit instead of leaving it to remember-to-call discipline at each handler.
+ * the same consequences — including undo availability, because its device, environment, rule, and
+ * specification tools go through journal-recording write paths. Routing every target through one
+ * table keeps that parity explicit instead of leaving it to remember-to-call discipline at each
+ * handler.
  *
  * The target names themselves come from `types/chat.ts`, which is the wire contract; keeping a second
  * copy here let the two drift.
