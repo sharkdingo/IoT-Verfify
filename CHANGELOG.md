@@ -42,6 +42,11 @@ history into a technical spec. The spec content itself now lives under
   narrowed the fix search to fewer rules. `FuzzModel` now normalizes it in one accessor shared by
   validation and evaluation, which previously disagreed: a padded key validated and then resolved to
   no domain, changing what the explorer actually checked.
+- **A dismissed run dialog no longer reopens itself.** `dismissResultDialog` cleared the result and the
+  deep link but left the in-flight history-detail request running, and `openVerificationRun` only
+  guards on "is this still the newest request" — so a load that resolved just after the user pressed
+  Escape re-assigned the result and the dialog came back, with its URL already stripped. It now
+  invalidates the request coordinator first, matching what the exploration surface already did.
 - **Escape closes a deep-linked modal on the first press.** `useModalAccessibility` bound its Escape
   handler to the modal's own element, so the key only worked once focus was inside the dialog — and
   focus arrives in a `nextTick` after a post-flush watcher. Opening a surface from a deep link on page
