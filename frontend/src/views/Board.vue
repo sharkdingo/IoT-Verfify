@@ -11974,6 +11974,12 @@ const closeResultDialog = () => {
 }
 
 const dismissResultDialog = () => {
+  // A user-facing close must also invalidate any in-flight run load. `openVerificationRun` only
+  // guards on `isCurrent(token)`, which stays true for the newest request — so a load still resolving
+  // when the user pressed Escape re-assigned `verificationResult` and the dialog reappeared on its
+  // own. Deep-linking a run is exactly the case that leaves a load outstanding while the surface is
+  // already visible.
+  historyDetailRequests.invalidate()
   closeResultDialog()
   clearRunDeepLink()
 }
