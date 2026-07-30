@@ -17,6 +17,11 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-07-30
 
+#### Changed
+- **The landing-page background video is now self-hosted.** The production UI loads the versioned
+  MP4 asset from the application origin instead of depending on a third-party CDN at runtime, and
+  preloads it for immediate playback when reduced-motion preferences permit video.
+
 #### Fixed
 - **Destructive template and scene confirmations now cover undo/redo history.** Full-scene
   replacement, device-type deletion, and bundled-default reset previews report the exact edit-history

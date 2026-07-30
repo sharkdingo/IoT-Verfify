@@ -330,11 +330,11 @@ onUnmounted(() => {
       loop
       muted
       playsinline
-      preload="metadata"
+      preload="auto"
       poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1920 1080'%3E%3Crect fill='%230b1722' width='1920' height='1080'/%3E%3C/svg%3E"
       @error="videoUnavailable = true"
     >
-      <source src="https://cdn.pixabay.com/video/2025/05/06/277096_large.mp4" type="video/mp4">
+      <source src="/videos/landing-bg.mp4" type="video/mp4">
     </video>
 
     <div class="video-overlay"></div>

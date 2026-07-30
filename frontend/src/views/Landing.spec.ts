@@ -170,4 +170,13 @@ describe('Landing authentication usability', () => {
     expect(wrapper.find('video').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('loads the background video from the application origin', async () => {
+    const { wrapper } = await mountLanding()
+
+    const video = wrapper.get('video.video-bg')
+    expect(video.attributes('preload')).toBe('auto')
+    expect(video.get('source').attributes('src')).toBe('/videos/landing-bg.mp4')
+    wrapper.unmount()
+  })
 })

@@ -71,6 +71,7 @@ gradlew  utf8lf
 *.gif    binary
 *.ico    binary
 *.webp   binary
+*.mp4    binary
 # SVG is XML/text, but treat as binary to avoid line-ending churn across the large
 # asset set under frontend/src/assets/. Switch to `text` if you need to diff them.
 *.svg    binary
