@@ -200,7 +200,7 @@ class NusmvEnvironmentPoolTest {
         assertEquals("28", merged.get(0).getValue());
         assertTrue(smv.contains("a_temperature: 15..35;"), smv);
         assertTrue(smv.contains("init(a_temperature) := 28;"), smv);
-        assertTrue(smv.contains("next(ac_1.temperature_rate)"), smv);
+        assertTrue(smv.contains("temperature_rate := case"), smv);
         assertTrue(smv.contains("a_temperature + ac_1.temperature_rate"), smv);
         assertTrue(!smv.contains("ac_1.temperature := a_temperature;"), smv);
     }

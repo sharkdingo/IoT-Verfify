@@ -152,6 +152,65 @@ class NaturalChangeRateIntervalSoundnessTest {
         }
     }
 
+    /**
+     * A device effect must reach the environment in the step the device is acting, per MEDIC §3.1,
+     * Fig. 2b. While the impact rate was a state variable, {@code next(a_v)} read the previous
+     * step's rate: a device initialised into an acting mode applied nothing on the first transition,
+     * and switching one on took two steps to move the value. Emitting the rate as a DEFINE over the
+     * current state removes the lag; this pins the difference in NuSMV rather than in generated text.
+     */
+    @Test
+    void aDeviceAlreadyActingMovesTheEnvironmentOnTheFirstStep() throws Exception {
+        String nusmv = resolveNusmvPath();
+        Assumptions.assumeTrue(nusmv != null && Files.exists(Path.of(nusmv)),
+                "NuSMV executable is required for this soundness check");
+
+        String lagging = """
+                MODULE AC
+                VAR
+                  MachineState : {off, cool};
+                  temperature_rate : -2..0;
+                ASSIGN
+                  init(MachineState) := cool;
+                  init(temperature_rate) := 0;
+                  next(MachineState) := MachineState;
+                  next(temperature_rate) := case MachineState = cool : -2; TRUE : 0; esac;
+                MODULE main
+                VAR
+                  ac : AC;
+                  a_temperature : 20..30;
+                ASSIGN
+                  init(a_temperature) := 30;
+                  next(a_temperature) := max(20, min(30, a_temperature - 1 + ac.temperature_rate));
+                CTLSPEC AG (a_temperature = 30 -> AX (a_temperature <= 27))
+                """;
+        String contemporaneous = """
+                MODULE AC
+                VAR
+                  MachineState : {off, cool};
+                DEFINE
+                  temperature_rate := case MachineState = cool : -2; TRUE : 0; esac;
+                ASSIGN
+                  init(MachineState) := cool;
+                  next(MachineState) := MachineState;
+                MODULE main
+                VAR
+                  ac : AC;
+                  a_temperature : 20..30;
+                ASSIGN
+                  init(a_temperature) := 30;
+                  next(a_temperature) := max(20, min(30, a_temperature - 1 + ac.temperature_rate));
+                CTLSPEC AG (a_temperature = 30 -> AX (a_temperature <= 27))
+                """;
+
+        assertTrue(runNusmv(nusmv, lagging).stream()
+                        .anyMatch(line -> line.contains("is false")),
+                "a stored rate must be shown to lag, otherwise this test proves nothing");
+        assertTrue(runNusmv(nusmv, contemporaneous).stream()
+                        .anyMatch(line -> line.contains("is true")),
+                "a DEFINE rate must apply the device effect in the same step");
+    }
+
     private static String resolveNusmvPath() {
         String env = System.getenv("NUSMV_PATH");
         if (env != null && !env.isBlank()) {

@@ -118,7 +118,6 @@ public class SmvDeviceModuleBuilder {
         appendModeVariables(varContent, smv);
         appendInternalVariables(varContent, smv);
         appendSignalVariables(varContent, smv);
-        appendVariableRates(varContent, smv);
         if (!isSensor) {
             appendPropertyVariables(varContent, smv, PropertyDimension.TRUST);
             if (enablePrivacy) {
@@ -127,6 +126,12 @@ public class SmvDeviceModuleBuilder {
         }
         if (!varContent.isEmpty()) {
             content.append("\nVAR").append(varContent);
+        }
+
+        StringBuilder defineContent = new StringBuilder();
+        appendVariableRates(defineContent, smv);
+        if (!defineContent.isEmpty()) {
+            content.append("\nDEFINE").append(defineContent);
         }
     }
 
@@ -208,54 +213,81 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
+    /**
+     * Emits each numeric impact rate as a {@code DEFINE} over the device's current state.
+     *
+     * <p>MEDIC §3.1, Fig. 2b combines the device effect with the environment step
+     * <em>contemporaneously</em>: {@code v' - v ∈ [lower + env.D.v, upper + env.D.v]}. A state
+     * variable cannot express that, because {@code next(a_v)} reads the unprimed rate while
+     * {@code next(rate)} is derived from the current mode — so a device that starts already cooling
+     * applied nothing on the first transition, and switching it on took two steps to move the
+     * value. NuSMV confirmed the lag: with a rate variable, an AC initialised to {@code cool} left
+     * {@code AG (a_temperature = 30 -> AX a_temperature <= 27)} false, and the {@code DEFINE} form
+     * makes it true. A definition is also strictly cheaper — it adds no BDD variable and needs no
+     * {@code init}/{@code next}.
+     */
     private void appendVariableRates(StringBuilder content, DeviceSmvData smv) {
         for (String varName : smv.getImpactedVariables()) {
             // Only numeric impacted variables use a rate. Enum/boolean dynamics use Value.
             if (!isNumericVariable(smv, varName)) continue;
-            int[] range = computeRateRange(smv, varName);
-            content.append("\n\t").append(varName).append("_rate: ")
-                   .append(range[0]).append("..").append(range[1]).append(";");
+            content.append("\n\t").append(varName).append("_rate := ")
+                   .append(rateDefinitionExpression(smv, varName)).append(";");
         }
     }
 
     /**
-     * Scan validated WorkingState.Dynamics and derive the exact rate domain.
-     * A numeric impacted variable without an explicit active rate stutters at zero.
+     * The rate a device currently applies to one impacted variable, as a case over its live state.
+     * Every state without a declared {@code Dynamics} entry contributes no effect.
      */
-    private int[] computeRateRange(DeviceSmvData smv, String varName) {
-        int minRate = 0, maxRate = 0;
-        boolean found = false;
+    private String rateDefinitionExpression(DeviceSmvData smv, String varName) {
+        StringBuilder expression = new StringBuilder("case ");
         if (smv.getManifest() != null && smv.getManifest().getWorkingStates() != null) {
-            for (DeviceManifest.WorkingState ws : smv.getManifest().getWorkingStates()) {
-                if (ws.getDynamics() == null) continue;
-                for (DeviceManifest.Dynamic dyn : ws.getDynamics()) {
-                    if (varName.equals(dyn.getVariableName()) && dyn.getChangeRate() != null) {
-                        int rate;
-                        try {
-                            rate = Integer.parseInt(dyn.getChangeRate().trim());
-                        } catch (NumberFormatException e) {
-                            throw SmvGenerationException.templateInvalid(smv.getVarName(),
-                                    "WorkingState Dynamics for '" + varName
-                                            + "' has non-integer ChangeRate '" + dyn.getChangeRate() + "'");
-                        }
-                        if (!found) {
-                            minRate = rate;
-                            maxRate = rate;
-                            found = true;
-                        } else {
-                            minRate = Math.min(minRate, rate);
-                            maxRate = Math.max(maxRate, rate);
-                        }
+            for (DeviceManifest.WorkingState state : smv.getManifest().getWorkingStates()) {
+                if (state.getDynamics() == null) continue;
+                for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
+                    if (!varName.equals(dynamic.getVariableName())) continue;
+                    if (smv.getModes() == null || smv.getModes().isEmpty()) {
+                        throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                                "WorkingState Dynamics requires Modes so state '" + state.getName()
+                                        + "' can guard impacted variable '" + varName + "'");
                     }
+                    String guard = stateGuardExpression(smv, state.getName());
+                    if (guard == null) continue;
+                    expression.append(guard).append(" : ")
+                              .append(parseDynamicChangeRate(smv.getVarName(), varName, dynamic))
+                              .append("; ");
                 }
             }
         }
-        if (!found) return new int[]{0, 0};
-        // 确保 0 在范围内（rate=0 是 TRUE 分支的默认值）
-        minRate = Math.min(minRate, 0);
-        maxRate = Math.max(maxRate, 0);
-        return new int[]{minRate, maxRate};
+        return expression.append("TRUE : 0; esac").toString();
     }
+
+    /** Conjunction pinning every concrete mode segment of a WorkingState name. */
+    private String stateGuardExpression(DeviceSmvData smv, String stateName) {
+        String[] segments = stateName.split(";");
+        StringBuilder guard = new StringBuilder();
+        for (int index = 0; index < smv.getModes().size() && index < segments.length; index++) {
+            String segment = segments[index].trim();
+            if (segment.isEmpty()) continue;
+            if (guard.length() > 0) guard.append(" & ");
+            guard.append(smv.getModes().get(index)).append(" = ")
+                 .append(DeviceSmvDataFactory.cleanStateName(segment));
+        }
+        return guard.length() == 0 ? null : guard.toString();
+    }
+
+    private int parseDynamicChangeRate(String deviceName, String varName,
+                                       DeviceManifest.Dynamic dynamic) {
+        String rawRate = dynamic.getChangeRate();
+        try {
+            return Integer.parseInt(rawRate != null ? rawRate.trim() : "");
+        } catch (NumberFormatException e) {
+            throw SmvGenerationException.templateInvalid(deviceName,
+                    "WorkingState Dynamics for '" + varName
+                            + "' has non-integer ChangeRate '" + rawRate + "'");
+        }
+    }
+
 
     private void appendPropertyVariables(StringBuilder content, DeviceSmvData smv, PropertyDimension dim) {
         String domain = (dim == PropertyDimension.TRUST) ? "{untrusted, trusted}" : "{private, public}";
@@ -468,10 +500,8 @@ public class SmvDeviceModuleBuilder {
             content.append("\n\tinit(").append(sig.getName()).append(") := ").append(NUSMV_FALSE).append(";");
         }
 
-        for (String varName : smv.getImpactedVariables()) {
-            if (!isNumericVariable(smv, varName)) continue;
-            content.append("\n\tinit(").append(varName).append("_rate) := 0;");
-        }
+        // No init for an impact rate: it is a DEFINE over the current state, so it already holds the
+        // device's live effect in step 0 instead of starting at zero and lagging by one step.
     }
 
     private String variableDomainExpression(DeviceManifest.InternalVariable variable) {

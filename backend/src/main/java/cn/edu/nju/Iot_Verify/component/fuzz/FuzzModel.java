@@ -1117,7 +1117,12 @@ final class FuzzModel {
                 DeviceState deviceState = transitionSource.devices.get(device.id);
                 if (entry.getValue().isNumeric() && device.numericImpactedEnvironment.contains(name)) {
                     hasNumericImpact = true;
-                    currentImpactRate += deviceState.impactRates.getOrDefault(name, 0);
+                    // Derive the effect from the state the device is in for this step, matching the
+                    // formal generator's DEFINE. Reading a stored rate carried the previous step's
+                    // value, so a device that had just started acting contributed nothing until the
+                    // step after -- and one starting in an acting mode contributed nothing at all.
+                    currentImpactRate += dynamicEffect(
+                            device.activeWorkingState(deviceState.modes), name).numericRate();
                 } else if (!entry.getValue().isNumeric() && device.impactedEnvironment.contains(name)) {
                     DynamicEffect dynamic = dynamicEffect(device.activeWorkingState(deviceState.modes), name);
                     if (discreteDynamic == null) {

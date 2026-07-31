@@ -18,6 +18,15 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-08-01 (later)
 
 #### Fixed
+- **A device now moves a shared environment value in the same step it is acting.** Its per-variable
+  impact rate was a state variable, so the environment transition read the *previous* step's rate:
+  switching an air conditioner on took two steps to change the temperature, and a device that started
+  in a cooling mode never applied its effect on the first transition at all. MEDIC §3.1, Fig. 2b
+  combines the device effect with the environment step contemporaneously, so the rate is now a
+  definition over the device's current state. NuSMV confirms the difference — with the old encoding
+  `AG (a_temperature = 30 -> AX a_temperature <= 27)` was false for an AC initialised to `cool`, and
+  it is true now. The bounded explorer derives the effect from the same live state, so counterexamples
+  and findings agree. The model is also slightly smaller, since a definition adds no state variable.
 - **A declared `NaturalChangeRate` interval is now modeled in full, so verification can no longer
   report a scene safe on the strength of steps it never explored.** The declaration constrains
   `v' - v` (MEDIC §3.1, Fig. 2b), but the generator emitted only the lower, zero, and upper deltas.

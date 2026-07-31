@@ -1417,18 +1417,24 @@ class FuzzEngineTest {
         assertEquals(first.generatedPaths(), second.generatedPaths());
     }
 
+    /**
+     * MEDIC §3.1, Fig. 2b combines a device's effect with the environment step contemporaneously, so
+     * a device that is already in an acting state moves the value on the very first transition. The
+     * snapshot starts in {@code cool} (ChangeRate -1) with drift {@code [-1, 1]}, so seed 0 gives
+     * 50 - 1 - 1 = 48. Reading a stored rate instead produced 49 and delayed every effect by a step.
+     */
     @Test
-    void numericEnvironmentUsesPreviousImpactRateAndDeclaredRateCandidates() {
+    void numericEnvironmentAppliesTheActiveImpactRateInTheSameStep() {
         FuzzModel centered = FuzzModel.from(numericImpactSnapshot("50"));
         FuzzModel.Simulation centeredPath = centered.simulate(new long[]{0L, 0L}, 3);
 
-        assertEquals("49", centeredPath.traceStates().get(1).getEnvVariables().get(0).getValue());
-        assertEquals("47", centeredPath.traceStates().get(2).getEnvVariables().get(0).getValue());
+        assertEquals("48", centeredPath.traceStates().get(1).getEnvVariables().get(0).getValue());
+        assertEquals("46", centeredPath.traceStates().get(2).getEnvVariables().get(0).getValue());
 
         FuzzModel upperBoundary = FuzzModel.from(numericImpactSnapshot("100"));
         FuzzModel.Simulation boundaryPath = upperBoundary.simulate(new long[]{0L}, 2);
 
-        assertEquals("99", boundaryPath.traceStates().get(1).getEnvVariables().get(0).getValue());
+        assertEquals("98", boundaryPath.traceStates().get(1).getEnvVariables().get(0).getValue());
     }
 
     @Test
@@ -1436,7 +1442,9 @@ class FuzzEngineTest {
         FuzzModel model = FuzzModel.from(numericImpactSnapshot("100", "0"));
         FuzzModel.Simulation path = model.simulate(new long[]{0L}, 2);
 
-        assertEquals("100", path.traceStates().get(1).getEnvVariables().get(0).getValue());
+        // NaturalChangeRate=0 adds no drift, but the device's own declared cooling effect still
+        // applies in this step: 100 - 1 = 99.
+        assertEquals("99", path.traceStates().get(1).getEnvVariables().get(0).getValue());
     }
 
     /**

@@ -2828,12 +2828,15 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
-        // The all-empty state should NOT produce a guardless ": 5;" line
-        assertFalse(result.matches("(?s).*\\t\\t:\\s*5;.*"),
-                "All-empty-segment state should not emit guardless ': 5;' branch, got:\n" + result);
-        // The valid state "on;fast" should still produce its guarded branch
-        assertTrue(result.contains(": 3;"),
-                "Valid state 'on;fast' should produce its ': 3;' rate branch, got:\n" + result);
+        assertNotNull(result);
+        // The rate is a DEFINE inside the device module, so assert there rather than on main.
+        String deviceModule = deviceBuilder.build(smv, false, false);
+        // A state whose every mode segment is empty guards nothing, so it must contribute no branch.
+        assertFalse(deviceModule.contains(" : 5;"),
+                "All-empty-segment state should contribute no rate branch, got:\n" + deviceModule);
+        // The valid state "on;fast" still produces its guarded branch.
+        assertTrue(deviceModule.contains(" : 3;"),
+                "Valid state 'on;fast' should produce its guarded rate branch, got:\n" + deviceModule);
     }
 
     @Test
@@ -3328,12 +3331,15 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("dev_1", smv);
 
-        // Should NOT throw NPE, should produce next(dev_1.temperature_rate) transition
+        // Must not throw, and the impact rate must exist as a DEFINE over the current state so the
+        // device's effect reaches the environment in the same step rather than one step later.
         String result = assertDoesNotThrow(() ->
                 mainBuilder.build(1L, List.of(device), List.of(), map, AttackScenarioDto.none(), false));
+        assertNotNull(result);
 
-        assertTrue(result.contains("next(dev_1.temperature_rate)"),
-                "Expected _rate transition for ImpactedVariable 'temperature', got:\n" + result);
+        String deviceModule = deviceBuilder.build(smv, false, false);
+        assertTrue(deviceModule.contains("temperature_rate := case"),
+                "Expected a temperature_rate definition for the ImpactedVariable, got:\n" + deviceModule);
     }
 
     @Test

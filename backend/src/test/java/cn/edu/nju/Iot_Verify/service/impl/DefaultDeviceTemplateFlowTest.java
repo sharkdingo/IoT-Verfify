@@ -112,7 +112,7 @@ class DefaultDeviceTemplateFlowTest {
         assertTrue(smv.contains("init(a_temperature) := 30;"), smv);
         assertTrue(smv.contains("temp_sensor_1.temperature := a_temperature;"), smv);
         assertFalse(smv.contains("ac_1.temperature := a_temperature;"), smv);
-        assertTrue(smv.contains("next(ac_1.temperature_rate)"), smv);
+        assertTrue(smv.contains("temperature_rate := case"), smv);
         assertTrue(smv.contains("a_temperature + ac_1.temperature_rate"), smv);
         assertTrue(smv.contains("temp_sensor_1.temperature > 28"), smv);
         assertTrue(smv.contains(": cool;"), smv);
@@ -139,8 +139,8 @@ class DefaultDeviceTemplateFlowTest {
         assertTrue(smv.contains("aq_1.airQuality := a_airQuality;"), smv);
         assertTrue(smv.contains("aq_1.carbonDioxide := a_carbonDioxide;"), smv);
         assertFalse(smv.contains("purifier_1.airQuality := a_airQuality;"), smv);
-        assertTrue(smv.contains("next(purifier_1.airQuality_rate)"), smv);
-        assertTrue(smv.contains("next(purifier_1.carbonDioxide_rate)"), smv);
+        assertTrue(smv.contains("airQuality_rate := case"), smv);
+        assertTrue(smv.contains("carbonDioxide_rate := case"), smv);
     }
 
     @Test
@@ -161,7 +161,7 @@ class DefaultDeviceTemplateFlowTest {
         assertTrue(smv.contains("a_illuminance: 0..100;"), smv);
         assertTrue(smv.contains("lux_1.illuminance := a_illuminance;"), smv);
         assertFalse(smv.contains("light_1.illuminance := a_illuminance;"), smv);
-        assertTrue(smv.contains("next(light_1.illuminance_rate)"), smv);
+        assertTrue(smv.contains("illuminance_rate := case"), smv);
         assertTrue(smv.contains("a_illuminance + light_1.illuminance_rate"), smv);
     }
 

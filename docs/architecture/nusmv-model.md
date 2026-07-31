@@ -122,7 +122,10 @@ A shared numeric environment value must explicitly declare `NaturalChangeRate` a
 that interval plus all active device effects within the declared domain. The declaration is a
 constraint on the per-step change, so on every step the generator combines **every integer delta the
 interval admits** with the summed active device-effect expression and clamps each candidate to the
-declared bounds. Clamping pins both boundaries, so saturation at the domain edge needs no separate
+declared bounds. Each device's `<var>_rate` is a `DEFINE` over that device's current state, so its
+effect reaches the environment in the same step it is acting — Fig. 2b combines the two
+contemporaneously. Holding the rate in a state variable instead delayed every effect by one step and
+let a device that started in an acting mode contribute nothing at all. Clamping pins both boundaries, so saturation at the domain edge needs no separate
 at-boundary branch. `NaturalChangeRate=[-1, 1]` is MEDIC §3.1, Fig. 2b's exact
 physical disturbance; `0` explicitly means no independent natural change, so only active
 device effects remain and the value stutters when there are none. A wider interval is therefore a

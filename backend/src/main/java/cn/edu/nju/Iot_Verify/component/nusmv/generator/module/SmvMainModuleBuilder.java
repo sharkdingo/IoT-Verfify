@@ -348,7 +348,7 @@ public class SmvMainModuleBuilder {
         if (enablePrivacy) {
             appendVariablePropertyTransitions(content, devices, deviceSmvMap, PropertyDimension.PRIVACY, isAttack);
         }
-        appendVariableRateTransitions(content, devices, deviceSmvMap);
+        // Impact rates are DEFINEs inside each device module, so main emits no rate transition.
         appendExternalVariableAssignments(content, devices, deviceSmvMap, isAttack);
         appendInternalVariableTransitions(content, devices, deviceSmvMap, isAttack);
         appendRuleExecutionProbeAssignments(content, rules, deviceSmvMap, isAttack, paramCtx, context);
@@ -1672,69 +1672,6 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         }
         throw SmvGenerationException.smvGenerationError(
                 "Rule content item '" + contentName + "' is not declared by device '" + contentDevice + "'");
-    }
-
-    private void appendVariableRateTransitions(StringBuilder content,
-                                              List<DeviceVerificationDto> devices,
-                                              Map<String, DeviceSmvData> deviceSmvMap) {
-        for (DeviceVerificationDto device : devices) {
-            DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
-            if (smv == null || smv.getImpactedVariables() == null || smv.getManifest() == null) continue;
-
-            String varName = smv.getVarName();
-
-            for (String varName2 : smv.getImpactedVariables()) {
-                if (!isNumericImpactVariable(smv, varName2)) continue;
-
-                content.append("\n\tnext(").append(varName).append(".").append(varName2).append("_rate) :=\n");
-                content.append("\tcase\n");
-
-                if (smv.getManifest().getWorkingStates() != null) {
-                    for (DeviceManifest.WorkingState state : smv.getManifest().getWorkingStates()) {
-                        if (state.getDynamics() == null) continue;
-                        
-                        for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
-                            if (varName2.equals(dynamic.getVariableName())) {
-                                if (smv.getModes() != null && !smv.getModes().isEmpty()) {
-                                    String[] states = state.getName().split(";");
-                                    boolean firstCond = true;
-                                    for (int c = 0; c < smv.getModes().size() && c < states.length; c++) {
-                                        String rawSeg = states[c].trim();
-                                        if (rawSeg.isEmpty()) continue;
-                                        if (firstCond) {
-                                            content.append("\t\t");
-                                        } else {
-                                            content.append(" & ");
-                                        }
-                                        firstCond = false;
-                                        content.append(varName).append(".").append(smv.getModes().get(c))
-                                               .append("=").append(DeviceSmvDataFactory.cleanStateName(rawSeg));
-                                    }
-                                    if (firstCond) continue; // all segments empty — skip this CASE branch
-                                    String rawRate = dynamic.getChangeRate();
-                                    final int parsedRate;
-                                    try {
-                                        parsedRate = Integer.parseInt(rawRate != null ? rawRate.trim() : "");
-                                    } catch (NumberFormatException e) {
-                                        throw SmvGenerationException.templateInvalid(varName,
-                                                "WorkingState Dynamics for '" + varName2
-                                                        + "' has non-integer ChangeRate '" + rawRate + "'");
-                                    }
-                                    content.append(": ").append(parsedRate).append(";\n");
-                                } else {
-                                    throw SmvGenerationException.templateInvalid(varName,
-                                            "WorkingState Dynamics requires Modes so state '" + state.getName()
-                                                    + "' can guard impacted variable '" + varName2 + "'");
-                                }
-                            }
-                        }
-                    }
-                }
-
-                content.append("\t\tTRUE: 0;\n");
-                content.append("\tesac;");
-            }
-        }
     }
 
     private void appendInternalVariableTransitions(StringBuilder content,

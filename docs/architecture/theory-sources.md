@@ -42,6 +42,11 @@ their own copy; the citations below are precise enough to check against any copy
   the declaration lets reach 6 in one step. Because the span is therefore a state-space cost, it is
   bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN` and a wider declaration is rejected rather
   than silently narrowed.
+- **Device effect timing** — Fig. 2b combines the device effect and the environment step in the same
+  transition, so each device's `<var>_rate` is a `DEFINE` over its current state rather than a state
+  variable. A stored rate is read unprimed while it is itself computed from the current mode, which
+  delayed every effect by one step and made a device that started in an acting mode contribute
+  nothing on the first transition. The bounded explorer derives the same effect from the live state.
 - **Trust and privacy propagation** — `trust`/`privacy` labels belong to states and variables. Under
   MEDIC §3.3, Def. 3.3, Fig. 4, a target becomes untrusted only when every contributing trigger source
   is untrusted, while any private source makes the target private. Implementation:
