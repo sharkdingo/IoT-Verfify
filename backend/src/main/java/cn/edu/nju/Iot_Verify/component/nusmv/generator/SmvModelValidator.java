@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
 import cn.edu.nju.Iot_Verify.util.NaturalChangeRateParser;
@@ -661,7 +662,17 @@ public class SmvModelValidator {
         }
         if (hasRateDeclaration) {
             try {
-                NaturalChangeRateParser.parse(naturalRate);
+                NaturalChangeRateParser.RateRange range = NaturalChangeRateParser.parse(naturalRate);
+                // Every integer in the interval becomes an admissible next value, so the span is a
+                // state-space cost. Reject an unmodelably wide declaration instead of narrowing it
+                // to its endpoints, which would prove properties the declaration does not support.
+                if (range.span() > RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN) {
+                    throw SmvGenerationException.templateInvalid(deviceName, context
+                            + " declares NaturalChangeRate '" + naturalRate + "', whose span exceeds"
+                            + " the modelable maximum of "
+                            + RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN
+                            + "; every value in the interval is modeled as reachable in one step");
+                }
             } catch (NaturalChangeRateParser.ParseException exception) {
                 if (exception.isDescending()) {
                     throw SmvGenerationException.templateInvalid(deviceName, context

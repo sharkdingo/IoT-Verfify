@@ -291,7 +291,7 @@ describe('SystemInspector rule execution order', () => {
     const evolution = wrapper.get('[data-testid="environment-evolution-temperature"]')
     expect(wrapper.get('label').text()).toContain('Model initial value')
     expect(evolution.text()).toContain('[-1, 1]')
-    expect(evolution.text()).toContain('-1, 0, 1')
+    expect(evolution.text()).toContain('-1, 0, +1')
     expect(evolution.text()).toContain('Hall heater · on: rate 2 per step')
     expect(evolution.text()).toContain('never written back')
   })

@@ -2998,10 +2998,17 @@ class SmvGeneratorFixesTest {
 
         assertTrue(result.contains("a_temperature: 15..35;"),
                 "Attack mode must preserve the environment domain declared by the template, got:\n" + result);
-        assertTrue(result.contains("max(15, min(35, a_temperature+ac_1.temperature_rate))"),
+        assertTrue(result.contains("max(15, min(35, a_temperature + ac_1.temperature_rate))"),
                 "Candidates should remain clamped to the declared domain, got:\n" + result);
-        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature - 2+ac_1.temperature_rate)), max(15, min(35, a_temperature+ac_1.temperature_rate)), max(15, min(35, a_temperature + 3+ac_1.temperature_rate))}"),
-                "All candidates should remain within the declared domain, got:\n" + result);
+        // "[-2, 3]" admits every integer from -2 to 3, each combined with the device effect and
+        // clamped to the declared domain.
+        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature - 2 + ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature - 1 + ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature + ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature + 1 + ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature + 2 + ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature + 3 + ac_1.temperature_rate))}"),
+                "Every declared drift must be admitted and clamped, got:\n" + result);
     }
 
     @Test
@@ -3044,27 +3051,30 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
-        // Upper boundary branch: a_temperature>=35: {clamp(a_temperature - 30), a_temperature}
-        // Without clamp, 35-30=5 which is below lower bound 15
-        assertTrue(result.contains("a_temperature>=35: {max(15, min(35, a_temperature - 30)), a_temperature}"),
-                "Upper boundary branch should clamp lowerNcr candidate within >=upper guard, got:\n" + result);
-
-        // Lower boundary branch: a_temperature<=15: {a_temperature, clamp(a_temperature + 30)}
-        // Without clamp, 15+30=45 which is above upper bound 35
-        assertTrue(result.contains("a_temperature<=15: {a_temperature, max(15, min(35, a_temperature + 30))}"),
-                "Lower boundary branch should clamp upperNcr candidate within <=lower guard, got:\n" + result);
-
-        // TRUE branch should also be clamped
-        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature - 30)), max(15, min(35, a_temperature)), max(15, min(35, a_temperature + 30))}"),
-                "TRUE branch should clamp all three candidates, got:\n" + result);
+        // A rate far wider than the domain still yields only in-domain candidates, because every
+        // admissible delta is clamped. Clamping is what pins both boundaries, so the generator emits
+        // no at-boundary guard: the extreme candidates simply saturate.
+        assertFalse(result.contains("a_temperature>=35:"),
+                "clamping already pins the upper boundary; no at-boundary branch should remain:\n" + result);
+        assertFalse(result.contains("a_temperature<=15:"),
+                "clamping already pins the lower boundary; no at-boundary branch should remain:\n" + result);
+        for (int delta = -30; delta <= 30; delta++) {
+            String shifted = delta == 0 ? "a_temperature"
+                    : delta > 0 ? "a_temperature + " + delta
+                    : "a_temperature - " + Math.abs(delta);
+            assertTrue(result.contains("max(15, min(35, " + shifted + "))"),
+                    "declared rate [-30, 30] must admit and clamp delta " + delta + ", got:\n" + result);
+        }
 
         temperature.setNaturalChangeRate("[2,3]");
         String increasingResult = mainBuilder.build(
                 1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
-        assertTrue(increasingResult.contains("TRUE: {max(15, min(35, a_temperature + 2)), "
-                        + "max(15, min(35, a_temperature)), "
+        // A wholly positive interval keeps the stutter candidate: a step may apply no drift.
+        assertTrue(increasingResult.contains("TRUE: {max(15, min(35, a_temperature)), "
+                        + "max(15, min(35, a_temperature + 2)), "
                         + "max(15, min(35, a_temperature + 3))}"),
-                "same-direction ranges must retain both declared endpoints, got:\n" + increasingResult);
+                "same-direction ranges must admit every declared drift and the stutter, got:\n"
+                        + increasingResult);
     }
 
     @Test
@@ -3116,12 +3126,15 @@ class SmvGeneratorFixesTest {
         assertFalse(result.contains("a_temperature=15-(ac_1.temperature_rate)"),
                 "declared dynamics should not be replaced by a special lower-boundary branch, got:\n" + result);
 
-        // Every state uses all declared natural-rate endpoints plus the device effect, then clamps.
-        assertTrue(result.contains("TRUE: {"
-                        + "max(15, min(35, a_temperature - 30+ac_1.temperature_rate)), "
-                        + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
-                        + "max(15, min(35, a_temperature + 30+ac_1.temperature_rate))}"),
-                "TRUE branch should clamp all three candidates, got:\n" + result);
+        // Every state combines each admissible drift with the device effect, then clamps.
+        for (int delta : new int[]{-30, -1, 0, 1, 30}) {
+            String shifted = delta == 0 ? "a_temperature"
+                    : delta > 0 ? "a_temperature + " + delta
+                    : "a_temperature - " + Math.abs(delta);
+            assertTrue(result.contains(
+                            "max(15, min(35, " + shifted + " + ac_1.temperature_rate))"),
+                    "delta " + delta + " must combine with the device effect, got:\n" + result);
+        }
     }
 
     @Test
@@ -3156,9 +3169,11 @@ class SmvGeneratorFixesTest {
 
         assertFalse(result.contains("a_temperature=35-(ac_1.temperature_rate)"), result);
         assertFalse(result.contains("a_temperature=15-(ac_1.temperature_rate)"), result);
-        assertFalse(result.contains("toint(a_temperature)-1+ac_1.temperature_rate"), result);
-        assertFalse(result.contains("a_temperature+1+ac_1.temperature_rate"), result);
-        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
+        assertFalse(result.contains("toint(a_temperature) - 1 + ac_1.temperature_rate"), result);
+        assertFalse(result.contains("a_temperature + 1 + ac_1.temperature_rate"), result);
+        // NaturalChangeRate=0 declares no independent drift, so the device effect stands alone and
+        // no hidden [-1, 1] term is layered on top.
+        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature + ac_1.temperature_rate))}"),
                 "only the declared device effect should remain, got:\n" + result);
     }
 
@@ -3199,19 +3214,22 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
-        // Upper boundary: dev_1.power>=10: {clamp(dev_1.power - 8), dev_1.power}
-        // Without clamp, 10-8=2 is fine, but this verifies the clamp wrapper is present
-        assertTrue(result.contains("dev_1.power>=10: {max(0, min(10, dev_1.power - 8)), dev_1.power}"),
-                "Internal var upper boundary should clamp lowerNcr candidate, got:\n" + result);
-
-        // Lower boundary: dev_1.power<=0: {dev_1.power, clamp(dev_1.power + 8)}
-        // Without clamp, 0+8=8 is fine, but verifies the clamp wrapper is present
-        assertTrue(result.contains("dev_1.power<=0: {dev_1.power, max(0, min(10, dev_1.power + 8))}"),
-                "Internal var lower boundary should clamp upperNcr candidate, got:\n" + result);
-
-        // TRUE branch: all three candidates clamped
-        assertTrue(result.contains("TRUE: {max(0, min(10, dev_1.power - 8)), max(0, min(10, dev_1.power)), max(0, min(10, dev_1.power + 8))}"),
-                "Internal var TRUE branch should clamp all three candidates, got:\n" + result);
+        // A declared interval constrains the per-step change, so every integer in [-8, 8] is an
+        // admissible next value and each candidate is clamped to the declared domain. Clamping alone
+        // pins both boundaries -- verified against NuSMV -- so no at-boundary branch is emitted:
+        // saturating candidates keep the value inside 0..10 while still allowing it to hold or leave.
+        for (int delta = -8; delta <= 8; delta++) {
+            String shifted = delta == 0 ? "dev_1.power"
+                    : delta > 0 ? "dev_1.power + " + delta
+                    : "dev_1.power - " + Math.abs(delta);
+            String candidate = "max(0, min(10, " + shifted + "))";
+            assertTrue(result.contains(candidate),
+                    "declared rate [-8, 8] must admit " + candidate + ", got:\n" + result);
+        }
+        assertFalse(result.contains("dev_1.power>=10:"),
+                "clamping already pins the upper boundary; no at-boundary branch should remain");
+        assertFalse(result.contains("dev_1.power<=0:"),
+                "clamping already pins the lower boundary; no at-boundary branch should remain");
     }
 
     @Test
@@ -3251,19 +3269,23 @@ class SmvGeneratorFixesTest {
 
         assertFalse(result.contains("next(dev_1.waterTemperature_rate)"),
                 "Local-only dynamics should not create environment-impact rate variables, got:\n" + result);
+        // [-1, 1] has no interior, so its candidate set is unchanged: each admissible drift combines
+        // with the state's own ChangeRate of +1.
         assertTrue(result.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature - 1 + 1)), max(0, min(100, dev_1.waterTemperature + 1)), max(0, min(100, dev_1.waterTemperature + 1 + 1))};"),
                 "WorkingState.Dynamics.ChangeRate should update local numeric variable directly, got:\n" + result);
 
         var.setNaturalChangeRate("[2,3]");
         String sameDirection = mainBuilder.build(
                 1L, List.of(device), List.of(), map, AttackScenarioDto.none(), false);
-        assertTrue(sameDirection.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature + 2 + 1)), max(0, min(100, dev_1.waterTemperature + 1)), max(0, min(100, dev_1.waterTemperature + 3 + 1))};"),
-                "Local numeric ranges must retain both declared endpoints and the dynamic-only candidate, got:\n"
+        // "[2, 3]" admits +2 and +3, and a step may apply no drift, so the dynamic-only candidate
+        // remains. All three combine with the ChangeRate of +1.
+        assertTrue(sameDirection.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature + 1)), max(0, min(100, dev_1.waterTemperature + 2 + 1)), max(0, min(100, dev_1.waterTemperature + 3 + 1))};"),
+                "Local dynamics must admit every declared drift plus the dynamic-only candidate, got:\n"
                         + sameDirection);
-        assertTrue(sameDirection.contains("TRUE: {max(0, min(100, dev_1.waterTemperature + 2)), "
-                        + "max(0, min(100, dev_1.waterTemperature)), "
+        assertTrue(sameDirection.contains("TRUE: {max(0, min(100, dev_1.waterTemperature)), "
+                        + "max(0, min(100, dev_1.waterTemperature + 2)), "
                         + "max(0, min(100, dev_1.waterTemperature + 3))}"),
-                "The local fallback must retain both declared endpoints and stutter, got:\n"
+                "The local fallback must admit every declared drift and the stutter, got:\n"
                         + sameDirection);
     }
 

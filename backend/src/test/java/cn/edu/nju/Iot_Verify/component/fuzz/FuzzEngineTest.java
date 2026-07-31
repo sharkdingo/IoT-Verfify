@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -1438,21 +1439,34 @@ class FuzzEngineTest {
         assertEquals("100", path.traceStates().get(1).getEnvVariables().get(0).getValue());
     }
 
+    /**
+     * A declared interval constrains the per-step change, so the explorer must be able to reach
+     * every value in it — not just the endpoints, and not only whichever candidate one seed happens
+     * to select. Asserting a single seed's pick pinned list order rather than semantics.
+     */
     @Test
-    void numericEnvironmentWithoutDeviceImpactKeepsBothSameDirectionRateEndpoints() {
-        FuzzModel model = FuzzModel.from(numericImpactSnapshot("10", "[2,3]", false));
-        FuzzModel.Simulation path = model.simulate(new long[]{0L}, 2);
+    void numericEnvironmentCanReachEveryValueTheDeclaredIntervalAdmits() {
+        Set<String> reachable = new HashSet<>();
+        for (long seed = 0L; seed < 64L; seed++) {
+            FuzzModel model = FuzzModel.from(numericImpactSnapshot("10", "[2,3]", false));
+            reachable.add(model.simulate(new long[]{seed}, 2)
+                    .traceStates().get(1).getEnvVariables().get(0).getValue());
+        }
 
-        assertEquals("12", path.traceStates().get(1).getEnvVariables().get(0).getValue());
+        // "[2, 3]" permits +2 and +3, and a step may always apply no drift at all.
+        assertEquals(Set.of("10", "12", "13"), reachable);
     }
 
     @Test
-    void numericLocalVariableKeepsBothSameDirectionRateEndpoints() {
-        FuzzModel model = FuzzModel.from(numericLocalSnapshot("10", "[2,3]"));
-        FuzzModel.Simulation path = model.simulate(new long[]{0L}, 2);
+    void numericLocalVariableCanReachEveryValueTheDeclaredIntervalAdmits() {
+        Set<String> reachable = new HashSet<>();
+        for (long seed = 0L; seed < 64L; seed++) {
+            FuzzModel model = FuzzModel.from(numericLocalSnapshot("10", "[2,3]"));
+            reachable.add(model.simulate(new long[]{seed}, 2)
+                    .traceStates().get(1).getDevices().get(0).getVariables().get(0).getValue());
+        }
 
-        assertEquals("12", path.traceStates().get(1).getDevices().get(0)
-                .getVariables().get(0).getValue());
+        assertEquals(Set.of("10", "12", "13"), reachable);
     }
 
     @Test

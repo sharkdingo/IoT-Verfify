@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.util;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -49,5 +51,39 @@ class NaturalChangeRateParserTest {
         assertEquals("0..1", NaturalChangeRateParser.canonical("1"));
         assertEquals("0..1", NaturalChangeRateParser.canonical("[0, 1]"));
         assertEquals("1,2", NaturalChangeRateParser.canonical("1,2"));
+    }
+
+    /**
+     * A declared interval constrains {@code v' - v}, so the model must admit every integer in it.
+     * Emitting only the endpoints let NuSMV prove {@code AG (v = 5 -> AX v != 6)} for a variable
+     * declared {@code [-3, 3]}, which is an unsound SATISFIED verdict.
+     */
+    @Test
+    void admissibleDeltasCoverTheWholeDeclaredIntervalNotJustItsEndpoints() {
+        assertEquals(List.of(-3, -2, -1, 0, 1, 2, 3),
+                NaturalChangeRateParser.parse("[-3, 3]").admissibleDeltas());
+        assertEquals(List.of(-1, 0, 1),
+                NaturalChangeRateParser.parse("[-1, 1]").admissibleDeltas());
+        assertEquals(List.of(0, 1),
+                NaturalChangeRateParser.parse("1").admissibleDeltas());
+        assertEquals(List.of(0), NaturalChangeRateParser.parse("0").admissibleDeltas());
+    }
+
+    @Test
+    void admissibleDeltasAlwaysAllowAStutterStepEvenWhenTheIntervalExcludesZero() {
+        assertEquals(List.of(0, 2, 3, 4),
+                NaturalChangeRateParser.parse("[2, 4]").admissibleDeltas());
+        assertEquals(List.of(-4, -3, -2, 0),
+                NaturalChangeRateParser.parse("[-4, -2]").admissibleDeltas());
+    }
+
+    @Test
+    void spanAndStaticReportTheDeclarationWithoutOverflowing() {
+        assertTrue(NaturalChangeRateParser.parse("0").isStatic());
+        assertFalse(NaturalChangeRateParser.parse("[0, 1]").isStatic());
+        assertEquals(6L, NaturalChangeRateParser.parse("[-3, 3]").span());
+        assertEquals((long) Integer.MAX_VALUE - Integer.MIN_VALUE,
+                NaturalChangeRateParser.parse(
+                        "[" + Integer.MIN_VALUE + ", " + Integer.MAX_VALUE + "]").span());
     }
 }

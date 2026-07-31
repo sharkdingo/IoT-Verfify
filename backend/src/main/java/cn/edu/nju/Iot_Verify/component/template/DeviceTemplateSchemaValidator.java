@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.template;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
@@ -272,7 +273,16 @@ public class DeviceTemplateSchemaValidator {
             return;
         }
         try {
-            NaturalChangeRateParser.parse(rawRate);
+            NaturalChangeRateParser.RateRange range = NaturalChangeRateParser.parse(rawRate);
+            // The interval is modeled exhaustively, so reject an unmodelably wide span at authoring
+            // time rather than letting generation silently narrow it.
+            if (range.span() > RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN) {
+                throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                        + name + "' declares NaturalChangeRate '" + rawRate + "', whose span exceeds"
+                        + " the modelable maximum of "
+                        + RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN
+                        + "; every value in the interval is modeled as reachable in one step.");
+            }
         } catch (NaturalChangeRateParser.ParseException exception) {
             if (exception.isDescending()) {
                 throw new BadRequestException("Template '" + templateName + "': " + kind + " '"

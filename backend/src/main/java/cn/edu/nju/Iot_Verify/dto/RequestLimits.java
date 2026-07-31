@@ -21,6 +21,15 @@ public final class RequestLimits {
     public static final int MAX_TEMPLATE_DYNAMICS = 100;
     public static final int MAX_TEMPLATE_INTERNAL_VARIABLES = 100;
     public static final int MAX_TEMPLATE_VALUES = 100;
+    /**
+     * Widest {@code NaturalChangeRate} span the generator will model.
+     *
+     * <p>A declared interval is a constraint on {@code v' - v} (MEDIC §3.1, Fig. 2b), so every
+     * integer in it must be an admissible next value — anything less proves properties the
+     * declaration does not support. That makes the span a state-space cost, which is bounded here
+     * and rejected at validation rather than silently narrowed to the endpoints.
+     */
+    public static final int MAX_NATURAL_CHANGE_RATE_SPAN = 100;
     public static final int MAX_TEMPLATE_ENVIRONMENT_DOMAINS = 100;
     public static final int MAX_TEMPLATE_IMPACTED_VARIABLES = 100;
     public static final int MAX_TEMPLATE_TRANSITIONS = 100;

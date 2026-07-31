@@ -10,5 +10,9 @@ export const REQUEST_LIMITS = Object.freeze({
   templates: 100,
   chatSessions: 100,
   chatContentCharacters: 10000,
-  sceneBytes: 64 * 1024 * 1024
+  sceneBytes: 64 * 1024 * 1024,
+  // Mirrors RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN. Every value in a declared
+  // NaturalChangeRate interval is modeled as reachable in one step, so its span is a state-space
+  // cost that both sides must reject identically.
+  naturalChangeRateSpan: 100
 })

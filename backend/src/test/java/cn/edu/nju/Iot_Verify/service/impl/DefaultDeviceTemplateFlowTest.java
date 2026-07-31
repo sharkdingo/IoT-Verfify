@@ -113,7 +113,7 @@ class DefaultDeviceTemplateFlowTest {
         assertTrue(smv.contains("temp_sensor_1.temperature := a_temperature;"), smv);
         assertFalse(smv.contains("ac_1.temperature := a_temperature;"), smv);
         assertTrue(smv.contains("next(ac_1.temperature_rate)"), smv);
-        assertTrue(smv.contains("a_temperature+ac_1.temperature_rate"), smv);
+        assertTrue(smv.contains("a_temperature + ac_1.temperature_rate"), smv);
         assertTrue(smv.contains("temp_sensor_1.temperature > 28"), smv);
         assertTrue(smv.contains(": cool;"), smv);
     }
@@ -162,7 +162,7 @@ class DefaultDeviceTemplateFlowTest {
         assertTrue(smv.contains("lux_1.illuminance := a_illuminance;"), smv);
         assertFalse(smv.contains("light_1.illuminance := a_illuminance;"), smv);
         assertTrue(smv.contains("next(light_1.illuminance_rate)"), smv);
-        assertTrue(smv.contains("a_illuminance+light_1.illuminance_rate"), smv);
+        assertTrue(smv.contains("a_illuminance + light_1.illuminance_rate"), smv);
     }
 
     private static String generateSmv(SmvGenerator generator,

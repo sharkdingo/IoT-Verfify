@@ -3,6 +3,7 @@ import type {
     InternalVariable
 } from '../types/device'
 import type { DeviceNode } from '../types/node'
+import { REQUEST_LIMITS } from '../constants/requestLimits'
 
 // --- 图标与路径 ---
 
@@ -191,6 +192,7 @@ export const MANIFEST_VALIDATION_MESSAGE_KEYS = {
     numericBoundsOrderInvalid: 'app.manifestValidation.numericBoundsOrderInvalid',
     sharedNumericNaturalChangeRateRequired: 'app.manifestValidation.sharedNumericNaturalChangeRateRequired',
     naturalChangeRateInvalid: 'app.manifestValidation.naturalChangeRateInvalid',
+    naturalChangeRateSpanTooWide: 'app.manifestValidation.naturalChangeRateSpanTooWide',
     naturalChangeRateNumericOnly: 'app.manifestValidation.naturalChangeRateNumericOnly',
     environmentDomainNameRequired: 'app.manifestValidation.environmentDomainNameRequired',
     environmentDomainDuplicate: 'app.manifestValidation.environmentDomainDuplicate',
@@ -253,10 +255,29 @@ export const canonicalNaturalChangeRate = (value: unknown): string => {
     return parsed ? `${parsed.lower}..${parsed.upper}` : String(value)
 }
 
-export const naturalChangeCandidateValues = (value: unknown): string => {
+/**
+ * Every per-step change the declared interval admits, matching the generated model.
+ *
+ * The declaration constrains the change rather than listing interesting values, so a wide interval
+ * has to read as a wide interval here too: showing a user "2, 0, 3" for `[2, 4]` would describe an
+ * under-approximation the backend no longer generates. A step that applies no drift is always
+ * admitted, which is why `0` appears even when the interval excludes it.
+ */
+const MAX_NATURAL_CHANGE_RATE_SPAN = REQUEST_LIMITS.naturalChangeRateSpan
+
+export const naturalChangeDeltas = (value: unknown): number[] | null => {
     const parsed = parseNaturalChangeRate(value)
-    if (!parsed) return String(value ?? '')
-    return Array.from(new Set([parsed.lower, 0, parsed.upper])).join(', ')
+    if (!parsed) return null
+    const deltas: number[] = []
+    for (let delta = parsed.lower; delta <= parsed.upper; delta += 1) deltas.push(delta)
+    if (!deltas.includes(0)) deltas.splice(parsed.lower > 0 ? 0 : deltas.length, 0, 0)
+    return deltas
+}
+
+export const naturalChangeCandidateValues = (value: unknown): string => {
+    const deltas = naturalChangeDeltas(value)
+    if (!deltas) return String(value ?? '')
+    return deltas.map(delta => (delta > 0 ? `+${delta}` : String(delta))).join(', ')
 }
 
 const validateNumericRateContract = (
@@ -281,12 +302,25 @@ const validateNumericRateContract = (
             { name }
         )
     }
-    if (numeric && hasRate && !parseNaturalChangeRate(declaration.NaturalChangeRate)) {
-        return invalidManifest(
-            'naturalChangeRateInvalid',
-            `${kind} "${name}" has invalid NaturalChangeRate "${String(declaration.NaturalChangeRate)}"`,
-            { kind, name, rate: String(declaration.NaturalChangeRate) }
-        )
+    if (numeric && hasRate) {
+        const parsed = parseNaturalChangeRate(declaration.NaturalChangeRate)
+        if (!parsed) {
+            return invalidManifest(
+                'naturalChangeRateInvalid',
+                `${kind} "${name}" has invalid NaturalChangeRate "${String(declaration.NaturalChangeRate)}"`,
+                { kind, name, rate: String(declaration.NaturalChangeRate) }
+            )
+        }
+        // Every value in the interval is modeled as reachable in one step, so the span is a
+        // state-space cost the backend bounds. Reject it here too, or authoring would accept a
+        // manifest that generation refuses.
+        if (parsed.upper - parsed.lower > MAX_NATURAL_CHANGE_RATE_SPAN) {
+            return invalidManifest(
+                'naturalChangeRateSpanTooWide',
+                `${kind} "${name}" declares NaturalChangeRate "${String(declaration.NaturalChangeRate)}", whose span exceeds the modelable maximum of ${MAX_NATURAL_CHANGE_RATE_SPAN}`,
+                { kind, name, rate: String(declaration.NaturalChangeRate), max: MAX_NATURAL_CHANGE_RATE_SPAN }
+            )
+        }
     }
     return null
 }

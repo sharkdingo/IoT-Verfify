@@ -15,6 +15,22 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-01 (later)
+
+#### Fixed
+- **A declared `NaturalChangeRate` interval is now modeled in full, so verification can no longer
+  report a scene safe on the strength of steps it never explored.** The declaration constrains
+  `v' - v` (MEDIC §3.1, Fig. 2b), but the generator emitted only the lower, zero, and upper deltas.
+  For `[-1, 1]` those *are* the whole interval, which is why every bundled template hid the problem;
+  for anything wider the interior was missing, and NuSMV would prove a variable declared `[-3, 3]`
+  could not move by 1 in a step. Both the formal generator and the bounded explorer now admit every
+  integer the interval permits, combined with active device effects and clamped to the declared
+  domain, so a wider interval is a genuinely weaker assumption rather than a different one.
+  A step may always apply no drift, so an interval that excludes zero still lets a value hold still.
+  Because the span is therefore a state-space cost, an unmodelably wide interval is rejected at
+  template authoring and at generation instead of being silently narrowed. The redundant
+  at-boundary branches are gone: clamping already pins both ends of the domain.
+
 ### 2026-08-01
 
 #### Fixed

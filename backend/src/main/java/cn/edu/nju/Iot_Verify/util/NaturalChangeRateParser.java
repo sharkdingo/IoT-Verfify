@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.util;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
@@ -52,7 +54,51 @@ public final class NaturalChangeRateParser {
         }
     }
 
+    /**
+     * A declared per-step change interval.
+     *
+     * <p>The interval is a <em>constraint</em> on {@code v' - v}, exactly as MEDIC §3.1, Fig. 2b
+     * writes it — not a shortlist of interesting deltas. Emitting only the endpoints was unsound:
+     * for {@code [-3, 3]} it omitted ±1 and ±2, so NuSMV proved
+     * {@code AG (v = 5 -> AX v != 6)} <em>true</em> for a variable the declaration lets reach 6 in
+     * one step. A verifier must never report SATISFIED for behaviour the declaration permits, so
+     * every integer in the interval is admitted. {@code [-1, 1]} is unchanged by this — it has no
+     * interior — which is why the unsoundness stayed hidden while every bundled template used it.
+     */
     public record RateRange(int lower, int upper) {
+
+        /** True when the declaration permits no independent change at all. */
+        public boolean isStatic() {
+            return lower == 0 && upper == 0;
+        }
+
+        /**
+         * Widest single-step magnitude the interval permits, as a long so {@code Integer.MIN_VALUE}
+         * cannot overflow the comparison.
+         */
+        public long span() {
+            return (long) upper - (long) lower;
+        }
+
+        /**
+         * Every integer delta the declaration admits, ascending, always including {@code 0}.
+         *
+         * <p>Zero is always present because a step in which the value does not drift is permitted
+         * even by an interval that excludes it arithmetically (for example {@code [1, 3]}): the
+         * product treats a declared rate as the drift a step <em>may</em> apply, not one it must.
+         * Callers combine each delta with the active device effect for that step.
+         */
+        public List<Integer> admissibleDeltas() {
+            List<Integer> deltas = new ArrayList<>();
+            for (int delta = lower; delta <= upper; delta++) {
+                deltas.add(delta);
+                if (delta == Integer.MAX_VALUE) break;
+            }
+            if (!deltas.contains(Integer.valueOf(0))) {
+                deltas.add(lower > 0 ? 0 : deltas.size(), Integer.valueOf(0));
+            }
+            return List.copyOf(deltas);
+        }
     }
 
     public static final class ParseException extends IllegalArgumentException {

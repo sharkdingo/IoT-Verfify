@@ -5,6 +5,7 @@ import {
   getDeviceIconUrl,
   MANIFEST_VALIDATION_MESSAGE_KEYS,
   naturalChangeCandidateValues,
+  naturalChangeDeltas,
   parseNaturalChangeRate,
   resolveImpactEnvironmentDefinition,
   validateManifest
@@ -174,14 +175,43 @@ describe('device environment-domain semantics', () => {
     })).toMatchObject({ valid: false, code: 'naturalChangeRateNumericOnly' })
   })
 
-  it('parses and displays the exact endpoint candidate contract', () => {
+  it('parses a rate declaration and shows the whole interval it admits', () => {
     expect(parseNaturalChangeRate('1')).toEqual({ lower: 0, upper: 1 })
     expect(parseNaturalChangeRate('[2, 3]')).toEqual({ lower: 2, upper: 3 })
     expect(parseNaturalChangeRate('[3, 2]')).toBeNull()
     expect(parseNaturalChangeRate('2147483648')).toBeNull()
-    expect(naturalChangeCandidateValues('[2, 3]')).toBe('2, 0, 3')
     expect(canonicalNaturalChangeRate(null)).toBe('0..0')
     expect(canonicalNaturalChangeRate('')).toBe('')
+  })
+
+  // The declaration constrains the per-step change, so the UI must not describe an
+  // under-approximation the generator no longer produces. A step with no drift is always allowed,
+  // which is why 0 appears even for an interval that excludes it.
+  it('lists every per-step change the declared interval admits, including a stutter', () => {
+    expect(naturalChangeDeltas('[-1, 1]')).toEqual([-1, 0, 1])
+    expect(naturalChangeDeltas('[-3, 3]')).toEqual([-3, -2, -1, 0, 1, 2, 3])
+    expect(naturalChangeDeltas('[2, 4]')).toEqual([0, 2, 3, 4])
+    expect(naturalChangeDeltas('0')).toEqual([0])
+    expect(naturalChangeCandidateValues('[-1, 1]')).toBe('-1, 0, +1')
+    expect(naturalChangeCandidateValues('[2, 4]')).toBe('0, +2, +3, +4')
+  })
+
+  it('rejects a rate interval too wide to model exhaustively', () => {
+    const manifest = (rate: string) => ({
+      Name: 'Wide Drift Sensor',
+      InternalVariables: [{
+        Name: 'temperature',
+        IsInside: false,
+        LowerBound: -1000,
+        UpperBound: 1000,
+        NaturalChangeRate: rate,
+        Trust: 'trusted',
+        Privacy: 'public',
+        FalsifiableWhenCompromised: false
+      }]
+    })
+    expect(validateManifest(manifest('[-500, 500]')).code).toBe('naturalChangeRateSpanTooWide')
+    expect(validateManifest(manifest('[-1, 1]')).code).not.toBe('naturalChangeRateSpanTooWide')
   })
 
   it('rejects an impacted value whose domain exists only outside its own manifest', () => {

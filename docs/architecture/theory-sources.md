@@ -35,9 +35,13 @@ their own copy; the citations below are precise enough to check against any copy
   `[-1, 1]` physical disturbance. IoT-Verify exposes that fixed interval as the required
   `NaturalChangeRate` parameter. `[-1, 1]` therefore reproduces the paper rule exactly; `0`
   explicitly disables independent natural change; another declared interval is a visible
-  parameterized extension. The formal generator and bounded explorer both add the declared
-  lower endpoint, zero, and upper endpoint candidates to active device effects and clamp to
-  the declared domain. For MEDIC's integer `[-1, 1]`, those are the complete paper interval.
+  parameterized extension. The declaration is a **constraint on `v' - v`**, so the formal
+  generator and the bounded explorer both admit *every* integer in it — combined with the active
+  device effect and clamped to the declared domain. Modelling only the endpoints was unsound: for
+  `[-3, 3]` it omitted ±1 and ±2, and NuSMV then *proved* `AG (v = 5 -> AX v != 6)` for a variable
+  the declaration lets reach 6 in one step. Because the span is therefore a state-space cost, it is
+  bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN` and a wider declaration is rejected rather
+  than silently narrowed.
 - **Trust and privacy propagation** — `trust`/`privacy` labels belong to states and variables. Under
   MEDIC §3.3, Def. 3.3, Fig. 4, a target becomes untrusted only when every contributing trigger source
   is untrusted, while any private source makes the target private. Implementation:
@@ -73,9 +77,12 @@ These are intentional, not drift. Keep the list honest when adding more.
 - Numeric environment evolution parameterizes MEDIC's fixed per-step `[-1, 1]` disturbance.
   Every shared numeric declaration must state `NaturalChangeRate`: use `[-1, 1]` for exact
   MEDIC behavior, `0` for explicit stutter absent device effects, or another interval for a
-  deliberate domain-specific endpoint abstraction. The generator never layers a second hidden
-  `[-1, 1]` term on top of that declaration. Optional device-local numeric rates use the same
-  endpoint-and-stutter convention as a project extension; they are not part of MEDIC's shared
+  deliberate domain-specific widening. The interval is modeled exhaustively rather than as a
+  shortlist of interesting values, so a wider interval is a genuinely weaker assumption instead of a
+  different one. The generator never layers a second hidden `[-1, 1]` term on top of that
+  declaration. A declaration is always allowed to apply no drift in a step, so an interval that
+  excludes zero (say `[2, 4]`) still permits the value to hold still. Optional device-local numeric
+  rates use the same convention as a project extension; they are not part of MEDIC's shared
   physical-environment equation.
 - Specification templates 1–7 extend MEDIC's two primitive security templates with safety and
   reachability shapes. MEDIC §4.1 explicitly anticipates this ("More CTL templates ... can be defined

@@ -193,7 +193,7 @@
           "NaturalChangeRate": {
             "type": "string",
             "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$",
-            "description": "Per-step natural change candidates: single value '1' means {0,1}; a range contributes its unique lower, zero, and upper values. Required for shared numeric variables (IsInside=false): [-1,1] is the complete integer MEDIC baseline and 0 explicitly means no independent natural change."
+            "description": "Per-step constraint on the value change: every integer in the interval is modeled as reachable in one step, so a wider interval is a weaker assumption, not a different one. A single value '1' means the interval 0..1; an interval that excludes zero still permits a step with no drift. Required for shared numeric variables (IsInside=false): [-1,1] is MEDIC's exact integer baseline and 0 explicitly means no independent natural change. The span is bounded because it is a state-space cost."
           }
         },
         "additionalProperties": false,
@@ -258,7 +258,7 @@
           "NaturalChangeRate": {
             "type": "string",
             "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$",
-            "description": "Required for numeric shared environment domains. Use [-1,1] for the complete integer MEDIC baseline or 0 for no independent natural change; wider ranges contribute their unique lower, zero, and upper candidates."
+            "description": "Required for numeric shared environment domains. Use [-1,1] for MEDIC's exact integer baseline or 0 for no independent natural change. Every integer in a wider interval is modeled as reachable in one step, and the span is bounded because it is a state-space cost."
           }
         },
         "additionalProperties": false,

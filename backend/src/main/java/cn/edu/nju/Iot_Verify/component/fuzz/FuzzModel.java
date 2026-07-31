@@ -2534,6 +2534,8 @@ final class FuzzModel {
         private final Integer upper;
         private final int lowerRate;
         private final int upperRate;
+        /** The declared interval, so candidate generation matches the formal generator exactly. */
+        private final NaturalChangeRateParser.RateRange rateRange;
 
         private ValueDomain(
                 List<String> values,
@@ -2546,6 +2548,7 @@ final class FuzzModel {
             this.upper = upper;
             this.lowerRate = lowerRate;
             this.upperRate = upperRate;
+            this.rateRange = new NaturalChangeRateParser.RateRange(lowerRate, upperRate);
         }
 
         private static ValueDomain from(
@@ -2636,13 +2639,11 @@ final class FuzzModel {
                 return freeDiscreteChoice ? values : List.of(cleanLiteral(current));
             }
             int currentValue = parseInteger(current, "for numeric state");
+            // Same admissible-delta set the formal generator emits, so a finding and a
+            // counterexample describe the same transition relation.
             LinkedHashSet<String> candidates = new LinkedHashSet<>();
-            if (lowerRate != 0) {
-                candidates.add(Long.toString(clamp((long) currentValue + dynamicRate + lowerRate)));
-            }
-            candidates.add(Long.toString(clamp((long) currentValue + dynamicRate)));
-            if (upperRate != 0) {
-                candidates.add(Long.toString(clamp((long) currentValue + dynamicRate + upperRate)));
+            for (int delta : rateRange.admissibleDeltas()) {
+                candidates.add(Long.toString(clamp((long) currentValue + dynamicRate + delta)));
             }
             return List.copyOf(candidates);
         }
@@ -2664,12 +2665,8 @@ final class FuzzModel {
             long currentValue = parseInteger(current, "for numeric environment state");
             long effectiveImpactRate = hasNumericImpact ? impactRate : 0L;
             LinkedHashSet<String> candidates = new LinkedHashSet<>();
-            if (lowerRate != 0) {
-                candidates.add(Long.toString(clamp(currentValue + lowerRate + effectiveImpactRate)));
-            }
-            candidates.add(Long.toString(clamp(currentValue + effectiveImpactRate)));
-            if (upperRate != 0) {
-                candidates.add(Long.toString(clamp(currentValue + upperRate + effectiveImpactRate)));
+            for (int delta : rateRange.admissibleDeltas()) {
+                candidates.add(Long.toString(clamp(currentValue + delta + effectiveImpactRate)));
             }
             return List.copyOf(candidates);
         }

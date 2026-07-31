@@ -1292,54 +1292,24 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         int lower = var.getLowerBound();
         int upper = var.getUpperBound();
 
-        int[] ncr = parseNaturalChangeRate(var.getNaturalChangeRate(), "env:" + varName);
-        int lowerRate = ncr[0], upperRate = ncr[1];
+        NaturalChangeRateParser.RateRange rate =
+                parseNaturalChangeRate(var.getNaturalChangeRate(), "env:" + varName);
 
         // Check if any device provides an impacted _rate expression for this variable
         String rateExpr = findImpactRateExpression(varName, devices, deviceSmvMap);
 
-        if (rateExpr != null) {
-            // NaturalChangeRate explicitly parameterizes MEDIC's [-1, 1] disturbance. Combine the
-            // declared endpoints with active device effects, but never add a second hidden term.
-            List<String> rateCandidates = new ArrayList<>();
-            if (lowerRate != 0) {
-                rateCandidates.add(clampExpr(formatArithmeticExpr(smvVarName, lowerRate) + "+" + rateExpr, lower, upper));
-            }
-            rateCandidates.add(clampExpr(smvVarName + "+" + rateExpr, lower, upper));
-            if (upperRate != 0) {
-                rateCandidates.add(clampExpr(formatArithmeticExpr(smvVarName, upperRate) + "+" + rateExpr, lower, upper));
-            }
-            content.append("\t\tTRUE: {").append(String.join(", ", rateCandidates)).append("};\n");
-        } else {
-            // No impacted rate: use NaturalChangeRate for TRUE branch candidates
-            if (upperRate > 0) {
-                StringBuilder upperSet = new StringBuilder("{");
-                if (lowerRate < 0) {
-                    upperSet.append(clampExpr(formatArithmeticExpr(smvVarName, lowerRate), lower, upper)).append(", ");
-                }
-                upperSet.append(smvVarName).append("}");
-                content.append("\t\t").append(smvVarName).append(">=").append(upper)
-                       .append(": ").append(upperSet).append(";\n");
-            }
-            if (lowerRate < 0) {
-                StringBuilder lowerSet = new StringBuilder("{").append(smvVarName);
-                if (upperRate > 0) {
-                    lowerSet.append(", ").append(clampExpr(formatArithmeticExpr(smvVarName, upperRate), lower, upper));
-                }
-                lowerSet.append("}");
-                content.append("\t\t").append(smvVarName).append("<=").append(lower)
-                       .append(": ").append(lowerSet).append(";\n");
-            }
-
-            List<String> rateCandidates = new ArrayList<>();
-            if (lowerRate != 0) {
-                rateCandidates.add(clampExpr(formatArithmeticExpr(smvVarName, lowerRate), lower, upper));
-            }
-            rateCandidates.add(clampExpr(smvVarName, lower, upper));
-            if (upperRate != 0) {
-                rateCandidates.add(clampExpr(formatArithmeticExpr(smvVarName, upperRate), lower, upper));
-            }
-            content.append("\t\tTRUE: {").append(String.join(", ", rateCandidates)).append("};\n");
+        // MEDIC §3.1, Fig. 2b constrains v' - v to the declared interval combined with the active
+        // device effect, so every integer in that interval is an admissible next value. Clamping to
+        // the declared domain already pins both boundaries, which is why no separate at-boundary
+        // branch is needed: at v = upper the ascending deltas simply saturate there.
+        List<String> rateCandidates = new ArrayList<>();
+        for (int delta : rate.admissibleDeltas()) {
+            String shifted = formatArithmeticExpr(smvVarName, delta);
+            rateCandidates.add(clampExpr(
+                    rateExpr == null ? shifted : shifted + " + " + rateExpr, lower, upper));
+        }
+        content.append("\t\tTRUE: {").append(String.join(", ", rateCandidates)).append("};\n");
+        if (rateExpr == null) {
         }
     }
 
@@ -1840,64 +1810,25 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                         impactedRate = varName + "." + var.getName() + "_rate";
                     }
 
-                    int[] ncrParsed = parseNaturalChangeRate(var.getNaturalChangeRate(), "internal:" + var.getName());
-                    int lowerNcr = ncrParsed[0], upperNcr = ncrParsed[1];
+                    NaturalChangeRateParser.RateRange localRate = parseNaturalChangeRate(
+                            var.getNaturalChangeRate(), "internal:" + var.getName());
 
                     String varRef = varName + "." + var.getName();
 
                     appendLocalNumericDynamicsBranches(content, smv, varName, var, varRef,
-                            lowerNcr, upperNcr, hasNumericBounds, lowerBound, upperBound);
+                            localRate, hasNumericBounds, lowerBound, upperBound);
 
-                    if (upperBound != null && (upperNcr > 0 || !impactedRate.isEmpty())) {
-                        if (impactedRate.isEmpty()) {
-                            StringBuilder upperSet = new StringBuilder("{");
-                            if (lowerNcr < 0) {
-                                String expr = formatArithmeticExpr(varRef, lowerNcr);
-                                upperSet.append(lowerBound != null ? clampExpr(expr, lowerBound, upperBound) : expr).append(", ");
-                            }
-                            upperSet.append(varRef).append("}");
-                            content.append("\t\t").append(varRef).append(">=").append(upperBound)
-                                   .append(": ").append(upperSet).append(";\n");
-                        } else {
-                            content.append("\t\t").append(varRef).append(">=").append(upperBound)
-                                   .append(": ").append(upperBound).append(";\n");
-                        }
-                    }
-                    if (lowerBound != null && (lowerNcr < 0 || !impactedRate.isEmpty())) {
-                        if (impactedRate.isEmpty()) {
-                            StringBuilder lowerSet = new StringBuilder("{").append(varRef);
-                            if (upperNcr > 0) {
-                                String expr = formatArithmeticExpr(varRef, upperNcr);
-                                lowerSet.append(", ").append(upperBound != null ? clampExpr(expr, lowerBound, upperBound) : expr);
-                            }
-                            lowerSet.append("}");
-                            content.append("\t\t").append(varRef).append("<=").append(lowerBound)
-                                   .append(": ").append(lowerSet).append(";\n");
-                        } else {
-                            content.append("\t\t").append(varRef).append("<=").append(lowerBound)
-                                   .append(": ").append(lowerBound).append(";\n");
-                        }
-                    }
-
+                    // Every integer in the declared interval is admissible, combined with the
+                    // device's own active effect. Clamping pins both boundaries, so saturation at
+                    // the domain edge needs no separate branch.
                     List<String> rateCandidates = new ArrayList<>();
-                    if (lowerNcr != 0) {
-                        String lowerExpr = formatArithmeticExpr(varRef, lowerNcr);
+                    for (int delta : localRate.admissibleDeltas()) {
+                        String expr = formatArithmeticExpr(varRef, delta);
                         if (!impactedRate.isEmpty()) {
-                            lowerExpr = lowerExpr + "+" + impactedRate;
+                            expr = expr + " + " + impactedRate;
                         }
-                        rateCandidates.add(hasNumericBounds ? clampExpr(lowerExpr, lowerBound, upperBound) : lowerExpr);
-                    }
-                    String steadyExpr = varRef;
-                    if (!impactedRate.isEmpty()) {
-                        steadyExpr = steadyExpr + "+" + impactedRate;
-                    }
-                    rateCandidates.add(hasNumericBounds ? clampExpr(steadyExpr, lowerBound, upperBound) : steadyExpr);
-                    if (upperNcr != 0) {
-                        String upperExpr = formatArithmeticExpr(varRef, upperNcr);
-                        if (!impactedRate.isEmpty()) {
-                            upperExpr = upperExpr + "+" + impactedRate;
-                        }
-                        rateCandidates.add(hasNumericBounds ? clampExpr(upperExpr, lowerBound, upperBound) : upperExpr);
+                        rateCandidates.add(
+                                hasNumericBounds ? clampExpr(expr, lowerBound, upperBound) : expr);
                     }
                     content.append("\t\tTRUE: {").append(String.join(", ", rateCandidates)).append("};\n");
                 } else {
@@ -2031,8 +1962,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                                     String deviceVarName,
                                                     DeviceManifest.InternalVariable var,
                                                     String varRef,
-                                                    int lowerNcr,
-                                                    int upperNcr,
+                                                    NaturalChangeRateParser.RateRange rate,
                                                     boolean hasNumericBounds,
                                                     Integer lowerBound,
                                                     Integer upperBound) {
@@ -2058,17 +1988,12 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                     + "' has non-integer ChangeRate '" + dynamic.getChangeRate() + "'");
                 }
 
+                // The state's own ChangeRate is a definite effect; the declared interval is the
+                // drift that may accompany it, so every admissible delta combines with that effect.
                 List<String> candidates = new ArrayList<>();
-                if (lowerNcr != 0) {
+                for (int delta : rate.admissibleDeltas()) {
                     candidates.add(clampIfBounded(
-                            formatArithmeticExpr(formatArithmeticExpr(varRef, lowerNcr), dynamicRate),
-                            hasNumericBounds, lowerBound, upperBound));
-                }
-                candidates.add(clampIfBounded(formatArithmeticExpr(varRef, dynamicRate),
-                        hasNumericBounds, lowerBound, upperBound));
-                if (upperNcr != 0) {
-                    candidates.add(clampIfBounded(
-                            formatArithmeticExpr(formatArithmeticExpr(varRef, upperNcr), dynamicRate),
+                            formatArithmeticExpr(formatArithmeticExpr(varRef, delta), dynamicRate),
                             hasNumericBounds, lowerBound, upperBound));
                 }
 
@@ -2141,14 +2066,12 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * Parse NaturalChangeRate string into [lowerRate, upperRate].
-     * Supports formats: "3", "[-1,2]", etc.
-     * Returns int[2] where [0]=lowerRate, [1]=upperRate.
+     * Resolves a declared NaturalChangeRate into the interval the generated model must admit,
+     * failing generation on a malformed declaration rather than modeling a guess.
      */
-    private int[] parseNaturalChangeRate(String ncr, String contextName) {
+    private NaturalChangeRateParser.RateRange parseNaturalChangeRate(String ncr, String contextName) {
         try {
-            NaturalChangeRateParser.RateRange range = NaturalChangeRateParser.parse(ncr);
-            return new int[]{range.lower(), range.upper()};
+            return NaturalChangeRateParser.parse(ncr);
         } catch (NaturalChangeRateParser.ParseException exception) {
             throw SmvGenerationException.templateInvalid(contextName,
                     "NaturalChangeRate '" + ncr

@@ -115,18 +115,22 @@ boolean.
 
 Evolution is scope-sensitive. A device-local variable follows its declared Transition
 assignment, WorkingState Dynamic, or numeric `NaturalChangeRate`; if none applies, it
-retains its current value. A local numeric rate uses the same unique lower-endpoint,
-zero, and upper-endpoint candidates as a shared numeric rate, combined with its active
+retains its current value. A local numeric rate follows the same interval convention as a
+shared numeric rate, combined with its active
 WorkingState Dynamic when one applies. The generator does not invent arbitrary local device changes.
 A shared numeric environment value must explicitly declare `NaturalChangeRate` and follows
-that interval plus all active device effects within the declared domain. On every step, the
-generator combines the lower and upper rate endpoints (when non-zero) with the summed active
-device-effect expression, also retains the device-effect-only candidate, and clamps every
-candidate to the declared bounds. `NaturalChangeRate=[-1, 1]` is MEDIC §3.1, Fig. 2b's exact
+that interval plus all active device effects within the declared domain. The declaration is a
+constraint on the per-step change, so on every step the generator combines **every integer delta the
+interval admits** with the summed active device-effect expression and clamps each candidate to the
+declared bounds. Clamping pins both boundaries, so saturation at the domain edge needs no separate
+at-boundary branch. `NaturalChangeRate=[-1, 1]` is MEDIC §3.1, Fig. 2b's exact
 physical disturbance; `0` explicitly means no independent natural change, so only active
-device effects remain and the value stutters when there are none. Other declared intervals
-are a visible parameterized endpoint extension: the transition uses the unique lower, zero,
-and upper delta candidates, not every integer between wider endpoints. No second hidden
+device effects remain and the value stutters when there are none. A wider interval is therefore a
+strictly weaker assumption rather than a different one — modelling only its endpoints would prove
+properties the declaration does not support — and a step that applies no drift is always admitted,
+so an interval excluding zero (say `[2, 4]`) still lets the value hold still. Because the span is a
+state-space cost it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN`, and a wider
+declaration is rejected at authoring and generation instead of being narrowed. No second hidden
 `[-1, 1]` term is added. A shared
 enum/boolean environment value is an uncontrolled model input and may otherwise choose
 any value in its declared domain on each step. These assumptions are returned, rather than merely documented, through
