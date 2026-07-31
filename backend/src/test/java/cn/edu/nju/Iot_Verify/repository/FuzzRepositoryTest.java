@@ -354,19 +354,22 @@ class FuzzRepositoryTest {
                 .build());
 
         assertEquals(1, findingRepository
-                .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(11L, task.getId()).size());
+                .findByUserIdAndFuzzTaskId(11L, task.getId()).size());
         assertTrue(findingRepository
-                .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(12L, task.getId()).isEmpty());
+                .findByUserIdAndFuzzTaskId(12L, task.getId()).isEmpty());
         assertEquals(1L, findingRepository.countByUserIdAndFuzzTaskId(11L, task.getId()));
         assertEquals(0L, findingRepository.countByUserIdAndFuzzTaskId(12L, task.getId()));
-        List<FuzzTaskPo> completedRuns = taskRepository.findByUserIdAndStatusOrderByCreatedAtDescIdDesc(
+        List<FuzzTaskSummaryProjection> completedRuns = taskRepository
+                .findSummaryByUserIdAndStatusOrderByCreatedAtDescIdDesc(
                 11L, FuzzTaskPo.TaskStatus.COMPLETED, PageRequest.of(0, 25));
         assertEquals(1, completedRuns.size());
         assertEquals(FuzzExplorationMode.BOARD_SNAPSHOT,
                 completedRuns.get(0).getExplorationMode());
-        List<FuzzTaskPo> inbox = taskRepository.findByUserIdAndStatusNotOrderByCreatedAtDescIdDesc(
+        List<FuzzTaskSummaryProjection> inbox = taskRepository
+                .findSummaryByUserIdAndStatusNotOrderByCreatedAtDescIdDesc(
                 11L, FuzzTaskPo.TaskStatus.COMPLETED, PageRequest.of(0, 100));
-        assertEquals(List.of(cancelledTask.getId()), inbox.stream().map(FuzzTaskPo::getId).toList());
+        assertEquals(List.of(cancelledTask.getId()),
+                inbox.stream().map(FuzzTaskSummaryProjection::getId).toList());
         assertEquals(FuzzExplorationMode.PAPER_COMPATIBLE,
                 inbox.get(0).getExplorationMode());
     }
@@ -467,6 +470,9 @@ class FuzzRepositoryTest {
                 .noneMatch(name -> name.equals("getViolatedSpecJson")
                         || name.equals("getStatesJson")
                         || name.equals("getInputEventsJson")));
+        assertTrue(Arrays.stream(FuzzFindingRepository.class.getMethods())
+                .map(Method::getName)
+                .noneMatch(name -> name.contains("OrderByCreatedAt")));
     }
 
     private FuzzTaskPo taskForLease(String workerId, LocalDateTime leaseExpiresAt) {

@@ -79,6 +79,7 @@ const i18n = createI18n({
         untrusted: 'Untrusted',
         public: 'Public',
         private: 'Private',
+        useTemplateDefaultWithValue: 'Use template default ({value})',
         resetDefaultTemplatesNotice: 'The catalog and pool update together.',
         defaultTemplateResetReverificationRequired: 'Existing verification and simulation history does not establish the reset board.',
         defaultTemplatesResetSuccessReverificationRequired: 'Reset {types}/{devices}/{variables}. Rerun verification and simulation.',
@@ -180,6 +181,24 @@ describe('ControlCenter model token display', () => {
             name: 'CustomSwitch',
             defaultTemplate: false,
             manifest: { ...manifest, Name: 'CustomSwitch' }
+          },
+          {
+            id: 3,
+            name: 'NumericSwitch',
+            defaultTemplate: false,
+            manifest: {
+              ...manifest,
+              Name: 'NumericSwitch',
+              InternalVariables: [{
+                Name: 'threshold',
+                IsInside: true,
+                FalsifiableWhenCompromised: false,
+                Trust: 'trusted',
+                Privacy: 'public',
+                LowerBound: 5,
+                UpperBound: 20
+              }]
+            }
           }
         ]
       },
@@ -194,12 +213,18 @@ describe('ControlCenter model token display', () => {
     expect(bundledState.attributes('value')).toBe('off')
     expect(bundledValue.text()).toBe('Enabled')
     expect(bundledValue.attributes('value')).toBe('on')
+    expect(wrapper.get('[data-testid="single-device-variable-SwitchState"] option[value=""]').text())
+      .toBe('Use template default (Enabled)')
     expect(wrapper.get('span[title="Switch status"]').text()).toBe('Switch status')
 
     await templateSelect.setValue('CustomSwitch')
     expect(wrapper.get('[data-testid="single-device-state"] option[value="off"]').text()).toBe('off')
     expect(wrapper.get('[data-testid="single-device-variable-SwitchState"] option[value="on"]').text()).toBe('on')
     expect(wrapper.get('span[title="SwitchState"]').text()).toBe('SwitchState')
+
+    await templateSelect.setValue('NumericSwitch')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="single-device-variable-threshold"]').element.placeholder)
+      .toBe('Use template default (5) / 5 - 20')
 
     wrapper.unmount()
   })

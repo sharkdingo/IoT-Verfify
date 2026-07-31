@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
@@ -22,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 import java.util.Map;
 import java.time.LocalDateTime;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -109,10 +111,12 @@ class SimulationSyncToolTest {
         when(boardDataConverter.getModelInputSnapshot(1L)).thenReturn(snapshot(device));
         when(simulationService.simulateWithTemplateSnapshot(anyLong(), any(), any()))
                 .thenReturn(SimulationResultDto.builder()
-                        .requestedSteps(1)
-                        .steps(1)
+                        .requestedSteps(11)
+                        .steps(11)
                         .modelComplete(true)
-                        .states(List.of(new TraceStateDto(), new TraceStateDto()))
+                        .states(IntStream.range(0, 12)
+                                .mapToObj(this::traceState)
+                                .toList())
                         .logs(List.of("ok"))
                         .historyPersistence(RunPersistenceDto.notRequested())
                         .modelSnapshot(ModelRunSnapshotDto.captured(
@@ -121,12 +125,26 @@ class SimulationSyncToolTest {
 
         JsonNode json = objectMapper.readTree(
                 new SimulateModelTool(boardDataConverter, simulationService, objectMapper)
-                        .execute("{\"steps\":1}"));
+                        .execute("{\"steps\":11}"));
 
         assertEquals(1, json.path("modelSnapshot").path("deviceCount").asInt());
         assertTrue(json.path("message").asText().contains("not a prediction"));
         assertTrue(json.path("message").asText().contains("not added to run history"));
+        assertTrue(json.path("message").asText().contains("simulate_model_async"));
         assertEquals("NOT_REQUESTED", json.path("historyPersistence").path("status").asText());
+        assertEquals(12, json.path("stateCount").asInt());
+        assertEquals("INITIAL_AND_FINAL", json.path("statePreviewKind").asText());
+        assertEquals(2, json.path("previewedStateCount").asInt());
+        assertEquals(2, json.path("statePreview").size());
+        assertEquals(0, json.path("statePreview").get(0).path("stateIndex").asInt());
+        assertEquals(11, json.path("statePreview").get(1).path("stateIndex").asInt());
+        assertEquals("Device 0",
+                json.path("statePreview").get(0).path("devices").get(0).path("deviceLabel").asText());
+        assertTrue(json.path("statePreview").get(0).path("devices").get(0).path("deviceId").isMissingNode());
+        assertTrue(json.path("initialState").isMissingNode());
+        assertTrue(json.path("finalState").isMissingNode());
+        assertTrue(json.path("allStates").isMissingNode());
+        assertTrue(json.path("logs").isMissingNode());
     }
 
     @Test
@@ -266,5 +284,19 @@ class SimulationSyncToolTest {
     private ModelInputSnapshot snapshot(DeviceVerificationDto device) {
         return new ModelInputSnapshot(
                 List.of(), List.of(device), List.of(), List.of(), List.of(), Map.of());
+    }
+
+    private TraceStateDto traceState(int index) {
+        TraceDeviceDto device = new TraceDeviceDto();
+        device.setDeviceId("internal_" + index);
+        device.setDeviceLabel("Device " + index);
+        device.setTemplateName("Light");
+        device.setState(index == 0 ? "off" : "on");
+        return TraceStateDto.builder()
+                .stateIndex(index)
+                .devices(List.of(device))
+                .triggeredRules(List.of())
+                .compromisedAutomationLinks(List.of())
+                .build();
     }
 }

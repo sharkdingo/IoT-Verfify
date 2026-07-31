@@ -983,7 +983,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         manifest.setInternalVariables(List.of(
                 DeviceManifest.InternalVariable.builder()
                         .name("temperature").isInside(false).trust("untrusted").privacy("public")
-                        .lowerBound(0).upperBound(100).build()));
+                        .lowerBound(0).upperBound(100).naturalChangeRate("0").build()));
         manifest.setImpactedVariables(List.of("temperature"));
 
         DeviceTemplateDto dto = new DeviceTemplateDto();
@@ -1018,7 +1018,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         manifest.setInternalVariables(List.of(
                 DeviceManifest.InternalVariable.builder()
                         .name("humidity").isInside(false).trust("untrusted").privacy("public")
-                        .lowerBound(0).upperBound(100).build()));
+                        .lowerBound(0).upperBound(100).naturalChangeRate("0").build()));
         manifest.setImpactedVariables(List.of("humidity"));
 
         DeviceTemplateDto dto = new DeviceTemplateDto();
@@ -1110,7 +1110,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         manifest.setInternalVariables(List.of(
                 DeviceManifest.InternalVariable.builder()
                         .name("temperature").isInside(false).trust("untrusted").privacy("public")
-                        .lowerBound(0).upperBound(100).build(),
+                        .lowerBound(0).upperBound(100).naturalChangeRate("0").build(),
                 DeviceManifest.InternalVariable.builder()
                         .name("temperature_rate").isInside(true).lowerBound(-10).upperBound(10).build()));
         manifest.setImpactedVariables(List.of("temperature"));

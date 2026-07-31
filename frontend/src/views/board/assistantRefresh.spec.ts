@@ -51,20 +51,25 @@ describe('assistant refresh targets', () => {
 })
 
 describe('parity with the backend', () => {
-  it('declares exactly the targets ChatServiceImpl can emit', () => {
-    // The backend decides which REFRESH_DATA target to send. A target it emits but we do not
-    // declare is silently dropped as "unsupported", so the workspace would keep showing stale
-    // data after a successful tool run.
-    const chatService = readFileSync(resolve(
+  it('declares exactly the targets the backend progress presenter can emit', () => {
+    // ChatToolProgressPresenter owns the tool-to-refresh mapping consumed by ChatServiceImpl.
+    // A target it emits but we do not declare is silently dropped as "unsupported", so the
+    // workspace would keep showing stale data after a successful tool run.
+    const presenter = readFileSync(resolve(
       dirname(fileURLToPath(import.meta.url)),
       '..', '..', '..', '..',
-      'backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/ChatServiceImpl.java'
+      'backend/src/main/java/cn/edu/nju/Iot_Verify/component/ai/chat/ChatToolProgressPresenter.java'
     ), 'utf8')
+    const mappingStart = presenter.indexOf('public List<String> potentialRefreshTargets')
+    const mappingEnd = presenter.indexOf('private String confirmedAction', mappingStart)
+    const mapping = presenter.slice(mappingStart, mappingEnd)
 
     const emitted = [...new Set(
-      [...chatService.matchAll(/"target",\s*"([a-z_]+)"/g)].map(match => match[1])
+      [...mapping.matchAll(/"([a-z]+_(?:list|state|history))"/g)].map(match => match[1])
     )].sort()
 
+    expect(mappingStart).toBeGreaterThanOrEqual(0)
+    expect(mappingEnd).toBeGreaterThan(mappingStart)
     expect(emitted.length).toBeGreaterThan(0)
     expect([...ASSISTANT_REFRESH_TARGETS].sort()).toEqual(emitted)
   })

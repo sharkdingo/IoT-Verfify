@@ -3,11 +3,13 @@ package cn.edu.nju.Iot_Verify.util.mapper;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
+import cn.edu.nju.Iot_Verify.repository.projection.SimulationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.junit.jupiter.api.Test;
 
@@ -16,6 +18,8 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SimulationTaskMapperTest {
 
@@ -25,6 +29,40 @@ class SimulationTaskMapperTest {
             + "\"environmentVariableCount\":1,\"deviceTemplateCount\":2,\"templatesFrozen\":true}";
     private static final String MODEL_SEMANTICS_JSON = JsonUtils.toJson(ModelSemanticsDto.forRun(
             AttackScenarioDto.anyUpToBudget(3), true, 4, 2, 2));
+
+    @Test
+    void mapsTaskInboxProjectionWithoutWorkerOrDetailPayloads() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 7, 30, 9, 30);
+        SimulationTaskSummaryProjection projection = mock(SimulationTaskSummaryProjection.class);
+        when(projection.getId()).thenReturn(6L);
+        when(projection.getUserId()).thenReturn(1L);
+        when(projection.getInitiator()).thenReturn(RunInitiator.AI_ASSISTANT);
+        when(projection.getStatus()).thenReturn(SimulationTaskPo.TaskStatus.PENDING);
+        when(projection.getCreatedAt()).thenReturn(createdAt);
+        when(projection.getProcessingTimeMs()).thenReturn(null);
+        when(projection.getProgress()).thenReturn(0);
+        when(projection.getRequestedSteps()).thenReturn(10);
+        when(projection.getSteps()).thenReturn(null);
+        when(projection.getSimulationTraceId()).thenReturn(null);
+        when(projection.getIsAttack()).thenReturn(true);
+        when(projection.getAttackBudget()).thenReturn(3);
+        when(projection.getModeledDeviceAttackPointCount()).thenReturn(4);
+        when(projection.getModeledFalsifiableReadingDeviceCount()).thenReturn(2);
+        when(projection.getModeledAutomationLinkAttackPointCount()).thenReturn(2);
+        when(projection.getEnablePrivacy()).thenReturn(true);
+        when(projection.getModelSemanticsJson()).thenReturn(MODEL_SEMANTICS_JSON);
+        when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
+        when(projection.getCheckLogsJson()).thenReturn("[]");
+        when(projection.getGenerationIssuesJson()).thenReturn("[]");
+
+        SimulationTaskSummaryDto summary = mapper.toSummaryDto(projection);
+
+        assertEquals(6L, summary.getId());
+        assertEquals(RunInitiator.AI_ASSISTANT, summary.getInitiator());
+        assertEquals("PENDING", summary.getStatus());
+        assertEquals(10, summary.getRequestedSteps());
+        assertEquals(6, summary.getModelSemantics().getModeledAttackPointCount());
+    }
 
     @Test
     void mapsStructuredGenerationIssuesToTaskAndSummary() {

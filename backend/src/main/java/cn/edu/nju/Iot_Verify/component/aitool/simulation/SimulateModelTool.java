@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.ModelTraceToolPresenter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
@@ -9,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SimulationExecutionException;
@@ -61,7 +63,7 @@ public class SimulateModelTool extends AbstractAiTool {
         props.put("attackPoints", attackPointsSchema());
         props.put("enablePrivacy", Map.of(
                 "type", "boolean",
-                "description", "Track private-data labels through automation chains. This models label propagation, not access control or encryption. Default false."
+                "description", "Track public/private sensitivity labels through automation chains. This models label propagation, not access control or encryption. Default false."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -70,7 +72,8 @@ public class SimulateModelTool extends AbstractAiTool {
 
         return LlmToolSpec.of(getName(), "Run NuSMV random simulation on the current board. " +
                 "Atomically snapshots all devices, environment values, rules, and referenced templates from the board. " +
-                "Returns a sequence of states showing how the system evolves over N steps. " +
+                "Returns result counts plus compact initial/final state previews. This synchronous preview is not saved; " +
+                "use simulate_model_async and get_simulation_trace when a saved pageable state sequence is needed. " +
                 "Requires at least one device on the board.", schema);
     }
 
@@ -104,6 +107,7 @@ public class SimulateModelTool extends AbstractAiTool {
 
             SimulationRequestDto request = new SimulationRequestDto();
             request.setDevices(devices);
+            request.setPlaybackNodes(board.nodes());
             request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSteps(steps);
@@ -132,25 +136,20 @@ public class SimulateModelTool extends AbstractAiTool {
             summary.put("modelSnapshot", result.getModelSnapshot());
             summary.put("historyPersistence", result.getHistoryPersistence());
 
-            // Include state transition overview (initial/final, and all for short traces).
-            if (result.getStates() != null && !result.getStates().isEmpty()) {
-                summary.put("initialState", result.getStates().get(0));
-                if (result.getStates().size() > 1) {
-                    summary.put("finalState", result.getStates().get(result.getStates().size() - 1));
-                }
-                if (result.getStates().size() <= 11) {
-                    summary.put("allStates", result.getStates());
-                }
-            }
-
-            if (result.getLogs() != null && !result.getLogs().isEmpty()) {
-                summary.put("logs", result.getLogs());
-            }
+            List<TraceStateDto> states = result.getStates();
+            List<TraceStateDto> boundaryStates = states.size() == 1
+                    ? List.of(states.get(0))
+                    : List.of(states.get(0), states.get(states.size() - 1));
+            summary.put("statePreviewKind", "INITIAL_AND_FINAL");
+            summary.put("previewedStateCount", boundaryStates.size());
+            summary.put("statePreview", ModelTraceToolPresenter.states(boundaryStates));
 
             String message = result.isModelComplete()
                     ? "Model-trace simulation completed. This is model behavior, not a prediction of the physical home."
                     : "Model-trace simulation completed with disabled rules; the trace represents an incomplete generated model.";
             message += " This preview was not added to run history.";
+            message += " It includes only the initial/final state preview; use simulate_model_async "
+                    + "and get_simulation_trace for saved pageable state detail.";
             summary.put("message", message);
             return readOnlySuccessJson(summary, message);
         } catch (ArgValidationException e) {

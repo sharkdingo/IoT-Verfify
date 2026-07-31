@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,7 +41,9 @@ public class VerifyTaskStatusTool extends AbstractAiTool {
                 List.of("taskId")
         );
 
-        return LlmToolSpec.of(getName(), "Query async verification task status and progress by taskId.", schema);
+        return LlmToolSpec.of(getName(),
+                "Query async verification task status and progress by taskId. A completed task exposes its runId for get_verification_run. Raw NuSMV output and execution logs are intentionally omitted.",
+                schema);
     }
 
     @Override
@@ -58,11 +61,15 @@ public class VerifyTaskStatusTool extends AbstractAiTool {
             VerificationTaskDto task = verificationService.getTask(userId, taskId);
             int progress = verificationService.getTaskProgress(userId, taskId);
 
-            return readOnlySuccessJson(Map.of(
-                    "taskId", taskId,
-                    "progress", progress,
-                    "task", task
-            ), "Verification task status retrieved.");
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("taskId", taskId);
+            body.put("progress", progress);
+            body.put("task", taskProjection(task, progress));
+            if ("COMPLETED".equals(task.getStatus())) {
+                body.put("runId", taskId);
+                body.put("nextTool", "get_verification_run");
+            }
+            return readOnlySuccessJson(body, "Verification task status retrieved.");
         } catch (ArgValidationException e) {
             return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
@@ -76,5 +83,33 @@ public class VerifyTaskStatusTool extends AbstractAiTool {
             return errorJson("Failed to query verification task.",
                     "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> taskProjection(VerificationTaskDto task, int progress) {
+        Map<String, Object> projected = new LinkedHashMap<>();
+        projected.put("id", task.getId());
+        projected.put("initiator", task.getInitiator());
+        projected.put("status", task.getStatus());
+        projected.put("progress", progress);
+        projected.put("progressStage", task.getProgressStage());
+        projected.put("createdAt", task.getCreatedAt());
+        projected.put("startedAt", task.getStartedAt());
+        projected.put("completedAt", task.getCompletedAt());
+        projected.put("processingTimeMs", task.getProcessingTimeMs());
+        projected.put("isAttack", task.getIsAttack());
+        projected.put("attackBudget", task.getAttackBudget());
+        projected.put("enablePrivacy", task.getEnablePrivacy());
+        projected.put("modelSemantics", task.getModelSemantics());
+        projected.put("modelSnapshot", task.getModelSnapshot());
+        projected.put("outcome", task.getOutcome());
+        projected.put("modelComplete", task.getModelComplete());
+        projected.put("violatedSpecCount", task.getViolatedSpecCount());
+        projected.put("disabledRuleCount", task.getDisabledRuleCount());
+        projected.put("skippedSpecCount", task.getSkippedSpecCount());
+        projected.put("generationIssues", safeList(task.getGenerationIssues()));
+        projected.put("specResults", VerificationToolPresenter.specResults(task.getSpecResults()));
+        projected.put("checkLogCount", safeList(task.getCheckLogs()).size());
+        projected.put("errorMessage", task.getErrorMessage());
+        return projected;
     }
 }

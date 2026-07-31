@@ -6,7 +6,7 @@ scenario into NuSMV. Request and response field tables live in
 [spec-templates.md](spec-templates.md); identity rules live in
 [device-identity.md](device-identity.md).
 
-Verified against code on 2026-07-24. Primary sources:
+Verified against code on 2026-07-31. Primary sources:
 `SmvGenerator`, `DeviceSmvDataFactory`, `SmvModelValidator`,
 `SmvDeviceModuleBuilder`, `SmvMainModuleBuilder`, `SmvSpecificationBuilder`, and
 `SmvTraceParser`, `NusmvExecutor`, and `NusmvTempArtifactCleaner`.
@@ -76,8 +76,8 @@ a NuSMV probe generation. Invalid templates are rejected, not partially imported
 | :--- | :--- |
 | `InternalVariables[].IsInside=true` | Device-local variable, emitted as `device.variable` |
 | `InternalVariables[].IsInside=false` | Shared environment reading, stored once in the board environment pool and emitted internally as `a_<name>` |
-| `EnvironmentDomains[]` | Domain/default metadata for an impact-only shared value; no device read mirror or rule/spec read permission |
-| `ImpactedVariables[]` | Shared environment value the device may change; this grants write impact, not read permission |
+| `EnvironmentDomains[]` | Domain/default metadata for an impact-only shared value; no device read mirror or device-scoped rule/spec reference |
+| `ImpactedVariables[]` | Shared environment value the device may change; this declares a modeled effect, not a modeled read or any authorization |
 | `FalsifiableWhenCompromised=true` | The compromise model may replace this reported value with any value in its declared domain and marks its trust label untrusted |
 
 `IsInside` and `FalsifiableWhenCompromised` are required on every template variable.
@@ -115,19 +115,21 @@ boolean.
 
 Evolution is scope-sensitive. A device-local variable follows its declared Transition
 assignment, WorkingState Dynamic, or numeric `NaturalChangeRate`; if none applies, it
-retains its current value. The generator does not invent arbitrary local device changes.
-A shared numeric environment value follows its declared natural rate and active device
-effects within the declared domain, plus MEDIC's environment disturbance: the paper models
-such a variable as a self-loop constrained by `v' - v ∈ [-1 + env.D.v, 1 + env.D.v]`, i.e.
-the value moves by the device effect "with a slight disturbance in the range of [-1, 1] in
-each time step" (MEDIC §3.1, Fig. 2b). When a device effect is active — some submitted device lists the
-variable in `ImpactedVariables` — the domain-boundary branches therefore carry a ±1 candidate even
-when no `NaturalChangeRate` is declared; a physical quantity is only imperfectly observed, so
-treating it as movable only by a declared rate would be unsound in the unsafe direction. With no
-device effect at all, the boundary branches are not emitted and the value follows `NaturalChangeRate`
-alone. All candidates are clamped to the declared domain. A shared enum/boolean environment value is an
-uncontrolled model input and may otherwise choose any value in its declared domain on
-each step. These assumptions are returned, rather than merely documented, through
+retains its current value. A local numeric rate uses the same unique lower-endpoint,
+zero, and upper-endpoint candidates as a shared numeric rate, combined with its active
+WorkingState Dynamic when one applies. The generator does not invent arbitrary local device changes.
+A shared numeric environment value must explicitly declare `NaturalChangeRate` and follows
+that interval plus all active device effects within the declared domain. On every step, the
+generator combines the lower and upper rate endpoints (when non-zero) with the summed active
+device-effect expression, also retains the device-effect-only candidate, and clamps every
+candidate to the declared bounds. `NaturalChangeRate=[-1, 1]` is MEDIC §3.1, Fig. 2b's exact
+physical disturbance; `0` explicitly means no independent natural change, so only active
+device effects remain and the value stutters when there are none. Other declared intervals
+are a visible parameterized endpoint extension: the transition uses the unique lower, zero,
+and upper delta candidates, not every integer between wider endpoints. No second hidden
+`[-1, 1]` term is added. A shared
+enum/boolean environment value is an uncontrolled model input and may otherwise choose
+any value in its declared domain on each step. These assumptions are returned, rather than merely documented, through
 `modelSemantics.environmentEvolutionEffects` and `localVariableFallbackPolicy`.
 
 ### Environment authority
@@ -143,7 +145,7 @@ unused account template cannot change the current model.
 
 Explicit shared initial values are exact model inputs after whitespace normalization.
 Invalid enum or numeric values, unknown or duplicate environment entries, undeclared
-domains, and malformed natural-change rates fail generation; the generator never
+domains, and missing or malformed shared numeric natural-change rates fail generation; the generator never
 clamps a value, replaces it with the first enum member, assumes `0..100`, or silently
 omits it. When a valid value is omitted, the documented template default or
 nondeterministic initialization may apply according to the model contract.
@@ -302,12 +304,13 @@ can still falsify any value whose template explicitly sets
 `untrusted`. Users may override initial labels when their deployment assumptions differ;
 the label is neither authentication nor an attack probability.
 
-Default privacy labels follow sensitivity of the fact itself, not device ownership or the
-mere existence of an API. Routine appliance modes and ordinary environmental readings
+Default privacy labels encode the fact's sensitivity classification. MEDIC §3.3 derives that
+classification from who is expected to access content, but the resulting model label does not
+grant or deny access. Routine appliance modes and ordinary environmental readings
 start as `public`; location, activity/occupancy, security access, communications, financial,
 health, and personal-content facts start as `private`. These are reviewable template
-authoring defaults, not access-control decisions. Users may override them when the actual
-deployment has different privacy assumptions.
+authoring assumptions used by propagation and verification, not runtime access-control
+decisions. Users may override them when the actual deployment has different privacy assumptions.
 
 Concrete built-in examples follow that classification: social-network `posting`, phone
 `taking photo` / `uploading to cloud`, and door/window/garage open/contact facts are
@@ -388,6 +391,11 @@ closed; it is never degraded to an unconditional prohibition.
 A rule reads all IF conditions in the current state and changes the command target in
 the next state. `targetType` is explicit (`api`, `variable`, `mode`, or `state`); the
 generator does not infer it from a name.
+
+This is a deliberate one-step abstraction. MEDIC §3.2 represents a rule as a separate
+`Ready`/`Waiting` handling-node FSM before issuing its command; IoT-Verify collapses that
+internal step, matching HAFuzz §3.3's source-state-to-next-state trace formation and the
+user-facing Immediate specification `AG(IF -> AX(THEN))`.
 
 - signal API conditions represent an event pulse and require an explicit `Signal=true`;
   every API must explicitly choose `Signal=true` (observable trigger) or `false`

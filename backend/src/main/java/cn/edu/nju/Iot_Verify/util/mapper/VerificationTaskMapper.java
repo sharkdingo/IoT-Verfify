@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.PersistedModelContextIntegrity;
@@ -41,6 +42,7 @@ public class VerificationTaskMapper {
 
         return VerificationTaskDto.builder()
                 .id(po.getId())
+                .initiator(po.getInitiator())
                 .status(po.getStatus() != null ? po.getStatus().name() : null)
                 .createdAt(po.getCreatedAt())
                 .startedAt(po.getStartedAt())
@@ -66,6 +68,36 @@ public class VerificationTaskMapper {
                 .build();
     }
 
+    public VerificationTaskSummaryDto toSummaryDto(VerificationTaskSummaryProjection projection) {
+        if (projection == null) return null;
+        return toSummaryDto(VerificationTaskPo.builder()
+                .id(projection.getId())
+                .userId(projection.getUserId())
+                .initiator(projection.getInitiator())
+                .status(projection.getStatus())
+                .createdAt(projection.getCreatedAt())
+                .startedAt(projection.getStartedAt())
+                .completedAt(projection.getCompletedAt())
+                .processingTimeMs(projection.getProcessingTimeMs())
+                .isAttack(projection.getIsAttack())
+                .attackBudget(projection.getAttackBudget())
+                .modeledDeviceAttackPointCount(projection.getModeledDeviceAttackPointCount())
+                .modeledFalsifiableReadingDeviceCount(projection.getModeledFalsifiableReadingDeviceCount())
+                .modeledAutomationLinkAttackPointCount(projection.getModeledAutomationLinkAttackPointCount())
+                .enablePrivacy(projection.getEnablePrivacy())
+                .modelSnapshotJson(projection.getModelSnapshotJson())
+                .modelSemanticsJson(projection.getModelSemanticsJson())
+                .outcome(projection.getOutcome())
+                .violatedSpecCount(projection.getViolatedSpecCount())
+                .disabledRuleCount(projection.getDisabledRuleCount())
+                .skippedSpecCount(projection.getSkippedSpecCount())
+                .generationIssuesJson(projection.getGenerationIssuesJson())
+                .errorMessage(projection.getErrorMessage())
+                .progress(projection.getProgress())
+                .progressStage(projection.getProgressStage())
+                .build());
+    }
+
     /**
      * List<VerificationTaskPo> -> List<VerificationTaskDto>
      */
@@ -84,16 +116,13 @@ public class VerificationTaskMapper {
         }
         validateLifecycle(po, "verification task");
 
-        List<String> checkLogs = po.getCheckLogs() != null
-                ? po.getCheckLogs()
-                : JsonUtils.readPersisted("verification task", po.getId(), "checkLogsJson",
-                        () -> JsonUtils.fromJsonToStringList(po.getCheckLogsJson()));
         VerificationOutcome outcome = taskOutcome(po, "verification task");
         PersistedModelContextIntegrity.ValidatedContext context =
                 modelContext(po, "verification task");
 
         return VerificationTaskSummaryDto.builder()
                 .id(po.getId())
+                .initiator(po.getInitiator())
                 .status(po.getStatus() != null ? po.getStatus().name() : null)
                 .createdAt(po.getCreatedAt())
                 .startedAt(po.getStartedAt())
@@ -127,6 +156,7 @@ public class VerificationTaskMapper {
         int skippedSpecCount = projection.getSkippedSpecCount();
         return VerificationRunSummaryDto.builder()
                 .id(projection.getId())
+                .initiator(projection.getInitiator())
                 .createdAt(projection.getCreatedAt())
                 .startedAt(projection.getStartedAt())
                 .completedAt(projection.getCompletedAt())
@@ -169,6 +199,7 @@ public class VerificationTaskMapper {
                         () -> JsonUtils.fromJsonToStringList(po.getCheckLogsJson()));
         return VerificationRunDto.builder()
                 .id(po.getId())
+                .initiator(po.getInitiator())
                 .createdAt(po.getCreatedAt())
                 .startedAt(po.getStartedAt())
                 .completedAt(po.getCompletedAt())
@@ -220,11 +251,12 @@ public class VerificationTaskMapper {
                 po.getSkippedSpecCount() != null ? po.getSkippedSpecCount() : 0);
     }
 
-    public List<VerificationTaskSummaryDto> toSummaryDtoList(List<VerificationTaskPo> poList) {
-        if (poList == null) {
+    public List<VerificationTaskSummaryDto> toSummaryProjectionDtoList(
+            List<VerificationTaskSummaryProjection> projections) {
+        if (projections == null) {
             return List.of();
         }
-        return poList.stream()
+        return projections.stream()
                 .map(this::toSummaryDto)
                 .toList();
     }
@@ -281,6 +313,9 @@ public class VerificationTaskMapper {
         }
         if (po.getUserId() == null || po.getUserId() < 1) {
             fail(recordType, po.getId(), "userId", "task owner is missing or invalid");
+        }
+        if (po.getInitiator() == null) {
+            fail(recordType, po.getId(), "initiator", "task initiator is missing");
         }
         if (po.getStatus() == null) {
             fail(recordType, po.getId(), "status", "task status is missing");
@@ -350,6 +385,9 @@ public class VerificationTaskMapper {
 
     private void validateCompletedRunProjection(VerificationRunSummaryProjection projection) {
         Object id = projection.getId();
+        if (projection.getInitiator() == null) {
+            fail("verification run", id, "initiator", "run initiator is missing");
+        }
         if (projection.getStatus() != VerificationTaskPo.TaskStatus.COMPLETED) {
             fail("verification run", id, "status", "completed run status is invalid");
         }

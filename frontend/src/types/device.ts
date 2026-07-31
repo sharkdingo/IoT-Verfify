@@ -15,6 +15,7 @@ export interface InternalVariable {
     // 数值型属性
     LowerBound?: number
     UpperBound?: number
+    // Required when this is a shared (IsInside=false) numeric domain.
     NaturalChangeRate?: string
     // 枚举型属性
     Values?: string[]
@@ -27,6 +28,7 @@ export interface EnvironmentDomain {
     Privacy: string
     LowerBound?: number
     UpperBound?: number
+    // Required for numeric environment domains; invalid for enum domains.
     NaturalChangeRate?: string
     Values?: string[]
 }

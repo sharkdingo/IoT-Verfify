@@ -188,7 +188,8 @@ public class ParameterAdjustStrategy implements FixStrategy {
 
         // §5.3/user intent: before enumerating a Cartesian product, try the smaller repair
         // class in which exactly one threshold changes. Values are checked nearest-first and
-        // final verification covers every initial state and every submitted specification.
+        // final verification removes the counterexample-only replay constraints, then checks every
+        // submitted specification from the ordinary authored-model initialization.
         if (thresholds.size() > 1 && maxAttempts > 1) {
             int singleParameterBudget = Math.max(1, maxAttempts / 2);
             SingleParameterSearchResult singleParameterResult = tryClosestSingleParameterFix(

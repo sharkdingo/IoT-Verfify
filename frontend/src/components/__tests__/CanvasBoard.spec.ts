@@ -412,6 +412,74 @@ describe('CanvasBoard device context actions', () => {
     wrapper.unmount()
   })
 
+  it('shows effective template security labels and identifies instance overrides', async () => {
+    const previousLocale = i18n.global.locale.value
+    i18n.global.locale.value = 'en'
+    const node = {
+      id: 'sensor-1',
+      templateName: 'Private Sensor',
+      label: 'Hall sensor',
+      position: { x: 80, y: 80 },
+      state: 'active',
+      width: 176,
+      height: 128
+    }
+    const template = {
+      name: 'Private Sensor',
+      manifest: {
+        Name: 'Private Sensor',
+        Modes: ['Power'],
+        InitState: 'active',
+        WorkingStates: [{ Name: 'active', Trust: 'untrusted', Privacy: 'private' }],
+        InternalVariables: [{
+          Name: 'reading',
+          IsInside: true,
+          FalsifiableWhenCompromised: true,
+          Trust: 'untrusted',
+          Privacy: 'private',
+          Values: ['idle', 'active']
+        }]
+      }
+    }
+    const wrapper = mount(CanvasBoard, {
+      props: {
+        nodes: [node],
+        edges: [],
+        deviceTemplates: [template],
+        pan: { x: 0, y: 0 },
+        zoom: 1,
+        getNodeIcon: () => '',
+        hasNodeStateMachine: () => true,
+        getNodeEffectiveState: currentNode => currentNode.state || 'active'
+      },
+      global: { plugins: [i18n] }
+    })
+
+    try {
+      const inheritedTitles = wrapper.findAll('.device-node-trust').map(badge => badge.attributes('title')).join(' ')
+      expect(inheritedTitles).toContain('Current state (template default)')
+      expect(inheritedTitles).toContain('reading (template default)')
+      expect(inheritedTitles).toContain('propagation analysis')
+
+      await wrapper.setProps({
+        nodes: [{
+          ...node,
+          currentStateTrust: 'trusted',
+          currentStatePrivacy: 'public',
+          variables: [{ name: 'reading', value: 'active', trust: 'trusted' }],
+          privacies: [{ name: 'reading', privacy: 'public' }]
+        }]
+      })
+      const badges = wrapper.findAll('.device-node-trust')
+      expect(badges).toHaveLength(1)
+      expect(badges[0].text()).toContain('Shown sources trusted')
+      expect(badges[0].attributes('title')).toContain('instance override')
+    } finally {
+      wrapper.unmount()
+      i18n.global.locale.value = previousLocale
+    }
+  })
+
   it('formats playback state and variables only from their frozen token sources', () => {
     const nodes = [
       { id: 'bundled-1', label: 'Bundled state', templateName: 'Current bundled', position: { x: 0, y: 0 }, state: 'current', width: 176, height: 128 },

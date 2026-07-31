@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.dto.simulation;
 
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -24,6 +25,8 @@ import java.util.List;
 public class SimulationTraceSummaryDto {
 
     private Long id;
+
+    private RunInitiator initiator;
 
     private int requestedSteps;
 

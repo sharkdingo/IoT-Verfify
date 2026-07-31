@@ -24,7 +24,13 @@ class TraceMapperTest {
     private static final String MODEL_SEMANTICS_JSON = JsonUtils.toJson(
             ModelSemanticsDto.forRun(AttackScenarioDto.none(), false, 1, 1, 0));
     private static final String VALID_REQUEST_JSON =
-            "{\"rules\":[{\"id\":42,\"ruleString\":\"Rule A\"}]}";
+            "{\"devices\":[{\"varName\":\"d1\",\"deviceLabel\":\"d1\",\"templateName\":\"t1\"}],"
+            + "\"playbackNodes\":[{\"id\":\"d1\",\"templateName\":\"t1\",\"label\":\"d1\","
+            + "\"position\":{\"x\":0,\"y\":0},\"state\":\"Working\",\"width\":160,\"height\":120}],"
+            + "\"rules\":[{\"id\":42,\"conditions\":[{\"deviceName\":\"d1\","
+            + "\"attribute\":\"state\",\"targetType\":\"state\",\"relation\":\"=\",\"value\":\"Working\"}],"
+            + "\"command\":{\"deviceName\":\"d1\",\"action\":\"stay\"},"
+            + "\"ruleString\":\"Rule A\"}]}";
 
     private static String stateJson(int stateIndex) {
         return "{\"stateIndex\":" + stateIndex + ",\"devices\":[],"
@@ -57,7 +63,11 @@ class TraceMapperTest {
     @Test
     void usesPersistedAttackContextInsteadOfRecountingRequestDevices() {
         TracePo po = baseTrace("{\"devices\":[{\"varName\":\"d1\",\"templateName\":\"t1\"}],"
-                + "\"rules\":[{}],\"specs\":[],"
+                + "\"playbackNodes\":[{\"id\":\"d1\",\"templateName\":\"t1\",\"label\":\"d1\","
+                + "\"position\":{\"x\":0,\"y\":0},\"state\":\"Working\",\"width\":160,\"height\":120}],"
+                + "\"rules\":[{\"conditions\":[{\"deviceName\":\"d1\",\"attribute\":\"state\","
+                + "\"targetType\":\"state\",\"relation\":\"=\",\"value\":\"Working\"}],"
+                + "\"command\":{\"deviceName\":\"d1\",\"action\":\"stay\"}}],\"specs\":[],"
                 + "\"attackScenario\":{\"mode\":\"ANY_UP_TO_BUDGET\",\"budget\":1},"
                 + "\"enablePrivacy\":true}");
         po.setIsAttack(true);
@@ -80,6 +90,8 @@ class TraceMapperTest {
         assertEquals(1, dto.getModelSnapshot().getDeviceCount());
         assertTrue(dto.getModelSnapshot().isTemplatesFrozen());
         assertEquals(po.getTemplateSnapshotsJson(), dto.getTemplateSnapshotsJson());
+        assertEquals("d1", dto.getPlaybackScene().nodes().get(0).getId());
+        assertEquals("d1", dto.getPlaybackScene().rules().get(0).getCommand().getDeviceName());
     }
 
     @Test
@@ -273,7 +285,7 @@ class TraceMapperTest {
     }
 
     @Test
-    void summaryProjectionValidatesAndCountsStates() {
+    void summaryProjectionValidatesMetadataAndMapsPersistedStateCount() {
         TraceSummaryProjection projection = validSummaryProjection(8L);
 
         var summary = mapper.toSummaryDto(projection);
@@ -283,57 +295,9 @@ class TraceMapperTest {
     }
 
     @Test
-    void summaryProjectionRejectsCorruptModelContextBeforeCountingTraceAsAvailable() {
+    void summaryProjectionRejectsMissingStateCount() {
         TraceSummaryProjection projection = validSummaryProjection(9L);
-        when(projection.getModelSemanticsJson()).thenReturn("{}");
-
-        assertEquals("modelSemanticsJson", assertThrows(
-                PersistedDataIntegrityException.class,
-                () -> mapper.toSummaryDto(projection)).getField());
-    }
-
-    @Test
-    void summaryProjectionRejectsMalformedStatesJson() {
-        TraceSummaryProjection projection = validSummaryProjection(10L);
-        when(projection.getStatesJson()).thenReturn("{ not valid json");
-
-        assertEquals("statesJson", assertThrows(
-                PersistedDataIntegrityException.class,
-                () -> mapper.toSummaryDto(projection)).getField());
-    }
-
-    @Test
-    void summaryProjectionRejectsRuleEvidenceThatDoesNotMatchFrozenRules() {
-        TraceSummaryProjection projection = validSummaryProjection(13L);
-        when(projection.getStatesJson()).thenReturn(
-                "[{\"stateIndex\":1,\"devices\":[],\"triggeredRules\":[],"
-                        + "\"compromisedAutomationLinks\":[]},"
-                        + "{\"stateIndex\":2,\"devices\":[],"
-                        + "\"triggeredRules\":[{\"ruleIndex\":0,\"ruleId\":\"42\","
-                        + "\"ruleLabel\":\"Forged\"}],\"compromisedAutomationLinks\":[]}]");
-
-        assertEquals("statesJson", assertThrows(
-                PersistedDataIntegrityException.class,
-                () -> mapper.toSummaryDto(projection)).getField());
-    }
-
-    @Test
-    void summaryProjectionRejectsEmptyStructurallyInvalidOrNonSequentialStates() {
-        for (String statesJson : java.util.List.of(
-                "[]", "[{}]", "[" + stateJson(2) + "]")) {
-            TraceSummaryProjection projection = validSummaryProjection(11L);
-            when(projection.getStatesJson()).thenReturn(statesJson);
-
-            assertEquals("statesJson", assertThrows(
-                    PersistedDataIntegrityException.class,
-                    () -> mapper.toSummaryDto(projection)).getField());
-        }
-    }
-
-    @Test
-    void summaryProjectionRejectsStateCountMismatch() {
-        TraceSummaryProjection projection = validSummaryProjection(12L);
-        when(projection.getStatesJson()).thenReturn("[" + stateJson(1) + "]");
+        when(projection.getStateCount()).thenReturn(0);
 
         assertEquals("stateCount", assertThrows(
                 PersistedDataIntegrityException.class,
@@ -372,22 +336,7 @@ class TraceMapperTest {
         when(projection.getViolatedSpecJson()).thenReturn(
                 "{\"id\":\"s0\",\"templateId\":\"3\",\"aConditions\":[],"
                         + "\"ifConditions\":[],\"thenConditions\":[],\"devices\":[]}");
-        when(projection.getStatesJson()).thenReturn(
-                "[" + stateJson(1) + "," + stateJson(2) + "]");
         when(projection.getStateCount()).thenReturn(2);
-        when(projection.getRequestJson()).thenReturn(VALID_REQUEST_JSON);
-        applyValidSummaryContext(projection);
         return projection;
-    }
-
-    private void applyValidSummaryContext(TraceSummaryProjection projection) {
-        when(projection.getIsAttack()).thenReturn(false);
-        when(projection.getAttackBudget()).thenReturn(0);
-        when(projection.getEnablePrivacy()).thenReturn(false);
-        when(projection.getModeledDeviceAttackPointCount()).thenReturn(1);
-        when(projection.getModeledFalsifiableReadingDeviceCount()).thenReturn(0);
-        when(projection.getModeledAutomationLinkAttackPointCount()).thenReturn(1);
-        when(projection.getModelSemanticsJson()).thenReturn(MODEL_SEMANTICS_JSON);
-        when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
     }
 }

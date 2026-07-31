@@ -16,11 +16,7 @@ import java.util.Optional;
 @Repository
 public interface FuzzFindingRepository extends JpaRepository<FuzzFindingPo, Long> {
 
-    List<FuzzFindingPo> findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(
-            Long userId, Long fuzzTaskId);
-
-    List<FuzzFindingPo> findByUserIdAndFuzzTaskIdInOrderByCreatedAtAscIdAsc(
-            Long userId, Collection<Long> fuzzTaskIds);
+    List<FuzzFindingPo> findByUserIdAndFuzzTaskId(Long userId, Long fuzzTaskId);
 
     @Query("SELECT f.id AS id, f.userId AS userId, f.fuzzTaskId AS fuzzTaskId, "
          + "f.violatedSpecId AS violatedSpecId, "

@@ -14,7 +14,7 @@ export interface RecommendationFilteredItem {
   type: string
   index: number
   reasonCode: string
-  reason: string
+  reason?: string
   label?: string
 }
 
@@ -33,6 +33,8 @@ export interface RuleRecommendation {
   category?: string
   /** Exact user-facing rule name persisted when the candidate is applied. */
   name: string
+  /** Advisory explanation shown before applying; not persisted as rule semantics. */
+  reason: string
   conditions: {
     deviceId: string
     deviceLabel?: string

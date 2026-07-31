@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.util.NaturalChangeRateParser;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
@@ -1298,35 +1299,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         String rateExpr = findImpactRateExpression(varName, devices, deviceSmvMap);
 
         if (rateExpr != null) {
-            // Impacted-rate branch: clamp every candidate to the declared range.
-            //
-            // The -1 / +1 terms are MEDIC's environment disturbance, not an accident. The paper models
-            // a shared environment variable as a self-loop with the constraint
-            // v' - v in [-1 + env.D.v, 1 + env.D.v] — "the value of v is increased by env.D.v with a
-            // slight disturbance in the range of [-1, 1] in each time step" (MEDIC §3.1, Fig. 2b). Do
-            // not remove them to make a boundary state hold: a numeric environment value is an
-            // imperfectly-observed physical quantity, so a verdict that assumes it can only move by a
-            // declared rate would be unsound in the unsafe direction.
-            content.append("\t\t").append(smvVarName).append("=").append(upper)
-                   .append("-(").append(rateExpr).append("): {")
-                   .append(clampExpr("toint(" + smvVarName + ")-1+" + rateExpr, lower, upper))
-                   .append(", ")
-                   .append(clampExpr(smvVarName + "+" + rateExpr, lower, upper))
-                   .append("};\n");
-
-            content.append("\t\t").append(smvVarName).append(">").append(upper)
-                   .append("-(").append(rateExpr).append("): {").append(upper).append("};\n");
-
-            content.append("\t\t").append(smvVarName).append("=").append(lower)
-                   .append("-(").append(rateExpr).append("): {")
-                   .append(clampExpr(smvVarName + "+" + rateExpr, lower, upper))
-                   .append(", ")
-                   .append(clampExpr(smvVarName + "+1+" + rateExpr, lower, upper))
-                   .append("};\n");
-
-            content.append("\t\t").append(smvVarName).append("<").append(lower)
-                   .append("-(").append(rateExpr).append("): {").append(lower).append("};\n");
-
+            // NaturalChangeRate explicitly parameterizes MEDIC's [-1, 1] disturbance. Combine the
+            // declared endpoints with active device effects, but never add a second hidden term.
             List<String> rateCandidates = new ArrayList<>();
             if (lowerRate != 0) {
                 rateCandidates.add(clampExpr(formatArithmeticExpr(smvVarName, lowerRate) + "+" + rateExpr, lower, upper));
@@ -1358,11 +1332,11 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             }
 
             List<String> rateCandidates = new ArrayList<>();
-            if (lowerRate < 0) {
+            if (lowerRate != 0) {
                 rateCandidates.add(clampExpr(formatArithmeticExpr(smvVarName, lowerRate), lower, upper));
             }
             rateCandidates.add(clampExpr(smvVarName, lower, upper));
-            if (upperRate > 0) {
+            if (upperRate != 0) {
                 rateCandidates.add(clampExpr(formatArithmeticExpr(smvVarName, upperRate), lower, upper));
             }
             content.append("\t\tTRUE: {").append(String.join(", ", rateCandidates)).append("};\n");
@@ -1906,7 +1880,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     }
 
                     List<String> rateCandidates = new ArrayList<>();
-                    if (lowerNcr < 0) {
+                    if (lowerNcr != 0) {
                         String lowerExpr = formatArithmeticExpr(varRef, lowerNcr);
                         if (!impactedRate.isEmpty()) {
                             lowerExpr = lowerExpr + "+" + impactedRate;
@@ -1918,7 +1892,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                         steadyExpr = steadyExpr + "+" + impactedRate;
                     }
                     rateCandidates.add(hasNumericBounds ? clampExpr(steadyExpr, lowerBound, upperBound) : steadyExpr);
-                    if (upperNcr > 0) {
+                    if (upperNcr != 0) {
                         String upperExpr = formatArithmeticExpr(varRef, upperNcr);
                         if (!impactedRate.isEmpty()) {
                             upperExpr = upperExpr + "+" + impactedRate;
@@ -2085,14 +2059,14 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                 }
 
                 List<String> candidates = new ArrayList<>();
-                if (lowerNcr < 0) {
+                if (lowerNcr != 0) {
                     candidates.add(clampIfBounded(
                             formatArithmeticExpr(formatArithmeticExpr(varRef, lowerNcr), dynamicRate),
                             hasNumericBounds, lowerBound, upperBound));
                 }
                 candidates.add(clampIfBounded(formatArithmeticExpr(varRef, dynamicRate),
                         hasNumericBounds, lowerBound, upperBound));
-                if (upperNcr > 0) {
+                if (upperNcr != 0) {
                     candidates.add(clampIfBounded(
                             formatArithmeticExpr(formatArithmeticExpr(varRef, upperNcr), dynamicRate),
                             hasNumericBounds, lowerBound, upperBound));
@@ -2172,24 +2146,14 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
      * Returns int[2] where [0]=lowerRate, [1]=upperRate.
      */
     private int[] parseNaturalChangeRate(String ncr, String contextName) {
-        int lowerRate = 0, upperRate = 0;
-        if (ncr != null && !ncr.isEmpty()) {
-            String[] parts = ncr.replaceAll("[\\[\\]]", "").split(",");
-            try {
-                if (parts.length >= 2) {
-                    lowerRate = Integer.parseInt(parts[0].trim());
-                    upperRate = Integer.parseInt(parts[1].trim());
-                } else if (parts.length == 1) {
-                    int rate = Integer.parseInt(parts[0].trim());
-                    if (rate > 0) upperRate = rate;
-                    else lowerRate = rate;
-                }
-            } catch (NumberFormatException e) {
-                throw SmvGenerationException.templateInvalid(contextName,
-                        "NaturalChangeRate '" + ncr + "' is not a valid integer or [lower,upper] range");
-            }
+        try {
+            NaturalChangeRateParser.RateRange range = NaturalChangeRateParser.parse(ncr);
+            return new int[]{range.lower(), range.upper()};
+        } catch (NaturalChangeRateParser.ParseException exception) {
+            throw SmvGenerationException.templateInvalid(contextName,
+                    "NaturalChangeRate '" + ncr
+                            + "' is not a valid ordered integer or [lower,upper] range");
         }
-        return new int[]{lowerRate, upperRate};
     }
 
     private Map<String, String> resolveEnvironmentPoolInitValues(

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelPlaybackSceneDto;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -107,6 +108,9 @@ public class TraceDto {
     private ModelSemanticsDto modelSemantics;
 
     private ModelRunSnapshotDto modelSnapshot;
+
+    /** Exact device layout and rules shown while replaying this historical evidence. */
+    private ModelPlaybackSceneDto playbackScene;
 
     /**
      * 创建时间

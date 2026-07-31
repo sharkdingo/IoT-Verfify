@@ -59,7 +59,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
       "suggestedPlacement": "建议部署区域，例如 bedroom；仅作为推荐说明，不是持久化设备字段",
       "initialState": "可选，必须来自该模板 workingStates；不确定则省略",
       "currentStateTrust": "可选，仅在 initialState 存在时使用 trusted|untrusted；表示初始状态是否来自用户信任的事件",
-      "currentStatePrivacy": "可选，仅在 initialState 存在时使用 public|private；表示初始状态的数据敏感度标签",
+      "currentStatePrivacy": "可选，仅在 initialState 存在时使用 public|private；表示初始状态的数据敏感性标签",
       "initialVariables": [
         {"name": "本地变量名", "value": "初始值", "trust": "trusted|untrusted"}
       ],

@@ -52,7 +52,7 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
         props.put("attackMode", Map.of("type", "string", "enum", List.of("none", "exact", "exhaustive"), "description", "Per-run attack selection. Default none."));
         props.put("attackBudget", Map.of("type", "integer", "description", "Upper bound from 1 to 50 for attackMode exhaustive."));
         props.put("attackPoints", attackPointsSchema());
-        props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track private-data labels through automation chains. Privacy conditions force this on even when false. This is not access control or encryption. Default false."));
+        props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track public/private sensitivity labels through automation chains. Privacy conditions force this on even when false. This is not access control or encryption. Default false."));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
 
@@ -89,6 +89,7 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
 
             VerificationRequestDto request = new VerificationRequestDto();
             request.setDevices(devices);
+            request.setPlaybackNodes(board.nodes());
             request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSpecs(specs);

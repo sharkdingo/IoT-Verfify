@@ -40,12 +40,18 @@ public class GetSimulationTraceTool extends AbstractAiTool {
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
                 Map.of(
-                        "simulationId", Map.of("type", "integer", "description", "Simulation trace ID.")
+                        "simulationId", Map.of("type", "integer", "description", "Simulation trace ID."),
+                        "stateOffset", Map.of("type", "integer",
+                                "description", "Non-negative zero-based state-sequence offset (default 0)."),
+                        "stateLimit", Map.of("type", "integer",
+                                "description", "Number of states to return, 1-10 (default 10).")
                 ),
                 List.of("simulationId")
         );
 
-        return LlmToolSpec.of(getName(), "Get a saved simulation trace by simulationId, including its state sequence.", schema);
+        return LlmToolSpec.of(getName(),
+                "Get a saved simulation trace by simulationId with a bounded state window. Page the sequence with stateOffset and stateLimit; use stateCount and nextStateOffset to inspect another window.",
+                schema);
     }
 
     @Override
@@ -58,8 +64,14 @@ public class GetSimulationTraceTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
-            requireOnlyFields(args, "arguments", Set.of("simulationId"));
+            requireOnlyFields(args, "arguments", Set.of(
+                    "simulationId", "stateOffset", "stateLimit"));
             long simulationId = positiveLongArg(args, "simulationId");
+            int stateOffset = intArgInRange(args, "stateOffset", 0, 0,
+                    ModelTraceToolPresenter.MAX_STATE_OFFSET);
+            int stateLimit = intArgInRange(args, "stateLimit",
+                    ModelTraceToolPresenter.DEFAULT_STATE_LIMIT, 1,
+                    ModelTraceToolPresenter.MAX_STATE_LIMIT);
 
             SimulationTraceDto trace = simulationService.getSimulation(userId, simulationId);
 
@@ -75,8 +87,8 @@ public class GetSimulationTraceTool extends AbstractAiTool {
             body.put("enablePrivacy", trace.getEnablePrivacy());
             body.put("modelSemantics", trace.getModelSemantics());
             body.put("modelSnapshot", trace.getModelSnapshot());
-            body.put("stateCount", trace.getStates() != null ? trace.getStates().size() : 0);
-            body.put("states", ModelTraceToolPresenter.states(trace.getStates()));
+            ModelTraceToolPresenter.putStateWindow(
+                    body, trace.getStates(), stateOffset, stateLimit);
             body.put("createdAt", trace.getCreatedAt());
             String message = trace.isModelComplete()
                     ? "Saved model-trace simulation loaded. It is one possible model trajectory, not a physical-home prediction."

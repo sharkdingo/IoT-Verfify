@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.repository;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import org.junit.jupiter.api.AfterEach;
@@ -15,6 +16,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -98,6 +102,40 @@ class ChatMessageRepositoryTest {
                 "session-4", "turn-1", "execution-1", "assistant"));
         assertTrue(messageRepository.existsBySessionIdAndTurnIdAndExecutionIdAndRole(
                 "session-4", "turn-2", "execution-2", "user"));
+    }
+
+    @Test
+    void latestTerminalProjectionReturnsOneAuthoritativeOutcomePerSession() {
+        ChatMessagePo firstTerminal = message(
+                "session-terminal-a", "turn-1", "assistant", "execution-1");
+        firstTerminal.setExecutionStatus(ChatExecutionStatus.PARTIAL);
+        messageRepository.saveAndFlush(firstTerminal);
+        ChatMessagePo latestTerminal = message(
+                "session-terminal-a", "turn-2", "assistant", "execution-2");
+        latestTerminal.setExecutionStatus(ChatExecutionStatus.COMPLETED);
+        messageRepository.saveAndFlush(latestTerminal);
+        messageRepository.saveAndFlush(message(
+                "session-terminal-a", "turn-3", "user", "execution-3"));
+        ChatMessagePo otherSessionTerminal = message(
+                "session-terminal-b", "turn-1", "assistant", "execution-4");
+        otherSessionTerminal.setExecutionStatus(ChatExecutionStatus.FAILED);
+        messageRepository.saveAndFlush(otherSessionTerminal);
+
+        Map<String, ChatMessageRepository.LatestTerminalView> terminals =
+                messageRepository.findLatestTerminalBySessionIdIn(
+                                List.of("session-terminal-a", "session-terminal-b"))
+                        .stream()
+                        .collect(Collectors.toMap(
+                                ChatMessageRepository.LatestTerminalView::getSessionId,
+                                terminal -> terminal));
+
+        assertEquals(latestTerminal.getId(), terminals.get("session-terminal-a").getMessageId());
+        assertEquals(ChatExecutionStatus.COMPLETED,
+                terminals.get("session-terminal-a").getExecutionStatus());
+        assertEquals(otherSessionTerminal.getId(),
+                terminals.get("session-terminal-b").getMessageId());
+        assertEquals(ChatExecutionStatus.FAILED,
+                terminals.get("session-terminal-b").getExecutionStatus());
     }
 
     @Test

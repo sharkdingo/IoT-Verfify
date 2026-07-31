@@ -27,6 +27,7 @@ const snapshot = {
 
 const task = {
   id: 9,
+  initiator: 'USER',
   explorationMode: 'BOARD_SNAPSHOT',
   status: 'PENDING',
   progress: 0,
@@ -173,5 +174,37 @@ describe('fuzzing API', () => {
     await fuzzingApi.getRunFindings(4)
 
     expect(http.get).toHaveBeenCalledWith('/fuzz/runs/4/findings')
+  })
+
+  it('loads one replayable finding with its frozen run context', async () => {
+    vi.mocked(http.get).mockResolvedValue(envelope({
+      finding: {
+        id: 4,
+        fuzzTaskId: 9,
+        violatedSpecId: 'spec-1',
+        violatedSpec: { id: 'spec-1' },
+        firstViolationStep: 0,
+        states: [{ stateIndex: 0, devices: [], triggeredRules: [], compromisedAutomationLinks: [] }],
+        seed: 42,
+        inputEvents: [],
+        createdAt: '2026-07-14T10:00:01'
+      },
+      modelSnapshot: snapshot,
+      playbackScene: {
+        nodes: [
+          { id: 'sensor_1', templateName: 'Sensor', label: 'Sensor', position: { x: 20, y: 30 }, state: 'on', width: 160, height: 120 },
+          { id: 'alarm_1', templateName: 'Alarm', label: 'Alarm', position: { x: 360, y: 30 }, state: 'off', width: 160, height: 120 }
+        ],
+        rules: [{
+          id: 7,
+          conditions: [{ deviceName: 'sensor_1', attribute: 'state', targetType: 'state', relation: '=', value: 'on' }],
+          command: { deviceName: 'alarm_1', action: 'on' },
+          ruleString: 'Sensor turns on alarm'
+        }]
+      }
+    }))
+
+    await expect(fuzzingApi.getFinding(4)).resolves.toMatchObject({ finding: { id: 4 } })
+    expect(http.get).toHaveBeenCalledWith('/fuzz/findings/4')
   })
 })

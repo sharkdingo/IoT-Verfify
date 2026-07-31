@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-30.
+Verified against code on 2026-07-31.
 
 ---
 
@@ -132,7 +132,7 @@ Verified against code on 2026-07-30.
 | GET | `/api/fuzz/runs/{id}` | Completed exploration result with full findings | `docs/api/fuzzing.md` |
 | DELETE | `/api/fuzz/runs/{id}` | Delete an exploration result and all findings | `docs/api/fuzzing.md` |
 | GET | `/api/fuzz/runs/{id}/findings` | Full candidate findings for one completed run | `docs/api/fuzzing.md` |
-| GET | `/api/fuzz/findings/{id}` | One owned candidate finding | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/findings/{id}` | One owned candidate finding with validated frozen replay context | `docs/api/fuzzing.md` |
 
 ## Chat — `ChatController`
 
@@ -141,6 +141,7 @@ Verified against code on 2026-07-30.
 | GET | `/api/chat/sessions` | List chat sessions | `docs/api/chat-sse.md` |
 | POST | `/api/chat/sessions` | Create session | `docs/api/chat-sse.md` |
 | GET | `/api/chat/sessions/{sessionId}/messages` | Cursor-paged message history (`beforeId`, `limit`) | `docs/api/chat-sse.md` |
+| POST | `/api/chat/sessions/{sessionId}/seen` | Acknowledge the exact terminal assistant message rendered to the user | `docs/api/chat-sse.md` |
 | GET | `/api/chat/sessions/{sessionId}/activity` | Check whether server work is still active for the session | `docs/api/chat-sse.md` |
 | GET | `/api/chat/sessions/{sessionId}/confirmation` | Read pending protected-action kinds for explicit UI confirmation | `docs/api/chat-sse.md` |
 | POST | `/api/chat/sessions/{sessionId}/stop` | Request an explicit turn-aware stop; body carries the local `turnId` or `null` for reattached work | `docs/api/chat-sse.md` |

@@ -11,6 +11,7 @@ describe('recommendation materialization', () => {
   it('does not invent a missing relation for a value-based rule condition', () => {
     expect(() => materializeRuleRecommendation({
       name: 'Cool the room',
+      reason: 'The declared temperature signal can trigger the air conditioner.',
       conditions: [{
         deviceId: 'sensor-1',
         deviceName: 'Temperature sensor',
@@ -31,6 +32,7 @@ describe('recommendation materialization', () => {
   it('rejects scalar coercion and API conditions with value semantics', () => {
     const base = {
       name: 'Alert on motion',
+      reason: 'The motion signal can trigger the alarm.',
       command: { deviceId: 'alarm-1', deviceName: 'Alarm', action: 'on' }
     }
 
@@ -63,6 +65,7 @@ describe('recommendation materialization', () => {
   it('normalizes declared relation aliases without changing rule intent', () => {
     const rule = materializeRuleRecommendation({
       name: 'Cool the room',
+      reason: 'The declared temperature signal can trigger the air conditioner.',
       conditions: [{
         deviceId: 'sensor-1',
         deviceName: 'Temperature sensor',
@@ -84,6 +87,7 @@ describe('recommendation materialization', () => {
   it('keeps canonical model tokens intact when a recommendation is applied', () => {
     const rule = materializeRuleRecommendation({
       name: 'Send the photo',
+      reason: 'The phone API accepts the declared photo content.',
       conditions: [{
         deviceId: 'phone-1',
         deviceName: 'Phone',

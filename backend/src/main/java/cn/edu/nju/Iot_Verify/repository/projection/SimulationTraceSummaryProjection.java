@@ -1,17 +1,18 @@
 package cn.edu.nju.Iot_Verify.repository.projection;
 
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import java.time.LocalDateTime;
 
-/** Closed projection for simulation history; requestJson is used only for integrity validation. */
+/** Closed history projection that excludes full state, request, and solver-output payloads. */
 public interface SimulationTraceSummaryProjection {
 
     Long getId();
 
+    RunInitiator getInitiator();
+
     int getRequestedSteps();
 
     int getSteps();
-
-    String getStatesJson();
 
     Integer getStateCount();
 
@@ -22,8 +23,6 @@ public interface SimulationTraceSummaryProjection {
     String getModelSnapshotJson();
 
     String getModelSemanticsJson();
-
-    String getRequestJson();
 
     Boolean getIsAttack();
 

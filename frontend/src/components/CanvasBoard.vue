@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DeviceNode } from '../types/node'
+import type { DeviceTemplate } from '../types/device'
 import type { DeviceEdge } from '../types/edge'
 import type { CanvasPan } from '../types/canvas'
 import type { ModelTokenSource } from '../types/modelToken'
@@ -224,6 +225,8 @@ const props = defineProps<{
   nodes: DeviceNode[]
   /** 所有边（Board.vue 的 edges.value） */
   edges: DeviceEdge[]
+  /** Templates provide inherited security-label defaults for the live board. */
+  deviceTemplates?: DeviceTemplate[]
   /** 画布平移（Board.vue 的 canvasPan.value） */
   pan: CanvasPan
   /** 画布缩放（Board.vue 的 canvasZoom.value） */
@@ -846,19 +849,104 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
     return badges
   }
 
-  const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
-  if (node.currentStateTrust) {
-    badges.push({
-      kind: 'trust',
-      label: t(`app.${node.currentStateTrust}`),
-      title: t('app.stateTrust')
+  const templateName = String(node.templateName || '').trim().toLowerCase()
+  const template = props.deviceTemplates?.find(candidate => templateName && (
+    String(candidate.name || '').trim().toLowerCase() === templateName
+    || String(candidate.manifest?.Name || '').trim().toLowerCase() === templateName
+  ))
+  const effectiveState = props.getNodeEffectiveState(node)
+  const stateDefinition = template?.manifest?.WorkingStates?.find(state => state.Name === effectiveState)
+  const trustOverrides = new Map(
+    (node.variables || []).map(variable => [variable.name.toLowerCase(), variable.trust])
+  )
+  const privacyOverrides = new Map(
+    (node.privacies || []).map(entry => [entry.name.toLowerCase(), entry.privacy])
+  )
+  type LabelSource = 'template' | 'override'
+  const withSource = (label: string, source: LabelSource) => t(
+    source === 'override'
+      ? 'app.traceVisualization.configuredLabelInstanceOverride'
+      : 'app.traceVisualization.configuredLabelTemplateDefault',
+    { label }
+  )
+
+  const trustLabels: Array<{ label: string; trust: string; source: LabelSource }> = []
+  const stateTrust = node.currentStateTrust || stateDefinition?.Trust
+  if (stateTrust === 'trusted' || stateTrust === 'untrusted') {
+    trustLabels.push({
+      label: t('app.currentStateProperty'),
+      trust: stateTrust,
+      source: node.currentStateTrust ? 'override' : 'template'
     })
   }
-  const privateLabels = (node.privacies || [])
+  for (const variable of template?.manifest?.InternalVariables || []) {
+    if (variable.IsInside !== true) continue
+    const override = trustOverrides.get(variable.Name.toLowerCase())
+    const trust = override || variable.Trust
+    if (trust === 'trusted' || trust === 'untrusted') {
+      trustLabels.push({
+        label: formatNodeModelToken(node, variable.Name),
+        trust,
+        source: override ? 'override' : 'template'
+      })
+    }
+  }
+
+  const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
+  const untrustedLabels = trustLabels
+    .filter(entry => entry.trust === 'untrusted')
+    .map(entry => withSource(entry.label, entry.source))
+  if (untrustedLabels.length > 0) {
+    badges.push({
+      kind: 'trust',
+      label: t('app.traceVisualization.includesUntrustedSource'),
+      title: t('app.traceVisualization.untrustedLabelDetails', { labels: untrustedLabels.join(', ') })
+    })
+  } else if (trustLabels.length > 0) {
+    badges.push({
+      kind: 'trust',
+      label: t('app.traceVisualization.shownSourcesTrusted'),
+      title: t('app.traceVisualization.configuredTrustedLabelDetails', {
+        labels: trustLabels.map(entry => withSource(entry.label, entry.source)).join(', ')
+      })
+    })
+  }
+
+  const privacyLabels = new Map<string, { label: string; privacy: string; source: LabelSource }>()
+  const registerTemplatePrivacy = (name: string, privacy: string) => {
+    const key = name.toLowerCase()
+    const override = privacyOverrides.get(key)
+    privacyLabels.set(key, {
+      label: formatNodeModelToken(node, name),
+      privacy: override || privacy,
+      source: override ? 'override' : 'template'
+    })
+  }
+  for (const variable of template?.manifest?.InternalVariables || []) {
+    if (variable.IsInside === true) registerTemplatePrivacy(variable.Name, variable.Privacy)
+  }
+  for (const content of template?.manifest?.Contents || []) {
+    registerTemplatePrivacy(content.Name, content.Privacy)
+  }
+  for (const entry of node.privacies || []) {
+    const key = entry.name.toLowerCase()
+    if (!privacyLabels.has(key)) {
+      privacyLabels.set(key, {
+        label: formatNodeModelToken(node, entry.name),
+        privacy: entry.privacy,
+        source: 'override'
+      })
+    }
+  }
+  const privateLabels = [...privacyLabels.values()]
     .filter(entry => entry.privacy === 'private')
-    .map(entry => formatNodeModelToken(node, entry.name))
-  if (node.currentStatePrivacy === 'private') {
-    privateLabels.unshift(t('app.currentStateProperty'))
+    .map(entry => withSource(entry.label, entry.source))
+  const statePrivacy = node.currentStatePrivacy || stateDefinition?.Privacy
+  if (statePrivacy === 'private') {
+    privateLabels.unshift(withSource(
+      t('app.currentStateProperty'),
+      node.currentStatePrivacy ? 'override' : 'template'
+    ))
   }
   if (privateLabels.length > 0) {
     badges.push({
@@ -953,7 +1041,7 @@ const onNodeContextInternal = (node: DeviceNode, e: MouseEvent) => {
 const getNodeAriaLabel = (node: DeviceNode) => {
   const base = `${node.label}, ${node.templateName}, ${t('app.state')}: ${getNodeDisplayState(node)}`
   return isTraceActive.value && !isNodeRepresentedInTrace(node)
-    ? `${base}. ${t('app.traceVisualization.currentBoardDeviceNotRepresented')}`
+    ? `${base}. ${t('app.traceVisualization.playbackSceneDeviceNotRepresented')}`
     : base
 }
 

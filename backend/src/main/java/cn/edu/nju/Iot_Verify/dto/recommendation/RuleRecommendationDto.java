@@ -11,6 +11,8 @@ public class RuleRecommendationDto {
     private String category;
     /** User-facing rule name that is persisted when the recommendation is applied. */
     private String name;
+    /** Advisory explanation shown before applying; it is not persisted as rule semantics. */
+    private String reason;
     private List<ConditionDto> conditions;
     private CommandDto command;
 

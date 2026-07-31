@@ -54,6 +54,7 @@ user must act**.
 | Situation | Mechanism | Why |
 | :--- | :--- | :--- |
 | Operation succeeded, result visible on screen | **nothing** | The updated UI *is* the feedback. A toast repeating it is noise. |
+| Assistant changed shared state | `notifyInfo` after authoritative refresh | The result may be visible, but its AI origin is not; the receipt makes agency perceptible without blocking use. |
 | Operation succeeded, result not visible | `notifySuccess` (toast) | Short, non-blocking confirmation. |
 | Transient failure, retryable, non-blocking | `notifyError` (toast) | |
 | Blocked by current state (e.g. playback open) | `notifyBlocked` (toast) | Explains *why* and what to close. |
@@ -71,6 +72,12 @@ user must act**.
   same failure.
 - **Toasts are for what the UI cannot already show.** Before adding one, ask what changed
   on screen.
+- **Assistant agency is explicit.** Show one localized receipt only after the corresponding
+  authoritative refresh succeeds. Preview, read-only, rejected, unchanged, and unaccepted
+  cancellation results show no action receipt. Persisted run history labels assistant-originated
+  work and unknown legacy provenance; direct user work needs no origin badge.
+- Identical error toasts are grouped with a repeat count; concurrent refresh paths must not
+  stack the same message over the working surface.
 - Same semantic ⇒ same component, wording shape, icon, button order, focus behaviour.
 - Error text keeps what helps the user act; **no stack traces, no internal identifiers.**
   Raw backend diagnostics belong in Technical Details or the console.

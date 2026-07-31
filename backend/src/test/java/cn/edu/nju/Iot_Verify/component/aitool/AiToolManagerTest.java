@@ -57,6 +57,21 @@ class AiToolManagerTest {
     }
 
     @Test
+    void execute_successAndPreview_shouldAttachExplicitExecutionEvidence() throws Exception {
+        when(knownTool.execute("{}"))
+                .thenReturn("{\"count\":0}")
+                .thenReturn("{\"operation\":\"preview\",\"requiresUserConfirmation\":true}");
+
+        JsonNode success = objectMapper.readTree(manager.execute("known_tool", "{}"));
+        JsonNode preview = objectMapper.readTree(manager.execute("known_tool", "{}"));
+
+        assertEquals("SUCCESS", success.path("resultStatus").asText());
+        assertTrue(success.path("resultAvailable").asBoolean());
+        assertEquals("PREVIEW", preview.path("resultStatus").asText());
+        assertTrue(preview.path("resultAvailable").asBoolean());
+    }
+
+    @Test
     void execute_oversizedReadOnlyResult_shouldReturnBoundedUnavailableResult() throws Exception {
         chatExecutionConfig.setMaxToolResultBytes(4096);
         when(knownTool.execute("{}"))
@@ -131,5 +146,79 @@ class AiToolManagerTest {
         manager.execute("known_tool", "{}");
 
         assertFalse(Thread.currentThread().isInterrupted());
+    }
+
+    @Test
+    void execute_mutationToolFailure_shouldReportUnknownOutcome() throws Exception {
+        when(knownTool.getName()).thenReturn("manage_rule");
+        manager = new AiToolManager(List.of(knownTool), objectMapper, chatExecutionConfig);
+        manager.init();
+        when(knownTool.execute("{}"))
+                .thenThrow(new IllegalStateException("failed after an unknown execution point"));
+
+        JsonNode result = objectMapper.readTree(manager.execute("manage_rule", "{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", result.path("resultStatus").asText());
+        assertEquals(false, result.path("resultAvailable").asBoolean());
+        assertTrue(result.path("mutationMayHaveCommitted").asBoolean());
+        assertEquals("TOOL_EXECUTION_OUTCOME_UNKNOWN", result.path("errorCode").asText());
+        assertTrue(result.path("message").asText().contains("refresh current state"));
+    }
+
+    @Test
+    void execute_unusableMutationToolResult_shouldReportUnknownOutcome() throws Exception {
+        for (String unusableResult : java.util.Arrays.asList(null, "", "not json", "[]", "{}")) {
+            org.mockito.Mockito.reset(knownTool);
+            when(knownTool.getName()).thenReturn("manage_rule");
+            when(knownTool.execute("{}")).thenReturn(unusableResult);
+            manager = new AiToolManager(List.of(knownTool), objectMapper, chatExecutionConfig);
+            manager.init();
+
+            JsonNode result = objectMapper.readTree(manager.execute("manage_rule", "{}"));
+
+            assertEquals("RESULT_UNAVAILABLE", result.path("resultStatus").asText(),
+                    String.valueOf(unusableResult));
+            assertTrue(result.path("mutationMayHaveCommitted").asBoolean(),
+                    String.valueOf(unusableResult));
+            assertEquals("TOOL_RESULT_MALFORMED", result.path("errorCode").asText(),
+                    String.valueOf(unusableResult));
+        }
+    }
+
+    @Test
+    void execute_messageOnlyMutationResult_shouldReportUnknownOutcome() throws Exception {
+        when(knownTool.getName()).thenReturn("manage_rule");
+        manager = new AiToolManager(List.of(knownTool), objectMapper, chatExecutionConfig);
+        manager.init();
+        when(knownTool.execute("{}")).thenReturn("{\"message\":\"Rule updated successfully.\"}");
+
+        JsonNode result = objectMapper.readTree(manager.execute("manage_rule", "{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", result.path("resultStatus").asText());
+        assertFalse(result.path("resultAvailable").asBoolean(true));
+        assertTrue(result.path("mutationMayHaveCommitted").asBoolean());
+        assertEquals("TOOL_RESULT_MALFORMED", result.path("errorCode").asText());
+        assertTrue(result.path("message").asText().contains("authoritative completion marker"));
+    }
+
+    @Test
+    void execute_blankOrMalformedErrorCodeCannotBypassMutationResultContract() throws Exception {
+        when(knownTool.getName()).thenReturn("manage_rule");
+        for (String malformedResult : List.of(
+                "{\"message\":\"done\",\"errorCode\":\"\"}",
+                "{\"message\":\"done\",\"errorCode\":123}",
+                "{\"operation\":\"created\",\"errorCode\":123}")) {
+            org.mockito.Mockito.reset(knownTool);
+            when(knownTool.getName()).thenReturn("manage_rule");
+            when(knownTool.execute("{}")).thenReturn(malformedResult);
+            manager = new AiToolManager(List.of(knownTool), objectMapper, chatExecutionConfig);
+            manager.init();
+
+            JsonNode result = objectMapper.readTree(manager.execute("manage_rule", "{}"));
+
+            assertEquals("RESULT_UNAVAILABLE", result.path("resultStatus").asText(), malformedResult);
+            assertEquals("TOOL_RESULT_MALFORMED", result.path("errorCode").asText(), malformedResult);
+            assertTrue(result.path("mutationMayHaveCommitted").asBoolean(), malformedResult);
+        }
     }
 }

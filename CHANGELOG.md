@@ -15,6 +15,151 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-01
+
+#### Fixed
+- **Parallel assistant work now remains coherent across tabs, panel lifecycle, and logout.** Before
+  the lazy panel mounts, the application shell alone owns session observation; afterwards the chat
+  view alone polls the full list while visible or hidden, including a low-frequency idle poll that
+  discovers work newly started in another tab. Logout refreshes and settles every authoritative
+  active conversation even when this tab never opened the panel, while the backend records an
+  account-wide explicit chat stop before revoking the token. The running and unread indicators are
+  shown independently, active rows cannot offer a doomed Delete action, and reconciliation now has
+  one shared state instead of a local shadow that could remain stale.
+- **Background assistant completion now reconciles tabs that never mounted the chat panel.** The
+  session projection now includes the latest terminal-message id. The application retains that id
+  plus per-session activity while the panel is closed, so it also detects work that starts and
+  finishes between two polls, then reloads the authoritative Board plus run history even when the
+  original SSE tab was closed. A failed reload remains visibly marked and keeps destructive scene
+  operations and playback guarded until the shared retry path succeeds.
+- **Independent accounts no longer deadlock while recording their first reversible Board edits.**
+  The journal now checks for an abandoned redo branch before issuing its bulk delete, avoiding the
+  empty-range MySQL next-key lock that made concurrent first edits contend on the unique-index end
+  gap while preserving redo invalidation after an actual undo.
+- **The assistant now describes condition fixes in both supported directions.** The
+  `fix_violation` tool definition states that Salus-style condition adjustment may add or remove
+  triggering conditions, matching the strategy implementation and its existing API contract.
+- **NuSMV diagnostic output no longer claims to be an unabridged raw stream.** Result dialogs,
+  API documentation, and the retained-output marker now disclose the 10,000-character
+  storage/display cap while keeping clear that formal results and traces are parsed before it.
+
+### 2026-07-31
+
+#### Changed
+- **The default assistant model is now GPT-5.6 Luna.** The OpenAI-compatible model id is
+  `gpt-5.6-luna`; an explicit `IOT_VERIFY_OPENAI_MODEL` deployment override still takes
+  precedence.
+- **The assistant receives more conversation context without a narrower planning policy.**
+  Its coherent history window is now configurable with `CHAT_HISTORY_CHAR_LIMIT` and defaults
+  to 32,000 characters. Tool-backed model summaries are preserved when the current turn has
+  relevant authoritative evidence; unsupported read or mutation claims are still hidden.
+- **AI task and history capabilities now close across conversations.** The assistant can
+  discover all verification, simulation, and counterexample-search tasks, list and inspect
+  completed formal-verification runs including satisfied runs with no trace, use the Board's
+  authoritative undo/redo journal, preview/confirm clearing an unusable undo/redo journal without
+  changing Board data, and preview/confirm an atomic full-Board clear.
+- **Chat sessions now run independently.** Switching to a new conversation detaches only the
+  browser's SSE transport, so a long-running scene generation or replacement continues under its
+  original session while another conversation can be used. Active rows remain visible, background
+  completion reconciles the Board and notifies the user, and explicit Stop remains the only normal
+  cancellation path. Closing a tab or browser also leaves accepted work running. Completed results
+  retain a server-persisted unread marker and terminal-status label across browser restarts, with an
+  unread count on the assistant entry button; still-running sessions are also restored into the
+  entry indicator and shared Board guard after reload or in another tab. A result is acknowledged
+  only after its exact terminal message is rendered. A failed new-conversation creation leaves the
+  original live stream attached.
+- **Assistant conversation concurrency is configurable and defaults to four sessions per user.**
+  The admission response reports the actual limit, and the UI names it precisely while preserving
+  each already-running conversation. Redis coordinates the limit across instances and the documented
+  fail-open fallback enforces it per process.
+
+#### Fixed
+- **Concurrent chat navigation now preserves the user's latest visible state.** A stale active-row
+  poll can no longer erase, duplicate, or resurrect conversation rows, foreground refresh no longer
+  races background polling, and a delayed New Chat response no longer steals focus after the user
+  explicitly selects another conversation. Foreground refresh now also reconciles the Board and
+  notifies the user when it is the first observer of a background completion.
+- **Assistant work is now visible through one authoritative result and receipt path.** Every
+  chat-dispatched success or no-write preview carries an explicit execution status, and confirmed
+  actions reuse one operation-aware summary for progress plus the post-refresh UI receipt. Rule
+  reorder and rule/specification deletion previews are no longer mislabeled as completed deletes.
+  The shared protected-action confirmation is no longer mislabeled as a deletion when it represents
+  formal-fix application or Board/history clear.
+  Rule recommendations show model-authored rationale, and an explicitly selected category is
+  enforced by backend validation instead of relying on the prompt alone.
+- **Mutation tool results now require tool-specific completion evidence.** A message-only or
+  malformed result is surfaced as `RESULT_UNAVAILABLE` with conservative mutation uncertainty;
+  the assistant refreshes authoritative state and stops dependent planning until the user can
+  see whether the requested change actually committed. Successful list, availability, preview,
+  unchanged, and unaccepted-cancellation results no longer count as evidence for a model claim
+  that the assistant changed platform state.
+- **Formal verification and bounded exploration now expose MEDIC numeric-environment semantics.**
+  Every shared numeric value must explicitly declare `NaturalChangeRate`: `[-1, 1]` exactly models
+  MEDIC §3.1's per-step physical disturbance, `0` explicitly disables independent natural change,
+  and other intervals are visible lower/zero/upper endpoint extensions. Formal and bounded paths combine the
+  declared interval with every active device effect and clamp to the domain, without adding a second
+  hidden disturbance. The Environment Pool now separates model initial value from subsequent
+  evolution, shows device effects, detects case/domain/rate/default-label conflicts, and disables
+  ambiguous edits; the backend rejects the same conflicts on every write path. The live canvas now
+  displays effective template-default labels as well as instance overrides. Fuzz traces no longer
+  expose template trust values as evidence, and clients reject non-empty fuzz label evidence because
+  bounded exploration does not model MEDIC trust/privacy propagation. Privacy wording states
+  throughout that public/private is a sensitivity-propagation
+  label and never changes platform authorization, encryption, or transmission behavior.
+- **Template evolution validation and local-variable execution now use one rate contract.**
+  Frontend template preflight rejects malformed or descending natural-change rates, reversed
+  numeric bounds, and rates attached to enum domains before upload, matching backend admission.
+  Backend admission, formal generation, bounded exploration, and shared-domain comparison now use
+  one canonical parser, so malformed persisted or internal values cannot be reinterpreted differently.
+  Formal and bounded execution now both retain the lower endpoint for a same-direction local
+  rate such as `[2,3]`, alongside stutter and the upper endpoint.
+- **Model controls now name their semantics directly.** Public/private choices are presented as
+  sensitivity labels, the privacy run control names sensitivity-label propagation, and the
+  Environment Pool states the MEDIC `[-1,1]` baseline plus the single-combination/zero-rate rule.
+  The verification control recognizes privacy-specification target types with the same normalized
+  comparison as the backend, so its visible required/on state cannot disagree with execution.
+- **Formal-run controls now explain the same prerequisites that execution enforces.** Verification
+  and simulation show visible, accessibility-linked reasons for unavailable actions; device-local
+  initial-value controls name the concrete template starting value; and Environment Pool CAS edits
+  use the same effective template labels shown to the user.
+- **Assistant task polling now closes on persisted results without leaking technical payloads.**
+  Completed verification and simulation statuses expose the correct run/trace id and next tool,
+  omit raw NuSMV output and execution logs, and synchronous verification announces a synchronized
+  Run History only after persistence is confirmed. Top-level and nested task progress now repeat
+  the same authoritative live value instead of exposing a stale persisted value beside it. Stale
+  documentation now reports all 53 tools.
+- **The floating AI assistant remains draggable and resizable after browser layout changes.**
+  Dragging and resizing now share one interaction lifecycle, which is released when the viewport
+  changes, the window or tab loses focus, pointer capture is lost, or the panel closes. Repeated
+  browser resizing can therefore no longer leave the panel permanently stuck. The panel also
+  keeps useful movement room at short desktop heights and exposes a larger resize target. The
+  draggable playback-change popover now follows the same interruption cleanup instead of reusing
+  a stale drag origin after a viewport change, and keeps its pointer gesture usable when browser
+  pointer capture is unavailable.
+- **Historical evidence now degrades per selected record.** Replaying a verification trace no
+  longer loads every sibling trace in its run, so one damaged record cannot hide another valid
+  counterexample. Counterexample-search finding replay now obtains the selected finding together
+  with its validated frozen run snapshot and canvas, rather than requiring every sibling finding
+  to decode. Both paths still reject ownership mismatches and malformed frozen evidence.
+- **Deep-linked results now always describe the URL the user opened.** Switching from one result
+  link to another removes the older surface before the new detail load starts, and each navigation
+  owns its failure handling. A late response from an earlier link can therefore neither clear nor
+  validate child evidence for the newer one. Confirmed missing, forbidden, or damaged finding
+  targets now converge the URL and displayed state; temporary failures remain retryable.
+- **Saved partial verification evidence is no longer hidden.** A verification run can be
+  `INCONCLUSIVE` after a different property result is incomplete while still retaining a parsed,
+  replayable counterexample. Result and history views now load and show that evidence with an
+  explicit partial-evidence qualifier, without turning it into a final violation conclusion.
+- **Damaged historical detail no longer leaves the Board in a retry loop.** When a detail
+  endpoint explicitly reports `PERSISTED_SEMANTIC_DATA_INVALID`, the Board marks only the
+  affected verification trace or run, simulation result, exploration run, or individually
+  identified exploration finding unavailable and clears any deep link to it. Transport,
+  authorization, and temporary service failures remain retryable, so valid evidence is never
+  hidden merely because a request could not complete. A history-list refresh now retains that
+  confirmed unavailable state for the active Board session. Historical
+  links now retain transient failures for retry and reject a trace that is not part of its named
+  verification run.
+
 ### 2026-07-30
 
 #### Changed
@@ -23,6 +168,51 @@ history into a technical spec. The spec content itself now lives under
   preloads it for immediate playback when reduced-motion preferences permit video.
 
 #### Fixed
+- **Large verification and simulation histories no longer fail while loading summaries.** Result
+  and task-inbox sorting now selects only summary-width columns instead of materializing complete
+  state arrays, frozen requests, or detail-only diagnostics. Full trajectory and exploration
+  finding collections retain their public order by sorting after owned rows are loaded, so their
+  large JSON payloads also never enter a database filesort. Full trajectory and rule-evidence
+  integrity checks remain authoritative when a result is opened for replay or repair. Repeated
+  identical error notifications are grouped instead of stacking over the Board while independent
+  refreshes fail together.
+- **AI execution progress now stays readable and recoverable throughout a turn.** The live
+  reasoning/tool card uses the same full conversation width as its persisted completion state
+  instead of collapsing to a narrow strip. Read-only model playback no longer disables the
+  assistant composer; sending a new turn closes playback first, while an in-progress atomic scene
+  replacement remains a hard interaction boundary.
+- **Historical trajectory replay now preserves its own canvas evidence.** Verification, saved
+  simulation, and exploration findings render the run-captured node layout and rule links instead
+  of the current Board. A later Board or template change therefore makes a conclusion stale for
+  the current model without hiding the original evidence or mixing it with current template
+  presentation; stale verification replay still withholds repair actions.
+- **Assistant actions are now visible without restricting what the assistant may do.** Confirmed
+  Board mutations and model-run submissions show a localized receipt only after authoritative
+  refresh, while previews, reads, rejected choices, no-ops, and unaccepted cancellations no longer
+  claim a change. A final-response failure no longer repeats an already delivered action receipt.
+  Verification, simulation, and counterexample-search history persists whether a
+  run was initiated by the user or assistant and labels assistant/unknown provenance in the UI.
+  Unexpected failures and structurally unusable returns from mutation-capable tools now remain
+  visibly unconfirmed, stop dependent work, and request authoritative reconciliation; read-only
+  failures remain independent. Error
+  history also records when a pending refresh instruction could not be fully delivered instead of
+  claiming that the client received it.
+- **Long model traces no longer abort an otherwise healthy assistant turn.** Verification
+  counterexamples and simulation traces now return bounded pageable state windows, matching the
+  existing counterexample-search detail flow; all three expose the same counts and next offset and
+  cap one request at ten states before the global tool-result size guard. A definitively read-only
+  unavailable result also no longer skips independent calls from the same plan; possibly committed
+  mutations still stop immediately. Transient synchronous simulation now returns only projected
+  initial/final state previews and directs complete-sequence work to the saved pageable path instead
+  of duplicating up to eleven full states and success logs. Formal verification conclusions and
+  incomplete-model warnings remain unchanged.
+- **Empty-Board template drops now work across the complete visible canvas.** During a template
+  drag, the centered guidance and its buttons no longer intercept the drop target. Cancelling the
+  subsequent device-name dialog restores those actions because no node has been created yet.
+- **Successful full-scene imports no longer report an unconfirmed response when optional template
+  fields round-trip as omitted.** Immediate response checks and authoritative reload checks now use
+  one manifest canonicalizer that treats an explicit `null` object property as equivalent to the
+  backend DTO omitting it, while preserving array order and all non-null value differences.
 - **Destructive template and scene confirmations now cover undo/redo history.** Full-scene
   replacement, device-type deletion, and bundled-default reset previews report the exact edit-history
   count and bind their impact token to the complete journal. A concurrent edit, undo, or redo now

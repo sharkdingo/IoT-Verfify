@@ -154,11 +154,13 @@ exclude `COMPLETED`; completed verification rows are exposed through `/api/verif
 while saved simulation trajectories are exposed through `/api/simulate/traces`.
 Counterexamples remain children of one verification run. Deleting that run deletes its
 counterexamples atomically. `violatedSpecCount` records false properties;
-`counterexampleCount` records only replayable parsed traces and may be smaller.
-History summaries validate each saved state array and its scalar count before including a
-trace in that replayable count. Verification and simulation summaries additionally bind
-every rule event to the exact indexed rule in the server-internal frozen request, while
-omitting both state arrays and request snapshots from the summary payload.
+`counterexampleCount` records retained traces with valid summary metadata and may be smaller.
+History queries exclude state arrays, frozen requests, and solver output so database sorting
+operates on summary-width rows. Verification summaries validate the violated-specification
+snapshot and positive state count; simulation summaries validate step/count metadata,
+generation diagnostics, and structured run context. Full detail reads remain authoritative:
+they validate every saved state and bind each rule event to the exact indexed rule in the
+server-internal frozen request before returning replay or fix evidence.
 
 Simulation has no specifications and therefore no safety conclusion. `states` is one
 possible trajectory through the generated model. `requestedSteps` is the requested
@@ -257,8 +259,12 @@ Verification traces and simulation traces share the animation timeline. Playback
 read-only historical model snapshot:
 
 - it does not mutate the current board;
-- removed historical devices remain visible in the timeline summary and are marked as
-  historical; playback does not invent a canvas position for a device that no longer exists;
+- it renders the canonical run-captured `playbackScene` rather than the current canvas, so
+  removed, renamed, moved, or replaced historical devices and rules retain their recorded visual
+  positions and relationships. Frozen rule labels are used for trace evidence, and playback never
+  resolves node presentation through the current template or rule catalog;
+- a later Board edit makes the conclusion stale for the current model and withdraws repair actions,
+  but it does not suppress this historical replay;
 - active edges come from backend `triggeredRules`, not frontend re-evaluation guesses;
 - edges are static outside playback, and command-flow particles appear only for a
   backend-reported triggered rule whose delivery link is not compromised. Each selected

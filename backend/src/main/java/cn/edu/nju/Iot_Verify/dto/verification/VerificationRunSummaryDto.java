@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.dto.verification;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceSummaryDto;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -23,6 +24,7 @@ import java.util.List;
 public class VerificationRunSummaryDto {
 
     private Long id;
+    private RunInitiator initiator;
     private LocalDateTime createdAt;
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;

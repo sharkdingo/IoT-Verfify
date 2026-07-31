@@ -1,12 +1,13 @@
 # Theory sources
 
-The modeling, verification, fix, and bounded-exploration semantics in this repo implement published
-algorithms. This page is the index: which paper owns which behaviour, and where the implementation
-lives. **When the code and a paper disagree, the paper is the specification** — the opposite of the
-repo's usual "code wins" rule, which governs code vs. *our own* docs.
+The modeling, verification, fix, and bounded-exploration semantics in this repo draw on published
+algorithms. This page records which paper motivates each behaviour, which parts the product adopts,
+and where it deliberately differs. The product contract is the explicit behavior documented here,
+in the owning API/model documents, and in `modelSemantics`; a paper is not a silent override for a
+different user-facing contract.
 
-Read this before changing generated-model semantics. A construct that looks unmotivated is usually
-deliberate; see the cautionary case at the bottom.
+Read the cited section before changing generated-model semantics, then keep the formal checker,
+bounded explorer, API contract, tests, and UI explanation aligned with the chosen product meaning.
 
 ## The four papers
 
@@ -25,16 +26,21 @@ their own copy; the citations below are precise enough to check against any copy
 - **FSM per device** — WorkingStates → states, InternalVariables → variables, APIs → transitions
   carrying a `Signal_Device_API` label. MEDIC §3.1, Fig. 1. Implementation:
   `SmvDeviceModuleBuilder`, `DeviceSmvDataFactory`.
-- **Rule model as a handling node** — a rule becomes its own two-state FSM (`Ready`/`Waiting`) whose
-  `Rule_i_Command` label synchronizes with the target device. MEDIC §3.2, Def. 3.2, Fig. 3.
-  Implementation: `SmvMainModuleBuilder`'s rule branches and execution probes.
-- **Environment model and disturbance** — a shared variable is a single-state self-loop constrained by
-  `v' - v ∈ [-1 + env.D.v, 1 + env.D.v]`: the value moves by the device effect "with a slight
-  disturbance in the range of [-1, 1] in each time step". MEDIC §3.1 (final paragraph before §3.2),
-  Fig. 2b. Implementation: `SmvMainModuleBuilder.appendNumericEnvTransition` and its twin
-  `FuzzModel.ValueDomain.nextEnvironmentNumericCandidates`.
-- **Trust and privacy propagation** — `trust`/`privacy` per state and variable; a rule whose THIS part
-  is untrusted makes its THAT part untrusted. MEDIC §3.3, Def. 3.3, Fig. 4. Implementation:
+- **Rule execution** — MEDIC §3.2, Def. 3.2, Fig. 3 introduces a two-state handling node
+  (`Ready`/`Waiting`). IoT-Verify collapses that internal handling step: IF reads the current state and
+  the command writes the target's next state, matching HAFuzz §3.3, Fig. 5 and the product's Immediate
+  template. Implementation: `SmvMainModuleBuilder`'s rule branches and execution probes.
+- **Environment model** — MEDIC §3.1, Fig. 2b defines a numeric shared value by
+  `v' - v ∈ [-1 + env.D.v, 1 + env.D.v]`: the device effect is combined with a per-step
+  `[-1, 1]` physical disturbance. IoT-Verify exposes that fixed interval as the required
+  `NaturalChangeRate` parameter. `[-1, 1]` therefore reproduces the paper rule exactly; `0`
+  explicitly disables independent natural change; another declared interval is a visible
+  parameterized extension. The formal generator and bounded explorer both add the declared
+  lower endpoint, zero, and upper endpoint candidates to active device effects and clamp to
+  the declared domain. For MEDIC's integer `[-1, 1]`, those are the complete paper interval.
+- **Trust and privacy propagation** — `trust`/`privacy` labels belong to states and variables. Under
+  MEDIC §3.3, Def. 3.3, Fig. 4, a target becomes untrusted only when every contributing trigger source
+  is untrusted, while any private source makes the target private. Implementation:
   `SmvMainModuleBuilder`'s property transitions.
 - **Attack model** — a boolean `attacked` per device; a compromised sensor reports a random in-domain
   value with `trust := untrusted`, and a compromised actuator or link drops the command via an
@@ -54,13 +60,23 @@ their own copy; the citations below are precise enough to check against any copy
   `component/fuzz/paper/` monitor FSM; see [fuzzing-flow.md](fuzzing-flow.md). HAFuzz findings are
   candidate evidence, never formal conclusions — budget exhaustion is not satisfaction.
 
-## Where this project deliberately goes beyond a paper
+## Where this project deliberately differs from or goes beyond a paper
 
 These are intentional, not drift. Keep the list honest when adding more.
 
 - Device templates are user-authored JSON schemas rather than vendor capability documents, so the repo
   validates manifests at persist time (`DeviceTemplateSchemaValidator`, `SmvModelValidator`) — a step
   MEDIC does not need.
+- Rule execution collapses MEDIC's internal `Ready`/`Waiting` handling-node transition into one
+  user-visible current-state-to-next-state step. This keeps verification, simulation, traces, fixes,
+  HAFuzz path formation, and specification template 4 on one temporal convention.
+- Numeric environment evolution parameterizes MEDIC's fixed per-step `[-1, 1]` disturbance.
+  Every shared numeric declaration must state `NaturalChangeRate`: use `[-1, 1]` for exact
+  MEDIC behavior, `0` for explicit stutter absent device effects, or another interval for a
+  deliberate domain-specific endpoint abstraction. The generator never layers a second hidden
+  `[-1, 1]` term on top of that declaration. Optional device-local numeric rates use the same
+  endpoint-and-stutter convention as a project extension; they are not part of MEDIC's shared
+  physical-environment equation.
 - Specification templates 1–7 extend MEDIC's two primitive security templates with safety and
   reachability shapes. MEDIC §4.1 explicitly anticipates this ("More CTL templates ... can be defined
   and integrated into MEDIC for different requirements on demand").
@@ -68,36 +84,28 @@ These are intentional, not drift. Keep the list honest when adding more.
   `disabledRuleCount` / `skippedSpecCount` / `generationIssues` rather than silently dropped. The
   papers assume well-formed input.
 
-## Conformance checked against the papers (2026-07-28)
+## Conformance checked against the papers (2026-07-31)
 
 Spot-checked by reading each paper's algorithm alongside the implementation. Verified conforming:
 
-- **MEDIC environment disturbance** — `v' - v ∈ [-1 + env.D.v, 1 + env.D.v]` appears as the ±1
-  boundary candidates in `SmvMainModuleBuilder.appendNumericEnvTransition` and, mirrored, in
-  `FuzzModel.nextEnvironmentNumericCandidates`. Both engines agree, so a fuzz candidate path stays
-  reachable in the formal model.
 - **Salus §5.3 parameter refinement** — candidates are ordered by distance from the original value
   (`ParameterAdjustStrategy`), so the closest working value is offered first.
 - **Salus §5.2 condition candidates** — candidate conditions to add are derived from the violated
   specification's own conditions (`FixStrategyUtils`), not invented.
 - **HAFuzz distance-guided search** — the explorer keeps the minimum-distance seed per round and
-  persists both the requested and effective seed, so a finding is replayable.
+  persists both the requested and effective seed, so a finding is replayable. Its per-level weight
+  is Algorithm 1 line 25's `2^(l_up-l) / (2^l_up - 1)`; the reference artifact obtains the same
+  denominator by summing the powers used by all levels.
 - **FSM thesis ch.4 repair loop** — the ¬ρ search proposes candidate values and `forwardVerify`
   re-checks each against the real specification; a rejected candidate is added to the exclusion
   invariants rather than retried. `forwardVerify` also refuses to confirm a fix whose regenerated
   model is incomplete, so a vacuous pass is never reported as a repair.
 
-## The cautionary case
+## Review discipline
 
-On 2026-07-28 the ±1 environment disturbance was mistaken for an unauthored step and removed from both
-engines. The reasoning looked sound and was checked against a real NuSMV 2.7.1 run: with no declared
-`NaturalChangeRate` and every device effect inactive,
-`35 -> 34`, which reads exactly like a false alarm. It was reverted the same day: MEDIC §3.1 specifies
-that disturbance, because a numeric environment value is an imperfectly-observed physical quantity.
-
-Two lessons worth keeping:
-
-- **An empirical check confirms what the code does, not that the code is wrong.** The NuSMV run proved
-  the transition existed. It could not tell me the transition was intended.
-- **Asymmetric risk.** An over-permissive environment model yields a false alarm the user can dismiss;
-  an over-restrictive one hides a real violation. When unsure which way to err, err toward the paper.
+- A test or NuSMV run confirms what the implementation does; paper conformance still requires reading
+  the cited definition and comparing the complete transition, not one boundary example.
+- A paper-inspired assumption that widens behavior must be represented in the product contract. Do not
+  introduce undeclared nondeterminism merely because it is conservative for one analysis goal.
+- When the product deliberately abstracts a paper mechanism, name both semantics and explain why the
+  product convention wins, rather than describing a subset as an exact reproduction.

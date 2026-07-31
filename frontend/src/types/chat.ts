@@ -8,6 +8,9 @@ export interface ChatSession {
     createdAt?: string
     updatedAt: string
     active: boolean
+    latestTerminalMessageId: number | null
+    latestExecutionStatus: ChatExecutionStatus | null
+    hasUnreadUpdate: boolean
 }
 
 export interface ChatSessionActivity {
@@ -83,9 +86,37 @@ export const STREAM_REFRESH_TARGETS = [
 
 export type StreamRefreshTarget = typeof STREAM_REFRESH_TARGETS[number]
 
+export const ASSISTANT_ACTIONS = [
+    'DEVICE_ADDED',
+    'DEVICE_DELETED',
+    'DEVICE_UPDATED',
+    'RULES_UPDATED',
+    'REPAIR_APPLIED',
+    'SPECIFICATIONS_UPDATED',
+    'ENVIRONMENT_UPDATED',
+    'SCENE_APPLIED',
+    'DEFAULT_TEMPLATES_RESET',
+    'TEMPLATES_UPDATED',
+    'FORMAL_VERIFICATION_RUN',
+    'VERIFICATION_TASK_STARTED',
+    'SIMULATION_TASK_STARTED',
+    'EXPLORATION_TASK_STARTED',
+    'RUN_HISTORY_UPDATED',
+    'BOARD_UNDONE',
+    'BOARD_REDONE',
+    'BOARD_CLEARED',
+    'OUTCOME_RECONCILED'
+] as const
+
+export type AssistantAction = typeof ASSISTANT_ACTIONS[number]
+
 export interface StreamCommand {
     type: 'REFRESH_DATA'
-    payload: { target: StreamRefreshTarget }
+    payload: {
+        target: StreamRefreshTarget
+        assistantAction?: AssistantAction
+        assistantSummary?: string
+    }
 }
 
 export interface StreamTerminal {

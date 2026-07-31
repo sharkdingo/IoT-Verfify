@@ -19,10 +19,12 @@ import cn.edu.nju.Iot_Verify.configure.ThreadPoolConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingReplayDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzInputEventDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRequestDto;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRunDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRunSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzWorkloadPreviewDto;
@@ -159,6 +161,33 @@ class FuzzServiceImplTest {
                 threadPoolConfig,
                 transactionTemplate,
                 new ObjectMapper());
+    }
+
+    @Test
+    void fullRunOrdersLoadedFindingsWithoutDatabaseSortingLongTextPayloads() {
+        LocalDateTime firstTime = LocalDateTime.of(2026, 7, 30, 10, 0);
+        FuzzTaskPo run = FuzzTaskPo.builder()
+                .id(41L)
+                .userId(7L)
+                .status(FuzzTaskPo.TaskStatus.COMPLETED)
+                .build();
+        FuzzFindingPo first = FuzzFindingPo.builder().id(11L).createdAt(firstTime).build();
+        FuzzFindingPo second = FuzzFindingPo.builder().id(12L).createdAt(firstTime).build();
+        FuzzFindingPo last = FuzzFindingPo.builder().id(13L).createdAt(firstTime.plusSeconds(1)).build();
+        FuzzRunDto expected = FuzzRunDto.builder().id(41L).findings(List.of()).build();
+        when(taskRepository.findByIdAndUserIdAndStatus(
+                41L, 7L, FuzzTaskPo.TaskStatus.COMPLETED)).thenReturn(Optional.of(run));
+        when(findingRepository.findByUserIdAndFuzzTaskId(7L, 41L))
+                .thenReturn(List.of(last, second, first));
+        when(fuzzMapper.toRunDto(eq(run), anyList())).thenReturn(expected);
+
+        assertSame(expected, service.getRun(7L, 41L));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<FuzzFindingPo>> findings = ArgumentCaptor.forClass(List.class);
+        verify(fuzzMapper).toRunDto(eq(run), findings.capture());
+        assertEquals(List.of(11L, 12L, 13L),
+                findings.getValue().stream().map(FuzzFindingPo::getId).toList());
     }
 
     @Test
@@ -1214,7 +1243,7 @@ class FuzzServiceImplTest {
         assertEquals(createdAt, impact.getCreatedAt());
         assertEquals(completedAt, impact.getCompletedAt());
         verify(findingRepository, never())
-                .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(anyLong(), anyLong());
+                .findByUserIdAndFuzzTaskId(anyLong(), anyLong());
         verifyNoInteractions(fuzzMapper);
     }
 
@@ -1238,7 +1267,7 @@ class FuzzServiceImplTest {
         assertEquals(4L, deletedCount);
         verify(taskRepository).deleteCompletedRun(91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED);
         verify(findingRepository, never())
-                .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(anyLong(), anyLong());
+                .findByUserIdAndFuzzTaskId(anyLong(), anyLong());
         verifyNoInteractions(fuzzMapper);
     }
 
@@ -1305,6 +1334,34 @@ class FuzzServiceImplTest {
 
         verify(findingRepository).countByUserIdAndFuzzTaskId(7L, 91L);
         verify(fuzzMapper).toFindingDto(run, finding, 2L);
+    }
+
+    @Test
+    void findingReplayLookupUsesOnlyTheSelectedFindingAndItsValidatedRunContext() {
+        FuzzFindingPo finding = FuzzFindingPo.builder()
+                .id(81L)
+                .userId(7L)
+                .fuzzTaskId(91L)
+                .build();
+        FuzzTaskPo run = FuzzTaskPo.builder()
+                .id(91L)
+                .userId(7L)
+                .status(FuzzTaskPo.TaskStatus.COMPLETED)
+                .build();
+        FuzzFindingReplayDto expected = FuzzFindingReplayDto.builder()
+                .finding(FuzzFindingDto.builder().id(81L).fuzzTaskId(91L).build())
+                .build();
+        when(findingRepository.findByIdAndUserId(81L, 7L)).thenReturn(Optional.of(finding));
+        when(taskRepository.findByIdAndUserIdAndStatus(
+                91L, 7L, FuzzTaskPo.TaskStatus.COMPLETED)).thenReturn(Optional.of(run));
+        when(findingRepository.countByUserIdAndFuzzTaskId(7L, 91L)).thenReturn(2L);
+        when(fuzzMapper.toFindingReplayDto(run, finding, 2L)).thenReturn(expected);
+
+        assertSame(expected, service.getFindingReplay(7L, 81L));
+
+        verify(findingRepository).countByUserIdAndFuzzTaskId(7L, 91L);
+        verify(fuzzMapper).toFindingReplayDto(run, finding, 2L);
+        verify(findingRepository, never()).findByUserIdAndFuzzTaskId(anyLong(), anyLong());
     }
 
     @Test

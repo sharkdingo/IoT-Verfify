@@ -1,11 +1,14 @@
 package cn.edu.nju.Iot_Verify.component.ai.chat;
 
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResultContract;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -35,8 +38,12 @@ public class ChatToolProgressPresenter {
      * Exposed because the chat service applies the same check when classifying an execution.
      */
     public boolean hasValidKnownToolPayload(String functionName, JsonNode root) {
+        if (AiToolResultContract.isMutationCapable(functionName)) {
+            return AiToolResultContract.hasValidKnownToolPayload(functionName, root);
+        }
         if (!"board_overview".equals(functionName)) return true;
-        return hasArray(root, "devices")
+        return root != null && root.isObject()
+                && hasArray(root, "devices")
                 && hasArray(root, "rules")
                 && hasArray(root, "specs")
                 && hasArray(root, "edges")
@@ -67,7 +74,17 @@ public class ChatToolProgressPresenter {
             if (!root.isObject() || root.path("skipped").asBoolean(false)) {
                 return null;
             }
-            if (!root.path("error").asText("").isBlank()) {
+            if (AiToolResultContract.isUnavailable(root)) {
+                boolean mayHaveCommitted = root.path("mutationMayHaveCommitted").asBoolean(false);
+                return preferChinese
+                        ? (mayHaveCommitted
+                        ? "工具已经开始执行，但结果未能确认；当前状态需要重新读取，请核对后再重试。"
+                        : "工具结果不可用，平台状态尚未得到确认，请重试。")
+                        : (mayHaveCommitted
+                        ? "The tool started, but its result could not be confirmed; reread current state before retrying."
+                        : "The tool result is unavailable; current platform state was not confirmed. Retry the request.");
+            }
+            if (AiToolResultContract.isStructuredError(root)) {
                 String errorCode = root.path("errorCode").asText("").trim();
                 String code = errorCode.matches("[A-Z0-9_-]{1,64}") ? " (" + errorCode + ")" : "";
                 return preferChinese
@@ -128,7 +145,17 @@ public class ChatToolProgressPresenter {
                 String operation = root.path("operation").asText("").trim();
                 JsonNode rule = "deleted".equals(operation) ? root.path("deletedRule") : root.path("rule");
                 String description = rule.path("description").asText("").trim();
-                if (!operation.isBlank()) {
+                if ("preview".equals(operation)) {
+                    return compactToolProgressDetail(preferChinese
+                            ? "已预览规则删除影响；尚未写入，等待明确确认。"
+                            : "Previewed the rule deletion impact; nothing was written and explicit confirmation is pending.");
+                }
+                if ("reordered".equals(operation)) {
+                    return compactToolProgressDetail(preferChinese
+                            ? "已调整规则执行顺序，共 " + root.path("ruleCount").asInt(0) + " 条规则。"
+                            : "Reordered " + root.path("ruleCount").asInt(0) + " rule(s).");
+                }
+                if (Set.of("created", "deleted").contains(operation)) {
                     String action = "created".equals(operation)
                             ? (preferChinese ? "已创建规则" : "Created rule")
                             : (preferChinese ? "已删除规则" : "Deleted rule");
@@ -157,7 +184,12 @@ public class ChatToolProgressPresenter {
                 JsonNode spec = "deleted".equals(operation)
                         ? root.path("deletedSpecification") : root.path("specification");
                 String formula = spec.path("formulaPreview").asText("").trim();
-                if (!operation.isBlank()) {
+                if ("preview".equals(operation)) {
+                    return compactToolProgressDetail(preferChinese
+                            ? "已预览规约删除影响；尚未写入，等待明确确认。"
+                            : "Previewed the specification deletion impact; nothing was written and explicit confirmation is pending.");
+                }
+                if (Set.of("created", "deleted").contains(operation)) {
                     String action = "created".equals(operation)
                             ? (preferChinese ? "已创建规约" : "Created specification")
                             : (preferChinese ? "已删除规约" : "Deleted specification");
@@ -250,6 +282,73 @@ public class ChatToolProgressPresenter {
                             + " and privacy=" + variable.path("privacy").asText("") + ".");
                 }
             }
+            if ("manage_board_history".equals(functionName)) {
+                String operation = root.path("operation").asText("");
+                if ("clear_preview".equals(operation)) {
+                    return preferChinese
+                            ? "已预览清除 " + root.path("entryCount").asInt(0)
+                            + " 条撤销/重做记录；当前画布不会改变，正在等待确认。"
+                            : "Previewed clearing " + root.path("entryCount").asInt(0)
+                            + " undo/redo entries; current Board data will not change and confirmation is pending.";
+                }
+                if ("history_empty".equals(operation)) {
+                    return preferChinese
+                            ? "撤销/重做历史已经为空，画布未改变。"
+                            : "Undo/redo history was already empty; the Board did not change.";
+                }
+                if ("history_cleared".equals(operation)) {
+                    return preferChinese
+                            ? "已清除 " + root.path("clearedEntryCount").asInt(0)
+                            + " 条撤销/重做记录，当前画布未改变。"
+                            : "Cleared " + root.path("clearedEntryCount").asInt(0)
+                            + " undo/redo entries; current Board data did not change.";
+                }
+                if ("availability".equals(operation)) {
+                    return preferChinese
+                            ? "已读取编辑历史：可撤销=" + root.path("canUndo").asBoolean(false)
+                            + "，可重做=" + root.path("canRedo").asBoolean(false) + "。"
+                            : "Read edit history: canUndo=" + root.path("canUndo").asBoolean(false)
+                            + ", canRedo=" + root.path("canRedo").asBoolean(false) + ".";
+                }
+                if (Set.of("undone", "redone").contains(operation)) {
+                    boolean applied = root.path("applied").asBoolean(false);
+                    if (!applied) {
+                        return preferChinese
+                                ? ("undone".equals(operation) ? "没有可撤销的编辑。" : "没有可重做的编辑。")
+                                : ("undone".equals(operation) ? "There was no edit to undo." : "There was no edit to redo.");
+                    }
+                    String entityType = root.path("entityType").asText("").trim();
+                    return compactToolProgressDetail(preferChinese
+                            ? ("undone".equals(operation) ? "已撤销最近一次编辑" : "已重做上一次撤销的编辑")
+                            + (entityType.isBlank() ? "。" : "（" + entityType + "）。")
+                            : ("undone".equals(operation) ? "Undid the latest edit" : "Redid the previously undone edit")
+                            + (entityType.isBlank() ? "." : " (" + entityType + ")."));
+                }
+            }
+            if ("clear_board".equals(functionName)) {
+                if ("preview".equals(root.path("operation").asText())) {
+                    return compactToolProgressDetail(preferChinese
+                            ? String.format("已预览清空场景：将移除 %d 个设备、%d 条规则、%d 条规约；尚未写入，等待确认。",
+                            root.path("wouldRemoveDeviceCount").asInt(0),
+                            root.path("wouldRemoveRuleCount").asInt(0),
+                            root.path("wouldRemoveSpecificationCount").asInt(0))
+                            : String.format("Previewed Board clearing: %d device(s), %d rule(s), and %d specification(s) would be removed; nothing was written and confirmation is pending.",
+                            root.path("wouldRemoveDeviceCount").asInt(0),
+                            root.path("wouldRemoveRuleCount").asInt(0),
+                            root.path("wouldRemoveSpecificationCount").asInt(0)));
+                }
+                if ("cleared".equals(root.path("operation").asText())) {
+                    return compactToolProgressDetail(preferChinese
+                            ? String.format("已清空场景：移除 %d 个设备、%d 条规则、%d 条规约。",
+                            root.path("removedDeviceCount").asInt(0),
+                            root.path("removedRuleCount").asInt(0),
+                            root.path("removedSpecificationCount").asInt(0))
+                            : String.format("Cleared the Board: removed %d device(s), %d rule(s), and %d specification(s).",
+                            root.path("removedDeviceCount").asInt(0),
+                            root.path("removedRuleCount").asInt(0),
+                            root.path("removedSpecificationCount").asInt(0)));
+                }
+            }
 
             String operation = root.path("operation").asText("").trim();
             if (!operation.isBlank()) {
@@ -261,6 +360,103 @@ public class ChatToolProgressPresenter {
         } catch (Exception e) {
             return preferChinese ? "工具结果无法生成摘要。" : "The tool result could not be summarized.";
         }
+    }
+
+    /** One authoritative user-visible receipt and the client data it invalidates. */
+    public Optional<ActionReceipt> actionReceipt(
+            String functionName, String toolResult, boolean preferChinese) {
+        try {
+            JsonNode root = objectMapper.readTree(toolResult);
+            if (root == null || !root.isObject()) return Optional.empty();
+            if (!AiToolResultContract.hasValidControlFields(root)
+                    || AiToolResultContract.isUnavailable(root)
+                    || AiToolResultContract.isStructuredError(root)
+                    || !hasValidKnownToolPayload(functionName, root)) {
+                return Optional.empty();
+            }
+            boolean boardHistoryCleared = "manage_board_history".equals(functionName)
+                    && "history_cleared".equals(root.path("operation").asText());
+            String action = confirmedAction(functionName, root);
+            if (action == null && !boardHistoryCleared) return Optional.empty();
+            String summary = toolProgressDetail(functionName, toolResult, preferChinese);
+            if (isGenericSummary(summary, preferChinese)) summary = null;
+            return Optional.of(new ActionReceipt(action, summary, potentialRefreshTargets(functionName)));
+        } catch (Exception ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private boolean isGenericSummary(String summary, boolean preferChinese) {
+        if (summary == null || summary.isBlank()) return true;
+        return summary.equals(preferChinese ? "工具已返回结构化结果。" : "The tool returned a structured result.")
+                || summary.startsWith(preferChinese ? "工具操作结果：" : "Tool operation result: ");
+    }
+
+    public List<String> potentialRefreshTargets(String functionName) {
+        return switch (functionName) {
+            case "add_device" -> List.of("device_list", "environment_list");
+            case "delete_device" -> List.of("device_list", "environment_list", "rule_list", "spec_list");
+            case "edit_device" -> List.of("device_list", "spec_list");
+            case "manage_rule", "apply_fix" -> List.of("rule_list");
+            case "manage_spec" -> List.of("spec_list");
+            case "manage_environment" -> List.of("environment_list");
+            case "apply_scenario", "reset_default_templates", "manage_board_history", "clear_board" ->
+                    List.of("board_state");
+            case "add_template", "delete_template" -> List.of("template_list");
+            case "verify_model", "verify_model_async", "simulate_model_async", "fuzz_model_async",
+                    "cancel_verify_task", "cancel_simulate_task", "cancel_fuzz_task", "delete_trace",
+                    "delete_simulation_trace", "delete_verification_run", "delete_fuzz_run",
+                    "dismiss_verify_task", "dismiss_simulate_task", "dismiss_fuzz_task" ->
+                    List.of("run_history");
+            default -> List.of();
+        };
+    }
+
+    private String confirmedAction(String functionName, JsonNode root) {
+        String operation = root.path("operation").asText("");
+        return switch (functionName) {
+            case "add_device" -> "created".equals(operation) ? "DEVICE_ADDED" : null;
+            case "delete_device" -> "deleted".equals(operation) ? "DEVICE_DELETED" : null;
+            case "edit_device" -> Set.of("updated", "renamed").contains(operation) ? "DEVICE_UPDATED" : null;
+            case "manage_rule" -> Set.of("created", "deleted", "reordered").contains(operation)
+                    ? "RULES_UPDATED" : null;
+            case "apply_fix" -> "applied".equals(operation) ? "REPAIR_APPLIED" : null;
+            case "manage_spec" -> Set.of("created", "deleted").contains(operation)
+                    ? "SPECIFICATIONS_UPDATED" : null;
+            case "manage_environment" -> root.path("changesApplied").asBoolean(false)
+                    ? "ENVIRONMENT_UPDATED" : null;
+            case "apply_scenario" -> "replaced".equals(operation) ? "SCENE_APPLIED" : null;
+            case "reset_default_templates" -> "reset".equals(operation) ? "DEFAULT_TEMPLATES_RESET" : null;
+            case "add_template" -> "created".equals(operation) ? "TEMPLATES_UPDATED" : null;
+            case "delete_template" -> "deleted".equals(operation) ? "TEMPLATES_UPDATED" : null;
+            case "verify_model" -> root.hasNonNull("outcome")
+                    && "SAVED".equals(root.path("historyPersistence").path("status").asText())
+                    && root.path("historyPersistence").path("runId").canConvertToLong()
+                    && root.path("historyPersistence").path("runId").asLong() > 0
+                    ? "FORMAL_VERIFICATION_RUN" : null;
+            case "verify_model_async" -> root.path("taskAccepted").asBoolean(false)
+                    ? "VERIFICATION_TASK_STARTED" : null;
+            case "simulate_model_async" -> root.path("taskAccepted").asBoolean(false)
+                    ? "SIMULATION_TASK_STARTED" : null;
+            case "fuzz_model_async" -> root.path("taskAccepted").asBoolean(false)
+                    ? "EXPLORATION_TASK_STARTED" : null;
+            case "cancel_verify_task", "cancel_simulate_task", "cancel_fuzz_task" ->
+                    root.path("cancellationAccepted").asBoolean(false) ? "RUN_HISTORY_UPDATED" : null;
+            case "delete_trace", "delete_simulation_trace", "delete_verification_run", "delete_fuzz_run" ->
+                    root.path("deleted").asBoolean(false) ? "RUN_HISTORY_UPDATED" : null;
+            case "dismiss_verify_task", "dismiss_simulate_task", "dismiss_fuzz_task" ->
+                    root.path("dismissed").asBoolean(false) ? "RUN_HISTORY_UPDATED" : null;
+            case "manage_board_history" -> {
+                if (!root.path("applied").asBoolean(false)) yield null;
+                yield "undone".equals(operation) ? "BOARD_UNDONE"
+                        : "redone".equals(operation) ? "BOARD_REDONE" : null;
+            }
+            case "clear_board" -> "cleared".equals(operation) ? "BOARD_CLEARED" : null;
+            default -> null;
+        };
+    }
+
+    public record ActionReceipt(String assistantAction, String summary, List<String> refreshTargets) {
     }
 
     private int arraySize(JsonNode root, String field) {

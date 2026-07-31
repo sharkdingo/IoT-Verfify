@@ -51,7 +51,7 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
         props.put("steps", Map.of("type", "integer", "description", "Number of simulation steps (1-100, rejected if outside range). Default 10."));
         props.put("attackMode", Map.of("type", "string", "enum", List.of("none", "exact"), "description", "Per-run attack selection. Simulation never chooses attack points randomly. Default none."));
         props.put("attackPoints", attackPointsSchema());
-        props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track private-data labels through automation chains. This is not access control or encryption. Default false."));
+        props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track public/private sensitivity labels through automation chains. This is not access control or encryption. Default false."));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
 
@@ -84,6 +84,7 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
 
             SimulationRequestDto request = new SimulationRequestDto();
             request.setDevices(devices);
+            request.setPlaybackNodes(board.nodes());
             request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSteps(steps);

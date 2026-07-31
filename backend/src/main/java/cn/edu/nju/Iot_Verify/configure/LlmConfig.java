@@ -33,7 +33,7 @@ public class LlmConfig {
     @ToString.Exclude
     private String apiKey;
 
-    /** Model id/deployment name passed to the endpoint (e.g. {@code gpt-5.5}). */
+    /** Model id/deployment name passed to the endpoint (e.g. {@code gpt-5.6-luna}). */
     @NotBlank
     private String model;
 

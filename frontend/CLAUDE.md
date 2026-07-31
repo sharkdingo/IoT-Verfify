@@ -50,6 +50,14 @@ nothing wrong with them. Two consequences worth knowing before you debug an E2E 
   thinner than a green run suggests, though: the window is a rolling hour on a live counter, so
   back-to-back full runs share it. For repeated runs, restart the backend with the value raised
   rather than trusting the headroom.
+- **Raising only the register limit is not enough — the login ceiling is what a full run actually
+  hits.** `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` (default 120) is a per-source, per-minute
+  window, and `board-full-flow.spec.ts` logs in far more often than it registers. A run with only
+  the register cap raised failed five board specs with `AUTH_LOGIN_RATE_LIMIT_REACHED`
+  (`scope: SOURCE`) — including the account-cleanup fixture, which then reported a second,
+  misleading error. Every failure was the rate limiter, not the product. Raise
+  `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` and `AUTH_LOGIN_RATE_LIMIT_PER_MINUTE` alongside the
+  register caps on the JVM under test, and read the `reasonCode` before believing a board failure.
 - **A route mock must satisfy the same validators as the real response.** `api/chat.ts` validates
   every field it depends on, so a fixture returning a convenient subset is rejected at the boundary —
   and the failure surfaces far from the cause. A session mock missing `active`/`userId`/`updatedAt`
@@ -271,10 +279,11 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
 - **A displayed verdict only describes the model that was verified.** Any semantic board
   change (applying a fix, editing rules/specs/devices from the inspector or chat) makes an
   open verification result stale: `Board.vue` flags it from the single semantic-scene-change
-  hook in the mutation queue, then withdraws the per-counterexample Fix action, refuses
-  counterexample replay, and shows the re-run banner. Never let a stale verdict keep
-  offering actions that imply it describes the current canvas, and always clear the flag
-  when a fresh result is presented.
+  hook in the mutation queue, then withdraws the per-counterexample Fix action and shows the
+  re-run banner. Counterexample replay remains available because it renders the run's frozen
+  scene rather than the current canvas. Never let a stale verdict keep offering actions that
+  imply it describes the current canvas, and always clear the flag when a fresh result is
+  presented.
 - **Run history has two user layers.** Task Status contains only active or no-result
   failed/cancelled jobs. History Results contains one item per completed verification
   or saved simulation; verification counterexamples are nested summary evidence, not

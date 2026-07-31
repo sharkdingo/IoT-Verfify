@@ -1,4 +1,5 @@
 import type { ModelRunSnapshot } from './modelSemantics'
+import type { ModelPlaybackScene, RunInitiator } from './model'
 import type { Specification } from './spec'
 import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { TraceState } from './verify'
@@ -139,6 +140,13 @@ export interface FuzzingFinding {
   createdAt: string
 }
 
+/** One candidate finding with the immutable scene captured by its owning exploration run. */
+export interface FuzzingFindingReplay {
+  finding: FuzzingFinding
+  modelSnapshot: FuzzingModelRunSnapshot
+  playbackScene: ModelPlaybackScene
+}
+
 export type FuzzingFindingSummary = Pick<
   FuzzingFinding,
   | 'id'
@@ -151,10 +159,17 @@ export type FuzzingFindingSummary = Pick<
   violatedSpec?: Specification
   specificationLabel?: string
   stateCount: number
+  /**
+   * History summaries omit full trajectory evidence. This flag is added only after a selected
+   * finding's own detail has been rejected, so sibling findings remain independently usable.
+   */
+  dataAvailable?: true | false
+  unavailableReasonCode?: 'PERSISTED_SEMANTIC_DATA_INVALID' | string
 }
 
 export interface FuzzingTask {
   id: number
+  initiator: RunInitiator
   explorationMode: FuzzingExplorationMode
   status: AsyncTaskStatus
   progress: number
@@ -178,6 +193,7 @@ export type FuzzingTaskSummary = FuzzingTask
 
 export interface AvailableFuzzingRunSummary {
   id: number
+  initiator: RunInitiator
   explorationMode: FuzzingExplorationMode
   outcome: FuzzingOutcome
   effectiveSeed: number
@@ -199,6 +215,7 @@ export interface AvailableFuzzingRunSummary {
 
 export interface UnavailableFuzzingRunSummary {
   id: number
+  initiator: RunInitiator
   explorationMode?: FuzzingExplorationMode
   createdAt?: string
   completedAt?: string
@@ -215,6 +232,7 @@ export interface FuzzingRun extends Omit<
   'dataAvailable' | 'findings'
 > {
   dataAvailable?: never
+  playbackScene: ModelPlaybackScene
   targetSpecIds: string[]
   findings: FuzzingFinding[]
 }

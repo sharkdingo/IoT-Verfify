@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -22,6 +23,7 @@ import java.util.List;
 public class SimulationTaskDto {
 
     private Long id;
+    private RunInitiator initiator;
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime startedAt;
@@ -44,4 +46,3 @@ public class SimulationTaskDto {
     private Integer progress;
     private TaskProgressStage progressStage;
 }
-

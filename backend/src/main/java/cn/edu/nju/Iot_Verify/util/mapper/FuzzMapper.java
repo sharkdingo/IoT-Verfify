@@ -11,6 +11,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzEligibilityDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingReplayDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzIneligibleSpecDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzInputEventDto;
@@ -21,6 +22,7 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRunSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelPlaybackSceneDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -34,6 +36,7 @@ import cn.edu.nju.Iot_Verify.repository.projection.FuzzFindingSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.TraceStateIntegrity;
+import cn.edu.nju.Iot_Verify.util.ModelPlaybackSceneSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.stereotype.Component;
@@ -70,6 +73,7 @@ public class FuzzMapper {
         validateTaskLifecycle(task);
         return FuzzTaskDto.builder()
                 .id(task.getId())
+                .initiator(task.getInitiator())
                 .status(statusName(task))
                 .progress(task.getProgress())
                 .progressStage(task.getProgressStage())
@@ -95,6 +99,7 @@ public class FuzzMapper {
         validateTaskLifecycle(task);
         return FuzzTaskSummaryDto.builder()
                 .id(task.getId())
+                .initiator(task.getInitiator())
                 .status(statusName(task))
                 .progress(task.getProgress())
                 .progressStage(task.getProgressStage())
@@ -121,6 +126,7 @@ public class FuzzMapper {
         validateTaskSummaryProjection(task);
         return FuzzTaskSummaryDto.builder()
                 .id(task.getId())
+                .initiator(task.getInitiator())
                 .status(statusName(task))
                 .progress(task.getProgress())
                 .progressStage(task.getProgressStage())
@@ -147,6 +153,7 @@ public class FuzzMapper {
         validateTaskSummaryProjection(task);
         return FuzzTaskDto.builder()
                 .id(task.getId())
+                .initiator(task.getInitiator())
                 .status(statusName(task))
                 .progress(task.getProgress())
                 .progressStage(task.getProgressStage())
@@ -175,6 +182,7 @@ public class FuzzMapper {
                 .toList();
         return FuzzRunDto.builder()
                 .id(task.getId())
+                .initiator(task.getInitiator())
                 .outcome(task.getOutcome())
                 .explorationMode(explorationMode(task))
                 .effectiveSeed(task.getEffectiveSeed())
@@ -182,6 +190,7 @@ public class FuzzMapper {
                 .generatedPaths(task.getGeneratedPaths())
                 .elapsedMs(task.getElapsedMs())
                 .modelSnapshot(data.modelSnapshot())
+                .playbackScene(data.playbackScene())
                 .eligibility(data.eligibility())
                 .limitations(data.limitations())
                 .createdAt(task.getCreatedAt())
@@ -200,6 +209,7 @@ public class FuzzMapper {
         PersistedRunData data = validated.data();
         return FuzzRunSummaryDto.builder()
                 .id(task.getId())
+                .initiator(task.getInitiator())
                 .outcome(task.getOutcome())
                 .explorationMode(explorationMode(task))
                 .effectiveSeed(task.getEffectiveSeed())
@@ -234,6 +244,7 @@ public class FuzzMapper {
         ProjectedRunData data = context.data();
         return FuzzRunSummaryDto.builder()
                 .id(task.getId())
+                .initiator(task.getInitiator())
                 .outcome(task.getOutcome())
                 .explorationMode(explorationMode(task))
                 .effectiveSeed(task.getEffectiveSeed())
@@ -267,6 +278,23 @@ public class FuzzMapper {
     public FuzzFindingDto toFindingDto(
             FuzzTaskPo task, FuzzFindingPo finding, long actualFindingCount) {
         if (finding == null) return null;
+        ValidatedFindingReplay validated = validateFindingReplay(task, finding, actualFindingCount);
+        return toFindingDto(finding, validated.findingData());
+    }
+
+    public FuzzFindingReplayDto toFindingReplayDto(
+            FuzzTaskPo task, FuzzFindingPo finding, long actualFindingCount) {
+        if (finding == null) return null;
+        ValidatedFindingReplay validated = validateFindingReplay(task, finding, actualFindingCount);
+        return FuzzFindingReplayDto.builder()
+                .finding(toFindingDto(finding, validated.findingData()))
+                .modelSnapshot(validated.context().data().modelSnapshot())
+                .playbackScene(validated.context().data().playbackScene())
+                .build();
+    }
+
+    private ValidatedFindingReplay validateFindingReplay(
+            FuzzTaskPo task, FuzzFindingPo finding, long actualFindingCount) {
         validateTaskLifecycle(task);
         if (task == null
                 || finding.getId() == null
@@ -285,7 +313,7 @@ public class FuzzMapper {
                 finding.getCreatedAt(),
                 data,
                 context);
-        return toFindingDto(finding, data);
+        return new ValidatedFindingReplay(context, data);
     }
 
     private FuzzFindingDto toFindingDto(FuzzFindingPo finding, PersistedFindingData data) {
@@ -958,7 +986,7 @@ public class FuzzMapper {
             throw invalidRun(task, "eligibilityJson", "search outcomes require an eligible specification");
         }
         PersistedRunData data = new PersistedRunData(
-                targetSpecIds, modelSnapshot, eligibility, limitations);
+                targetSpecIds, modelSnapshot, frozenInput.playbackScene(), eligibility, limitations);
         return new PersistedRunContext(
                 data, specificationsById, new HashSet<>(eligibility.getEligibleSpecIds()),
                 frozenInput.rules(), frozenInput.tokenSources());
@@ -1033,6 +1061,9 @@ public class FuzzMapper {
         }
         if (task.getUserId() == null || task.getUserId() < 1) {
             throw invalidTask(task, "userId", "task owner is missing or invalid");
+        }
+        if (task.getInitiator() == null) {
+            throw invalidTask(task, "initiator", "task initiator is missing");
         }
         if (task.getStatus() == null) {
             throw invalidTask(task, "status", "task status is missing");
@@ -1117,6 +1148,9 @@ public class FuzzMapper {
     }
 
     private void validateProjectedLifecycle(FuzzTaskSummaryProjection task) {
+        if (task.getInitiator() == null) {
+            throw invalidProjectedTask(task, "task initiator is missing");
+        }
         FuzzTaskPo.TaskStatus status = task.getStatus();
         boolean terminal = status == FuzzTaskPo.TaskStatus.COMPLETED
                 || status == FuzzTaskPo.TaskStatus.FAILED
@@ -1191,6 +1225,7 @@ public class FuzzMapper {
     private FrozenInputData validateModelInputSnapshot(
             FuzzTaskPo task, ModelInputSnapshot snapshot) {
         if (snapshot == null || snapshot.devices() == null || snapshot.rules() == null
+                || snapshot.nodes() == null
                 || snapshot.specifications() == null || snapshot.environmentVariables() == null
                 || snapshot.templateManifests() == null || snapshot.specifications().isEmpty()) {
             throw invalidRun(task, "modelInputSnapshotJson", "frozen model input is missing required data");
@@ -1207,8 +1242,16 @@ public class FuzzMapper {
         if (snapshot.rules().stream().anyMatch(Objects::isNull)) {
             throw invalidRun(task, "modelInputSnapshotJson", "frozen rules contain null");
         }
-        return new FrozenInputData(
-                specificationsById, List.copyOf(snapshot.rules()), frozenTokenSources(task, snapshot));
+        try {
+            return new FrozenInputData(
+                    specificationsById,
+                    List.copyOf(snapshot.rules()),
+                    ModelPlaybackSceneSnapshot.canonicalize(
+                            snapshot.nodes(), snapshot.devices(), snapshot.rules()),
+                    frozenTokenSources(task, snapshot));
+        } catch (IllegalArgumentException exception) {
+            throw invalidRun(task, "modelInputSnapshotJson", exception.getMessage());
+        }
     }
 
     private FrozenTokenSources frozenTokenSources(FuzzTaskPo task, ModelInputSnapshot snapshot) {
@@ -1534,6 +1577,7 @@ public class FuzzMapper {
     private record PersistedRunData(
             List<String> targetSpecIds,
             ModelRunSnapshotDto modelSnapshot,
+            ModelPlaybackSceneDto playbackScene,
             FuzzEligibilityDto eligibility,
             List<String> limitations) {
     }
@@ -1549,6 +1593,7 @@ public class FuzzMapper {
     private record FrozenInputData(
             Map<String, SpecificationDto> specificationsById,
             List<RuleDto> rules,
+            ModelPlaybackSceneDto playbackScene,
             FrozenTokenSources tokenSources) {
     }
 
@@ -1561,6 +1606,11 @@ public class FuzzMapper {
     private record PersistedRunWithFindings(
             PersistedRunData data,
             Map<Long, PersistedFindingData> findingsById) {
+    }
+
+    private record ValidatedFindingReplay(
+            PersistedRunContext context,
+            PersistedFindingData findingData) {
     }
 
     private record ProjectedRunData(

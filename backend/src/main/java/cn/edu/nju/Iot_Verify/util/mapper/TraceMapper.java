@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.PersistedModelContextIntegrity;
+import cn.edu.nju.Iot_Verify.util.ModelPlaybackSceneSnapshot;
 import cn.edu.nju.Iot_Verify.util.TraceStateIntegrity;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.stereotype.Component;
@@ -31,8 +32,9 @@ public class TraceMapper {
             return null;
         }
         PersistedModelContextIntegrity.ValidatedContext context = modelContext(tracePo);
+        VerificationRequestDto frozenRequest = readFrozenRequest(tracePo.getId(), tracePo.getRequestJson());
         List<RuleDto> frozenRules = readFrozenRules(
-                tracePo.getId(), tracePo.getRequestJson(), context.modelSnapshot().getRuleCount());
+                tracePo.getId(), frozenRequest, context.modelSnapshot().getRuleCount());
         TraceDto dto = new TraceDto();
         dto.setId(tracePo.getId());
         dto.setUserId(tracePo.getUserId());
@@ -45,6 +47,10 @@ public class TraceMapper {
         dto.setRequestJson(tracePo.getRequestJson());
         dto.setTemplateSnapshotsJson(tracePo.getTemplateSnapshotsJson());
         dto.setModelSnapshot(context.modelSnapshot());
+        dto.setPlaybackScene(JsonUtils.readPersisted(
+                "verification trace", tracePo.getId(), "requestJson",
+                () -> ModelPlaybackSceneSnapshot.canonicalize(
+                        frozenRequest.getPlaybackNodes(), frozenRequest.getDevices(), frozenRules)));
         dto.setDisabledRuleCount(tracePo.getDisabledRuleCount());
         dto.setSkippedSpecCount(tracePo.getSkippedSpecCount());
         dto.setGenerationIssues(JsonUtils.readPersisted("verification trace", tracePo.getId(),
@@ -128,11 +134,6 @@ public class TraceMapper {
 
     public TraceSummaryDto toSummaryDto(TraceSummaryProjection projection) {
         if (projection == null) return null;
-        PersistedModelContextIntegrity.ValidatedContext context = modelContext(projection);
-        List<RuleDto> frozenRules = readFrozenRules(
-                projection.getId(), projection.getRequestJson(), context.modelSnapshot().getRuleCount());
-        List<TraceStateDto> states = readRequiredStates(
-                projection.getId(), projection.getStatesJson(), projection.getStateCount(), frozenRules);
         SpecificationDto violatedSpec = JsonUtils.readPersistedRequired(
                 "verification trace", projection.getId(), "violatedSpecJson",
                 () -> JsonUtils.fromJson(projection.getViolatedSpecJson(), SpecificationDto.class));
@@ -142,7 +143,7 @@ public class TraceMapper {
                         projection.getId(), projection.getVerificationTaskId()))
                 .violatedSpecId(projection.getViolatedSpecId())
                 .violatedSpec(violatedSpec)
-                .stateCount(states.size())
+                .stateCount(requiredStateCount(projection.getId(), projection.getStateCount()))
                 .createdAt(projection.getCreatedAt())
                 .dataAvailable(true)
                 .build();
@@ -171,10 +172,14 @@ public class TraceMapper {
                 });
     }
 
-    private List<RuleDto> readFrozenRules(Long id, String requestJson, int expectedRuleCount) {
-        VerificationRequestDto request = JsonUtils.readPersistedJsonRequired(
+    private VerificationRequestDto readFrozenRequest(Long id, String requestJson) {
+        return JsonUtils.readPersistedJsonRequired(
                 "verification trace", id, "requestJson", requestJson,
                 () -> JsonUtils.fromJson(requestJson, VerificationRequestDto.class));
+    }
+
+    private List<RuleDto> readFrozenRules(
+            Long id, VerificationRequestDto request, int expectedRuleCount) {
         return JsonUtils.readPersisted(
                 "verification trace", id, "requestJson",
                 () -> TraceStateIntegrity.requireFrozenRules(request.getRules(), expectedRuleCount));
@@ -203,17 +208,6 @@ public class TraceMapper {
                 po.getModeledFalsifiableReadingDeviceCount(),
                 po.getModeledAutomationLinkAttackPointCount(), po.getModelSemanticsJson(),
                 po.getModelSnapshotJson());
-    }
-
-    private PersistedModelContextIntegrity.ValidatedContext modelContext(
-            TraceSummaryProjection projection) {
-        return PersistedModelContextIntegrity.readVerification(
-                "verification trace", projection.getId(), projection.getIsAttack(),
-                projection.getAttackBudget(), projection.getEnablePrivacy(),
-                projection.getModeledDeviceAttackPointCount(),
-                projection.getModeledFalsifiableReadingDeviceCount(),
-                projection.getModeledAutomationLinkAttackPointCount(),
-                projection.getModelSemanticsJson(), projection.getModelSnapshotJson());
     }
 
 }

@@ -15,6 +15,7 @@ public interface ChatService {
     ChatSessionResponseDto createSession(Long userId);
     List<ChatMessageResponseDto> getHistory(Long userId, String sessionId);
     ChatHistoryPageDto getHistoryPage(Long userId, String sessionId, Long beforeId, int limit);
+    void markTerminalSeen(Long userId, String sessionId, Long terminalMessageId);
     void deleteSession(Long userId, String sessionId);
     String beginStreamRequest(Long userId, String sessionId, String turnId, String content);
     void abortUndispatched(Long userId, String sessionId, String executionId, String turnId);

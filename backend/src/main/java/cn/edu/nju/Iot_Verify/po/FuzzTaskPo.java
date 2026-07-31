@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.po;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -49,6 +50,11 @@ public class FuzzTaskPo implements TaskView {
 
     @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 32, columnDefinition = "varchar(32) default 'UNKNOWN'")
+    @Builder.Default
+    private RunInitiator initiator = RunInitiator.UNKNOWN;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -162,6 +168,7 @@ public class FuzzTaskPo implements TaskView {
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();
         if (status == null) status = TaskStatus.PENDING;
+        if (initiator == null) initiator = RunInitiator.UNKNOWN;
         if (progress == null) progress = 0;
         if (findingCount == null) findingCount = 0;
         if (explorationMode == null) explorationMode = FuzzExplorationMode.BOARD_SNAPSHOT;

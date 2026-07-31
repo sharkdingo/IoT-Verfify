@@ -13,6 +13,10 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties(prefix = "chat.execution")
 public class ChatExecutionConfig {
 
+    /** Maximum independently running assistant conversations for one user. */
+    @Min(1)
+    private int maxConcurrentSessionsPerUser = 4;
+
     /**
      * Emergency runaway guard, not a normal task budget.
      */
@@ -36,6 +40,10 @@ public class ChatExecutionConfig {
     /** Stored-message cap per session. Users can start another session or delete old history. */
     @Min(100)
     private int maxMessagesPerSession = 5_000;
+
+    /** Recent coherent conversation context supplied to the model, measured in Java characters. */
+    @Min(4000)
+    private int historyCharLimit = 32_000;
 
     /**
      * Distributed lease lifetime. A live worker renews this independently of the SSE connection.

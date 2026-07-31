@@ -33,6 +33,8 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
         implements AsyncTaskExecutionControl {
 
     protected static final int MAX_OUTPUT_LENGTH = 10_000;
+    private static final String OUTPUT_TRUNCATION_MARKER =
+            "\n... (diagnostic output truncated to 10000 characters for storage/display)";
     private static final String DIAGNOSTIC_LOSS_MESSAGE =
             "[diagnostic-loss] Task diagnostic logs could not be serialized or parsed.";
     private static final String DIAGNOSTIC_LOSS_JSON =
@@ -153,7 +155,7 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
     protected String truncateOutput(String output) {
         if (output == null) return null;
         return output.length() > MAX_OUTPUT_LENGTH
-                ? output.substring(0, MAX_OUTPUT_LENGTH) + "\n... (output truncated)" : output;
+                ? output.substring(0, MAX_OUTPUT_LENGTH) + OUTPUT_TRUNCATION_MARKER : output;
     }
 
     // ── 可提取且保留状态机差异钩子的方法 ──────────────────────────────

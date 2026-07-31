@@ -48,6 +48,13 @@ class FixViolationToolTest {
     }
 
     @Test
+    void definitionDescribesBothConditionAdjustmentDirections() {
+        String description = tool.getDefinition().description();
+
+        assertTrue(description.contains("add or remove triggering conditions"));
+    }
+
+    @Test
     void execute_traceId_outOfLongRange_returns400() throws Exception {
         assertValidationError("{\"traceId\":99999999999999999999}");
     }

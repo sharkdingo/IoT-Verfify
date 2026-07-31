@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.dto.verification;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
@@ -49,6 +51,26 @@ class VerificationRequestDtoValidationTest {
     }
 
     @Test
+    void playbackNodes_null_shouldReject() {
+        VerificationRequestDto request = validRequest();
+        request.setPlaybackNodes(null);
+
+        Set<ConstraintViolation<VerificationRequestDto>> violations = validator.validate(request);
+
+        assertTrue(hasFieldViolation(violations, "playbackNodes", "Playback nodes cannot be empty"));
+    }
+
+    @Test
+    void playbackNodes_withNullElement_shouldReject() {
+        VerificationRequestDto request = validRequest();
+        request.setPlaybackNodes(Collections.singletonList(null));
+
+        Set<ConstraintViolation<VerificationRequestDto>> violations = validator.validate(request);
+
+        assertTrue(hasViolationContaining(violations, "Playback node item cannot be null"));
+    }
+
+    @Test
     void specs_withNullElement_shouldReject() {
         VerificationRequestDto request = validRequest();
         request.setSpecs(Collections.singletonList(null));
@@ -80,8 +102,25 @@ class VerificationRequestDtoValidationTest {
     private VerificationRequestDto validRequest() {
         VerificationRequestDto request = new VerificationRequestDto();
         request.setDevices(List.of(validDevice()));
+        request.setPlaybackNodes(List.of(validPlaybackNode()));
         request.setSpecs(List.of(validSpec()));
+        request.setAttackScenario(AttackScenarioDto.none());
         return request;
+    }
+
+    private DeviceNodeDto validPlaybackNode() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("Lamp");
+        node.setTemplateName("Switch");
+        node.setLabel("Lamp");
+        DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+        position.setX(10.0);
+        position.setY(20.0);
+        node.setPosition(position);
+        node.setState("off");
+        node.setWidth(160);
+        node.setHeight(120);
+        return node;
     }
 
     private DeviceVerificationDto validDevice() {

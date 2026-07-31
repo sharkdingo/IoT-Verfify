@@ -2,9 +2,12 @@
 package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
@@ -24,6 +27,24 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessagePo, Long
     boolean existsBySessionIdAndTurnId(String sessionId, String turnId);
     boolean existsBySessionIdAndTurnIdAndExecutionIdAndRole(
             String sessionId, String turnId, String executionId, String role);
+    boolean existsByIdAndSessionIdAndRoleAndExecutionStatusIsNotNull(
+            Long id, String sessionId, String role);
+
+    @Query("""
+            select message.id as messageId,
+                   message.sessionId as sessionId,
+                   message.executionStatus as executionStatus
+              from ChatMessagePo message
+             where message.id in (
+                   select max(latest.id)
+                     from ChatMessagePo latest
+                    where latest.sessionId in :sessionIds
+                      and latest.role = 'assistant'
+                      and latest.executionStatus is not null
+                    group by latest.sessionId)
+            """)
+    List<LatestTerminalView> findLatestTerminalBySessionIdIn(
+            @Param("sessionIds") Collection<String> sessionIds);
 
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Transactional
@@ -32,4 +53,10 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessagePo, Long
 
     void deleteBySessionId(String sessionId);
     void deleteBySessionIdIn(Collection<String> sessionIds);
+
+    interface LatestTerminalView {
+        Long getMessageId();
+        String getSessionId();
+        ChatExecutionStatus getExecutionStatus();
+    }
 }

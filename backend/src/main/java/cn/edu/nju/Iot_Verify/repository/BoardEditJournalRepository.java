@@ -45,12 +45,15 @@ public interface BoardEditJournalRepository extends JpaRepository<BoardEditJourn
     /**
      * Discards the account's abandoned redo branch in one statement.
      *
-     * <p>Recorded on every new edit, where the previous read-then-{@code deleteAll} loaded the rows
-     * only to delete them one by one.
+     * <p>Checked on every new edit and issued only when such rows exist. The bulk operation replaces
+     * the previous read-then-{@code deleteAll} path that loaded rows only to delete them one by one.
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("delete from BoardEditJournalPo e where e.userId = :userId and e.undone = true")
     int deleteByUserIdAndUndoneTrue(@Param("userId") Long userId);
+
+    /** Consistent read used to avoid an empty-range delete and its MySQL next-key lock. */
+    boolean existsByUserIdAndUndoneTrue(Long userId);
 
     long countByUserIdAndUndoneFalse(Long userId);
 

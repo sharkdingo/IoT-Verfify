@@ -1,16 +1,26 @@
 # AI Tools
 
-The IoT-Verify AI assistant is backed by any OpenAI-compatible LLM endpoint (configured via `llm.*`; see [configuration.md](../getting-started/configuration.md)) and uses tool/function-calling: the model selects a tool by its snake_case `name`, and the backend runs the matching implementation. Each tool declares itself via a vendor-neutral `LlmToolSpec` (`getDefinition()`); the `LlmProvider` adapter translates specs and messages to the underlying SDK, so tools never depend on an SDK type. All 48 tools are Spring beans that implement `AiTool` (most extend `AbstractAiTool`) and are dispatched at runtime by `AiToolManager`. The chat planner receives the complete registered catalog on every round, so it can choose zero tools for conversation or combine reads, recommendations, targeted mutations, atomic scene replacement, verification, and task-status operations from the user's meaning and conversation context. There is no keyword-selected tool subset. `AiToolManager.execute()` wraps every dispatch in a catch-all that logs the exception and returns a generic `Tool execution failed due to an internal error` message, so raw exception detail is never leaked back to the model.
+The IoT-Verify AI assistant is backed by any OpenAI-compatible LLM endpoint (configured via `llm.*`; see [configuration.md](../getting-started/configuration.md)) and uses tool/function-calling: the model selects a tool by its snake_case `name`, and the backend runs the matching implementation. Each tool declares itself via a vendor-neutral `LlmToolSpec` (`getDefinition()`); the `LlmProvider` adapter translates specs and messages to the underlying SDK, so tools never depend on an SDK type. All 53 tools are Spring beans that implement `AiTool` (most extend `AbstractAiTool`) and are dispatched at runtime by `AiToolManager`. The chat planner receives the complete registered catalog on every round, so it can choose zero tools for conversation or combine reads, recommendations, targeted mutations, atomic scene replacement, verification, and task-status operations from the user's meaning and conversation context. There is no keyword-selected tool subset. `AiToolManager.execute()` wraps every dispatch in a catch-all, so raw exception detail is never leaked back to the model. Read-only exceptions return an ordinary tool error; an exception or malformed result from a mutation-capable tool becomes an explicit unavailable outcome because the write boundary may already have been crossed.
 
 **Tool responses are not the REST `Result<T>` envelope.** Internally each tool returns
 a raw JSON string (built by `AiToolResponseHelper`): on error, `{ "error", "errorCode",
-"status" }`; on success, a tool-specific body. That envelope only appears when a tool is
+"status" }`; on success, a tool-specific body. For chat dispatch, `AiToolManager` adds
+`resultStatus="SUCCESS"` and `resultAvailable=true`, or `resultStatus="PREVIEW"` for a
+no-write confirmation preview. These execution fields do not replace the domain payload.
+For mutation-capable tools, a successful or preview payload must also carry the tool-specific
+authoritative marker that proves it reached its result boundary: for example `operation`,
+`deleted`, `dismissed`, `cancellationAccepted` plus `taskId`, `taskAccepted` plus `taskId`, or
+the formal `outcome`. A free-form `message` (even one that says the operation succeeded) is not
+completion evidence. If the marker is absent or malformed after execution starts, the manager
+converts the response to `RESULT_UNAVAILABLE`, marks that the mutation may have committed, and
+the chat loop refreshes state before it can plan another dependent call.
+That envelope only appears when a tool is
 also exposed as an HTTP endpoint — e.g. `/api/board/*/recommend`, where the controller
 inspects the tool's JSON (`throwIfToolError`) and wraps the result in
 the endpoint's typed recommendation DTO inside `Result<T>` (see [board.md](board.md) and
 [overview.md](overview.md)).
 
-Verified against code on 2026-07-30. Source: component/aitool/, component/ai/.
+Verified against code on 2026-08-01. Source: component/aitool/, component/ai/.
 
 ## Argument Contract Notes
 
@@ -26,15 +36,22 @@ fields and nested condition/runtime objects. A field for another action, an unkn
 field, or a non-string JSON scalar in a string field is rejected before any read or
 write; it is never ignored or coerced and then reported as success.
 
-Response serialization failure is a third outcome, not a successful tool result. It is
-returned as `{ resultStatus: "RESULT_UNAVAILABLE", resultAvailable: false,
+An otherwise completed tool result that cannot be safely serialized, bounded, persisted,
+or returned is a third outcome, not a successful tool result. The same conservative outcome
+applies when a mutation-capable tool throws unexpectedly or returns an empty, non-object, or
+malformed result after execution starts, because the write boundary may already have been
+crossed. It is returned as
+`{ resultStatus: "RESULT_UNAVAILABLE", resultAvailable: false,
 mutationMayHaveCommitted, message }`; individual paths may also add `warning`,
-`errorCode`, or size metadata. The chat loop stops immediately, does not count that step
-as successful, and does not retry it. When
+`errorCode`, or size metadata. The step is not counted as successful and is never retried
+automatically. When
 `mutationMayHaveCommitted=true`, the affected authoritative collection is refreshed and
-the visible reply tells the user to inspect current state before retrying. A read-only
-unavailable result is also not counted as success, but does not request a mutation
-refresh.
+the loop stops before later calls because their assumptions may now be stale; the visible
+reply tells the user to inspect current state before retrying. A read-only unavailable
+result is also not counted as success, but does not request a mutation refresh or prevent
+independent later calls and planning rounds from returning useful evidence. An unexpected
+exception from a read-only tool remains an ordinary failure because it cannot have committed a
+Board or run-history mutation.
 
 Async start tools distinguish a definitively rejected submission from either an accepted
 task or an uncertain dispatch. A queue/dispatch failure whose still-pending row is
@@ -64,6 +81,11 @@ kept plus filtered candidates, and raw candidates equal inspected plus truncated
 candidates. `filteredItems` has one reason per filtered candidate. A zero-length AI array
 is reported as "no candidates returned", not as backend filtering or a successful empty
 recommendation set.
+Rule recommendations ask the model for a short user-facing `reason` grounded in the
+selected goal and actual device capabilities, and the Board shows it before apply. When
+the caller selects a category other than `all`, the backend also requires every kept
+candidate to carry that exact category; a model response from another category is
+reported as `categoryMismatch` instead of leaking through a prompt-only filter.
 
 | Tool | Required / important arguments | Notes |
 | --- | --- | --- |
@@ -83,7 +105,12 @@ recommendation set.
 | `add_template` | `name`, `manifest` | `manifest` must define modes/initial state/working states consistently. `InitState` exactly names one concrete complete `WorkingState`; wildcard/partial/case aliases are invalid. A multi-mode `WorkingState.Name` is a complete tuple; reused mode-state components must keep the same `Trust`/`Privacy` labels so the model can represent them losslessly. `APIs` are state-changing device commands, require at least one mode, use `Trigger: null`, and do not define an `Assignments` field. Every API explicitly supplies `StartState` (empty/`_` means any state) and boolean `Signal` (`true` = observable automation/specification event, `false` = command-only); observable routes cannot overlap another API or Transition. Autonomous conditional behavior belongs in a single-effect `Transition`: one concrete mode target or one assignment, never both/several. Transition triggers and assignment values are checked against declared domains. Every `InternalVariables[]` item explicitly sets `IsInside`, one domain (`Values`, including `TRUE/FALSE` for booleans, or `LowerBound`+`UpperBound`), and `FalsifiableWhenCompromised`; `IsInside=true` is instance-local and `false` is scene-shared. Scope/domain omission is invalid. Shared environment readings also explicitly set `Trust`/`Privacy`. Every `ImpactedVariables` name must get its domain from the same manifest: a readable external `InternalVariable`, or an impact-only `EnvironmentDomains` entry that grants no read capability. Optional `Icon` is UI-only and does not affect behavior. The same backend template validator used by UI imports rejects concrete generated NuSMV identifier collisions, but does not reserve broad business-name prefixes such as `variable_`, `a_`, `trust_`, or `privacy_`. Mutates templates and refreshes `template_list`. |
 | `delete_template` | `templateId`, `confirmed`, optional `impactToken` | `confirmed=false` previews the exact template, per-device blockers, and `editHistoryEntryCount` without writing. A later explicitly confirmed call must return the exact session-scoped preview `impactToken`; it resolves to the storage-layer impact token only after the binding is consumed. Stale template, usage, or edit-history commits return `409` with a fresh confirmable preview; blocked previews return `requiresUserConfirmation=false` because no valid replacement token exists. Completed deletion clears undo/redo history and refreshes `template_list`. |
 | `reset_default_templates` | `confirmed`; preview `impactToken` when confirmed | Uses the same atomic default-template refresh authority as the Board UI. `confirmed=false` returns exact bundled-template, affected-device, blocker, itemized Environment Pool changes (change type plus previous/current value, trust, and privacy), and `editHistoryEntryCount` without writing. A later explicit default-template-reset confirmation plus the opaque preview token refreshes bundled defaults while preserving custom template names, clears undo/redo history, then refreshes `board_state`. Deletion, scene-replacement, and reset confirmations are separate authorization kinds. |
-| Async task tools | `taskId` for status/cancel operations | Start tools return the authoritative accepted task snapshot, including its current lifecycle status, progress, frozen model scope, semantics, and `taskId`; acceptance is not completion. A confirmed pre-dispatch failure removes its pending row so it consumes no stored-task quota. If conditional cleanup is unconfirmed, `TASK_DISPATCH_OUTCOME_UNKNOWN` preserves the `taskId` and matching `statusTool`; poll it before retrying. If the initial status cannot be returned after acceptance, the result instead preserves `taskAccepted=true`, `taskId`, and `statusTool`; poll it before retrying. Polling/cancel tools require that id. |
+| `manage_board_history` | `action=availability\|undo\|redo\|clear`; `confirmed` and preview `impactToken` for `clear` | Reads authoritative undo/redo availability or invokes the same conflict-aware reversible edit journal as the Board UI. `undo`, `redo`, and `clear` are used only on an explicit user request. Clear first returns the exact entry count and availability without changing Board data; a later structured protected-action confirmation plus the opaque token discards only that unchanged journal state. A successful undo/redo returns its entity type, original operation, current collection counts, and remaining availability. Applied undo/redo and confirmed history clear refresh `board_state`; empty history is an explicit no-op and emits no action receipt. |
+| `clear_board` | `confirmed`; preview `impactToken` when confirmed | Atomically clears devices, the Environment Pool, rules, specifications, and Board edit history. `confirmed=false` returns exact current counts and performs no write. A later structured destructive confirmation plus the same session-scoped token authorizes replacement with an empty Board only while the preview is still current. An already empty Board is an explicit no-op. |
+| `list_async_tasks` | optional `kind`, `status`, `initiator`, `limit` | Discovers non-completed verification, simulation, and bounded counterexample-search tasks across conversations and UI/assistant initiators, newest first. It supplies the task ids needed by status, cancellation, and dismissal tools instead of assuming the current chat created the task. Completed conclusions belong to the corresponding run-history tools. |
+| `list_verification_runs` | optional `limit` | Lists every completed formal-verification conclusion, including `SATISFIED` runs that have no counterexample trace. Summaries expose outcome, completeness, skipped/disabled counts, and counterexample count. |
+| `get_verification_run` | `runId` | Loads one completed formal run with per-spec conclusions, model completeness, snapshot, semantics, and generation issues. Raw NuSMV stdout is omitted; counterexample steps remain owned by `get_trace`. |
+| Async task tools | `taskId` for status/cancel operations | Start tools return the authoritative accepted task snapshot, including its current lifecycle status, progress, frozen model scope, semantics, and `taskId`; acceptance is not completion. A confirmed pre-dispatch failure removes its pending row so it consumes no stored-task quota. If conditional cleanup is unconfirmed, `TASK_DISPATCH_OUTCOME_UNKNOWN` preserves the `taskId` and matching `statusTool`; poll it before retrying. If the initial status cannot be returned after acceptance, the result instead preserves `taskAccepted=true`, `taskId`, and `statusTool`; poll it before retrying. Status results are compact model-facing projections: execution logs and raw NuSMV stdout stay on REST/debug surfaces. The top-level `progress` and nested `task.progress` repeat the same authoritative live value, even when the persisted task snapshot is slightly behind. Completed verification returns `runId` plus `nextTool=get_verification_run`; a completed saved simulation returns `simulationId` plus `nextTool=get_simulation_trace`. Polling/cancel tools require the task id. |
 | Trace tools | `traceId` or `simulationId` depending on domain | Verification traces use `traceId`; simulation traces use `simulationId`. |
 
 Every tool result is measured as UTF-8 before it is persisted or returned to the model.
@@ -91,6 +118,16 @@ Results over `CHAT_MAX_TOOL_RESULT_BYTES` become a bounded `RESULT_UNAVAILABLE` 
 with `errorCode=TOOL_RESULT_TOO_LARGE`; mutation-capable tools conservatively report that
 state may already have changed. `list_templates(detail=true)` returns the semantic manifest
 but deliberately omits the UI-only `Icon` field.
+
+The three state-sequence detail tools, `get_trace`, `get_simulation_trace`, and
+`get_fuzz_finding`, page their projected states before this global result boundary.
+`stateOffset` is optional, zero-based, defaults to `0`, and accepts any non-negative
+32-bit integer;
+`stateLimit` is optional, defaults to `10`, and accepts `1..10`. Responses report
+`stateCount`, `stateOffset`, `stateLimit`, `returnedStateCount`, `hasMoreStates`, and
+`nextStateOffset` when another window exists. An offset beyond the end is a valid empty
+window rather than a validation failure. Fuzz-finding input events are restricted to the
+same returned state window.
 
 All recommendation tools share one behavior-capability projection. It includes explicit
 `modeValues`, full variable/environment domains, falsifiability and natural change,
@@ -127,16 +164,30 @@ does not roll back an already-started tool; the frontend performs a full reconci
 as documented in [chat-sse.md](chat-sse.md).
 An unavailable result from a possibly committed mutation requests the same refresh but
 is reported separately as unconfirmed, never as a usable success.
+Confirmed meaningful actions also attach a typed `assistantAction` receipt and, when the
+tool returned a specific bounded summary, `assistantSummary` to the primary refresh. The
+client shows the exact summary (or the localized typed fallback) only after authoritative
+state has loaded. Tool-specific
+markers such as `operation`, `changesApplied`, `taskAccepted`, `cancellationAccepted`,
+`deleted`, and `dismissed` decide whether an action occurred; a generic success message is
+insufficient. Lists, previews, rejected alternatives, semantic no-ops, and unaccepted
+cancellations therefore do not claim that the assistant changed anything. The final-reply
+evidence guard makes the same distinction: merely calling a mutation-capable multi-action tool
+does not support a completion claim unless that exact result produced an action receipt.
+Verification,
+simulation, and counterexample-search records created through a chat tool persist
+`initiator=AI_ASSISTANT`; direct UI/REST work persists `USER`.
 No-write previews and proposed alternatives carry `requiresUserConfirmation=true`, do
 not emit refresh commands, and stop the current tool loop so the model cannot approve its
 own deletion, reset, rename, or substitute choice. When protected work is pending, the
 client reads the server-authoritative pending kind and sends an explicit structured
 `CONFIRM` or `CANCEL` button command. Ordinary message text and model classification
-cannot authorize deletion, bundled-default reset, or full-scene replacement. The model
+cannot authorize deletion, formal-fix application, Board/history clear, bundled-default
+reset, or full-scene replacement. The model
 may still classify only a non-destructive alternative choice; malformed/unavailable
 classification authorizes nothing, and merely including `confirmed=true` in
 model-generated arguments is never authorization.
-Each protected deletion or bundled-default reset preview issues a random, opaque
+Each protected mutation preview issues a random, opaque
 `impactToken` bound on the server to the authenticated user, chat session, tool name,
 target, and canonical preview digest. A session holds at most one such pending protected
 action. The token expires after 15 minutes and is consumed atomically before the mutation,
@@ -163,6 +214,8 @@ contract.
 | --- | --- |
 | `board_overview` | Return the current semantic board: device runtime values, shared environment pool, rule-derived edges, typed rules, and typed specifications. Stable device ids remain separate tool references; every natural-language condition/command summary uses the current device label. Specifications include structured conditions and an explicitly named `formulaPreview`, not only template/count metadata. |
 | `manage_environment` | List or patch/reset one shared environment variable through the same board authority as the UI. |
+| `manage_board_history` | Read undo/redo availability, explicitly undo/redo, or preview/confirm clearing unusable history through the same authoritative edit journal as the Board UI. History clear never changes current Board data. |
+| `clear_board` | Preview exact current counts, then atomically clear the whole Board only after a later structured destructive confirmation. |
 
 The assistant uses `board_overview` as the first source of truth for current-scene
 questions, including device, rule, and specification counts. To extend an existing
@@ -465,18 +518,23 @@ by NuSMV generation and exists only for frontend rendering. Each internal variab
 `FalsifiableWhenCompromised`: `true` means a compromised instance may report any value
 inside that variable's declared domain and the source becomes untrusted. API presence
 does not infer this behavior, and attack modeling never widens the declared domain.
+Every shared numeric `InternalVariable` and numeric `EnvironmentDomain` must explicitly
+declare `NaturalChangeRate`: `[-1, 1]` is the MEDIC §3.1 baseline, while `0` explicitly
+means no independent natural change. Wider custom ranges use their unique lower, zero, and
+upper values as per-step delta candidates. Device-local numeric variables may omit it and then
+retain their value unless a structured Dynamic or Transition changes them.
 
 ## Simulation
 
 | Tool | Summary |
 | --- | --- |
-| `simulate_model` | Run a synchronous NuSMV random simulation on the board, returning a sequence of states over N steps. |
+| `simulate_model` | Run a transient synchronous NuSMV random simulation on the board, returning result counts plus compact initial/final user-semantic state previews. |
 | `simulate_model_async` | Submit an asynchronous NuSMV simulation task and return its current status, progress, requested steps, effective attack/privacy context, frozen model snapshot, model semantics, and taskId for polling. Acceptance is not completion. |
-| `simulate_task_status` | Query the status and progress of an async simulation task by taskId. |
+| `simulate_task_status` | Query status and progress by taskId without execution logs. A completed saved trajectory exposes `simulationId` and `nextTool=get_simulation_trace`. |
 | `cancel_simulate_task` | Cancel an async simulation task by taskId. |
 | `dismiss_simulate_task` | Preview a failed or cancelled simulation task and its retained diagnostics, then remove it only after explicit confirmation with the returned `impactToken` in a later user turn. It refuses active tasks (cancel first); saved traces are removed with `delete_simulation_trace`. |
 | `list_simulation_traces` | List all saved simulation traces for the current user. |
-| `get_simulation_trace` | Get a saved simulation trace by simulationId, including its state sequence. |
+| `get_simulation_trace` | Get a saved simulation trace by simulationId with a bounded, pageable state window. |
 | `delete_simulation_trace` | Preview a saved run and receive an opaque `impactToken`, then delete it only after explicit confirmation with that token in a later user turn. |
 
 `simulate_model` and `simulate_model_async` accept `attackMode=none|exact`. Exact mode
@@ -507,11 +565,19 @@ accepted task's `taskId`, `taskStatus`, `progress`, `requestedSteps`, effective 
 `isAttack` / `attackBudget`, the submitted `attackScenario`, `enablePrivacy`,
 `modelSnapshot`, and `modelSemantics`. It
 says the task was accepted, not that simulation completed.
+Polling returns a compact task projection rather than the REST DTO. Its top-level and nested
+progress fields use one authoritative live value. A saved completed task exposes its
+`simulationId` and exact next tool, while technical execution logs remain on the REST/debug
+surface.
 
 `simulate_model` returns `modelComplete`, `disabledRuleCount`, and item-level
 `generationIssues`; success means a model
 trace was produced, not that it predicts the physical home. Empty states, timeout,
-interruption, and execution failure are structured errors. It also returns
+interruption, and execution failure are structured errors. Its transient result exposes
+`stateCount` plus `statePreviewKind=INITIAL_AND_FINAL`, `previewedStateCount`, and a
+projected `statePreview`; it does not duplicate the complete sequence or successful-run
+logs into the chat result. Use `simulate_model_async`, poll its task, and then page the
+saved sequence through `get_simulation_trace` when intermediate states are needed. It also returns
 `historyPersistence.status=NOT_REQUESTED` and explicitly says that this preview did not
 create a run-history entry. Saved-trace list/detail tools
 also return model completeness, `generationIssues`, and structured `isAttack` /
@@ -531,11 +597,14 @@ from damaged persistence.
 | --- | --- |
 | `verify_model` | Run synchronous NuSMV formal verification on the board and report whether every emitted specification was satisfied, plus generation warnings and property-violation details. |
 | `verify_model_async` | Submit an asynchronous NuSMV verification task and return its current status, progress, effective attack/privacy context, frozen model snapshot, model semantics, and taskId for polling. Acceptance is not completion. |
-| `verify_task_status` | Query the status and progress of an async verification task by taskId. |
+| `verify_task_status` | Query status and progress by taskId without raw NuSMV stdout or execution logs. A completed task exposes `runId` and `nextTool=get_verification_run`. |
 | `cancel_verify_task` | Cancel an async verification task by taskId. |
 | `dismiss_verify_task` | Preview a failed or cancelled verification task and its retained diagnostics, then remove it only after explicit confirmation with the returned `impactToken` in a later user turn. It refuses active tasks (cancel first) and completed tasks (use `delete_verification_run`). |
+| `list_async_tasks` | Discover non-completed verification, simulation, and counterexample-search task ids across conversations, with kind/status/initiator filters; completed results stay in run history. |
+| `list_verification_runs` | List all completed formal conclusions, including satisfied runs with no counterexample. |
+| `get_verification_run` | Read one completed run's per-spec results and completeness without exposing raw NuSMV output. |
 | `list_traces` | List all saved verification counterexample traces (each a state sequence leading to a violation). Each row now also carries its `runId` for run-level history operations. |
-| `get_trace` | Get a saved verification trace by traceId, including its state sequence. |
+| `get_trace` | Get a saved verification trace by traceId with a bounded, pageable state window. |
 | `delete_trace` | Preview a saved verification trace and receive an opaque `impactToken`, then delete it only after explicit confirmation with that token in a later user turn. |
 | `delete_verification_run` | Preview a completed verification run and the exact number of stored trace rows with an opaque `impactToken`, then cascade-delete the run and every trace row it produced only after explicit confirmation with that token in a later user turn. The count includes unavailable or damaged evidence and is intentionally distinct from the run's replayable counterexample count. |
 | `fix_violation` | Analyze a violation trace to localize fault rules and suggest fixes via parameter, condition, or permanent rule-removal strategies (needs a traceId). |
@@ -563,13 +632,16 @@ return `VALIDATION_ERROR` with status `400` before the board is loaded. Service-
 semantic validation errors, including an exhaustive budget larger than the effective
 surface or an exact point outside it, are returned as `BUSINESS_ERROR` with status `422`.
 Unknown run-option fields are rejected before the board is loaded.
+Polling returns a compact task projection rather than the REST DTO. Its top-level and nested
+progress fields use one authoritative live value. Completed tasks expose their `runId` and
+exact next tool; raw NuSMV stdout and technical execution logs remain on the REST/debug surface.
 
 `verify_model` returns `outcome`, `modelComplete`, `requestedSpecCount`,
 `emittedSpecCount`, run context (`isAttack`, `attackBudget`, `attackScenario`, `enablePrivacy`,
 `modelSemantics`), `historyPersistence`, and structured
 chat-facing `specResults` entries shaped as `{ specificationLabel, formulaPreview,
 formulaKind, outcome, checkedExpression }`, plus item-level
-`generationIssues`. `emittedSpecCount`
+`generationIssues` and `checkLogCount`. Technical check-log contents are omitted. `emittedSpecCount`
 matches the length of `specResults`; requested specs skipped before NuSMV emission are
 reported through `skippedSpecCount` and `generationIssues`. `violationCount` counts
 only explicit `VIOLATED` spec results; `traceCount` counts saved counterexample traces,
@@ -584,6 +656,10 @@ plus source-model completeness; raw `violatedSpecJson` and ownership ids remain 
 The tool's message distinguishes a saved history row from `FAILED` or
 `OUTCOME_UNKNOWN`; an unknown history outcome instructs the assistant to refresh history
 before retrying and does not weaken or erase the formal conclusion.
+The post-refresh `FORMAL_VERIFICATION_RUN` receipt is emitted only when
+`historyPersistence.status=SAVED` includes a positive `runId`. A completed conclusion whose
+history write failed or remains unknown is still reported to the model, but the UI does not
+claim that Run History was synchronized.
 `list_traces` reads the completed-run summary hierarchy rather than downloading every
 full state sequence. It returns `availableCount`/`unavailableCount` and preserves an
 unavailable trace as an id plus reason code, without presenting it as a zero-state valid
@@ -655,7 +731,7 @@ never ran because the shared fix deadline had already expired.
 | `dismiss_fuzz_task` | Preview a failed or cancelled counterexample-search task and its retained diagnostics, then remove it only after explicit confirmation with the returned `impactToken` in a later user turn. It refuses active tasks (cancel first) and completed tasks (use `delete_fuzz_run`). |
 | `list_fuzz_runs` | List completed counterexample-search runs (history), newest first, with outcome, effective seed, and finding counts. Paginated via `page`/`size`. |
 | `get_fuzz_run` | Get one completed run: outcome, parameters, eligibility, limitations, and finding summaries. |
-| `get_fuzz_finding` | Get one finding, including its violated specification, first violation step, and a bounded state/input-event window. `stateOffset` defaults to `0`; `stateLimit` defaults to `10` and is limited to `1..20`. The response includes total/returned counts, `hasMoreStates`, and `nextStateOffset` when another page exists. |
+| `get_fuzz_finding` | Get one finding, including its violated specification, first violation step, and the shared bounded state/input-event window documented above. |
 | `delete_fuzz_run` | Preview a completed run and the exact number of stored finding rows with an opaque `impactToken`, then cascade-delete the run and every finding row it produced only after explicit confirmation with that token in a later user turn. The preview uses lightweight user-scoped metadata, so damaged finding payloads remain cleanable. |
 
 The paper-compatible random-state strategy is intentionally not exposed to the assistant:

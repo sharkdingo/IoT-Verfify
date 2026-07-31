@@ -33,6 +33,7 @@ import {
   getSessionActivity,
   getSessionHistory,
   getSessionList,
+  markSessionTerminalSeen,
   requestSessionStop,
   sendStreamChat
 } from './chat'
@@ -550,6 +551,29 @@ describe('chat stream lifecycle semantics', () => {
     })
   })
 
+  it('preserves the configured per-user chat concurrency limit from an HTTP error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        message: 'Too many chat operations',
+        data: { reasonCode: 'USER_CHAT_OPERATION_BUSY', limit: 4 }
+      }))
+    }))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() }
+    )).rejects.toMatchObject({
+      kind: 'HTTP_ERROR',
+      status: 429,
+      reasonCode: 'USER_CHAT_OPERATION_BUSY',
+      limit: 4
+    })
+  })
+
   it('classifies a missing response body without exposing its English parser message as UI text', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: null }))
     const onError = vi.fn()
@@ -651,7 +675,10 @@ describe('chat stream lifecycle semantics', () => {
     for (const command of [
       { type: 'NAVIGATE', payload: { target: 'board_state' } },
       { type: 'REFRESH_DATA', payload: { target: 'future_target' } },
-      { type: 'REFRESH_DATA', payload: { target: 'board_state', extra: true } }
+      { type: 'REFRESH_DATA', payload: { target: 'board_state', extra: true } },
+      { type: 'REFRESH_DATA', payload: { target: 'board_state', assistantAction: 'FUTURE_ACTION' } },
+      { type: 'REFRESH_DATA', payload: { target: 'board_state', assistantSummary: '   ' } },
+      { type: 'REFRESH_DATA', payload: { target: 'board_state', assistantSummary: 'x'.repeat(241) } }
     ]) {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
         `data: ${JSON.stringify({ command })}\n\n`
@@ -678,6 +705,61 @@ describe('chat stream lifecycle semantics', () => {
     expect(onCommand).toHaveBeenCalledWith({
       type: 'REFRESH_DATA',
       payload: { target: 'board_state' }
+    })
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"command":{"type":"REFRESH_DATA","payload":{"target":"run_history","assistantAction":"FORMAL_VERIFICATION_RUN"}}}\n\n'
+      + terminalFrame('turn-2')
+    )))
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onCommand },
+      undefined,
+      'turn-2'
+    )
+    expect(onCommand).toHaveBeenLastCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'run_history', assistantAction: 'FORMAL_VERIFICATION_RUN' }
+    })
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"command":{"type":"REFRESH_DATA","payload":{"target":"board_state","assistantAction":"BOARD_CLEARED","assistantSummary":"Cleared 2 devices and 3 rules."}}}\n\n'
+      + terminalFrame('turn-3')
+    )))
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onCommand },
+      undefined,
+      'turn-3'
+    )
+    expect(onCommand).toHaveBeenLastCalledWith({
+      type: 'REFRESH_DATA',
+      payload: {
+        target: 'board_state',
+        assistantAction: 'BOARD_CLEARED',
+        assistantSummary: 'Cleared 2 devices and 3 rules.'
+      }
+    })
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulStreamResponse(
+      'data: {"command":{"type":"REFRESH_DATA","payload":{"target":"board_state","assistantSummary":"Cleared 4 undo/redo entries; current Board data did not change."}}}\n\n'
+      + terminalFrame('turn-4')
+    )))
+    await sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onCommand },
+      undefined,
+      'turn-4'
+    )
+    expect(onCommand).toHaveBeenLastCalledWith({
+      type: 'REFRESH_DATA',
+      payload: {
+        target: 'board_state',
+        assistantSummary: 'Cleared 4 undo/redo entries; current Board data did not change.'
+      }
     })
   })
 
@@ -1117,15 +1199,28 @@ describe('chat session list contract', () => {
     title: null,
     updatedAt: '2026-07-28T00:00:00Z',
     active: false,
+    latestTerminalMessageId: null,
+    latestExecutionStatus: null,
+    hasUnreadUpdate: false,
     ...over
   })
 
   it('accepts a complete session list', async () => {
-    vi.mocked(http.get).mockResolvedValue({ data: { data: [session(), session({ id: 's2', active: true })] } })
+    vi.mocked(http.get).mockResolvedValue({ data: { data: [
+      session(),
+      session({ id: 's2', active: true }),
+      session({
+        id: 's3',
+        latestTerminalMessageId: 42,
+        latestExecutionStatus: 'COMPLETED',
+        hasUnreadUpdate: true
+      })
+    ] } })
 
     const sessions = await getSessionList()
 
-    expect(sessions.map(s => s.active)).toEqual([false, true])
+    expect(sessions.map(s => s.active)).toEqual([false, true, false])
+    expect(sessions[2].latestTerminalMessageId).toBe(42)
   })
 
   it('rejects a row missing `active` instead of reading it as idle', async () => {
@@ -1142,6 +1237,36 @@ describe('chat session list contract', () => {
     vi.mocked(http.get).mockResolvedValue({ data: { data: [session({ active: 'true' })] } })
 
     await expect(getSessionList()).rejects.toThrow(/incomplete/)
+  })
+
+  it('rejects missing or contradictory persisted result visibility fields', async () => {
+    const { hasUnreadUpdate: _dropped, ...withoutUnread } = session()
+    vi.mocked(http.get).mockResolvedValue({ data: { data: [withoutUnread] } })
+    await expect(getSessionList()).rejects.toThrow(/incomplete/)
+
+    vi.mocked(http.get).mockResolvedValue({ data: { data: [session({
+      latestTerminalMessageId: 42,
+      latestExecutionStatus: null,
+      hasUnreadUpdate: true
+    })] } })
+    await expect(getSessionList()).rejects.toThrow(/incomplete/)
+
+    vi.mocked(http.get).mockResolvedValue({ data: { data: [session({
+      latestTerminalMessageId: null,
+      latestExecutionStatus: 'FAILED'
+    })] } })
+    await expect(getSessionList()).rejects.toThrow(/incomplete/)
+  })
+
+  it('acknowledges the exact terminal message rendered for a session', async () => {
+    vi.mocked(http.post).mockResolvedValue({ data: { data: null } })
+
+    await markSessionTerminalSeen('session/one', 42)
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/chat/sessions/session%2Fone/seen',
+      { terminalMessageId: 42 }
+    )
   })
 
   it('rejects a list payload that is not an array', async () => {

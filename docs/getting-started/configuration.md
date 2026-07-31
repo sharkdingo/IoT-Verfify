@@ -9,7 +9,7 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-25. Source:
+Verified against code on 2026-07-31. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
 `configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
 `configure/ChatExecutionConfig`, `configure/NusmvConfig`, `configure/OperationAdmissionConfig`,
@@ -112,8 +112,8 @@ Fixed pool settings: `timeout 3000ms`, `max-active 16`, `max-idle 8`, `min-idle 
 `max-wait 2000ms`.
 
 Redis also coordinates per-user admission for synchronous formal work and assistant
-streams. One verification/simulation/fix operation and up to two assistant streams may
-run per user. Active Redis leases are renewed only while their owning in-process lease is
+streams. One verification/simulation/fix operation and up to the configured number of assistant
+streams may run per user. Active Redis leases are renewed only while their owning in-process lease is
 open; renewal and release both compare the random owner token before changing the key.
 When Redis is unavailable, these limits remain enforced within each backend process but
 cannot coordinate across instances; request processing remains fail-open.
@@ -151,7 +151,7 @@ relay. Point `IOT_VERIFY_OPENAI_BASE_URL` at the endpoint and supply the matchin
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
 | `IOT_VERIFY_OPENAI_API_KEY` | `your_api_key_here` | API key for the endpoint. **Placeholder default — must be overridden in production.** |
-| `IOT_VERIFY_OPENAI_MODEL` | `gpt-5.5` | Model id / deployment name sent to the endpoint |
+| `IOT_VERIFY_OPENAI_MODEL` | `gpt-5.6-luna` | Model id / deployment name sent to the endpoint |
 | `IOT_VERIFY_OPENAI_RECOMMENDATION_MODEL` | *(empty; reuses `IOT_VERIFY_OPENAI_MODEL`)* | Optional model dedicated to device/rule/specification/scenario recommendations |
 | `IOT_VERIFY_OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL (official API or relay) |
 | `LLM_PROVIDER` | `openai` | Provider implementation selector (currently only `openai`) |
@@ -160,7 +160,7 @@ relay. Point `IOT_VERIFY_OPENAI_BASE_URL` at the endpoint and supply the matchin
 On Windows, changing a User environment variable does not update already-running
 terminals, IDEs, or backend processes. Restart the process that launches Spring Boot, or
 set the process value explicitly before startup, for example
-`$env:IOT_VERIFY_OPENAI_MODEL = "gpt-5.5"`. The backend only sees the environment of the
+`$env:IOT_VERIFY_OPENAI_MODEL = "gpt-5.6-luna"`. The backend only sees the environment of the
 process that starts it.
 
 ## Chat Streaming
@@ -168,11 +168,13 @@ process that starts it.
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
 | `CHAT_SSE_TIMEOUT_MS` | `3600000` | Total SSE emitter lifetime for `/api/chat/completions` (60 minutes by default); keep it higher than `LLM_TIMEOUT_MINUTES` so long multi-step tasks and provider errors remain visible. |
+| `CHAT_MAX_CONCURRENT_SESSIONS_PER_USER` | `4` | Maximum independently running assistant conversations admitted for one user. Redis enforces the limit across instances; the fail-open fallback enforces it per process. Minimum `1`. |
 | `CHAT_MAX_TOOL_ROUNDS` | `64` | Emergency runaway guard for one assistant request, not a normal task budget. Product flows should finish or stop on confirmation/result safety before this value. Minimum `8`. |
 | `CHAT_MAX_STAGNANT_ROUNDS` | `2` | Stop after this many consecutive rounds repeat the exact same tool calls and results. A changed call or changed result resets the counter. Minimum `1`. |
 | `CHAT_MAX_TOOL_RESULT_BYTES` | `49152` | Maximum UTF-8 bytes in one AI tool result before it becomes a structured `TOOL_RESULT_TOO_LARGE` unavailable result. Minimum `4096`. |
 | `CHAT_MAX_TOOL_CALLS_PER_ROUND` | `16` | Maximum tool calls accepted from one model planning response. A larger response executes none of its calls. Minimum `1`. |
 | `CHAT_MAX_MESSAGES_PER_SESSION` | `5000` | Stored-row ceiling for one conversation. It must reserve `2 + CHAT_MAX_TOOL_ROUNDS * (1 + CHAT_MAX_TOOL_CALLS_PER_ROUND)` rows for a complete turn. |
+| `CHAT_HISTORY_CHAR_LIMIT` | `32000` | Maximum coherent recent conversation context supplied to the model, measured in Java characters. Complete tool-call/result blocks remain atomic at the boundary. Minimum `4000`. |
 | `CHAT_EXECUTION_LEASE_TTL_MS` | `30000` | Lifetime of the cross-instance chat execution lease without a successful heartbeat. A crashed/restarted worker therefore stops reporting the session as active after at most this interval. Minimum `3000`; must be at least twice the heartbeat interval. |
 | `CHAT_EXECUTION_LEASE_HEARTBEAT_MS` | `10000` | Fixed delay between execution-lease renewals and expired-lease cleanup passes. Renewal is conditional on the same session/user/execution id, so an old worker cannot reclaim a replaced lease. Minimum `1000`. |
 | `AI_SESSION_STATE_CLEANUP_MS` | `60000` | Fixed delay between database cleanup passes for expired AI task-continuation, scenario-draft, and protected-action state. Active reads also reject and remove expired rows. |

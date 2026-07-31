@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
+import cn.edu.nju.Iot_Verify.repository.projection.SimulationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.ModelGenerationDiagnostics;
 import cn.edu.nju.Iot_Verify.util.PersistedModelContextIntegrity;
@@ -29,6 +30,7 @@ public class SimulationTaskMapper {
         PersistedModelContextIntegrity.ValidatedContext context = modelContext(po);
         return SimulationTaskDto.builder()
                 .id(po.getId())
+                .initiator(po.getInitiator())
                 .status(po.getStatus().name())
                 .createdAt(po.getCreatedAt())
                 .startedAt(po.getStartedAt())
@@ -67,6 +69,7 @@ public class SimulationTaskMapper {
         PersistedModelContextIntegrity.ValidatedContext context = modelContext(po);
         return SimulationTaskSummaryDto.builder()
                 .id(po.getId())
+                .initiator(po.getInitiator())
                 .status(po.getStatus().name())
                 .createdAt(po.getCreatedAt())
                 .startedAt(po.getStartedAt())
@@ -90,11 +93,42 @@ public class SimulationTaskMapper {
                 .build();
     }
 
-    public List<SimulationTaskSummaryDto> toSummaryDtoList(List<SimulationTaskPo> poList) {
-        if (poList == null) {
+    public SimulationTaskSummaryDto toSummaryDto(SimulationTaskSummaryProjection projection) {
+        if (projection == null) return null;
+        return toSummaryDto(SimulationTaskPo.builder()
+                .id(projection.getId())
+                .userId(projection.getUserId())
+                .initiator(projection.getInitiator())
+                .status(projection.getStatus())
+                .createdAt(projection.getCreatedAt())
+                .startedAt(projection.getStartedAt())
+                .completedAt(projection.getCompletedAt())
+                .processingTimeMs(projection.getProcessingTimeMs())
+                .isAttack(projection.getIsAttack())
+                .attackBudget(projection.getAttackBudget())
+                .modeledDeviceAttackPointCount(projection.getModeledDeviceAttackPointCount())
+                .modeledFalsifiableReadingDeviceCount(projection.getModeledFalsifiableReadingDeviceCount())
+                .modeledAutomationLinkAttackPointCount(projection.getModeledAutomationLinkAttackPointCount())
+                .enablePrivacy(projection.getEnablePrivacy())
+                .modelSnapshotJson(projection.getModelSnapshotJson())
+                .modelSemanticsJson(projection.getModelSemanticsJson())
+                .requestedSteps(projection.getRequestedSteps())
+                .steps(projection.getSteps())
+                .simulationTraceId(projection.getSimulationTraceId())
+                .checkLogsJson(projection.getCheckLogsJson())
+                .generationIssuesJson(projection.getGenerationIssuesJson())
+                .errorMessage(projection.getErrorMessage())
+                .progress(projection.getProgress())
+                .progressStage(projection.getProgressStage())
+                .build());
+    }
+
+    public List<SimulationTaskSummaryDto> toSummaryProjectionDtoList(
+            List<SimulationTaskSummaryProjection> projections) {
+        if (projections == null) {
             return List.of();
         }
-        return poList.stream()
+        return projections.stream()
                 .map(this::toSummaryDto)
                 .toList();
     }
@@ -122,6 +156,9 @@ public class SimulationTaskMapper {
         }
         if (po.getUserId() == null || po.getUserId() < 1) {
             fail(po, "userId", "task owner is missing or invalid");
+        }
+        if (po.getInitiator() == null) {
+            fail(po, "initiator", "task initiator is missing");
         }
         if (po.getStatus() == null) {
             fail(po, "status", "task status is missing");

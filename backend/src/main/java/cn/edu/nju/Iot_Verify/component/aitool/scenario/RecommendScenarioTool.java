@@ -103,7 +103,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
         "position": {"x": 0, "y": 0},
         "state": "仅有状态机模板填写；必须是 InitState 或 WorkingStates 中的值",
         "currentStateTrust": "可选，trusted|untrusted；表示初始状态触发自动化时的控制来源标签，不是认证、通用完整性或概率",
-        "currentStatePrivacy": "可选，public|private；表示初始状态的数据敏感度标签，不是访问控制",
+        "currentStatePrivacy": "可选，public|private；表示初始状态的数据敏感性标签，不是访问控制",
         "variables": [
           {"name": "IsInside=true 的本地变量名", "value": "模板声明域内的初始值", "trust": "trusted|untrusted"}
         ],
@@ -144,7 +144,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
 规约模板语义（必须按公式选择，不能只匹配 JSON 形状）：
 %s
 附加约束：
-- contentDevice 与 content 必须同时为 null，或同时填写。content 必须来自对应设备模板的 Contents，且目标 API 必须声明 AcceptsContent=true；仅在动作携带该内容且需要分析敏感度标签传播时使用。该标签不表示系统复制了真实数据或实施了访问控制。
+- contentDevice 与 content 必须同时为 null，或同时填写。content 必须来自对应设备模板的 Contents，且目标 API 必须声明 AcceptsContent=true；仅在动作携带该内容且需要分析敏感性标签传播时使用。该标签不表示系统复制了真实数据或实施了访问控制。
 - templateId 3 也用于隐私泄露：把公开动作/状态与对应 privacy=private 一起放进 aConditions。
 - templateId 7 的 aConditions 不得直接使用 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。
 - 每个 condition: {deviceId, targetType, key, propertyScope?, relation?, value?}。propertyScope 仅 trust/privacy 必填；非 API 条件必须给出 relation/value，API 条件可省略二者并按 = TRUE 处理；不要输出内部 id、side、deviceLabel、templateLabel、formula、Mode_state 生成键或 devices 缓存。
@@ -1413,7 +1413,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                     ? "场景设备缺少本次 AI 回答内的引用别名，或别名超过 100 个字符；系统不会根据标签猜测引用。"
                     : "A scenario device is missing its response-local reference alias or the alias exceeds 100 characters; the backend does not infer references from the label.";
             case "invalidDeviceRuntime" -> zh
-                    ? "场景设备显式给出的初始状态、来源标签、敏感度标签或本地变量不符合设备模板声明；后端不会静默改成默认值。"
+                    ? "场景设备显式给出的初始状态、来源标签、敏感性标签或本地变量不符合设备模板声明；后端不会静默改成默认值。"
                     : "A scenario device explicitly supplied an initial state, source label, sensitivity label, or local variable that does not match the template; the backend does not silently replace it with a default.";
             case "duplicateDeviceId" -> zh
                     ? "两个场景设备使用了同一本次回答内的引用别名，规则和规约无法无歧义地绑定到实例。"
@@ -1458,7 +1458,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                     ? "场景规则的内容复制来源或内容字段未通过设备模板校验。"
                     : "A scenario rule has an invalid content source or content field for the referenced template.";
             case "ruleActionDoesNotAcceptContent" -> zh
-                    ? "场景规则把内容敏感度附着到了未声明 AcceptsContent 的普通动作；整条规则已过滤。"
+                    ? "场景规则把内容敏感性标签附着到了未声明 AcceptsContent 的普通动作；整条规则已过滤。"
                     : "A scenario rule attaches content sensitivity to an ordinary action that does not declare AcceptsContent; the whole rule was filtered.";
             case "contradictoryRuleConditions" -> zh
                     ? "场景规则的触发条件在设备声明的合法状态或变量定义域中无法同时成立。"

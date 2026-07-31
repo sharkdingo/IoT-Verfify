@@ -226,6 +226,76 @@ describe('DeviceDialog template authority', () => {
     unresolved.unmount()
   })
 
+  it('names the effective template starting value when an override is cleared', () => {
+    i18n.global.locale.value = 'en'
+    const manifest: DeviceManifest = {
+      Name: 'Defaulted Controller',
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [
+        {
+          Name: 'mode',
+          IsInside: true,
+          FalsifiableWhenCompromised: false,
+          Trust: 'trusted',
+          Privacy: 'public',
+          Values: ['idle', 'active']
+        },
+        {
+          Name: 'threshold',
+          IsInside: true,
+          FalsifiableWhenCompromised: false,
+          LowerBound: 5,
+          UpperBound: 20,
+          Trust: 'trusted',
+          Privacy: 'public'
+        }
+      ],
+      APIs: []
+    }
+    const template: DeviceTemplate = {
+      name: manifest.Name,
+      manifest,
+      defaultTemplate: false
+    }
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        deviceName: template.name,
+        description: '',
+        label: 'Controller',
+        nodeId: 'controller-defaults',
+        manifest,
+        nodes: [{
+          id: 'controller-defaults',
+          templateName: template.name,
+          label: 'Controller',
+          position: { x: 0, y: 0 },
+          state: 'Working',
+          width: 176,
+          height: 128,
+          variables: []
+        }],
+        deviceTemplates: [template],
+        specs: []
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const enumSelect = document.querySelector<HTMLSelectElement>(
+      '[data-testid="device-runtime-variable-mode"]'
+    )!
+    const numericInput = document.querySelector<HTMLInputElement>(
+      '[data-testid="device-runtime-variable-threshold"]'
+    )!
+    expect(enumSelect.querySelector('option[value=""]')?.textContent)
+      .toBe('Use template default (idle)')
+    expect(numericInput.placeholder).toBe('Use template default (5) / 5 - 20')
+    expect(numericInput.value).toBe('5')
+    wrapper.unmount()
+  })
+
   it('merges disjoint refreshes and requires an explicit choice for conflicting runtime edits', async () => {
     const manifest: DeviceManifest = {
       Name: 'Custom Controller',

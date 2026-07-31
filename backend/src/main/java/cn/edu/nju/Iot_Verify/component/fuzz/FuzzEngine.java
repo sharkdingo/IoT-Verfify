@@ -412,7 +412,7 @@ public final class FuzzEngine {
             if (command != null && (hasText(command.getContent()) || hasText(command.getContentDevice()))) {
                 return new UnsupportedReason(
                         "CONTENT_COMMAND_UNSUPPORTED",
-                        "Content-bearing automation commands are outside the fuzzing MVP.");
+                        "Bounded exploration does not model content-bearing automation commands; use formal verification for this specification.");
             }
         }
         return null;
@@ -448,7 +448,7 @@ public final class FuzzEngine {
     private static UnsupportedReason trustPrivacyUnsupported() {
         return new UnsupportedReason(
                 "TRUST_PRIVACY_UNSUPPORTED",
-                "Trust and privacy predicates are outside the fuzzing MVP.");
+                "Bounded exploration does not model trust/privacy label propagation; use formal verification for this specification.");
     }
 
     private static List<SpecConditionDto> allConditions(SpecificationDto specification) {

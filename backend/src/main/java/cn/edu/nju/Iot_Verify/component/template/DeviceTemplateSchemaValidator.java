@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.template;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.util.NaturalChangeRateParser;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -245,6 +246,16 @@ public class DeviceTemplateSchemaValidator {
             String naturalRate = declaration.path("NaturalChangeRate").asText(null);
             boolean numeric = lower != null && upper != null
                     && lower.isIntegralNumber() && upper.isIntegralNumber();
+            boolean sharedEnvironment = "EnvironmentDomain".equals(kind)
+                    || ("InternalVariable".equals(kind)
+                    && declaration.has("IsInside")
+                    && !declaration.path("IsInside").asBoolean());
+            if (numeric && sharedEnvironment && naturalRate == null) {
+                throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                        + name + "' is a shared numeric environment variable and must explicitly define "
+                        + "NaturalChangeRate ('[-1, 1]' for the MEDIC baseline disturbance, or '0' "
+                        + "for no natural change).");
+            }
             if (naturalRate != null && !naturalRate.isBlank() && !numeric) {
                 throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                         + name + "' declares NaturalChangeRate, but only numeric ranges can change by a rate.");
@@ -257,32 +268,20 @@ public class DeviceTemplateSchemaValidator {
                                            String kind,
                                            String name,
                                            String rawRate) {
-        if (rawRate == null || rawRate.isBlank()) {
+        if (rawRate == null) {
             return;
         }
-        String[] parts = rawRate.replace("[", "").replace("]", "").split(",", -1);
-        final int lowerRate;
-        final int upperRate;
         try {
-            if (parts.length == 1) {
-                int rate = Integer.parseInt(parts[0].trim());
-                lowerRate = Math.min(0, rate);
-                upperRate = Math.max(0, rate);
-            } else if (parts.length == 2) {
-                lowerRate = Integer.parseInt(parts[0].trim());
-                upperRate = Integer.parseInt(parts[1].trim());
-            } else {
-                throw new NumberFormatException("wrong number of rate values");
+            NaturalChangeRateParser.parse(rawRate);
+        } catch (NaturalChangeRateParser.ParseException exception) {
+            if (exception.isDescending()) {
+                throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                        + name + "' has descending NaturalChangeRate '" + rawRate
+                        + "'; the lower rate must come first.");
             }
-        } catch (NumberFormatException exception) {
             throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                     + name + "' has NaturalChangeRate outside the supported integer format: '"
                     + rawRate + "'.");
-        }
-        if (lowerRate > upperRate) {
-            throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
-                    + name + "' has descending NaturalChangeRate '" + rawRate
-                    + "'; the lower rate must come first.");
         }
     }
 

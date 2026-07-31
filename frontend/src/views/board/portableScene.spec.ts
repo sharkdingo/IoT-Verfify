@@ -108,4 +108,75 @@ describe('canonicalization', () => {
     const b = codec.canonicalizeSceneFile(reordered as any)
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))
   })
+
+  it('matches backend null omission while preserving non-null manifest values', () => {
+    const explicitNull = {
+      ...minimalScene(),
+      templates: [{
+        name: 'Alarm',
+        manifest: {
+          Name: 'Alarm',
+          Description: '',
+          InternalVariables: [{
+            Name: 'level',
+            IsInside: true,
+            FalsifiableWhenCompromised: false,
+            Trust: 'trusted',
+            Privacy: 'public',
+            LowerBound: 0,
+            UpperBound: 1
+          }],
+          APIs: [{
+            Name: 'off',
+            StartState: 'on',
+            EndState: 'off',
+            Trigger: null,
+            Signal: false,
+            AcceptsContent: false
+          }]
+        }
+      }]
+    }
+    const omitted = {
+      ...minimalScene(),
+      templates: [{
+        name: 'Alarm',
+        manifest: {
+          APIs: [{
+            AcceptsContent: false,
+            Signal: false,
+            EndState: 'off',
+            Name: 'off',
+            StartState: 'on'
+          }],
+          InternalVariables: [{
+            UpperBound: 1,
+            LowerBound: 0,
+            Privacy: 'public',
+            Trust: 'trusted',
+            FalsifiableWhenCompromised: false,
+            IsInside: true,
+            Name: 'level'
+          }],
+          Description: '',
+          Name: 'Alarm'
+        }
+      }]
+    }
+
+    const canonical = codec.canonicalizeSceneFile(explicitNull as any)
+    expect(canonical).toEqual(codec.canonicalizeSceneFile(omitted as any))
+    expect(canonical.templates[0].manifest).toMatchObject({
+      Description: ''
+    })
+    expect(canonical.templates[0].manifest.APIs?.[0]).toMatchObject({
+      AcceptsContent: false,
+      Signal: false
+    })
+    expect(canonical.templates[0].manifest.APIs?.[0]).not.toHaveProperty('Trigger')
+    expect(canonical.templates[0].manifest.InternalVariables?.[0]).toMatchObject({
+      FalsifiableWhenCompromised: false,
+      LowerBound: 0
+    })
+  })
 })

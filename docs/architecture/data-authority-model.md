@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-25. Source: board/fuzz DTOs and services,
+Verified against code on 2026-07-31. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -47,9 +47,9 @@ Backend DTO: `DeviceTemplateDto`. Frontend type: `DeviceTemplate`.
 | `manifest.Description` | Template authoring | User-facing explanation | Template cards, AI context |
 | `manifest.Icon` | Template authoring | Self-contained `data:image` URI | Template cards, node icons |
 | `manifest.Modes` | Template authoring | Mode dimensions for multi-mode state strings | Rule/spec options, NuSMV state variables |
-| `manifest.InternalVariables` | Template authoring | Device variables and bounds/enums. Required `IsInside=true` means device-local; required `IsInside=false` means a shared environment variable and grants read permission. Shared declarations require explicit `Trust` and `Privacy`. Required `FalsifiableWhenCompromised` explicitly says whether compromise may replace that reported value inside its declared domain; API presence never infers ownership or attack behavior. | Rule/spec options, environment pool, NuSMV variables, attack behavior, fix ranges |
+| `manifest.InternalVariables` | Template authoring | Device variables and bounds/enums. Required `IsInside=true` means device-local; required `IsInside=false` means a shared environment variable and declares that this device reads/references it in the model. This is not authorization. Shared declarations require explicit `Trust` and `Privacy`. Required `FalsifiableWhenCompromised` explicitly says whether compromise may replace that reported value inside its declared domain; API presence never infers ownership or attack behavior. | Rule/spec options, environment pool, NuSMV variables, attack behavior, fix ranges |
 | `manifest.EnvironmentDomains` | Template authoring | Domain/default metadata for shared values this template affects without reading. It creates no device variable and grants no rule/spec source capability. Every entry requires explicit `Trust`/`Privacy` and must correspond to an `ImpactedVariables` name | Environment pool, NuSMV shared domain/dynamics |
-| `manifest.ImpactedVariables` | Template authoring | Shared environment variables affected by the device. This creates/keeps the variable in the environment pool but does not grant read permission. Each name must resolve in the same manifest through a readable external `InternalVariable` or an impact-only `EnvironmentDomain` | NuSMV environment model |
+| `manifest.ImpactedVariables` | Template authoring | Shared environment variables affected by the device. This creates/keeps the variable in the environment pool but does not declare a device read/reference. Each name must resolve in the same manifest through a readable external `InternalVariable` or an impact-only `EnvironmentDomain` | NuSMV environment model |
 | `manifest.InitState` | Template authoring | Concrete complete initial configuration matching one `WorkingState`; no wildcard/partial tuple | Node creation default, NuSMV init |
 | `manifest.WorkingStates` | Template authoring | Legal states and state dynamics | Node state UI, rule/spec validation, NuSMV transitions |
 | `manifest.Transitions` | Template authoring | Autonomous single-effect behavior: one concrete mode update or one internal/shared-variable assignment. Triggers read only declared modes/readable variables and values must fit their domains. Multi-effect declarations are rejected rather than partially modeled | NuSMV state/variable transitions |
@@ -137,6 +137,14 @@ Backend DTO: `BoardEnvironmentVariableDto`. Backend table:
 | `trust` | User/environment pool editor; template default fallback | Initial trust for the shared variable | NuSMV trust variables, specs/traces |
 | `privacy` | User/environment pool editor; template default fallback | Initial privacy for the shared variable | Privacy modeling, specs/traces |
 
+The frontend labels `value` as the **model initial value**, not the current physical value.
+Each verification, simulation, or bounded-exploration path starts from it; later trace states
+do not write back to the pool. The expanded pool also shows the template-owned evolution:
+the required `NaturalChangeRate` for numeric shared values and each WorkingState device effect.
+`[-1, 1]` is the MEDIC §3.1 baseline disturbance, `0` is an explicit no-natural-change
+choice, and any other interval is a visible project extension whose per-step candidates are
+the unique lower endpoint, zero, and upper endpoint.
+
 The environment pool is the only persisted source for environment values. `GET
 /api/board/environment` reads current devices/templates, inserts missing required rows,
 keeps existing values, and prunes variables no current device can read or affect. Public
@@ -149,18 +157,22 @@ required scenario variables without relying on frontend-only inference.
 
 Rules and specifications reference an environment variable with a device prefix, e.g.
 `thermostat_1.temperature`. The prefix does not create a per-device environment value;
-it proves that `thermostat_1` is allowed to read `temperature`. A device that only lists
+it identifies `thermostat_1` as a template that declares `temperature` readable in the
+model. A device that only lists
 `temperature` in `ImpactedVariables` can change `a_temperature` through its rate/value
 dynamics, but it cannot be used as a rule/spec source for `temperature`. The actual
 value, trust, and privacy are read from the board environment pool. NuSMV generation
 uses that pool to initialize the single shared `a_temperature` variable; only devices
-with read permission receive a `device.temperature := a_temperature` mirror.
+that declare the shared value as readable model state receive a
+`device.temperature := a_temperature` mirror. This is model wiring, not access control.
 
 Unused templates in the account never contribute a domain or default to the current
 board. For one active shared name, every participating template must agree on literal
 casing, numeric/enum domain (including enum order because its first item is the default),
 `NaturalChangeRate`, default trust, and default privacy. Board writes and direct model
 generation reject conflicts rather than selecting whichever device happens to appear first.
+The Environment Pool groups names case-insensitively, lists every active source and mismatch,
+and disables value/label editing when no single shared definition exists.
 
 Environment names are literal user/template names. The `a_` marker is added only when
 generating SMV identifiers. If a real template variable is named `a_temperature`, board
@@ -419,7 +431,7 @@ Backend DTOs: `VerificationTaskDto`, `VerificationTaskSummaryDto`,
 | `generationIssues` | Generator/result | User-readable label and reason for each omitted rule/spec | Result and history UI |
 | `specResults` | NuSMV executor plus immutable submitted spec/device/template context | Per-spec `SATISFIED` / `VIOLATED` / `INCONCLUSIVE` outcome, user-domain formula preview/type/label, and actual technical expression | Verification result UI without current-Board reinterpretation |
 | `checkLogs` | Service/generator/executor | Diagnostic log lines | Result/history |
-| `nusmvOutput` | Executor | Truncated raw output | Debug/result details |
+| `nusmvOutput` | Executor, then service retention cap | Capped NuSMV diagnostic output; see the [verification API contract](../api/verification.md) | Debug/result details |
 | `requestedSteps` / `steps` | Simulation service | Requested/actual simulation steps | Simulation history |
 | `simulationTraceId` | Simulation trace persistence | Link task to saved simulation trace | History lookup |
 | `maxIterations` / `pathLength` / `populationSize` | Counterexample-exploration request | Bounded search configuration | Fuzz worker/result history |

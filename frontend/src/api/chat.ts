@@ -14,7 +14,7 @@ import type {
     StreamProgress,
     StreamTerminal
 } from "@/types/chat"
-import { STREAM_REFRESH_TARGETS } from '@/types/chat'
+import { ASSISTANT_ACTIONS, STREAM_REFRESH_TARGETS } from '@/types/chat'
 import { useAuth } from '@/stores/auth'
 import { redirectToLogin } from '@/router/loginRedirect'
 
@@ -34,6 +34,7 @@ export class ChatStreamError extends Error {
     readonly kind: ChatStreamErrorKind
     readonly detail?: string
     readonly reasonCode?: string
+    readonly limit?: number
 
     constructor(message: string, options: {
         serverFrame?: boolean
@@ -41,6 +42,7 @@ export class ChatStreamError extends Error {
         kind?: ChatStreamErrorKind
         detail?: string
         reasonCode?: string
+        limit?: number
     } = {}) {
         super(message)
         this.name = 'ChatStreamError'
@@ -49,6 +51,7 @@ export class ChatStreamError extends Error {
         this.kind = options.kind ?? (this.serverFrame ? 'SERVER_FRAME' : 'UNKNOWN')
         this.detail = options.detail
         this.reasonCode = options.reasonCode
+        this.limit = options.limit
     }
 }
 
@@ -115,6 +118,7 @@ const EXECUTION_GUARD_OUTCOMES: ReadonlySet<NonNullable<StreamProgress['outcome'
 // Derived from the wire contract rather than repeated: a target added to types/chat.ts but missed
 // here would make the validator reject a frame the server is entitled to send.
 const REFRESH_TARGET_NAMES: ReadonlySet<string> = new Set(STREAM_REFRESH_TARGETS);
+const ASSISTANT_ACTION_NAMES: ReadonlySet<string> = new Set(ASSISTANT_ACTIONS);
 
 const isStreamProgress = (value: unknown): value is StreamProgress => {
   if (!isRecord(value)
@@ -186,12 +190,26 @@ const validateStreamProgress = (value: unknown, context: string): StreamProgress
 };
 
 const validateStreamCommand = (value: unknown): StreamCommand => {
+  const payloadKeys = isRecord(value) && isRecord(value.payload)
+      ? Object.keys(value.payload)
+      : [];
   if (!isRecord(value)
       || value.type !== 'REFRESH_DATA'
       || !isRecord(value.payload)
-      || Object.keys(value.payload).length !== 1
+      || payloadKeys.length < 1
+      || payloadKeys.length > 3
+      || payloadKeys.some(key => key !== 'target'
+          && key !== 'assistantAction'
+          && key !== 'assistantSummary')
       || typeof value.payload.target !== 'string'
-      || !REFRESH_TARGET_NAMES.has(value.payload.target)) {
+      || !REFRESH_TARGET_NAMES.has(value.payload.target)
+      || (value.payload.assistantAction !== undefined
+          && (typeof value.payload.assistantAction !== 'string'
+              || !ASSISTANT_ACTION_NAMES.has(value.payload.assistantAction)))
+      || (value.payload.assistantSummary !== undefined
+          && (typeof value.payload.assistantSummary !== 'string'
+              || value.payload.assistantSummary.trim().length === 0
+              || value.payload.assistantSummary.length > 240))) {
     throw new Error('Chat stream command is incomplete');
   }
   return value as unknown as StreamCommand;
@@ -248,10 +266,10 @@ const validateChatHistoryMessages = (
 /**
  * Validates one session row.
  *
- * `active` drives `hasAuthoritativeActiveSession` → `isAssistantBusy`, which is what stops a second
- * assistant mutation from starting while one is still running server-side. A row missing the flag
- * would read as `undefined` → falsy → idle, silently unlocking exactly the action the check exists
- * to hold back. So an incomplete row is an error, not a default.
+ * `active` locks input only when this is the selected conversation, while any active row keeps the
+ * shared Board protected and drives background-completion polling. A missing flag would read as
+ * `undefined` → falsy → idle, hiding work and unlocking the Board while the server is still writing.
+ * So an incomplete row is an error, not a default.
  */
 const validateChatSession = (value: unknown, context: string): ChatSession => {
   const session = value as Partial<ChatSession> | null;
@@ -263,7 +281,17 @@ const validateChatSession = (value: unknown, context: string): ChatSession => {
       // one untitled row.
       || (session.title !== null && session.title !== undefined && typeof session.title !== 'string')
       || typeof session.updatedAt !== 'string'
-      || typeof session.active !== 'boolean') {
+      || typeof session.active !== 'boolean'
+      || (session.latestTerminalMessageId !== null
+        && (typeof session.latestTerminalMessageId !== 'number'
+          || !Number.isSafeInteger(session.latestTerminalMessageId)
+          || session.latestTerminalMessageId <= 0))
+      || (session.latestExecutionStatus !== null
+        && (typeof session.latestExecutionStatus !== 'string'
+          || !CHAT_EXECUTION_STATUSES.has(session.latestExecutionStatus as ChatExecutionStatus)))
+      || typeof session.hasUnreadUpdate !== 'boolean'
+      || ((session.latestTerminalMessageId == null) !== (session.latestExecutionStatus == null))
+      || (session.hasUnreadUpdate && session.latestTerminalMessageId == null)) {
     throw new Error(`${context} is incomplete`);
   }
   return session as ChatSession;
@@ -314,6 +342,19 @@ export const getSessionHistory = async (
     nextBeforeId: nextBeforeId as number | null,
     hasMore: raw.hasMore
   };
+}
+
+export const markSessionTerminalSeen = async (
+    sessionId: string,
+    terminalMessageId: number
+): Promise<void> => {
+  if (!Number.isSafeInteger(terminalMessageId) || terminalMessageId <= 0) {
+    throw new Error('Terminal message id must be a positive safe integer');
+  }
+  await api.post(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/seen`,
+    { terminalMessageId }
+  );
 }
 
 export const requestSessionStop = async (
@@ -418,7 +459,8 @@ export const sendStreamChat = async (
                 kind: 'HTTP_ERROR',
                 status: response.status,
                 detail: detail.message,
-                reasonCode: detail.reasonCode
+                reasonCode: detail.reasonCode,
+                limit: detail.limit
             });
         }
 
@@ -614,7 +656,10 @@ const readErrorDetail = async (response: Response) => {
             const json = JSON.parse(body);
             return {
                 message: json?.message || json?.error || fallback,
-                reasonCode: typeof json?.data?.reasonCode === 'string' ? json.data.reasonCode : undefined
+                reasonCode: typeof json?.data?.reasonCode === 'string' ? json.data.reasonCode : undefined,
+                limit: Number.isSafeInteger(json?.data?.limit) && json.data.limit > 0
+                    ? json.data.limit
+                    : undefined
             };
         } catch {
             return { message: body.slice(0, 200) };

@@ -164,6 +164,37 @@ class RecommendRulesToolTest {
     }
 
     @Test
+    void execute_filtersCandidatesOutsideTheExplicitRequestedCategory() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [{
+                            "category": "comfort",
+                            "name": "Motion turns on the light",
+                            "reason": "This improves comfort when motion is detected.",
+                            "conditions": [{
+                              "deviceId":"node-light","deviceName":"Light","attribute":"motion",
+                              "targetType":"variable","relation":"=","value":"yes"
+                            }],
+                            "command": {"deviceId":"node-light","deviceName":"Light","action":"turnOn"}
+                          }]
+                        }
+                        """);
+
+        JsonNode unfiltered = objectMapper.readTree(tool.execute("{\"category\":\"all\"}"));
+        JsonNode result = objectMapper.readTree(tool.execute("{\"category\":\"security\"}"));
+
+        assertEquals(1, unfiltered.path("validatedCount").asInt(),
+                "the fixture must be valid before the requested-category filter is applied");
+        assertEquals(0, result.path("validatedCount").asInt());
+        assertEquals(1, result.path("filteredCount").asInt());
+        assertEquals("categoryMismatch",
+                result.path("filteredItems").get(0).path("reasonCode").asText());
+    }
+
+    @Test
     void execute_acceptsModeAttributeRecommendation() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice(), lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());

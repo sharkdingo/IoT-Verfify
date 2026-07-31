@@ -10,7 +10,6 @@ import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
-import cn.edu.nju.Iot_Verify.dto.verification.SpecResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
@@ -66,7 +65,7 @@ public class VerifyModelTool extends AbstractAiTool {
         props.put("attackPoints", attackPointsSchema());
         props.put("enablePrivacy", Map.of(
                 "type", "boolean",
-                "description", "Track private-data labels through automation chains. Privacy conditions force this on even when false. This models label propagation, not access control or encryption. Default false."
+                "description", "Track public/private sensitivity labels through automation chains. Privacy conditions force this on even when false. This models label propagation, not access control or encryption. Default false."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -114,6 +113,7 @@ public class VerifyModelTool extends AbstractAiTool {
 
             VerificationRequestDto request = new VerificationRequestDto();
             request.setDevices(devices);
+            request.setPlaybackNodes(board.nodes());
             request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSpecs(specs);
@@ -131,7 +131,7 @@ public class VerifyModelTool extends AbstractAiTool {
             summary.put("requestedSpecCount", specs.size());
             summary.put("emittedSpecCount", result.getSpecResults() != null ? result.getSpecResults().size() : 0);
             summary.put("violationCount", countFailedSpecs(result));
-            summary.put("specResults", presentSpecResults(result.getSpecResults()));
+            summary.put("specResults", VerificationToolPresenter.specResults(result.getSpecResults()));
             summary.put("generationIssues", result.getGenerationIssues());
             summary.put("isAttack", Boolean.TRUE.equals(result.getIsAttack()));
             summary.put("attackBudget", result.getAttackBudget());
@@ -158,9 +158,8 @@ public class VerifyModelTool extends AbstractAiTool {
                 summary.put("traces", traceSummaries);
             }
 
-            if (result.getCheckLogs() != null && !result.getCheckLogs().isEmpty()) {
-                summary.put("checkLogs", result.getCheckLogs());
-            }
+            summary.put("checkLogCount", result.getCheckLogs() != null
+                    ? result.getCheckLogs().size() : 0);
 
             String message = switch (result.getOutcome() != null
                     ? result.getOutcome() : VerificationOutcome.INCONCLUSIVE) {
@@ -230,27 +229,4 @@ public class VerifyModelTool extends AbstractAiTool {
         };
     }
 
-    /**
-     * Chat-facing projection. Persistence ids are unnecessary for interpretation or the
-     * follow-up fix flow, which is addressed by traceId, so keep them out of ordinary AI output.
-     */
-    private List<Map<String, Object>> presentSpecResults(List<SpecResultDto> specResults) {
-        if (specResults == null || specResults.isEmpty()) {
-            return List.of();
-        }
-        List<Map<String, Object>> presented = new ArrayList<>(specResults.size());
-        for (SpecResultDto specResult : specResults) {
-            if (specResult == null) {
-                continue;
-            }
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("specificationLabel", specResult.getSpecificationLabel());
-            row.put("formulaPreview", specResult.getFormulaPreview());
-            row.put("formulaKind", specResult.getFormulaKind());
-            row.put("outcome", specResult.getOutcome());
-            row.put("checkedExpression", specResult.getExpression());
-            presented.add(row);
-        }
-        return List.copyOf(presented);
-    }
 }

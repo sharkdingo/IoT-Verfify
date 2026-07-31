@@ -4,7 +4,9 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelPlaybackSceneDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -27,6 +29,8 @@ import java.util.List;
 public class SimulationTraceDto {
 
     private Long id;
+
+    private RunInitiator initiator;
 
     @JsonIgnore
     private Long userId;
@@ -68,6 +72,9 @@ public class SimulationTraceDto {
     private ModelSemanticsDto modelSemantics;
 
     private ModelRunSnapshotDto modelSnapshot;
+
+    /** Exact device layout and rules shown while replaying this historical trajectory. */
+    private ModelPlaybackSceneDto playbackScene;
 
     /** SAVED for history details, FAILED when execution succeeded but history persistence did not. */
     private RunPersistenceDto historyPersistence;

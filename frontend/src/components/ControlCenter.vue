@@ -23,6 +23,7 @@ import {
   findTemplateStateTrust,
   getTemplateEnvironmentVariables,
   getTemplateLocalVariables,
+  getTemplateVariableDefaultValue,
   getTemplateWorkingStates,
   materializeDeviceRuntimeConfig,
   resetDeviceRuntimeDraft,
@@ -252,7 +253,10 @@ const variableInputPlaceholder = (variable: InternalVariable) => {
   if (templateVariableUsesNumericBounds(variable)) {
     const lower = variable.LowerBound ?? '-∞'
     const upper = variable.UpperBound ?? '∞'
-    return `${lower} - ${upper}`
+    const defaultValue = getTemplateVariableDefaultValue(variable)
+    return defaultValue
+      ? `${t('app.useTemplateDefaultWithValue', { value: defaultValue })} / ${lower} - ${upper}`
+      : `${lower} - ${upper}`
   }
   return t('app.enterValuePlaceholder')
 }
@@ -2563,7 +2567,7 @@ watch(() => props.readOnly, readOnly => {
                         :data-testid="`single-device-variable-${variable.Name}`"
                         class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
                       >
-                        <option value="">{{ t('app.useTemplateDefault') }}</option>
+                        <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatTemplateModelToken(selectedDeviceTemplate, getTemplateVariableDefaultValue(variable)) }) }}</option>
                         <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatTemplateModelToken(selectedDeviceTemplate, value) }}</option>
                       </select>
                       <input

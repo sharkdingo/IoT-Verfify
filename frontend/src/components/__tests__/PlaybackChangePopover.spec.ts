@@ -60,6 +60,23 @@ const i18n = createI18n({
   }
 })
 
+const createPointerEvent = (
+  type: string,
+  init: { pointerId: number; clientX: number; clientY: number; buttons?: number }
+) => {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperties(event, {
+    pointerId: { value: init.pointerId },
+    pointerType: { value: 'touch' },
+    isPrimary: { value: true },
+    button: { value: 0 },
+    buttons: { value: init.buttons ?? 0 },
+    clientX: { value: init.clientX },
+    clientY: { value: init.clientY }
+  })
+  return event
+}
+
 describe('PlaybackChangePopover', () => {
   it('shows independent, user-facing before/after facts and can be dismissed', async () => {
     const wrapper = mount(PlaybackChangePopover, {
@@ -128,6 +145,93 @@ describe('PlaybackChangePopover', () => {
 
     expect(wrapper.emitted('move')).toBeTruthy()
     expect(wrapper.emitted('move')?.at(-1)?.[0]).toEqual(expect.objectContaining({ x: 40, y: 35 }))
+  })
+
+  it('starts a fresh drag after a viewport change interrupts the previous gesture', async () => {
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'simulation',
+        stateNumber: 2,
+        totalStates: 4,
+        position: { x: 0, y: 0 },
+        changes: [{
+          deviceId: 'sensor_1',
+          deviceLabel: 'Sensor',
+          details: [{ kind: 'state', previousValue: 'idle', currentValue: 'active' }]
+        }],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const handle = wrapper.get('[data-testid="playback-change-drag-handle"]')
+    await handle.trigger('mousedown', { button: 0, clientX: 100, clientY: 100 })
+    window.dispatchEvent(new Event('resize'))
+
+    await handle.trigger('mousedown', { button: 0, clientX: 200, clientY: 200 })
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 225, clientY: 230 }))
+    window.dispatchEvent(new MouseEvent('mouseup', { clientX: 225, clientY: 230 }))
+
+    expect(wrapper.emitted('move')?.at(-1)?.[0]).toEqual({ x: 25, y: 30 })
+  })
+
+  it('keeps pointer dragging usable when capture is unavailable', () => {
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'simulation',
+        stateNumber: 2,
+        totalStates: 4,
+        position: { x: 0, y: 0 },
+        changes: [{
+          deviceId: 'sensor_1',
+          deviceLabel: 'Sensor',
+          details: [{ kind: 'state', previousValue: 'idle', currentValue: 'active' }]
+        }],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const handle = wrapper.get('[data-testid="playback-change-drag-handle"]')
+    handle.element.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 7,
+      clientX: 100,
+      clientY: 100,
+      buttons: 1
+    }))
+    window.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 7,
+      clientX: 100,
+      clientY: 100
+    }))
+
+    handle.element.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 8,
+      clientX: 200,
+      clientY: 200,
+      buttons: 1
+    }))
+    window.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 8,
+      clientX: 225,
+      clientY: 230,
+      buttons: 1
+    }))
+    window.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 8,
+      clientX: 225,
+      clientY: 230
+    }))
+
+    expect(wrapper.emitted('move')?.at(-1)?.[0]).toEqual({ x: 25, y: 30 })
   })
 
   it('stays informative when a playback state has no observable delta', () => {

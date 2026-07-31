@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 
 import java.time.LocalDateTime;
 
@@ -17,6 +18,8 @@ public interface FuzzTaskSummaryProjection {
     Long getId();
 
     Long getUserId();
+
+    RunInitiator getInitiator();
 
     FuzzTaskPo.TaskStatus getStatus();
 

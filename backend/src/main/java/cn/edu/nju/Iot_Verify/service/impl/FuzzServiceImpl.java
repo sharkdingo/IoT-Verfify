@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.configure.ThreadPoolConfig;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzEligibilityDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingReplayDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzIneligibleSpecDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzInputEventDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
@@ -35,6 +36,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -59,6 +61,7 @@ import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskProgressProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.service.FuzzService;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.RunInitiatorResolver;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.FuzzMapper;
@@ -80,6 +83,7 @@ import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -400,6 +404,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             LocalDateTime createdAt = databaseNow();
             FuzzTaskPo task = FuzzTaskPo.builder()
                     .userId(userId)
+                    .initiator(RunInitiatorResolver.current())
                     .status(FuzzTaskPo.TaskStatus.PENDING)
                     .createdAt(createdAt)
                     .progress(0)
@@ -1382,6 +1387,8 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     run != null ? run.getId() : null, e);
             return FuzzRunSummaryDto.builder()
                     .id(run != null ? run.getId() : null)
+                    .initiator(run != null && run.getInitiator() != null
+                            ? run.getInitiator() : RunInitiator.UNKNOWN)
                     .createdAt(run != null ? run.getCreatedAt() : null)
                     .completedAt(run != null ? run.getCompletedAt() : null)
                     .findingCount(run != null && run.getFindingCount() != null
@@ -1397,8 +1404,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     @Transactional(readOnly = true)
     public FuzzRunDto getRun(Long userId, Long runId) {
         FuzzTaskPo run = requireOwnedRun(userId, runId);
-        return fuzzMapper.toRunDto(run,
-                findingRepository.findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(userId, runId));
+        return fuzzMapper.toRunDto(run, loadOrderedFindings(userId, runId));
     }
 
     @Override
@@ -1463,9 +1469,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     @Transactional(readOnly = true)
     public List<FuzzFindingDto> getFindings(Long userId, Long runId) {
         FuzzTaskPo run = requireOwnedRun(userId, runId);
-        List<FuzzFindingPo> findings = findingRepository
-                .findByUserIdAndFuzzTaskIdOrderByCreatedAtAscIdAsc(userId, runId);
-        return fuzzMapper.toRunDto(run, findings).getFindings();
+        return fuzzMapper.toRunDto(run, loadOrderedFindings(userId, runId)).getFindings();
     }
 
     @Override
@@ -1480,6 +1484,18 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         return fuzzMapper.toFindingDto(run, finding, actualFindingCount);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public FuzzFindingReplayDto getFindingReplay(Long userId, Long findingId) {
+        FuzzFindingPo finding = findingRepository.findByIdAndUserId(findingId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Counterexample search finding", findingId));
+        FuzzTaskPo run = requireOwnedRun(userId, finding.getFuzzTaskId());
+        long actualFindingCount = findingRepository.countByUserIdAndFuzzTaskId(
+                userId, finding.getFuzzTaskId());
+        return fuzzMapper.toFindingReplayDto(run, finding, actualFindingCount);
+    }
+
     private FuzzTaskPo requireOwnedTask(Long userId, Long taskId) {
         return taskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -1491,6 +1507,16 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                         runId, userId, FuzzTaskPo.TaskStatus.COMPLETED)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Counterexample search run", runId));
+    }
+
+    private List<FuzzFindingPo> loadOrderedFindings(Long userId, Long runId) {
+        return findingRepository.findByUserIdAndFuzzTaskId(userId, runId).stream()
+                .sorted(Comparator
+                        .comparing(FuzzFindingPo::getCreatedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(FuzzFindingPo::getId,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
     }
 
     private List<Long> normalizeExcludedTaskIds(List<Long> excludedTaskIds) {

@@ -150,7 +150,7 @@ describe('SystemInspector rule execution order', () => {
           IsInside: false,
           FalsifiableWhenCompromised: false,
           Trust: 'trusted',
-          Privacy: 'public',
+          Privacy: 'private',
           Values: ['off', 'on']
         }]
       }
@@ -183,6 +183,8 @@ describe('SystemInspector rule execution order', () => {
     expect(wrapper.text()).toContain('温度')
     await wrapper.get('[data-testid="toggle-environment-pool"]').trigger('click')
     await wrapper.get('article button').trigger('click')
+    expect(wrapper.get('[data-testid="environment-evolution-temperature"]').text())
+      .toContain('无设备作用时可在声明枚举值内非确定变化')
     const valueSelect = wrapper.get('[data-testid="environment-value-temperature"]')
     expect(valueSelect.find('option[value="off"]').text()).toBe('关闭')
     await wrapper.setProps({ environmentSaving: true })
@@ -194,9 +196,8 @@ describe('SystemInspector rule execution order', () => {
     expect(wrapper.emitted('save-environment')?.at(-1)).toEqual([[
       {
         name: 'temperature',
-        // The CAS baseline comes strictly from the authoritative snapshot; an absent trust/privacy
-        // normalizes to the same untrusted/public the server materializes, not a template default.
-        expected: { value: 'off', trust: 'untrusted', privacy: 'public' },
+        // Missing labels use the same template fallbacks in the visible row and CAS baseline.
+        expected: { value: 'off', trust: 'trusted', privacy: 'private' },
         desired: { value: 'on' }
       }
     ]])
@@ -248,6 +249,92 @@ describe('SystemInspector rule execution order', () => {
     expect(wrapper.find('[data-testid="environment-not-editable-signal"]').exists()).toBe(true)
     await valueSelect.setValue('on')
 
+    expect(wrapper.emitted('save-environment')).toBeUndefined()
+  })
+
+  it('separates the model initial value from declared per-step evolution', async () => {
+    const template: DeviceTemplate = {
+      name: 'Heater',
+      manifest: {
+        Name: 'Heater',
+        Modes: ['Power'],
+        InitState: 'off',
+        InternalVariables: [{
+          Name: 'temperature',
+          IsInside: false,
+          FalsifiableWhenCompromised: false,
+          Trust: 'untrusted',
+          Privacy: 'public',
+          LowerBound: 0,
+          UpperBound: 50,
+          NaturalChangeRate: '[-1, 1]'
+        }],
+        ImpactedVariables: ['temperature'],
+        WorkingStates: [
+          { Name: 'off', Trust: 'trusted', Privacy: 'public', Dynamics: [{ VariableName: 'temperature', ChangeRate: '0' }] },
+          { Name: 'on', Trust: 'trusted', Privacy: 'public', Dynamics: [{ VariableName: 'temperature', ChangeRate: '2' }] }
+        ]
+      }
+    }
+    const wrapper = mount(SystemInspector, {
+      props: {
+        activeSection: 'devices',
+        deviceTemplates: [template],
+        devices: [{ ...devices[0], id: 'heater-1', label: 'Hall heater', templateName: 'Heater', state: 'on' }],
+        environmentVariables: [{ name: 'temperature', value: '20', trust: 'untrusted', privacy: 'public' }]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('[data-testid="toggle-environment-pool"]').trigger('click')
+    await wrapper.get('[data-testid="environment-pool"] article button').trigger('click')
+    const evolution = wrapper.get('[data-testid="environment-evolution-temperature"]')
+    expect(wrapper.get('label').text()).toContain('Model initial value')
+    expect(evolution.text()).toContain('[-1, 1]')
+    expect(evolution.text()).toContain('-1, 0, 1')
+    expect(evolution.text()).toContain('Hall heater · on: rate 2 per step')
+    expect(evolution.text()).toContain('never written back')
+  })
+
+  it('shows conflicting active definitions and prevents every environment edit', async () => {
+    const template = (name: string, rate: string): DeviceTemplate => ({
+      name,
+      manifest: {
+        Name: name,
+        InternalVariables: [{
+          Name: 'temperature',
+          IsInside: false,
+          FalsifiableWhenCompromised: false,
+          Trust: 'untrusted',
+          Privacy: 'public',
+          LowerBound: 0,
+          UpperBound: 100,
+          NaturalChangeRate: rate
+        }]
+      }
+    })
+    const wrapper = mount(SystemInspector, {
+      props: {
+        activeSection: 'devices',
+        deviceTemplates: [template('Indoor Sensor', '[-1, 1]'), template('Outdoor Sensor', '[-5, 5]')],
+        devices: [
+          { ...devices[0], id: 'indoor-1', label: 'Indoor', templateName: 'Indoor Sensor' },
+          { ...devices[1], id: 'outdoor-1', label: 'Outdoor', templateName: 'Outdoor Sensor' }
+        ],
+        environmentVariables: [{ name: 'temperature', value: '20', trust: 'untrusted', privacy: 'public' }]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('[data-testid="toggle-environment-pool"]').trigger('click')
+    await wrapper.get('[data-testid="environment-pool"] article button').trigger('click')
+    expect(wrapper.get('[data-testid="environment-conflict-temperature"]').text())
+      .toContain('natural change rates differ')
+    const value = wrapper.get('[data-testid="environment-value-temperature"]')
+    expect(value.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="environment-trust-temperature"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="environment-privacy-temperature"]').attributes('disabled')).toBeDefined()
+    await value.setValue('21')
     expect(wrapper.emitted('save-environment')).toBeUndefined()
   })
 

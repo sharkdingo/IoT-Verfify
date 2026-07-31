@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-30. Source:
+Verified against code on 2026-07-31. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -314,7 +314,7 @@ lossless without freezing template labels into every device.
 
 | Field | Type | Rules |
 | :--- | :--- | :--- |
-| `name` | `String` | Required; must be read by at least one current device template (`InternalVariables[].IsInside=false`) or affected by at least one current device through `ImpactedVariables`; affected-only devices do not gain rule/spec read permission |
+| `name` | `String` | Required; must be read by at least one current device template (`InternalVariables[].IsInside=false`) or affected by at least one current device through `ImpactedVariables`; affected-only devices do not gain a device-scoped rule/spec reference |
 | `value` | `String` | Required non-blank GET/response value from the canonical finite template domain. Create-time/internal patches accept a legal non-blank override or preserve the materialized template default when omitted/null. Complete scene replacement requires an explicit legal non-blank value |
 | `trust` | `String` | GET/response label; create-time/internal patches accept `trusted` / `untrusted` or preserve it when omitted/null. Complete scene replacement requires the field explicitly |
 | `privacy` | `String` | GET/response label; create-time/internal patches accept `public` / `private` or preserve it when omitted/null. Complete scene replacement requires the field explicitly |
@@ -498,15 +498,19 @@ all-or-nothing create action is enabled.
 
 After a scene-replacement `200` response, the Board canonicalizes the returned nodes,
 environment pool, rules, and specifications and compares them with the requested v4
-semantics before showing a completed replacement. A missing or non-equivalent response
-enters the same authoritative reload/reconciliation path as a lost response; it is not
-presented as a successful full import merely because HTTP status was successful.
+semantics before showing a completed replacement. Template-manifest object properties
+that are explicitly `null` in the request compare equal to properties omitted by the
+backend's non-null DTO serialization. This equivalence does not apply to non-null values
+or array order. A missing or non-equivalent response enters the same authoritative
+reload/reconciliation path as a lost response; it is not presented as a successful full
+import merely because HTTP status was successful.
 
 Rules and specifications still reference environment variables through a device prefix
 (for example `sensor_1.temperature`). That prefix means "this device's template declares
-permission to read `temperature`"; the actual initial value, trust, and privacy come
+`temperature` as readable model state"; the actual initial value, trust, and privacy come
 from `BoardEnvironmentVariableDto`. NuSMV generation initializes one shared
-`a_<name>` variable from that pool and mirrors it only into devices with read permission.
+`a_<name>` variable from that pool and mirrors it only into devices that declare the shared value as
+readable model state. This controls model references, not user or API authorization.
 
 ### Rule-derived canvas connections
 
@@ -835,12 +839,17 @@ auto-fix parameterization identifiers active in that model.
   XOR `LowerBound`+`UpperBound` (numeric range); never omit the domain, provide both
   forms, or provide only one bound** (backend `@AssertTrue isValidVariableDefinition`).
   Numeric bounds must be ascending. Enum values must remain distinct after spaces are
-  removed for NuSMV. `NaturalChangeRate` is valid only for numeric domains, must fit a
-  Java integer, and a two-value range must be ascending.
+  removed for NuSMV. `NaturalChangeRate` is valid only for numeric domains and accepts exactly
+  a 32-bit integer such as `1` or a bracketed, ascending two-integer interval such as
+  `[-1, 1]`; unbracketed pairs and extra endpoints are invalid. It is required when the numeric
+  variable is shared (`IsInside=false`): `[-1, 1]` reproduces MEDIC §3.1, `0` explicitly
+  disables independent natural change, and another interval is a visible endpoint model
+  extension whose candidates are the unique lower endpoint, zero, and upper endpoint.
 - `EnvironmentDomain`: `Name`, `Description`, required `Trust`/`Privacy`, and either
-  `Values` or `LowerBound`+`UpperBound`, plus optional `NaturalChangeRate`. It supplies
+  `Values` or `LowerBound`+`UpperBound`. A numeric domain also requires
+  `NaturalChangeRate`; an enum domain cannot declare it. It supplies
   the domain for a name this template lists in `ImpactedVariables` but does not read;
-  it creates no device variable and grants no rule/spec read capability. Every impact
+  it creates no device variable or device-scoped rule/spec reference. Every impact
   must resolve inside the same manifest, and unused/redundant domain entries are rejected.
 - `WorkingState`: `Name`, `Description`, required `Trust`, required `Privacy`, `Dynamics[]`
   (`Dynamic` = `VariableName`, `Value`, `ChangeRate`). In a multi-mode template, every
@@ -900,6 +909,8 @@ Installed but unused templates are irrelevant. Declarations for the same active 
 name must use the same literal casing, domain (including enum order), natural change
 rate, default trust, and default privacy; node/scene writes reject conflicts before
 persistence, so device ordering cannot choose the model silently.
+Environment Pool compare-and-set writes run the same active-definition check before
+reading baselines or persisting a patch.
 
 `Icon` is optional and is ignored by NuSMV generation. It exists for UI rendering:
 custom JSON imports may provide a self-contained `data:image/...` URI (max 256 KB).

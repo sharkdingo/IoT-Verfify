@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResultContract;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
@@ -68,6 +69,7 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -82,6 +84,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -90,7 +93,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private static final int MAX_PRE_ADMISSION_STOP_TURNS = 64;
     private static final Duration PRE_ADMISSION_STOP_TTL = Duration.ofMinutes(2);
 
-    private static final int HISTORY_CHAR_LIMIT = 4000;
     private static final int SESSION_LOCK_STRIPES = 256;
     private static final long EXECUTION_CONTROL_POLL_NANOS = Duration.ofMillis(250).toNanos();
     private static final Object[] SESSION_LOCKS = createSessionLocks();
@@ -235,8 +237,24 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         LocalDateTime now = databaseNow();
         List<ChatSessionPo> sessions = sessionRepo.findTop100ByUserIdOrderByUpdatedAtDesc(userId);
         List<ChatSessionResponseDto> response = chatMapper.toChatSessionDtoList(sessions);
+        Map<String, ChatMessageRepository.LatestTerminalView> latestTerminals = sessions.isEmpty()
+                ? Map.of()
+                : messageRepo.findLatestTerminalBySessionIdIn(
+                                sessions.stream().map(ChatSessionPo::getId).toList()).stream()
+                        .collect(Collectors.toMap(
+                                ChatMessageRepository.LatestTerminalView::getSessionId,
+                                terminal -> terminal));
         for (int index = 0; index < response.size(); index++) {
-            response.get(index).setActive(hasActiveExecutionLease(sessions.get(index), now));
+            ChatSessionPo session = sessions.get(index);
+            ChatSessionResponseDto sessionResponse = response.get(index);
+            sessionResponse.setActive(hasActiveExecutionLease(session, now));
+            ChatMessageRepository.LatestTerminalView latestTerminal = latestTerminals.get(session.getId());
+            if (latestTerminal != null) {
+                sessionResponse.setLatestTerminalMessageId(latestTerminal.getMessageId());
+                sessionResponse.setLatestExecutionStatus(latestTerminal.getExecutionStatus());
+                sessionResponse.setHasUnreadUpdate(session.getLastSeenTerminalMessageId() == null
+                        || latestTerminal.getMessageId() > session.getLastSeenTerminalMessageId());
+            }
         }
         return response;
     }
@@ -336,6 +354,30 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 .nextBeforeId(nextBeforeId)
                 .hasMore(hasMore && nextBeforeId != null)
                 .build();
+    }
+
+    @Override
+    public void markTerminalSeen(Long userId, String sessionId, Long terminalMessageId) {
+        if (terminalMessageId == null || terminalMessageId <= 0) {
+            throw new BadRequestException("Terminal message id must be a positive integer.");
+        }
+        synchronized (sessionLock(sessionId)) {
+            transactionTemplate.executeWithoutResult(status -> {
+                requireActiveUserForWrite(userId);
+                ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
+                        .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+                if (!messageRepo.existsByIdAndSessionIdAndRoleAndExecutionStatusIsNotNull(
+                        terminalMessageId, sessionId, "assistant")) {
+                    throw new BadRequestException(
+                            "The acknowledged message is not a terminal assistant message in this session.");
+                }
+                Long currentCursor = session.getLastSeenTerminalMessageId();
+                if (currentCursor == null || terminalMessageId > currentCursor) {
+                    session.setLastSeenTerminalMessageId(terminalMessageId);
+                    sessionRepo.saveAndFlush(session);
+                }
+            });
+        }
     }
 
     @Override
@@ -606,30 +648,44 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     @Override
+    public void requestUserExecutionStop(Long userId) {
+        if (userId == null) return;
+        markUserExecutionsStopped(userId, true);
+        stopLocalUserExecutions(userId, true);
+    }
+
+    @Override
     public void requestLocalUserExecutionStop(Long userId) {
         if (userId == null) return;
         try {
-            independentTransactionTemplate().executeWithoutResult(status -> {
-                List<ChatSessionPo> sessions = sessionRepo.findByUserIdForUpdate(userId);
-                LocalDateTime now = databaseNow();
-                for (ChatSessionPo session : sessions) {
-                    if (!hasActiveExecutionLease(session, now)) continue;
-                    // Account cleanup is a silent transport stop, not an explicit user cancellation.
-                    session.setExecutionStopRequested(true);
-                    session.setExecutionUserStopRequested(false);
-                }
-                sessionRepo.saveAllAndFlush(sessions);
-            });
+            markUserExecutionsStopped(userId, false);
         } catch (RuntimeException e) {
             log.warn("Could not mark chat sessions stopped for deleted user {}", userId, e);
         }
-        activeStreamRequests.forEach((sessionId, request) -> {
-            if (!Objects.equals(request.userId(), userId)) return;
-            stopActiveRequest(sessionId, request, false);
-        });
+        stopLocalUserExecutions(userId, false);
         runUserCleanupStep("destructive-action confirmations", () -> destructiveActionGuard.clearUser(userId));
         runUserCleanupStep("scenario drafts", () -> scenarioDraftStore.clearUser(userId));
         runUserCleanupStep("task continuations", () -> taskContinuationStore.clearUser(userId));
+    }
+
+    private void markUserExecutionsStopped(Long userId, boolean userInitiated) {
+        independentTransactionTemplate().executeWithoutResult(status -> {
+            List<ChatSessionPo> sessions = sessionRepo.findByUserIdForUpdate(userId);
+            LocalDateTime now = databaseNow();
+            for (ChatSessionPo session : sessions) {
+                if (!hasActiveExecutionLease(session, now)) continue;
+                session.setExecutionStopRequested(true);
+                session.setExecutionUserStopRequested(userInitiated);
+            }
+            sessionRepo.saveAllAndFlush(sessions);
+        });
+    }
+
+    private void stopLocalUserExecutions(Long userId, boolean userInitiated) {
+        activeStreamRequests.forEach((sessionId, request) -> {
+            if (!Objects.equals(request.userId(), userId)) return;
+            stopActiveRequest(sessionId, request, userInitiated);
+        });
     }
 
     private TransactionTemplate independentTransactionTemplate() {
@@ -913,22 +969,28 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 userId, sessionId, activeRequest, isDisconnect, isUserStop, true);
         activeRequest.emitter().compareAndSet(null, emitter);
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        Set<String> confirmedMutationTools = new LinkedHashSet<>();
+        boolean frontendCommandsDelivered = false;
+        boolean frontendCommandsDeliveryFailed = false;
         ToolLoopResult loopResult = ToolLoopResult.empty();
         TerminalPersistenceState terminalPersistence = TerminalPersistenceState.NOT_ATTEMPTED;
         AtomicBoolean serverCompletion = new AtomicBoolean(false);
         emitter.onCompletion(() -> {
             if (!serverCompletion.get()) {
-                isDisconnect.set(true);
-                activeRequest.requestControl().cancel();
+                log.debug("Chat SSE transport detached; execution will continue in the background: "
+                                + "sessionId={}, executionId={}",
+                        sessionId, executionId);
             }
         });
         emitter.onTimeout(() -> {
-            isDisconnect.set(true);
-            activeRequest.requestControl().cancel();
+            log.debug("Chat SSE transport timed out; execution will continue in the background: "
+                            + "sessionId={}, executionId={}",
+                    sessionId, executionId);
         });
         emitter.onError(ex -> {
-            isDisconnect.set(true);
-            activeRequest.requestControl().cancel();
+            log.debug("Chat SSE transport failed; execution will continue in the background: "
+                            + "sessionId={}, executionId={}, reason={}",
+                    sessionId, executionId, ex == null ? "unknown" : ex.toString());
         });
         try {
             UserContextHolder.setUserId(userId);
@@ -968,7 +1030,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 return;
             }
 
-            List<ChatMessagePo> historyPO = getSmartHistory(sessionId, HISTORY_CHAR_LIMIT);
+            List<ChatMessagePo> historyPO = getSmartHistory(
+                    sessionId, chatExecutionConfig.getHistoryCharLimit());
             List<LlmMessage> messages = new ArrayList<>();
             messages.add(buildToolPlanningSystemPrompt());
             messages.addAll(llmChatService.toMessages(historyPO));
@@ -999,7 +1062,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             log.debug("Starting model-driven planning with the complete {}-tool catalog", tools.size());
             loopResult = executeToolLoop(
                     userId, sessionId, messages, tools, commandSet, emitter, isDisconnect,
-                    preferChinese, executionTrace, executionId, shouldStop, forceStopCheck);
+                    preferChinese, executionTrace, executionId, shouldStop, forceStopCheck,
+                    confirmedMutationTools);
 
             if (forceStopCheck.getAsBoolean()) {
                 return;
@@ -1026,22 +1090,30 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
 
             if (shouldStop.getAsBoolean()) {
-                log.info("Client disconnected during tool loop, stopping chat processing");
+                log.info("Chat execution stop was requested during tool loop");
                 return;
             }
 
             if (!commandSet.isEmpty()) {
-                if (!sendFrontendCommands(emitter, commandSet)) {
-                    isDisconnect.set(true);
-                    return;
+                boolean commandsDelivered = sendFrontendCommands(emitter, commandSet);
+                if (!commandsDelivered) {
+                    // Switching conversations may detach the browser stream. The terminal row
+                    // remains authoritative and the client reconciles Board state from polling.
+                    log.debug("Chat refresh commands were not delivered; execution continues in the background: "
+                                    + "sessionId={}, executionId={}",
+                            sessionId, executionId);
+                    frontendCommandsDeliveryFailed = true;
+                } else {
+                    frontendCommandsDelivered = true;
                 }
+                commandSet.clear();
             }
 
             // These two notices are the audit record of failed, unconfirmed, and guard-stopped steps.
             // They are appended to finalAnswer unconditionally, because that is what gets persisted:
             // a transient unwritable connection must not erase "N steps failed" from the stored turn,
-            // which is the only place the user can still read it after a reload. A failed send is a
-            // disconnect, handled as one rather than ignored.
+            // which is the only place the user can still read it after a reload. A failed send only
+            // detaches the transport; it must not cancel the durable execution.
             String executionNotice = toolExecutionNotice(loopResult, preferChinese);
             if (!executionNotice.isBlank()) {
                 finalAnswer.append(executionNotice);
@@ -1063,7 +1135,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             List<LlmMessage> visibleReplyMessages = withVisibleReplyPrompt(messages, loopResult);
             ReplyGuardOutcome replyGuardOutcome = streamGuardedAssistantReply(
                     visibleReplyMessages, finalAnswer, emitter, isDisconnect, shouldStop,
-                    preferChinese, executionTrace);
+                    preferChinese, executionTrace, confirmedMutationTools);
             boolean finalResponseProduced = finalAnswer.length() > replyStart;
 
             if (!finalResponseProduced && !isDisconnect.get()) {
@@ -1111,25 +1183,49 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             serverCompletion.set(true);
             completeEmitter(emitter, isDisconnect);
         } catch (Exception e) {
-            if (isDisconnect.get() || isClientDisconnect(e)) {
+            // Losing the SSE transport is not a cancellation signal. Only the durable stop
+            // fence may interrupt the worker; provider/transport failures still get a terminal
+            // audit row so a detached browser can observe the outcome later.
+            if (isDisconnect.get()) {
                 isDisconnect.set(true);
-                log.info("Chat stream ended after client disconnect: {}", e.toString());
+                log.info("Chat execution ended after an explicit or durable stop: {}", e.toString());
                 return;
             }
             log.error("Chat Error", e);
             String errorMessage = errorMessageFor(e, preferChinese);
             if (!commandSet.isEmpty()) {
-                sendFrontendCommands(emitter, commandSet);
+                boolean pendingCommandsDelivered = sendFrontendCommands(emitter, commandSet);
+                if (pendingCommandsDelivered) {
+                    commandSet.clear();
+                    frontendCommandsDelivered = true;
+                    errorMessage += preferChinese
+                            ? " 一个或多个较早的工具写入可能已经完成；客户端已请求刷新受影响数据。重试前请检查当前状态。"
+                            : " One or more earlier tool mutations may already have completed; "
+                                + "the client was asked to refresh affected data. Review current state before retrying.";
+                } else {
+                    errorMessage += preferChinese
+                            ? " 一个或多个较早的工具写入可能已经完成，但刷新指令未能完整送达。重试前请重新加载并检查当前状态。"
+                            : " One or more earlier tool mutations may already have completed, but the refresh "
+                                + "instructions could not be fully delivered. Reload and review current state before retrying.";
+                }
+            } else if (frontendCommandsDeliveryFailed) {
                 errorMessage += preferChinese
-                        ? " 一个或多个较早的工具写入可能已经完成；客户端已请求刷新受影响数据。重试前请检查当前状态。"
-                        : " One or more earlier tool mutations may already have completed; "
-                            + "the client was asked to refresh affected data. Review current state before retrying.";
+                        ? " 一个或多个较早的工具操作可能已经完成，但刷新指令未能送达；请重新加载并检查当前状态。"
+                        : " One or more earlier tool actions may have completed, but refresh instructions were not delivered; "
+                            + "reload and review current state before retrying.";
+            } else if (frontendCommandsDelivered) {
+                errorMessage += preferChinese
+                        ? " 一个或多个较早的工具操作已经完成，受影响数据也已刷新；最终 AI 说明生成失败。"
+                        : " One or more earlier tool actions completed and affected data was refreshed; "
+                            + "the final AI explanation could not be generated.";
             }
             ChatExecutionStatus status = loopResult.hadToolCalls()
                     || executionTrace.stream().anyMatch(progress ->
                             "TOOL_EXECUTION".equals(progress.getStage())
                                     || "TOOL_RESULT".equals(progress.getStage()))
                     || !commandSet.isEmpty()
+                    || frontendCommandsDeliveryFailed
+                    || frontendCommandsDelivered
                     ? ChatExecutionStatus.PARTIAL
                     : ChatExecutionStatus.FAILED;
             String userStoppedNotice = interruptedAuditNotice(loopResult, preferChinese, true);
@@ -1467,7 +1563,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         Destructive Action Guidelines:
         - Device, template, rule, specification, and saved-trace deletion, deletion of a whole
           verification run (delete_verification_run) or counterexample-search run (delete_fuzz_run),
-          dismissal of a failed/cancelled task, and applying a formal fix are always two-turn operations.
+          dismissal of a failed/cancelled task, clearing unusable Board edit history, clearing the
+          Board (clear_board), and applying a formal fix are always two-turn operations.
         - Task dismissal (dismiss_verify_task, dismiss_simulate_task, dismiss_fuzz_task) previews the
           terminal task and diagnostics that would be lost. It never removes an active or completed task,
           so cancel active work first and use the matching run/trace deletion tool for saved history.
@@ -1493,12 +1590,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         - Template: list_templates, add_template, delete_template, reset_default_templates
         - Verification sync: verify_model
         - Verification async: verify_model_async, verify_task_status, cancel_verify_task, dismiss_verify_task
-        - Verification runs, traces, and formal fix: list_traces, get_trace, delete_trace, delete_verification_run, fix_violation, apply_fix
+        - Cross-run task discovery: list_async_tasks
+        - Verification runs, traces, and formal fix: list_verification_runs, get_verification_run, list_traces, get_trace, delete_trace, delete_verification_run, fix_violation, apply_fix
         - Simulation sync: simulate_model
         - Simulation async: simulate_model_async, simulate_task_status, cancel_simulate_task, dismiss_simulate_task
         - Simulation traces: list_simulation_traces, get_simulation_trace, delete_simulation_trace
         - Counterexample search (bounded fuzz): fuzz_model_async, fuzz_task_status, cancel_fuzz_task, dismiss_fuzz_task, list_fuzz_runs, get_fuzz_run, get_fuzz_finding, delete_fuzz_run
-        - Board: board_overview
+        - Board: board_overview, manage_board_history, clear_board
         edit_device renames, re-configures runtime, or moves/resizes one existing device (reversible, one aspect per call). manage_rule action=reorder sets the full rule execution order. Counterexample-search findings are heuristic candidate evidence, not formal traces: never route a fuzz finding into fix_violation or apply_fix, and never describe budget exhaustion as a proof that a specification holds.
         """;
 
@@ -1588,8 +1686,35 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 && destructivePending != null) {
             var payload = objectMapper.createObjectNode();
             payload.put("toolName", destructivePending.toolName());
-            payload.put("targetKey", destructivePending.targetKey());
             payload.put("impactToken", destructivePending.impactToken());
+            if ("clear_board".equals(destructivePending.toolName())) {
+                return LlmMessage.system("""
+                        Server-authoritative confirmation context:
+                        - The latest user message confirms the exact pending full-Board clear preview.
+                        - Call clear_board exactly once with confirmed=true and impactToken copied exactly.
+                        - Do not add a target field, request another preview, or call a read tool first. clear_board
+                          will atomically re-check the complete Board and edit-history impact before persistence.
+                        - After a usable result, continue only the remaining work still consistent with the latest message.
+                        Pending action: %s
+                        %s
+                        Task context: %s
+                        """.formatted(payload, userAuthority, taskContext));
+            }
+            if ("manage_board_history".equals(destructivePending.toolName())) {
+                return LlmMessage.system("""
+                        Server-authoritative confirmation context:
+                        - The latest user message confirms the exact pending Board edit-history clear preview.
+                        - Call manage_board_history exactly once with action=clear, confirmed=true, and
+                          impactToken copied exactly.
+                        - Do not add a target field, request another preview, or call a read tool first. The tool
+                          will atomically re-check the undo/redo entries and will not change current Board data.
+                        - After a usable result, continue only the remaining work still consistent with the latest message.
+                        Pending action: %s
+                        %s
+                        Task context: %s
+                        """.formatted(payload, userAuthority, taskContext));
+            }
+            payload.put("targetKey", destructivePending.targetKey());
             if ("apply_fix".equals(destructivePending.toolName())) {
                 return LlmMessage.system("""
                         Server-authoritative confirmation context:
@@ -1665,7 +1790,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             boolean defaultTemplateReset = "reset_default_templates".equals(destructivePending.toolName());
             context.put("pendingKind", defaultTemplateReset ? "defaultTemplateReset" : "destructive");
             context.put("pendingTool", destructivePending.toolName());
-            if (!defaultTemplateReset) {
+            if (!defaultTemplateReset
+                    && !Set.of("clear_board", "manage_board_history")
+                            .contains(destructivePending.toolName())) {
                 context.put("pendingTarget", destructivePending.targetKey());
             }
         }
@@ -1873,6 +2000,25 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                            String executionId,
                                            BooleanSupplier shouldStop,
                                            BooleanSupplier forceStopCheck) {
+        return executeToolLoop(
+                userId, sessionId, messages, tools, commandSet, emitter, isDisconnect,
+                preferChinese, executionTrace, executionId, shouldStop, forceStopCheck,
+                new LinkedHashSet<>());
+    }
+
+    private ToolLoopResult executeToolLoop(Long userId,
+                                           String sessionId,
+                                           List<LlmMessage> messages,
+                                           List<LlmToolSpec> tools,
+                                           Set<StreamResponseDto.CommandDto> commandSet,
+                                           SseEmitter emitter,
+                                           AtomicBoolean isDisconnect,
+                                           boolean preferChinese,
+                                           List<StreamResponseDto.ProgressDto> executionTrace,
+                                           String executionId,
+                                           BooleanSupplier shouldStop,
+                                           BooleanSupplier forceStopCheck,
+                                           Set<String> confirmedMutationTools) {
         boolean hadToolCalls = false;
         int successfulToolCalls = 0;
         int failedToolCalls = 0;
@@ -1885,7 +2031,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
         for (int round = 0; round < chatExecutionConfig.getMaxToolRounds(); round++) {
             if (forceStopCheck.getAsBoolean()) {
-                log.info("Client disconnected, stopping tool loop");
+                log.info("Chat execution stop was requested, stopping tool loop");
                 return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
@@ -1957,7 +2103,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             for (int toolCallIndex = 0; toolCallIndex < toolCalls.size(); toolCallIndex++) {
                 LlmToolCall toolCall = toolCalls.get(toolCallIndex);
                 if (forceStopCheck.getAsBoolean()) {
-                    log.info("Client disconnected, stopping remaining tool calls");
+                    log.info("Chat execution stop was requested, stopping remaining tool calls");
                     return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                             failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                             confirmationPending);
@@ -1971,6 +2117,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
                 String toolResult;
                 ToolExecutionOutcome executionOutcome;
+                boolean resultMayHaveCommitted = false;
                 boolean stoppedAfterTool = false;
                 if (functionName.isBlank()) {
                     toolResult = jsonError("Invalid tool call: missing function name.", "VALIDATION_ERROR", 400);
@@ -1989,13 +2136,23 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     toolResult = aiToolManager.execute(functionName, argsJson);
                     stoppedAfterTool = forceStopCheck.getAsBoolean();
                     executionOutcome = classifyToolExecution(functionName, toolResult);
+                    resultMayHaveCommitted = executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE
+                            && mutationMayHaveCommitted(toolResult);
                     if ("recommend_scenario".equals(functionName)) {
                         partialObjectiveResult = executionOutcome == ToolExecutionOutcome.PARTIAL;
                     }
-                    if (executionOutcome == ToolExecutionOutcome.USABLE
-                            || (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE
-                                && mutationMayHaveCommitted(toolResult))) {
-                        collectRefreshCommand(functionName, commandSet);
+                    if (resultMayHaveCommitted) {
+                        collectRefreshCommands(
+                                toolProgressPresenter.potentialRefreshTargets(functionName),
+                                "OUTCOME_RECONCILED", null, commandSet);
+                    } else if (executionOutcome == ToolExecutionOutcome.USABLE) {
+                        toolProgressPresenter.actionReceipt(functionName, toolResult, preferChinese)
+                                .ifPresent(receipt -> {
+                                    confirmedMutationTools.add(functionName);
+                                    collectRefreshCommands(
+                                            receipt.refreshTargets(), receipt.assistantAction(),
+                                            receipt.summary(), commandSet);
+                                });
                     }
                 }
 
@@ -2007,7 +2164,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     successfulToolCalls++;
                 } else if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
                     resultUnavailableToolCalls++;
-                    if (mutationMayHaveCommitted(toolResult)) {
+                    if (resultMayHaveCommitted) {
                         uncertainMutationCalls++;
                     }
                 } else {
@@ -2057,7 +2214,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                             failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls, true,
                             functionName, toolResult);
                 }
-                if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
+                if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE
+                        && resultMayHaveCommitted) {
                     appendSkippedToolResults(userId, sessionId, executionId, messages, toolCalls,
                             toolCallIndex + 1,
                             "PRIOR_RESULT_UNAVAILABLE",
@@ -2168,7 +2326,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             AtomicBoolean isDisconnect,
             BooleanSupplier shouldStop,
             boolean preferChinese,
-            List<StreamResponseDto.ProgressDto> executionTrace) {
+            List<StreamResponseDto.ProgressDto> executionTrace,
+            Set<String> confirmedMutationTools) {
         StringBuilder pending = new StringBuilder();
         AtomicReference<ReplyGuardOutcome> guardOutcome =
                 new AtomicReference<>(ReplyGuardOutcome.NONE);
@@ -2184,12 +2343,12 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 String segment = pending.substring(0, boundary + 1);
                 pending.delete(0, boundary + 1);
                 sendGuardedReplySegment(segment, finalAnswer, emitter, isDisconnect, guardOutcome,
-                        preferChinese, executionTrace);
+                        preferChinese, executionTrace, confirmedMutationTools);
             }
         }, replyShouldStop);
         if (!replyShouldStop.getAsBoolean() && !pending.isEmpty()) {
             sendGuardedReplySegment(pending.toString(), finalAnswer, emitter, isDisconnect, guardOutcome,
-                    preferChinese, executionTrace);
+                    preferChinese, executionTrace, confirmedMutationTools);
         }
         return guardOutcome.get();
     }
@@ -2209,8 +2368,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                          AtomicBoolean isDisconnect,
                                          AtomicReference<ReplyGuardOutcome> guardOutcome,
                                          boolean preferChinese,
-                                         List<StreamResponseDto.ProgressDto> executionTrace) {
-        GuardedClaimReplacement replacement = containsUnsupportedPlatformClaim(segment)
+                                         List<StreamResponseDto.ProgressDto> executionTrace,
+                                         Set<String> confirmedMutationTools) {
+        GuardedClaimReplacement replacement = containsUnsupportedPlatformClaim(
+                segment, executionTrace, confirmedMutationTools)
                 ? authoritativeClaimReplacement(preferChinese, executionTrace)
                 : new GuardedClaimReplacement(segment, ReplyGuardOutcome.NONE);
         String visible = replacement.content();
@@ -2219,7 +2380,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             guardOutcome.updateAndGet(current -> mergeReplyGuardOutcome(
                     current, replacement.outcome()));
         } else {
-            log.info("SSE connection interrupted, stopping AI response");
+            log.debug("SSE transport could not receive the response segment; execution continues");
             isDisconnect.set(true);
         }
     }
@@ -2243,6 +2404,33 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         if (hasUnsupportedClaim(checkableReply, UNSUPPORTED_TOOL_EVIDENCE_CLAIM, false, false)) return true;
         if (hasUnsupportedClaim(checkableReply, UNSUPPORTED_PLATFORM_READ_CLAIM, false, true)) return true;
         return hasUnsupportedClaim(checkableReply, UNSUPPORTED_PLATFORM_MUTATION_CLAIM, true, false);
+    }
+
+    private boolean containsUnsupportedPlatformClaim(
+            String reply,
+            List<StreamResponseDto.ProgressDto> executionTrace,
+            Set<String> confirmedMutationTools) {
+        if (reply == null || reply.isBlank()) return false;
+        String checkableReply = maskLiteralContent(reply);
+        if (hasUnsupportedClaim(checkableReply, UNSUPPORTED_TOOL_EVIDENCE_CLAIM, false, false)
+                && !hasUsableToolEvidence(executionTrace, null)) {
+            return true;
+        }
+        if (hasUnsupportedClaim(checkableReply, UNSUPPORTED_PLATFORM_READ_CLAIM, false, true)
+                && !hasUsableToolEvidence(executionTrace, Set.of("board_overview"))) {
+            return true;
+        }
+        return hasUnsupportedClaim(checkableReply, UNSUPPORTED_PLATFORM_MUTATION_CLAIM, true, false)
+                && (confirmedMutationTools == null || confirmedMutationTools.stream()
+                .noneMatch(AiToolResultContract.mutationCapableTools()::contains));
+    }
+
+    private boolean hasUsableToolEvidence(
+            List<StreamResponseDto.ProgressDto> executionTrace, Set<String> allowedTools) {
+        return executionTrace != null && executionTrace.stream().anyMatch(progress -> progress != null
+                && "TOOL_RESULT".equals(progress.getStage())
+                && "USABLE".equals(progress.getOutcome())
+                && (allowedTools == null || allowedTools.contains(progress.getToolName())));
     }
 
     private static String maskLiteralContent(String text) {
@@ -2518,34 +2706,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     private boolean hasValidToolResultControlFields(JsonNode root) {
-        if (!isOptionalToolResultText(root, "error")
-                || !isOptionalToolResultText(root, "errorCode")
-                || !isOptionalToolResultBoolean(root, "requiresUserConfirmation")
-                || !isOptionalToolResultBoolean(root, "resultAvailable")
-                || !isOptionalToolResultBoolean(root, "mutationMayHaveCommitted")) {
-            return false;
-        }
-        if (root.has("status") && (!root.get("status").isIntegralNumber()
-                || !root.get("status").canConvertToInt()
-                || root.get("status").intValue() < 100
-                || root.get("status").intValue() > 599)) {
-            return false;
-        }
-        if (root.has("resultStatus") && (!root.get("resultStatus").isTextual()
-                || !"RESULT_UNAVAILABLE".equals(root.get("resultStatus").textValue()))) {
-            return false;
-        }
-        return !root.has("objectiveStatus")
-                || (root.get("objectiveStatus").isTextual()
-                    && Set.of("COMPLETE", "PARTIAL").contains(root.get("objectiveStatus").textValue()));
-    }
-
-    private boolean isOptionalToolResultText(JsonNode root, String field) {
-        return !root.has(field) || root.get(field).isTextual();
-    }
-
-    private boolean isOptionalToolResultBoolean(JsonNode root, String field) {
-        return !root.has(field) || root.get(field).isBoolean();
+        return AiToolResultContract.hasValidControlFields(root);
     }
 
     /**
@@ -2576,7 +2737,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     private boolean sendFrontendCommands(SseEmitter emitter, Set<StreamResponseDto.CommandDto> commandSet) {
-        for (StreamResponseDto.CommandDto cmd : commandSet) {
+        List<StreamResponseDto.CommandDto> orderedCommands = commandSet.stream()
+                .sorted(java.util.Comparator.comparing(this::carriesAssistantAction))
+                .toList();
+        for (StreamResponseDto.CommandDto cmd : orderedCommands) {
             try {
                 StreamResponseDto packet = StreamResponseDto.command(cmd);
                 emitter.send(SseEmitter.event().data(packet, MediaType.APPLICATION_JSON));
@@ -2587,6 +2751,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
         }
         return true;
+    }
+
+    private boolean carriesAssistantAction(StreamResponseDto.CommandDto command) {
+        return command != null && command.getPayload() != null
+                && command.getPayload().containsKey("assistantAction");
     }
 
     private boolean sendSseTerminal(
@@ -2653,64 +2822,40 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             return true;
         } catch (IOException | IllegalStateException e) {
             log.debug("Failed to send chat progress stage {}: {}", stage, e.toString());
-            return false;
+            // SSE is only the live view. The session execution and its terminal audit remain
+            // authoritative, so a detached browser must not cancel background work.
+            return true;
         }
     }
 
 
-    private void collectRefreshCommand(String functionName, Set<StreamResponseDto.CommandDto> commandSet) {
-        switch (functionName) {
-            case "add_device" -> {
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "device_list")));
-                commandSet.add(new StreamResponseDto.CommandDto(
-                        "REFRESH_DATA", Map.of("target", "environment_list")));
-            }
-            case "delete_device" -> {
-                commandSet.add(new StreamResponseDto.CommandDto(
-                        "REFRESH_DATA", Map.of("target", "device_list")));
-                commandSet.add(new StreamResponseDto.CommandDto(
-                        "REFRESH_DATA", Map.of("target", "environment_list")));
-                commandSet.add(new StreamResponseDto.CommandDto(
-                        "REFRESH_DATA", Map.of("target", "rule_list")));
-                commandSet.add(new StreamResponseDto.CommandDto(
-                        "REFRESH_DATA", Map.of("target", "spec_list")));
-            }
-            case "edit_device" -> {
-                commandSet.add(new StreamResponseDto.CommandDto(
-                        "REFRESH_DATA", Map.of("target", "device_list")));
-                // Renaming a device also refreshes persisted specification label snapshots.
-                commandSet.add(new StreamResponseDto.CommandDto(
-                        "REFRESH_DATA", Map.of("target", "spec_list")));
-            }
-            case "manage_rule", "apply_fix" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "rule_list")));
-            case "manage_spec" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "spec_list")));
-            case "manage_environment" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "environment_list")));
-            case "apply_scenario" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "board_state")));
-            case "reset_default_templates" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "board_state")));
-            case "add_template", "delete_template" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "template_list")));
-            case "verify_model", "verify_model_async", "simulate_model_async",
-                    "fuzz_model_async", "cancel_verify_task", "cancel_simulate_task",
-                    "cancel_fuzz_task", "delete_trace", "delete_simulation_trace",
-                    "delete_verification_run", "delete_fuzz_run", "dismiss_verify_task",
-                    "dismiss_simulate_task", "dismiss_fuzz_task" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "run_history")));
-            default -> {
-            }
+    private void collectRefreshCommands(
+            List<String> targets,
+            String assistantAction,
+            String assistantSummary,
+            Set<StreamResponseDto.CommandDto> commandSet) {
+        for (int index = 0; index < targets.size(); index++) {
+            commandSet.add(index == 0
+                    ? refreshCommand(targets.get(index), assistantAction, assistantSummary)
+                    : refreshCommand(targets.get(index)));
         }
+    }
+
+    private StreamResponseDto.CommandDto refreshCommand(String target) {
+        return new StreamResponseDto.CommandDto("REFRESH_DATA", Map.of("target", target));
+    }
+
+    private StreamResponseDto.CommandDto refreshCommand(
+            String target, String assistantAction, String assistantSummary) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("target", target);
+        if (assistantAction != null && !assistantAction.isBlank()) {
+            payload.put("assistantAction", assistantAction);
+        }
+        if (assistantSummary != null && !assistantSummary.isBlank()) {
+            payload.put("assistantSummary", assistantSummary);
+        }
+        return new StreamResponseDto.CommandDto("REFRESH_DATA", payload);
     }
 
     private String toolExecutionNotice(ToolLoopResult result, boolean preferChinese) {
@@ -3379,7 +3524,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 return true;
             }
         } catch (IOException | IllegalStateException e) {
-            return false;
+            log.debug("Failed to send chat reply chunk; execution will continue: {}", e.toString());
+            return true;
         }
         return true;
     }
@@ -3404,7 +3550,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     .data(StreamResponseDto.error(message), MediaType.APPLICATION_JSON));
             return true;
         } catch (IOException | IllegalStateException e) {
-            return false;
+            log.debug("Failed to send chat error frame; terminal state remains persisted: {}", e.toString());
+            return true;
         }
     }
 
@@ -3461,27 +3608,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private boolean prefersChinese(String content) {
         return content != null && content.codePoints().anyMatch(codePoint ->
                 Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
-    }
-
-    private boolean isClientDisconnect(Throwable e) {
-        Throwable current = e;
-        while (current != null) {
-            String className = current.getClass().getName();
-            String message = current.getMessage();
-            if (className.contains("ClientAbortException")
-                    || className.contains("AsyncRequestNotUsableException")
-                    || containsIgnoreCase(message, "broken pipe")
-                    || containsIgnoreCase(message, "connection reset")
-                    || containsIgnoreCase(message, "response not usable")) {
-                return true;
-            }
-            current = current.getCause();
-        }
-        return false;
-    }
-
-    private boolean containsIgnoreCase(String value, String needle) {
-        return value != null && value.toLowerCase(java.util.Locale.ROOT).contains(needle);
     }
 
     private enum ToolExecutionOutcome {

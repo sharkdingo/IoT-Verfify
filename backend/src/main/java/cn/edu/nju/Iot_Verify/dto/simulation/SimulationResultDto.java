@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelPlaybackSceneDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -37,6 +38,9 @@ public class SimulationResultDto {
 
     /** Immutable submitted-model scope from which this one possible trajectory was generated. */
     private ModelRunSnapshotDto modelSnapshot;
+
+    /** Exact device layout and rules shown while replaying this trajectory. */
+    private ModelPlaybackSceneDto playbackScene;
 
     /** NOT_REQUESTED for preview-only simulation; saved-trace responses use SimulationTraceDto. */
     private RunPersistenceDto historyPersistence;

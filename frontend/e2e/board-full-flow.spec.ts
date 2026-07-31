@@ -174,7 +174,7 @@ const waitForTemplateOption = async (page: Page, templateName: string) => {
   }, templateName, { timeout: 30_000 })
 }
 
-const openControlSection = async (page: Page, section: 'devices' | 'rules' | 'specs') => {
+const openControlSection = async (page: Page, section: 'devices' | 'templates' | 'rules' | 'specs') => {
   const tab = page.getByTestId(`control-tab-${section}`)
   const panel = page.getByTestId(`control-section-${section}`)
 
@@ -1944,11 +1944,27 @@ test.describe('board full-stack NuSMV user flow', () => {
     await saveEmptyBoard(request, auth)
     await openWorkspace(page, auth)
 
+    await openControlSection(page, 'templates')
+    const cameraTemplate = page.locator('.template-card[title="Camera"]').first()
+    await expect(cameraTemplate).toBeVisible()
+    await cameraTemplate.dragTo(page.locator('#canvas-empty-state-title'))
+    await expect(page.getByTestId('template-instance-dialog')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('template-instance-dialog')).toBeHidden()
+    await expect(page.getByTestId('empty-state-import-scene')).toBeVisible()
+
     const scenePath = path.resolve(process.cwd(), '..', 'docs', 'examples', 'multi-violation-repair-scene.json')
     await page.getByTestId('scene-import-file').setInputFiles(scenePath)
     await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
       .getByRole('button', { name: 'Replace in full' })
       .click()
+
+    await expect(page.locator('.el-message').filter({
+      hasText: 'Scene atomically replaced in full'
+    })).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('.el-message').filter({
+      hasText: 'The import response was not confirmed'
+    })).toHaveCount(0)
 
     await waitForApi<any[]>(request, auth, '/api/board/nodes', nodes => nodes.length === 4)
     await waitForApi<any[]>(request, auth, '/api/board/environment', values =>

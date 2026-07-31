@@ -37,7 +37,9 @@ export const notifyBlocked = (message: string) => {
 }
 
 export const notifyError = (message: string) => {
-  ElMessage.error({ message, duration: DURATION.long })
+  // Background reconciliation and a user-triggered refresh can report the same failure together.
+  // Keep the repeat count without stacking identical errors over the working surface.
+  ElMessage.error({ message, duration: DURATION.long, grouping: true })
 }
 
 /**

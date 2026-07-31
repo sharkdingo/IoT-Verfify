@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-25. Source: `controller/ChatController.java`,
+Verified against code on 2026-08-01. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -16,15 +16,42 @@ Verified against code on 2026-07-25. Source: `controller/ChatController.java`,
 | GET | `/api/chat/sessions` | → `ChatSessionResponseDto[]` | List the user's sessions |
 | POST | `/api/chat/sessions` | → `ChatSessionResponseDto` | Create a session (no body) |
 | GET | `/api/chat/sessions/{sessionId}/messages?beforeId=&limit=50` | → `ChatHistoryPageDto` | Bounded message history, newest page first |
+| POST | `/api/chat/sessions/{sessionId}/seen` | `{ terminalMessageId: Long }` → `null` | Advance the session's seen cursor to the exact terminal assistant message rendered by the client |
 | GET | `/api/chat/sessions/{sessionId}/activity` | → `ChatSessionActivityDto { sessionId, active }` | Authoritative cross-instance check for whether a request is still active for the session |
 | GET | `/api/chat/sessions/{sessionId}/confirmation` | → `ChatPendingConfirmationDto { sessionId, kinds }` | Server-authoritative protected-action kinds waiting for an explicit UI decision |
 | POST | `/api/chat/sessions/{sessionId}/stop` | `{ turnId: String \| null }` → `null` | Stop the named local turn, or the reattached active response when its turn id is unavailable; already-started writes are not rolled back |
 | DELETE | `/api/chat/sessions/{sessionId}` | → `null` | Delete a session |
 
 `ChatSessionResponseDto`: `{ id: String, userId: Long, title: String | null, createdAt,
-updatedAt, active: boolean }`. `active` is computed from the same renewable database
+updatedAt, active: boolean, latestTerminalMessageId: Long | null,
+latestExecutionStatus: ChatExecutionStatus | null,
+hasUnreadUpdate: boolean }`. `active` is computed from the same renewable database
 lease as the dedicated activity endpoint, allowing a new browser connection to discover
 an already-running session from the list response.
+`latestTerminalMessageId`, `latestExecutionStatus`, and `hasUnreadUpdate` are projections of the
+latest persisted terminal assistant row, not a second completion record. The session stores only the monotonic
+`lastSeenTerminalMessageId` cursor. `hasUnreadUpdate` is true when the latest terminal id is newer
+than that cursor. A session with no terminal assistant row has `latestExecutionStatus=null` and
+`latestTerminalMessageId=null` and `hasUnreadUpdate=false`.
+The seen endpoint validates that `terminalMessageId` is a terminal assistant row in the owned
+session, then advances the cursor without allowing it to move backwards. Clients acknowledge the
+exact id loaded in history; they must not acknowledge "whatever is latest". This leaves a newer
+terminal result unread when another tab finishes it after the first tab loaded history. Session
+list and history GETs have no read side effect, and a hidden panel or background document must not
+call the seen endpoint.
+Clients may use the list's `active` projection before mounting a conversation view to restore a
+global running-session indicator and shared-Board safety guards after a reload or in another tab.
+Reading `active` does not attach to, cancel, or otherwise change the running execution.
+Before the chat panel is first mounted, `App` owns the periodic session projection. After
+`ChatView` mounts, it becomes the sole owner even while hidden: it polls the complete list every
+five seconds while idle and every second while any session is active. This single-writer handoff
+prevents two reconcilers from clearing each other's pending state while still discovering work
+started in another tab. Both owners retain each session's active projection and latest terminal
+message id. A newly observed terminal id, or an active session becoming inactive without one,
+triggers a full Board and run-history reconciliation even if the entire turn completed between
+polls or no tab retained the original SSE stream. A failed reconciliation remains a distinct
+visible and blocking client state and is retried; it is never inferred as successful from the
+terminal or unread projection.
 `title=null` means the session has no user-derived title yet; clients render their own
 localized "new conversation" label. Persistence placeholders such as `New Chat` are not
 part of the user-facing contract and are normalized to `null` when reading older rows.
@@ -54,7 +81,7 @@ internal `tool` rows are rejected. It treats this as an untrusted boundary: `rol
 history cursors, execution-status values, and every nested progress stage/outcome must have
 the documented shape. A malformed page is rejected and remains unavailable rather than being
 rendered as a completed or verified turn.
-Once a worker owns its admitted turn, normal, provider-failure, and client-disconnect paths
+Once a worker owns its admitted turn, normal, provider-failure, and detached-transport paths
 attempt to save one visible terminal assistant record. Admission cleanup, pre-execution
 ownership loss, or a terminal write failure can honestly leave no assistant row. A terminal
 write, including execution-trace serialization, is attempted at most once. If it fails, the
@@ -85,12 +112,18 @@ When the model returns a conversational response without executing a platform to
 server prefixes it with an authoritative notice that no current Board data was read and no
 platform operation was confirmed, even if model prose claims otherwise.
 `AWAITING_CONFIRMATION` means a no-write preview is waiting for the user's decision.
-`STOPPED` means the user explicitly requested the response to stop, while `DISCONNECTED`
-means transport loss ended it. Neither status implies rollback. A missing terminal status
+`STOPPED` means the user explicitly requested the response to stop. `DISCONNECTED` is reserved
+for a worker that loses durable execution ownership (for example lease or account cleanup),
+not for a browser that leaves the SSE stream. Neither status implies rollback. A missing terminal status
 remains unconfirmed rather than being inferred from tool records or prose. Raw tool JSON,
 internal identifiers, provider exceptions, and private model reasoning remain hidden.
 
-Only one stream request may be active for a session across all backend instances.
+Only one stream request may be active for a session across all backend instances. A user may
+have up to `CHAT_MAX_CONCURRENT_SESSIONS_PER_USER` admitted chat sessions running at the same
+time (four by default); this is a resource guard, not a session-switch cancellation rule. Starting
+another turn after the configured limit is reached returns `429` with the
+standard `USER_CHAT_OPERATION_BUSY` envelope, while switching conversations or detaching the
+SSE transport leaves the admitted session running.
 A concurrent request or deletion returns `409` with
 `data={ reasonCode: "CHAT_SESSION_BUSY", sessionId }`; it does not interrupt the first
 request. Registration happens before the worker is queued, so the short enqueue window
@@ -136,7 +169,7 @@ returns a `2xx` SSE response containing a localized structured `error` frame, cl
 without a terminal acknowledgement, and requires the client to wait for the session to become
 idle and reconcile history and Board state before retrying.
 
-Across sessions, each user may run at most two assistant streams at once. Redis
+Across sessions, each user may run up to the configured assistant-stream limit. Redis
 coordinates this admission across backend instances; if Redis is unavailable, the same
 limit is enforced within each process. A token-checked heartbeat renews every live Redis
 admission lease, so a healthy stream can run beyond its initial two-hour safety TTL without
@@ -151,7 +184,15 @@ beside a replacement.
 
 The admission response includes `data.reasonCode=USER_CHAT_OPERATION_BUSY`, operation
 kind, coordination scope, and limit. The frontend renders this as a wait-for-other-session
-message instead of exposing the backend's English diagnostic.
+message that names the actual configured limit instead of exposing the backend's English diagnostic.
+
+Closing the floating panel, switching conversations, closing a tab, or exiting the browser does
+not request Stop and does not transfer execution ownership to the SSE connection. Browser teardown
+ends the client transport; the backend treats emitter write failure as detachment, continues the
+admitted worker under its database lease, and attempts the same terminal persistence as an attached
+stream. On the next authenticated application load, the session list restores both active rows and
+persisted unread terminal results. Explicit Stop, lease ownership loss, and account deletion remain
+the cancellation boundaries.
 
 Permanent account deletion is stronger than ordinary per-session activity handling. The backend
 marks every persisted execution lease for that user as stopped and completes locally bound
@@ -189,13 +230,13 @@ chunks.
 If planning chooses no tool, the streamed and persisted answer begins with a deterministic
 server notice that the turn did not confirm current Board data or a completed platform
 operation. For every turn, the backend buffers each complete sentence before exposing it.
-Explicit tool-result or current-platform completion/mutation claims are replaced with the
-exact successful `TOOL_RESULT` progress details recorded by the server, or with a deterministic
-warning when no such result exists. With successful evidence, only the unsupported segment is
-replaced and later safe provider prose continues normally. Without successful evidence, the
-warning is emitted and all later provider prose is neither streamed nor persisted; earlier safe
-segments remain visible. A claim hidden without evidence downgrades an otherwise `COMPLETED`
-turn to `PARTIAL`, while an evidence-backed replacement retains the tool-derived status. This
+Explicit tool-result or current-platform completion/mutation claims are checked against
+the current turn's usable tool evidence. When the relevant read or mutation capability has
+an authoritative usable result, the model's natural-language summary is preserved; the
+deterministic `TOOL_RESULT` progress and action receipt remain the execution record. When no
+such evidence exists, the unsupported segment is replaced with a deterministic warning and
+all later provider prose is neither streamed nor persisted; earlier safe segments remain
+visible. A claim hidden without evidence downgrades an otherwise `COMPLETED` turn to `PARTIAL`. This
 deliberately narrow check does not classify API documentation, historical descriptions, or
 sample/draft content as a platform operation. Closed ASCII/typographic quoted spans, inline
 backtick code, and backtick or tilde code fences are preserved, so explanations and translations
@@ -274,8 +315,10 @@ If a model response contains several parallel tool calls and one call reaches th
 boundary, later calls in that same response are not executed. The backend records an
 explicit `skipped=true` tool result for each one so the provider conversation remains
 protocol-complete and the final visible explanation can still stream. The same rule
-applies after `RESULT_UNAVAILABLE`; skipped calls are not counted as successful or
-failed executions.
+applies after `RESULT_UNAVAILABLE` when `mutationMayHaveCommitted=true`; skipped calls are
+not counted as successful or failed executions. A read-only unavailable result is recorded
+but does not skip independent later calls in the response, because their read assumptions
+cannot have been invalidated by that failed serialization.
 
 History reconstruction also validates that every persisted assistant tool-call id has
 exactly one matching tool-result id before sending that block back to a provider.
@@ -297,7 +340,8 @@ user-authored objectives/updates and sanitized tool output, not model reasoning,
 successful confirmation can be followed by the remaining requested tools even when older
 chat detail fell outside the history window.
 
-Protected destructive previews (deletions and bundled-default reset) additionally return
+Protected mutation previews (deletions, formal-fix application, Board/history clear, and
+bundled-default reset) additionally return
 an opaque `impactToken`. The backend keeps one pending protected action per authenticated
 user and chat session, bound to the tool, target, and canonical digest of the visible
 preview. Confirmation is target-aware rather than position-aware: ordinary questions or
@@ -310,8 +354,10 @@ stream request's structured `confirmation` field. The accepted kinds are `DESTRU
 `DEFAULT_TEMPLATE_RESET`, and `SCENE_REPLACEMENT`. The backend requires that exact kind to
 still be pending for the authenticated session; an invented, stale, or mismatched command
 authorizes no write. The client rejects a confirmation response with a mismatched session or
-any value outside this enum instead of rendering unknown authority. Natural-language
-classification remains available only for
+any value outside this enum instead of rendering unknown authority. `DESTRUCTIVE` is the
+existing wire-level group for an ordinary protected preview; the UI therefore labels it as
+the previewed protected action rather than claiming every member is a deletion.
+Natural-language classification remains available only for
 non-destructive choice prompts and cannot create or consume protected authority.
 The token is valid for 15 minutes and is consumed once
 before mutation; a second tool call in the same model response cannot reuse it. Wrong,
@@ -321,14 +367,19 @@ cancellation clears the relevant pending action; session/account deletion and ex
 also clear it. Pending confirmations are stored in the shared database and consumed with
 an optimistic compare-and-delete, so restart or instance switching preserves both the
 binding and single-use guarantee. This binding applies uniformly to device, template, rule,
-specification, verification-trace, and simulation-trace deletion.
+specification, verification-trace, simulation-trace, task/run deletion, formal-fix
+application, and Board/edit-history clear.
 
 `RESULT_UNAVAILABLE` is distinct from both success and failure. It means response details
-could not be serialized after the tool reached its response stage. The loop stops so it
-cannot automatically repeat a possibly committed mutation. If
+could not be safely serialized, bounded, persisted, or returned after the tool reached its
+response stage, or that a mutation-capable tool threw or returned an unusable structural result
+after execution started and its write outcome therefore cannot be proved. If
 `mutationMayHaveCommitted=true`, affected data is refreshed, the result is counted as
-unconfirmed rather than usable, and the user is told to inspect current state before
-retrying. With `mutationMayHaveCommitted=false`, no mutation refresh is sent.
+unconfirmed rather than usable, the loop stops so it cannot act on stale assumptions, and
+the user is told to inspect current state before retrying. With
+`mutationMayHaveCommitted=false`, no mutation refresh is sent; independent later calls and
+planning may continue, while the unavailable step remains explicit and prevents the turn
+from being presented as completely successful.
 
 **Request body**: `ChatRequestDto`
 
@@ -345,9 +396,12 @@ is rejected with `503` (`ServiceUnavailableException`) only after its admitted r
 have been removed. Provider and processing failures after dispatch are reported as an SSE
 frame with an `error` field. The backend first persists the visible `FAILED` or
 `PARTIAL` terminal assistant row, sends the error frame, then sends its terminal
-acknowledgement as the final data frame. A detected disconnect persists
-`DISCONNECTED`; the client reloads authoritative history after the backend reports the
-session idle, so that record remains visible even when its SSE frame could not arrive.
+acknowledgement as the final data frame. A browser-side transport failure does not cancel the
+worker: it still persists the provider/processing outcome as `FAILED` or `PARTIAL` and the
+client discovers it through the active-session poll and authoritative history. A durable
+ownership loss may persist `DISCONNECTED`; the client reloads authoritative history after the
+backend reports the session idle, so that record remains visible even when its SSE frame could
+not arrive.
 If the terminal row itself cannot be saved, the `error` frame explicitly says history is
 incomplete and asks the client to reconcile current history and Board state; no second
 terminal insert is attempted and no terminal acknowledgement is sent. Admission rollback
@@ -365,7 +419,7 @@ Each SSE `data:` frame carries a JSON-serialized `StreamResponseDto`:
 | :--- | :--- | :--- |
 | `content` | `String` | A chunk of assistant text (streamed incrementally) |
 | `error` | `String` | A non-blank server error message. It is structurally distinct from model-authored `content` |
-| `command` | `CommandDto` | Optional front-end refresh command: `{ type: "REFRESH_DATA", payload: { target } }`, where `target` is `device_list`, `environment_list`, `rule_list`, `spec_list`, `template_list`, `run_history`, or `board_state` |
+| `command` | `CommandDto` | Optional front-end refresh command: `{ type: "REFRESH_DATA", payload: { target, assistantAction?, assistantSummary? } }`, where `target` is `device_list`, `environment_list`, `rule_list`, `spec_list`, `template_list`, `run_history`, or `board_state`. `assistantAction` is present only for a confirmed meaningful assistant action or an uncertain outcome that must be reconciled. A non-blank `assistantSummary` of at most 240 characters carries the backend's exact localized action summary when one is available. |
 | `progress` | `ProgressDto` | Optional live status `{ stage, toolName?, round?, outcome?, successfulSteps?, failedSteps?, unconfirmedSteps?, detail? }`; `detail` is a bounded task-resumption summary, model-authored reasoning summary, or operation-aware tool-result summary |
 | `terminal` | `TerminalDto` | Persistence acknowledgement `{ turnId, executionStatus }` for the final assistant row. It must match the request `turnId`, use a documented execution status, occur exactly once, and be the final data frame |
 
@@ -386,11 +440,27 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
 
 - Text chunks arrive as `StreamResponseDto` objects with a `content` field.
 - Front-end refresh commands arrive as separate frames carrying `command`. They are collected
-  from usable mutating tools and from
+  from usable tool results that carry the tool's authoritative changed/accepted marker and from
   result-unavailable tools that explicitly say a mutation may already have committed,
   then sent before the final streamed assistant text. If a later planning or reply step
   throws, pending refresh commands are sent before the SSE error when the connection is
-  still usable.
+  still usable. The persisted partial message records whether that delivery actually completed;
+  a failed or partial command send tells the user to reload and inspect current state instead of
+  claiming that the client was refreshed.
+- Refresh commands without an action receipt are sent first. Receipt-bearing commands are
+  sent last, so multi-collection effects such as device/environment reconciliation complete
+  before the client announces the assistant action. A successfully delivered command is
+  settled once: a later final-response failure records the completed action and refresh in the
+  persisted partial assistant message without emitting the same command again.
+- `assistantAction` is one of `DEVICE_ADDED`, `DEVICE_DELETED`, `DEVICE_UPDATED`,
+  `RULES_UPDATED`, `REPAIR_APPLIED`, `SPECIFICATIONS_UPDATED`, `ENVIRONMENT_UPDATED`,
+  `SCENE_APPLIED`, `DEFAULT_TEMPLATES_RESET`, `TEMPLATES_UPDATED`,
+  `FORMAL_VERIFICATION_RUN`, `VERIFICATION_TASK_STARTED`, `SIMULATION_TASK_STARTED`,
+  `EXPLORATION_TASK_STARTED`, `RUN_HISTORY_UPDATED`, `BOARD_UNDONE`, `BOARD_REDONE`,
+  `BOARD_CLEARED`, or `OUTCOME_RECONCILED`.
+  Preview, list, rejected, unchanged, and unaccepted-cancellation results emit no action receipt.
+  `OUTCOME_RECONCILED` means a mutation may have committed but the tool could not return a
+  confirmed result; it must not be rendered as success.
 - A `recommend_scenario` result whose deterministic `objectiveStatus` is `PARTIAL` remains
   reviewable, but the final assistant row is `PARTIAL` and carries a server notice that
   missing core scene parts were not completed.
@@ -398,7 +468,15 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   `requiresUserConfirmation`, `resultAvailable`, `resultStatus`, `objectiveStatus`,
   `mutationMayHaveCommitted`, `errorCode`, and `status` must use their documented scalar
   types and values. An empty object or malformed control field is a failed tool result, not
-  usable evidence.
+  a successful step. `resultStatus` and `resultAvailable` must be present together:
+  `SUCCESS`/`PREVIEW` pair with `true`, while `RESULT_UNAVAILABLE` pairs with `false`.
+  A mutation-capable tool must also return its documented authoritative marker (such as
+  `operation`, `deleted`, `taskAccepted` plus `taskId`, or `outcome`) before the result is usable;
+  a message-only JSON body is treated as an unconfirmed result and cannot authorize a later
+  dependent tool call.
+- A usable result from a mutation-capable tool is not automatically mutation evidence. Read/list
+  actions, previews, semantic no-ops, and rejected or unaccepted operations emit no action receipt;
+  the final-response guard therefore cannot use them to support a claim that platform state changed.
 - Progress frames arrive before and between potentially slow model/tool calls. They let the UI
   show a full-width ReAct-style record of sanitized reasoning summaries, localized actions,
   observations, confirmation points, cumulative outcomes, and elapsed time. `REASONING` is
@@ -463,6 +541,10 @@ method confirms the targeted refresh. If that refresh fails, the client immediat
 attempts the client-only `board_state` reconciliation. A second failure leaves a visible,
 localized retry panel open and keeps assistant requests, scene replacement, and trace
 playback locked until a later full reconciliation succeeds.
+When `assistantAction` is present, the frontend shows `assistantSummary` when supplied and
+otherwise uses the localized action label. The receipt appears only after the targeted refresh
+or fallback reconciliation succeeds. This ordering prevents the assistant from claiming a
+visible change before the UI has read authoritative state.
 
 The Stop control first sends `POST /api/chat/sessions/{sessionId}/stop` with the local
 turn id and waits for that durable stop fence before aborting the browser stream or polling
@@ -488,13 +570,35 @@ computed `COMPLETED`, `PARTIAL`, or `FAILED`. If the transport is still writable
 observes a cross-instance stop, it sends that persisted `STOPPED` terminal frame and completes
 the emitter; an already-broken transport is still completed server-side instead of remaining
 allocated until the SSE timeout.
-After an explicit stop or a session-switch/new-session request, the Board polls
-the session activity endpoint until `active=false`, keeps assistant mutations locked
-during that settling period, and only then reloads message history, board collections,
-and run history. Once explicit-stop or reattached remote work is confirmed idle, authoritative
-history may legitimately contain only its user turn when admission rollback or terminal
-persistence did not complete; the client replaces optimistic state, restores a draft only when
-that user turn is absent, and unlocks instead of waiting forever for a nonexistent terminal row.
+An explicit Stop still polls the session activity endpoint until `active=false`, keeps assistant
+mutations locked during that settling period, and only then reloads message history, board
+collections, and run history. Switching sessions or creating a new conversation is different:
+the browser detaches the old SSE transport without calling Stop. The server keeps the execution,
+tool writes, terminal status, and execution trace under the old session, while the sidebar keeps
+that row marked as active. The user can continue in another conversation; the selected
+conversation alone locks its composer. Any active conversation still protects full-scene
+replacement, full-scene clear, and historical playback globally because those operations share
+one Board; ordinary targeted edits retain their existing server-serialized semantics.
+For New Chat, the client creates the destination session before detaching the current transport;
+an HTTP failure or incomplete create response therefore leaves the original live execution visible
+and attached instead of stranding the user between conversations. If the user explicitly selects
+another row while creation is in flight, that newer selection wins and the created row remains
+available in the sidebar rather than taking focus later.
+The client detects active-to-idle background rows through both polling and foreground session-list
+refresh, then reconciles the authoritative Board and shows a completion notice. Opening that session later loads its persisted
+terminal row and trace; live SSE progress is not replayed. Once explicit-stop or reattached remote
+work is confirmed idle, authoritative history may legitimately contain only its user turn when
+admission rollback or terminal persistence did not complete; the client replaces optimistic
+state, restores a draft only when that user turn is absent, and unlocks instead of waiting forever
+for a nonexistent terminal row.
+The assistant entry renders running and unread counts independently, so unread results do not hide
+other conversations that are still executing. Active session rows keep their Stop control but
+disable Delete until the server reports them idle.
+Before sign-out, the client refreshes the authoritative session list, stops every active row,
+waits for settlement, and reconciles the Board. The application shell performs the same sequence
+when the lazy chat panel was never mounted. As a final server-side backstop, `/api/auth/logout`
+marks all currently active chat leases explicitly stopped before revoking the token. Closing only
+a panel, tab, or browser remains different and does not request Stop.
 Terminal-confirmed completion also waits for `active=false` and reloads
 authoritative message history so persisted terminal status wins over locally inferred
 progress. That normal path replaces the local response only when the terminal row carries
@@ -524,7 +628,10 @@ the login route like the axios interceptor. An SSE `403` is shown as an authoriz
 failure and does not log out an otherwise valid session.
 Every stream and session-history load has a client request epoch. Late chunks, commands,
 completion callbacks, or history responses from a stopped/replaced request are ignored,
-so they cannot clear or overwrite a newer conversation. Loading session history has a
+so they cannot clear or overwrite a newer conversation. Session-list polling is fenced by the
+same list version used by create, delete, and foreground refresh; an older poll cannot remove a
+newly created row, restore a deleted row, or duplicate a row that it observed before the create
+response arrived. Polling is deferred while a foreground list refresh is in flight. Loading session history has a
 separate UI state and does not expose a non-functional "stop response" control.
 
 The floating assistant is mounted lazily on its first open and then hidden rather than

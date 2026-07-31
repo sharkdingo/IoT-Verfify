@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,7 +42,9 @@ public class SimulateTaskStatusTool extends AbstractAiTool {
                 List.of("taskId")
         );
 
-        return LlmToolSpec.of(getName(), "Query async simulation task status and progress by taskId.", schema);
+        return LlmToolSpec.of(getName(),
+                "Query async simulation task status and progress by taskId. A completed saved trajectory exposes its simulationId for get_simulation_trace. Execution logs are intentionally omitted.",
+                schema);
     }
 
     @Override
@@ -59,11 +62,15 @@ public class SimulateTaskStatusTool extends AbstractAiTool {
             SimulationTaskDto task = simulationService.getTask(userId, taskId);
             int progress = simulationService.getTaskProgress(userId, taskId);
 
-            return readOnlySuccessJson(Map.of(
-                    "taskId", taskId,
-                    "progress", progress,
-                    "task", task
-            ), "Simulation task status retrieved.");
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("taskId", taskId);
+            body.put("progress", progress);
+            body.put("task", taskProjection(task, progress));
+            if (task.getSimulationTraceId() != null && task.getSimulationTraceId() > 0) {
+                body.put("simulationId", task.getSimulationTraceId());
+                body.put("nextTool", "get_simulation_trace");
+            }
+            return readOnlySuccessJson(body, "Simulation task status retrieved.");
         } catch (ArgValidationException e) {
             return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
@@ -77,5 +84,32 @@ public class SimulateTaskStatusTool extends AbstractAiTool {
             return errorJson("Failed to query simulation task.",
                     "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> taskProjection(SimulationTaskDto task, int progress) {
+        Map<String, Object> projected = new LinkedHashMap<>();
+        projected.put("id", task.getId());
+        projected.put("initiator", task.getInitiator());
+        projected.put("status", task.getStatus());
+        projected.put("progress", progress);
+        projected.put("progressStage", task.getProgressStage());
+        projected.put("createdAt", task.getCreatedAt());
+        projected.put("startedAt", task.getStartedAt());
+        projected.put("completedAt", task.getCompletedAt());
+        projected.put("processingTimeMs", task.getProcessingTimeMs());
+        projected.put("isAttack", task.getIsAttack());
+        projected.put("attackBudget", task.getAttackBudget());
+        projected.put("enablePrivacy", task.getEnablePrivacy());
+        projected.put("modelSemantics", task.getModelSemantics());
+        projected.put("modelSnapshot", task.getModelSnapshot());
+        projected.put("requestedSteps", task.getRequestedSteps());
+        projected.put("steps", task.getSteps());
+        projected.put("modelComplete", task.getModelComplete());
+        projected.put("disabledRuleCount", task.getDisabledRuleCount());
+        projected.put("generationIssues", safeList(task.getGenerationIssues()));
+        projected.put("simulationTraceId", task.getSimulationTraceId());
+        projected.put("checkLogCount", safeList(task.getCheckLogs()).size());
+        projected.put("errorMessage", task.getErrorMessage());
+        return projected;
     }
 }

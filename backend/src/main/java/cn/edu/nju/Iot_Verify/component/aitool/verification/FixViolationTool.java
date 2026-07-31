@@ -75,7 +75,7 @@ public class FixViolationTool extends AbstractAiTool {
         );
 
         return LlmToolSpec.of(getName(), "Analyze a violation trace to localize fault rules and suggest fixes. " +
-                "Supports 'parameter' (adjust numeric thresholds), 'condition' (remove triggering conditions), " +
+                "Supports 'parameter' (adjust numeric thresholds), 'condition' (add or remove triggering conditions), " +
                 "and 'remove' (permanently remove entire rules) strategies. This tool only analyzes and never applies a change. " +
                 "Requires a traceId from a previous verification.", schema);
     }

@@ -2,6 +2,7 @@ import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { buildSpecDeviceRefsFromConditions, buildSpecFormula } from '@/utils/spec'
 import { normalizeModelRelation, normalizeNuSmvDeviceName } from '@/utils/modelRequest'
 import { MANIFEST_VALIDATION_MESSAGE_KEYS, validateManifest } from '@/utils/device'
+import { canonicalizeTemplateManifest } from '@/utils/templateManifestCanonicalization'
 import { NODE_HEIGHT_RANGE, NODE_POSITION_ABS_MAX, NODE_WIDTH_RANGE } from '@/utils/canvas/nodeLayout'
 import { defaultSpecTemplates, specTemplateDetails } from '@/assets/config/specTemplates'
 import type { DeviceNode } from '@/types/node'
@@ -906,7 +907,7 @@ export const createSceneCodec = (t: Translate) => {
     if (!name) throw new Error(t('app.sceneImportMissingField', { field: `templates[${index}].name` }))
     return {
       name,
-      manifest: canonicalPlainValue(template.manifest) as DeviceTemplate['manifest']
+      manifest: canonicalizeTemplateManifest(template.manifest) as DeviceTemplate['manifest']
     }
   }
 

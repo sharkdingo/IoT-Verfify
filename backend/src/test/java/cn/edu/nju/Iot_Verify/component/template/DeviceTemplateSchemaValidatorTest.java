@@ -248,6 +248,7 @@ class DeviceTemplateSchemaValidatorTest {
                         .privacy("private")
                         .lowerBound(0)
                         .upperBound(100)
+                        .naturalChangeRate("[-1, 1]")
                         .build()))
                 .build();
 
@@ -984,6 +985,44 @@ class DeviceTemplateSchemaValidatorTest {
         org.assertj.core.api.Assertions.assertThat(overflowException.getMessage())
                 .contains("outside the supported integer format")
                 .contains("999999999999");
+    }
+
+    @Test
+    void sharedNumericEnvironmentRequiresExplicitNaturalChangeRate() throws Exception {
+        JsonNode shared = objectMapper.readTree("""
+                {
+                  "Name": "Temperature Sensor",
+                  "InternalVariables": [{
+                    "Name": "temperature",
+                    "IsInside": false,
+                    "FalsifiableWhenCompromised": true,
+                    "Trust": "untrusted",
+                    "Privacy": "public",
+                    "LowerBound": 0,
+                    "UpperBound": 100
+                  }]
+                }
+                """);
+        BadRequestException sharedException = assertThrows(BadRequestException.class, () ->
+                validator.validateRawManifest("Temperature Sensor", shared));
+        org.assertj.core.api.Assertions.assertThat(sharedException.getMessage())
+                .contains("NaturalChangeRate");
+
+        JsonNode local = objectMapper.readTree("""
+                {
+                  "Name": "Local Counter",
+                  "InternalVariables": [{
+                    "Name": "counter",
+                    "IsInside": true,
+                    "FalsifiableWhenCompromised": false,
+                    "Trust": "trusted",
+                    "Privacy": "public",
+                    "LowerBound": 0,
+                    "UpperBound": 100
+                  }]
+                }
+                """);
+        assertDoesNotThrow(() -> validator.validateRawManifest("Local Counter", local));
     }
 
     @Test

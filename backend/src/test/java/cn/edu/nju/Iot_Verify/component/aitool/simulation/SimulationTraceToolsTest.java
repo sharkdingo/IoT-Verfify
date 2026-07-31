@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -206,6 +207,8 @@ class SimulationTraceToolsTest {
         assertFalse(json.has("requestJson"));
         assertFalse(json.path("modelComplete").asBoolean());
         assertEquals(1, json.path("disabledRuleCount").asInt());
+        assertEquals(1, json.path("returnedStateCount").asInt());
+        assertEquals(10, json.path("stateLimit").asInt());
         assertTrue(json.path("isAttack").asBoolean());
         assertEquals("Hall light", json.path("states").get(0).path("devices").get(0)
                 .path("deviceLabel").asText());
@@ -214,6 +217,35 @@ class SimulationTraceToolsTest {
                 .path("ruleLabel").asText());
         assertFalse(json.path("states").get(0).path("triggeredRules").get(0).has("ruleId"));
         assertTrue(json.path("message").asText().contains("incomplete"));
+    }
+
+    @Test
+    void getSimulationTrace_pagesLongStateSequence() throws Exception {
+        UserContextHolder.setUserId(1L);
+        SimulationTraceDto trace = SimulationTraceDto.builder()
+                .id(12L)
+                .requestedSteps(15)
+                .steps(15)
+                .modelComplete(true)
+                .states(IntStream.range(0, 15)
+                        .mapToObj(index -> cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto.builder()
+                                .stateIndex(index)
+                                .devices(List.of())
+                                .triggeredRules(List.of())
+                                .compromisedAutomationLinks(List.of())
+                                .build())
+                        .toList())
+                .build();
+        when(simulationService.getSimulation(1L, 12L)).thenReturn(trace);
+
+        JsonNode json = objectMapper.readTree(getTool.execute(
+                "{\"simulationId\":12,\"stateOffset\":10}"));
+
+        assertEquals(15, json.path("stateCount").asInt());
+        assertEquals(10, json.path("stateOffset").asInt());
+        assertEquals(5, json.path("returnedStateCount").asInt());
+        assertFalse(json.path("hasMoreStates").asBoolean());
+        assertEquals(10, json.path("states").get(0).path("stateIndex").asInt());
     }
 
     @Test

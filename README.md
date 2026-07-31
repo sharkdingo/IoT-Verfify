@@ -26,7 +26,7 @@ fix suggestions when a specification is violated.
   each candidate re-verified before it is offered.
 - **Attack simulation** and **interactive simulation** (random N-step traces).
 - **AI assistant** — any OpenAI-compatible LLM endpoint with SSE-streamed final replies
-  and 48 built-in tools; device / rule / specification recommendations, confirmed
+  and 53 built-in tools; device / rule / specification recommendations, confirmed
   atomic application of a generated full-scene draft, and confirmed bundled-template reset.
 - **Bilingual UI** — full zh-CN / en internationalization.
 

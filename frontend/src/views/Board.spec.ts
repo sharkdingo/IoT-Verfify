@@ -10,22 +10,34 @@ import {
   createLatestBoardRequestGuard,
   createScopedBoardInvalidationBinding,
   focusCollapsedNarrowPanelToggle,
+  formalRunReadinessIssue,
   handleRecommendationApplySceneChange,
   hasRecommendationSceneChanged,
   hasFrozenBundledTokenSource,
   invalidateFuzzingResultRequests,
   isAccountDeletionOutcomeUncertain,
+  isPersistedHistoryDataInvalid,
+  persistedHistoryInvalidRecordId,
   loadBoardResultWithRetry,
   reconcileBoardNodeSnapshot,
   reconcileRenameDialogSnapshot,
   recommendationSceneFingerprint,
+  prepareBoardChatInteraction,
   revalidateHistoricalPlaybackAdmission,
+  retainSessionUnavailableHistoryItems,
   requestScenarioRecommendationWithTargets,
   runAdmittedBoardMutation,
   runTrackedBoardMutation,
   resolveCurrentBoardNode,
   resolveDeletionReviewDeviceDialogRestore,
-  shouldRedirectNarrowPanelFocus
+  shouldReportUnusableHistoryDeepLink,
+  shouldLoadVerificationEvidence,
+  shouldResolveLiveTemplateForPresentation,
+  shouldClearUnusableHistoryDeepLink,
+  shouldRedirectNarrowPanelFocus,
+  verificationTraceBelongsToRun,
+  fuzzingFindingBelongsToRun,
+  verificationRunContainsTrace
 } from './Board.vue'
 import { createPagedRequestCoordinator } from '@/utils/pagedRequestCoordinator'
 import {
@@ -64,6 +76,32 @@ describe('Board empty scenario objective feedback', () => {
   })
 })
 
+describe('Board formal-run readiness', () => {
+  const ready = {
+    deviceCount: 1,
+    specificationCount: 1,
+    rulesHaveTriggers: true,
+    simulationStepsValid: true
+  }
+
+  it('mirrors verification prerequisites before attack configuration is considered', () => {
+    expect(formalRunReadinessIssue('verification', { ...ready, deviceCount: 0 }))
+      .toBe('NO_DEVICES')
+    expect(formalRunReadinessIssue('verification', { ...ready, specificationCount: 0 }))
+      .toBe('NO_SPECIFICATIONS')
+    expect(formalRunReadinessIssue('verification', { ...ready, rulesHaveTriggers: false }))
+      .toBe('RULE_TRIGGER_REQUIRED')
+    expect(formalRunReadinessIssue('verification', ready)).toBeNull()
+  })
+
+  it('uses simulation steps instead of requiring specifications', () => {
+    expect(formalRunReadinessIssue('simulation', { ...ready, specificationCount: 0 }))
+      .toBeNull()
+    expect(formalRunReadinessIssue('simulation', { ...ready, simulationStepsValid: false }))
+      .toBe('INVALID_SIMULATION_STEPS')
+  })
+})
+
 describe('Board history deletion confirmation', () => {
   it('keeps an in-flight detail request current when deletion is cancelled', async () => {
     const invalidate = vi.fn()
@@ -82,6 +120,117 @@ describe('Board history deletion confirmation', () => {
       .resolves.toBe(true)
 
     expect(invalidate).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Board persisted history availability', () => {
+  it('marks only an explicit persisted semantic-data rejection as permanently unavailable', () => {
+    expect(isPersistedHistoryDataInvalid({
+      response: {
+        data: {
+          data: { reasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID' }
+        }
+      }
+    })).toBe(true)
+    expect(isPersistedHistoryDataInvalid({
+      response: {
+        data: {
+          data: { reasonCode: 'SERVICE_UNAVAILABLE' }
+        }
+      }
+    })).toBe(false)
+    expect(isPersistedHistoryDataInvalid(new Error('network timeout'))).toBe(false)
+  })
+
+  it('uses a persisted record id only when the response identifies the expected record type', () => {
+    const findingError = {
+      response: {
+        data: {
+          data: {
+            reasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID',
+            recordType: 'FuzzFinding',
+            recordId: '42'
+          }
+        }
+      }
+    }
+
+    expect(persistedHistoryInvalidRecordId(findingError, 'FuzzFinding')).toBe(42)
+    expect(persistedHistoryInvalidRecordId(findingError, 'FuzzTask')).toBeNull()
+    expect(persistedHistoryInvalidRecordId({
+      response: {
+        data: {
+          data: {
+            reasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID',
+            recordType: 'verification trace',
+            recordId: 71
+          }
+        }
+      }
+    }, 'verification trace')).toBe(71)
+    expect(persistedHistoryInvalidRecordId({
+      response: { data: { data: { reasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID', recordType: 'FuzzFinding', recordId: 'zero' } } }
+    }, 'FuzzFinding')).toBeNull()
+  })
+
+  it('strips a deep link only for an explicit persisted-data rejection', () => {
+    const persistedDataError = {
+      response: {
+        data: {
+          data: { reasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID' }
+        }
+      }
+    }
+
+    expect(shouldClearUnusableHistoryDeepLink(true, persistedDataError)).toBe(true)
+    expect(shouldClearUnusableHistoryDeepLink(false, persistedDataError)).toBe(false)
+    expect(shouldClearUnusableHistoryDeepLink(true, new Error('network timeout'))).toBe(false)
+  })
+
+  it('keeps confirmed unavailable history items unavailable after a summary refresh', () => {
+    const summaries: Array<{ id: number; dataAvailable: boolean }> = [
+      { id: 31, dataAvailable: true },
+      { id: 32, dataAvailable: true }
+    ]
+
+    expect(retainSessionUnavailableHistoryItems(
+      summaries,
+      new Set([32]),
+      summary => ({ ...summary, dataAvailable: false })
+    )).toEqual([
+      { id: 31, dataAvailable: true },
+      { id: 32, dataAvailable: false }
+    ])
+  })
+
+  it('keeps a history link retryable for transient reads but clears confirmed dead targets', () => {
+    expect(shouldReportUnusableHistoryDeepLink(true, new Error('network timeout'))).toBe(false)
+    expect(shouldReportUnusableHistoryDeepLink(true, { response: { status: 400 } })).toBe(false)
+    expect(shouldReportUnusableHistoryDeepLink(true, { response: { status: 503 } })).toBe(false)
+    expect(shouldReportUnusableHistoryDeepLink(true, { response: { status: 429 } })).toBe(false)
+    expect(shouldReportUnusableHistoryDeepLink(true, { response: { status: 404 } })).toBe(true)
+    expect(shouldReportUnusableHistoryDeepLink(false, { response: { status: 404 } })).toBe(false)
+  })
+
+  it('rejects a trace URL whose child evidence is not in the named verification run', () => {
+    expect(verificationRunContainsTrace({ traces: [{ id: 71 }] }, 71)).toBe(true)
+    expect(verificationRunContainsTrace({ traces: [{ id: 71 }] }, 72)).toBe(false)
+    expect(verificationRunContainsTrace({ traces: [{}] }, 71)).toBe(false)
+    expect(verificationRunContainsTrace(undefined, 71)).toBe(false)
+  })
+
+  it('keeps leaf replay scoped to the run encoded in the history URL', () => {
+    expect(verificationTraceBelongsToRun({ verificationTaskId: 71 }, 71)).toBe(true)
+    expect(verificationTraceBelongsToRun({ verificationTaskId: 72 }, 71)).toBe(false)
+    expect(fuzzingFindingBelongsToRun({ fuzzTaskId: 81 }, 81)).toBe(true)
+    expect(fuzzingFindingBelongsToRun({ fuzzTaskId: 82 }, 81)).toBe(false)
+  })
+
+  it('loads saved evidence by its count rather than treating an inconclusive conclusion as empty', () => {
+    expect(shouldLoadVerificationEvidence(1)).toBe(true)
+    expect(shouldLoadVerificationEvidence(0)).toBe(false)
+    expect(shouldLoadVerificationEvidence(-1)).toBe(false)
+    expect(shouldLoadVerificationEvidence(1.5)).toBe(false)
   })
 })
 
@@ -175,6 +324,45 @@ describe('Board historical playback admission', () => {
     })).resolves.toBe('request-stale')
 
     expect(waitForPendingMutations).not.toHaveBeenCalled()
+  })
+})
+
+describe('Board historical playback presentation', () => {
+  it('never resolves the live template catalog while historical evidence is open', () => {
+    expect(shouldResolveLiveTemplateForPresentation(true)).toBe(false)
+    expect(shouldResolveLiveTemplateForPresentation(false)).toBe(true)
+  })
+})
+
+describe('Board chat interaction preparation', () => {
+  it('closes read-only playback before admitting a new assistant turn', () => {
+    const closeTracePlayback = vi.fn()
+    const closeSimulationPlayback = vi.fn()
+
+    expect(prepareBoardChatInteraction({
+      sceneReplacementInProgress: false,
+      tracePlaybackVisible: true,
+      simulationPlaybackVisible: true,
+      closeTracePlayback,
+      closeSimulationPlayback
+    })).toBe(true)
+    expect(closeTracePlayback).toHaveBeenCalledOnce()
+    expect(closeSimulationPlayback).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the assistant blocked during an atomic scene replacement', () => {
+    const closeTracePlayback = vi.fn()
+    const closeSimulationPlayback = vi.fn()
+
+    expect(prepareBoardChatInteraction({
+      sceneReplacementInProgress: true,
+      tracePlaybackVisible: true,
+      simulationPlaybackVisible: true,
+      closeTracePlayback,
+      closeSimulationPlayback
+    })).toBe(false)
+    expect(closeTracePlayback).not.toHaveBeenCalled()
+    expect(closeSimulationPlayback).not.toHaveBeenCalled()
   })
 })
 
@@ -743,6 +931,37 @@ describe('Board scene-template response reconciliation', () => {
       [{ name: 'Other', manifest: { Name: 'Other' } }]
     )).toBe(false)
   })
+
+  it('treats omitted and explicit null optional manifest fields as one server-round-trip shape', () => {
+    const requested = {
+      name: 'Alarm',
+      manifest: {
+        Name: 'Alarm',
+        APIs: [{ Name: 'off', StartState: 'on', EndState: 'off', Trigger: null, Signal: true }]
+      }
+    }
+    const returned = {
+      name: 'Alarm',
+      manifest: {
+        APIs: [{ Signal: true, EndState: 'off', Name: 'off', StartState: 'on' }],
+        Name: 'Alarm'
+      }
+    }
+
+    expect(sceneTemplatesCoveredByCatalog([requested], [], [{ ...returned, id: 7 }])).toBe(true)
+    expect(sceneTemplatesCoveredByCatalog(
+      [requested],
+      [],
+      [{
+        ...returned,
+        id: 7,
+        manifest: {
+          ...returned.manifest,
+          APIs: [{ Name: 'off', StartState: 'on', EndState: 'off', Signal: false }]
+        }
+      }]
+    )).toBe(false)
+  })
 })
 
 describe('Board playback token provenance', () => {
@@ -833,6 +1052,15 @@ describe('Board model-fingerprint request ordering', () => {
 
     guard.invalidate()
     expect(guard.isCurrent(newer)).toBe(false)
+  })
+
+  it('keeps a newer deep-link navigation current when an older one settles', () => {
+    const guard = createLatestBoardRequestGuard()
+    const firstDeepLink = guard.begin()
+    const secondDeepLink = guard.begin()
+
+    expect(guard.isCurrent(firstDeepLink)).toBe(false)
+    expect(guard.isCurrent(secondDeepLink)).toBe(true)
   })
 })
 

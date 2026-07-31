@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.ai.chat.ChatToolProgressPresenter;
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import cn.edu.nju.Iot_Verify.component.ai.AiTaskContinuationStore;
 import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
@@ -15,6 +16,7 @@ import cn.edu.nju.Iot_Verify.dto.chat.ChatHistoryPageDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.po.UserPo;
@@ -52,6 +54,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -417,20 +420,88 @@ class ChatServiceImplHistoryWindowTest {
         live.setId("live-session");
         live.setActiveExecutionId("live-execution");
         live.setActiveExecutionExpiresAt(LocalDateTime.now().plusMinutes(1));
+        live.setLastSeenTerminalMessageId(7L);
         ChatSessionPo expired = new ChatSessionPo();
         expired.setId("expired-session");
         expired.setActiveExecutionId("expired-execution");
         expired.setActiveExecutionExpiresAt(LocalDateTime.now().minusSeconds(1));
+        expired.setLastSeenTerminalMessageId(9L);
         ChatSessionResponseDto liveDto = new ChatSessionResponseDto();
         ChatSessionResponseDto expiredDto = new ChatSessionResponseDto();
+        ChatMessageRepository.LatestTerminalView liveTerminal = mock(
+                ChatMessageRepository.LatestTerminalView.class);
+        when(liveTerminal.getSessionId()).thenReturn("live-session");
+        when(liveTerminal.getMessageId()).thenReturn(8L);
+        when(liveTerminal.getExecutionStatus()).thenReturn(ChatExecutionStatus.COMPLETED);
+        ChatMessageRepository.LatestTerminalView expiredTerminal = mock(
+                ChatMessageRepository.LatestTerminalView.class);
+        when(expiredTerminal.getSessionId()).thenReturn("expired-session");
+        when(expiredTerminal.getMessageId()).thenReturn(9L);
+        when(expiredTerminal.getExecutionStatus()).thenReturn(ChatExecutionStatus.FAILED);
         when(sessionRepo.findTop100ByUserIdOrderByUpdatedAtDesc(1L)).thenReturn(List.of(live, expired));
         when(chatMapper.toChatSessionDtoList(List.of(live, expired)))
                 .thenReturn(List.of(liveDto, expiredDto));
+        when(messageRepo.findLatestTerminalBySessionIdIn(List.of("live-session", "expired-session")))
+                .thenReturn(List.of(liveTerminal, expiredTerminal));
 
         List<ChatSessionResponseDto> result = service.getUserSessions(1L);
 
         assertTrue(result.get(0).isActive());
+        assertEquals(8L, result.get(0).getLatestTerminalMessageId());
+        assertEquals(ChatExecutionStatus.COMPLETED, result.get(0).getLatestExecutionStatus());
+        assertTrue(result.get(0).isHasUnreadUpdate());
         assertFalse(result.get(1).isActive());
+        assertEquals(9L, result.get(1).getLatestTerminalMessageId());
+        assertEquals(ChatExecutionStatus.FAILED, result.get(1).getLatestExecutionStatus());
+        assertFalse(result.get(1).isHasUnreadUpdate());
+    }
+
+    @Test
+    void markTerminalSeenAdvancesOnlyToTheExactOwnedTerminalMessage() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("seen-session");
+        session.setUserId(1L);
+        session.setLastSeenTerminalMessageId(20L);
+        when(sessionRepo.findByIdAndUserIdForUpdate("seen-session", 1L))
+                .thenReturn(Optional.of(session));
+        when(messageRepo.existsByIdAndSessionIdAndRoleAndExecutionStatusIsNotNull(
+                24L, "seen-session", "assistant")).thenReturn(true);
+
+        service.markTerminalSeen(1L, "seen-session", 24L);
+
+        assertEquals(24L, session.getLastSeenTerminalMessageId());
+        verify(sessionRepo).saveAndFlush(session);
+    }
+
+    @Test
+    void markTerminalSeenNeverMovesTheCursorBackwards() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("seen-session");
+        session.setUserId(1L);
+        session.setLastSeenTerminalMessageId(30L);
+        when(sessionRepo.findByIdAndUserIdForUpdate("seen-session", 1L))
+                .thenReturn(Optional.of(session));
+        when(messageRepo.existsByIdAndSessionIdAndRoleAndExecutionStatusIsNotNull(
+                24L, "seen-session", "assistant")).thenReturn(true);
+
+        service.markTerminalSeen(1L, "seen-session", 24L);
+
+        assertEquals(30L, session.getLastSeenTerminalMessageId());
+        verify(sessionRepo, never()).saveAndFlush(any(ChatSessionPo.class));
+    }
+
+    @Test
+    void markTerminalSeenRejectsAMessageThatIsNotATerminalInTheOwnedSession() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("seen-session");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserIdForUpdate("seen-session", 1L))
+                .thenReturn(Optional.of(session));
+
+        assertThrows(BadRequestException.class,
+                () -> service.markTerminalSeen(1L, "seen-session", 24L));
+
+        verify(sessionRepo, never()).saveAndFlush(any(ChatSessionPo.class));
     }
 
     @Test

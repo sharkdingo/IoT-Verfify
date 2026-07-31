@@ -107,22 +107,7 @@ public final class EnvironmentDomainUtils {
     }
 
     private static String canonicalNaturalChangeRate(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return "0..0";
-        }
-        String[] parts = raw.replace("[", "").replace("]", "").replace(" ", "").split(",");
-        try {
-            if (parts.length == 1) {
-                int rate = Integer.parseInt(parts[0]);
-                return Math.min(0, rate) + ".." + Math.max(0, rate);
-            }
-            if (parts.length == 2) {
-                return Integer.parseInt(parts[0]) + ".." + Integer.parseInt(parts[1]);
-            }
-        } catch (NumberFormatException ignored) {
-            // Schema validation reports malformed rates; preserve text here for deterministic mismatch reporting.
-        }
-        return raw.trim();
+        return NaturalChangeRateParser.canonical(raw);
     }
 
     private static String normalizeLabel(String value, String fallback) {

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -29,6 +30,8 @@ public class VerificationTaskDto {
      * 任务ID
      */
     private Long id;
+
+    private RunInitiator initiator;
 
     /**
      * 任务状态

@@ -65,6 +65,15 @@ describe('toast severities', () => {
     expect(failure.duration).toBeGreaterThan(success.duration)
   })
 
+  it('groups identical errors instead of stacking duplicate toasts', () => {
+    notifyError('history failed')
+
+    expect(elementPlus.message.error).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'history failed',
+      grouping: true
+    }))
+  })
+
   it('clears every open toast when the board changes context wholesale', () => {
     dismissAllNotifications()
     expect(elementPlus.message.closeAll).toHaveBeenCalledOnce()

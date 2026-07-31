@@ -122,6 +122,18 @@ let dragState: {
   minDeltaY: number
   maxDeltaY: number
 } | null = null
+let activeDragTarget: HTMLElement | null = null
+
+const removeDragListeners = () => {
+  window.removeEventListener('pointermove', onDragMove)
+  window.removeEventListener('pointerup', onDragEnd)
+  window.removeEventListener('pointercancel', onDragEnd)
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup', onMouseUp)
+  window.removeEventListener('resize', interruptDrag)
+  window.removeEventListener('blur', interruptDrag)
+  document.removeEventListener('visibilitychange', onDragVisibilityChange)
+}
 
 const beginDrag = (clientX: number, clientY: number, pointerId: number, target?: HTMLElement) => {
   if (!popoverRef.value) return
@@ -137,7 +149,23 @@ const beginDrag = (clientX: number, clientY: number, pointerId: number, target?:
     minDeltaY: viewportInset - rect.top,
     maxDeltaY: window.innerHeight - viewportInset - rect.bottom
   }
-  if (pointerId >= 0) target?.setPointerCapture?.(pointerId)
+  activeDragTarget = pointerId >= 0 ? (target ?? null) : null
+  if (activeDragTarget) {
+    try {
+      activeDragTarget.setPointerCapture?.(pointerId)
+    } catch {
+      // Window pointer listeners retain the fallback path when capture is unavailable.
+    }
+    activeDragTarget.addEventListener('lostpointercapture', onPointerCaptureLost)
+  }
+  if (pointerId >= 0) {
+    window.addEventListener('pointermove', onDragMove)
+    window.addEventListener('pointerup', onDragEnd)
+    window.addEventListener('pointercancel', onDragEnd)
+  }
+  window.addEventListener('resize', interruptDrag)
+  window.addEventListener('blur', interruptDrag)
+  document.addEventListener('visibilitychange', onDragVisibilityChange)
 }
 
 const updateDrag = (clientX: number, clientY: number) => {
@@ -156,12 +184,30 @@ const updateDrag = (clientX: number, clientY: number) => {
   })
 }
 
-const finishDrag = (pointerId: number, target?: HTMLElement) => {
+const finishDrag = (pointerId: number) => {
   if (!dragState || dragState.pointerId !== pointerId) return
-  if (pointerId >= 0) target?.releasePointerCapture?.(pointerId)
+  const target = activeDragTarget
   dragState = null
-  window.removeEventListener('mousemove', onMouseMove)
-  window.removeEventListener('mouseup', onMouseUp)
+  activeDragTarget = null
+  target?.removeEventListener('lostpointercapture', onPointerCaptureLost)
+  if (pointerId >= 0 && target) {
+    try {
+      target.releasePointerCapture?.(pointerId)
+    } catch {
+      // Capture may already have been released by the browser.
+    }
+  }
+  removeDragListeners()
+}
+
+const interruptDrag = () => {
+  if (dragState) finishDrag(dragState.pointerId)
+}
+
+const onPointerCaptureLost = (event: PointerEvent) => finishDrag(event.pointerId)
+
+const onDragVisibilityChange = () => {
+  if (document.hidden) interruptDrag()
 }
 
 const onDragStart = (event: PointerEvent) => {
@@ -177,7 +223,7 @@ const onDragMove = (event: PointerEvent) => {
 }
 
 const onDragEnd = (event: PointerEvent) => {
-  finishDrag(event.pointerId, event.currentTarget as HTMLElement)
+  finishDrag(event.pointerId)
 }
 
 const onMouseMove = (event: MouseEvent) => {
@@ -198,8 +244,8 @@ const onMouseDragStart = (event: MouseEvent) => {
 }
 
 onBeforeUnmount(() => {
-  window.removeEventListener('mousemove', onMouseMove)
-  window.removeEventListener('mouseup', onMouseUp)
+  interruptDrag()
+  removeDragListeners()
 })
 
 const detailLabel = (detail: PlaybackDeviceChangeDetail, deviceId: string): string => {
@@ -245,9 +291,6 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
       data-testid="playback-change-drag-handle"
       :title="t('app.traceVisualization.moveChangesPanel')"
       @pointerdown="onDragStart"
-      @pointermove="onDragMove"
-      @pointerup="onDragEnd"
-      @pointercancel="onDragEnd"
       @mousedown="onMouseDragStart"
     >
       <div class="min-w-0">

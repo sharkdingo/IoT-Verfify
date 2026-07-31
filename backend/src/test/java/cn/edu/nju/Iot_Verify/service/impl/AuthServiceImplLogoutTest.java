@@ -224,7 +224,19 @@ class AuthServiceImplLogoutTest {
 
         authService.logout(1L, "Bearer valid-token");
 
+        verify((ChatExecutionControl) chatService).requestUserExecutionStop(1L);
         verify(tokenBlacklistService).blacklist("valid-token", 3600L);
+    }
+
+    @Test
+    void logout_chatStopFailureDoesNotRevokeTheTokenBeforeTheOutcomeIsKnown() {
+        doThrow(new IllegalStateException("database unavailable"))
+                .when((ChatExecutionControl) chatService).requestUserExecutionStop(1L);
+
+        assertThrows(IllegalStateException.class,
+                () -> authService.logout(1L, "Bearer valid-token"));
+
+        verifyNoInteractions(tokenBlacklistService);
     }
 
     // --- userId 为 null ---

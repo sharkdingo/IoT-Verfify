@@ -19,6 +19,7 @@ import {
   buildDeviceRuntimeConfig,
   createDeviceRuntimeDraft,
   getTemplateLocalVariables,
+  getTemplateVariableDefaultValue,
   getTemplateWorkingStates,
   resetDeviceRuntimeDraft,
   templateVariableHasEnumValues,
@@ -364,7 +365,10 @@ const variableInputPlaceholder = (variable: InternalVariable) => {
   if (templateVariableUsesNumericBounds(variable)) {
     const lower = variable.LowerBound ?? '-∞'
     const upper = variable.UpperBound ?? '∞'
-    return `${lower} - ${upper}`
+    const defaultValue = getTemplateVariableDefaultValue(variable)
+    return defaultValue
+      ? `${t('app.useTemplateDefaultWithValue', { value: defaultValue })} / ${lower} - ${upper}`
+      : `${lower} - ${upper}`
   }
   return t('app.enterValuePlaceholder')
 }
@@ -1267,7 +1271,7 @@ const deviceSpecs = computed(() => {
                             :data-testid="`device-runtime-variable-${variable.Name}`"
                             class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                           >
-                            <option value="">{{ t('app.modelControlled') }}</option>
+                            <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatDeviceModelToken(getTemplateVariableDefaultValue(variable)) }) }}</option>
                             <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatDeviceModelToken(value) }}</option>
                           </select>
                           <input

@@ -71,6 +71,27 @@ const seedVerificationRun = async (
   return runId as number
 }
 
+const replaceBoardWithEmptyScene = async (request: APIRequestContext, auth: AuthUser) => {
+  const headers = { Authorization: `Bearer ${auth.token}` }
+  const previewResponse = await request.get(`${apiBaseURL}/api/board/replacement-preview`, { headers })
+  expect(previewResponse.ok(), await previewResponse.text()).toBeTruthy()
+  const preview = await previewResponse.json()
+  expect(preview?.data?.impactToken, JSON.stringify(preview)).toBeTruthy()
+
+  const replaceResponse = await request.post(`${apiBaseURL}/api/board/batch`, {
+    headers,
+    data: {
+      impactToken: preview.data.impactToken,
+      nodes: [],
+      environmentVariables: [],
+      rules: [],
+      specs: [],
+      templateSnapshots: []
+    }
+  })
+  expect(replaceResponse.ok(), await replaceResponse.text()).toBeTruthy()
+}
+
 test.describe('board run deep links', () => {
   test('deep-links a verification run and survives refresh, Back, and Forward', async ({ page, request }) => {
     const auth = await createAuthenticatedUser(request)
@@ -161,9 +182,16 @@ test.describe('board run deep links', () => {
     const traceId = traces[0]?.id
     expect(traceId, JSON.stringify(traces).slice(0, 200)).toBeTruthy()
 
+    // The current board is deliberately replaced after the run completes. Replay must use the
+    // persisted run snapshot, then return to this new empty board when the user closes it.
+    await replaceBoardWithEmptyScene(request, auth)
+
     await page.goto(`/#/board?run=verification:${runId}&trace=${traceId}`)
     await expect(page.getByTestId('trace-timeline')).toBeVisible({ timeout: 90_000 })
     expect(boardQuery(page)).toContain(`trace=${traceId}`)
+    await expect(page.locator('[data-node-id="temperature_1"]')).toBeVisible()
+    await expect(page.locator('[data-node-id="ac_1"]')).toBeVisible()
+    await expect(page.getByTestId('canvas-board')).toContainText('Living-room Temperature Sensor')
 
     // Refresh restores the same replay, not just the run.
     await page.reload()
@@ -178,6 +206,8 @@ test.describe('board run deep links', () => {
     expect(boardQuery(page)).not.toContain('trace=')
     expect(boardQuery(page)).not.toContain('run=')
     await expect(page.getByTestId('verification-result-dialog')).toHaveCount(0)
+    await expect(page.locator('[data-node-id="temperature_1"]')).toHaveCount(0)
+    await expect(page.locator('[data-node-id="ac_1"]')).toHaveCount(0)
   })
 
   test('keeps server-persisted layout state out of the URL', async ({ page, request }) => {

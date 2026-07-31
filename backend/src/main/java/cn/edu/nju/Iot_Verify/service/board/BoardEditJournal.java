@@ -83,7 +83,13 @@ public class BoardEditJournal {
             Object before,
             Object after,
             Integer entityOrder) {
-        journalRepo.deleteByUserIdAndUndoneTrue(userId);
+        // Under MySQL REPEATABLE READ, deleting an empty per-user range takes a next-key lock on
+        // the unique index's end gap. Two different accounts creating their first entries can then
+        // deadlock when both inserts need that same gap. A consistent existence read takes no such
+        // lock; issue the delete only when there is an abandoned redo branch to remove.
+        if (journalRepo.existsByUserIdAndUndoneTrue(userId)) {
+            journalRepo.deleteByUserIdAndUndoneTrue(userId);
+        }
 
         // Allocation is read-max-then-add-one, and the per-user lock guarding it is in-JVM only. The
         // unique (user_id, sequence) index (BoardEditJournalSequenceUniqueness) turns a cross-instance

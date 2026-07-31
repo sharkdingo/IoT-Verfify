@@ -5,6 +5,7 @@ import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatExecutionConfigTest {
@@ -13,7 +14,10 @@ class ChatExecutionConfigTest {
 
     @Test
     void defaults_shouldReserveOneCompleteWorstCaseTurn() {
-        assertTrue(validator.validate(new ChatExecutionConfig()).isEmpty());
+        ChatExecutionConfig config = new ChatExecutionConfig();
+
+        assertTrue(validator.validate(config).isEmpty());
+        assertEquals(4, config.getMaxConcurrentSessionsPerUser());
     }
 
     @Test

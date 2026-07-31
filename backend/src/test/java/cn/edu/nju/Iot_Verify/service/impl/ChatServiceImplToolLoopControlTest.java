@@ -11,6 +11,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResultContract;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
@@ -67,7 +68,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -248,6 +248,15 @@ class ChatServiceImplToolLoopControlTest {
         });
     }
 
+    private static void delayAtLeast(Duration duration) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Test delay was interrupted", e);
+        }
+    }
+
     @Test
     void executeToolLoop_whenDisconnected_shouldSkipIntentCall() throws Exception {
         invokeToolLoop(new AtomicBoolean(true), new LinkedHashSet<>());
@@ -298,6 +307,10 @@ class ChatServiceImplToolLoopControlTest {
                 service, "board_overview",
                 "{\"devices\":[],\"rules\":[],\"specs\":[],\"edges\":[],"
                         + "\"environmentVariables\":[]}").toString());
+        assertEquals("FAILED", classifyToolExecutionMethod.invoke(
+                service, "manage_rule", "{\"message\":\"Rule updated successfully.\"}").toString());
+        assertEquals("USABLE", classifyToolExecutionMethod.invoke(
+                service, "manage_rule", "{\"operation\":\"reordered\",\"ruleCount\":2}").toString());
         assertNull(toolProgressPresenter.toolProgressDetail(
                 "board_overview", "{\"devices\":[]}", false));
     }
@@ -758,6 +771,65 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void pendingConfirmationPrompt_usesClearBoardSchemaWithoutInventingTargetArgument() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "buildPendingTaskSystemPrompt",
+                AiDestructiveActionGuard.PendingActionContext.class,
+                AiScenarioDraftStore.PendingApplication.class,
+                AiTaskContinuationStore.ContinuationContext.class,
+                ChatConfirmationDetector.ConfirmationDecision.class,
+                String.class);
+        method.setAccessible(true);
+
+        LlmMessage context = (LlmMessage) method.invoke(
+                service,
+                new AiDestructiveActionGuard.PendingActionContext(
+                        "clear_board", "current-board", "clear-token"),
+                null,
+                null,
+                ChatConfirmationDetector.ConfirmationDecision.confirmed(
+                        ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE),
+                "Confirm clearing the Board");
+
+        assertTrue(context.content().contains("Call clear_board exactly once"));
+        assertTrue(context.content().contains("confirmed=true"));
+        assertTrue(context.content().contains("clear-token"));
+        assertTrue(context.content().contains("Do not add a target field"));
+        assertFalse(context.content().contains("current-board"));
+        assertFalse(context.content().contains("targetKey"));
+    }
+
+    @Test
+    void pendingConfirmationPrompt_usesHistoryClearSchemaWithoutInventingTargetArgument() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "buildPendingTaskSystemPrompt",
+                AiDestructiveActionGuard.PendingActionContext.class,
+                AiScenarioDraftStore.PendingApplication.class,
+                AiTaskContinuationStore.ContinuationContext.class,
+                ChatConfirmationDetector.ConfirmationDecision.class,
+                String.class);
+        method.setAccessible(true);
+
+        LlmMessage context = (LlmMessage) method.invoke(
+                service,
+                new AiDestructiveActionGuard.PendingActionContext(
+                        "manage_board_history", "board-edit-history", "history-token"),
+                null,
+                null,
+                ChatConfirmationDetector.ConfirmationDecision.confirmed(
+                        ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE),
+                "Confirm clearing unusable undo history");
+
+        assertTrue(context.content().contains("Call manage_board_history exactly once"));
+        assertTrue(context.content().contains("action=clear"));
+        assertTrue(context.content().contains("confirmed=true"));
+        assertTrue(context.content().contains("history-token"));
+        assertTrue(context.content().contains("Do not add a target field"));
+        assertFalse(context.content().contains("board-edit-history"));
+        assertFalse(context.content().contains("targetKey"));
+    }
+
+    @Test
     void pendingConfirmationPrompt_replaysStoredApplyFixWithoutRepeatingSignedSuggestion() throws Exception {
         Method method = ChatServiceImpl.class.getDeclaredMethod(
                 "buildPendingTaskSystemPrompt",
@@ -805,7 +877,7 @@ class ChatServiceImplToolLoopControlTest {
                 .thenReturn(toolCallResult("manage_rule", "{}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("manage_rule", "{}"))
-                .thenReturn("{\"message\":\"ok\"}");
+                .thenReturn("{\"operation\":\"created\",\"message\":\"ok\"}");
 
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         invokeToolLoop(new AtomicBoolean(false), commandSet);
@@ -814,6 +886,7 @@ class ChatServiceImplToolLoopControlTest {
         StreamResponseDto.CommandDto cmd = commandSet.iterator().next();
         assertEquals("REFRESH_DATA", cmd.getType());
         assertEquals("rule_list", cmd.getPayload().get("target"));
+        assertEquals("RULES_UPDATED", cmd.getPayload().get("assistantAction"));
     }
 
     @Test
@@ -828,7 +901,9 @@ class ChatServiceImplToolLoopControlTest {
         invokeToolLoop(new AtomicBoolean(false), commandSet);
 
         assertEquals(1, commandSet.size());
-        assertEquals("board_state", commandSet.iterator().next().getPayload().get("target"));
+        StreamResponseDto.CommandDto command = commandSet.iterator().next();
+        assertEquals("board_state", command.getPayload().get("target"));
+        assertEquals("SCENE_APPLIED", command.getPayload().get("assistantAction"));
     }
 
     @Test
@@ -843,7 +918,30 @@ class ChatServiceImplToolLoopControlTest {
         invokeToolLoop(new AtomicBoolean(false), commandSet);
 
         assertEquals(1, commandSet.size());
-        assertEquals("rule_list", commandSet.iterator().next().getPayload().get("target"));
+        StreamResponseDto.CommandDto command = commandSet.iterator().next();
+        assertEquals("rule_list", command.getPayload().get("target"));
+        assertEquals("REPAIR_APPLIED", command.getPayload().get("assistantAction"));
+    }
+
+    @Test
+    void executeToolLoop_whenEditHistoryIsCleared_shouldRefreshBeforeShowingExactSummary()
+            throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("manage_board_history", "{\"action\":\"clear\"}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("manage_board_history", "{\"action\":\"clear\"}"))
+                .thenReturn("{\"operation\":\"history_cleared\",\"clearedEntryCount\":4,"
+                        + "\"canUndo\":false,\"canRedo\":false}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        assertEquals(1, commandSet.size());
+        StreamResponseDto.CommandDto command = commandSet.iterator().next();
+        assertEquals("board_state", command.getPayload().get("target"));
+        assertFalse(command.getPayload().containsKey("assistantAction"));
+        assertTrue(String.valueOf(command.getPayload().get("assistantSummary"))
+                .contains("Cleared 4 undo/redo"));
     }
 
     @Test
@@ -858,7 +956,9 @@ class ChatServiceImplToolLoopControlTest {
         Object loopResult = invokeToolLoop(new AtomicBoolean(false), commandSet);
 
         assertEquals(1, commandSet.size());
-        assertEquals("rule_list", commandSet.iterator().next().getPayload().get("target"));
+        StreamResponseDto.CommandDto command = commandSet.iterator().next();
+        assertEquals("rule_list", command.getPayload().get("target"));
+        assertEquals("OUTCOME_RECONCILED", command.getPayload().get("assistantAction"));
         assertEquals(0, recordInt(loopResult, "successfulToolCalls"));
         assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"));
         assertEquals(1, recordInt(loopResult, "uncertainMutationCalls"));
@@ -888,7 +988,9 @@ class ChatServiceImplToolLoopControlTest {
             Object loopResult = invokeToolLoop(new AtomicBoolean(false), commandSet);
 
             assertEquals(1, commandSet.size(), toolName);
-            assertEquals("run_history", commandSet.iterator().next().getPayload().get("target"), toolName);
+            StreamResponseDto.CommandDto command = commandSet.iterator().next();
+            assertEquals("run_history", command.getPayload().get("target"), toolName);
+            assertEquals("OUTCOME_RECONCILED", command.getPayload().get("assistantAction"), toolName);
             assertEquals(0, recordInt(loopResult, "successfulToolCalls"), toolName);
             assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"), toolName);
             assertEquals(1, recordInt(loopResult, "uncertainMutationCalls"), toolName);
@@ -897,9 +999,11 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
-    void executeToolLoop_whenReadOnlyResultIsUnavailable_shouldStopWithoutRefresh() throws Exception {
+    void executeToolLoop_whenReadOnlyResultIsUnavailable_shouldContinuePlanningWithoutRefresh()
+            throws Exception {
         when(llmChatService.chatWithTools(anyList(), anyList()))
-                .thenReturn(toolCallResult("list_rules", "{}"));
+                .thenReturn(toolCallResult("list_rules", "{}"))
+                .thenReturn(textResult("done"));
         when(aiToolManager.execute("list_rules", "{}"))
                 .thenReturn("{\"resultStatus\":\"RESULT_UNAVAILABLE\",\"resultAvailable\":false,"
                         + "\"mutationMayHaveCommitted\":false}");
@@ -911,7 +1015,35 @@ class ChatServiceImplToolLoopControlTest {
         assertEquals(0, recordInt(loopResult, "successfulToolCalls"));
         assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"));
         assertEquals(0, recordInt(loopResult, "uncertainMutationCalls"));
-        verify(llmChatService).chatWithTools(anyList(), anyList());
+        verify(llmChatService, org.mockito.Mockito.times(2)).chatWithTools(anyList(), anyList());
+    }
+
+    @Test
+    void executeToolLoop_whenOneOfSeveralReadResultsIsUnavailable_shouldRunIndependentCalls()
+            throws Exception {
+        List<LlmToolCall> plannedCalls = List.of(
+                new LlmToolCall("tc_unavailable", "get_trace", "{\"traceId\":1}"),
+                new LlmToolCall("tc_later", "list_rules", "{}"));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(LlmChatResponse.ofToolCalls(plannedCalls))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("get_trace", "{\"traceId\":1}"))
+                .thenReturn("{\"resultStatus\":\"RESULT_UNAVAILABLE\",\"resultAvailable\":false,"
+                        + "\"mutationMayHaveCommitted\":false}");
+        when(aiToolManager.execute("list_rules", "{}"))
+                .thenReturn("{\"rules\":[]}");
+
+        List<LlmMessage> messages = new ArrayList<>();
+        Object loopResult = invokeToolLoop(
+                new AtomicBoolean(false), new LinkedHashSet<>(), mock(SseEmitter.class), messages);
+
+        verify(aiToolManager).execute("list_rules", "{}");
+        assertEquals(1, recordInt(loopResult, "successfulToolCalls"));
+        assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"));
+        assertEquals(3, messages.size());
+        assertEquals("tc_later", messages.get(2).toolCallId());
+        assertFalse(new ObjectMapper().readTree(messages.get(2).content())
+                .path("skipped").asBoolean());
     }
 
     @Test
@@ -1029,7 +1161,7 @@ class ChatServiceImplToolLoopControlTest {
                 .thenReturn(toolCallResult("delete_device", "{\"identifier\":\"light_1\"}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("delete_device", "{\"identifier\":\"light_1\"}"))
-                .thenReturn("{\"message\":\"ok\"}");
+                .thenReturn("{\"operation\":\"deleted\",\"deleted\":true,\"message\":\"ok\"}");
 
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         invokeToolLoop(new AtomicBoolean(false), commandSet);
@@ -1046,7 +1178,7 @@ class ChatServiceImplToolLoopControlTest {
                 .thenReturn(toolCallResult("add_device", "{\"templateName\":\"Sensor\"}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("add_device", "{\"templateName\":\"Sensor\"}"))
-                .thenReturn("{\"message\":\"ok\"}");
+                .thenReturn("{\"operation\":\"created\",\"message\":\"ok\"}");
 
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         invokeToolLoop(new AtomicBoolean(false), commandSet);
@@ -1064,7 +1196,7 @@ class ChatServiceImplToolLoopControlTest {
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("edit_device",
                 "{\"id\":\"device-1\",\"field\":\"label\",\"label\":\"Hall\"}"))
-                .thenReturn("{\"message\":\"ok\"}");
+                .thenReturn("{\"operation\":\"renamed\",\"message\":\"ok\"}");
 
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         invokeToolLoop(new AtomicBoolean(false), commandSet);
@@ -1081,13 +1213,45 @@ class ChatServiceImplToolLoopControlTest {
                 .thenReturn(toolCallResult("manage_environment", "{\"action\":\"set\",\"name\":\"temperature\",\"value\":\"21\"}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("manage_environment", "{\"action\":\"set\",\"name\":\"temperature\",\"value\":\"21\"}"))
-                .thenReturn("{\"message\":\"ok\",\"changesApplied\":true}");
+                .thenReturn("{\"message\":\"ok\",\"operation\":\"updated\",\"changesApplied\":true}");
 
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         invokeToolLoop(new AtomicBoolean(false), commandSet);
 
         StreamResponseDto.CommandDto command = commandSet.iterator().next();
         assertEquals("environment_list", command.getPayload().get("target"));
+        assertEquals("ENVIRONMENT_UPDATED", command.getPayload().get("assistantAction"));
+    }
+
+    @Test
+    void executeToolLoop_whenSuccessfulToolReportsNoChange_shouldNotClaimAnAssistantAction()
+            throws Exception {
+        Map<String, String> noChangeResults = Map.ofEntries(
+                Map.entry("manage_environment", "{\"message\":\"listed\",\"operation\":\"listed\",\"changesApplied\":false}"),
+                Map.entry("edit_device", "{\"message\":\"unchanged\",\"operation\":\"unchanged\"}"),
+                Map.entry("delete_device", "{\"message\":\"preview\",\"operation\":\"preview\",\"requiresUserConfirmation\":true}"),
+                Map.entry("manage_rule", "{\"message\":\"preview\",\"operation\":\"preview\",\"requiresUserConfirmation\":true}"),
+                Map.entry("apply_fix", "{\"message\":\"preview\",\"operation\":\"preview\",\"requiresUserConfirmation\":true}"),
+                Map.entry("manage_spec", "{\"message\":\"preview\",\"operation\":\"preview\",\"requiresUserConfirmation\":true}"),
+                Map.entry("apply_scenario", "{\"message\":\"preview\",\"operation\":\"preview\",\"requiresUserConfirmation\":true}"),
+                Map.entry("delete_template", "{\"message\":\"in use\",\"requiresUserConfirmation\":false,\"preview\":{}}"),
+                Map.entry("reset_default_templates", "{\"message\":\"blocked\",\"requiresUserConfirmation\":false,\"preview\":{}}"),
+                Map.entry("cancel_verify_task", "{\"message\":\"already completed\",\"cancellationAccepted\":false}"),
+                Map.entry("delete_trace", "{\"message\":\"preview\",\"operation\":\"preview\",\"requiresUserConfirmation\":true}"),
+                Map.entry("dismiss_verify_task", "{\"message\":\"preview\",\"operation\":\"preview\",\"requiresUserConfirmation\":true}")
+        );
+        for (Map.Entry<String, String> entry : noChangeResults.entrySet()) {
+            org.mockito.Mockito.reset(llmChatService, aiToolManager, messageRepo);
+            when(llmChatService.chatWithTools(anyList(), anyList()))
+                    .thenReturn(toolCallResult(entry.getKey(), "{}"))
+                    .thenReturn(textResult("done"));
+            when(aiToolManager.execute(entry.getKey(), "{}")).thenReturn(entry.getValue());
+
+            Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+            invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+            assertTrue(commandSet.isEmpty(), entry.getKey());
+        }
     }
 
     @Test
@@ -1103,7 +1267,7 @@ class ChatServiceImplToolLoopControlTest {
                     .thenReturn(toolCallResult(toolName, "{}"))
                     .thenReturn(textResult("done"));
             when(aiToolManager.execute(toolName, "{}"))
-                    .thenReturn("{\"message\":\"ok\"}");
+                    .thenReturn(confirmedRunHistoryMutationResult(toolName));
 
             Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
             invokeToolLoop(new AtomicBoolean(false), commandSet);
@@ -1111,6 +1275,14 @@ class ChatServiceImplToolLoopControlTest {
             assertEquals(1, commandSet.size(), toolName);
             StreamResponseDto.CommandDto command = commandSet.iterator().next();
             assertEquals("run_history", command.getPayload().get("target"), toolName);
+            String expectedAction = switch (toolName) {
+                case "verify_model" -> "FORMAL_VERIFICATION_RUN";
+                case "verify_model_async" -> "VERIFICATION_TASK_STARTED";
+                case "simulate_model_async" -> "SIMULATION_TASK_STARTED";
+                case "fuzz_model_async" -> "EXPLORATION_TASK_STARTED";
+                default -> "RUN_HISTORY_UPDATED";
+            };
+            assertEquals(expectedAction, command.getPayload().get("assistantAction"), toolName);
         }
     }
 
@@ -1134,7 +1306,7 @@ class ChatServiceImplToolLoopControlTest {
                 .thenReturn(toolCallResult("manage_rule", "{}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("manage_rule", "{}"))
-                .thenReturn("{\"message\":\"ok\"}");
+                .thenReturn("{\"operation\":\"created\",\"message\":\"ok\"}");
 
         SseEmitter emitter = mock(SseEmitter.class);
 
@@ -1143,6 +1315,36 @@ class ChatServiceImplToolLoopControlTest {
 
         verify(aiToolManager).execute("manage_rule", "{}");
         assertEquals(1, commandSet.size());
+    }
+
+    @Test
+    void sendFrontendCommands_shouldSendActionReceiptAfterAllPlainRefreshes() throws Exception {
+        SseEmitter emitter = mock(SseEmitter.class);
+        List<StreamResponseDto> frames = captureSseFrames(emitter);
+        Set<StreamResponseDto.CommandDto> commands = new LinkedHashSet<>();
+        commands.add(new StreamResponseDto.CommandDto("REFRESH_DATA", Map.of(
+                "target", "device_list", "assistantAction", "DEVICE_ADDED")));
+        commands.add(new StreamResponseDto.CommandDto("REFRESH_DATA", Map.of(
+                "target", "environment_list")));
+
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "sendFrontendCommands", SseEmitter.class, Set.class);
+        method.setAccessible(true);
+
+        assertEquals(true, method.invoke(service, emitter, commands));
+        assertEquals(List.of("environment_list", "device_list"), frames.stream()
+                .map(StreamResponseDto::getCommand)
+                .map(StreamResponseDto.CommandDto::getPayload)
+                .map(payload -> String.valueOf(payload.get("target")))
+                .toList());
+    }
+
+    @Test
+    void everyMutationCapableTool_shouldHaveAnAuthoritativeRefreshTarget() {
+        for (String toolName : AiToolResultContract.mutationCapableTools()) {
+            assertFalse(toolProgressPresenter.potentialRefreshTargets(toolName).isEmpty(),
+                    toolName + " has no authoritative reconciliation target");
+        }
     }
 
     @Test
@@ -1211,6 +1413,26 @@ class ChatServiceImplToolLoopControlTest {
                         && message.getExecutionStatus() == ChatExecutionStatus.DISCONNECTED));
         verifyNoInteractions(llmChatService, aiToolManager);
         verify(destructiveActionGuard).clearUser(1L);
+        assertTrue(transactionPropagations.contains(TransactionDefinition.PROPAGATION_REQUIRES_NEW));
+        service.endStreamRequest(1L, "s1", executionId);
+    }
+
+    @Test
+    void requestUserExecutionStop_whenRequestIsQueued_persistsAnExplicitStop() {
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        String executionId = service.beginStreamRequest(1L, "s1", "turn-1", "hello");
+        transactionPropagations.clear();
+        service.requestUserExecutionStop(1L);
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                message -> message != null
+                        && message.getExecutionStatus() == ChatExecutionStatus.STOPPED));
+        verifyNoInteractions(llmChatService, aiToolManager);
+        verify(destructiveActionGuard, never()).clearUser(1L);
+        verify(scenarioDraftStore, never()).clearUser(1L);
+        verify(taskContinuationStore, never()).clearUser(1L);
         assertTrue(transactionPropagations.contains(TransactionDefinition.PROPAGATION_REQUIRES_NEW));
         service.endStreamRequest(1L, "s1", executionId);
     }
@@ -1539,7 +1761,7 @@ class ChatServiceImplToolLoopControlTest {
         chatExecutionConfig.setLeaseTtlMs(20);
         chatExecutionConfig.setLeaseHeartbeatMs(5);
         transactionTemplate = transactionTemplateWithCommitHook(commit -> {
-            if (commit == 1) LockSupport.parkNanos(Duration.ofMillis(80).toNanos());
+            if (commit == 1) delayAtLeast(Duration.ofMillis(80));
         });
         service = newService();
 
@@ -1559,7 +1781,7 @@ class ChatServiceImplToolLoopControlTest {
         chatExecutionConfig.setLeaseTtlMs(1_000);
         chatExecutionConfig.setLeaseHeartbeatMs(400);
         transactionTemplate = transactionTemplateWithCommitHook(commit -> {
-            if (commit == 1) LockSupport.parkNanos(Duration.ofMillis(700).toNanos());
+            if (commit == 1) delayAtLeast(Duration.ofMillis(700));
         });
         service = newService();
 
@@ -1578,7 +1800,7 @@ class ChatServiceImplToolLoopControlTest {
         chatExecutionConfig.setLeaseTtlMs(20);
         chatExecutionConfig.setLeaseHeartbeatMs(5);
         transactionTemplate = transactionTemplateWithCommitHook(commit -> {
-            if (commit == 1) LockSupport.parkNanos(Duration.ofMillis(80).toNanos());
+            if (commit == 1) delayAtLeast(Duration.ofMillis(80));
         });
         service = newService();
         doThrow(new IllegalStateException("database unavailable"))
@@ -1669,7 +1891,7 @@ class ChatServiceImplToolLoopControlTest {
         chatExecutionConfig.setLeaseTtlMs(50);
         chatExecutionConfig.setLeaseHeartbeatMs(10);
         transactionTemplate = transactionTemplateWithCommitHook(commit -> {
-            if (commit == 2) LockSupport.parkNanos(Duration.ofMillis(150).toNanos());
+            if (commit == 2) delayAtLeast(Duration.ofMillis(150));
         });
         service = newService();
         String executionId = service.beginStreamRequest(1L, "s1", "turn-admission", "hello");
@@ -1690,7 +1912,7 @@ class ChatServiceImplToolLoopControlTest {
         chatExecutionConfig.setLeaseTtlMs(1_000);
         chatExecutionConfig.setLeaseHeartbeatMs(400);
         transactionTemplate = transactionTemplateWithCommitHook(commit -> {
-            if (commit == 3) LockSupport.parkNanos(Duration.ofMillis(700).toNanos());
+            if (commit == 3) delayAtLeast(Duration.ofMillis(700));
         });
         service = newService();
         ChatSessionPo firstSession = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
@@ -1735,7 +1957,7 @@ class ChatServiceImplToolLoopControlTest {
         String executionId = service.beginStreamRequest(1L, "s1", "turn-admission", "hello");
         LocalDateTime originalExpiry = session.getActiveExecutionExpiresAt();
         doAnswer(invocation -> {
-            LockSupport.parkNanos(Duration.ofMillis(80).toNanos());
+            delayAtLeast(Duration.ofMillis(80));
             return List.of(session);
         }).when(sessionRepo).findByIdInForUpdate(any());
 
@@ -1893,6 +2115,78 @@ class ChatServiceImplToolLoopControlTest {
                         && "assistant".equals(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED
                         && msg.getContent().contains("The user stopped")));
+        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.DISCONNECTED));
+        service.endStreamRequest(1L, "s1", executionId);
+    }
+
+    @Test
+    void processStreamChat_whenBrowserDetachesDuringPlanning_continuesAndPersistsTerminal() {
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        AtomicReference<Runnable> completionCallback = new AtomicReference<>();
+        SseEmitter emitter = mock(SseEmitter.class);
+        doAnswer(invocation -> {
+            completionCallback.set(invocation.getArgument(0));
+            return null;
+        }).when(emitter).onCompletion(any());
+        when(llmChatService.chatWithTools(anyList(), anyList())).thenAnswer(invocation -> {
+            completionCallback.get().run();
+            return textResult("planning done");
+        });
+        doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("Finished in the background.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        String executionId = service.beginStreamRequest(
+                1L, "s1", "turn-1", "continue after I switch conversations");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "continue after I switch conversations", emitter);
+
+        verify(llmChatService).streamReply(anyList(), any(), any());
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL
+                        && msg.getContent().contains("Finished in the background.")));
+        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.DISCONNECTED));
+        service.endStreamRequest(1L, "s1", executionId);
+    }
+
+    @Test
+    void processStreamChat_whenSseWritesFail_continuesAndPersistsTerminal() throws Exception {
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList())).thenReturn(textResult("planning done"));
+        doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("The detached request still completed.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+        SseEmitter emitter = mock(SseEmitter.class);
+        doThrow(new IOException("browser transport detached"))
+                .when(emitter).send(any(SseEmitter.SseEventBuilder.class));
+
+        String executionId = service.beginStreamRequest(
+                1L, "s1", "turn-1", "continue after transport failure");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "continue after transport failure", emitter);
+
+        verify(llmChatService).streamReply(anyList(), any(), any());
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL
+                        && msg.getContent().contains("The detached request still completed.")));
         verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
                         && "assistant".equals(msg.getRole())
@@ -2137,6 +2431,85 @@ class ChatServiceImplToolLoopControlTest {
                         && "assistant".equalsIgnoreCase(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL
                         && msg.getContent().contains("temporarily unavailable")));
+    }
+
+    @Test
+    void processStreamChat_whenFinalReplyFailsAfterMutation_doesNotRepeatDeliveredActionReceipt()
+            throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        useSession(session);
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of(toolSpec("manage_rule")));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("manage_rule", "{}"))
+                .thenReturn(textResult("planning done"));
+        when(aiToolManager.execute("manage_rule", "{}"))
+                .thenReturn("{\"operation\":\"created\",\"message\":\"ok\"}");
+        doThrow(ServiceUnavailableException.aiService(new RuntimeException("provider unavailable")))
+                .when(llmChatService).streamReply(anyList(), any(), any());
+        SseEmitter emitter = mock(SseEmitter.class);
+        List<StreamResponseDto> frames = captureSseFrames(emitter);
+
+        String executionId = service.beginStreamRequest(1L, "s1", "turn-1", "create a rule");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "create a rule", emitter);
+
+        List<StreamResponseDto.CommandDto> commands = frames.stream()
+                .map(StreamResponseDto::getCommand)
+                .filter(Objects::nonNull)
+                .toList();
+        assertEquals(1, commands.size());
+        assertEquals("RULES_UPDATED", commands.get(0).getPayload().get("assistantAction"));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL
+                        && msg.getContent().contains("affected data was refreshed")
+                        && msg.getContent().contains("final AI explanation could not be generated")));
+    }
+
+    @Test
+    void processStreamChat_whenPendingRefreshCannotBeDelivered_persistsTruthfulReconciliationNotice()
+            throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        useSession(session);
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of(toolSpec("manage_rule")));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("manage_rule", "{}"))
+                .thenReturn(textResult("planning done"));
+        when(aiToolManager.execute("manage_rule", "{}"))
+                .thenReturn("{\"operation\":\"created\",\"message\":\"ok\"}");
+        doThrow(new IllegalStateException("continuation state unavailable"))
+                .when(taskContinuationStore).clear(1L, "s1");
+        SseEmitter emitter = mock(SseEmitter.class);
+        doAnswer(invocation -> {
+            SseEmitter.SseEventBuilder event = invocation.getArgument(0, SseEmitter.SseEventBuilder.class);
+            for (ResponseBodyEmitter.DataWithMediaType item : event.build()) {
+                if (item.getData() instanceof StreamResponseDto frame && frame.getCommand() != null) {
+                    throw new IOException("connection failed while sending refresh");
+                }
+            }
+            return null;
+        }).when(emitter).send(any(SseEmitter.SseEventBuilder.class));
+
+        String executionId = service.beginStreamRequest(1L, "s1", "turn-1", "create a rule");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "create a rule", emitter);
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL
+                        && msg.getContent().contains("refresh instructions could not be fully delivered")
+                        && msg.getContent().contains("Reload and review current state before retrying")
+                        && !msg.getContent().contains("client was asked to refresh")));
     }
 
     @Test
@@ -2930,6 +3303,48 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void processStreamChat_whenMutationCapableToolOnlyReads_doesNotTreatItAsMutationEvidence()
+            throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        useSession(session);
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of(toolSpec("manage_environment")));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("manage_environment", "{\"action\":\"list\"}"), textResult("done"));
+        when(aiToolManager.execute("manage_environment", "{\"action\":\"list\"}"))
+                .thenReturn("{\"operation\":\"listed\",\"environmentVariables\":[]}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("I deleted every device.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+        SseEmitter emitter = mock(SseEmitter.class);
+        List<StreamResponseDto> frames = captureSseFrames(emitter);
+
+        String executionId = service.beginStreamRequest(1L, "s1", "turn-1", "list environment values");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "list environment values", emitter);
+
+        String streamedContent = frames.stream()
+                .map(StreamResponseDto::getContent)
+                .filter(Objects::nonNull)
+                .reduce("", String::concat);
+        assertTrue(streamedContent.contains("authoritative tool record"));
+        assertFalse(streamedContent.contains("I deleted every device."));
+        assertTrue(frames.stream().noneMatch(frame -> frame.getCommand() != null));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getContent().contains("authoritative tool record")
+                        && !msg.getContent().contains("I deleted every device.")
+                        && msg.getExecutionStatus() == ChatExecutionStatus.COMPLETED));
+    }
+
+    @Test
     void processStreamChat_whenFailedToolModelClaimsMutation_hidesUnsupportedClaim() throws Exception {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("s1");
@@ -2968,6 +3383,44 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(streamedContent.contains("The system hid an unverified reply"));
         assertFalse(streamedContent.contains("I deleted every device."));
         verify(emitter).complete();
+    }
+
+    @Test
+    void processStreamChat_whenMutationHasAuthoritativeEvidence_preservesModelSummary() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        useSession(session);
+        when(messageRepo.findTop80BySessionIdOrderByIdDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of(toolSpec("manage_rule")));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("manage_rule", "{}"), textResult("done"));
+        when(aiToolManager.execute("manage_rule", "{}"))
+                .thenReturn("{\"operation\":\"created\",\"rule\":{\"description\":\"Turn on the light\"}}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("I created the requested rule.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+        SseEmitter emitter = mock(SseEmitter.class);
+        List<StreamResponseDto> frames = captureSseFrames(emitter);
+
+        String executionId = service.beginStreamRequest(1L, "s1", "turn-1", "create the rule");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "create the rule", emitter);
+
+        String streamedContent = frames.stream()
+                .map(StreamResponseDto::getContent)
+                .filter(Objects::nonNull)
+                .reduce("", String::concat);
+        assertTrue(streamedContent.contains("I created the requested rule."));
+        assertFalse(streamedContent.contains("system replaced"));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getContent().contains("I created the requested rule.")
+                        && msg.getExecutionStatus() == ChatExecutionStatus.COMPLETED));
     }
 
     @Test
@@ -3363,6 +3816,23 @@ class ChatServiceImplToolLoopControlTest {
     private LlmToolSpec toolSpec(String name) {
         return LlmToolSpec.of(name, name,
                 new FunctionParameterSchema("object", Map.of(), List.of()));
+    }
+
+    private String confirmedRunHistoryMutationResult(String toolName) {
+        return switch (toolName) {
+            case "verify_model" -> "{\"outcome\":\"SATISFIED\",\"historyPersistence\":{"
+                    + "\"status\":\"SAVED\",\"runId\":1},\"message\":\"ok\"}";
+            case "verify_model_async", "simulate_model_async", "fuzz_model_async" ->
+                    "{\"taskAccepted\":true,\"taskId\":1,\"message\":\"ok\"}";
+            case "cancel_verify_task", "cancel_simulate_task", "cancel_fuzz_task" ->
+                    "{\"taskId\":1,\"cancellationAccepted\":true,\"message\":\"ok\"}";
+            case "delete_trace", "delete_simulation_trace",
+                    "delete_verification_run", "delete_fuzz_run" ->
+                    "{\"deleted\":true,\"message\":\"ok\"}";
+            case "dismiss_verify_task", "dismiss_simulate_task", "dismiss_fuzz_task" ->
+                    "{\"dismissed\":true,\"message\":\"ok\"}";
+            default -> throw new IllegalArgumentException("Unexpected run-history tool " + toolName);
+        };
     }
 
     private int recordInt(Object record, String accessor) throws Exception {

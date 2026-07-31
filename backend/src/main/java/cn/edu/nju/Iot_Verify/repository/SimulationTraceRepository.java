@@ -14,8 +14,21 @@ import java.util.Optional;
 @Repository
 public interface SimulationTraceRepository extends JpaRepository<SimulationTracePo, Long> {
 
-    List<SimulationTraceSummaryProjection> findByUserIdOrderByCreatedAtDescIdDesc(
-            Long userId, Pageable pageable);
+    @Query("SELECT trace.id AS id, trace.initiator AS initiator, "
+            + "trace.requestedSteps AS requestedSteps, "
+            + "trace.steps AS steps, trace.stateCount AS stateCount, "
+            + "trace.logsJson AS logsJson, trace.generationIssuesJson AS generationIssuesJson, "
+            + "trace.modelSnapshotJson AS modelSnapshotJson, "
+            + "trace.modelSemanticsJson AS modelSemanticsJson, trace.isAttack AS isAttack, "
+            + "trace.attackBudget AS attackBudget, trace.enablePrivacy AS enablePrivacy, "
+            + "trace.modeledDeviceAttackPointCount AS modeledDeviceAttackPointCount, "
+            + "trace.modeledFalsifiableReadingDeviceCount AS modeledFalsifiableReadingDeviceCount, "
+            + "trace.modeledAutomationLinkAttackPointCount AS modeledAutomationLinkAttackPointCount, "
+            + "trace.createdAt AS createdAt "
+            + "FROM SimulationTracePo trace WHERE trace.userId = :userId "
+            + "ORDER BY trace.createdAt DESC, trace.id DESC")
+    List<SimulationTraceSummaryProjection> findSummariesByUserId(
+            @Param("userId") Long userId, Pageable pageable);
 
     @Query("SELECT COUNT(trace) FROM SimulationTracePo trace "
             + "WHERE trace.userId = :userId AND NOT EXISTS ("

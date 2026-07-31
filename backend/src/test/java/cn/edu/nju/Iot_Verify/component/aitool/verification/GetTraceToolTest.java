@@ -18,6 +18,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.never;
@@ -129,6 +130,10 @@ class GetTraceToolTest {
         assertEquals(false, json.path("modelComplete").asBoolean());
         assertEquals(1, json.path("disabledRuleCount").asInt());
         assertEquals(1, json.path("stateCount").asInt());
+        assertEquals(0, json.path("stateOffset").asInt());
+        assertEquals(10, json.path("stateLimit").asInt());
+        assertEquals(1, json.path("returnedStateCount").asInt());
+        assertEquals(false, json.path("hasMoreStates").asBoolean());
         assertEquals(false, json.has("trace"));
         assertEquals("Front camera", json.path("states").get(0).path("devices").get(0)
                 .path("deviceLabel").asText());
@@ -138,5 +143,39 @@ class GetTraceToolTest {
         assertEquals(false, json.path("states").get(0).path("triggeredRules").get(0).has("ruleId"));
         assertEquals(false, json.path("states").get(0).path("triggeredRules").get(0).has("ruleIndex"));
         assertEquals(true, json.path("message").asText().contains("incomplete"));
+    }
+
+    @Test
+    void execute_pagesLongTraceInsteadOfReturningTheWholeSequence() throws Exception {
+        UserContextHolder.setUserId(1L);
+        TraceDto trace = TraceDto.builder()
+                .id(8L)
+                .modelComplete(true)
+                .states(IntStream.range(0, 12)
+                        .mapToObj(index -> TraceStateDto.builder()
+                                .stateIndex(index)
+                                .devices(List.of())
+                                .triggeredRules(List.of())
+                                .compromisedAutomationLinks(List.of())
+                                .build())
+                        .toList())
+                .build();
+        when(verificationService.getTrace(1L, 8L)).thenReturn(trace);
+
+        JsonNode json = objectMapper.readTree(tool.execute(
+                "{\"traceId\":8,\"stateOffset\":9,\"stateLimit\":2}"));
+
+        assertEquals(12, json.path("stateCount").asInt());
+        assertEquals(9, json.path("stateOffset").asInt());
+        assertEquals(2, json.path("returnedStateCount").asInt());
+        assertEquals(9, json.path("states").get(0).path("stateIndex").asInt());
+        assertEquals(11, json.path("nextStateOffset").asInt());
+        assertEquals(true, json.path("hasMoreStates").asBoolean());
+
+        JsonNode beyondEnd = objectMapper.readTree(tool.execute(
+                "{\"traceId\":8,\"stateOffset\":100000}"));
+        assertEquals(100000, beyondEnd.path("stateOffset").asInt());
+        assertEquals(0, beyondEnd.path("returnedStateCount").asInt());
+        assertEquals(false, beyondEnd.path("hasMoreStates").asBoolean());
     }
 }

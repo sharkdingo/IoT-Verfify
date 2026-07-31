@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.po;
 
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -26,6 +27,11 @@ public class SimulationTracePo {
 
     @Column(nullable = false)
     private Long userId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 32, columnDefinition = "varchar(32) default 'UNKNOWN'")
+    @Builder.Default
+    private RunInitiator initiator = RunInitiator.UNKNOWN;
 
     private int requestedSteps;
 
@@ -83,6 +89,9 @@ public class SimulationTracePo {
     protected void onCreate() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
+        }
+        if (initiator == null) {
+            initiator = RunInitiator.UNKNOWN;
         }
     }
 }

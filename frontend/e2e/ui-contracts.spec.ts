@@ -159,7 +159,7 @@ test.describe('board accessibility contracts', () => {
 
     const privacy = page.getByTestId('verification-privacy-toggle')
     await expect(privacy).toHaveRole('switch')
-    await expect(privacy).toHaveAccessibleName(/private-data/i)
+    await expect(privacy).toHaveAccessibleName(/sensitivity-label propagation/i)
     await expect(privacy).toHaveAttribute('aria-checked', 'false')
 
     await privacy.click()

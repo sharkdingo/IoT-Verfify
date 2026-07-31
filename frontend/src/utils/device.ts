@@ -187,6 +187,11 @@ export const MANIFEST_VALIDATION_MESSAGE_KEYS = {
     internalVariableFalsifiableRequired: 'app.manifestValidation.internalVariableFalsifiableRequired',
     internalVariableScopeRequired: 'app.manifestValidation.internalVariableScopeRequired',
     internalVariableDomainRequired: 'app.manifestValidation.internalVariableDomainRequired',
+    numericBoundsInvalid: 'app.manifestValidation.numericBoundsInvalid',
+    numericBoundsOrderInvalid: 'app.manifestValidation.numericBoundsOrderInvalid',
+    sharedNumericNaturalChangeRateRequired: 'app.manifestValidation.sharedNumericNaturalChangeRateRequired',
+    naturalChangeRateInvalid: 'app.manifestValidation.naturalChangeRateInvalid',
+    naturalChangeRateNumericOnly: 'app.manifestValidation.naturalChangeRateNumericOnly',
     environmentDomainNameRequired: 'app.manifestValidation.environmentDomainNameRequired',
     environmentDomainDuplicate: 'app.manifestValidation.environmentDomainDuplicate',
     environmentDomainConflictsWithVariable: 'app.manifestValidation.environmentDomainConflictsWithVariable',
@@ -219,6 +224,72 @@ const invalidManifest = (
     msg: string,
     params: Record<string, string | number> = {}
 ): ManifestValidationResult => ({ valid: false, code, params, msg })
+
+export interface NaturalChangeRateRange {
+    lower: number
+    upper: number
+}
+
+const isJavaInteger = (value: number): boolean =>
+    Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
+
+/** Parse exactly the rate syntax accepted by the template JSON schema. */
+export const parseNaturalChangeRate = (value: unknown): NaturalChangeRateRange | null => {
+    if (typeof value !== 'string'
+        || !/^(-?\d+|\[\s*-?\d+\s*,\s*-?\d+\s*\])$/.test(value)) {
+        return null
+    }
+    const parts = value.replace(/[\[\]]/g, '').split(',').map(part => Number(part.trim()))
+    const lower = parts.length === 1 ? Math.min(0, parts[0]) : parts[0]
+    const upper = parts.length === 1 ? Math.max(0, parts[0]) : parts[1]
+    return isJavaInteger(lower) && isJavaInteger(upper) && lower <= upper
+        ? { lower, upper }
+        : null
+}
+
+export const canonicalNaturalChangeRate = (value: unknown): string => {
+    if (value === undefined || value === null) return '0..0'
+    const parsed = parseNaturalChangeRate(value)
+    return parsed ? `${parsed.lower}..${parsed.upper}` : String(value)
+}
+
+export const naturalChangeCandidateValues = (value: unknown): string => {
+    const parsed = parseNaturalChangeRate(value)
+    if (!parsed) return String(value ?? '')
+    return Array.from(new Set([parsed.lower, 0, parsed.upper])).join(', ')
+}
+
+const validateNumericRateContract = (
+    declaration: Record<string, any>,
+    kind: 'InternalVariable' | 'EnvironmentDomain',
+    name: string,
+    numeric: boolean,
+    sharedEnvironment: boolean
+): ManifestValidationResult | null => {
+    const hasRate = Object.prototype.hasOwnProperty.call(declaration, 'NaturalChangeRate')
+    if (!numeric && hasRate) {
+        return invalidManifest(
+            'naturalChangeRateNumericOnly',
+            `${kind} "${name}" declares NaturalChangeRate, but only numeric ranges support it`,
+            { kind, name }
+        )
+    }
+    if (numeric && sharedEnvironment && !hasRate) {
+        return invalidManifest(
+            'sharedNumericNaturalChangeRateRequired',
+            `Shared numeric ${kind} "${name}" must explicitly define NaturalChangeRate`,
+            { name }
+        )
+    }
+    if (numeric && hasRate && !parseNaturalChangeRate(declaration.NaturalChangeRate)) {
+        return invalidManifest(
+            'naturalChangeRateInvalid',
+            `${kind} "${name}" has invalid NaturalChangeRate "${String(declaration.NaturalChangeRate)}"`,
+            { kind, name, rate: String(declaration.NaturalChangeRate) }
+        )
+    }
+    return null
+}
 
 export const validateManifest = (obj: any): ManifestValidationResult => {
     if (!obj || typeof obj !== 'object') {
@@ -379,8 +450,18 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
             )
         }
         const hasValues = Array.isArray(variable.Values) && variable.Values.length > 0
-        const hasLower = Number.isInteger(variable.LowerBound)
-        const hasUpper = Number.isInteger(variable.UpperBound)
+        const hasLowerField = Object.prototype.hasOwnProperty.call(variable, 'LowerBound')
+        const hasUpperField = Object.prototype.hasOwnProperty.call(variable, 'UpperBound')
+        if ((hasLowerField && !isJavaInteger(variable.LowerBound))
+            || (hasUpperField && !isJavaInteger(variable.UpperBound))) {
+            return invalidManifest(
+                'numericBoundsInvalid',
+                `InternalVariable "${variable.Name}" bounds must be 32-bit integers`,
+                { kind: 'InternalVariable', name: variable.Name }
+            )
+        }
+        const hasLower = isJavaInteger(variable.LowerBound)
+        const hasUpper = isJavaInteger(variable.UpperBound)
         if (hasValues === (hasLower && hasUpper) || hasLower !== hasUpper) {
             return invalidManifest(
                 'internalVariableDomainRequired',
@@ -388,6 +469,21 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
                 { name: variable.Name }
             )
         }
+        if (hasLower && hasUpper && variable.LowerBound > variable.UpperBound) {
+            return invalidManifest(
+                'numericBoundsOrderInvalid',
+                `InternalVariable "${variable.Name}" has LowerBound greater than UpperBound`,
+                { kind: 'InternalVariable', name: variable.Name }
+            )
+        }
+        const rateIssue = validateNumericRateContract(
+            variable,
+            'InternalVariable',
+            variable.Name,
+            hasLower && hasUpper,
+            variable.IsInside === false
+        )
+        if (rateIssue) return rateIssue
         internalNames.set(name, variable)
     }
 
@@ -422,8 +518,18 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
             )
         }
         const hasValues = Array.isArray(domain.Values) && domain.Values.length > 0
-        const hasLower = Number.isInteger(domain.LowerBound)
-        const hasUpper = Number.isInteger(domain.UpperBound)
+        const hasLowerField = Object.prototype.hasOwnProperty.call(domain, 'LowerBound')
+        const hasUpperField = Object.prototype.hasOwnProperty.call(domain, 'UpperBound')
+        if ((hasLowerField && !isJavaInteger(domain.LowerBound))
+            || (hasUpperField && !isJavaInteger(domain.UpperBound))) {
+            return invalidManifest(
+                'numericBoundsInvalid',
+                `EnvironmentDomain "${domain.Name}" bounds must be 32-bit integers`,
+                { kind: 'EnvironmentDomain', name: domain.Name }
+            )
+        }
+        const hasLower = isJavaInteger(domain.LowerBound)
+        const hasUpper = isJavaInteger(domain.UpperBound)
         if (hasValues === (hasLower && hasUpper) || hasLower !== hasUpper) {
             return invalidManifest(
                 'environmentDomainValuesRequired',
@@ -431,6 +537,21 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
                 { name: domain.Name }
             )
         }
+        if (hasLower && hasUpper && domain.LowerBound > domain.UpperBound) {
+            return invalidManifest(
+                'numericBoundsOrderInvalid',
+                `EnvironmentDomain "${domain.Name}" has LowerBound greater than UpperBound`,
+                { kind: 'EnvironmentDomain', name: domain.Name }
+            )
+        }
+        const rateIssue = validateNumericRateContract(
+            domain,
+            'EnvironmentDomain',
+            domain.Name,
+            hasLower && hasUpper,
+            true
+        )
+        if (rateIssue) return rateIssue
         domainNames.set(name, domain)
     }
 

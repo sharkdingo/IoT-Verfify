@@ -3,12 +3,14 @@ package cn.edu.nju.Iot_Verify.util.mapper;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.junit.jupiter.api.Test;
@@ -31,6 +33,38 @@ class VerificationTaskMapperTest {
             AttackScenarioDto.anyUpToBudget(2), true, 3, 2, 1));
     private static final String NO_ATTACK_MODEL_SEMANTICS_JSON = JsonUtils.toJson(ModelSemanticsDto.forRun(
             AttackScenarioDto.none(), false, 3, 2, 1));
+
+    @Test
+    void mapsTaskInboxProjectionWithoutDetailColumns() {
+        VerificationTaskSummaryProjection projection = mock(VerificationTaskSummaryProjection.class);
+        when(projection.getId()).thenReturn(6L);
+        when(projection.getUserId()).thenReturn(1L);
+        when(projection.getInitiator()).thenReturn(RunInitiator.AI_ASSISTANT);
+        when(projection.getStatus()).thenReturn(VerificationTaskPo.TaskStatus.FAILED);
+        when(projection.getCreatedAt()).thenReturn(CREATED_AT);
+        when(projection.getCompletedAt()).thenReturn(CREATED_AT.plusSeconds(1));
+        when(projection.getProcessingTimeMs()).thenReturn(null);
+        when(projection.getProgress()).thenReturn(100);
+        when(projection.getIsAttack()).thenReturn(false);
+        when(projection.getAttackBudget()).thenReturn(0);
+        when(projection.getModeledDeviceAttackPointCount()).thenReturn(3);
+        when(projection.getModeledFalsifiableReadingDeviceCount()).thenReturn(1);
+        when(projection.getModeledAutomationLinkAttackPointCount()).thenReturn(2);
+        when(projection.getEnablePrivacy()).thenReturn(false);
+        when(projection.getModelSemanticsJson()).thenReturn(NO_ATTACK_MODEL_SEMANTICS_JSON);
+        when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
+        when(projection.getOutcome()).thenReturn(VerificationOutcome.INCONCLUSIVE);
+        when(projection.getGenerationIssuesJson()).thenReturn("[]");
+        when(projection.getErrorMessage()).thenReturn("solver unavailable");
+
+        VerificationTaskSummaryDto summary = mapper.toSummaryDto(projection);
+
+        assertEquals(6L, summary.getId());
+        assertEquals(RunInitiator.AI_ASSISTANT, summary.getInitiator());
+        assertEquals("FAILED", summary.getStatus());
+        assertEquals("solver unavailable", summary.getErrorMessage());
+        assertEquals(5, summary.getModelSemantics().getModeledAttackPointCount());
+    }
 
     @Test
     void mapsStructuredSpecResultsAndLogs() {
@@ -162,6 +196,7 @@ class VerificationTaskMapperTest {
 
         VerificationRunSummaryProjection projection = mock(VerificationRunSummaryProjection.class);
         when(projection.getId()).thenReturn(10L);
+        when(projection.getInitiator()).thenReturn(RunInitiator.USER);
         when(projection.getStatus()).thenReturn(VerificationTaskPo.TaskStatus.COMPLETED);
         when(projection.getCreatedAt()).thenReturn(CREATED_AT);
         when(projection.getStartedAt()).thenReturn(CREATED_AT);
@@ -183,6 +218,7 @@ class VerificationTaskMapperTest {
 
         var summary = mapper.toRunSummaryDto(projection, 0);
         assertEquals(0, summary.getCounterexampleCount());
+        assertEquals(RunInitiator.USER, summary.getInitiator());
         assertEquals(VerificationOutcome.VIOLATED, summary.getOutcome());
     }
 

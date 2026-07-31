@@ -193,10 +193,23 @@
           "NaturalChangeRate": {
             "type": "string",
             "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$",
-            "description": "Natural change rate: single value '1' or range '[-1, 1]'"
+            "description": "Per-step natural change candidates: single value '1' means {0,1}; a range contributes its unique lower, zero, and upper values. Required for shared numeric variables (IsInside=false): [-1,1] is the complete integer MEDIC baseline and 0 explicitly means no independent natural change."
           }
         },
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "IsInside": {"const": false},
+                "LowerBound": {"type": "integer"},
+                "UpperBound": {"type": "integer"}
+              },
+              "required": ["IsInside", "LowerBound", "UpperBound"]
+            },
+            "then": {"required": ["NaturalChangeRate"]}
+          }
+        ],
         "oneOf": [
           {
             "required": ["Values"],
@@ -244,10 +257,19 @@
           "UpperBound": {"type": "integer"},
           "NaturalChangeRate": {
             "type": "string",
-            "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$"
+            "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$",
+            "description": "Required for numeric shared environment domains. Use [-1,1] for the complete integer MEDIC baseline or 0 for no independent natural change; wider ranges contribute their unique lower, zero, and upper candidates."
           }
         },
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": ["LowerBound", "UpperBound"]
+            },
+            "then": {"required": ["NaturalChangeRate"]}
+          }
+        ],
         "oneOf": [
           {
             "required": ["Values"],

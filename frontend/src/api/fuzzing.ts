@@ -1,6 +1,7 @@
 import api from './http'
 import type {
   FuzzingFinding,
+  FuzzingFindingReplay,
   FuzzPaperDomainPreview,
   FuzzWorkloadPreview,
   FuzzingRequest,
@@ -12,7 +13,7 @@ import type {
 import { isValidFuzzPaperDomainFingerprint } from '@/types/fuzzing'
 import type { TaskCancellationResult } from '@/types/task'
 import {
-  validateFuzzingFinding,
+  validateFuzzingFindingReplay,
   validateFuzzingFindingList,
   validateFuzzingRun,
   validateFuzzingRunSummaryList,
@@ -109,6 +110,6 @@ export default {
   deleteRun: async (runId: number): Promise<void> =>
     unpack<void>(await api.delete(`/fuzz/runs/${runId}`)),
 
-  getFinding: async (findingId: number): Promise<FuzzingFinding> =>
-    validateFuzzingFinding(unpack<unknown>(await api.get(`/fuzz/findings/${findingId}`)))
+  getFinding: async (findingId: number): Promise<FuzzingFindingReplay> =>
+    validateFuzzingFindingReplay(unpack<unknown>(await api.get(`/fuzz/findings/${findingId}`)))
 }

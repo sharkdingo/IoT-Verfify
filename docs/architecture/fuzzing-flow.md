@@ -4,7 +4,7 @@ Architecture and semantic boundary for the HAFuzz-inspired bounded search module
 API fields and endpoints are owned by [../api/fuzzing.md](../api/fuzzing.md); formal
 model semantics remain owned by [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-24. Source: `component/fuzz/`,
+Verified against code on 2026-07-31. Source: `component/fuzz/`,
 `service/impl/FuzzServiceImpl.java`, `po/FuzzTaskPo.java`, and
 `po/FuzzFindingPo.java`.
 
@@ -129,11 +129,12 @@ Canvas coordinates and dimensions do not invalidate a semantic preview.
    state with satisfaction of the next shortest-path transition conditions. It recursively
    resolves predecessor rule conditions (`GetPrevConditions`) and weights them by solver
    level across a fixed three-level chain. The per-level weight is
-   `2^(l_up-l) / (2^l_up - 1)`, which **deliberately differs** from the `2^(l_up-l) / 2^(l_up-1)`
-   printed in Algorithm 1 line 25: the printed denominator makes the weights sum to `1.75`
-   at `l_up = 3` instead of 1, so `Dist_cond` can exceed the integer `Dist_graph` and drive
-   the returned `Dist_graph - Dist_cond` negative. `SeedSelection` takes the *minimum*
-   distance, so a negative score inverts the ranking the metri...[truncated 121 chars] Every atomic proposition uses the paper's
+   `2^(l_up-l) / (2^l_up - 1)`, exactly as printed in Algorithm 1 line 25. The denominator
+   is the sum of the powers assigned to all levels, so a fully satisfied condition chain
+   contributes exactly `1` to `Dist_cond`; the HAFuzz reference artifact computes the same
+   normalization by summing its power map. `SeedSelection` takes the *minimum* distance,
+   and the implementation also clamps the final score to a non-negative distance. Every
+   atomic proposition uses the paper's
    explicit binary satisfaction (`1` when true, `0` otherwise), including numeric
     predicates. Conjunctions average all constituent conditions and disjunctions take
     their maximum satisfaction. Predecessors are resolved for rule-produced state,

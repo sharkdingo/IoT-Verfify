@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.projection.SimulationTraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
@@ -30,9 +31,16 @@ class SimulationTraceMapperTest {
             + "\"environmentVariableCount\":0,\"deviceTemplateCount\":1,\"templatesFrozen\":true}";
     private static final String MODEL_SEMANTICS_JSON = JsonUtils.toJson(
             ModelSemanticsDto.forRun(AttackScenarioDto.anyUpToBudget(2), true, 1, 2, 1));
-    private static final String VALID_REQUEST_JSON = "{\"devices\":[],\"rules\":["
-            + "{\"id\":42,\"ruleString\":\"Rule A\"},"
-            + "{\"id\":43,\"ruleString\":\"Rule B\"}],\"steps\":10,"
+    private static final String VALID_REQUEST_JSON = "{\"devices\":[{\"varName\":\"d1\","
+            + "\"deviceLabel\":\"d1\",\"templateName\":\"t1\"}],"
+            + "\"playbackNodes\":[{\"id\":\"d1\",\"templateName\":\"t1\",\"label\":\"d1\","
+            + "\"position\":{\"x\":0,\"y\":0},\"state\":\"Working\",\"width\":160,\"height\":120}],\"rules\":["
+            + "{\"id\":42,\"conditions\":[{\"deviceName\":\"d1\",\"attribute\":\"state\","
+            + "\"targetType\":\"state\",\"relation\":\"=\",\"value\":\"Working\"}],"
+            + "\"command\":{\"deviceName\":\"d1\",\"action\":\"stay\"},\"ruleString\":\"Rule A\"},"
+            + "{\"id\":43,\"conditions\":[{\"deviceName\":\"d1\",\"attribute\":\"state\","
+            + "\"targetType\":\"state\",\"relation\":\"=\",\"value\":\"Working\"}],"
+            + "\"command\":{\"deviceName\":\"d1\",\"action\":\"stay\"},\"ruleString\":\"Rule B\"}],\"steps\":10,"
             + "\"attackScenario\":{\"mode\":\"ANY_UP_TO_BUDGET\",\"budget\":2},"
             + "\"enablePrivacy\":true}";
 
@@ -94,6 +102,8 @@ class SimulationTraceMapperTest {
         assertTrue(dto.getModelSnapshot().isTemplatesFrozen());
         assertEquals("{\"light\":{\"Name\":\"Light\"}}", dto.getTemplateSnapshotsJson());
         assertEquals(LocalDateTime.of(2026, 1, 1, 12, 0), dto.getCreatedAt());
+        assertEquals("d1", dto.getPlaybackScene().nodes().get(0).getId());
+        assertEquals(2, dto.getPlaybackScene().rules().size());
     }
 
     @Test
@@ -244,7 +254,6 @@ class SimulationTraceMapperTest {
         when(projection.getRequestedSteps()).thenReturn(1);
         when(projection.getSteps()).thenReturn(0);
         when(projection.getStateCount()).thenReturn(1);
-        when(projection.getStatesJson()).thenReturn("[" + stateJson(1) + "]");
         when(projection.getEnablePrivacy()).thenReturn((Boolean) null);
 
         List<SimulationTraceSummaryDto> list = mapper.toSummaryProjectionDtoList(List.of(projection));
@@ -296,59 +305,19 @@ class SimulationTraceMapperTest {
     }
 
     @Test
-    void summaryProjectionValidatesStatesAndMapsSummary() {
+    void summaryProjectionValidatesMetadataAndMapsSummary() {
         SimulationTraceSummaryDto summary = mapper.toSummaryProjectionDto(validProjection(7L));
 
         assertEquals(7L, summary.getId());
+        assertEquals(RunInitiator.AI_ASSISTANT, summary.getInitiator());
         assertEquals(2, summary.getSteps());
         assertTrue(summary.getDataAvailable());
     }
 
     @Test
-    void summaryProjectionRejectsMalformedStatesJson() {
+    void summaryProjectionRejectsInvalidStateMetadata() {
         SimulationTraceSummaryProjection projection = validProjection(8L);
-        when(projection.getStatesJson()).thenReturn("{ not valid json");
-
-        assertEquals("statesJson", assertThrows(
-                PersistedDataIntegrityException.class,
-                () -> mapper.toSummaryProjectionDto(projection)).getField());
-    }
-
-    @Test
-    void summaryProjectionRejectsOutOfRangeFrozenRuleEvidence() {
-        SimulationTraceSummaryProjection projection = validProjection(11L);
-        when(projection.getStatesJson()).thenReturn(
-                "[{\"stateIndex\":1,\"devices\":[],\"triggeredRules\":[],"
-                        + "\"compromisedAutomationLinks\":[]},"
-                        + "{\"stateIndex\":2,\"devices\":[],"
-                        + "\"triggeredRules\":[{\"ruleIndex\":2}],"
-                        + "\"compromisedAutomationLinks\":[]},"
-                        + "{\"stateIndex\":3,\"devices\":[],\"triggeredRules\":[],"
-                        + "\"compromisedAutomationLinks\":[]}]");
-
-        assertEquals("statesJson", assertThrows(
-                PersistedDataIntegrityException.class,
-                () -> mapper.toSummaryProjectionDto(projection)).getField());
-    }
-
-    @Test
-    void summaryProjectionRejectsEmptyStructurallyInvalidOrNonSequentialStates() {
-        for (String statesJson : List.of(
-                "[]", "[{}]", "[" + stateJson(2) + "]")) {
-            SimulationTraceSummaryProjection projection = validProjection(9L);
-            when(projection.getStatesJson()).thenReturn(statesJson);
-
-            assertEquals("statesJson", assertThrows(
-                    PersistedDataIntegrityException.class,
-                    () -> mapper.toSummaryProjectionDto(projection)).getField());
-        }
-    }
-
-    @Test
-    void summaryProjectionRejectsStateCountMismatch() {
-        SimulationTraceSummaryProjection projection = validProjection(10L);
-        when(projection.getStatesJson()).thenReturn(
-                "[" + stateJson(1) + "," + stateJson(2) + "]");
+        when(projection.getStateCount()).thenReturn(2);
 
         assertEquals("stateCount", assertThrows(
                 PersistedDataIntegrityException.class,
@@ -358,14 +327,12 @@ class SimulationTraceMapperTest {
     private SimulationTraceSummaryProjection validProjection(Long id) {
         SimulationTraceSummaryProjection projection = mock(SimulationTraceSummaryProjection.class);
         when(projection.getId()).thenReturn(id);
+        when(projection.getInitiator()).thenReturn(RunInitiator.AI_ASSISTANT);
         when(projection.getRequestedSteps()).thenReturn(10);
         when(projection.getSteps()).thenReturn(2);
         when(projection.getStateCount()).thenReturn(3);
-        when(projection.getStatesJson()).thenReturn(
-                "[" + stateJson(1) + "," + stateJson(2) + "," + stateJson(3) + "]");
         when(projection.getLogsJson()).thenReturn("[]");
         when(projection.getGenerationIssuesJson()).thenReturn("[]");
-        when(projection.getRequestJson()).thenReturn(VALID_REQUEST_JSON);
         when(projection.getModelSnapshotJson()).thenReturn(MODEL_SNAPSHOT_JSON);
         when(projection.getModelSemanticsJson()).thenReturn(MODEL_SEMANTICS_JSON);
         when(projection.getIsAttack()).thenReturn(true);

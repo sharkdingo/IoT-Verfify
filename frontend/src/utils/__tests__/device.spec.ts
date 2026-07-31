@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { i18n } from '@/assets/i18n'
 import {
+  canonicalNaturalChangeRate,
   getDeviceIconUrl,
   MANIFEST_VALIDATION_MESSAGE_KEYS,
+  naturalChangeCandidateValues,
+  parseNaturalChangeRate,
   resolveImpactEnvironmentDefinition,
   validateManifest
 } from '../device'
@@ -70,6 +73,7 @@ describe('device environment-domain semantics', () => {
         Name: 'illuminance',
         LowerBound: 0,
         UpperBound: 100,
+        NaturalChangeRate: '[-1, 1]',
         Trust: 'untrusted',
         Privacy: 'public'
       }],
@@ -85,6 +89,99 @@ describe('device environment-domain semantics', () => {
       FalsifiableWhenCompromised: false
     })
     expect(validateManifest(manifest)).toEqual({ valid: true })
+  })
+
+  it('requires an explicit natural rate only for shared numeric variables', () => {
+    const shared = {
+      Name: 'Temperature Sensor',
+      InternalVariables: [{
+        Name: 'temperature',
+        IsInside: false,
+        FalsifiableWhenCompromised: true,
+        Trust: 'untrusted',
+        Privacy: 'public',
+        LowerBound: 0,
+        UpperBound: 100
+      }]
+    }
+    expect(validateManifest(shared)).toMatchObject({
+      valid: false,
+      code: 'sharedNumericNaturalChangeRateRequired'
+    })
+
+    expect(validateManifest({
+      ...shared,
+      InternalVariables: [{ ...shared.InternalVariables[0], IsInside: true }]
+    })).toEqual({ valid: true })
+  })
+
+  it('matches backend numeric-domain and natural-rate admission before upload', () => {
+    const numericVariable = {
+      Name: 'temperature',
+      IsInside: false,
+      FalsifiableWhenCompromised: true,
+      Trust: 'untrusted',
+      Privacy: 'public',
+      LowerBound: 0,
+      UpperBound: 100,
+      NaturalChangeRate: '[-1, 1]'
+    }
+
+    expect(validateManifest({
+      Name: 'Descending domain',
+      InternalVariables: [{ ...numericVariable, LowerBound: 101 }]
+    })).toMatchObject({ valid: false, code: 'numericBoundsOrderInvalid' })
+
+    expect(validateManifest({
+      Name: 'Out-of-range integer domain',
+      InternalVariables: [{ ...numericVariable, UpperBound: 2147483648 }]
+    })).toMatchObject({ valid: false, code: 'numericBoundsInvalid' })
+
+    expect(validateManifest({
+      Name: 'Descending rate',
+      InternalVariables: [{ ...numericVariable, NaturalChangeRate: '[2, 1]' }]
+    })).toMatchObject({ valid: false, code: 'naturalChangeRateInvalid' })
+
+    expect(validateManifest({
+      Name: 'Whitespace outside rate',
+      InternalVariables: [{ ...numericVariable, NaturalChangeRate: ' [-1, 1]' }]
+    })).toMatchObject({ valid: false, code: 'naturalChangeRateInvalid' })
+
+    expect(validateManifest({
+      Name: 'Descending impact domain',
+      EnvironmentDomains: [{
+        Name: 'temperature',
+        Trust: 'untrusted',
+        Privacy: 'public',
+        LowerBound: 100,
+        UpperBound: 0,
+        NaturalChangeRate: '[-1, 1]'
+      }],
+      ImpactedVariables: ['temperature']
+    })).toMatchObject({ valid: false, code: 'numericBoundsOrderInvalid' })
+
+    expect(validateManifest({
+      Name: 'Discrete weather',
+      InternalVariables: [{
+        Name: 'weather',
+        IsInside: false,
+        FalsifiableWhenCompromised: true,
+        Trust: 'untrusted',
+        Privacy: 'public',
+        Values: ['dry', 'wet'],
+        NaturalChangeRate: '1'
+      }]
+    })).toMatchObject({ valid: false, code: 'naturalChangeRateNumericOnly' })
+  })
+
+  it('parses and displays the exact endpoint candidate contract', () => {
+    expect(parseNaturalChangeRate('1')).toEqual({ lower: 0, upper: 1 })
+    expect(parseNaturalChangeRate('[2, 3]')).toEqual({ lower: 2, upper: 3 })
+    expect(parseNaturalChangeRate('[3, 2]')).toBeNull()
+    expect(parseNaturalChangeRate('2147483648')).toBeNull()
+    expect(naturalChangeCandidateValues('[2, 3]')).toBe('2, 0, 3')
+    expect(canonicalNaturalChangeRate(null)).toBe('0..0')
+    expect(canonicalNaturalChangeRate('')).toBe('')
   })
 
   it('rejects an impacted value whose domain exists only outside its own manifest', () => {
@@ -105,6 +202,7 @@ describe('device environment-domain semantics', () => {
         Name: 'illuminance',
         LowerBound: 0,
         UpperBound: 100,
+        NaturalChangeRate: '[-1, 1]',
         Trust: 'untrusted',
         Privacy: 'public'
       }],

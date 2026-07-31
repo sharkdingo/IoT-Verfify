@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-25. Source: `frontend/src/api/`,
+Verified against code on 2026-08-01. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/components/ChatView.vue`,
 `frontend/src/views/Board.vue`, `frontend/src/App.vue`, and `frontend/src/router/index.ts`.
 
@@ -112,8 +112,8 @@ whether the account still exists instead of retrying the destructive request.
 The destructive dialog enables confirmation only after the user actually types, pastes,
 or composes the identifier in that opening. A browser/password-manager autofill that merely
 populates the matching value is not treated as deliberate confirmation.
-`logout` only revokes the current token; background verification/simulation/exploration tasks are
-not cancelled. `deleteAccount` is the destructive path: it cancels active tasks,
+`logout` stops active AI-chat responses before revoking the current token; background
+verification/simulation/exploration tasks are not cancelled. `deleteAccount` is the destructive path: it cancels active tasks,
 serializes in-flight writes with account deletion, and removes user-owned data.
 
 Authentication changes propagate between tabs through one JSON storage event
@@ -160,7 +160,10 @@ Its methods return already-unwrapped values. Non-exhaustive:
   `environmentVariables` from the committed response; do not infer success from a count.
 - Control Center template UI is split into **Create Template** and **Template Repository**.
   Clicking a template card opens its detail preview; dragging a template card to the
-  canvas opens a device-instance naming dialog and only saves after confirmation.
+  canvas opens a device-instance naming dialog and only saves after confirmation. While
+  a template drag is active, the empty-canvas guidance and its button area become
+  pointer-transparent so every visible canvas position is a valid drop target. Cancelling
+  the naming dialog leaves the Board empty and restores the guidance actions.
   During trace playback or an atomic scene replacement, Control Center keeps read-only
   inspection actions (template preview, search, export, and schema download) available but
   disables device/template/rule/specification mutation entry points, including template
@@ -247,9 +250,13 @@ Its methods return already-unwrapped values. Non-exhaustive:
   same wording. Export sorts templates/devices/environment and
   object keys into a stable order, but preserves authored arrays such as `rules[]`, rule
   `sources[]`, `specs[]`, and spec condition lists because order participates in rule
-  precedence and preserves the user's authored semantics. Public fix localization uses
-  stable adjustment ids rather than array positions. Rule ids are omitted so an imported scene
-  creates fresh backend rows, as do specifications; only stable device ids are preserved.
+  precedence and preserves the user's authored semantics. Canonical template manifests
+  omit optional object properties whose value is `null`, matching the backend DTO response
+  shape; explicit `null` and omission therefore compare as the same round trip. Array order,
+  empty strings, `false`, zero, and every non-null value remain significant. Public fix
+  localization uses stable adjustment ids rather than array positions. Rule ids are omitted so
+  an imported scene creates fresh backend rows, as do specifications; only stable device ids are
+  preserved.
   Import rejects a missing/different schema or any unsupported version instead of
   guessing aliases and rewriting future data into version 4. It validates duplicate
   device ids, required identity/position/size, state required only for state-machine
@@ -498,8 +505,8 @@ Board layout and visual shell rules:
   Board drift warnings remain visible because they change how the trace may be
   interpreted. Simulation run details must report `states.length`, actual `steps`, and
   `requestedSteps` separately (`states = steps + 1` when parsing is complete); execution
-  logs, per-state tables, and raw NuSMV output are diagnostic sections opened on demand,
-  not the primary playback surface.
+  logs, per-state tables, and possibly truncated NuSMV diagnostic output are sections
+  opened on demand, not the primary playback surface.
 - Canvas rule edges are derived from `rules` whenever either nodes or rules change.
   Do not cache or persist edge rows. Keep edge labels hidden by default and reveal
   them on hover/focus through the SVG hit area so dense boards stay readable while
@@ -668,7 +675,29 @@ full-trace/finding lists. Load full verification/fuzz run detail, full trace/fin
 states, or full simulation states only when the user opens that result/replay. Keep
 `dataAvailable=false` rows visible with a
 damaged-history explanation and deletion action, but disable open/replay/fix; one bad
-row must not turn the entire history panel into "load failed".
+summary row must not turn the entire history panel into "load failed". A summary marked
+available does not pre-validate its omitted full trajectory. If the on-demand detail read
+rejects damaged states or frozen rule evidence, keep the history row, close no unrelated
+result, and report that exact detail as unavailable rather than fabricating an empty replay.
+When the backend identifies that persisted semantic corruption with
+`PERSISTED_SEMANTIC_DATA_INVALID`, replace the affected local verification trace or run,
+simulation result, exploration run, or (when `recordType=FuzzFinding` identifies one)
+individual exploration finding with its unavailable placeholder before showing the
+explanation. Do not make that permanent change for transport, authorization,
+or service-availability failures: those outcomes remain retryable and must not hide
+potentially valid evidence. When that failed detail was requested through a Board run
+deep link, strip the dead run/trace/finding parameters as well, so refresh cannot reopen
+the same unavailable artifact. Preserve an explicitly confirmed unavailable placeholder
+across history-list refreshes for the mounted Board session; a new Board session may read it
+again after an external data repair.
+For a run URL that names a child trace or exploration finding, verify that the child belongs to
+the declared run before replaying it. Clear only a confirmed absent, forbidden, malformed, or
+persisted-invalid target; a transport, rate-limit, or 5xx failure keeps the URL so the user can
+retry rather than losing the result they asked to open. When a target is confirmed unusable, close
+any already-open parent result as the URL is stripped so the Board and its persistent explanation
+describe the same state.
+Task-inbox list calls likewise return closed summaries; full task diagnostics stay on the
+per-id polling/detail endpoints.
 Exploration history requests one bounded page at a time and exposes a localized Load
 More action in the exploration filter. Appends are de-duplicated by run ID; deleting a
 run resets offset pagination to the first page so shifted rows are not skipped. Exact
@@ -860,7 +889,8 @@ object of the same two. **Rule persistence is not here**: targeted `getRules`/`a
 ## Chat (SSE) — `api/chat.ts`
 
 Named exports. Session management (`getSessionList`, `createSession`,
-`getSessionHistory`, `getSessionActivity`, `requestSessionStop`, `deleteSession`) uses
+`getSessionHistory`, `markSessionTerminalSeen`, `getSessionActivity`, `requestSessionStop`,
+`deleteSession`) uses
 axios; **streaming does not**.
 `getSessionHistory` returns `{ messages, nextBeforeId, hasMore }`; the first call requests
 the newest bounded page, and `ChatView` passes `nextBeforeId` back as `beforeId` when the
@@ -868,7 +898,10 @@ user loads older messages. Older pages are prepended while preserving scroll pos
 If the initial history request fails, the selected session remains selected and the message
 composer stays disabled behind an explicit Retry action; the UI does not reinterpret a
 network error as an empty conversation. New-session clicks are single-flight, and a failed
-or incomplete create response is shown without closing the mobile session list.
+or incomplete create response is shown without closing the mobile session list or detaching an
+existing live conversation. The current SSE transport is detached only after the destination
+session has been created successfully. A later explicit row selection made while creation is
+pending takes precedence; the new row is retained but does not steal focus when its response arrives.
 
 `sendStreamChat(...)` uses the native `fetch` API against
 `${VITE_API_BASE_URL || ''}/api/chat/completions` (relative by default, so it also goes
@@ -896,14 +929,45 @@ incomplete-stream failure waits for idle settlement, reconciles Board state, and
 optimistic turn with authoritative history, including a valid user-only result. An HTTP
 rejection before acceptance removes optimistic placeholders and restores the ordinary text draft.
 
-`getSessionList` also returns `ChatSession.active`. `ChatView` refreshes this list whenever
-the panel becomes visible and whenever the document returns to the foreground. It reconnects
-the selected conversation first when that session is active; otherwise it opens and monitors
-one authoritative active session. Every active flag in the refreshed list participates in the
-global Board coordination lock, so a second concurrent session cannot be hidden by list order
-or briefly unlock Board mutations while the monitored session settles. When one monitored
-session becomes idle, the client hands monitoring to another active session before releasing
-the lock. Selecting a row already marked active starts activity polling before history loading,
+`getSessionList` returns `ChatSession.active`, `latestTerminalMessageId`,
+`latestExecutionStatus`, and `hasUnreadUpdate`. `ChatView` refreshes this list whenever the panel becomes visible and whenever
+the document or window returns to the foreground. It reconnects
+the selected conversation first when that session is active; when there is no selected
+conversation it opens and monitors one active session. Every active flag in the refreshed list
+participates in the global full-scene replacement/clear and playback guard, so a second concurrent
+session cannot be hidden by list order or briefly unlock those shared-Board operations while the
+monitored session settles. The selected conversation
+alone owns the composer lock: switching away from a running conversation detaches its SSE
+transport without sending Stop, and a new conversation can start while the first execution
+continues under its own session. After `ChatView` mounts, it owns one complete session-list poll
+loop even while hidden: five-second polls discover work started in another tab while idle, and the
+interval shortens to one second while any row is active. Before that first mount, `App` owns the
+five-second projection instead. This single-writer handoff prevents duplicate completion
+reconciliation. Background completion is therefore detected even when no SSE connection is
+attached. Polling and the foreground session-list refresh
+share the same terminal-message completion path: the client reconciles the Board and shows a completion
+notice; opening that row later loads its persisted
+terminal assistant record and execution trace. Each row retains its latest terminal-status label;
+an unread label remains after a tab or browser is closed because it comes from the persisted
+session seen cursor, not an in-memory active-to-idle transition. The application also loads the
+session list while the panel is closed, restores the active-session count into the same shared
+Board guard, and shows running-conversation and unread-conversation counts independently on
+the assistant entry button. This makes a still-running task visible and keeps full-scene operations
+protected after a browser reload or in a second tab before the chat panel has ever been opened.
+While the panel is closed, the application also refreshes this projection periodically and on
+foreground/focus transitions. It retains each session's active state and exact latest terminal id,
+not only aggregate counts: a newly observed terminal id, or a previously active id becoming idle or
+disappearing without one, makes the application perform the same full Board and run-history
+reconciliation used by an attached chat view. Exact terminal identity covers work that starts and
+finishes between two polls. This also covers a second tab whose chat panel has never been mounted and
+therefore never received the original stream or its refresh commands.
+If the refresh fails, one shared reconciliation-required state keeps the assistant entry visibly
+marked, exposes the existing retry panel when opened, and keeps full-scene replacement, clear, and
+playback guarded until a retry succeeds. Poll responses are discarded if create, delete, or
+foreground refresh changed the session-list version while the request was in flight, preventing an
+older snapshot from removing or restoring rows. Foreground refresh and background polling do not
+run concurrently, and create responses merge by session id when polling observed the commit first.
+Selecting a row already marked active starts activity polling before history loading,
 so a slow or failed history request cannot briefly unlock known-running work; rows without
 that signal perform the dedicated activity check. This is an authoritative activity
 reattachment rather than an SSE replay: the UI shows that server work is still running,
@@ -911,8 +975,16 @@ exposes the real stop endpoint, and keeps mutations locked. Once activity become
 reloads the terminal assistant row (including the persisted trace) and reconciles the
 Board/run history. Terminal history/session refresh still runs when Board reconciliation
 fails; the reconciliation retry remains visible and locked, but the completed assistant
-record is not hidden behind an unrelated Board refresh failure. Session-list activity dots
-make runs started in another tab visible without waiting for a conflicting action to fail.
+record is not hidden behind an unrelated Board refresh failure. Session-list running/status labels
+make runs started in another tab and results completed while offline visible without waiting for a
+conflicting action to fail.
+
+History rendering acknowledges only the newest terminal assistant message id actually present in
+the visible conversation. A hidden panel, background document, list refresh, or history GET does
+not mark a result seen. The acknowledgement is monotonic and carries the exact loaded id, so a
+later result from another tab remains unread. If acknowledgement succeeds but the following list
+refresh fails, the UI keeps the unread marker until an authoritative refresh rather than claiming
+that all results were seen.
 
 The chat stop control first calls `requestSessionStop(sessionId, turnId)` and waits for the
 durable stop fence before aborting the SSE response or polling activity. Reattached work
@@ -930,11 +1002,17 @@ worker before its next control poll.
 The settlement history request invalidates any older in-flight initial history load, and a
 successful settlement clears the earlier history-error state. A delayed response therefore
 cannot replace a newer terminal row or leave the composer disabled after recovery.
-Session switching, new-conversation creation, and deletion wait for the same settling
-step. Activity checks have their own 2.5-second request timeout, so three consecutive
-query failures produce an outcome-unknown warning and an authoritative state refresh
-within seconds rather than inheriting the general 100-second axios timeout. Do not label this
-control as cancelling the requested operation.
+Explicit Stop and logout wait for durable stop settlement. Logout first refreshes the complete
+session list, so it includes work started in another tab; the application shell performs the same
+stop/wait/reconcile sequence if the lazy chat panel was never mounted. The logout API then writes
+an account-scoped stop fence before revoking the token as a final server-side backstop. Session
+switching and new-conversation creation only detach the local transport, so they do not cancel the
+requested operation. Deleting an active row is disabled in the client and rejected by the server
+with `CHAT_SESSION_BUSY`, leaving the work visible.
+Activity checks have their own 2.5-second request timeout, so three consecutive query failures
+produce an outcome-unknown warning and an authoritative state refresh within seconds rather than
+inheriting the general 100-second axios timeout. Do not label a navigation detach as cancelling
+the requested operation.
 If the server continues to report an active tool for the 10-second settlement window,
 the UI switches to the same visible retry/locked state instead of spinning for the full
 SSE timeout or releasing a known-running mutation.
@@ -950,9 +1028,11 @@ authentication and navigate to login only when the stream's original token is st
 a delayed stream from another account is isolated. `403` responses remain authorization
 errors and do not discard a valid login session.
 Board collection refreshes triggered by chat are serialized through the same mutation
-queue. Read-only trace playback and a pending scene replacement disable new assistant
-requests; starting either while an assistant stream is active is blocked until the stream
-stops and its authoritative refresh can complete.
+queue. A pending scene replacement disables new assistant requests. Read-only trace
+playback still locks Board mutations, but it does not disable the assistant composer;
+sending a new assistant turn first closes the visible trace/simulation playback and then
+starts the request. Starting playback or scene replacement while an assistant stream is
+active remains blocked until the stream stops and its authoritative refresh can complete.
 
 `onFinish(terminal)` is emitted only after one valid persisted terminal acknowledgement,
 never merely because the reader reached EOF and never on abort. Server failures use a
@@ -965,9 +1045,9 @@ loads; callbacks from replaced requests cannot clear a newer controller or overw
 newly selected conversation. Conversation-history loading is separate from response
 generation, so the Stop control is shown only for a response that can actually be
 aborted.
-Unmount aborts history/activity/settlement transports and clears elapsed/poll timers, so a
-closed assistant panel cannot later overwrite the replacement view or continue invisible
-client polling.
+Unmount or browser teardown aborts history/activity/settlement transports and clears elapsed/poll
+timers. It does not send the explicit Stop command: accepted server work continues under its session
+lease, and its persisted terminal result is restored as unread on the next application load.
 
 ---
 

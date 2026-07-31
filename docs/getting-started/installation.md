@@ -73,7 +73,7 @@ export DB_PASSWORD="your_mysql_password"
 export JWT_SECRET="your-secret-key-here-min-256-bits"
 export IOT_VERIFY_OPENAI_API_KEY="your-api-key"
 export IOT_VERIFY_OPENAI_BASE_URL="https://api.openai.com/v1"
-export IOT_VERIFY_OPENAI_MODEL="gpt-5.5"
+export IOT_VERIFY_OPENAI_MODEL="gpt-5.6-luna"
 export NUSMV_PATH="/path/to/NuSMV"
 ```
 

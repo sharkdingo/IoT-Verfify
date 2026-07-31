@@ -30,6 +30,9 @@ public class ChatSessionPo {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    @Column(name = "last_seen_terminal_message_id")
+    private Long lastSeenTerminalMessageId;
+
     @Column(name = "active_execution_id", length = 36)
     private String activeExecutionId;
 

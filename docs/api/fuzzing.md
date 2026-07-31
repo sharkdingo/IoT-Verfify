@@ -5,7 +5,7 @@ module. The endpoint index lives in [rest-endpoints.md](rest-endpoints.md); glob
 authentication, `Result<T>`, and error conventions live in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-25. Source: `controller/FuzzController.java`,
+Verified against code on 2026-07-31. Source: `controller/FuzzController.java`,
 `service/impl/FuzzServiceImpl.java`, and `dto/fuzz/`.
 
 ---
@@ -213,12 +213,15 @@ taskId }`; clients must reconcile that task before retrying. A row independently
 the authoritative task rather than treated as dispatch failure.
 
 Response data: the accepted `FuzzTaskDto`. Acceptance is not completion. Its fields are
-`id`, `status`, `progress`, `progressStage`, lifecycle timestamps, `processingTimeMs`, optional
+`id`, `initiator`, `status`, `progress`, `progressStage`, lifecycle timestamps, `processingTimeMs`, optional
 `errorMessage`, optional `runId`/`outcome`, frozen `modelSnapshot`, the five request
 configuration fields (`explorationMode`, `maxIterations`, `pathLength`,
 `populationSize`, and optional `seed`), and `targetSpecIds`. `runId` equals the task ID
 after successful completion. Task detail and task-list summaries both return the
 persisted `explorationMode`; it is not inferred from the current UI selection.
+`initiator` is `USER` for direct REST/UI submission, `AI_ASSISTANT` for a task submitted
+by a tool inside an owned chat turn, or `UNKNOWN` when provenance is unavailable. Task
+and completed-run responses preserve this persisted value and never infer it from current UI state.
 The exploration phases are `QUEUED`, `STARTING`, `PREPARING_EXPLORATION`,
 `EXPLORING_CANDIDATES`, and `PERSISTING_RESULT`. The backend persists the percentage
 and phase in one atomic active-task update so the UI can describe real work without
@@ -321,6 +324,7 @@ page when the current page length equals its requested size. Meanwhile,
 | Field | Type | Meaning |
 | :--- | :--- | :--- |
 | `id` | integer | Run/task identity |
+| `initiator` | enum | Persisted `USER`, `AI_ASSISTANT`, or `UNKNOWN` origin |
 | `outcome` | enum | `FOUND_VIOLATION`, `BUDGET_EXHAUSTED`, or `INCONCLUSIVE` |
 | `explorationMode` | enum | Persisted `BOARD_SNAPSHOT` or `PAPER_COMPATIBLE` algorithm used for this run |
 | `effectiveSeed` | integer | Exact seed used; submit this value to reproduce the deterministic search |
@@ -328,6 +332,7 @@ page when the current page length equals its requested size. Meanwhile,
 | `generatedPaths` | integer | Paths evaluated, including every population member evaluated before early completion |
 | `elapsedMs` | integer | Engine elapsed time |
 | `modelSnapshot` | object | Captured counts/time with `templatesFrozen=true` and the canonical `modelFingerprint` used for current-Board drift checks |
+| `playbackScene` | object | `FuzzRunDto` detail only: canonical frozen `{ nodes, rules }` used to render its findings without consulting the live Board. It is omitted from list summaries. |
 | `eligibility` | object | Eligible IDs plus frozen `eligibleSpecLabels`, itemized ineligible specifications, requested count, and eligible count |
 | `limitations` | `string[]` | Stable limitation codes that apply to this run |
 | `createdAt` / `completedAt` | datetime | Lifecycle timestamps |
@@ -346,7 +351,9 @@ same relation with overflow-safe multiplication.
 persisted row remains visible with `dataAvailable=false`,
 `unavailableReasonCode=PERSISTED_SEMANTIC_DATA_INVALID`, its available identity and
 timestamps, and an empty `findings` list. Run detail fails closed instead of returning
-an unavailable detail object. Deleting a run through `DELETE /api/fuzz/runs/{id}`
+an unavailable detail object. When a complete-result read identifies an individual
+`FuzzFinding` as damaged, clients disable only that finding and retain independently
+validated siblings for direct replay. Deleting a run through `DELETE /api/fuzz/runs/{id}`
 deletes its findings in the same transaction.
 
 Run-list decoding uses a lightweight finding projection that excludes the frozen
@@ -355,11 +362,15 @@ frozen `specificationLabel`, and `stateCount`, and validates run
 metadata, finding ownership/counts, seed, timestamps, and bounded state-count/violation-step
 metadata, including `stateCount <= pathLength`. A finding summary intentionally has no
 `dataAvailable` field: the list projection has not loaded enough evidence to make that
-claim. Replay loads the full owned run on demand and selects the finding from that run's
-validated embedded evidence; it never combines a separately returned finding with another
-response's model snapshot. Full run or finding detail validates the complete frozen
+claim. Replay loads the selected finding with its atomically returned frozen run context;
+it never combines a separately returned finding with another response's model snapshot. This
+lets a valid finding remain replayable when a sibling's full payload is damaged. Full run or
+finding detail validates the complete frozen
 specification and state/event prefix before returning it. Corruption inside full evidence
 therefore fails closed at that detail boundary even when the preceding list metadata was valid.
+Full finding collections preserve ascending creation/id order after loading owned rows. Their
+database query is deliberately unordered so complete state and input-event LONGTEXT does not
+inflate a filesort; the same full-detail validation still runs before the response is returned.
 
 Detail decoding treats the persisted, versioned `modelInputSnapshotJson` envelope as the
 integrity root. The public model counts must exactly match
@@ -414,8 +425,13 @@ fallback for future unknown codes.
 
 ## Findings
 
-`GET /api/fuzz/runs/{id}/findings` returns all full findings for one owned run;
-`GET /api/fuzz/findings/{id}` returns one owned finding. A `FuzzFindingDto` is:
+`GET /api/fuzz/runs/{id}/findings` returns all full findings for one owned run.
+`GET /api/fuzz/findings/{id}` returns `FuzzFindingReplayDto`, containing the selected
+`finding: FuzzFindingDto` plus the owning run's validated `modelSnapshot` and
+`playbackScene`. This is the replay contract for a selected history item or
+`run=exploration:<runId>&finding=<findingId>` link: clients verify that
+`finding.fuzzTaskId` equals the URL's `runId`, then render only this frozen scene. A
+`FuzzFindingDto` is:
 
 | Field | Type | Meaning |
 | :--- | :--- | :--- |
@@ -423,7 +439,7 @@ fallback for future unknown codes.
 | `violatedSpecId` | string | Captured specification identity |
 | `violatedSpec` | `SpecificationDto` | Frozen structured specification snapshot; never rebuilt from the current Board |
 | `firstViolationStep` | integer | Zero-based first violating state; always `states.length - 1` |
-| `states` | `TraceStateDto[]` | Candidate finite prefix ending exactly at the first violation. Device, device-local-variable, and environment entries carry the frozen `modelTokenSource` contract defined in [verification trace structure](verification.md#3-trace-structure) |
+| `states` | `TraceStateDto[]` | Candidate finite prefix ending exactly at the first violation. Device, device-local-variable, and environment entries carry the frozen `modelTokenSource` contract defined in [verification trace structure](verification.md#3-trace-structure). Because neither exploration mode implements MEDIC trust/privacy propagation, fuzz trace variables leave `trust` null and device/state `trustPrivacy`/`privacies` collections empty. Clients reject a finding carrying any non-null/non-empty label evidence instead of presenting template labels as finding evidence |
 | `seed` | integer | Run's effective seed |
 | `inputEvents` | `FuzzInputEventDto[]` | Ordered replay evidence as `{ step, kind, targetId, property, value, source }`. `kind` is `DEVICE_STATE`, `DEVICE_VARIABLE`, `ENVIRONMENT_VALUE`, or `ENVIRONMENT_RATE`; `source` is `MODEL_CHOICE`, `RANDOM_INITIAL_STATE`, or `SEED_EVENT`. Paper-compatible one-based `Position` is exposed as zero-based `step` |
 | `createdAt` | datetime | Persistence time |
@@ -447,7 +463,8 @@ environment variable is `BUNDLED` or `CUSTOM` only when every captured template 
 agrees; mixed declarations are `UNKNOWN`. Missing or conflicting finding sources are invalid
 and are never synthesized from current templates. Clients localize only `BUNDLED`.
 
-Before replay, the frontend validates every nested state, device, variable, triggered-rule,
+Before replay, the frontend validates the selected finding together with its returned frozen run
+snapshot and playback scene, then validates every nested state, device, variable, triggered-rule,
 trust/privacy, and environment/global entry. Invalid scalar types, property scopes,
 trust/privacy enum values, duplicate identities, incomplete device/variable membership between
 complete snapshots, per-list evidence semantics, cross-state source drift, or missing, null, or

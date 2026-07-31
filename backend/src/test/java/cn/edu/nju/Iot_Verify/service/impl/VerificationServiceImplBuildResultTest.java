@@ -11,6 +11,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.configure.AsyncTaskAdmissionConfig;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
@@ -43,6 +44,7 @@ import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
@@ -197,6 +199,26 @@ class VerificationServiceImplBuildResultTest {
                 Long.class, Long.class, List.class, Map.class, Map.class, String.class,
                 List.class, List.class, int.class, int.class);
         buildVerificationResult.setAccessible(true);
+    }
+
+    @Test
+    void fullTraceCollectionOrdersLoadedPayloadsWithoutDatabaseSortingJson() {
+        LocalDateTime olderTime = LocalDateTime.of(2026, 7, 30, 10, 0);
+        TracePo oldest = TracePo.builder().id(11L).createdAt(olderTime).build();
+        TracePo sameTimeNewerId = TracePo.builder().id(12L).createdAt(olderTime).build();
+        TracePo newest = TracePo.builder().id(13L).createdAt(olderTime.plusSeconds(1)).build();
+        List<TraceDto> expected = List.of(TraceDto.builder().id(13L).build());
+        when(traceRepository.findByUserId(7L))
+                .thenReturn(List.of(oldest, newest, sameTimeNewerId));
+        when(traceMapper.toDtoList(anyList())).thenReturn(expected);
+
+        assertSame(expected, service.getUserTraces(7L));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<TracePo>> traces = ArgumentCaptor.forClass(List.class);
+        verify(traceMapper).toDtoList(traces.capture());
+        assertEquals(List.of(13L, 12L, 11L),
+                traces.getValue().stream().map(TracePo::getId).toList());
     }
 
     @Test
@@ -1129,7 +1151,7 @@ class VerificationServiceImplBuildResultTest {
         File smv = createTempModelFile();
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         SpecificationDto spec = makeEffectiveSpec("privacy-spec");
-        spec.getAConditions().get(0).setTargetType("privacy");
+        spec.getAConditions().get(0).setTargetType(" Privacy ");
         spec.getAConditions().get(0).setPropertyScope("variable");
         spec.getAConditions().get(0).setKey("status");
         spec.getAConditions().get(0).setValue("private");
@@ -1274,18 +1296,16 @@ class VerificationServiceImplBuildResultTest {
 
     @Test
     void taskInboxQueryExcludesCompletedRuns() {
-        List<VerificationTaskPo> rows = List.of(VerificationTaskPo.builder()
-                .id(5L).userId(1L).status(VerificationTaskPo.TaskStatus.FAILED)
-                .createdAt(LocalDateTime.now()).build());
-        when(taskRepository.findByUserIdAndStatusNotOrderByCreatedAtDesc(
+        VerificationTaskSummaryProjection row = mock(VerificationTaskSummaryProjection.class);
+        List<VerificationTaskSummaryProjection> rows = List.of(row);
+        when(taskRepository.findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
                 1L, VerificationTaskPo.TaskStatus.COMPLETED)).thenReturn(rows);
-        when(verificationTaskMapper.toSummaryDtoList(rows)).thenReturn(List.of());
+        when(verificationTaskMapper.toSummaryProjectionDtoList(rows)).thenReturn(List.of());
 
         service.getTasks(1L, List.of());
 
-        verify(taskRepository).findByUserIdAndStatusNotOrderByCreatedAtDesc(
+        verify(taskRepository).findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
                 1L, VerificationTaskPo.TaskStatus.COMPLETED);
-        verify(taskRepository, never()).findByUserIdOrderByCreatedAtDesc(anyLong());
     }
 
     @Test
@@ -1298,7 +1318,7 @@ class VerificationServiceImplBuildResultTest {
         when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
                 .thenReturn(List.of(good, corrupt));
-        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+        when(traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(
                 1L, List.of(21L, 22L))).thenReturn(List.of());
         when(verificationTaskMapper.toRunSummaryDto(good, 0))
                 .thenReturn(VerificationRunSummaryDto.builder().id(21L).build());
@@ -1322,7 +1342,7 @@ class VerificationServiceImplBuildResultTest {
         when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
                 .thenReturn(List.of(run));
-        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+        when(traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(
                 1L, List.of(23L))).thenReturn(List.of());
         when(verificationTaskMapper.toRunSummaryDto(run, 0))
                 .thenThrow(new IllegalStateException("mapper bug"));
@@ -1340,7 +1360,7 @@ class VerificationServiceImplBuildResultTest {
         when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
                 .thenReturn(List.of(run));
-        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+        when(traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(
                 1L, List.of(31L))).thenReturn(List.of(corruptTrace));
         when(traceMapper.toSummaryDto(corruptTrace)).thenThrow(new PersistedDataIntegrityException(
                 "verification trace", 41L, "violatedSpecJson", "malformed JSON"));
@@ -1377,7 +1397,7 @@ class VerificationServiceImplBuildResultTest {
                 .dataAvailable(null)
                 .build();
         when(taskRepository.findByIdAndUserId(32L, 1L)).thenReturn(Optional.of(run));
-        when(traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
+        when(traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(
                 1L, List.of(32L))).thenReturn(List.of(availableTrace, unknownTrace, corruptTrace));
         when(traceMapper.toSummaryDto(availableTrace)).thenReturn(availableSummary);
         when(traceMapper.toSummaryDto(unknownTrace)).thenReturn(unknownSummary);
@@ -1837,6 +1857,7 @@ class VerificationServiceImplBuildResultTest {
                                                 int attackBudget, boolean enablePrivacy) {
         VerificationRequestDto r = new VerificationRequestDto();
         r.setDevices(devices);
+        r.setPlaybackNodes(playbackNodes(devices));
         r.setRules(rules);
         r.setSpecs(specs);
         r.setAttackScenario(AttackScenarioDto.builder()
@@ -1846,5 +1867,30 @@ class VerificationServiceImplBuildResultTest {
                 .build());
         r.setEnablePrivacy(enablePrivacy);
         return r;
+    }
+
+    private List<DeviceNodeDto> playbackNodes(List<DeviceVerificationDto> devices) {
+        if (devices == null) return null;
+        List<DeviceNodeDto> nodes = new ArrayList<>();
+        for (int index = 0; index < devices.size(); index++) {
+            DeviceVerificationDto device = devices.get(index);
+            DeviceNodeDto node = new DeviceNodeDto();
+            String id = device != null && device.getVarName() != null && !device.getVarName().isBlank()
+                    ? device.getVarName() : "invalid_" + index;
+            node.setId(id);
+            node.setTemplateName(device != null && device.getTemplateName() != null
+                    && !device.getTemplateName().isBlank() ? device.getTemplateName() : "Invalid");
+            node.setLabel(device != null && device.getDeviceLabel() != null
+                    && !device.getDeviceLabel().isBlank() ? device.getDeviceLabel() : id);
+            DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+            position.setX((double) index * 240);
+            position.setY(0.0);
+            node.setPosition(position);
+            node.setState("Working");
+            node.setWidth(160);
+            node.setHeight(120);
+            nodes.add(node);
+        }
+        return nodes;
     }
 }

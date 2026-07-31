@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -201,6 +202,30 @@ class SimulationAsyncToolsTest {
         assertTrue(result.contains("taskId"));
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
+    }
+
+    @Test
+    void simulateTaskStatus_completedTask_shouldExposeTraceHandoffWithoutExecutionLogs()
+            throws Exception {
+        when(simulationService.getTask(1L, 12L)).thenReturn(SimulationTaskDto.builder()
+                .id(12L)
+                .status("COMPLETED")
+                .progress(92)
+                .simulationTraceId(31L)
+                .checkLogs(List.of("internal execution log"))
+                .build());
+        when(simulationService.getTaskProgress(1L, 12L)).thenReturn(100);
+
+        JsonNode json = objectMapper.readTree(
+                simulateTaskStatusTool.execute("{\"taskId\":12}"));
+
+        assertEquals(100, json.path("progress").asInt());
+        assertEquals(100, json.path("task").path("progress").asInt());
+        assertEquals(31L, json.path("simulationId").asLong());
+        assertEquals("get_simulation_trace", json.path("nextTool").asText());
+        assertEquals(31L, json.path("task").path("simulationTraceId").asLong());
+        assertEquals(1, json.path("task").path("checkLogCount").asInt());
+        assertFalse(json.path("task").has("checkLogs"));
     }
 
     @Test

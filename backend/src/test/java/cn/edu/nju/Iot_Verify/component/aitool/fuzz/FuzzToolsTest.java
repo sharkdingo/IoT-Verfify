@@ -280,7 +280,7 @@ class FuzzToolsTest {
         JsonNode zeroLimit = objectMapper.readTree(getFuzzFindingTool.execute(
                 "{\"findingId\":11,\"stateLimit\":0}"));
         JsonNode oversizedLimit = objectMapper.readTree(getFuzzFindingTool.execute(
-                "{\"findingId\":11,\"stateLimit\":21}"));
+                "{\"findingId\":11,\"stateLimit\":11}"));
         JsonNode negativeOffset = objectMapper.readTree(getFuzzFindingTool.execute(
                 "{\"findingId\":11,\"stateOffset\":-1}"));
 

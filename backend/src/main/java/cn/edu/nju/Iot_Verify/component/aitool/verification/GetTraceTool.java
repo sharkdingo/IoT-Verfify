@@ -38,11 +38,18 @@ public class GetTraceTool extends AbstractAiTool {
     public LlmToolSpec getDefinition() {
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
-                Map.of("traceId", Map.of("type", "integer", "description", "Verification trace ID.")),
+                Map.of(
+                        "traceId", Map.of("type", "integer", "description", "Verification trace ID."),
+                        "stateOffset", Map.of("type", "integer",
+                                "description", "Non-negative zero-based state-sequence offset (default 0)."),
+                        "stateLimit", Map.of("type", "integer",
+                                "description", "Number of states to return, 1-10 (default 10).")),
                 List.of("traceId")
         );
 
-        return LlmToolSpec.of(getName(), "Get a saved verification trace by traceId, including its state sequence.", schema);
+        return LlmToolSpec.of(getName(),
+                "Get a saved verification trace by traceId with a bounded state window. Page the sequence with stateOffset and stateLimit; use stateCount and nextStateOffset to inspect another window.",
+                schema);
     }
 
     @Override
@@ -55,8 +62,13 @@ public class GetTraceTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
-            requireOnlyFields(args, "arguments", Set.of("traceId"));
+            requireOnlyFields(args, "arguments", Set.of("traceId", "stateOffset", "stateLimit"));
             long traceId = positiveLongArg(args, "traceId");
+            int stateOffset = intArgInRange(args, "stateOffset", 0, 0,
+                    ModelTraceToolPresenter.MAX_STATE_OFFSET);
+            int stateLimit = intArgInRange(args, "stateLimit",
+                    ModelTraceToolPresenter.DEFAULT_STATE_LIMIT, 1,
+                    ModelTraceToolPresenter.MAX_STATE_LIMIT);
 
             TraceDto trace = verificationService.getTrace(userId, traceId);
 
@@ -67,8 +79,8 @@ public class GetTraceTool extends AbstractAiTool {
             body.put("disabledRuleCount", trace.getDisabledRuleCount());
             body.put("skippedSpecCount", trace.getSkippedSpecCount());
             body.put("generationIssues", trace.getGenerationIssues());
-            body.put("stateCount", trace.getStates() != null ? trace.getStates().size() : 0);
-            body.put("states", ModelTraceToolPresenter.states(trace.getStates()));
+            ModelTraceToolPresenter.putStateWindow(
+                    body, trace.getStates(), stateOffset, stateLimit);
             body.put("isAttack", trace.getAttack());
             body.put("attackBudget", trace.getAttackBudget());
             body.put("enablePrivacy", trace.getEnablePrivacy());

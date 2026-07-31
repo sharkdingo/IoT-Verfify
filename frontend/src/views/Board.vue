@@ -33,6 +33,83 @@ export const createLatestBoardRequestGuard = () => {
   }
 }
 
+/**
+ * Historical playback is evidence from a completed run. Its node presentation must never read
+ * the live template catalog, because a later template edit can otherwise change old evidence.
+ */
+export const shouldResolveLiveTemplateForPresentation = (historicalPlaybackActive: boolean): boolean =>
+  !historicalPlaybackActive
+
+/** A persisted-history detail cannot be safely retried when the server rejects its frozen model. */
+export const isPersistedHistoryDataInvalid = (error: unknown): boolean =>
+  (error as { response?: { data?: { data?: { reasonCode?: unknown } } } })
+    ?.response?.data?.data?.reasonCode === 'PERSISTED_SEMANTIC_DATA_INVALID'
+
+/** Returns an affected persisted record only when the backend identified one unambiguously. */
+export const persistedHistoryInvalidRecordId = (
+  error: unknown,
+  recordType: string
+): number | null => {
+  const data = (error as {
+    response?: { data?: { data?: { reasonCode?: unknown; recordType?: unknown; recordId?: unknown } } }
+  })?.response?.data?.data
+  if (data?.reasonCode !== 'PERSISTED_SEMANTIC_DATA_INVALID' || data.recordType !== recordType) {
+    return null
+  }
+  const recordId = Number(data.recordId)
+  return Number.isSafeInteger(recordId) && recordId > 0 ? recordId : null
+}
+
+export const shouldClearUnusableHistoryDeepLink = (
+  loadingFromDeepLink: boolean,
+  error: unknown
+): boolean => loadingFromDeepLink && isPersistedHistoryDataInvalid(error)
+
+/** Only confirmed absent/forbidden targets, not transient reads, make a shared history link dead. */
+export const shouldReportUnusableHistoryDeepLink = (
+  loadingFromDeepLink: boolean,
+  error: unknown
+): boolean => {
+  if (!loadingFromDeepLink) return false
+  if (isPersistedHistoryDataInvalid(error)) return true
+  const status = Number((error as { response?: { status?: unknown } } | null)?.response?.status)
+  return status === 403 || status === 404 || status === 410
+}
+
+/** A trace address is meaningful only under the verification run named by its URL. */
+export const verificationRunContainsTrace = (
+  run: { traces?: Array<{ id?: number }> } | null | undefined,
+  traceId: number
+): boolean => Number.isSafeInteger(traceId) && traceId > 0
+  && (run?.traces || []).some(trace => trace.id === traceId)
+
+/** A leaf replay response must belong to the run encoded in a shared history URL. */
+export const verificationTraceBelongsToRun = (
+  trace: { verificationTaskId?: number } | null | undefined,
+  runId: number
+): boolean => Number.isSafeInteger(runId) && runId > 0 && trace?.verificationTaskId === runId
+
+/** A fuzz finding is addressed under its owning completed exploration run when deep-linked. */
+export const fuzzingFindingBelongsToRun = (
+  finding: { fuzzTaskId?: number } | null | undefined,
+  runId: number
+): boolean => Number.isSafeInteger(runId) && runId > 0 && finding?.fuzzTaskId === runId
+
+/** A run can remain inconclusive while retaining evidence parsed before another result failed. */
+export const shouldLoadVerificationEvidence = (counterexampleCount: unknown): boolean =>
+  Number.isSafeInteger(counterexampleCount) && Number(counterexampleCount) > 0
+
+/**
+ * A summary endpoint deliberately avoids decoding every large frozen artifact. Once an on-demand
+ * read proves one artifact is corrupt, keep that fact for this mounted Board session so a list
+ * refresh cannot turn the same known-bad item back into a misleading replay button.
+ */
+export const retainSessionUnavailableHistoryItems = <T extends { id: number }>(
+  items: readonly T[],
+  unavailableIds: ReadonlySet<number>,
+  toUnavailable: (item: T) => T
+): T[] => items.map(item => unavailableIds.has(item.id) ? toUnavailable(item) : item)
+
 export class BoardMutationAdmissionCancelledError extends Error {
   constructor() {
     super('Board mutation admission was cancelled')
@@ -74,6 +151,25 @@ export const revalidateHistoricalPlaybackAdmission = async ({
   if (!isRequestCurrent()) return 'request-stale'
   if (currentMutationEpoch() !== initialMutationEpoch) return 'board-changed'
   return recheckUiAdmission() ? 'admitted' : 'ui-blocked'
+}
+
+export const prepareBoardChatInteraction = ({
+  sceneReplacementInProgress,
+  tracePlaybackVisible,
+  simulationPlaybackVisible,
+  closeTracePlayback,
+  closeSimulationPlayback
+}: {
+  sceneReplacementInProgress: boolean
+  tracePlaybackVisible: boolean
+  simulationPlaybackVisible: boolean
+  closeTracePlayback: () => void
+  closeSimulationPlayback: () => void
+}): boolean => {
+  if (sceneReplacementInProgress) return false
+  if (tracePlaybackVisible) closeTracePlayback()
+  if (simulationPlaybackVisible) closeSimulationPlayback()
+  return true
 }
 
 export const runTrackedBoardMutation = async <T,>(
@@ -425,6 +521,29 @@ export const getConfirmedBoardItemStatus = <T extends { id?: string }>(
     : 'item-changed'
 }
 
+export type FormalRunKind = 'verification' | 'simulation'
+export type FormalRunReadinessIssue =
+  | 'NO_DEVICES'
+  | 'NO_SPECIFICATIONS'
+  | 'RULE_TRIGGER_REQUIRED'
+  | 'INVALID_SIMULATION_STEPS'
+
+export const formalRunReadinessIssue = (
+  kind: FormalRunKind,
+  input: {
+    deviceCount: number
+    specificationCount: number
+    rulesHaveTriggers: boolean
+    simulationStepsValid: boolean
+  }
+): FormalRunReadinessIssue | null => {
+  if (input.deviceCount <= 0) return 'NO_DEVICES'
+  if (kind === 'verification' && input.specificationCount <= 0) return 'NO_SPECIFICATIONS'
+  if (!input.rulesHaveTriggers) return 'RULE_TRIGGER_REQUIRED'
+  if (kind === 'simulation' && !input.simulationStepsValid) return 'INVALID_SIMULATION_STEPS'
+  return null
+}
+
 </script>
 
 <script setup lang="ts">
@@ -456,6 +575,7 @@ import type {
   ModelGenerationIssue,
   Trace,
   TraceDevice,
+  TraceSummary,
   TraceTriggeredRule,
   TraceVariable,
   VerificationRequest,
@@ -485,8 +605,11 @@ import { isValidFuzzPaperDomainFingerprint } from '@/types/fuzzing'
 import type { ModelSemantics, RunBoardComparison } from '@/types/modelSemantics'
 import type {
   EnvironmentVariableUpdateRequest,
-  ModelEnvironmentVariable
+  ModelEnvironmentVariable,
+  ModelPlaybackScene,
+  RunInitiator
 } from '@/types/model'
+import { isRunInitiator } from '@/types/model'
 import type { InteractiveOperationStage, TaskCancellationResult, TaskProgressStage } from '@/types/task'
 import type { FixApplyResult } from '@/types/fix'
 import type { ChatLogoutPreparation } from '@/types/chat'
@@ -517,6 +640,7 @@ import {
   reconcileBoardFocus,
   type BoardSemanticScene
 } from './board/semanticCommit'
+import { buildPlaybackEdges } from './board/playbackScene'
 import {
   formatRecommendationFilteredItem as formatFilteredItem,
   formatRecommendationFilteredType as formatFilteredType
@@ -555,7 +679,8 @@ import {
   buildSimulationRequestPayload,
   buildModelRunSignature,
   buildVerificationRequestPayload,
-  normalizeModelRelation
+  normalizeModelRelation,
+  specificationsRequirePrivacy
 } from '@/utils/modelRequest'
 import { isModelSemanticsConsistent } from '@/utils/modelSemantics'
 import {
@@ -589,8 +714,7 @@ import {
 import {
   FUZZ_RESPONSE_INCOMPLETE_CODE,
   getFuzzActiveTaskLimit,
-  getFuzzStoredTaskLimit,
-  resolveFuzzingRunFinding
+  getFuzzStoredTaskLimit
 } from '@/utils/fuzzingResponse'
 import {
   FUZZ_INLINE_RESULT_RECOVERY_MAX_FAILURES,
@@ -633,6 +757,7 @@ import {
   findTemplateStateTrust,
   getTemplateLocalVariables,
   getTemplateEnvironmentVariables,
+  getTemplateVariableDefaultValue,
   getTemplateWorkingStates,
   resetDeviceRuntimeDraft,
   templateVariableHasEnumValues,
@@ -706,6 +831,28 @@ const router = useRouter()
 const route = useRoute()
 const chatStore = useChatStore()
 const { toggleChat } = chatStore
+const hasAssistantWork = computed(() => chatStore.state.streaming
+  || chatStore.state.activeCount > 0
+  || chatStore.state.reconciliationRequired)
+const assistantButtonLabel = computed(() => {
+  if (chatStore.state.reconciliationRequired) {
+    return t('app.chat.reconciliationPendingStatus', {
+      active: chatStore.state.activeCount,
+      unread: chatStore.state.unreadCount
+    })
+  }
+  if (chatStore.state.activeCount > 0) {
+    return chatStore.state.unreadCount > 0
+      ? t('app.chat.runningAndUnreadResults', {
+          active: chatStore.state.activeCount,
+          unread: chatStore.state.unreadCount
+        })
+      : t('app.chat.runningSessions', { count: chatStore.state.activeCount })
+  }
+  return chatStore.state.unreadCount > 0
+    ? t('app.chat.unreadResults', { count: chatStore.state.unreadCount })
+    : t('app.aiAssistant')
+})
 const { state: authState, logout, logoutIfTokenMatches, getToken } = useAuth()
 const { theme } = useTheme()
 
@@ -737,6 +884,7 @@ type FuzzUnreadNotification = {
   runId?: number
   outcome?: string
   createdAt: string
+  initiator?: RunInitiator
 }
 
 const unreadFuzzNotifications = ref<FuzzUnreadNotification[]>([])
@@ -1324,6 +1472,9 @@ watch(actionDockViewportWidth, applyViewportPanelConstraints, { immediate: true 
 const deviceTemplates = ref<DeviceTemplate[]>([])
 const templatesLoading = ref(false)
 const nodes = ref<DeviceNode[]>([])
+const activePlaybackScene = ref<ModelPlaybackScene | null>(null)
+const playbackCanvasPan = ref<CanvasPan>({ x: 0, y: 0 })
+const playbackCanvasZoom = ref(1)
 const environmentVariables = ref<ModelEnvironmentVariable[]>([])
 const environmentMutationPending = ref(false)
 const edges = ref<DeviceEdge[]>([])
@@ -1379,9 +1530,13 @@ const cloneVisibleDeviceNodes = (): DeviceNode[] =>
   deepClone(getVisibleDeviceNodes())
 
 // 画布只展示由用户规则派生的可见连线；模板内部变量保留在 manifest 中，不再生成用户可见节点/边。
-const allEdges = computed(() => {
-  return edges.value
-})
+const playbackEdges = computed(() => activePlaybackScene.value
+  ? buildPlaybackEdges(activePlaybackScene.value)
+  : [])
+const renderedCanvasNodes = computed(() => activePlaybackScene.value?.nodes || nodes.value)
+const allEdges = computed(() => activePlaybackScene.value ? playbackEdges.value : edges.value)
+const renderedCanvasPan = computed(() => activePlaybackScene.value ? playbackCanvasPan.value : canvasPan.value)
+const renderedCanvasZoom = computed(() => activePlaybackScene.value ? playbackCanvasZoom.value : canvasZoom.value)
 const specifications = ref<Specification[]>([])
 
 type BoardDataKey = 'templates' | 'nodes' | 'environment' | 'rules' | 'specs'
@@ -1410,6 +1565,13 @@ const isBoardDataReady = computed(() =>
 const isCanvasInteractionLocked = computed(() =>
   isModelPlaybackActive.value
   || isSceneReplacementInProgress.value
+  || isAuthScopeTransitioning.value
+  || boardDataLoadState.nodes !== 'ready')
+
+// Read-only playback locks semantic/layout edits, but it must remain navigable. Playback owns a
+// separate viewport, so panning or zooming an old scene cannot alter the live board layout.
+const isCanvasNavigationLocked = computed(() =>
+  isSceneReplacementInProgress.value
   || isAuthScopeTransitioning.value
   || boardDataLoadState.nodes !== 'ready')
 
@@ -1818,7 +1980,10 @@ const templateVariableInputPlaceholder = (variable: InternalVariable) => {
   if (templateVariableUsesNumericBounds(variable)) {
     const lower = variable.LowerBound ?? '-∞'
     const upper = variable.UpperBound ?? '∞'
-    return `${lower} - ${upper}`
+    const defaultValue = getTemplateVariableDefaultValue(variable)
+    return defaultValue
+      ? `${t('app.useTemplateDefaultWithValue', { value: defaultValue })} / ${lower} - ${upper}`
+      : `${lower} - ${upper}`
   }
   return t('app.enterValuePlaceholder')
 }
@@ -2100,6 +2265,11 @@ const resolveTemplateForNode = (node: DeviceNode): DeviceTemplate | null => {
   return findTemplateByAnyName(node.templateName) || null
 }
 
+const resolvePresentationTemplateForNode = (node: DeviceNode): DeviceTemplate | null =>
+  shouldResolveLiveTemplateForPresentation(activePlaybackScene.value !== null)
+    ? resolveTemplateForNode(node)
+    : null
+
 const isBundledDeviceTemplate = (template?: DeviceTemplate | null): boolean =>
   template?.defaultTemplate === true
 
@@ -2109,7 +2279,7 @@ const formatBundledModelToken = (value: unknown): string => formatBuiltInModelTo
 )
 
 const formatNodeModelToken = (node: DeviceNode, value: unknown): string =>
-  isBundledDeviceTemplate(resolveTemplateForNode(node))
+  isBundledDeviceTemplate(resolvePresentationTemplateForNode(node))
     ? formatBundledModelToken(value)
     : String(value ?? '')
 
@@ -2174,16 +2344,16 @@ const bundledBoardDeviceIds = computed(() => nodes.value
 const bundledBoardEnvironmentNames = computed(() => getBundledEnvironmentNames(nodes.value))
 
 const hasNodeStateMachine = (node: DeviceNode): boolean => {
-  return hasModeledStateMachine(resolveTemplateForNode(node)?.manifest)
+  return hasModeledStateMachine(resolvePresentationTemplateForNode(node)?.manifest)
 }
 
 const getNodeEffectiveState = (node: DeviceNode): string => {
-  const manifest = resolveTemplateForNode(node)?.manifest
+  const manifest = resolvePresentationTemplateForNode(node)?.manifest
   return resolveEffectiveNodeState(node.state, manifest, t('app.unknown'))
 }
 
 const getBoardNodeIcon = (node: DeviceNode, stateOverride?: string): string => {
-  const template = resolveTemplateForNode(node)
+  const template = resolvePresentationTemplateForNode(node)
   return resolveNodeIcon(node, template?.manifest || stateOverride || null, stateOverride)
 }
 
@@ -2195,29 +2365,30 @@ const clampZoom = (value: number) =>
   Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
 
 const setCanvasZoom = (value: number, options: { preserveCenter?: boolean } = {}) => {
-  if (isCanvasInteractionLocked.value) return
+  if (isCanvasNavigationLocked.value) return
   const nextZoom = clampZoom(value)
   if (!Number.isFinite(nextZoom)) return
-  if (Math.abs(nextZoom - canvasZoom.value) < 0.001) return
-  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
+  if (Math.abs(nextZoom - renderedCanvasZoom.value) < 0.001) return
+  if (!activePlaybackScene.value && !layoutHydrated.value) canvasStateTouchedBeforeLayout = true
 
   const center = options.preserveCenter ? getVisibleCanvasCenterWorld() : null
-  canvasZoom.value = nextZoom
+  if (activePlaybackScene.value) playbackCanvasZoom.value = nextZoom
+  else canvasZoom.value = nextZoom
   if (center) {
     panCanvasToWorldCenter(center.x, center.y)
   }
 }
 
 const adjustCanvasZoom = (delta: number) => {
-  if (isCanvasInteractionLocked.value) return
-  setCanvasZoom(canvasZoom.value + delta, { preserveCenter: true })
+  if (isCanvasNavigationLocked.value) return
+  setCanvasZoom(renderedCanvasZoom.value + delta, { preserveCenter: true })
 }
 
-const canvasZoomPercent = computed(() => Math.round(canvasZoom.value * 100))
+const canvasZoomPercent = computed(() => Math.round(renderedCanvasZoom.value * 100))
 
 const handleCanvasMapZoomInput = (event: Event) => {
   const input = event.target as HTMLInputElement | null
-  if (isCanvasInteractionLocked.value) {
+  if (isCanvasNavigationLocked.value) {
     if (input) input.value = String(canvasZoomPercent.value)
     return
   }
@@ -2226,17 +2397,15 @@ const handleCanvasMapZoomInput = (event: Event) => {
     if (input) input.value = String(canvasZoomPercent.value)
     return
   }
-  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   setCanvasZoom(value / 100, { preserveCenter: true })
 }
 
 const onBoardWheel = (e: WheelEvent) => {
-  if (isCanvasInteractionLocked.value) {
+  if (isCanvasNavigationLocked.value) {
     if (e.ctrlKey) e.preventDefault()
     return
   }
   if (e.ctrlKey) {
-    if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
     if (e.deltaY > 0) {
       adjustCanvasZoom(-ZOOM_STEP)
     } else {
@@ -2255,12 +2424,10 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
     || target instanceof HTMLSelectElement
     || Boolean(target?.isContentEditable)
 
-  if (!e.defaultPrevented && !isCanvasInteractionLocked.value
+  if (!e.defaultPrevented && !isCanvasNavigationLocked.value
     && isCanvasHovered.value && !isEditableTarget && (e.ctrlKey || e.metaKey)) {
     if (['=', '+', '-', '0'].includes(e.key)) {
       e.preventDefault()
-      if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
-
       if (e.key === '=' || e.key === '+') {
         adjustCanvasZoom(ZOOM_STEP)
       } else if (e.key === '-') {
@@ -2273,13 +2440,13 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
 }
 
 const onCanvasPointerDown = (e: PointerEvent) => {
-  if (isCanvasInteractionLocked.value) return
+  if (isCanvasNavigationLocked.value) return
   if (e.button !== 0 || e.isPrimary === false || canvasPanPointerId !== null) return
   e.preventDefault()
   isPanning = true
   canvasPanPointerId = e.pointerId
   panStart = { x: e.clientX, y: e.clientY }
-  panOrigin = { x: canvasPan.value.x, y: canvasPan.value.y }
+  panOrigin = { x: renderedCanvasPan.value.x, y: renderedCanvasPan.value.y }
 
   const target = e.currentTarget as HTMLElement
   canvasPanTarget = target
@@ -2293,17 +2460,19 @@ const onCanvasPointerDown = (e: PointerEvent) => {
 
 const onCanvasPointerMove = (e: PointerEvent) => {
   if (!isPanning || e.pointerId !== canvasPanPointerId) return
-  if (isCanvasInteractionLocked.value) {
+  if (isCanvasNavigationLocked.value) {
     finishCanvasPan(e.pointerId)
     return
   }
   const dx = e.clientX - panStart.x
   const dy = e.clientY - panStart.y
-  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
-  canvasPan.value = {
+  if (!activePlaybackScene.value && !layoutHydrated.value) canvasStateTouchedBeforeLayout = true
+  const nextPan = {
     x: panOrigin.x + dx,
     y: panOrigin.y + dy
   }
+  if (activePlaybackScene.value) playbackCanvasPan.value = nextPan
+  else canvasPan.value = nextPan
 }
 
 const finishCanvasPan = (pointerId: number | null = canvasPanPointerId) => {
@@ -4569,7 +4738,7 @@ const importScene = async (
   if (!isAdmitted()) return false
   if (!ensurePlaybackClosedForMutation()) return false
   if (isSceneReplacementInProgress.value) return false
-  if (chatStore.state.streaming) {
+  if (hasAssistantWork.value) {
     notifyBlocked(t('app.finishAssistantBeforeSceneReplacement'))
     return false
   }
@@ -4691,7 +4860,7 @@ const importScene = async (
 const clearScene = async () => {
   if (!ensurePlaybackClosedForMutation()) return
   if (isClearingScene.value || isImportingScene.value) return
-  if (chatStore.state.streaming) {
+  if (hasAssistantWork.value) {
     notifyBlocked(t('app.finishAssistantBeforeSceneReplacement'))
     return
   }
@@ -4959,7 +5128,7 @@ let canvasMapDragPointerId: number | null = null
 
 // Canvas map calculations
 const canvasMapData = computed(() => {
-  const visibleNodes = getVisibleDeviceNodes()
+  const visibleNodes = renderedCanvasNodes.value
 
   if (visibleNodes.length === 0) {
     return {
@@ -4987,11 +5156,11 @@ const canvasMapData = computed(() => {
   const frame = getVisibleCanvasFrame()
   let visibleWorldWidth = 900
   let visibleWorldHeight = 600
-  if (frame && canvasZoom.value > 0) {
-    const visibleMinX = (frame.left - canvasPan.value.x) / canvasZoom.value
-    const visibleMinY = (frame.top - canvasPan.value.y) / canvasZoom.value
-    const visibleMaxX = (frame.left + frame.width - canvasPan.value.x) / canvasZoom.value
-    const visibleMaxY = (frame.top + frame.height - canvasPan.value.y) / canvasZoom.value
+  if (frame && renderedCanvasZoom.value > 0) {
+    const visibleMinX = (frame.left - renderedCanvasPan.value.x) / renderedCanvasZoom.value
+    const visibleMinY = (frame.top - renderedCanvasPan.value.y) / renderedCanvasZoom.value
+    const visibleMaxX = (frame.left + frame.width - renderedCanvasPan.value.x) / renderedCanvasZoom.value
+    const visibleMaxY = (frame.top + frame.height - renderedCanvasPan.value.y) / renderedCanvasZoom.value
     visibleWorldWidth = Math.max(1, visibleMaxX - visibleMinX)
     visibleWorldHeight = Math.max(1, visibleMaxY - visibleMinY)
     minX = Math.min(minX, visibleMinX)
@@ -5041,7 +5210,7 @@ const canvasMapData = computed(() => {
     if (!fromDot || !toDot) return []
 
     // Check if bidirectional
-    const isBidirectional = edges.value.some(e =>
+    const isBidirectional = allEdges.value.some(e =>
       (e.from === edge.to && e.to === edge.from)
     )
 
@@ -5133,10 +5302,10 @@ const getVisibleCanvasFrame = () => {
 
 const getVisibleCanvasCenterWorld = () => {
   const frame = getVisibleCanvasFrame()
-  if (!frame || canvasZoom.value <= 0) return null
+  if (!frame || renderedCanvasZoom.value <= 0) return null
   return {
-    x: (frame.left + frame.width / 2 - canvasPan.value.x) / canvasZoom.value,
-    y: (frame.top + frame.height / 2 - canvasPan.value.y) / canvasZoom.value
+    x: (frame.left + frame.width / 2 - renderedCanvasPan.value.x) / renderedCanvasZoom.value,
+    y: (frame.top + frame.height / 2 - renderedCanvasPan.value.y) / renderedCanvasZoom.value
   }
 }
 
@@ -5180,11 +5349,13 @@ const canvasMapPointFromEvent = (event: PointerEvent, rect?: DOMRect | null) => 
 const panCanvasToWorldCenter = (worldX: number, worldY: number) => {
   const frame = getVisibleCanvasFrame()
   if (!frame) return
-  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
-  canvasPan.value = {
-    x: frame.left + frame.width / 2 - worldX * canvasZoom.value,
-    y: frame.top + frame.height / 2 - worldY * canvasZoom.value
+  if (!activePlaybackScene.value && !layoutHydrated.value) canvasStateTouchedBeforeLayout = true
+  const nextPan = {
+    x: frame.left + frame.width / 2 - worldX * renderedCanvasZoom.value,
+    y: frame.top + frame.height / 2 - worldY * renderedCanvasZoom.value
   }
+  if (activePlaybackScene.value) playbackCanvasPan.value = nextPan
+  else canvasPan.value = nextPan
 }
 
 const focusDeviceNodeOnCanvas = (
@@ -5279,12 +5450,12 @@ const focusSpecInInspector = async (specId?: string | null) => {
 const canvasMapViewportRect = computed(() => {
   const bounds = canvasMapData.value.bounds
   const frame = getVisibleCanvasFrame()
-  if (!bounds || !frame || canvasZoom.value <= 0) return null
+  if (!bounds || !frame || renderedCanvasZoom.value <= 0) return null
 
-  const visibleMinX = (frame.left - canvasPan.value.x) / canvasZoom.value
-  const visibleMinY = (frame.top - canvasPan.value.y) / canvasZoom.value
-  const visibleMaxX = (frame.left + frame.width - canvasPan.value.x) / canvasZoom.value
-  const visibleMaxY = (frame.top + frame.height - canvasPan.value.y) / canvasZoom.value
+  const visibleMinX = (frame.left - renderedCanvasPan.value.x) / renderedCanvasZoom.value
+  const visibleMinY = (frame.top - renderedCanvasPan.value.y) / renderedCanvasZoom.value
+  const visibleMaxX = (frame.left + frame.width - renderedCanvasPan.value.x) / renderedCanvasZoom.value
+  const visibleMaxY = (frame.top + frame.height - renderedCanvasPan.value.y) / renderedCanvasZoom.value
   const topLeft = worldToCanvasMapPoint(visibleMinX, visibleMinY)
   const bottomRight = worldToCanvasMapPoint(visibleMaxX, visibleMaxY)
   if (!topLeft || !bottomRight) return null
@@ -5303,17 +5474,16 @@ const canvasMapViewportRect = computed(() => {
 })
 
 const navigateCanvasMap = (event: PointerEvent, rect?: DOMRect | null) => {
-  if (isCanvasInteractionLocked.value) return
+  if (isCanvasNavigationLocked.value) return
   const point = canvasMapPointFromEvent(event, rect)
   if (!point) return
   const world = canvasMapPointToWorld(point.x, point.y)
   if (!world) return
-  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   panCanvasToWorldCenter(world.x, world.y)
 }
 
 const onCanvasMapPointerDown = (event: PointerEvent) => {
-  if (isCanvasInteractionLocked.value) return
+  if (isCanvasNavigationLocked.value) return
   if (!canvasMapData.value.bounds
     || event.button !== 0
     || event.isPrimary === false
@@ -5335,7 +5505,7 @@ const onCanvasMapPointerDown = (event: PointerEvent) => {
 
 const onCanvasMapPointerMove = (event: PointerEvent) => {
   if (!isCanvasMapDragging.value || event.pointerId !== canvasMapDragPointerId) return
-  if (isCanvasInteractionLocked.value) {
+  if (isCanvasNavigationLocked.value) {
     finishCanvasMapDrag(event.pointerId)
     return
   }
@@ -5371,13 +5541,10 @@ const onCanvasMapPointerLost = (event: PointerEvent) => {
   finishCanvasMapDrag(event.pointerId)
 }
 
-const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
+const fittedViewportForNodes = (targetNodes: DeviceNode[]) => {
   const bounds = getNodeBounds(targetNodes)
   const frame = getVisibleCanvasFrame()
-  if (!bounds || !frame) {
-    notifyInfo(t('app.noDevicesOnCanvas'))
-    return
-  }
+  if (!bounds || !frame) return null
 
   const padding = 72
   const contentWidth = Math.max(1, bounds.maxX - bounds.minX)
@@ -5394,17 +5561,57 @@ const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
   )
   const centerX = (bounds.minX + bounds.maxX) / 2
   const centerY = (bounds.minY + bounds.maxY) / 2
-  canvasZoom.value = Number.isFinite(zoom) ? zoom : 1
-  canvasPan.value = {
-    x: frame.left + frame.width / 2 - centerX * canvasZoom.value,
-    y: frame.top + frame.height / 2 - centerY * canvasZoom.value
+  const fittedZoom = Number.isFinite(zoom) ? zoom : 1
+  return {
+    zoom: fittedZoom,
+    pan: {
+      x: frame.left + frame.width / 2 - centerX * fittedZoom,
+      y: frame.top + frame.height / 2 - centerY * fittedZoom
+    }
   }
 }
 
+const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
+  const viewport = fittedViewportForNodes(targetNodes)
+  if (!viewport) {
+    notifyInfo(t('app.noDevicesOnCanvas'))
+    return
+  }
+  canvasZoom.value = viewport.zoom
+  canvasPan.value = viewport.pan
+}
+
+const activatePlaybackScene = (scene: ModelPlaybackScene) => {
+  activePlaybackScene.value = deepClone(scene)
+  void nextTick(() => {
+    const viewport = fittedViewportForNodes(activePlaybackScene.value?.nodes || [])
+    if (!viewport) return
+    playbackCanvasZoom.value = viewport.zoom
+    playbackCanvasPan.value = viewport.pan
+  })
+}
+
+const deactivatePlaybackScene = () => {
+  activePlaybackScene.value = null
+  playbackCanvasZoom.value = 1
+  playbackCanvasPan.value = { x: 0, y: 0 }
+}
+
 const fitToContent = () => {
-  if (isCanvasInteractionLocked.value) return
+  if (isCanvasNavigationLocked.value) return
+  const viewport = fittedViewportForNodes(renderedCanvasNodes.value)
+  if (!viewport) {
+    notifyInfo(t('app.noDevicesOnCanvas'))
+    return
+  }
+  if (activePlaybackScene.value) {
+    playbackCanvasZoom.value = viewport.zoom
+    playbackCanvasPan.value = viewport.pan
+    return
+  }
   if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
-  fitNodesToCanvas(getVisibleDeviceNodes())
+  canvasZoom.value = viewport.zoom
+  canvasPan.value = viewport.pan
 }
 
 const handleCreateDevice = async (data: {
@@ -5899,7 +6106,14 @@ defineExpose({
   refreshRunHistory: refreshRunHistoryFromChat,
   refreshAllBoardState: refreshAllBoardStateFromChat,
   getChatSuggestionContext,
-  isChatInteractionLocked: () => isSceneReplacementInProgress.value || isModelPlaybackActive.value
+  isChatInteractionLocked: () => isSceneReplacementInProgress.value,
+  prepareChatInteraction: () => prepareBoardChatInteraction({
+    sceneReplacementInProgress: isSceneReplacementInProgress.value,
+    tracePlaybackVisible: traceAnimationState.value.visible,
+    simulationPlaybackVisible: simulationAnimationState.value.visible,
+    closeTracePlayback: closeTraceAnimation,
+    closeSimulationPlayback: closeSimulationTimeline
+  })
 })
 
 // ==== Verification Logic ====
@@ -5910,10 +6124,8 @@ const verificationError = ref<string | null>(null)
 // (applying a fix, editing rules/specs/devices from the inspector or chat) makes it stale,
 // so the counterexample actions must stop claiming to describe the current board.
 const verificationResultStale = ref(false)
-// A simulation trace is the same kind of claim: replay animates it over the CURRENT canvas,
-// so a reconciled board invalidates it for exactly the same reason. Declared here (next to the
-// verification flag) so both are set from the one hook below; the simulation state itself lives
-// further down with the rest of the simulation logic.
+// Simulation conclusions become stale after a semantic edit too. Replay remains available because
+// it uses the run's frozen visual scene; stale only means the conclusion is not about the live board.
 const simulationResultStale = ref(false)
 
 // Called from the single semantic-scene-change hook in the board mutation queue, so every
@@ -7823,7 +8035,7 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
 const isSimulating = ref(false)
 const simulationResult = ref<SimulationResultView | null>(null)
 const simulationError = ref<string | null>(null)
-// Result of the last successful simulation, kept so its logs / raw NuSMV output stay reachable while
+// Result of the last successful simulation, kept so its logs / NuSMV diagnostics stay reachable while
 // the timeline is open. The result dialog only auto-opens on error; on success we go straight to the
 // timeline (by design) and let the user open the logs on demand via openSimulationLogs().
 const lastSimulationResult = ref<SimulationResultView | null>(null)
@@ -8065,15 +8277,74 @@ const boardRunBlockedReason = computed(() => {
   if (!isBoardDataReady.value) return t('app.loading')
   return ''
 })
-const verificationRunBlockedReason = computed(() =>
-  boardRunBlockedReason.value || verificationAttackConfigurationError.value)
-const simulationRunBlockedReason = computed(() =>
-  boardRunBlockedReason.value || simulationAttackConfigurationError.value)
 
-const hasPrivacySpecification = computed(() => specifications.value.some(spec =>
-  [spec.aConditions, spec.ifConditions, spec.thenConditions]
-    .some(conditions => (conditions || []).some(condition => condition.targetType === 'privacy'))
-))
+const rulesHaveValidTriggers = computed(() => {
+  try {
+    rules.value.forEach((rule, index) => assertRuleHasTrigger(rule, index))
+    return true
+  } catch {
+    return false
+  }
+})
+
+const formalRunIssueMessage = (
+  kind: FormalRunKind,
+  issue: FormalRunReadinessIssue | null
+): string => {
+  if (issue === 'NO_DEVICES') {
+    return t(kind === 'verification' ? 'app.noDevicesToVerify' : 'app.noDevicesToSimulate')
+  }
+  if (issue === 'NO_SPECIFICATIONS') return t('app.noSpecsToVerify')
+  if (issue === 'RULE_TRIGGER_REQUIRED') return t('app.ruleTriggerSourceRequired')
+  if (issue === 'INVALID_SIMULATION_STEPS') {
+    return t('app.integerBetween', {
+      field: t('app.simulationSteps'),
+      min: SIMULATION_STEPS_MIN,
+      max: SIMULATION_STEPS_MAX
+    })
+  }
+  return ''
+}
+
+const verificationReadinessIssue = computed(() => formalRunReadinessIssue('verification', {
+  deviceCount: nodes.value.length,
+  specificationCount: specifications.value.length,
+  rulesHaveTriggers: rulesHaveValidTriggers.value,
+  simulationStepsValid: true
+}))
+
+const simulationReadinessIssue = computed(() => formalRunReadinessIssue('simulation', {
+  deviceCount: nodes.value.length,
+  specificationCount: specifications.value.length,
+  rulesHaveTriggers: rulesHaveValidTriggers.value,
+  simulationStepsValid: Number.isInteger(simulationForm.steps)
+    && simulationForm.steps >= SIMULATION_STEPS_MIN
+    && simulationForm.steps <= SIMULATION_STEPS_MAX
+}))
+
+const verificationRunBlockedReason = computed(() => {
+  if (!verificationForm.isAsync && synchronousSimulationRunning.value) {
+    return t('app.formalOperationBusy')
+  }
+  return boardRunBlockedReason.value
+    || formalRunIssueMessage('verification', verificationReadinessIssue.value)
+    || verificationAttackConfigurationError.value
+})
+
+const simulationRunBlockedReason = computed(() => {
+  if (!simulationForm.isAsync && synchronousVerificationRunning.value) {
+    return t('app.formalOperationBusy')
+  }
+  if (traceAnimationState.value.visible || simulationAnimationState.value.visible) {
+    return t('app.playbackMustCloseBeforeSimulation')
+  }
+  return boardRunBlockedReason.value
+    || formalRunIssueMessage('simulation', simulationReadinessIssue.value)
+    || simulationAttackConfigurationError.value
+})
+
+const hasPrivacySpecification = computed(() =>
+  specificationsRequirePrivacy(specifications.value))
 
 watch(hasPrivacySpecification, required => {
   if (required) verificationForm.enablePrivacy = true
@@ -8475,6 +8746,123 @@ const simulationTasks = ref<SimulationTaskSummary[]>([])
 const verificationRuns = ref<VerificationRunSummary[]>([])
 const fuzzingRuns = ref<FuzzingRunSummary[]>([])
 const simulationRuns = ref<SimulationTraceSummary[]>([])
+const unavailableVerificationRunIds = new Set<number>()
+const unavailableVerificationTraceIds = new Set<number>()
+const unavailableSimulationTraceIds = new Set<number>()
+const unavailableFuzzingRunIds = new Set<number>()
+const unavailableFuzzingFindingIds = new Set<number>()
+
+const unavailableTraceSummary = (trace: TraceSummary): TraceSummary => ({
+  id: trace.id,
+  verificationTaskId: trace.verificationTaskId,
+  violatedSpecId: trace.violatedSpecId,
+  createdAt: trace.createdAt,
+  dataAvailable: false,
+  unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+})
+
+const unavailableVerificationRunSummary = (run: VerificationRunSummary): VerificationRunSummary => ({
+  id: run.id,
+  initiator: run.initiator,
+  createdAt: run.createdAt,
+  startedAt: run.startedAt,
+  completedAt: run.completedAt,
+  processingTimeMs: run.processingTimeMs,
+  counterexampleCount: run.counterexampleCount,
+  counterexamples: [],
+  dataAvailable: false,
+  unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+})
+
+const unavailableSimulationTraceSummary = (
+  trace: SimulationTraceSummary
+): SimulationTraceSummary => ({
+  id: trace.id,
+  initiator: trace.initiator,
+  createdAt: trace.createdAt,
+  dataAvailable: false,
+  unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+})
+
+const unavailableFuzzingRunSummary = (run: FuzzingRunSummary): FuzzingRunSummary => ({
+  id: run.id,
+  initiator: run.initiator,
+  explorationMode: run.explorationMode,
+  createdAt: run.createdAt,
+  completedAt: run.completedAt,
+  findingCount: run.findingCount,
+  findings: [],
+  dataAvailable: false,
+  unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+})
+
+const unavailableFuzzingFindingSummary = (
+  finding: FuzzingFindingSummary
+): FuzzingFindingSummary => ({
+  ...finding,
+  dataAvailable: false,
+  unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
+})
+
+const retainKnownVerificationHistoryAvailability = (runs: VerificationRunSummary[]) =>
+  retainSessionUnavailableHistoryItems(
+    runs,
+    unavailableVerificationRunIds,
+    unavailableVerificationRunSummary
+  ).map(run => ({
+    ...run,
+    counterexamples: retainSessionUnavailableHistoryItems(
+      run.counterexamples,
+      unavailableVerificationTraceIds,
+      unavailableTraceSummary
+    )
+  }))
+
+const retainKnownSimulationHistoryAvailability = (runs: SimulationTraceSummary[]) =>
+  retainSessionUnavailableHistoryItems(
+    runs,
+    unavailableSimulationTraceIds,
+    unavailableSimulationTraceSummary
+  )
+
+const retainKnownFuzzingHistoryAvailability = (runs: FuzzingRunSummary[]) =>
+  retainSessionUnavailableHistoryItems(
+    runs,
+    unavailableFuzzingRunIds,
+    unavailableFuzzingRunSummary
+  ).map(run => ({
+    ...run,
+    findings: retainSessionUnavailableHistoryItems(
+      run.findings,
+      unavailableFuzzingFindingIds,
+      unavailableFuzzingFindingSummary
+    )
+  }))
+
+const markVerificationTraceUnavailable = (traceId: number) => {
+  unavailableVerificationTraceIds.add(traceId)
+  verificationRuns.value = retainKnownVerificationHistoryAvailability(verificationRuns.value)
+}
+
+const markVerificationRunUnavailable = (runId: number) => {
+  unavailableVerificationRunIds.add(runId)
+  verificationRuns.value = retainKnownVerificationHistoryAvailability(verificationRuns.value)
+}
+
+const markSimulationTraceUnavailable = (traceId: number) => {
+  unavailableSimulationTraceIds.add(traceId)
+  simulationRuns.value = retainKnownSimulationHistoryAvailability(simulationRuns.value)
+}
+
+const markFuzzingRunUnavailable = (runId: number) => {
+  unavailableFuzzingRunIds.add(runId)
+  fuzzingRuns.value = retainKnownFuzzingHistoryAvailability(fuzzingRuns.value)
+}
+
+const markFuzzingFindingUnavailable = (findingId: number) => {
+  unavailableFuzzingFindingIds.add(findingId)
+  fuzzingRuns.value = retainKnownFuzzingHistoryAvailability(fuzzingRuns.value)
+}
 const FUZZ_TASK_INBOX_PAGE_SIZE = 100
 const FUZZ_RUN_HISTORY_PAGE_SIZE = 25
 const fuzzingRunsPage = ref(0)
@@ -8622,7 +9010,12 @@ const hydrateFuzzNotificationState = () => {
       Number.isSafeInteger(item?.taskId)
       && item.taskId > 0
       && (item.kind === 'COMPLETED' || item.kind === 'FAILED' || item.kind === 'UNAVAILABLE')
-      && typeof item.createdAt === 'string').slice(0, 100)
+      && typeof item.createdAt === 'string')
+      .map((item: FuzzUnreadNotification) => ({
+        ...item,
+        initiator: isRunInitiator(item.initiator) ? item.initiator : 'UNKNOWN'
+      }))
+      .slice(0, 100)
     trackedFuzzTaskIds.value = (Array.isArray(parsed.trackedTaskIds) ? parsed.trackedTaskIds : [])
       .filter((id: unknown) => Number.isSafeInteger(id) && Number(id) > 0)
       .map(Number)
@@ -8692,6 +9085,7 @@ const withUnreadFuzzUnavailablePlaceholders = (runs: FuzzingRunSummary[]): Fuzzi
     .filter(notification => notification.kind === 'UNAVAILABLE' && !knownIds.has(notification.taskId))
     .map(notification => ({
       id: notification.taskId,
+      initiator: notification.initiator ?? 'UNKNOWN',
       createdAt: notification.createdAt,
       completedAt: notification.createdAt,
       findingCount: 0,
@@ -8908,6 +9302,7 @@ const reconcileTrackedFuzzTasks = async (
       markFuzzNotificationUnread({
         taskId,
         kind: 'FAILED',
+        initiator: task.initiator,
         createdAt: task.completedAt || task.createdAt
       })
       continue
@@ -8934,6 +9329,7 @@ const reconcileTrackedFuzzTasks = async (
         markFuzzNotificationUnread({
           taskId,
           kind: 'FAILED',
+          initiator: resolvedTask.initiator,
           createdAt: resolvedTask.completedAt || resolvedTask.createdAt
         })
         return
@@ -8945,6 +9341,7 @@ const reconcileTrackedFuzzTasks = async (
         taskId,
         runId: run.id,
         kind: 'COMPLETED',
+        initiator: run.initiator,
         outcome: run.outcome,
         createdAt: run.completedAt
       })
@@ -8959,6 +9356,7 @@ const reconcileTrackedFuzzTasks = async (
         || new Date().toISOString()
       upsertFuzzingRunSummary({
         id: taskId,
+        initiator: resolvedTask?.initiator ?? 'UNKNOWN',
         explorationMode: resolvedTask?.explorationMode,
         createdAt,
         completedAt: resolvedTask?.completedAt,
@@ -8971,6 +9369,7 @@ const reconcileTrackedFuzzTasks = async (
         taskId,
         runId: taskId,
         kind: 'UNAVAILABLE',
+        initiator: resolvedTask?.initiator ?? 'UNKNOWN',
         createdAt
       })
       unavailableTaskIds.push(taskId)
@@ -9057,7 +9456,7 @@ const loadVerificationRuns = async (showError = true): Promise<boolean> => {
   try {
     const runs = await boardApi.getVerificationRuns()
     if (!verificationHistoryRequests.isCurrent(token)) return true
-    verificationRuns.value = runs || []
+    verificationRuns.value = retainKnownVerificationHistoryAvailability(runs || [])
     historyResultErrors.verification = null
     return true
   } catch (e: any) {
@@ -9083,7 +9482,7 @@ const loadSimulationRuns = async (showError = true): Promise<boolean> => {
   try {
     const runs = await simulationApi.getUserSimulations()
     if (!simulationHistoryRequests.isCurrent(token)) return true
-    simulationRuns.value = runs || []
+    simulationRuns.value = retainKnownSimulationHistoryAvailability(runs || [])
     historyResultErrors.simulation = null
     return true
   } catch (e: any) {
@@ -9115,14 +9514,17 @@ const executeFuzzingRunsRequest = async (
       refreshCurrentFuzzingModelFingerprint()
     ])
     if (!fuzzingHistoryRequests.isCurrent(token)) return true
+    const retainedRuns = retainKnownFuzzingHistoryAvailability(runs)
     if (append) {
       const existingIds = new Set(fuzzingRuns.value.map(run => run.id))
       fuzzingRuns.value = [
         ...fuzzingRuns.value,
-        ...runs.filter(run => !existingIds.has(run.id))
+        ...retainedRuns.filter(run => !existingIds.has(run.id))
       ]
     } else {
-      fuzzingRuns.value = withUnreadFuzzUnavailablePlaceholders(runs)
+      fuzzingRuns.value = retainKnownFuzzingHistoryAvailability(
+        withUnreadFuzzUnavailablePlaceholders(retainedRuns)
+      )
     }
     historyResultErrors.fuzzing = null
     fuzzingRunsPage.value = page
@@ -9338,6 +9740,10 @@ const deleteVerificationRun = async (run: VerificationRunSummary) => {
     await boardApi.deleteVerificationRun(runId)
     if (boardLifecycleDisposed) return
     verificationHistoryRequests.invalidate()
+    unavailableVerificationRunIds.delete(runId)
+    for (const trace of run.counterexamples) {
+      unavailableVerificationTraceIds.delete(trace.id)
+    }
     verificationRuns.value = verificationRuns.value.filter(item => item.id !== runId)
     notifySuccess(t('app.verificationRunDeleted'))
   } catch (e: any) {
@@ -9355,26 +9761,49 @@ const deleteVerificationRun = async (run: VerificationRunSummary) => {
   }
 }
 
-const openVerificationRun = async (runId: number) => {
+const openVerificationRun = async (
+  runId: number,
+  deepLinkLoad?: DeepLinkLoadContext
+): Promise<boolean> => {
   const requestToken = historyDetailRequests.beginReplace()
+  let runDetailLoaded = false
   try {
     const run = await boardApi.getVerificationRun(runId)
-    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
-    const traces = run.outcome === 'VIOLATED'
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return false
+    runDetailLoaded = true
+    const traces = shouldLoadVerificationEvidence(run.counterexampleCount)
       ? await boardApi.getVerificationRunTraces(runId)
       : []
-    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return false
     verificationResult.value = attachLocalRunSubmission(
       buildVerificationResultFromRun(run, traces),
       null
     )
     verificationResultStale.value = false
     closeHistoryPanel(false)
+    return true
   } catch (e: any) {
-    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return false
     console.error('Failed to load verification run:', e)
-    if (loadingFromDeepLink) reportUnusableDeepLink()
+    if (isPersistedHistoryDataInvalid(e)) {
+      // A complete-run view needs every trace, but one damaged child must not disable its
+      // independently addressable siblings in the history panel.
+      const traceId = persistedHistoryInvalidRecordId(e, 'verification trace')
+      if (traceId !== null) markVerificationTraceUnavailable(traceId)
+      else if (!runDetailLoaded) markVerificationRunUnavailable(runId)
+      if (shouldClearUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+        reportUnusableDeepLink(deepLinkLoad)
+      }
+      notifyBlocked(t(runDetailLoaded
+        ? 'app.historyRunHasUnavailableEvidenceDetail'
+        : 'app.historyItemUnavailableDetail'))
+      return false
+    }
+    if (shouldReportUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+      reportUnusableDeepLink(deepLinkLoad)
+    }
     else notifyError(extractApiErrorMessage(e, t('app.failedToLoadVerificationRun')))
+    return false
   } finally {
     historyDetailRequests.finish(requestToken)
   }
@@ -9460,6 +9889,7 @@ const watchSimulationTask = async (taskId: number) => {
       simulationRuns.value = [
         {
           id: result.traceId,
+          initiator: taskSummary?.initiator ?? 'UNKNOWN',
           requestedSteps: result.requestedSteps,
           steps: result.steps,
           modelComplete: isSimulationModelComplete(result),
@@ -9515,13 +9945,14 @@ const watchSimulationTask = async (taskId: number) => {
 
 const upsertFuzzingRunSummary = (run: FuzzingRunSummary) => {
   fuzzingHistoryRequests.invalidate()
-  const existingIndex = fuzzingRuns.value.findIndex(item => item.id === run.id)
+  const retainedRun = retainKnownFuzzingHistoryAvailability([run])[0]
+  const existingIndex = fuzzingRuns.value.findIndex(item => item.id === retainedRun.id)
   if (existingIndex >= 0) {
-    fuzzingRuns.value = fuzzingRuns.value.map(item => item.id === run.id ? run : item)
+    fuzzingRuns.value = fuzzingRuns.value.map(item => item.id === retainedRun.id ? retainedRun : item)
     return
   }
   const previousCount = fuzzingRuns.value.length
-  fuzzingRuns.value = [run, ...fuzzingRuns.value].slice(0, FUZZ_RUN_HISTORY_PAGE_SIZE)
+  fuzzingRuns.value = [retainedRun, ...fuzzingRuns.value].slice(0, FUZZ_RUN_HISTORY_PAGE_SIZE)
   fuzzingRunsPage.value = 0
   fuzzingRunsHasMore.value = fuzzingRunsHasMore.value || previousCount >= FUZZ_RUN_HISTORY_PAGE_SIZE
 }
@@ -9606,6 +10037,7 @@ const watchFuzzingTask = async (taskId: number) => {
           taskId,
           runId: taskId,
           kind: 'UNAVAILABLE',
+          initiator: taskSummary?.initiator ?? 'UNKNOWN',
           createdAt: new Date().toISOString()
         })
       } else {
@@ -9617,6 +10049,7 @@ const watchFuzzingTask = async (taskId: number) => {
           markFuzzNotificationUnread({
             taskId,
             kind: 'FAILED',
+            initiator: taskSummary?.initiator ?? 'UNKNOWN',
             createdAt: new Date().toISOString()
           })
           notifyError(fuzzingError.value)
@@ -9832,13 +10265,22 @@ const revalidateHistoricalPlaybackAfterLoad = async (
   return result === 'admitted'
 }
 
-const selectAndPlayVerificationTrace = async (traceId: number) => {
+const selectAndPlayVerificationTrace = async (
+  traceId: number,
+  deepLinkLoad?: DeepLinkLoadContext,
+  expectedRunId?: number
+) => {
   if (!ensureHistoricalPlaybackUiAdmission()) return
   const initialMutationEpoch = boardMutationAdmissionEpoch
   const requestToken = historyDetailRequests.beginReplace()
   try {
     const trace = await boardApi.getVerificationTrace(traceId)
     if (!await revalidateHistoricalPlaybackAfterLoad(requestToken, initialMutationEpoch)) return
+    if (expectedRunId !== undefined && !verificationTraceBelongsToRun(trace, expectedRunId)) {
+      if (isCurrentDeepLinkLoad(deepLinkLoad)) reportUnusableDeepLink(deepLinkLoad)
+      else notifyError(t('app.failedToLoadTrace'))
+      return
+    }
     if (!trace?.states?.length) {
       notifyBlocked(t('app.traceHasNoStates'))
       return
@@ -9858,7 +10300,18 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load trace:', e)
-    notifyError(t('app.failedToLoadTrace'))
+    if (isPersistedHistoryDataInvalid(e)) {
+      markVerificationTraceUnavailable(traceId)
+      if (shouldClearUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+        reportUnusableDeepLink(deepLinkLoad)
+      }
+      notifyBlocked(t('app.historyTraceUnavailableDetail'))
+      return
+    }
+    if (shouldReportUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+      reportUnusableDeepLink(deepLinkLoad)
+    }
+    else notifyError(t('app.failedToLoadTrace'))
   } finally {
     historyDetailRequests.finish(requestToken)
   }
@@ -9873,7 +10326,10 @@ const openFixForVerificationTrace = (trace: { id: number; violatedSpecId?: strin
   openFixDialog(trace.id, trace.violatedSpecId)
 }
 
-const selectAndPlaySimulationTrace = async (traceId: number) => {
+const selectAndPlaySimulationTrace = async (
+  traceId: number,
+  deepLinkLoad?: DeepLinkLoadContext
+) => {
   if (!ensureHistoricalPlaybackUiAdmission()) return
   const initialMutationEpoch = boardMutationAdmissionEpoch
   const requestToken = historyDetailRequests.beginReplace()
@@ -9898,7 +10354,8 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
       attackBudget: trace.attackBudget ?? 0,
       enablePrivacy: trace.enablePrivacy === true,
       modelSemantics: trace.modelSemantics,
-      modelSnapshot: trace.modelSnapshot
+      modelSnapshot: trace.modelSnapshot,
+      playbackScene: trace.playbackScene
     }
 
     closeHistoryPanel(false)
@@ -9914,7 +10371,17 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load simulation trace:', e)
-    if (loadingFromDeepLink) reportUnusableDeepLink()
+    if (isPersistedHistoryDataInvalid(e)) {
+      markSimulationTraceUnavailable(traceId)
+      if (shouldClearUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+        reportUnusableDeepLink(deepLinkLoad)
+      }
+      notifyBlocked(t('app.historyItemUnavailableDetail'))
+      return
+    }
+    if (shouldReportUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+      reportUnusableDeepLink(deepLinkLoad)
+    }
     else notifyError(t('app.failedToLoadSimulationRun'))
   } finally {
     historyDetailRequests.finish(requestToken)
@@ -9937,6 +10404,7 @@ const deleteSimulationRun = async (run: SimulationTraceSummary) => {
     await simulationApi.deleteSimulation(traceId)
     if (boardLifecycleDisposed) return
     simulationHistoryRequests.invalidate()
+    unavailableSimulationTraceIds.delete(traceId)
     simulationRuns.value = simulationRuns.value.filter(t => t.id !== traceId)
     notifySuccess(t('app.simulationRunDeleted'))
   } catch (e: any) {
@@ -9962,10 +10430,13 @@ const fuzzingCompletionMessage = (run: AvailableFuzzingRunSummary | FuzzingRun):
   return t('app.fuzzInconclusiveDetail')
 }
 
-const openFuzzingRun = async (runId: number) => {
+const openFuzzingRun = async (
+  runId: number,
+  deepLinkLoad?: DeepLinkLoadContext
+): Promise<boolean> => {
   if (isModelPlaybackActive.value) {
     notifyBlocked(t('app.playbackReadOnlyCloseFirst'))
-    return
+    return false
   }
   const requestEpoch = ++fuzzingResultRequestEpoch
   const requestToken = historyDetailRequests.beginReplace()
@@ -9974,7 +10445,7 @@ const openFuzzingRun = async (runId: number) => {
     await nextTick()
     if (requestEpoch !== fuzzingResultRequestEpoch
       || !historyDetailRequests.isCurrent(requestToken)
-      || boardLifecycleDisposed) return
+      || boardLifecycleDisposed) return false
     fuzzingError.value = null
     fuzzingResult.value = null
     fuzzingResultLoading.value = true
@@ -9985,17 +10456,36 @@ const openFuzzingRun = async (runId: number) => {
     ])
     if (requestEpoch !== fuzzingResultRequestEpoch
       || !historyDetailRequests.isCurrent(requestToken)
-      || boardLifecycleDisposed) return
+      || boardLifecycleDisposed) return false
     presentFuzzingRun(run)
+    return true
   } catch (e: any) {
     if (requestEpoch !== fuzzingResultRequestEpoch
       || !historyDetailRequests.isCurrent(requestToken)
-      || boardLifecycleDisposed) return
+      || boardLifecycleDisposed) return false
     console.error('Failed to load fuzzing run:', e)
     showFuzzingResultDialog.value = false
     fuzzingError.value = null
-    if (loadingFromDeepLink) reportUnusableDeepLink()
+    if (isPersistedHistoryDataInvalid(e)) {
+      const findingId = persistedHistoryInvalidRecordId(e, 'FuzzFinding')
+      if (findingId !== null) {
+        markFuzzingFindingUnavailable(findingId)
+      } else {
+        markFuzzingRunUnavailable(runId)
+      }
+      if (shouldClearUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+        reportUnusableDeepLink(deepLinkLoad)
+      }
+      notifyBlocked(t(findingId !== null
+        ? 'app.historyRunHasUnavailableFindingDetail'
+        : 'app.historyItemUnavailableDetail'))
+      return false
+    }
+    if (shouldReportUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+      reportUnusableDeepLink(deepLinkLoad)
+    }
     else notifyError(extractApiErrorMessage(e, t('app.failedToLoadFuzzingRun')))
+    return false
   } finally {
     if (requestEpoch === fuzzingResultRequestEpoch) {
       fuzzingResultLoading.value = false
@@ -10043,6 +10533,10 @@ const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
     await fuzzingApi.deleteRun(run.id)
     if (boardLifecycleDisposed) return
     fuzzingHistoryRequests.invalidate()
+    unavailableFuzzingRunIds.delete(run.id)
+    for (const finding of run.findings) {
+      unavailableFuzzingFindingIds.delete(finding.id)
+    }
     fuzzingRuns.value = fuzzingRuns.value.filter(item => item.id !== run.id)
     fuzzingRunsPage.value = 0
     fuzzingRunsHasMore.value = false
@@ -10069,18 +10563,23 @@ const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
   }
 }
 
-const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) => {
+const selectAndPlayFuzzingFinding = async (
+  findingId: number,
+  runId?: number,
+  deepLinkLoad?: DeepLinkLoadContext
+) => {
   if (!ensureHistoricalPlaybackUiAdmission()) return
   const initialMutationEpoch = boardMutationAdmissionEpoch
   const requestToken = historyDetailRequests.beginReplace()
   try {
-    if (!runId) throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
-    const resolvedRun = await fuzzingApi.getRun(runId)
+    const replay = await fuzzingApi.getFinding(findingId)
     if (!await revalidateHistoricalPlaybackAfterLoad(requestToken, initialMutationEpoch)) return
-    if (!resolvedRun || resolvedRun.dataAvailable === false || !resolvedRun.modelSnapshot) {
-      throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
+    if (runId !== undefined && !fuzzingFindingBelongsToRun(replay.finding, runId)) {
+      if (isCurrentDeepLinkLoad(deepLinkLoad)) reportUnusableDeepLink(deepLinkLoad)
+      else notifyError(t('app.failedToLoadFuzzingFinding'))
+      return
     }
-    const finding = resolveFuzzingRunFinding(resolvedRun, findingId)
+    const finding = replay.finding
     if (!finding.states.length) {
       notifyBlocked(t('app.fuzzFindingHasNoStates'))
       return
@@ -10095,7 +10594,8 @@ const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) =>
       skippedSpecCount: 0,
       generationIssues: [],
       states: finding.states,
-      modelSnapshot: resolvedRun.modelSnapshot,
+      modelSnapshot: replay.modelSnapshot,
+      playbackScene: replay.playbackScene,
       createdAt: finding.createdAt
     }
 
@@ -10108,7 +10608,26 @@ const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) =>
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load fuzzing finding:', e)
-    notifyError(extractApiErrorMessage(e, t('app.failedToLoadFuzzingFinding')))
+    if (runId && isPersistedHistoryDataInvalid(e)) {
+      const persistedFindingId = persistedHistoryInvalidRecordId(e, 'FuzzFinding')
+      if (persistedFindingId !== null) {
+        markFuzzingFindingUnavailable(persistedFindingId)
+      } else {
+        markFuzzingRunUnavailable(runId)
+      }
+      if (shouldClearUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+        reportUnusableDeepLink(deepLinkLoad)
+      }
+      notifyBlocked(t(persistedFindingId !== null
+        ? 'app.historyFindingUnavailableDetail'
+        : 'app.historyItemUnavailableDetail'))
+      return
+    }
+    if (shouldReportUnusableHistoryDeepLink(isCurrentDeepLinkLoad(deepLinkLoad), e)) {
+      reportUnusableDeepLink(deepLinkLoad)
+    } else {
+      notifyError(extractApiErrorMessage(e, t('app.failedToLoadFuzzingFinding')))
+    }
   } finally {
     historyDetailRequests.finish(requestToken)
   }
@@ -10125,6 +10644,7 @@ type FuzzVerificationHandoff = {
 const fuzzVerificationHandoff = ref<FuzzVerificationHandoff | null>(null)
 
 const availableFuzzRunForFinding = (finding: FuzzingFindingSummary | FuzzingFinding) => {
+  if ('dataAvailable' in finding && finding.dataAvailable === false) return null
   if (fuzzingResult.value?.id === finding.fuzzTaskId) return fuzzingResult.value
   const historyRun = fuzzingRuns.value.find(run => run.id === finding.fuzzTaskId)
   return historyRun?.dataAvailable ? historyRun : null
@@ -10575,6 +11095,12 @@ const simulationAnimationState = ref({
  * timeline can never appear while the canvas still highlights a previous run's state.
  */
 const openSimulationAnimationFromSavedStates = () => {
+  const scene = lastSimulationResult.value?.playbackScene
+  if (!scene) {
+    notifyError(t('app.playbackSnapshotUnavailable'))
+    return
+  }
+  activatePlaybackScene(scene)
   simulationAnimationState.value = { visible: true }
   highlightedTrace.value = {
     states: savedSimulationStates.value,
@@ -10609,6 +11135,12 @@ const traceAnimationState = ref({
  * -- a caller cannot forget to rewind `selectedStateIndex` or leave `isPlaying` set.
  */
 const openTraceAnimationAt = (selectedTraceIndex: number) => {
+  const scene = savedTraces.value[selectedTraceIndex]?.playbackScene
+  if (!scene) {
+    notifyError(t('app.playbackSnapshotUnavailable'))
+    return
+  }
+  activatePlaybackScene(scene)
   traceAnimationState.value = {
     visible: true,
     selectedTraceIndex,
@@ -10900,7 +11432,7 @@ const isLiveBoardEditorVisible = computed(() =>
 )
 
 const ensureLiveBoardEditorClosedForPlayback = (): boolean => {
-  if (chatStore.state.streaming) {
+  if (hasAssistantWork.value) {
     notifyBlocked(t('app.finishAssistantBeforePlayback'))
     return false
   }
@@ -11013,15 +11545,15 @@ const formattedTraceDeviceSecurityLabels = (device: TraceDevice, labels: string[
     value => formatPlaybackDeviceModelToken(device, value)
   ))
 
-const traceTriggeredRuleLabel = (rule: { ruleId?: string | null; ruleLabel?: string | null }, index: number) => {
+const traceTriggeredRuleLabel = (rule: { ruleIndex?: number; ruleId?: string | null; ruleLabel?: string | null }, index: number) => {
   if (rule.ruleLabel?.trim()) return rule.ruleLabel.trim()
-  const currentRule = rule.ruleId != null
-    ? rules.value.find(candidate => String(candidate.id) === String(rule.ruleId))
-    : undefined
-  return currentRule?.name || t('app.ruleNumber', { number: index + 1 })
+  const frozenRule = rule.ruleId != null
+    ? activePlaybackScene.value?.rules.find(candidate => String(candidate.id) === String(rule.ruleId))
+    : activePlaybackScene.value?.rules[Number.isSafeInteger(rule.ruleIndex) ? Number(rule.ruleIndex) : index]
+  return frozenRule?.ruleString || t('app.ruleNumber', { number: index + 1 })
 }
 
-const traceTriggeredRuleExistsOnBoard = (rule: { ruleId?: string | null }) =>
+const traceTriggeredRuleExistsOnBoard = (rule: { ruleIndex?: number; ruleId?: string | null }) =>
   rule.ruleId != null && currentBoardRuleIds.value.includes(String(rule.ruleId))
 
 const selectedTraceStateNumber = computed({
@@ -11069,14 +11601,6 @@ const selectAndPlayTrace = (traceIndex: number) => {
     return
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
-  // Replaying a counterexample animates it over the CURRENT canvas. Once the board has
-  // changed, the trace no longer describes this model, so refuse instead of showing a
-  // walkthrough that contradicts the live scene.
-  if (verificationResultStale.value) {
-    notifyBlocked(t('app.verificationResultStaleReverify'))
-    return
-  }
-
   const traces = verificationResult.value?.traces
   if (traces && traceIndex >= 0 && traceIndex < traces.length) {
     resetPlaybackChanges()
@@ -11112,6 +11636,7 @@ const closeTraceAnimation = () => {
   traceAnimationState.value.visible = false
   highlightedTrace.value = null
   activeFuzzingFinding.value = null
+  deactivatePlaybackScene()
   resetPlaybackChanges()
   clearRunDeepLink()
 }
@@ -11269,13 +11794,6 @@ const openSimulationTimeline = () => {
     return
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
-  // Replay animates these states over the CURRENT canvas. Once the board has been reconciled,
-  // the trace no longer describes this model, so refuse rather than show a contradicting walkthrough.
-  if (simulationResultStale.value) {
-    notifyBlocked(t('app.simulationResultStaleRerun'))
-    return
-  }
-
   const simulationStates = simulationResult.value?.states
   if (simulationStates && simulationStates.length > 0) {
     resetPlaybackChanges()
@@ -11303,6 +11821,7 @@ const handleSimulationTimelineAction = () => {
 const closeSimulationTimeline = () => {
   simulationAnimationState.value.visible = false
   highlightedTrace.value = null
+  deactivatePlaybackScene()
   resetPlaybackChanges()
   // For `run=simulation:<id>` the timeline *is* the addressed surface, so the URL must stop naming
   // it. Otherwise a refresh or a shared link reopens the playback the user deliberately closed, and
@@ -11525,10 +12044,12 @@ const runFuzzing = async (): Promise<boolean> => {
   fuzzingSettingsNotice.value = null
   asyncFuzzingTask.value = { taskId: null, progress: 0, status: t('app.taskInitializing') }
   let submittedTaskId: number | null = null
+  let submittedTaskInitiator: RunInitiator = 'USER'
 
   try {
     const submittedTask = await fuzzingApi.startAsync(request)
     submittedTaskId = submittedTask.id
+    submittedTaskInitiator = submittedTask.initiator
     trackFuzzTask(submittedTask.id)
     asyncFuzzingTask.value = {
       taskId: submittedTask.id,
@@ -11549,6 +12070,7 @@ const runFuzzing = async (): Promise<boolean> => {
         taskId: submittedTask.id,
         runId: run.id,
         kind: 'COMPLETED',
+        initiator: run.initiator,
         outcome: run.outcome,
         createdAt: run.completedAt
       })
@@ -11578,6 +12100,7 @@ const runFuzzing = async (): Promise<boolean> => {
         taskId: submittedTaskId,
         runId: submittedTaskId,
         kind: 'UNAVAILABLE',
+        initiator: submittedTaskInitiator,
         createdAt: new Date().toISOString()
       })
       if (!showFuzzingPanel.value) {
@@ -11609,6 +12132,7 @@ const runFuzzing = async (): Promise<boolean> => {
         markFuzzNotificationUnread({
           taskId: submittedTaskId,
           kind: 'FAILED',
+          initiator: submittedTaskInitiator,
           createdAt: new Date().toISOString()
         })
         notifyError(fuzzingError.value)
@@ -11743,7 +12267,8 @@ const handleSimulate = async (simConfig: {
           attackBudget: trace.attackBudget ?? 0,
           enablePrivacy: trace.enablePrivacy === true,
           modelSemantics: trace.modelSemantics,
-          modelSnapshot: trace.modelSnapshot
+          modelSnapshot: trace.modelSnapshot,
+          playbackScene: trace.playbackScene
         }
       } else {
         result = await simulationApi.simulate(req)
@@ -11757,7 +12282,7 @@ const handleSimulate = async (simConfig: {
       void loadSimulationRuns(false)
     }
     
-    // Keep the full result so its logs / raw NuSMV output remain reachable from the timeline via
+    // Keep the full result so its logs / NuSMV diagnostics remain reachable from the timeline via
     // openSimulationLogs(); the success path opens the timeline (below), not the result dialog.
     result = attachLocalRunSubmission(result, submission)
     lastSimulationResult.value = result
@@ -11767,6 +12292,7 @@ const handleSimulate = async (simConfig: {
       simulationRuns.value = [
         {
           id: result.traceId,
+          initiator: 'USER',
           requestedSteps: result.requestedSteps,
           steps: result.steps,
           modelComplete: isSimulationModelComplete(result),
@@ -11930,12 +12456,12 @@ const pollAsyncVerification = async (
       asyncVerificationTask.value.progress = 100
       let traces: Trace[] = []
       try {
-        traces = task.outcome === 'VIOLATED'
-          ? await loadCompletedTaskResult(
+        traces = task.outcome === 'SATISFIED'
+          ? []
+          : await loadCompletedTaskResult(
             () => boardApi.getTaskTraces(taskId),
             expectedPollingEpoch
           )
-          : []
       } catch (error) {
         if (isPollingAbortedError(error)) throw error
         upsertVerificationTaskSummary({ ...task, progress: 100 })
@@ -12037,7 +12563,8 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
           attackBudget: trace.attackBudget ?? 0,
           enablePrivacy: trace.enablePrivacy === true,
           modelSemantics: trace.modelSemantics,
-          modelSnapshot: trace.modelSnapshot
+          modelSnapshot: trace.modelSnapshot,
+          playbackScene: trace.playbackScene
         }
       }
       upsertSimulationTaskSummary({ ...task, progress: 100 })
@@ -12180,12 +12707,10 @@ const staleDeepLink = ref(false)
 
 /** The target currently reflected on screen, so the watcher can skip redundant loads. */
 let appliedDeepLinkTarget: BoardRunTarget | null = null
-/**
- * True while a run is being loaded because the URL asked for it. A failure then means the
- * link is unusable (banner + strip), whereas the same failure from a history click is an
- * ordinary transient error (toast).
- */
-let loadingFromDeepLink = false
+const deepLinkLoadRequests = createLatestBoardRequestGuard()
+type DeepLinkLoadContext = { requestEpoch: number }
+const isCurrentDeepLinkLoad = (context: DeepLinkLoadContext | undefined): boolean =>
+  context !== undefined && deepLinkLoadRequests.isCurrent(context.requestEpoch)
 
 /**
  * Navigation we initiate ourselves must not be re-applied by the target watcher (a redundant
@@ -12235,37 +12760,40 @@ const isResultSurfaceVisible = computed(() =>
  * responses, so this only decides *what* to open and reports an unusable link once.
  */
 const applyDeepLinkTarget = async (target: BoardRunTarget | null) => {
+  const deepLinkLoad: DeepLinkLoadContext = { requestEpoch: deepLinkLoadRequests.begin() }
   appliedDeepLinkTarget = target
+  // The URL is changing authority. Leaving A visible while B is loading makes a temporary B
+  // failure look like A succeeded, and lets its child id be checked against the wrong parent.
+  closeResultSurfaces()
   if (!target) {
-    closeResultSurfaces()
     return
   }
 
-  loadingFromDeepLink = true
-  try {
-    await loadDeepLinkTarget(target)
-  } finally {
-    loadingFromDeepLink = false
-  }
+  await loadDeepLinkTarget(target, deepLinkLoad)
 }
 
-const loadDeepLinkTarget = async (target: BoardRunTarget) => {
+const loadDeepLinkTarget = async (
+  target: BoardRunTarget,
+  deepLinkLoad: DeepLinkLoadContext
+) => {
   if (target.kind === 'verification') {
-    await openVerificationRun(target.runId)
-    // The trace list only exists once its run is loaded, so replay is a second step.
-    if (target.traceId !== undefined && verificationResult.value) {
-      await selectAndPlayVerificationTrace(target.traceId)
+    if (target.traceId !== undefined) {
+      await selectAndPlayVerificationTrace(target.traceId, deepLinkLoad, target.runId)
+      return
     }
+    const loaded = await openVerificationRun(target.runId, deepLinkLoad)
+    if (!loaded || !isCurrentDeepLinkLoad(deepLinkLoad)) return
     return
   }
   if (target.kind === 'simulation') {
-    await selectAndPlaySimulationTrace(target.runId)
+    await selectAndPlaySimulationTrace(target.runId, deepLinkLoad)
     return
   }
-  await openFuzzingRun(target.runId)
-  if (target.findingId !== undefined && fuzzingResult.value) {
-    await selectAndPlayFuzzingFinding(target.findingId, target.runId)
+  if (target.findingId !== undefined) {
+    await selectAndPlayFuzzingFinding(target.findingId, target.runId, deepLinkLoad)
+    return
   }
+  await openFuzzingRun(target.runId, deepLinkLoad)
 }
 
 /**
@@ -12282,7 +12810,9 @@ const syncBoardToDeepLink = async () => {
   // syntactically dead link needs no explanation beyond a clean board — only a well-formed
   // link to a run we cannot load warrants the banner.
   if (hasUnusableBoardRunParams(route.query)) {
+    deepLinkLoadRequests.invalidate()
     appliedDeepLinkTarget = null
+    closeResultSurfaces()
     // Stripped directly: `navigateToRunTarget(null)` would see an already-`null` target and
     // decide there is nothing to do, leaving the dead params in the URL.
     void router.replace({ query: applyBoardRunTarget(route.query, null) })
@@ -12308,9 +12838,12 @@ watch(isBoardDataReady, ready => {
  * Both degrade to the plain board with one persistent, dismissible explanation — never a
  * fabricated empty result — and the dead params are stripped so a refresh stays clean.
  */
-const reportUnusableDeepLink = () => {
+const reportUnusableDeepLink = (deepLinkLoad?: DeepLinkLoadContext) => {
+  if (deepLinkLoad && !isCurrentDeepLinkLoad(deepLinkLoad)) return
   staleDeepLink.value = true
+  deepLinkLoadRequests.invalidate()
   appliedDeepLinkTarget = null
+  closeResultSurfaces()
   // Strip directly rather than via `navigateToRunTarget`, which no-ops when the parsed
   // target is already `null` (a well-formed link whose run failed to load, or dead params).
   void router.replace({ query: applyBoardRunTarget(route.query, null) })
@@ -12722,13 +13255,36 @@ const counterexampleTraceHelpText = computed(() => {
           <button
             type="button"
             class="nav-action-btn ai-assistant-btn"
+            :class="{
+              'has-active-status': chatStore.state.activeCount > 0,
+              'has-unread-status': chatStore.state.unreadCount > 0,
+              'has-sync-status': chatStore.state.reconciliationRequired
+            }"
             data-testid="open-ai-assistant"
-            :aria-label="t('app.aiAssistant')"
+            :aria-label="assistantButtonLabel"
             :disabled="!isBoardDataReady"
             @click="toggleChat"
           >
             <span class="material-symbols-outlined">smart_toy</span>
             <span>{{ t('app.aiAssistant') }}</span>
+            <span
+              v-if="chatStore.state.reconciliationRequired"
+              class="ai-assistant-status is-sync-pending"
+              data-testid="ai-assistant-sync-pending"
+              aria-hidden="true"
+            >!</span>
+            <span
+              v-if="chatStore.state.activeCount > 0"
+              class="ai-assistant-status is-running"
+              data-testid="ai-assistant-running"
+              aria-hidden="true"
+            >{{ chatStore.state.activeCount > 9 ? '9+' : chatStore.state.activeCount }}</span>
+            <span
+              v-if="chatStore.state.unreadCount > 0"
+              class="ai-assistant-status is-unread"
+              data-testid="ai-assistant-unread"
+              aria-hidden="true"
+            >{{ chatStore.state.unreadCount > 9 ? '9+' : chatStore.state.unreadCount }}</span>
           </button>
           <button
             type="button"
@@ -12947,7 +13503,7 @@ const counterexampleTraceHelpText = computed(() => {
                     :data-testid="`template-instance-variable-${variable.Name}`"
                     class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
-                    <option value="">{{ t('app.useTemplateDefault') }}</option>
+                    <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatTemplateModelToken(templateInstanceDialogData.template, getTemplateVariableDefaultValue(variable)) }) }}</option>
                     <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatTemplateModelToken(templateInstanceDialogData.template, value) }}</option>
                   </select>
                   <input
@@ -13085,7 +13641,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="canvas-map-zoom-out"
                 :title="t('app.zoomOut')"
                 :aria-label="t('app.zoomOut')"
-                :disabled="isCanvasInteractionLocked"
+                :disabled="isCanvasNavigationLocked"
                 @click="adjustCanvasZoom(-ZOOM_STEP)"
               >
                 <span class="material-symbols-outlined text-sm" aria-hidden="true">remove</span>
@@ -13100,7 +13656,7 @@ const counterexampleTraceHelpText = computed(() => {
                   step="5"
                   :value="canvasZoomPercent"
                   :aria-label="t('app.zoomLevel')"
-                  :disabled="isCanvasInteractionLocked"
+                  :disabled="isCanvasNavigationLocked"
                   @input="handleCanvasMapZoomInput"
                   @change="handleCanvasMapZoomInput"
                   @keydown.stop
@@ -13113,7 +13669,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="canvas-map-zoom-in"
                 :title="t('app.zoomIn')"
                 :aria-label="t('app.zoomIn')"
-                :disabled="isCanvasInteractionLocked"
+                :disabled="isCanvasNavigationLocked"
                 @click="adjustCanvasZoom(ZOOM_STEP)"
               >
                 <span class="material-symbols-outlined text-sm" aria-hidden="true">add</span>
@@ -13124,7 +13680,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="canvas-map-fit"
                 :title="t('app.fitToContent')"
                 :aria-label="t('app.fitToContent')"
-                :disabled="isCanvasInteractionLocked"
+                :disabled="isCanvasNavigationLocked"
                 @click="fitToContent"
               >
                 <span class="material-symbols-outlined text-sm" aria-hidden="true">fit_screen</span>
@@ -13208,6 +13764,7 @@ const counterexampleTraceHelpText = computed(() => {
       data-testid="canvas-fit-mobile"
       :title="t('app.fitToContent')"
       :aria-label="t('app.fitToContent')"
+      :disabled="isCanvasNavigationLocked"
       @click="fitToContent"
     >
       <span class="material-symbols-outlined" aria-hidden="true">fit_screen</span>
@@ -13217,10 +13774,11 @@ const counterexampleTraceHelpText = computed(() => {
     <div class="canvas-container" @wheel.ctrl.prevent="onBoardWheel">
       <!-- Canvas Board -->
       <CanvasBoard
-          :nodes="nodes"
+          :nodes="renderedCanvasNodes"
           :edges="allEdges"
-          :pan="canvasPan"
-          :zoom="canvasZoom"
+          :device-templates="deviceTemplates"
+          :pan="renderedCanvasPan"
+          :zoom="renderedCanvasZoom"
           :get-node-icon="getBoardNodeIcon"
           :has-node-state-machine="hasNodeStateMachine"
           :get-node-effective-state="getNodeEffectiveState"
@@ -13249,7 +13807,10 @@ const counterexampleTraceHelpText = computed(() => {
         data-testid="canvas-empty-state"
         aria-labelledby="canvas-empty-state-title"
       >
-        <div class="pointer-events-auto max-w-xl text-center">
+        <div
+          class="max-w-xl text-center"
+          :class="draggingTplName ? 'pointer-events-none' : 'pointer-events-auto'"
+        >
           <span class="material-symbols-outlined text-4xl text-slate-400 dark:text-slate-500" aria-hidden="true">account_tree</span>
           <h2 id="canvas-empty-state-title" class="mt-3 text-xl font-bold text-slate-800 dark:text-slate-100">
             {{ t('app.emptyCanvasTitle') }}
@@ -14073,8 +14634,9 @@ const counterexampleTraceHelpText = computed(() => {
         <button
           @click="runVerification"
           data-testid="run-verification"
-          :disabled="isVerifying || (!verificationForm.isAsync && synchronousSimulationRunning) || Boolean(verificationRunBlockedReason)"
+          :disabled="isVerifying || Boolean(verificationRunBlockedReason)"
           :title="verificationRunBlockedReason || undefined"
+          :aria-describedby="verificationRunBlockedReason ? 'verification-run-blocked-reason' : undefined"
           class="w-full py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
           <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
@@ -14090,6 +14652,15 @@ const counterexampleTraceHelpText = computed(() => {
             {{ verificationForm.isAsync ? t('app.createVerificationTask') : t('app.runVerificationNow') }}
           </template>
         </button>
+        <p
+          v-if="verificationRunBlockedReason"
+          id="verification-run-blocked-reason"
+          data-testid="verification-run-blocked-reason"
+          class="text-xs leading-5 text-amber-700"
+          role="status"
+        >
+          {{ verificationRunBlockedReason }}
+        </p>
       </div>
     </div>
 
@@ -14787,7 +15358,10 @@ const counterexampleTraceHelpText = computed(() => {
 
             <!-- Reason -->
             <div class="px-3 pb-2">
-              <p class="text-xs text-slate-600 break-words">
+              <p v-if="rec.reason" class="text-xs leading-5 text-slate-700 break-words">
+                {{ rec.reason }}
+              </p>
+              <p class="mt-1 text-xs text-slate-500 break-words">
                 {{ rec.category
                   ? t('app.categoryWithValue', { value: formatRecommendationCategory(rec.category, key => t(key)) })
                   : t('app.aiGeneratedAutomationRule') }}
@@ -15757,8 +16331,9 @@ const counterexampleTraceHelpText = computed(() => {
         <button
           @click="runSimulation"
           data-testid="run-simulation"
-          :disabled="isSimulating || (!simulationForm.isAsync && synchronousVerificationRunning) || traceAnimationState.visible || simulationAnimationState.visible || Boolean(simulationRunBlockedReason)"
+          :disabled="isSimulating || Boolean(simulationRunBlockedReason)"
           :title="simulationRunBlockedReason || undefined"
+          :aria-describedby="simulationRunBlockedReason ? 'simulation-run-blocked-reason' : undefined"
           class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
           <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
@@ -15774,6 +16349,15 @@ const counterexampleTraceHelpText = computed(() => {
             {{ simulationForm.isAsync ? t('app.createSimulationTask') : t('app.runSimulationNow') }}
           </template>
         </button>
+        <p
+          v-if="simulationRunBlockedReason"
+          id="simulation-run-blocked-reason"
+          data-testid="simulation-run-blocked-reason"
+          class="text-xs leading-5 text-amber-700"
+          role="status"
+        >
+          {{ simulationRunBlockedReason }}
+        </p>
       </div>
     </div>
 
@@ -16239,7 +16823,7 @@ const counterexampleTraceHelpText = computed(() => {
           <summary class="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-slate-700 hover:text-slate-900">
             <span class="inline-flex items-center gap-2">
               <span class="material-symbols-outlined text-lg text-slate-500" aria-hidden="true">code</span>
-              {{ t('app.showRawNusmvOutput') }}
+              {{ t('app.showNusmvDiagnosticOutput') }}
             </span>
             <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
           </summary>
@@ -16544,7 +17128,7 @@ const counterexampleTraceHelpText = computed(() => {
 
           <details v-if="verificationResult.nusmvOutput" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
             <summary class="text-sm font-bold text-slate-700 cursor-pointer hover:text-slate-900">
-              {{ t('app.showRawNusmvOutput') }}
+              {{ t('app.showNusmvDiagnosticOutput') }}
             </summary>
             <div class="mt-3 bg-slate-900 rounded-lg p-3 max-h-40 overflow-y-auto">
               <pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{{ verificationResult.nusmvOutput || t('app.noOutput') }}</pre>
@@ -16552,12 +17136,27 @@ const counterexampleTraceHelpText = computed(() => {
           </details>
         </div>
 
-        <div v-if="verificationResult && getVerificationOutcome(verificationResult) === 'VIOLATED' && verificationResult.traces && verificationResult.traces.length > 0">
-          <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.violationsTitle') }} ({{ verificationResult.traces.length }})</h4>
+        <div v-if="verificationResult?.traces?.length">
+          <h4 class="text-sm font-bold text-slate-700 mb-2">
+            {{ getVerificationOutcome(verificationResult) === 'VIOLATED'
+              ? t('app.violationsTitle')
+              : t('app.inconclusiveEvidenceTitle') }} ({{ verificationResult.traces.length }})
+          </h4>
+          <p
+            v-if="getVerificationOutcome(verificationResult) === 'INCONCLUSIVE'"
+            class="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900"
+          >
+            {{ t('app.inconclusiveEvidenceSummary', { counterexamples: verificationResult.traces.length }) }}
+          </p>
           <div class="space-y-2">
             <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-3">
               <div class="flex items-center justify-between mb-1">
-                <div class="text-xs font-bold text-red-600">{{ t('app.violationNumber', { index: Number(i) + 1 }) }}</div>
+                <div
+                  class="text-xs font-bold"
+                  :class="getVerificationOutcome(verificationResult) === 'VIOLATED'
+                    ? 'text-red-600'
+                    : 'text-amber-700'"
+                >{{ t('app.violationNumber', { index: Number(i) + 1 }) }}</div>
                 <div class="flex gap-1">
                   <button
                     v-if="canFixVerificationResultTrace(trace)"

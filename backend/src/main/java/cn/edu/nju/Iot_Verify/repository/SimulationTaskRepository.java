@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import cn.edu.nju.Iot_Verify.repository.projection.SimulationTaskSummaryProjection;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -37,14 +38,10 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
                                @Param("workerId") String workerId,
                                @Param("pending") SimulationTaskPo.TaskStatus pending);
 
-    List<SimulationTaskPo> findByUserIdOrderByCreatedAtDesc(Long userId);
-
-    List<SimulationTaskPo> findByUserIdAndIdNotInOrderByCreatedAtDesc(Long userId, List<Long> excludedIds);
-
-    List<SimulationTaskPo> findByUserIdAndStatusNotOrderByCreatedAtDesc(
+    List<SimulationTaskSummaryProjection> findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
             Long userId, SimulationTaskPo.TaskStatus status);
 
-    List<SimulationTaskPo> findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
+    List<SimulationTaskSummaryProjection> findSummaryByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
             Long userId, SimulationTaskPo.TaskStatus status, List<Long> excludedIds);
 
     void deleteByUserIdAndSimulationTraceId(Long userId, Long simulationTraceId);

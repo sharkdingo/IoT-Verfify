@@ -2,6 +2,8 @@ import type {
   AvailableFuzzingRunSummary,
   FuzzingEligibility,
   FuzzingFinding,
+  FuzzingFindingReplay,
+  FuzzingModelRunSnapshot,
   FuzzPaperDomainPreview,
   FuzzWorkloadPreview,
   FuzzingRun,
@@ -17,6 +19,8 @@ import {
 } from '@/types/fuzzing'
 import type { AsyncTaskStatus, TaskProgressStage } from '@/types/task'
 import { validateTraceStatePayload } from './traceStateResponse'
+import { isRunInitiator, type ModelPlaybackScene } from '@/types/model'
+import { validateModelPlaybackScene } from './playbackSceneResponse'
 
 export const FUZZ_RESPONSE_INCOMPLETE_CODE = 'FUZZ_RESPONSE_INCOMPLETE'
 export const FUZZ_ACTIVE_TASK_LIMIT_REACHED_CODE = 'FUZZ_ACTIVE_TASK_LIMIT_REACHED'
@@ -283,6 +287,32 @@ const validateTraceStateList = (value: unknown, context: string) => {
       throw new FuzzResponseContractError(context, detail)
     }
   })
+  const states = value as Array<Record<string, any>>
+  const rejectEvidence = (path: string) => {
+    throw new FuzzResponseContractError(
+      context,
+      `${path} must not contain trust/privacy evidence because bounded exploration does not model label propagation`
+    )
+  }
+  const rejectVariableTrust = (variables: Array<Record<string, any>>, path: string) => {
+    variables.forEach((variable, index) => {
+      if (variable.trust !== undefined && variable.trust !== null) {
+        rejectEvidence(`${path}[${index}].trust`)
+      }
+    })
+  }
+  states.forEach((state, stateIndex) => {
+    const statePath = `states[${stateIndex}]`
+    if ((state.trustPrivacies || []).length > 0) rejectEvidence(`${statePath}.trustPrivacies`)
+    rejectVariableTrust(state.envVariables || [], `${statePath}.envVariables`)
+    rejectVariableTrust(state.globalVariables || [], `${statePath}.globalVariables`)
+    state.devices.forEach((device: Record<string, any>, deviceIndex: number) => {
+      const devicePath = `${statePath}.devices[${deviceIndex}]`
+      if ((device.trustPrivacy || []).length > 0) rejectEvidence(`${devicePath}.trustPrivacy`)
+      if ((device.privacies || []).length > 0) rejectEvidence(`${devicePath}.privacies`)
+      rejectVariableTrust(device.variables, `${devicePath}.variables`)
+    })
+  })
 }
 
 const validateEligibility = (value: unknown, context: string): FuzzingEligibility => {
@@ -325,6 +355,9 @@ const validateEligibility = (value: unknown, context: string): FuzzingEligibilit
 const validateTask = (value: unknown, context: string): FuzzingTask => {
   const task = record(value, context)
   integer(task.id, 'id', context, 1)
+  if (!isRunInitiator(task.initiator)) {
+    throw new FuzzResponseContractError(context, 'initiator is invalid')
+  }
   validateExplorationMode(task.explorationMode, context)
   if (!TASK_STATUSES.has(task.status)) {
     throw new FuzzResponseContractError(context, 'status is invalid')
@@ -361,6 +394,9 @@ const validateRun = (
 ): FuzzingRunSummary => {
   const run = record(value, context)
   integer(run.id, 'id', context, 1)
+  if (!isRunInitiator(run.initiator)) {
+    throw new FuzzResponseContractError(context, 'initiator is invalid')
+  }
   if (availabilityRequired && typeof run.dataAvailable !== 'boolean') {
     throw new FuzzResponseContractError(context, 'dataAvailable must be boolean')
   }
@@ -392,6 +428,14 @@ const validateRun = (
   const generatedPaths = integer(run.generatedPaths, 'generatedPaths', context)
   integer(run.elapsedMs, 'elapsedMs', context)
   validateSnapshot(run.modelSnapshot, context)
+  if (!availabilityRequired) {
+    validateModelPlaybackScene(
+      run.playbackScene,
+      run.modelSnapshot.deviceCount,
+      run.modelSnapshot.ruleCount,
+      detail => { throw new FuzzResponseContractError(context, detail) }
+    )
+  }
   const eligibility = validateEligibility(run.eligibility, context)
   const eligibleSpecIds = new Set(eligibility.eligibleSpecIds)
   if ((run.outcome === 'INCONCLUSIVE') !== (eligibleSpecIds.size === 0)) {
@@ -547,7 +591,7 @@ export const validateFuzzingRun = (value: unknown): FuzzingRun => {
     }
   }
   const { dataAvailable: _summaryAvailability, ...detail } = run
-  return { ...detail, findings }
+  return { ...detail, findings } as FuzzingRun
 }
 
 export const validateFuzzingRunSummaryList = (value: unknown): FuzzingRunSummary[] => {
@@ -610,6 +654,29 @@ export const validateFuzzingFinding = (value: unknown): FuzzingFinding => {
     }
   })
   return finding as FuzzingFinding
+}
+
+/**
+ * The single-finding endpoint carries the frozen run context needed for replay. It must be
+ * validated together with the finding so the canvas never falls back to the current Board.
+ */
+export const validateFuzzingFindingReplay = (value: unknown): FuzzingFindingReplay => {
+  const context = 'Fuzz finding replay'
+  const replay = record(value, context)
+  const finding = validateFuzzingFinding(replay.finding)
+  validateSnapshot(replay.modelSnapshot, context)
+  const snapshot = replay.modelSnapshot as FuzzingModelRunSnapshot
+  validateModelPlaybackScene(
+    replay.playbackScene,
+    snapshot.deviceCount,
+    snapshot.ruleCount,
+    detail => { throw new FuzzResponseContractError(context, detail) }
+  )
+  return {
+    finding,
+    modelSnapshot: snapshot,
+    playbackScene: replay.playbackScene as ModelPlaybackScene
+  }
 }
 
 export const validateFuzzingFindingList = (value: unknown): FuzzingFinding[] => {

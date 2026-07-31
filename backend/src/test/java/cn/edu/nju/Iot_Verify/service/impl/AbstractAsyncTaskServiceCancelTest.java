@@ -116,6 +116,10 @@ class AbstractAsyncTaskServiceCancelTest {
             updateTaskProgress(task.id, progress, TaskProgressStage.STARTING);
         }
 
+        private String retainedDiagnosticOutput(String output) {
+            return truncateOutput(output);
+        }
+
         /** Mirrors a worker's finally block: record the cancellation, then clean up worker state. */
         private void runWorkerFinally() {
             handleCancellation(task);
@@ -262,6 +266,17 @@ class AbstractAsyncTaskServiceCancelTest {
 
         assertEquals(2, service.progressWriteCount);
         assertEquals(13, service.task.progress);
+    }
+
+    @Test
+    void diagnosticOutput_namesTheStorageAndDisplayLimitWhenTruncated() {
+        TestAsyncTaskService service = new TestAsyncTaskService();
+        String boundaryOutput = "x".repeat(AbstractAsyncTaskService.MAX_OUTPUT_LENGTH);
+
+        assertEquals(boundaryOutput, service.retainedDiagnosticOutput(boundaryOutput));
+        assertEquals(boundaryOutput
+                        + "\n... (diagnostic output truncated to 10000 characters for storage/display)",
+                service.retainedDiagnosticOutput(boundaryOutput + "y"));
     }
 
     @Test

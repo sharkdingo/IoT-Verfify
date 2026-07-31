@@ -638,6 +638,55 @@ class BoardStorageServiceImplBatchTest {
     }
 
     @Test
+    void saveEnvironmentVariables_rejectsActiveDevicesWithConflictingEnvironmentSemantics() {
+        BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
+                nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
+
+        DeviceTemplateDto.DeviceManifest.InternalVariable slowTemperature =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("temperature").isInside(false)
+                        .lowerBound(0).upperBound(100).naturalChangeRate("[-1,1]")
+                        .trust("untrusted").privacy("public").build();
+        DeviceTemplateDto.DeviceManifest.InternalVariable fastTemperature =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("temperature").isInside(false)
+                        .lowerBound(0).upperBound(100).naturalChangeRate("[-5,5]")
+                        .trust("untrusted").privacy("public").build();
+        DeviceTemplatePo firstTemplate = DeviceTemplatePo.builder()
+                .userId(1L).name("Indoor Sensor")
+                .manifestJson(JsonUtils.toJson(DeviceTemplateDto.DeviceManifest.builder()
+                        .name("Indoor Sensor").internalVariables(List.of(slowTemperature)).build()))
+                .build();
+        DeviceTemplatePo secondTemplate = DeviceTemplatePo.builder()
+                .userId(1L).name("Outdoor Sensor")
+                .manifestJson(JsonUtils.toJson(DeviceTemplateDto.DeviceManifest.builder()
+                        .name("Outdoor Sensor").internalVariables(List.of(fastTemperature)).build()))
+                .build();
+        DeviceNodeDto indoor = boardNode("indoor_1", "Indoor Sensor", "Hallway sensor");
+        DeviceNodeDto outdoor = boardNode("outdoor_1", "Outdoor Sensor", "Patio sensor");
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(new DeviceNodePo(), new DeviceNodePo()));
+        when(deviceNodeMapper.toDto(any())).thenReturn(indoor, outdoor);
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(firstTemplate, secondTemplate));
+
+        ValidationException exception = assertThrows(ValidationException.class, () ->
+                serviceWithTemplates.saveEnvironmentVariables(1L, List.of(
+                        new EnvironmentVariableUpdateRequestDto(
+                                "temperature",
+                                new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                                        "20", "untrusted", "public"),
+                                new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                                        "21", null, null)))));
+
+        String message = String.join(" ", exception.getErrors().values());
+        assertTrue(message.contains("natural-change-rate mismatch"), message);
+        assertTrue(message.contains("Hallway sensor"), message);
+        assertTrue(message.contains("Patio sensor"), message);
+        verify(environmentRepo, never()).saveAll(any());
+    }
+
+    @Test
     void saveBoardBatch_rejectsDeviceReferenceThatCollidesWithGeneratedEnvironmentName() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,

@@ -6,6 +6,7 @@ import {
   getFuzzStoredTaskLimit,
   resolveFuzzingRunFinding,
   validateFuzzingFinding,
+  validateFuzzingFindingReplay,
   validateFuzzPaperDomainPreview,
   validateFuzzWorkloadPreview,
   validateFuzzingRun,
@@ -37,8 +38,22 @@ const traceState = (stateIndex: number) => ({
   compromisedAutomationLinks: []
 })
 
+const playbackScene = {
+  nodes: [
+    { id: 'sensor_1', templateName: 'Sensor', label: 'Sensor', position: { x: 20, y: 30 }, state: 'on', width: 160, height: 120 },
+    { id: 'alarm_1', templateName: 'Alarm', label: 'Alarm', position: { x: 360, y: 30 }, state: 'off', width: 160, height: 120 }
+  ],
+  rules: [{
+    id: 7,
+    conditions: [{ deviceName: 'sensor_1', attribute: 'state', targetType: 'state' as const, relation: '=', value: 'on' }],
+    command: { deviceName: 'alarm_1', action: 'on' },
+    ruleString: 'Sensor turns on alarm'
+  }]
+}
+
 const run = {
   id: 4,
+  initiator: 'USER' as const,
   explorationMode: 'BOARD_SNAPSHOT',
   outcome: 'BUDGET_EXHAUSTED',
   effectiveSeed: 42,
@@ -46,6 +61,7 @@ const run = {
   generatedPaths: 5000,
   elapsedMs: 1200,
   modelSnapshot: snapshot,
+  playbackScene,
   eligibility: {
     eligibleSpecIds: ['spec-1'],
     eligibleSpecLabels: { 'spec-1': 'Door remains closed' },
@@ -336,6 +352,7 @@ describe('fuzzing response contracts', () => {
     )
     expect(() => validateFuzzingTask({
       id: 1,
+      initiator: 'USER',
       status: 'RUNNING',
       progress: 10,
       createdAt: '2026-07-14T10:00:00',
@@ -394,6 +411,7 @@ describe('fuzzing response contracts', () => {
   it('accepts a minimal unavailable history placeholder and requires availability on summaries', () => {
     expect(validateFuzzingRunSummaryList([{
       id: 4,
+      initiator: 'UNKNOWN',
       createdAt: '2026-07-14T10:00:00',
       completedAt: '2026-07-14T10:00:01',
       findings: [],
@@ -402,6 +420,7 @@ describe('fuzzing response contracts', () => {
     }])).toMatchObject([{ id: 4, dataAvailable: false }])
     expect(() => validateFuzzingRunSummaryList([{
       id: 4,
+      initiator: 'USER',
       findings: [{ id: 2 }],
       dataAvailable: false,
       unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID'
@@ -539,6 +558,17 @@ describe('fuzzing response contracts', () => {
     })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
     expect(() => assertFuzzingFindingBelongsToRun(detailFinding, 99, 'Fuzz finding replay'))
       .toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+
+    expect(validateFuzzingFindingReplay({
+      finding: detailFinding,
+      modelSnapshot: snapshot,
+      playbackScene
+    })).toMatchObject({ finding: { id: 2 }, modelSnapshot: snapshot })
+    expect(() => validateFuzzingFindingReplay({
+      finding: detailFinding,
+      modelSnapshot: { ...snapshot, deviceCount: 1 },
+      playbackScene
+    })).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
   })
 
   it('requires completed metadata on available runs and targets only on details', () => {
@@ -561,6 +591,7 @@ describe('fuzzing response contracts', () => {
   it('rejects a task progress value outside 0-100', () => {
     expect(() => validateFuzzingTask({
       id: 1,
+      initiator: 'USER',
       explorationMode: 'BOARD_SNAPSHOT',
       status: 'RUNNING',
       progress: 120,
@@ -576,6 +607,7 @@ describe('fuzzing response contracts', () => {
   it('requires inbox summaries to carry the frozen model snapshot and targets', () => {
     expect(validateFuzzingTaskSummaryList([{
       id: 1,
+      initiator: 'AI_ASSISTANT',
       explorationMode: 'PAPER_COMPATIBLE',
       status: 'RUNNING',
       progress: 20,
@@ -588,6 +620,7 @@ describe('fuzzing response contracts', () => {
     }])).toHaveLength(1)
     expect(() => validateFuzzingTaskSummaryList([{
       id: 1,
+      initiator: 'USER',
       explorationMode: 'BOARD_SNAPSHOT',
       status: 'RUNNING',
       progress: 20,
@@ -636,34 +669,19 @@ describe('fuzzing response contracts', () => {
         variables: [{
           name: 'workingState',
           value: 'idle',
-          trust: 'trusted',
+          trust: null,
           modelTokenSource: 'BUNDLED'
         }],
-        trustPrivacy: [{
-          name: 'idle',
-          propertyScope: 'state',
-          mode: 'MotionMode',
-          trust: true
-        }],
-        privacies: [{
-          name: 'recording',
-          propertyScope: 'content',
-          privacy: 'private'
-        }]
+        trustPrivacy: [],
+        privacies: []
       }],
       triggeredRules: [{ ruleIndex: 0, ruleId: 'rule-1', ruleLabel: 'Record motion' }],
       compromisedAutomationLinks: [],
-      trustPrivacies: [{
-        name: 'idle',
-        propertyScope: 'state',
-        mode: 'MotionMode',
-        trust: true,
-        privacy: null
-      }],
+      trustPrivacies: [],
       envVariables: [{
         name: 'temperature',
         value: '21',
-        trust: 'untrusted',
+        trust: null,
         modelTokenSource: 'UNKNOWN'
       }],
       globalVariables: [{
@@ -728,7 +746,7 @@ describe('fuzzing response contracts', () => {
         ...detailedState,
         devices: [{
           ...detailedState.devices[0],
-          trustPrivacy: [{ name: 'idle', propertyScope: 'generated_state', trust: true }]
+          trustPrivacy: [{ name: 'idle', propertyScope: 'state', mode: 'MotionMode', trust: true }]
         }]
       },
       {
@@ -740,14 +758,33 @@ describe('fuzzing response contracts', () => {
       },
       {
         ...detailedState,
-        trustPrivacies: [
-          detailedState.trustPrivacies[0],
-          { ...detailedState.trustPrivacies[0], trust: false }
-        ]
+        trustPrivacies: [{
+          name: 'idle',
+          propertyScope: 'state',
+          mode: 'MotionMode',
+          trust: true
+        }]
       },
       {
         ...detailedState,
         envVariables: [{ name: 'temperature', value: '21', trust: true }]
+      },
+      {
+        ...detailedState,
+        devices: [{
+          ...detailedState.devices[0],
+          variables: [{
+            ...detailedState.devices[0].variables[0],
+            trust: 'trusted'
+          }]
+        }]
+      },
+      {
+        ...detailedState,
+        globalVariables: [{
+          ...detailedState.globalVariables[0],
+          trust: 'trusted'
+        }]
       },
       {
         ...detailedState,
@@ -946,6 +983,7 @@ describe('fuzzing response contracts', () => {
     )
     expect(() => validateFuzzingTask({
       id: 1,
+      initiator: 'USER',
       explorationMode: 'PAPER_COMPATIBLE',
       status: 'RUNNING',
       progress: 10,

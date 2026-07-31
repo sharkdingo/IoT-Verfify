@@ -63,6 +63,7 @@ class SmvGeneratorFixesTest {
                 .falsifiableWhenCompromised(!isInside)
                 .lowerBound(lo)
                 .upperBound(hi)
+                .naturalChangeRate(isInside ? null : "0")
                 .build();
     }
 
@@ -462,6 +463,52 @@ class SmvGeneratorFixesTest {
         map.put("sensor_1", smvB);
 
         assertDoesNotThrow(() -> validator.validate(map));
+    }
+
+    @Test
+    @DisplayName("P3: shared numeric environment without an explicit natural rate is rejected")
+    void sharedNumericEnvironment_withoutNaturalRate_throws() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 0, 100);
+        temperature.setNaturalChangeRate(null);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .internalVariables(List.of(temperature))
+                .build();
+        DeviceSmvData device = buildSmvData(
+                "sensor_1", "Sensor", List.of(), Map.of(), List.of(temperature), manifest);
+        device.getEnvVariables().put("temperature", temperature);
+
+        SmvGenerationException exception = assertThrows(SmvGenerationException.class, () ->
+                validator.validate(Map.of("sensor_1", device)));
+
+        assertTrue(exception.getMessage().contains("must explicitly define NaturalChangeRate"),
+                exception.getMessage());
+    }
+
+    @Test
+    @DisplayName("P3: every formal-model entry point rejects rate syntax outside the schema grammar")
+    void naturalChangeRate_nonCanonicalSyntax_isNeverReinterpretedByFormalModel() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 0, 100);
+        temperature.setNaturalChangeRate("1,2");
+        DeviceManifest manifest = DeviceManifest.builder()
+                .internalVariables(List.of(temperature))
+                .build();
+        DeviceSmvData smv = buildSmvData(
+                "sensor_1", "Sensor", List.of(), Map.of(), List.of(temperature), manifest);
+        smv.getEnvVariables().put("temperature", temperature);
+        Map<String, DeviceSmvData> map = Map.of("sensor_1", smv);
+
+        SmvGenerationException validationException = assertThrows(SmvGenerationException.class,
+                () -> validator.validate(map));
+        assertTrue(validationException.getMessage().contains("invalid NaturalChangeRate '1,2'"),
+                validationException.getMessage());
+
+        temperature.setNaturalChangeRate("[1,2,999]");
+        DeviceVerificationDto dto = device("sensor_1", "Sensor");
+        SmvGenerationException generationException = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.build(
+                        1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false));
+        assertTrue(generationException.getMessage().contains("NaturalChangeRate '[1,2,999]'"),
+                generationException.getMessage());
     }
 
     @Test
@@ -2170,6 +2217,7 @@ class SmvGeneratorFixesTest {
                 .privacy("public")
                 .lowerBound(0)
                 .upperBound(100)
+                .naturalChangeRate("[-1, 1]")
                 .build();
         DeviceManifest manifest = DeviceManifest.builder()
                 .name("Temperature Sensor")
@@ -3009,11 +3057,19 @@ class SmvGeneratorFixesTest {
         // TRUE branch should also be clamped
         assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature - 30)), max(15, min(35, a_temperature)), max(15, min(35, a_temperature + 30))}"),
                 "TRUE branch should clamp all three candidates, got:\n" + result);
+
+        temperature.setNaturalChangeRate("[2,3]");
+        String increasingResult = mainBuilder.build(
+                1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
+        assertTrue(increasingResult.contains("TRUE: {max(15, min(35, a_temperature + 2)), "
+                        + "max(15, min(35, a_temperature)), "
+                        + "max(15, min(35, a_temperature + 3))}"),
+                "same-direction ranges must retain both declared endpoints, got:\n" + increasingResult);
     }
 
     @Test
-    @DisplayName("A10-boundary: WITH-rate extreme NCR boundary branches are clamped")
-    void numericEnvTransition_withRate_extremeNcr_boundaryBranchesClamped() {
+    @DisplayName("A10-boundary: impacted environment combines every declared rate before clamping")
+    void numericEnvTransition_withRate_extremeNcr_combinesDeclaredRatesAtBoundaries() {
         // NCR=[-30,30] on range 15..35, WITH a device that impacts temperature
         DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 15, 35);
         temperature.setNaturalChangeRate("[-30,30]");
@@ -3055,28 +3111,12 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
-        // WITH-rate =upper boundary: candidates are clamped. The -1 is MEDIC's environment
-        // disturbance (§3.1, Fig. 2b), not an unauthored step — see appendNumericEnvTransition.
-        assertTrue(result.contains("a_temperature=35-(ac_1.temperature_rate): {"
-                        + "max(15, min(35, toint(a_temperature)-1+ac_1.temperature_rate)), "
-                        + "max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
-                "=upper boundary should clamp both candidates, got:\n" + result);
+        assertFalse(result.contains("a_temperature=35-(ac_1.temperature_rate)"),
+                "declared dynamics should not be replaced by a special upper-boundary branch, got:\n" + result);
+        assertFalse(result.contains("a_temperature=15-(ac_1.temperature_rate)"),
+                "declared dynamics should not be replaced by a special lower-boundary branch, got:\n" + result);
 
-        // WITH-rate >upper boundary: constant {35}, no overflow possible
-        assertTrue(result.contains("a_temperature>35-(ac_1.temperature_rate): {35}"),
-                ">upper boundary should emit constant upper, got:\n" + result);
-
-        // WITH-rate =lower boundary: candidates are clamped, +1 disturbance included.
-        assertTrue(result.contains("a_temperature=15-(ac_1.temperature_rate): {"
-                        + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
-                        + "max(15, min(35, a_temperature+1+ac_1.temperature_rate))}"),
-                "=lower boundary should clamp both candidates, got:\n" + result);
-
-        // WITH-rate <lower boundary: constant {15}
-        assertTrue(result.contains("a_temperature<15-(ac_1.temperature_rate): {15}"),
-                "<lower boundary should emit constant lower, got:\n" + result);
-
-        // TRUE branch: all three NCR+rate candidates clamped
+        // Every state uses all declared natural-rate endpoints plus the device effect, then clamps.
         assertTrue(result.contains("TRUE: {"
                         + "max(15, min(35, a_temperature - 30+ac_1.temperature_rate)), "
                         + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
@@ -3085,14 +3125,10 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("A10-boundary: MEDIC's ±1 environment disturbance survives an absent NaturalChangeRate")
-    void numericEnvTransition_withRate_noNcr_keepsEnvironmentDisturbance() {
-        // Same impacted variable but with NO NaturalChangeRate. MEDIC models a shared environment
-        // value as moving by the device effect plus a [-1,1] disturbance each step (§3.1, Fig. 2b), so
-        // the boundary branches must still offer the disturbed candidate: a physical quantity is only
-        // imperfectly observed, and assuming otherwise would be unsound in the unsafe direction.
+    @DisplayName("A10-boundary: explicit zero natural rate uses only the declared device effect")
+    void numericEnvTransition_withRate_zeroNcr_usesOnlyDeclaredDeviceEffect() {
         DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 15, 35);
-        temperature.setNaturalChangeRate(null);
+        temperature.setNaturalChangeRate("0");
 
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
@@ -3118,18 +3154,12 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
-        assertTrue(result.contains("a_temperature=35-(ac_1.temperature_rate): {"
-                        + "max(15, min(35, toint(a_temperature)-1+ac_1.temperature_rate)), "
-                        + "max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
-                "=upper boundary keeps the -1 disturbance without a declared rate, got:\n" + result);
-        assertTrue(result.contains("a_temperature=15-(ac_1.temperature_rate): {"
-                        + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
-                        + "max(15, min(35, a_temperature+1+ac_1.temperature_rate))}"),
-                "=lower boundary keeps the +1 disturbance without a declared rate, got:\n" + result);
-        // With no NaturalChangeRate the default branch offers the device effect alone, so the
-        // disturbance is a property of the boundary branches specifically.
+        assertFalse(result.contains("a_temperature=35-(ac_1.temperature_rate)"), result);
+        assertFalse(result.contains("a_temperature=15-(ac_1.temperature_rate)"), result);
+        assertFalse(result.contains("toint(a_temperature)-1+ac_1.temperature_rate"), result);
+        assertFalse(result.contains("a_temperature+1+ac_1.temperature_rate"), result);
         assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
-                "the default branch has no NCR candidates to add, got:\n" + result);
+                "only the declared device effect should remain, got:\n" + result);
     }
 
     @Test
@@ -3223,6 +3253,18 @@ class SmvGeneratorFixesTest {
                 "Local-only dynamics should not create environment-impact rate variables, got:\n" + result);
         assertTrue(result.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature - 1 + 1)), max(0, min(100, dev_1.waterTemperature + 1)), max(0, min(100, dev_1.waterTemperature + 1 + 1))};"),
                 "WorkingState.Dynamics.ChangeRate should update local numeric variable directly, got:\n" + result);
+
+        var.setNaturalChangeRate("[2,3]");
+        String sameDirection = mainBuilder.build(
+                1L, List.of(device), List.of(), map, AttackScenarioDto.none(), false);
+        assertTrue(sameDirection.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature + 2 + 1)), max(0, min(100, dev_1.waterTemperature + 1)), max(0, min(100, dev_1.waterTemperature + 3 + 1))};"),
+                "Local numeric ranges must retain both declared endpoints and the dynamic-only candidate, got:\n"
+                        + sameDirection);
+        assertTrue(sameDirection.contains("TRUE: {max(0, min(100, dev_1.waterTemperature + 2)), "
+                        + "max(0, min(100, dev_1.waterTemperature)), "
+                        + "max(0, min(100, dev_1.waterTemperature + 3))}"),
+                "The local fallback must retain both declared endpoints and stutter, got:\n"
+                        + sameDirection);
     }
 
     // ======================== NPE guard: ImpactedVariables without InternalVariables ========================

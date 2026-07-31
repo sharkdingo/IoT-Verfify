@@ -45,9 +45,9 @@ public class GetFuzzFindingTool extends AbstractAiTool {
                         "findingId", Map.of("type", "integer",
                                 "description", "Counterexample-search finding ID (from get_fuzz_run's findings)."),
                         "stateOffset", Map.of("type", "integer",
-                                "description", "Zero-based state-sequence offset, 0-10000 (default 0)."),
+                                "description", "Non-negative zero-based state-sequence offset (default 0)."),
                         "stateLimit", Map.of("type", "integer",
-                                "description", "Number of states to return, 1-20 (default 10).")),
+                                "description", "Number of states to return, 1-10 (default 10).")),
                 List.of("findingId"));
         return LlmToolSpec.of(getName(),
                 "Get one counterexample-search finding, including its violated specification, first violation step, and a bounded state/input-event window. Page states with stateOffset and stateLimit. A finding is heuristic candidate evidence, not a formal counterexample; never route it into fix_violation or apply_fix.",
@@ -66,23 +66,14 @@ public class GetFuzzFindingTool extends AbstractAiTool {
             requireOnlyFields(args, "arguments", Set.of(
                     "findingId", "stateOffset", "stateLimit"));
             long findingId = positiveLongArg(args, "findingId");
-            int stateOffset = intArgInRange(args, "stateOffset", 0, 0, 10_000);
-            int stateLimit = intArgInRange(args, "stateLimit", 10, 1, 20);
+            int stateOffset = intArgInRange(args, "stateOffset", 0, 0,
+                    ModelTraceToolPresenter.MAX_STATE_OFFSET);
+            int stateLimit = intArgInRange(args, "stateLimit",
+                    ModelTraceToolPresenter.DEFAULT_STATE_LIMIT, 1,
+                    ModelTraceToolPresenter.MAX_STATE_LIMIT);
 
             FuzzFindingDto finding = fuzzService.getFinding(userId, findingId);
             List<TraceStateDto> states = safeList(finding.getStates());
-            int windowStart = Math.min(stateOffset, states.size());
-            int windowEnd = Math.min(states.size(), windowStart + stateLimit);
-            List<TraceStateDto> stateWindow = states.subList(windowStart, windowEnd);
-
-            List<FuzzInputEventDto> inputEvents = safeList(finding.getInputEvents());
-            List<FuzzInputEventDto> inputEventWindow = new ArrayList<>();
-            for (FuzzInputEventDto event : inputEvents) {
-                if (event != null && event.getStep() >= windowStart && event.getStep() < windowEnd) {
-                    inputEventWindow.add(event);
-                }
-            }
-
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("findingId", finding.getId());
             body.put("runId", finding.getFuzzTaskId());
@@ -90,15 +81,19 @@ public class GetFuzzFindingTool extends AbstractAiTool {
                     finding.getViolatedSpec()));
             body.put("firstViolationStep", finding.getFirstViolationStep());
             body.put("seed", finding.getSeed());
-            body.put("stateCount", states.size());
-            body.put("stateOffset", stateOffset);
-            body.put("stateLimit", stateLimit);
-            body.put("returnedStateCount", stateWindow.size());
-            body.put("hasMoreStates", windowEnd < states.size());
-            if (windowEnd < states.size()) {
-                body.put("nextStateOffset", windowEnd);
+            ModelTraceToolPresenter.StateWindow stateWindow =
+                    ModelTraceToolPresenter.putStateWindow(
+                            body, states, stateOffset, stateLimit);
+
+            List<FuzzInputEventDto> inputEvents = safeList(finding.getInputEvents());
+            List<FuzzInputEventDto> inputEventWindow = new ArrayList<>();
+            for (FuzzInputEventDto event : inputEvents) {
+                if (event != null && event.getStep() >= stateWindow.startInclusive()
+                        && event.getStep() < stateWindow.endExclusive()) {
+                    inputEventWindow.add(event);
+                }
             }
-            body.put("states", ModelTraceToolPresenter.states(stateWindow));
+
             body.put("inputEventCount", inputEvents.size());
             body.put("returnedInputEventCount", inputEventWindow.size());
             body.put("inputEvents", List.copyOf(inputEventWindow));

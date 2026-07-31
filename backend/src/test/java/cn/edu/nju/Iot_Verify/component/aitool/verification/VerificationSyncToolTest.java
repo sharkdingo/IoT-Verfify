@@ -155,6 +155,8 @@ class VerificationSyncToolTest {
         assertTrue(json.path("traces").get(0).path("violatedSpecId").isMissingNode());
         assertEquals("OUTCOME_UNKNOWN", json.path("historyPersistence").path("status").asText());
         assertTrue(json.path("message").asText().contains("could not be confirmed"));
+        assertEquals(1, json.path("checkLogCount").asInt());
+        assertTrue(json.path("checkLogs").isMissingNode());
     }
 
     @Test

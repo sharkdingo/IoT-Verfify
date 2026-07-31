@@ -35,6 +35,7 @@ import {
   getSessionHistory,
   getSessionList,
   hasCompletedToolEvidence,
+  markSessionTerminalSeen,
   requestSessionStop,
   sendStreamChat
 } from '@/api/chat';
@@ -59,6 +60,7 @@ const props = withDefaults(defineProps<{
   boardMode?: boolean;
   getBoardContext?: () => BoardChatContext | null;
   interactionLocked?: boolean;
+  prepareInteraction?: () => boolean;
   executeCommand?: (command: StreamCommand) => Promise<boolean>;
 }>(), {
   boardMode: false,
@@ -73,6 +75,7 @@ const visible = computed(() => chatStore.state.visible);
 const { state: authState } = useAuth();
 const authenticatedUserId = computed(() => authState.user?.userId ?? null);
 let chatAuthEpoch = 0;
+let userSessionNavigationEpoch = 0;
 
 /**
  * Legacy protocol residue, kept as a no-op safety net for persisted history.
@@ -211,9 +214,11 @@ const presetTasks = computed(() => [
 const isSidebarOpen = ref(false);
 const isRecording = ref(false);
 const sessions = ref<ChatSession[]>([]);
+const terminalSeenRequests = new Map<string, number>();
 const isLoadingSessions = ref(false);
 const sessionListLoadFailed = ref(false);
 const isCreatingSession = ref(false);
+const isPreparingStreamSession = ref(false);
 const currentSessionId = ref<string>('');
 const messages = ref<ChatMessage[]>([]);
 const pendingConfirmationKinds = ref<ChatConfirmationKind[]>([]);
@@ -228,7 +233,10 @@ const streamProgressEvents = ref<StreamProgress[]>([]);
 const streamElapsedSeconds = ref(0);
 let streamElapsedTimer: ReturnType<typeof setInterval> | null = null;
 let confirmationRequestEpoch = 0;
-const reconciliationRequired = ref(false);
+const reconciliationRequired = computed({
+  get: () => chatStore.state.reconciliationRequired,
+  set: (required: boolean) => chatStore.setReconciliationRequired(required)
+});
 const isRetryingReconciliation = ref(false);
 const activeStreamSessionId = ref('');
 const activeStreamTurnId = ref('');
@@ -245,9 +253,15 @@ const historyHasMore = ref(false);
 const historyNextBeforeId = ref<number | null>(null);
 const hasAuthoritativeActiveSession = computed(() =>
     sessions.value.some(session => session.active));
+const hasCurrentAuthoritativeActiveSession = computed(() =>
+    Boolean(currentSessionId.value)
+    && sessions.value.some(session => session.id === currentSessionId.value && session.active));
 const isAssistantBusy = computed(() =>
     isStreaming.value || isSettlingStream.value || isMonitoringRemoteExecution.value
-    || reconciliationRequired.value || hasAuthoritativeActiveSession.value);
+    || reconciliationRequired.value || hasCurrentAuthoritativeActiveSession.value);
+const hasAnyAssistantWork = computed(() =>
+    isStreaming.value || isSettlingStream.value || reconciliationRequired.value
+    || hasAuthoritativeActiveSession.value || chatStore.state.activeCount > 0);
 const isLoading = computed(() => isAssistantBusy.value || isLoadingHistory.value);
 const TOOL_LABEL_KEYS: Record<string, string> = {
   edit_device: 'app.chat.toolLabels.editDevice',
@@ -297,6 +311,11 @@ const TOOL_LABEL_KEYS: Record<string, string> = {
   list_simulation_traces: 'app.chat.toolLabels.listSimulationTraces',
   get_simulation_trace: 'app.chat.toolLabels.getSimulationTrace',
   delete_simulation_trace: 'app.chat.toolLabels.deleteSimulationTrace',
+  list_async_tasks: 'app.chat.toolLabels.listAsyncTasks',
+  list_verification_runs: 'app.chat.toolLabels.listVerificationRuns',
+  get_verification_run: 'app.chat.toolLabels.getVerificationRun',
+  manage_board_history: 'app.chat.toolLabels.manageBoardHistory',
+  clear_board: 'app.chat.toolLabels.clearBoard',
   board_overview: 'app.chat.toolLabels.boardOverview'
 };
 const readableToolName = (progress: StreamProgress) => {
@@ -424,6 +443,30 @@ const executionTraceStatus = (
       ? t('app.chat.executionTraceWaiting')
       : t('app.chat.executionTraceCompleted');
 };
+const sessionExecutionStatus = (session: ChatSession) => {
+  if (session.active) return t('app.chat.sessionActive');
+  switch (session.latestExecutionStatus) {
+    case 'COMPLETED': return t('app.chat.executionTraceCompleted');
+    case 'AWAITING_CONFIRMATION': return t('app.chat.executionTraceAwaitingConfirmation');
+    case 'PARTIAL': return t('app.chat.executionTracePartial');
+    case 'STOPPED': return t('app.chat.executionTraceStopped');
+    case 'DISCONNECTED': return t('app.chat.executionTraceDisconnected');
+    case 'FAILED': return t('app.chat.executionTraceFailed');
+    default: return '';
+  }
+};
+const sessionStatusClass = (session: ChatSession) => ({
+  'is-running': session.active,
+  'is-unread': session.hasUnreadUpdate,
+  'is-failed': !session.active && session.latestExecutionStatus === 'FAILED',
+  'is-warning': !session.active && (session.latestExecutionStatus === 'PARTIAL'
+    || session.latestExecutionStatus === 'STOPPED'
+    || session.latestExecutionStatus === 'DISCONNECTED'
+    || session.latestExecutionStatus === 'AWAITING_CONFIRMATION')
+});
+const sessionStatusTitle = (session: ChatSession) => session.hasUnreadUpdate
+    ? t('app.chat.sessionUnreadUpdate', { status: sessionExecutionStatus(session) })
+    : sessionExecutionStatus(session);
 const progressEventClass = (progress: StreamProgress, active: boolean) => ({
   'is-success': progress.stage === 'TOOL_RESULT' && progress.outcome === 'USABLE',
   'is-warning': progress.stage === 'EXECUTION_GUARD'
@@ -513,7 +556,7 @@ const handleExecutionTraceScroll = (event: Event, active: boolean) => {
     if (events) events.scrollTop = 0;
   });
 };
-watch(isAssistantBusy, busy => chatStore.setStreaming(busy), { immediate: true });
+watch(hasAnyAssistantWork, busy => chatStore.setStreaming(busy), { immediate: true });
 const scrollRef = ref<HTMLElement | null>(null);
 const chatPanelRef = ref<HTMLElement | null>(null);
 const abortController = ref<AbortController | null>(null);
@@ -527,18 +570,16 @@ let settlementDetachedTransport: AbortController | null = null;
 let reconciliationPromise: Promise<boolean> | null = null;
 let activityMonitorEpoch = 0;
 let activityMonitorAbortController: AbortController | null = null;
+let activeSessionsMonitorEpoch = 0;
+let activeSessionsPollTimer: ReturnType<typeof setTimeout> | null = null;
+let activeSessionsPollInFlight = false;
+let chatViewMounted = false;
+let sessionCompletionObservationsInitialized = false;
 const chatPosition = ref<{ left: number; top: number; width: number; height: number } | null>(null);
-const dragState = ref<{
+const panelInteraction = ref<{
+  mode: 'drag' | 'resize';
   pointerId: number;
-  startX: number;
-  startY: number;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-} | null>(null);
-const resizeState = ref<{
-  pointerId: number;
+  target: HTMLElement;
   startX: number;
   startY: number;
   left: number;
@@ -549,11 +590,20 @@ const resizeState = ref<{
 
 const CHAT_MIN_WIDTH = 320;
 const CHAT_MIN_HEIGHT = 360;
+const CHAT_ABSOLUTE_MIN_HEIGHT = 260;
 const CHAT_DEFAULT_WIDTH = 760;
 const CHAT_DEFAULT_HEIGHT = 640;
+const CHAT_DEFAULT_VERTICAL_SLACK = 96;
 const CHAT_COMPACT_WIDTH = 960;
 
 const isCompactChatWidth = (width: number) => width < CHAT_COMPACT_WIDTH;
+
+const canAdjustChatPanel = () => typeof window !== 'undefined' && window.innerWidth > 720;
+
+const getChatMinimumHeight = (availableHeight: number) => Math.min(
+    CHAT_MIN_HEIGHT,
+    Math.max(CHAT_ABSOLUTE_MIN_HEIGHT, availableHeight - CHAT_DEFAULT_VERTICAL_SLACK * 2)
+);
 
 const getChatViewportInsets = () => {
   const boardToolRail = props.boardMode && window.innerWidth < 1280 ? 128 : 12;
@@ -570,7 +620,7 @@ const clampChatGeometry = (left: number, top: number, width: number, height: num
   const availableWidth = Math.max(240, window.innerWidth - insets.left - insets.right);
   const availableHeight = Math.max(260, window.innerHeight - insets.top - insets.bottom);
   const minWidth = Math.min(CHAT_MIN_WIDTH, availableWidth);
-  const minHeight = Math.min(CHAT_MIN_HEIGHT, availableHeight);
+  const minHeight = Math.min(getChatMinimumHeight(availableHeight), availableHeight);
   const nextWidth = Math.min(Math.max(width, minWidth), availableWidth);
   const nextHeight = Math.min(Math.max(height, minHeight), availableHeight);
   const minLeft = insets.left;
@@ -590,22 +640,28 @@ const createDefaultChatGeometry = () => {
   const availableWidth = Math.max(240, window.innerWidth - insets.left - insets.right);
   const availableHeight = Math.max(260, window.innerHeight - insets.top - insets.bottom);
   const width = Math.min(CHAT_DEFAULT_WIDTH, availableWidth);
-  const height = Math.min(CHAT_DEFAULT_HEIGHT, availableHeight);
+  // A floating window needs visible room to move and grow. Taking every available vertical pixel
+  // at common 720px desktop heights made a draggable/resizable panel appear inert.
+  const height = Math.min(
+      CHAT_DEFAULT_HEIGHT,
+      Math.max(getChatMinimumHeight(availableHeight), availableHeight - CHAT_DEFAULT_VERTICAL_SLACK)
+  );
   const left = Math.max(insets.left, window.innerWidth - insets.right - width);
   const top = Math.max(insets.top, insets.top + 12);
   return clampChatGeometry(left, top, width, height);
 };
 
 const chatPanelStyle = computed<Record<string, string>>(() => {
-  if (typeof window !== 'undefined' && window.innerWidth <= 720) return {};
-  if (!chatPosition.value) return {} as Record<string, string>;
+  const position = chatPosition.value;
+  if (typeof window !== 'undefined' && window.innerWidth <= 720) return {} as Record<string, string>;
+  if (!position) return {} as Record<string, string>;
   return {
-    left: `${chatPosition.value.left}px`,
-    top: `${chatPosition.value.top}px`,
+    left: `${position.left}px`,
+    top: `${position.top}px`,
     right: 'auto',
     bottom: 'auto',
-    width: `${chatPosition.value.width}px`,
-    height: `${chatPosition.value.height}px`
+    width: `${position.width}px`,
+    height: `${position.height}px`
   };
 });
 
@@ -621,88 +677,104 @@ watch(isChatPanelCompact, (compact, wasCompact) => {
   }
 });
 
-const stopPanelDrag = () => {
-  dragState.value = null;
-  window.removeEventListener('pointermove', onPanelDragMove);
-  window.removeEventListener('pointerup', stopPanelDrag);
-  window.removeEventListener('pointercancel', stopPanelDrag);
+const removePanelInteractionListeners = () => {
+  window.removeEventListener('pointermove', onPanelInteractionMove);
+  window.removeEventListener('pointerup', stopPanelInteraction);
+  window.removeEventListener('pointercancel', stopPanelInteraction);
 };
 
-const stopPanelResize = () => {
-  resizeState.value = null;
-  window.removeEventListener('pointermove', onPanelResizeMove);
-  window.removeEventListener('pointerup', stopPanelResize);
-  window.removeEventListener('pointercancel', stopPanelResize);
+const stopPanelInteraction = (event?: PointerEvent) => {
+  const state = panelInteraction.value;
+  if (state && event?.pointerId !== undefined && event.pointerId !== state.pointerId) return;
+
+  panelInteraction.value = null;
+  removePanelInteractionListeners();
+  if (!state) return;
+
+  state.target.removeEventListener('lostpointercapture', onPanelLostPointerCapture);
+  try {
+    state.target.releasePointerCapture?.(state.pointerId);
+  } catch {
+    // The browser may already have released capture while the window was resizing or losing focus.
+  }
 };
 
-const onPanelDragMove = (event: PointerEvent) => {
-  const state = dragState.value;
+const onPanelLostPointerCapture = (event: PointerEvent) => {
+  stopPanelInteraction(event);
+};
+
+const onPanelInteractionMove = (event: PointerEvent) => {
+  const state = panelInteraction.value;
   if (!state || event.pointerId !== state.pointerId) return;
-  chatPosition.value = clampChatGeometry(
-      state.left + event.clientX - state.startX,
-      state.top + event.clientY - state.startY,
-      state.width,
-      state.height
-  );
-};
+  if (event.pointerType === 'mouse' && event.buttons === 0) {
+    stopPanelInteraction(event);
+    return;
+  }
 
-const onPanelResizeMove = (event: PointerEvent) => {
-  const state = resizeState.value;
-  if (!state || event.pointerId !== state.pointerId) return;
+  if (state.mode === 'drag') {
+    chatPosition.value = clampChatGeometry(
+        state.left + event.clientX - state.startX,
+        state.top + event.clientY - state.startY,
+        state.width,
+        state.height
+    );
+    return;
+  }
+
+  const insets = getChatViewportInsets();
+  const maxWidth = window.innerWidth - insets.right - state.left;
+  const maxHeight = window.innerHeight - insets.bottom - state.top;
   chatPosition.value = clampChatGeometry(
       state.left,
       state.top,
-      state.width + event.clientX - state.startX,
-      state.height + event.clientY - state.startY
+      Math.min(state.width + event.clientX - state.startX, maxWidth),
+      Math.min(state.height + event.clientY - state.startY, maxHeight)
   );
 };
 
-const startPanelDrag = (event: PointerEvent) => {
-  if (event.button !== 0) return;
-  const target = event.target as HTMLElement | null;
-  if (target?.closest('button, a, input, textarea, select, [role="button"], .chat-resize-handle')) return;
+const startPanelInteraction = (event: PointerEvent, mode: 'drag' | 'resize') => {
+  if (event.button !== 0 || event.isPrimary === false || !canAdjustChatPanel()
+      || panelInteraction.value) return;
   const panel = chatPanelRef.value;
   if (!panel) return;
 
+  event.preventDefault();
+  const target = event.currentTarget as HTMLElement;
   const rect = panel.getBoundingClientRect();
-  const next = clampChatGeometry(rect.left, rect.top, rect.width, rect.height);
-  chatPosition.value = next;
-  dragState.value = {
+  const geometry = clampChatGeometry(rect.left, rect.top, rect.width, rect.height);
+  chatPosition.value = geometry;
+  panelInteraction.value = {
+    mode,
     pointerId: event.pointerId,
+    target,
     startX: event.clientX,
     startY: event.clientY,
-    left: next.left,
-    top: next.top,
-    width: next.width,
-    height: next.height
+    left: geometry.left,
+    top: geometry.top,
+    width: geometry.width,
+    height: geometry.height
   };
-  window.addEventListener('pointermove', onPanelDragMove);
-  window.addEventListener('pointerup', stopPanelDrag);
-  window.addEventListener('pointercancel', stopPanelDrag);
+
+  try {
+    target.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Pointer capture is optional; window listeners retain the fallback path.
+  }
+  target.addEventListener('lostpointercapture', onPanelLostPointerCapture);
+  window.addEventListener('pointermove', onPanelInteractionMove);
+  window.addEventListener('pointerup', stopPanelInteraction);
+  window.addEventListener('pointercancel', stopPanelInteraction);
+};
+
+const startPanelDrag = (event: PointerEvent) => {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest('button, a, input, textarea, select, [role="button"], .chat-resize-handle')) return;
+  startPanelInteraction(event, 'drag');
 };
 
 const startPanelResize = (event: PointerEvent) => {
-  if (event.button !== 0) return;
-  event.preventDefault();
   event.stopPropagation();
-  const panel = chatPanelRef.value;
-  if (!panel) return;
-
-  const rect = panel.getBoundingClientRect();
-  const current = clampChatGeometry(rect.left, rect.top, rect.width, rect.height);
-  chatPosition.value = current;
-  resizeState.value = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    left: current.left,
-    top: current.top,
-    width: current.width,
-    height: current.height
-  };
-  window.addEventListener('pointermove', onPanelResizeMove);
-  window.addEventListener('pointerup', stopPanelResize);
-  window.addEventListener('pointercancel', stopPanelResize);
+  startPanelInteraction(event, 'resize');
 };
 
 const clampExistingChatPosition = () => {
@@ -714,6 +786,13 @@ const clampExistingChatPosition = () => {
     isSidebarOpen.value = false;
   }
 };
+
+const handleChatViewportResize = () => {
+  stopPanelInteraction();
+  clampExistingChatPosition();
+};
+
+const handlePanelWindowBlur = () => stopPanelInteraction();
 
 // ================= 文本处理辅助函数 =================
 
@@ -777,7 +856,12 @@ const formatStreamError = (error: unknown) => {
         if (error.reasonCode === 'CHAT_HISTORY_LIMIT_REACHED') {
           return t('app.chat.historyLimitReached');
         }
-        if (error.status === 429) return t('app.chat.assistantOperationBusy');
+        if (error.reasonCode === 'USER_CHAT_OPERATION_BUSY') {
+          return Number.isSafeInteger(error.limit) && (error.limit ?? 0) > 0
+              ? t('app.chat.assistantOperationBusy', { limit: error.limit })
+              : t('app.chat.assistantOperationBusyUnknown');
+        }
+        if (error.status === 429) return t('app.chat.assistantOperationBusyUnknown');
         return t('app.chat.httpRequestFailed', { status: error.status ?? '?' });
       case 'SERVER_FRAME':
         return localizedTextOrFallback(error.message, t('app.chat.serverStreamError'), locale.value);
@@ -852,22 +936,29 @@ const startListening = () => {
 
 // 监听 visible 变化，执行相应逻辑
 watch(visible, (newVal) => {
-  if (newVal) void initSessions();
-  if (newVal) {
-    refreshBoardContext();
-    const nextGeometry = chatPosition.value
-        ? clampChatGeometry(
-            chatPosition.value.left,
-            chatPosition.value.top,
-            chatPosition.value.width,
-            chatPosition.value.height
-        )
-        : createDefaultChatGeometry();
-    chatPosition.value = nextGeometry;
-    isSidebarOpen.value = !props.boardMode && !isCompactChatWidth(nextGeometry.width) && window.innerWidth >= 1120;
-    nextTick(clampExistingChatPosition);
+  if (!newVal) {
+    stopPanelInteraction();
+    return;
   }
+  void initSessions().then(() => nextTick(() => acknowledgeCurrentVisibleHistory()));
+  refreshBoardContext();
+  const nextGeometry = chatPosition.value
+      ? clampChatGeometry(
+          chatPosition.value.left,
+          chatPosition.value.top,
+          chatPosition.value.width,
+          chatPosition.value.height
+      )
+      : createDefaultChatGeometry();
+  chatPosition.value = nextGeometry;
+  isSidebarOpen.value = !props.boardMode && !isCompactChatWidth(nextGeometry.width) && window.innerWidth >= 1120;
+  nextTick(clampExistingChatPosition);
 });
+
+watch(sessions, currentSessions => {
+  chatStore.setActiveCount(currentSessions.filter(session => session.active).length);
+  chatStore.setUnreadCount(currentSessions.filter(session => session.hasUnreadUpdate).length);
+}, { deep: true });
 
 const invokeSystemCommand = async (command: StreamCommand): Promise<boolean> => {
   if (!props.executeCommand) {
@@ -925,11 +1016,21 @@ const reconcileAuthoritativeState = async (
 
 const executeStreamCommand = async (command: StreamCommand): Promise<boolean> => {
   const completed = await invokeSystemCommand(command);
-  if (completed) return true;
+  if (completed) {
+    if (command.payload.assistantSummary || command.payload.assistantAction) {
+      notifyInfo(command.payload.assistantSummary
+        ?? t(`app.chat.assistantActions.${command.payload.assistantAction}`));
+    }
+    return true;
+  }
   if (command.type === 'REFRESH_DATA' && command.payload?.target !== 'board_state') {
     const reconciled = await reconcileAuthoritativeState();
     if (reconciled) {
       notifyBlocked(t('app.chat.targetRefreshRecovered'));
+      if (command.payload.assistantSummary || command.payload.assistantAction) {
+        notifyInfo(command.payload.assistantSummary
+          ?? t(`app.chat.assistantActions.${command.payload.assistantAction}`));
+      }
       return true;
     }
   } else if (command.type === 'REFRESH_DATA') {
@@ -948,8 +1049,13 @@ const retryAuthoritativeReconciliation = async () => {
 };
 
 const updateSessionActivity = (sessionId: string, active: boolean) => {
-  const session = sessions.value.find(item => item.id === sessionId);
-  if (session) session.active = active;
+  if (!sessions.value.some(session => session.id === sessionId)) return;
+  // Keep API snapshots immutable. A caller may reuse a response object while a background
+  // poll or an account switch is still in flight; mutating it would leak activity into another
+  // conversation or test fixture.
+  sessions.value = sessions.value.map(session => session.id === sessionId
+    ? { ...session, active }
+    : session);
 };
 
 const isHttpNotFound = (error: any) => error?.response?.status === 404;
@@ -1086,10 +1192,104 @@ const monitorSessionActivity = (sessionId: string, knownActive = false) => {
   })();
 };
 
+const stopActiveSessionsMonitor = () => {
+  activeSessionsMonitorEpoch += 1;
+  if (activeSessionsPollTimer) {
+    clearTimeout(activeSessionsPollTimer);
+    activeSessionsPollTimer = null;
+  }
+};
+
+const scheduleActiveSessionsPoll = () => {
+  if (!chatViewMounted || activeSessionsPollTimer) return;
+  activeSessionsPollTimer = setTimeout(() => {
+    activeSessionsPollTimer = null;
+    void pollActiveSessions();
+  }, hasAuthoritativeActiveSession.value ? 1000 : 5000);
+};
+
+type SessionCompletionObservation = Pick<ChatSession, 'active' | 'latestTerminalMessageId'>;
+
+const captureSessionCompletionObservations = (availableSessions: ChatSession[]) => new Map(
+    availableSessions.map(session => [session.id, {
+      active: session.active,
+      latestTerminalMessageId: session.latestTerminalMessageId
+    }]));
+
+const completedBackgroundSessions = (
+    previous: Map<string, SessionCompletionObservation>,
+    nextSessions: ChatSession[],
+    compareTerminalMessages: boolean
+) => nextSessions.filter(session => {
+  const prior = previous.get(session.id);
+  const observedNewTerminal = compareTerminalMessages
+      && session.latestTerminalMessageId !== null
+      && session.latestTerminalMessageId !== prior?.latestTerminalMessageId;
+  const observedActiveSettlement = prior?.active === true && !session.active;
+  return (observedNewTerminal || observedActiveSettlement)
+      && session.id !== activeStreamSessionId.value;
+});
+
+const reconcileCompletedBackgroundSessions = async (
+    completedSessions: ChatSession[],
+    authEpoch: number
+) => {
+  if (completedSessions.length === 0) return;
+  const reconciled = await reconcileAuthoritativeState();
+  if (!chatViewMounted || authEpoch !== chatAuthEpoch) return;
+  completedSessions.forEach(session => {
+    notifyInfo(t(reconciled
+      ? 'app.chat.backgroundSessionCompleted'
+      : 'app.chat.backgroundSessionCompletedSyncPending', {
+      title: session.title || t('app.chat.newChat')
+    }));
+  });
+};
+
+const pollActiveSessions = async () => {
+  if (isLoadingSessions.value) {
+    scheduleActiveSessionsPoll();
+    return;
+  }
+  if (activeSessionsPollInFlight) return;
+  activeSessionsPollInFlight = true;
+  const pollEpoch = activeSessionsMonitorEpoch;
+  const authEpoch = chatAuthEpoch;
+  const sessionListEpoch = sessionListRequestEpoch;
+  const previous = captureSessionCompletionObservations(sessions.value);
+  try {
+    const res = await getSessionList();
+    if (authEpoch !== chatAuthEpoch || pollEpoch !== activeSessionsMonitorEpoch
+        || sessionListEpoch !== sessionListRequestEpoch
+        || !Array.isArray(res)) return;
+    const ownedSessions = authenticatedUserId.value === null
+        ? res
+        : res.filter(session => session.userId === authenticatedUserId.value);
+    sessions.value = ownedSessions;
+    await reconcileCompletedBackgroundSessions(
+        completedBackgroundSessions(previous, ownedSessions, true), authEpoch);
+  } catch (error) {
+    if (authEpoch === chatAuthEpoch && pollEpoch === activeSessionsMonitorEpoch
+        && sessionListEpoch === sessionListRequestEpoch) {
+      console.warn('[Chat] Could not refresh active chat sessions:', error);
+    }
+  } finally {
+    activeSessionsPollInFlight = false;
+    // A stale request can finish after a monitor stop/restart. Re-arm from current state so the
+    // replacement monitor is not lost merely because its first timer fired while this request ran.
+    if (chatViewMounted) scheduleActiveSessionsPoll();
+  }
+};
+
+watch(hasAuthoritativeActiveSession, () => {
+  stopActiveSessionsMonitor();
+  scheduleActiveSessionsPoll();
+}, { immediate: true });
+
 const reattachAuthoritativeActiveSession = (availableSessions: ChatSession[]) => {
   const activeSession = availableSessions.find(session =>
     session.id === currentSessionId.value && session.active)
-      ?? availableSessions.find(session => session.active);
+      ?? (!currentSessionId.value ? availableSessions.find(session => session.active) : undefined);
   if (!activeSession) return;
 
   if (currentSessionId.value === activeSession.id) {
@@ -1099,22 +1299,34 @@ const reattachAuthoritativeActiveSession = (availableSessions: ChatSession[]) =>
   void handleSelectSession(activeSession.id, true);
 };
 
-const initSessions = async (reattachActive = true) => {
+const initSessions = async (reattachActive = true): Promise<boolean> => {
   const requestEpoch = ++sessionListRequestEpoch;
+  const authEpoch = chatAuthEpoch;
+  const previous = captureSessionCompletionObservations(sessions.value);
+  const compareTerminalMessages = sessionCompletionObservationsInitialized;
   isLoadingSessions.value = true;
   sessionListLoadFailed.value = false;
   try {
     const res = await getSessionList();
     if (!Array.isArray(res)) throw new Error('Session list response is not an array');
+    const ownedSessions = authenticatedUserId.value === null
+        ? res
+        : res.filter(session => session.userId === authenticatedUserId.value);
     if (requestEpoch === sessionListRequestEpoch) {
-      sessions.value = res;
+      sessionCompletionObservationsInitialized = true;
+      sessions.value = ownedSessions;
       if (reattachActive && !isStreaming.value && !activeStreamSessionId.value) {
-        reattachAuthoritativeActiveSession(res);
+        reattachAuthoritativeActiveSession(ownedSessions);
       }
+      await reconcileCompletedBackgroundSessions(
+          completedBackgroundSessions(previous, ownedSessions, compareTerminalMessages), authEpoch);
+      return true;
     }
+    return false;
   } catch (e) {
     if (requestEpoch === sessionListRequestEpoch) sessionListLoadFailed.value = true;
     console.error('加载会话列表失败:', e);
+    return false;
   } finally {
     if (requestEpoch === sessionListRequestEpoch) isLoadingSessions.value = false;
   }
@@ -1129,7 +1341,7 @@ const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true)
       sessionListRequestEpoch += 1;
       isLoadingSessions.value = false;
       sessionListLoadFailed.value = false;
-      sessions.value.unshift(session);
+      sessions.value = [session, ...sessions.value.filter(item => item.id !== session.id)];
       return session.id;
     }
     throw new Error('Chat session response is incomplete');
@@ -1142,18 +1354,25 @@ const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true)
 };
 
 const onNewChatClick = async () => {
-  if (isCreatingSession.value) return;
+  if (isCreatingSession.value || isPreparingStreamSession.value || isSettlingStream.value) return;
+  const navigationEpoch = ++userSessionNavigationEpoch;
   isCreatingSession.value = true;
   try {
-    if (await settleActiveRequest(false) !== 'ready') return;
     const newId = await handleCreateSession();
     if (!newId) return;
+    // A session click made while creation was in flight is the user's newer navigation intent.
+    if (navigationEpoch !== userSessionNavigationEpoch) return;
     await handleSelectSession(newId);
     // 新建对话后自动收起侧边栏（移动端友好）
     if (window.innerWidth < 960 || isChatPanelCompact.value) isSidebarOpen.value = false;
   } finally {
     isCreatingSession.value = false;
   }
+};
+
+const handleUserSelectSession = (sessionId: string, knownActive = false) => {
+  userSessionNavigationEpoch += 1;
+  return handleSelectSession(sessionId, knownActive);
 };
 
 const handleDelete = async (sessionId: string) => {
@@ -1165,9 +1384,6 @@ const handleDelete = async (sessionId: string) => {
   if (!confirmed) return;
 
   try {
-    if (currentSessionId.value === sessionId || activeStreamSessionId.value === sessionId) {
-      if (await settleActiveRequest(false) !== 'ready') return;
-    }
     await deleteSession(sessionId);
     clearAuthoritativelyDeletedSession(sessionId);
     notifySuccess(t('app.chat.sessionDeleted'));
@@ -1180,7 +1396,9 @@ const handleDelete = async (sessionId: string) => {
 };
 
 const handleSelectSession = async (sessionId: string, knownActive = false) => {
+  if (isPreparingStreamSession.value || isSettlingStream.value) return;
   if (currentSessionId.value === sessionId && !historyLoadFailed.value) {
+    void acknowledgeCurrentVisibleHistory();
     if (!isAssistantBusy.value) {
       monitorSessionActivity(sessionId, knownActive);
       void refreshPendingConfirmation(sessionId);
@@ -1188,9 +1406,9 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
     return;
   }
 
-  // A browser abort does not cancel a synchronous backend tool call. Wait until the
-  // server confirms the old session is idle before showing another conversation.
-  if (await settleActiveRequest(false) !== 'ready') return;
+  // Navigation detaches the live transport only. The durable execution remains owned by its
+  // session and is reflected by the sidebar activity indicator until the server settles it.
+  detachCurrentExecutionForNavigation();
   historyRequestEpoch += 1;
   historyAbortController.value?.abort();
 
@@ -1232,6 +1450,38 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
   }
 };
 
+const acknowledgeVisibleTerminal = async (sessionId: string, history: ChatMessage[]) => {
+  if (!visible.value || document.hidden || currentSessionId.value !== sessionId) return;
+  const terminal = [...history].reverse().find(message =>
+    message.role === 'assistant'
+    && Number.isSafeInteger(message.id)
+    && (message.id ?? 0) > 0
+    && Boolean(message.executionStatus));
+  if (!terminal?.id || !terminal.executionStatus) return;
+  const terminalMessageId = terminal.id;
+  if ((terminalSeenRequests.get(sessionId) ?? 0) >= terminalMessageId) return;
+
+  const authEpoch = chatAuthEpoch;
+  terminalSeenRequests.set(sessionId, terminalMessageId);
+  try {
+    await markSessionTerminalSeen(sessionId, terminalMessageId);
+    if (authEpoch !== chatAuthEpoch) return;
+    if (sessions.value.some(session => session.id === sessionId && session.hasUnreadUpdate)) {
+      await initSessions(false);
+    }
+  } catch (error) {
+    if (terminalSeenRequests.get(sessionId) === terminalMessageId) {
+      terminalSeenRequests.delete(sessionId);
+    }
+    console.warn(`Could not acknowledge visible assistant result for session ${sessionId}:`, error);
+  }
+};
+
+const acknowledgeCurrentVisibleHistory = () => {
+  const sessionId = currentSessionId.value;
+  if (sessionId) void acknowledgeVisibleTerminal(sessionId, messages.value);
+};
+
 const applyHistoryPage = (page: ChatHistoryPage, prepend: boolean) => {
   const cleaned = page.messages.map(m => ({
       ...m,
@@ -1242,6 +1492,8 @@ const applyHistoryPage = (page: ChatHistoryPage, prepend: boolean) => {
     messages.value = [...cleaned.filter(message => message.id == null || !existingIds.has(message.id)), ...messages.value];
   } else {
     messages.value = cleaned;
+    const sessionId = currentSessionId.value;
+    if (sessionId) void nextTick(() => acknowledgeVisibleTerminal(sessionId, cleaned));
   }
   historyHasMore.value = page.hasMore && page.nextBeforeId != null;
   historyNextBeforeId.value = page.nextBeforeId;
@@ -1326,6 +1578,23 @@ const abortActiveTransport = (showCancelledMessage = false) => {
   detachActiveTransport(showCancelledMessage)?.abort();
 };
 
+const detachCurrentExecutionForNavigation = () => {
+  const detachedSessionId = activeStreamSessionId.value;
+  stopSessionActivityMonitor();
+  abortActiveTransport(false);
+  isStreaming.value = false;
+  streamProgress.value = null;
+  streamProgressEvents.value = [];
+  streamElapsedSeconds.value = 0;
+  if (detachedSessionId) updateSessionActivity(detachedSessionId, true);
+  activeStreamSessionId.value = '';
+  activeStreamTurnId.value = '';
+  activeStreamAuthToken.value = null;
+  historyReplacementWithoutTerminalAllowed.value = false;
+  explicitStopRegistrationPending.value = false;
+  activeStreamRetryDraft.value = '';
+};
+
 const requestOwnedSessionStop = (sessionId: string, turnId?: string): Promise<void> => {
   const authToken = activeStreamAuthToken.value || scopedAuthToken.value;
   return authToken
@@ -1335,12 +1604,23 @@ const requestOwnedSessionStop = (sessionId: string, turnId?: string): Promise<vo
 
 const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
   const sessionId = activeStreamSessionId.value;
+  const activeSessionIds = Array.from(new Set([
+    ...sessions.value.filter(session => session.active).map(session => session.id),
+    ...(sessionId ? [sessionId] : [])
+  ]));
   const stopAlreadyPending = explicitStopRegistrationPending.value && Boolean(settlementPromise);
-  if (sessionId && previousAuthToken && !stopAlreadyPending) {
+  if (previousAuthToken) {
     const turnId = activeStreamTurnId.value;
     const ownerToken = activeStreamAuthToken.value || previousAuthToken;
-    void requestSessionStop(sessionId, turnId || undefined, ownerToken).catch(error => {
-      console.warn(`[Chat] Failed to stop session ${sessionId} during an account change:`, error);
+    activeSessionIds.forEach(activeSessionId => {
+      if (activeSessionId === sessionId && stopAlreadyPending) return;
+      void requestSessionStop(
+          activeSessionId,
+          activeSessionId === sessionId ? turnId || undefined : undefined,
+          ownerToken
+      ).catch(error => {
+        console.warn(`[Chat] Failed to stop session ${activeSessionId} during an account change:`, error);
+      });
     });
   }
   settlementDetachedTransport?.abort();
@@ -1352,6 +1632,7 @@ const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
   confirmationRequestEpoch += 1;
   abortActiveTransport(false);
   stopSessionActivityMonitor();
+  stopActiveSessionsMonitor();
   settlementAbortController?.abort();
   settlementAbortController = null;
   settlementPromise = null;
@@ -1360,6 +1641,8 @@ const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
   historyAbortController.value = null;
 
   sessions.value = [];
+  sessionCompletionObservationsInitialized = false;
+  terminalSeenRequests.clear();
   currentSessionId.value = '';
   messages.value = [];
   // The fallback key is positional (`index:<n>`), so a collapse recorded for one account's last row
@@ -1382,6 +1665,7 @@ const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
   isLoadingSessions.value = false;
   sessionListLoadFailed.value = false;
   isCreatingSession.value = false;
+  isPreparingStreamSession.value = false;
   isLoadingHistory.value = false;
   historyLoadFailed.value = false;
   isLoadingOlderHistory.value = false;
@@ -1391,6 +1675,7 @@ const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
   streamProgressEvents.value = [];
   streamElapsedSeconds.value = 0;
   boardContext.value = null;
+  chatStore.setActiveCount(0);
   chatStore.setStreaming(false);
 };
 
@@ -1599,13 +1884,66 @@ const handleStop = async () => {
   await settleActiveRequest(true);
 };
 
-const prepareForLogout = async (): Promise<ChatLogoutPreparation> =>
-    await settleActiveRequest(true);
+const prepareForLogout = async (): Promise<ChatLogoutPreparation> => {
+  let outcome: ChatLogoutPreparation = await initSessions(false)
+      ? 'ready'
+      : 'outcome-unknown';
+  const attachedSessionId = activeStreamSessionId.value;
+  const backgroundSessionIds = Array.from(new Set(
+      sessions.value
+          .filter(session => session.active && session.id !== attachedSessionId)
+          .map(session => session.id)));
+  const stopConfirmedSessionIds: string[] = [];
+  const ownerToken = activeStreamAuthToken.value || scopedAuthToken.value;
+
+  for (const sessionId of backgroundSessionIds) {
+    try {
+      await (ownerToken
+          ? requestSessionStop(sessionId, undefined, ownerToken)
+          : requestSessionStop(sessionId));
+      stopConfirmedSessionIds.push(sessionId);
+    } catch (error) {
+      if (isHttpNotFound(error)) continue;
+      console.warn(`[Chat] Failed to stop background session ${sessionId} before logout:`, error);
+      outcome = 'outcome-unknown';
+    }
+  }
+
+  if (attachedSessionId) {
+    const attachedOutcome = await settleActiveRequest(true);
+    if (attachedOutcome === 'reconciliation-failed') return attachedOutcome;
+    if (attachedOutcome === 'outcome-unknown') outcome = attachedOutcome;
+  }
+
+  for (const sessionId of stopConfirmedSessionIds) {
+    try {
+      if (!await waitForSessionIdle(sessionId)) return 'reconciliation-failed';
+      updateSessionActivity(sessionId, false);
+    } catch (error) {
+      console.warn(`[Chat] Could not confirm background session ${sessionId} stopped before logout:`, error);
+      outcome = 'outcome-unknown';
+    }
+  }
+
+  if (backgroundSessionIds.length > 0 || reconciliationRequired.value) {
+    if (!await reconcileAuthoritativeState()) return 'reconciliation-failed';
+    await initSessions(false);
+  }
+  return outcome;
+};
 
 defineExpose({ prepareForLogout });
 
 const handleDocumentVisibilityChange = () => {
+  if (document.hidden) {
+    stopPanelInteraction();
+    return;
+  }
   if (!document.hidden && visible.value) void initSessions();
+};
+
+const handlePanelWindowFocus = () => {
+  if (visible.value) void initSessions();
 };
 
 watch(authenticatedUserId, (nextUserId, previousUserId) => {
@@ -1627,19 +1965,25 @@ watch(() => authState.token, nextToken => {
 }, { flush: 'post' });
 
 onMounted(() => {
+  chatViewMounted = true;
   if (visible.value) {
     refreshBoardContext();
     void initSessions();
     nextTick(clampExistingChatPosition);
   }
-  window.addEventListener('resize', clampExistingChatPosition);
+  scheduleActiveSessionsPoll();
+  window.addEventListener('resize', handleChatViewportResize);
+  window.addEventListener('blur', handlePanelWindowBlur);
+  window.addEventListener('focus', handlePanelWindowFocus);
   document.addEventListener('visibilitychange', handleDocumentVisibilityChange);
 });
 
 onUnmounted(() => {
+  chatViewMounted = false;
   abortActiveTransport(false);
   stopListening();
   stopSessionActivityMonitor();
+  stopActiveSessionsMonitor();
   settlementAbortController?.abort();
   settlementAbortController = null;
   settlementDetachedTransport?.abort();
@@ -1651,9 +1995,10 @@ onUnmounted(() => {
   historyAbortController.value?.abort();
   historyAbortController.value = null;
   isLoadingHistory.value = false;
-  stopPanelDrag();
-  stopPanelResize();
-  window.removeEventListener('resize', clampExistingChatPosition);
+  stopPanelInteraction();
+  window.removeEventListener('resize', handleChatViewportResize);
+  window.removeEventListener('blur', handlePanelWindowBlur);
+  window.removeEventListener('focus', handlePanelWindowFocus);
   document.removeEventListener('visibilitychange', handleDocumentVisibilityChange);
 });
 
@@ -1667,6 +2012,10 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
     notifyBlocked(t('app.chat.contentTooLong', {
       limit: REQUEST_LIMITS.chatContentCharacters.toLocaleString()
     }));
+    return;
+  }
+  if (props.prepareInteraction?.() === false || props.interactionLocked) {
+    notifyBlocked(t('app.chat.boardInteractionLocked'));
     return;
   }
   const requestAuthEpoch = chatAuthEpoch;
@@ -1719,13 +2068,19 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
     let targetSessionId = currentSessionId.value;
     // 自动创建新会话
     if (!targetSessionId) {
-      const newId = await handleCreateSession(controller.signal, false);
-      if (requestEpoch !== streamRequestEpoch) return;
-      if (!newId) throw new Error(t('app.chat.createSessionFailed'));
-      targetSessionId = newId;
-      currentSessionId.value = targetSessionId;
+      isPreparingStreamSession.value = true;
+      try {
+        const newId = await handleCreateSession(controller.signal, false);
+        if (requestEpoch !== streamRequestEpoch) return;
+        if (!newId) throw new Error(t('app.chat.createSessionFailed'));
+        targetSessionId = newId;
+        currentSessionId.value = targetSessionId;
+      } finally {
+        isPreparingStreamSession.value = false;
+      }
     }
     activeStreamSessionId.value = targetSessionId;
+    updateSessionActivity(targetSessionId, true);
 
     // 先插入一条空的 AI 消息占位
     messages.value.push({
@@ -2004,8 +2359,8 @@ const scrollToBottom = (force = false) => {
         :class="[
           'chat-panel',
           {
-            dragging: dragState,
-            resizing: resizeState,
+            dragging: panelInteraction?.mode === 'drag',
+            resizing: panelInteraction?.mode === 'resize',
             'chat-panel--compact': isChatPanelCompact,
             'chat-panel--sidebar-open': isSidebarOpen
           }
@@ -2018,7 +2373,9 @@ const scrollToBottom = (force = false) => {
 
         <div :class="['sidebar', { collapsed: !isSidebarOpen }]">
           <div class="sidebar-header">
-            <button type="button" class="new-chat-btn" :disabled="isSettlingStream || isCreatingSession" @click="onNewChatClick">
+            <button type="button" class="new-chat-btn"
+              :disabled="isSettlingStream || isCreatingSession || isPreparingStreamSession"
+              @click="onNewChatClick">
               <PlusOutlined/> <span class="btn-label">{{ t('app.chat.newChat') }}</span>
             </button>
           </div>
@@ -2060,23 +2417,31 @@ const scrollToBottom = (force = false) => {
                 type="button"
                 class="session-select-button"
                 :data-testid="`chat-session-${session.id}`"
-                @click="handleSelectSession(session.id, session.active)"
+                :disabled="isSettlingStream || isPreparingStreamSession"
+                @click="handleUserSelectSession(session.id, session.active)"
               >
                 <MessageOutlined class="item-icon"/>
-                <span class="item-title">{{ session.title || t('app.chat.newChat') }}</span>
-                <span
-                  v-if="session.active"
-                  class="session-active-indicator"
-                  data-testid="chat-session-active"
-                  :aria-label="t('app.chat.sessionActive')"
-                  :title="t('app.chat.sessionActive')"
-                ></span>
+                <span class="session-copy">
+                  <span class="item-title">{{ session.title || t('app.chat.newChat') }}</span>
+                  <span
+                    v-if="sessionExecutionStatus(session)"
+                    class="session-status"
+                    :class="sessionStatusClass(session)"
+                    :data-testid="session.active ? 'chat-session-active' : 'chat-session-status'"
+                    :aria-label="sessionStatusTitle(session)"
+                    :title="sessionStatusTitle(session)"
+                  >
+                    <span class="session-status-dot" aria-hidden="true"></span>
+                    <span>{{ sessionExecutionStatus(session) }}</span>
+                  </span>
+                </span>
               </button>
               <button
                 type="button"
                 class="delete-btn-wrapper"
                 :aria-label="t('app.delete')"
-                :title="t('app.delete')"
+                :title="session.active ? t('app.chat.sessionStillRunning') : t('app.delete')"
+                :disabled="isSettlingStream || isPreparingStreamSession || session.active"
                 @click.stop="handleDelete(session.id)"
               >
                 <DeleteOutlined class="delete-icon"/>
@@ -2100,7 +2465,11 @@ const scrollToBottom = (force = false) => {
         ></button>
 
         <div class="main-content">
-          <div class="glass-header" @pointerdown="startPanelDrag">
+          <div
+            class="glass-header"
+            data-testid="chat-drag-handle"
+            @pointerdown="startPanelDrag"
+          >
             <div class="header-left-group">
               <button
                 type="button"
@@ -2134,6 +2503,7 @@ const scrollToBottom = (force = false) => {
           <button
             type="button"
             class="chat-resize-handle"
+            data-testid="chat-resize-handle"
             :aria-label="t('app.resize')"
             :title="t('app.resize')"
             @pointerdown="startPanelResize"
@@ -2165,7 +2535,7 @@ const scrollToBottom = (force = false) => {
               role="alert"
             >
               <span>{{ t('app.chat.networkError') }}</span>
-              <button type="button" class="history-pagination__button" @click="handleSelectSession(currentSessionId)">
+              <button type="button" class="history-pagination__button" @click="handleUserSelectSession(currentSessionId)">
                 {{ t('app.retry') }}
               </button>
             </div>
@@ -2558,7 +2928,7 @@ const scrollToBottom = (force = false) => {
   width: min(31rem, calc(100vw - var(--chat-safe-left) - var(--chat-safe-right)));
   height: min(42rem, calc(100dvh - 5.75rem));
   min-width: min(20rem, calc(100vw - 1.5rem));
-  min-height: min(22rem, calc(100dvh - 5.5rem));
+  min-height: min(22rem, max(16.25rem, calc(100dvh - 17.5rem)));
   display: flex;
   pointer-events: auto;
   overflow: hidden;
@@ -2735,18 +3105,58 @@ const scrollToBottom = (force = false) => {
 }
 
 .item-title {
-  flex: 1;
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-active-indicator {
-  width: 0.5rem;
-  height: 0.5rem;
+.session-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.session-status {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--chat-muted);
+  font-size: 0.7rem;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.session-status-dot {
+  width: 0.42rem;
+  height: 0.42rem;
   flex: 0 0 auto;
   border-radius: 50%;
+  background: currentColor;
+}
+
+.session-status.is-running {
+  color: var(--chat-success);
+}
+
+.session-status.is-warning {
+  color: #d97706;
+}
+
+.session-status.is-failed {
+  color: #dc2626;
+}
+
+.session-status.is-unread {
+  color: var(--chat-accent);
+  font-weight: 750;
+}
+
+.session-status.is-running .session-status-dot {
   background: var(--chat-success);
   box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--chat-success) 18%, transparent);
 }
@@ -2841,6 +3251,7 @@ const scrollToBottom = (force = false) => {
   border-bottom: 1px solid var(--chat-border);
   background: color-mix(in srgb, var(--chat-bg) 88%, transparent);
   cursor: grab;
+  touch-action: none;
   user-select: none;
 }
 
@@ -2905,11 +3316,11 @@ const scrollToBottom = (force = false) => {
 
 .chat-resize-handle {
   position: absolute;
-  right: 0.35rem;
-  bottom: 0.35rem;
+  right: 0;
+  bottom: 0;
   z-index: 6;
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 2rem;
+  height: 2rem;
   border: 0;
   border-radius: 0.35rem;
   background:
@@ -2917,6 +3328,7 @@ const scrollToBottom = (force = false) => {
       linear-gradient(135deg, transparent 0 62%, color-mix(in srgb, var(--chat-muted) 64%, transparent) 63% 71%, transparent 72%);
   cursor: nwse-resize;
   opacity: 0.65;
+  touch-action: none;
 }
 
 .chat-resize-handle:hover,
@@ -3170,12 +3582,6 @@ const scrollToBottom = (force = false) => {
   width: 100%;
   max-width: 100%;
   align-self: stretch;
-}
-
-.assistant-pending-body.has-execution-trace {
-  width: fit-content;
-  max-width: min(15rem, 100%);
-  align-self: flex-start;
 }
 
 .msg-actions {
@@ -3815,10 +4221,15 @@ const scrollToBottom = (force = false) => {
     min-height: 2.75rem;
   }
 
-  /* The mobile panel already has a fixed viewport geometry; a 20px resize
+  /* The mobile panel already has a fixed viewport geometry; a resize
    * affordance only consumes space and is not a useful touch interaction. */
   .chat-resize-handle {
     display: none;
+  }
+
+  .glass-header {
+    cursor: default;
+    touch-action: auto;
   }
 
   .sidebar {
@@ -3910,7 +4321,7 @@ const scrollToBottom = (force = false) => {
   }
 }
 
-@media (pointer: coarse), (max-height: 599px) {
+@media (pointer: coarse) {
   .control-icon-button,
   .tool-icon,
   .action-btn {
@@ -3919,7 +4330,8 @@ const scrollToBottom = (force = false) => {
   }
 
   .chat-resize-handle {
-    display: none;
+    width: 2.75rem;
+    height: 2.75rem;
   }
 }
 

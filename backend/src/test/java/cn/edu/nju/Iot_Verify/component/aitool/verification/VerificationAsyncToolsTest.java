@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.verification.SpecResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.AsyncTaskDispatchOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -195,6 +197,40 @@ class VerificationAsyncToolsTest {
         assertTrue(result.contains("taskId"));
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
+    }
+
+    @Test
+    void verifyTaskStatus_completedTask_shouldExposeRunHandoffWithoutRawTechnicalOutput()
+            throws Exception {
+        when(verificationService.getTask(1L, 12L)).thenReturn(VerificationTaskDto.builder()
+                .id(12L)
+                .status("COMPLETED")
+                .progress(92)
+                .outcome(cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome.SATISFIED)
+                .specResults(List.of(SpecResultDto.builder()
+                        .specId("internal-spec-id")
+                        .templateId("internal-template-id")
+                        .specificationLabel("Door remains closed")
+                        .outcome(cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome.SATISFIED)
+                        .build()))
+                .checkLogs(List.of("internal execution log"))
+                .nusmvOutput("raw NuSMV stdout")
+                .build());
+        when(verificationService.getTaskProgress(1L, 12L)).thenReturn(100);
+
+        JsonNode json = objectMapper.readTree(
+                verifyTaskStatusTool.execute("{\"taskId\":12}"));
+
+        assertEquals(100, json.path("progress").asInt());
+        assertEquals(100, json.path("task").path("progress").asInt());
+        assertEquals(12L, json.path("runId").asLong());
+        assertEquals("get_verification_run", json.path("nextTool").asText());
+        assertEquals("SATISFIED", json.path("task").path("outcome").asText());
+        assertFalse(json.path("task").path("specResults").get(0).has("specId"));
+        assertFalse(json.path("task").path("specResults").get(0).has("templateId"));
+        assertEquals(1, json.path("task").path("checkLogCount").asInt());
+        assertFalse(json.path("task").has("checkLogs"));
+        assertFalse(json.path("task").has("nusmvOutput"));
     }
 
     @Test

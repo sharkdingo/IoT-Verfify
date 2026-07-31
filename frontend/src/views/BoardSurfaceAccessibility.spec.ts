@@ -47,6 +47,23 @@ describe('Board surface accessibility contracts', () => {
     expect(deleteDialog).toContain('flex shrink-0 flex-wrap justify-end')
   })
 
+  it('names the concrete template value behind blank initial-value choices', () => {
+    const placeholder = boardSource.slice(
+      boardSource.indexOf('const templateVariableInputPlaceholder ='),
+      boardSource.indexOf('const buildTemplateInstanceRuntimeConfig')
+    )
+    expect(placeholder).toContain('getTemplateVariableDefaultValue(variable)')
+    expect(placeholder).toContain("t('app.useTemplateDefaultWithValue', { value: defaultValue })")
+
+    const templateDialog = boardSource.slice(
+      boardSource.indexOf('v-if="templateInstanceDialogVisible"'),
+      boardSource.indexOf('<!-- Left Sidebar - Control Center -->')
+    )
+    expect(templateDialog).toContain(
+      'formatTemplateModelToken(templateInstanceDialogData.template, getTemplateVariableDefaultValue(variable))'
+    )
+  })
+
   it('isolates narrow-screen background controls and respects reduced motion', () => {
     const narrowBackground = boardSource.slice(
       boardSource.indexOf('data-testid="board-narrow-background"') - 100,
@@ -98,5 +115,17 @@ describe('Board surface accessibility contracts', () => {
     expect(shortLandscapePlayback).toContain('width: min(22rem, 42vw)')
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-timeline-host')
     expect(shortLandscapePlayback).toContain('right: calc(min(22rem, 42vw) + (var(--board-floating-gap, 1rem) * 2))')
+  })
+
+  it('pairs disabled formal-run controls with visible reasons', () => {
+    for (const kind of ['verification', 'simulation']) {
+      const button = boardSource.slice(
+        boardSource.indexOf(`data-testid="run-${kind}"`) - 150,
+        boardSource.indexOf(`data-testid="${kind}-run-blocked-reason"`) + 350
+      )
+      expect(button).toContain(`:aria-describedby="${kind}RunBlockedReason`)
+      expect(button).toContain(`id="${kind}-run-blocked-reason"`)
+      expect(button).toContain(`{{ ${kind}RunBlockedReason }}`)
+    }
   })
 })

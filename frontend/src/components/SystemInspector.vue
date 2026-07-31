@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from 'vue'
 import type { DeviceNode } from '../types/node'
-import type { DeviceTemplate, InternalVariable } from '../types/device'
+import type { DeviceTemplate, InternalVariable, WorkingState } from '../types/device'
 import type {
   EnvironmentVariableUpdateRequest,
   ModelEnvironmentVariable
@@ -11,7 +11,11 @@ import type { Specification } from '../types/spec'
 import { specTemplateDetails } from '../assets/config/specTemplates'
 import { useI18n } from 'vue-i18n'
 import { buildSpecFormula } from '@/utils/spec'
-import { resolveImpactEnvironmentDefinition } from '@/utils/device'
+import {
+  canonicalNaturalChangeRate,
+  naturalChangeCandidateValues,
+  resolveImpactEnvironmentDefinition
+} from '@/utils/device'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { hasModeledStateMachine, resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
@@ -229,7 +233,7 @@ const environmentPoolByName = computed(() => {
   const result = new Map<string, ModelEnvironmentVariable>()
   for (const variable of props.environmentVariables || []) {
     const name = String(variable?.name || '').trim()
-    if (name) result.set(name, variable)
+    if (name) result.set(normalizeLookupName(name), variable)
   }
   return result
 })
@@ -240,6 +244,13 @@ interface EnvironmentSource {
   deviceId: string
   label: string
   role: EnvironmentSourceRole
+  effects: EnvironmentEffect[]
+}
+
+interface EnvironmentEffect {
+  state: string
+  value: string
+  bundled: boolean
 }
 
 interface EnvironmentGroup {
@@ -248,7 +259,75 @@ interface EnvironmentGroup {
   bundled: boolean
   ranges: string[]
   sources: EnvironmentSource[]
+  conflicts: string[]
 }
+
+const hasEnumDomain = (variable: InternalVariable) =>
+  Array.isArray(variable.Values) && variable.Values.length > 0
+
+const hasNumericDomain = (variable: InternalVariable) =>
+  variable.LowerBound !== undefined && variable.UpperBound !== undefined
+
+const environmentDefinitionIncompatibility = (
+  leftName: string,
+  left: InternalVariable,
+  rightName: string,
+  right: InternalVariable
+): string | null => {
+  if (leftName !== rightName) {
+    return t('app.environmentConflictName', { left: leftName, right: rightName })
+  }
+  if (hasEnumDomain(left) !== hasEnumDomain(right)
+      || hasNumericDomain(left) !== hasNumericDomain(right)) {
+    return t('app.environmentConflictType')
+  }
+  if (hasNumericDomain(left)
+      && (left.LowerBound !== right.LowerBound || left.UpperBound !== right.UpperBound)) {
+    return t('app.environmentConflictRange', {
+      left: `${left.LowerBound}..${left.UpperBound}`,
+      right: `${right.LowerBound}..${right.UpperBound}`
+    })
+  }
+  if (hasEnumDomain(left)
+      && JSON.stringify(left.Values) !== JSON.stringify(right.Values)) {
+    return t('app.environmentConflictValues')
+  }
+  const leftRate = canonicalNaturalChangeRate(left.NaturalChangeRate)
+  const rightRate = canonicalNaturalChangeRate(right.NaturalChangeRate)
+  if (leftRate !== rightRate) {
+    return t('app.environmentConflictNaturalRate', { left: leftRate, right: rightRate })
+  }
+  const leftTrust = normalizeTrust(left.Trust)
+  const rightTrust = normalizeTrust(right.Trust)
+  if (leftTrust !== rightTrust) {
+    return t('app.environmentConflictTrust', { left: t(`app.${leftTrust}`), right: t(`app.${rightTrust}`) })
+  }
+  const leftPrivacy = normalizePrivacy(left.Privacy)
+  const rightPrivacy = normalizePrivacy(right.Privacy)
+  if (leftPrivacy !== rightPrivacy) {
+    return t('app.environmentConflictPrivacy', {
+      left: t(`app.${leftPrivacy}`),
+      right: t(`app.${rightPrivacy}`)
+    })
+  }
+  return null
+}
+
+const environmentEffectsFor = (
+  template: DeviceTemplate | null | undefined,
+  name: string
+): EnvironmentEffect[] => (template?.manifest?.WorkingStates || [])
+  .flatMap((state: WorkingState) => (state.Dynamics || [])
+    .filter(dynamic => dynamic.VariableName === name)
+    .map(dynamic => ({
+      state: state.Name,
+      value: dynamic.ChangeRate !== undefined
+        ? t('app.environmentRateEffect', { rate: dynamic.ChangeRate })
+        : t('app.environmentValueEffect', {
+            value: isBundledTemplate(template) ? formatModelToken(dynamic.Value) : String(dynamic.Value || '')
+          }),
+      bundled: isBundledTemplate(template)
+    })))
 
 const environmentDefinitionFor = (
   name: string,
@@ -274,23 +353,27 @@ const addEnvironmentGroup = (
   source?: EnvironmentSource,
   bundled = false
 ) => {
-  const existing = grouped.get(name)
+  const key = normalizeLookupName(name)
+  const existing = grouped.get(key)
   const current = existing || {
     name,
     definition,
     bundled,
     ranges: [],
-    sources: []
+    sources: [],
+    conflicts: []
   }
-  if (!current.definition || current.definition.Name === name && !current.definition.Values && current.definition.LowerBound === undefined) {
-    current.definition = definition
+  if (existing) {
+    const mismatch = environmentDefinitionIncompatibility(
+      current.name, current.definition, name, definition)
+    if (mismatch && !current.conflicts.includes(mismatch)) current.conflicts.push(mismatch)
   }
   if (existing) current.bundled = current.bundled && bundled
   current.ranges.push(getVariableRange(definition))
   if (source && !current.sources.some(item => item.deviceId === source.deviceId && item.role === source.role)) {
     current.sources.push(source)
   }
-  grouped.set(name, current)
+  grouped.set(key, current)
 }
 
 const environmentVariables = computed(() => {
@@ -305,7 +388,8 @@ const environmentVariables = computed(() => {
       addEnvironmentGroup(grouped, variable.Name, variable, {
         deviceId: device.id,
         label: device.label,
-        role: 'read'
+        role: 'read',
+        effects: []
       }, isBundledTemplate(template))
     }
 
@@ -315,14 +399,15 @@ const environmentVariables = computed(() => {
       addEnvironmentGroup(grouped, name, environmentDefinitionFor(name, template), {
         deviceId: device.id,
         label: device.label,
-        role: 'impact'
+        role: 'impact',
+        effects: environmentEffectsFor(template, name)
       }, isBundledTemplate(template))
     }
   }
 
   for (const saved of props.environmentVariables || []) {
     const name = String(saved?.name || '').trim()
-    if (!name || grouped.has(name)) continue
+    if (!name || grouped.has(normalizeLookupName(name))) continue
     addEnvironmentGroup(grouped, name, environmentDefinitionFor(name))
   }
 
@@ -331,7 +416,7 @@ const environmentVariables = computed(() => {
       const ranges = uniqueNonEmpty(variable.ranges).map(range => variable.bundled
         ? range.split(' / ').map(formatModelToken).join(' / ')
         : range)
-      const saved = environmentPoolByName.value.get(variable.name)
+      const saved = environmentPoolByName.value.get(normalizeLookupName(variable.name))
       const authoritativeValue = typeof saved?.value === 'string' ? saved.value.trim() : ''
       const value = authoritativeValue !== ''
         ? String(saved!.value)
@@ -339,13 +424,29 @@ const environmentVariables = computed(() => {
       // A compare-and-set edit needs a non-blank authoritative baseline value. A variable with
       // no declared value domain materializes blank and is not verifiable, so its controls are
       // shown disabled with an explanation instead of silently discarding edits.
-      const editable = authoritativeValue !== ''
+      const editable = authoritativeValue !== '' && variable.conflicts.length === 0
       const trust = normalizeTrust(saved?.trust || variable.definition.Trust)
       const privacy = normalizePrivacy(saved?.privacy || variable.definition.Privacy)
       return {
         ...variable,
         displayName: variable.bundled ? formatModelToken(variable.name) : variable.name,
-        rangeLabel: ranges.length === 1 ? ranges[0] : t('app.mixedRanges'),
+        rangeLabel: variable.conflicts.length > 0
+          ? t('app.conflictingDefinitions')
+          : (ranges.length === 1 ? ranges[0] : t('app.mixedRanges')),
+        naturalChangeRateLabel: hasNumericDomain(variable.definition)
+          ? (variable.definition.NaturalChangeRate
+              ? t('app.environmentNumericEvolution', {
+                  rate: variable.definition.NaturalChangeRate,
+                  candidates: naturalChangeCandidateValues(variable.definition.NaturalChangeRate)
+                })
+              : t('app.environmentNaturalRateMissing'))
+          : t('app.environmentDiscreteEvolution'),
+        evolutionEffects: variable.sources.flatMap(source => source.effects.map(effect => ({
+          ...effect,
+          deviceId: source.deviceId,
+          deviceLabel: source.label,
+          stateLabel: effect.bundled ? formatModelToken(effect.state) : effect.state
+        }))),
         value,
         editable,
         valueLabel: value
@@ -387,16 +488,17 @@ const updateEnvironmentVariable = (
   patch: EnvironmentVariableEdit
 ) => {
   if (!ensureWritable()) return
-  const saved = environmentPoolByName.value.get(name)
+  const displayed = environmentVariables.value.find(variable => variable.name === name)
+  if (!displayed?.editable) return
+  const saved = environmentPoolByName.value.get(normalizeLookupName(name))
   const authoritativeValue = typeof saved?.value === 'string' ? saved.value.trim() : ''
   if (!authoritativeValue) return
-  // The compare-and-set baseline must come strictly from the authoritative Environment Pool
-  // snapshot, never from a template-derived display value. normalizeTrust/normalizePrivacy
-  // default to the same untrusted/public the server materializes, so an absent label matches.
+  // The displayed effective labels combine the authoritative row with the same template fallbacks
+  // the backend materializes. Reuse them so the CAS baseline cannot contradict the visible value.
   const expected: EnvironmentVariableUpdateRequest['expected'] = {
     value: authoritativeValue,
-    trust: normalizeTrust(saved?.trust),
-    privacy: normalizePrivacy(saved?.privacy)
+    trust: displayed.trust,
+    privacy: displayed.privacy
   }
   const desired: EnvironmentVariableUpdateRequest['desired'] = {}
   for (const field of ['value', 'trust', 'privacy'] as const) {
@@ -865,12 +967,12 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <div v-if="isEnvironmentVariableExpanded(variable.name)" class="mt-2 space-y-2">
               <div class="grid grid-cols-1 gap-2 text-[10px]">
                 <label class="min-w-0 rounded-md bg-slate-50 p-1.5 dark:bg-slate-800">
-                  <span class="block font-bold uppercase text-slate-400">{{ t('app.value') }}</span>
+                  <span class="block font-bold uppercase text-slate-400">{{ t('app.modelInitialValue') }}</span>
                   <select
                     v-if="variable.enumValues.length > 0"
                     :data-testid="`environment-value-${variable.name}`"
                     :value="variable.value"
-                    :aria-label="`${variable.displayName} ${t('app.value')}`"
+                    :aria-label="`${variable.displayName} ${t('app.modelInitialValue')}`"
                     :disabled="props.readOnly || props.environmentSaving || !variable.editable"
                     :aria-busy="props.environmentSaving ? 'true' : undefined"
                     class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
@@ -888,20 +990,41 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     :max="variable.upperBound"
                     :value="variable.value"
                     :title="variable.valueTitle"
-                    :aria-label="`${variable.displayName} ${t('app.value')}`"
+                    :aria-label="`${variable.displayName} ${t('app.modelInitialValue')}`"
                     :disabled="props.readOnly || props.environmentSaving || !variable.editable"
                     :aria-busy="props.environmentSaving ? 'true' : undefined"
                     class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   />
                   <p
-                    v-if="!variable.editable"
+                    v-if="variable.conflicts.length > 0"
+                    :data-testid="`environment-conflict-${variable.name}`"
+                    class="mt-1 text-[10px] leading-4 text-red-600 dark:text-red-300"
+                  >
+                    {{ t('app.environmentDefinitionConflict', { reasons: variable.conflicts.join('; ') }) }}
+                  </p>
+                  <p
+                    v-else-if="!variable.editable"
                     :data-testid="`environment-not-editable-${variable.name}`"
                     class="mt-1 text-[10px] leading-4 text-amber-600 dark:text-amber-300"
                   >
                     {{ t('app.environmentValueNotEditable') }}
                   </p>
                 </label>
+                <div
+                  :data-testid="`environment-evolution-${variable.name}`"
+                  class="rounded-md border border-slate-200 bg-white/70 p-2 text-[10px] leading-4 text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300"
+                >
+                  <p class="font-bold uppercase text-slate-400">{{ t('app.modelEvolution') }}</p>
+                  <p>{{ t('app.naturalChangeRate') }}: <strong>{{ variable.naturalChangeRateLabel }}</strong></p>
+                  <ul v-if="variable.evolutionEffects.length > 0" class="mt-1 space-y-0.5">
+                    <li v-for="effect in variable.evolutionEffects" :key="`${effect.deviceId}:${effect.state}:${effect.value}`">
+                      {{ effect.deviceLabel }} · {{ effect.stateLabel }}: {{ effect.value }}
+                    </li>
+                  </ul>
+                  <p v-else class="mt-1">{{ t('app.environmentNoDeviceEffects') }}</p>
+                  <p class="mt-1 text-slate-400">{{ t('app.environmentEvolutionHint') }}</p>
+                </div>
                 <details class="rounded-md border border-slate-200 bg-white/70 p-1.5 dark:border-slate-700 dark:bg-slate-900/60">
                   <summary class="cursor-pointer text-[10px] font-bold text-slate-500">{{ t('app.advancedTrustPrivacyOverrides') }}</summary>
                   <p class="mt-1 text-[10px] leading-4 text-slate-400">{{ t('app.environmentTrustOverrideHint') }}</p>

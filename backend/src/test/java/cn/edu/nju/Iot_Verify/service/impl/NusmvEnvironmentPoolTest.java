@@ -249,6 +249,7 @@ class NusmvEnvironmentPoolTest {
                 .falsifiableWhenCompromised(true)
                 .lowerBound(lower)
                 .upperBound(upper)
+                .naturalChangeRate("0")
                 .trust("trusted")
                 .privacy("public")
                 .build();
@@ -259,6 +260,7 @@ class NusmvEnvironmentPoolTest {
                 .name(name)
                 .lowerBound(lower)
                 .upperBound(upper)
+                .naturalChangeRate("0")
                 .trust("trusted")
                 .privacy("public")
                 .build();

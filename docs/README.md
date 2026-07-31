@@ -66,7 +66,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | [docs/api/verification.md](api/verification.md) | ✅ ready | Verify/simulate/task/trace/fix DTO-level contract | — |
 | [docs/api/fuzzing.md](api/fuzzing.md) | ✅ ready | Counterexample-exploration task/run/finding DTO-level contract | — |
 | [docs/api/chat-sse.md](api/chat-sse.md) | ✅ ready | SSE streaming protocol for chat | — |
-| [docs/api/ai-tools.md](api/ai-tools.md) | ✅ ready | The 48 AI tools: names, categories, argument semantics | — |
+| [docs/api/ai-tools.md](api/ai-tools.md) | ✅ ready | The 53 AI tools: names, categories, argument semantics | — |
 
 ### Guides
 

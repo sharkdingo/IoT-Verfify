@@ -4,7 +4,8 @@ import {
   buildSimulationRequestPayload,
   buildVerificationRequestPayload,
   normalizeNuSmvDeviceName,
-  normalizeNuSmvValue
+  normalizeNuSmvValue,
+  specificationsRequirePrivacy
 } from '../modelRequest'
 
 describe('modelRequest', () => {
@@ -74,6 +75,16 @@ describe('modelRequest', () => {
     expect(normalizeNuSmvValue('"42"')).toBe('42')
     expect(normalizeNuSmvValue("'42'")).toBe('42')
     expect(normalizeNuSmvValue('"on"')).toBe('"on"')
+  })
+
+  it('detects privacy specifications with the same normalized comparison as the backend', () => {
+    const privacySpec = {
+      ...specifications[0],
+      aConditions: [{ ...specifications[0].aConditions[0], targetType: ' Privacy ' }]
+    }
+
+    expect(specificationsRequirePrivacy([privacySpec] as any[])).toBe(true)
+    expect(specificationsRequirePrivacy(specifications)).toBe(false)
   })
 
   it('builds identical devices and rules for verification and simulation', () => {
@@ -708,6 +719,7 @@ describe('modelRequest', () => {
       rules: request.rules,
       environmentVariables: request.environmentVariables,
       devices: request.devices,
+      playbackNodes: request.playbackNodes,
       attackScenario: request.attackScenario
     }
     const withUnusedTemplate = [
@@ -718,5 +730,12 @@ describe('modelRequest', () => {
     expect(buildModelRunSignature(reorderedRequest, withUnusedTemplate)).toBe(
       buildModelRunSignature(request, deviceTemplates)
     )
+    expect(buildModelRunSignature({
+      ...request,
+      playbackNodes: request.playbackNodes.map((node, index) => ({
+        ...node,
+        position: { x: node.position.x + index + 100, y: node.position.y + 50 }
+      }))
+    }, deviceTemplates)).toBe(buildModelRunSignature(request, deviceTemplates))
   })
 })

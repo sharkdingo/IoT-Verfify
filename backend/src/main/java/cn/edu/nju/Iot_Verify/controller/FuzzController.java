@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingReplayDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRequestDto;
@@ -146,9 +147,9 @@ public class FuzzController {
     }
 
     @GetMapping("/findings/{id}")
-    public Result<FuzzFindingDto> getFinding(
+    public Result<FuzzFindingReplayDto> getFinding(
             @CurrentUser Long userId,
             @PathVariable @Positive(message = "Finding ID must be positive") Long id) {
-        return Result.success(fuzzService.getFinding(userId, id));
+        return Result.success(fuzzService.getFindingReplay(userId, id));
     }
 }

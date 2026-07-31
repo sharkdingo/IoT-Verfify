@@ -1,6 +1,13 @@
 import type { NodePrivacyState, NodeVariableState } from './node'
 import type { RuleSourceItemType } from './rule'
 import type { Specification } from './spec'
+import type { DeviceNode } from './node'
+
+export const RUN_INITIATORS = ['USER', 'AI_ASSISTANT', 'UNKNOWN'] as const
+export type RunInitiator = typeof RUN_INITIATORS[number]
+
+export const isRunInitiator = (value: unknown): value is RunInitiator =>
+  typeof value === 'string' && (RUN_INITIATORS as readonly string[]).includes(value)
 
 export interface ModelDevice {
   varName: string
@@ -57,6 +64,12 @@ export interface ModelRule {
   conditions: ModelRuleCondition[]
   command: ModelRuleCommand
   ruleString?: string
+}
+
+/** Immutable visual context for replaying one run independently of the live board. */
+export interface ModelPlaybackScene {
+  nodes: DeviceNode[]
+  rules: ModelRule[]
 }
 
 export type ModelSpecification = Specification

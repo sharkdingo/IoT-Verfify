@@ -21,6 +21,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunDeletionImpactDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.model.TemplateSnapshotBundleDto;
@@ -53,8 +54,11 @@ import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.ModelPlaybackSceneSnapshot;
+import cn.edu.nju.Iot_Verify.util.RunInitiatorResolver;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import cn.edu.nju.Iot_Verify.util.SpecificationFormulaPreview;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
@@ -315,7 +319,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             log.warn("Sync verification timed out after {}ms", timeoutMs);
             result = applyRunContext(buildErrorResult("", List.of("Verification timed out")),
                     input.attackScenario(), input.enablePrivacy(), input.attackSurface(), input.modelSnapshot(),
-                    buildTemplateSnapshotsJson(input.templateManifests(), input.deviceSmvMap()));
+                    buildTemplateSnapshotsJson(input.templateManifests(), input.deviceSmvMap()), input.request());
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof InternalServerException ise) throw ise;
@@ -422,7 +426,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     requestJson, genResult.emittedSpecs(), genResult.generationIssues(),
                     genResult.disabledRuleCount(), genResult.skippedSpecCount());
             applyRunContext(finalResult, request.resolvedAttackScenario(), enablePrivacy,
-                    attackSurface, modelSnapshot, templateSnapshotsJson);
+                    attackSurface, modelSnapshot, templateSnapshotsJson, request);
             return finalResult;
 
         } catch (IOException | InterruptedException e) {
@@ -447,7 +451,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             // Persist result.json when tempDir exists (both success and failure) for debugging.
             if (finalResult != null) {
                 applyRunContext(finalResult, request.resolvedAttackScenario(), enablePrivacy,
-                        attackSurface, modelSnapshot, templateSnapshotsJson);
+                        attackSurface, modelSnapshot, templateSnapshotsJson, request);
                 saveResultJson(smvFile, finalResult);
             }
             cleanupTempFile(smvFile);
@@ -529,6 +533,13 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         snapshot.setEnvironmentVariables(modelInput.environmentVariables());
         NusmvRequestValidator.throwIfErrors(errors);
 
+        try {
+            snapshot.setPlaybackNodes(ModelPlaybackSceneSnapshot.canonicalize(
+                    snapshot.getPlaybackNodes(), devices, rules).nodes());
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("playbackNodes", e.getMessage());
+        }
+
         AttackSurface attackSurface = modelInput.attackSurface();
         AttackScenarioValidator.validateAgainstSurface(attackScenario, attackSurface, rules);
 
@@ -550,7 +561,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 .flatMap(Collection::stream)
                 .filter(Objects::nonNull)
                 .map(SpecConditionDto::getTargetType)
-                .anyMatch(type -> "privacy".equalsIgnoreCase(type));
+                .anyMatch(type -> type != null && "privacy".equalsIgnoreCase(type.trim()));
     }
 
     private VerificationResultDto applyModelContext(VerificationResultDto result,
@@ -586,7 +597,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                                    boolean enablePrivacy,
                                                    AttackSurface attackSurface,
                                                    ModelRunSnapshotDto modelSnapshot,
-                                                   String templateSnapshotsJson) {
+                                                   String templateSnapshotsJson,
+                                                   VerificationRequestDto request) {
         applyModelContext(result, attackScenario, enablePrivacy, attackSurface);
         if (result == null) {
             return null;
@@ -596,6 +608,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             for (TraceDto trace : result.getTraces()) {
                 trace.setModelSnapshot(modelSnapshot);
                 trace.setTemplateSnapshotsJson(templateSnapshotsJson);
+                trace.setPlaybackScene(ModelPlaybackSceneSnapshot.canonicalize(
+                        request.getPlaybackNodes(), request.getDevices(), request.getRules()));
             }
         }
         return result;
@@ -842,6 +856,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             LocalDateTime createdAt = databaseNow();
             VerificationTaskPo task = VerificationTaskPo.builder()
                     .userId(userId)
+                    .initiator(RunInitiatorResolver.current())
                     .status(VerificationTaskPo.TaskStatus.PENDING)
                     .isAttack(requiredScenario.isEnabled())
                     .attackBudget(requiredScenario.effectiveBudget())
@@ -1061,7 +1076,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     genResult.emittedSpecs(), genResult.generationIssues(),
                     genResult.disabledRuleCount(), genResult.skippedSpecCount());
             applyRunContext(finalResult, input.attackScenario(), input.enablePrivacy(),
-                    input.attackSurface(), input.modelSnapshot(), templateSnapshotsJson);
+                    input.attackSurface(), input.modelSnapshot(), templateSnapshotsJson, input.request());
 
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
@@ -1089,7 +1104,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         } finally {
             if (finalResult != null) {
                 applyRunContext(finalResult, input.attackScenario(), input.enablePrivacy(),
-                        input.attackSurface(), input.modelSnapshot(), templateSnapshotsJson);
+                        input.attackSurface(), input.modelSnapshot(), templateSnapshotsJson, input.request());
                 saveResultJson(smvFile, finalResult);
             }
             cleanupTempFile(smvFile);
@@ -1156,12 +1171,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     @Transactional(readOnly = true)
     public List<VerificationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds) {
         List<Long> normalizedExcludedIds = normalizeExcludedTaskIds(excludedTaskIds);
-        List<VerificationTaskPo> tasks = normalizedExcludedIds.isEmpty()
-                ? taskRepository.findByUserIdAndStatusNotOrderByCreatedAtDesc(
+        List<VerificationTaskSummaryProjection> tasks = normalizedExcludedIds.isEmpty()
+                ? taskRepository.findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
                         userId, VerificationTaskPo.TaskStatus.COMPLETED)
-                : taskRepository.findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
+                : taskRepository.findSummaryByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
                         userId, VerificationTaskPo.TaskStatus.COMPLETED, normalizedExcludedIds);
-        return verificationTaskMapper.toSummaryDtoList(
+        return verificationTaskMapper.toSummaryProjectionDtoList(
                 tasks);
     }
 
@@ -1191,7 +1206,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         List<Long> runIds = runs.stream().map(VerificationRunSummaryProjection::getId).toList();
         Map<Long, List<TraceSummaryDto>> tracesByRun = new LinkedHashMap<>();
         for (TraceSummaryProjection trace :
-                traceRepository.findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(userId, runIds)) {
+                traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(userId, runIds)) {
             if (trace == null || trace.getVerificationTaskId() == null) continue;
             tracesByRun.computeIfAbsent(trace.getVerificationTaskId(), ignored -> new ArrayList<>())
                     .add(toTraceSummaryOrUnavailable(trace));
@@ -1216,6 +1231,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     run != null ? run.getId() : null, e);
             return VerificationRunSummaryDto.builder()
                     .id(run != null ? run.getId() : null)
+                    .initiator(run != null && run.getInitiator() != null
+                            ? run.getInitiator() : RunInitiator.UNKNOWN)
                     .createdAt(run != null ? run.getCreatedAt() : null)
                     .startedAt(run != null ? run.getStartedAt() : null)
                     .completedAt(run != null ? run.getCompletedAt() : null)
@@ -1251,7 +1268,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         VerificationTaskPo run = getCompletedRun(userId, runId);
         run.setCheckLogs(readCheckLogs(run));
         List<TraceSummaryDto> counterexamples = traceRepository
-                .findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(userId, List.of(runId))
+                .findSummariesByUserIdAndVerificationTaskIdIn(userId, List.of(runId))
                 .stream()
                 .filter(Objects::nonNull)
                 .map(this::toTraceSummaryOrUnavailable)
@@ -1353,7 +1370,14 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     @Override
     @Transactional(readOnly = true)
     public List<TraceDto> getUserTraces(Long userId) {
-        return traceMapper.toDtoList(traceRepository.findByUserIdOrderByCreatedAtDesc(userId));
+        List<TracePo> traces = traceRepository.findByUserId(userId).stream()
+                .sorted(Comparator
+                        .comparing(TracePo::getCreatedAt,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(TracePo::getId,
+                                Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+        return traceMapper.toDtoList(traces);
     }
 
     @Override
@@ -1818,6 +1842,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     : VerificationOutcome.INCONCLUSIVE;
             VerificationTaskPo run = VerificationTaskPo.builder()
                     .userId(userId)
+                    .initiator(RunInitiatorResolver.current())
                     .status(VerificationTaskPo.TaskStatus.COMPLETED)
                     .createdAt(startedAt)
                     .startedAt(startedAt)

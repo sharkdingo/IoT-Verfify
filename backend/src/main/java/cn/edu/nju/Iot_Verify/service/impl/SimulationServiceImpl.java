@@ -36,10 +36,13 @@ import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.repository.projection.SimulationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.ModelPlaybackSceneSnapshot;
+import cn.edu.nju.Iot_Verify.util.RunInitiatorResolver;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -345,6 +348,13 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         snapshot.setEnvironmentVariables(modelInput.environmentVariables());
         NusmvRequestValidator.throwIfErrors(errors);
 
+        try {
+            snapshot.setPlaybackNodes(ModelPlaybackSceneSnapshot.canonicalize(
+                    snapshot.getPlaybackNodes(), devices, rules).nodes());
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("playbackNodes", e.getMessage());
+        }
+
         AttackSurface attackSurface = modelInput.attackSurface();
         AttackScenarioValidator.validateAgainstSurface(attackScenario, attackSurface, rules);
 
@@ -489,6 +499,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             LocalDateTime createdAt = databaseNow();
             SimulationTaskPo task = SimulationTaskPo.builder()
                     .userId(userId)
+                    .initiator(RunInitiatorResolver.current())
                     .status(SimulationTaskPo.TaskStatus.PENDING)
                     .requestedSteps(requestedSteps)
                     .isAttack(requiredScenario.isEnabled())
@@ -800,12 +811,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     @Transactional(readOnly = true)
     public List<SimulationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds) {
         List<Long> normalizedExcludedIds = normalizeExcludedTaskIds(excludedTaskIds);
-        List<SimulationTaskPo> tasks = normalizedExcludedIds.isEmpty()
-                ? simulationTaskRepository.findByUserIdAndStatusNotOrderByCreatedAtDesc(
+        List<SimulationTaskSummaryProjection> tasks = normalizedExcludedIds.isEmpty()
+                ? simulationTaskRepository.findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
                         userId, SimulationTaskPo.TaskStatus.COMPLETED)
-                : simulationTaskRepository.findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
+                : simulationTaskRepository.findSummaryByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
                         userId, SimulationTaskPo.TaskStatus.COMPLETED, normalizedExcludedIds);
-        return simulationTaskMapper.toSummaryDtoList(
+        return simulationTaskMapper.toSummaryProjectionDtoList(
                 tasks);
     }
 
@@ -904,6 +915,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 .enablePrivacy(result.isEnablePrivacy())
                 .modelSemantics(result.getModelSemantics())
                 .modelSnapshot(result.getModelSnapshot())
+                .playbackScene(result.getPlaybackScene())
                 .historyPersistence(persistence)
                 .createdAt(LocalDateTime.now())
                 .build();
@@ -913,7 +925,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     @Transactional(readOnly = true)
     public List<SimulationTraceSummaryDto> getUserSimulations(Long userId) {
         return simulationTraceMapper.toSummaryProjectionDtoList(
-                simulationTraceRepository.findByUserIdOrderByCreatedAtDescIdDesc(
+                simulationTraceRepository.findSummariesByUserId(
                         userId, PageRequest.of(0, taskAdmissionLimits.getMaxStoredTasksPerUser())));
     }
 
@@ -1061,6 +1073,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 finalResult.setModelSemantics(ModelSemanticsDto.forRun(
                         request.resolvedAttackScenario(), enablePrivacy, attackSurface));
                 finalResult.setModelSnapshot(modelSnapshot);
+                finalResult.setPlaybackScene(ModelPlaybackSceneSnapshot.canonicalize(
+                        request.getPlaybackNodes(), request.getDevices(), request.getRules()));
                 finalResult.setDisabledRuleCount(disabledRuleCount);
                 finalResult.setModelComplete(generationCompleted && disabledRuleCount == 0);
                 finalResult.setGenerationIssues(generationIssues);
@@ -1130,7 +1144,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                                      String requestJson, String templateSnapshotsJson) {
         requireActiveUserForPersistence(userId);
         enforceSimulationRunStorageCapacity(userId);
-        return persistSimulationTraceForActiveUser(userId, result, requestJson, templateSnapshotsJson);
+        return persistSimulationTraceForActiveUser(userId, result, requestJson, templateSnapshotsJson,
+                RunInitiatorResolver.current());
     }
 
     private void requireSimulationRunStorageCapacity(Long userId) {
@@ -1157,10 +1172,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     private SimulationTracePo persistSimulationTraceForActiveUser(Long userId, SimulationResultDto result,
-                                                                  String requestJson, String templateSnapshotsJson) {
+                                                                  String requestJson, String templateSnapshotsJson,
+                                                                  cn.edu.nju.Iot_Verify.dto.model.RunInitiator initiator) {
         ModelSemanticsDto semantics = result.getModelSemantics();
         SimulationTracePo po = SimulationTracePo.builder()
                 .userId(userId)
+                .initiator(initiator)
                 .requestedSteps(result.getRequestedSteps())
                 .steps(result.getSteps())
                 .statesJson(JsonUtils.toJson(result.getStates()))
@@ -1215,7 +1232,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             requireActiveUserForPersistence(userId);
             simulationTaskRepository.findByIdForUpdate(task.getId());
             SimulationTracePo savedTrace = persistSimulationTraceForActiveUser(
-                    userId, result, requestJson, templateSnapshotsJson);
+                    userId, result, requestJson, templateSnapshotsJson, task.getInitiator());
             if (isCompletionCancelled(task.getId())) {
                 log.info("Simulation task {} was cancelled after trace persistence but before completion; rolling back trace", task.getId());
                 status.setRollbackOnly();

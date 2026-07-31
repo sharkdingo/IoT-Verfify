@@ -16,6 +16,12 @@ interface ModelRequestBase {
   enablePrivacy: boolean
 }
 
+export const specificationsRequirePrivacy = (specifications: Specification[]): boolean =>
+  specifications.some(specification =>
+    [specification.aConditions, specification.ifConditions, specification.thenConditions]
+      .some(conditions => (conditions || []).some(condition =>
+        String(condition?.targetType || '').trim().toLowerCase() === 'privacy')))
+
 const NUSMV_RESERVED_WORDS = new Set([
   'module', 'var', 'ivar', 'frozenvar', 'define', 'constants', 'assign',
   'init', 'trans', 'invar', 'invars', 'spec', 'ctlspec', 'ltlspec',
@@ -254,6 +260,13 @@ const buildEnvironmentVariables = (environmentVariables?: ModelEnvironmentVariab
       }
     })
 
+const buildPlaybackNodes = (nodes: DeviceNode[]): DeviceNode[] => nodes.map(node => ({
+  ...node,
+  position: { ...node.position },
+  ...(node.variables ? { variables: node.variables.map(variable => ({ ...variable })) } : {}),
+  ...(node.privacies ? { privacies: node.privacies.map(privacy => ({ ...privacy })) } : {})
+}))
+
 const buildAttackScenario = (attackScenario: AttackScenario): AttackScenario => {
   if (attackScenario.mode === 'NONE') {
     return { mode: 'NONE', budget: 0, points: [] }
@@ -277,6 +290,7 @@ export const buildVerificationRequestPayload = (
   params: ModelRequestBase & { specifications: Specification[] }
 ): VerificationRequest => ({
   devices: buildDevices(params.nodes, params.deviceTemplates),
+  playbackNodes: buildPlaybackNodes(params.nodes),
   environmentVariables: buildEnvironmentVariables(params.environmentVariables),
   rules: buildRules(params.rules),
   specs: buildSpecs(params.specifications),
@@ -288,6 +302,7 @@ export const buildSimulationRequestPayload = (
   params: ModelRequestBase & { steps: number }
 ): SimulationRequest => ({
   devices: buildDevices(params.nodes, params.deviceTemplates),
+  playbackNodes: buildPlaybackNodes(params.nodes),
   environmentVariables: buildEnvironmentVariables(params.environmentVariables),
   rules: buildRules(params.rules),
   steps: params.steps,
@@ -315,6 +330,7 @@ export const buildModelRunSignature = (
   request: VerificationRequest | SimulationRequest,
   deviceTemplates: DeviceTemplate[]
 ): string => {
+  const { playbackNodes: _playbackNodes, ...semanticRequest } = request
   const referencedNames = new Set(request.devices
     .map(device => String(device.templateName || '').trim().toLowerCase())
     .filter(Boolean))
@@ -331,5 +347,5 @@ export const buildModelRunSignature = (
     }))
     .sort((left, right) => left.name.localeCompare(right.name))
 
-  return JSON.stringify(canonicalizeModelValue({ request, templates }))
+  return JSON.stringify(canonicalizeModelValue({ request: semanticRequest, templates }))
 }

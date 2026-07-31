@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.configure.AsyncTaskAdmissionConfig;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
@@ -33,6 +34,7 @@ import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.projection.SimulationTraceSummaryProjection;
+import cn.edu.nju.Iot_Verify.repository.projection.SimulationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
@@ -311,6 +313,7 @@ class SimulationServiceImplTest {
                                                    boolean enablePrivacy) {
         SimulationRequestDto request = new SimulationRequestDto();
         request.setDevices(devices);
+        request.setPlaybackNodes(playbackNodes(devices));
         request.setRules(rules);
         request.setSteps(steps);
         request.setAttackScenario(AttackScenarioDto.builder()
@@ -1241,7 +1244,7 @@ class SimulationServiceImplTest {
     @Test
     void getUserSimulations_delegatesToMapperAndRepo() {
         SimulationTraceSummaryProjection projection = mock(SimulationTraceSummaryProjection.class);
-        when(simulationTraceRepository.findByUserIdOrderByCreatedAtDescIdDesc(
+        when(simulationTraceRepository.findSummariesByUserId(
                 eq(1L), any(Pageable.class)))
                 .thenReturn(List.of(projection));
         SimulationTraceSummaryDto summary = SimulationTraceSummaryDto.builder().id(1L).steps(3).build();
@@ -1259,14 +1262,14 @@ class SimulationServiceImplTest {
         AsyncTaskAdmissionConfig admissionConfig = new AsyncTaskAdmissionConfig();
         admissionConfig.getSimulation().setMaxStoredTasksPerUser(137);
         SimulationServiceImpl configuredService = serviceWithAdmissionConfig(admissionConfig);
-        when(simulationTraceRepository.findByUserIdOrderByCreatedAtDescIdDesc(
+        when(simulationTraceRepository.findSummariesByUserId(
                 eq(1L), any(Pageable.class))).thenReturn(List.of());
         when(simulationTraceMapper.toSummaryProjectionDtoList(List.of())).thenReturn(List.of());
 
         assertTrue(configuredService.getUserSimulations(1L).isEmpty());
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(simulationTraceRepository).findByUserIdOrderByCreatedAtDescIdDesc(
+        verify(simulationTraceRepository).findSummariesByUserId(
                 eq(1L), pageable.capture());
         assertEquals(0, pageable.getValue().getPageNumber());
         assertEquals(137, pageable.getValue().getPageSize());
@@ -1289,18 +1292,16 @@ class SimulationServiceImplTest {
 
     @Test
     void taskStatusQueryExcludesCompletedRuns() {
-        List<SimulationTaskPo> rows = List.of(SimulationTaskPo.builder()
-                .id(2L).userId(1L).status(SimulationTaskPo.TaskStatus.FAILED)
-                .createdAt(LocalDateTime.now()).build());
-        when(simulationTaskRepository.findByUserIdAndStatusNotOrderByCreatedAtDesc(
+        SimulationTaskSummaryProjection row = mock(SimulationTaskSummaryProjection.class);
+        List<SimulationTaskSummaryProjection> rows = List.of(row);
+        when(simulationTaskRepository.findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
                 1L, SimulationTaskPo.TaskStatus.COMPLETED)).thenReturn(rows);
-        when(simulationTaskMapper.toSummaryDtoList(rows)).thenReturn(List.of());
+        when(simulationTaskMapper.toSummaryProjectionDtoList(rows)).thenReturn(List.of());
 
         service.getTasks(1L, List.of());
 
-        verify(simulationTaskRepository).findByUserIdAndStatusNotOrderByCreatedAtDesc(
+        verify(simulationTaskRepository).findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
                 1L, SimulationTaskPo.TaskStatus.COMPLETED);
-        verify(simulationTaskRepository, never()).findByUserIdOrderByCreatedAtDesc(anyLong());
     }
 
     @Test
@@ -1483,6 +1484,7 @@ class SimulationServiceImplTest {
                                             int steps, boolean isAttack, int attackBudget, boolean enablePrivacy) {
         SimulationRequestDto r = new SimulationRequestDto();
         r.setDevices(devices);
+        r.setPlaybackNodes(playbackNodes(devices));
         r.setRules(rules);
         r.setSteps(steps);
         r.setAttackScenario(AttackScenarioDto.builder()
@@ -1492,6 +1494,31 @@ class SimulationServiceImplTest {
                 .build());
         r.setEnablePrivacy(enablePrivacy);
         return r;
+    }
+
+    private List<DeviceNodeDto> playbackNodes(List<DeviceVerificationDto> devices) {
+        if (devices == null) return null;
+        List<DeviceNodeDto> nodes = new ArrayList<>();
+        for (int index = 0; index < devices.size(); index++) {
+            DeviceVerificationDto device = devices.get(index);
+            DeviceNodeDto node = new DeviceNodeDto();
+            String id = device != null && device.getVarName() != null && !device.getVarName().isBlank()
+                    ? device.getVarName() : "invalid_" + index;
+            node.setId(id);
+            node.setTemplateName(device != null && device.getTemplateName() != null
+                    && !device.getTemplateName().isBlank() ? device.getTemplateName() : "Invalid");
+            node.setLabel(device != null && device.getDeviceLabel() != null
+                    && !device.getDeviceLabel().isBlank() ? device.getDeviceLabel() : id);
+            DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+            position.setX((double) index * 240);
+            position.setY(0.0);
+            node.setPosition(position);
+            node.setState("Working");
+            node.setWidth(160);
+            node.setHeight(120);
+            nodes.add(node);
+        }
+        return nodes;
     }
 
     private RuleDto makeRule() {

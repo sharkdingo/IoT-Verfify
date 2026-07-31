@@ -795,6 +795,7 @@ describe('FuzzingPanel', () => {
         cancelling: false,
         frozenTask: {
           id: 73,
+          initiator: 'USER',
           explorationMode: 'PAPER_COMPATIBLE',
           status: 'RUNNING',
           progress: 25,

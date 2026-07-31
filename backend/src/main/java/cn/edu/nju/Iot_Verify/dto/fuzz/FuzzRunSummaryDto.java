@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.dto.fuzz;
 
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -18,6 +19,7 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class FuzzRunSummaryDto {
     private Long id;
+    private RunInitiator initiator;
     private FuzzOutcome outcome;
     private FuzzExplorationMode explorationMode;
     private Long effectiveSeed;

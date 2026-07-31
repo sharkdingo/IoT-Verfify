@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
+import cn.edu.nju.Iot_Verify.util.NaturalChangeRateParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -69,7 +70,8 @@ public class DeviceTemplateNuSmvValidator {
             for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
                 validateSmvIdentifier(templateName, "InternalVariable", iv.getName());
                 validateTemplateVariableDomain(templateName, "InternalVariable", iv.getName(),
-                        iv.getValues(), iv.getLowerBound(), iv.getUpperBound(), iv.getNaturalChangeRate());
+                        iv.getValues(), iv.getLowerBound(), iv.getUpperBound(), iv.getNaturalChangeRate(),
+                        !Boolean.TRUE.equals(iv.getIsInside()));
                 if (!Boolean.TRUE.equals(iv.getIsInside())
                         && (!hasText(iv.getTrust()) || !hasText(iv.getPrivacy()))) {
                     throw new BadRequestException(
@@ -83,7 +85,7 @@ public class DeviceTemplateNuSmvValidator {
                 validateSmvIdentifier(templateName, "EnvironmentDomain", domain.getName());
                 validateTemplateVariableDomain(templateName, "EnvironmentDomain", domain.getName(),
                         domain.getValues(), domain.getLowerBound(), domain.getUpperBound(),
-                        domain.getNaturalChangeRate());
+                        domain.getNaturalChangeRate(), true);
                 if (!hasText(domain.getTrust()) || !hasText(domain.getPrivacy())) {
                     throw new BadRequestException(
                             "Template '" + templateName + "': EnvironmentDomain '" + domain.getName()
@@ -163,7 +165,8 @@ public class DeviceTemplateNuSmvValidator {
                                                 List<String> values,
                                                 Integer lowerBound,
                                                 Integer upperBound,
-                                                String naturalChangeRate) {
+                                                String naturalChangeRate,
+                                                boolean sharedEnvironment) {
         if (lowerBound != null && upperBound != null && lowerBound > upperBound) {
             throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                     + name + "' has LowerBound " + lowerBound + " greater than UpperBound " + upperBound + ".");
@@ -179,30 +182,25 @@ public class DeviceTemplateNuSmvValidator {
             }
         }
         boolean numeric = lowerBound != null && upperBound != null;
-        if (hasText(naturalChangeRate) && !numeric) {
+        boolean hasRateDeclaration = naturalChangeRate != null;
+        if (numeric && sharedEnvironment && !hasRateDeclaration) {
+            throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                    + name + "' is a shared numeric environment variable and must explicitly define "
+                    + "NaturalChangeRate ('[-1, 1]' for the MEDIC baseline disturbance, or '0' "
+                    + "for no natural change).");
+        }
+        if (hasRateDeclaration && !numeric) {
             throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                     + name + "' declares NaturalChangeRate, but only numeric ranges can change by a rate.");
         }
-        if (hasText(naturalChangeRate)) {
-            String[] parts = naturalChangeRate.replace("[", "").replace("]", "").split(",", -1);
+        if (hasRateDeclaration) {
             try {
-                int lowerRate;
-                int upperRate;
-                if (parts.length == 1) {
-                    int rate = Integer.parseInt(parts[0].trim());
-                    lowerRate = Math.min(0, rate);
-                    upperRate = Math.max(0, rate);
-                } else if (parts.length == 2) {
-                    lowerRate = Integer.parseInt(parts[0].trim());
-                    upperRate = Integer.parseInt(parts[1].trim());
-                } else {
-                    throw new NumberFormatException("wrong number of rate values");
-                }
-                if (lowerRate > upperRate) {
+                NaturalChangeRateParser.parse(naturalChangeRate);
+            } catch (NaturalChangeRateParser.ParseException exception) {
+                if (exception.isDescending()) {
                     throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                             + name + "' has invalid or descending NaturalChangeRate '" + naturalChangeRate + "'.");
                 }
-            } catch (NumberFormatException exception) {
                 throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                         + name + "' has invalid NaturalChangeRate '" + naturalChangeRate + "'.");
             }

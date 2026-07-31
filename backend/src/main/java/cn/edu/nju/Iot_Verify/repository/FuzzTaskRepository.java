@@ -77,20 +77,11 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
     List<Long> findIdsByUserIdAndStatus(@Param("userId") Long userId,
                                         @Param("status") FuzzTaskPo.TaskStatus status);
 
-    List<FuzzTaskPo> findByUserIdAndStatusNotOrderByCreatedAtDescIdDesc(
-            Long userId, FuzzTaskPo.TaskStatus status, Pageable pageable);
-
     List<FuzzTaskSummaryProjection> findSummaryByUserIdAndStatusNotOrderByCreatedAtDescIdDesc(
             Long userId, FuzzTaskPo.TaskStatus status, Pageable pageable);
 
-    List<FuzzTaskPo> findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDescIdDesc(
-            Long userId, FuzzTaskPo.TaskStatus status, List<Long> excludedIds, Pageable pageable);
-
     List<FuzzTaskSummaryProjection> findSummaryByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDescIdDesc(
             Long userId, FuzzTaskPo.TaskStatus status, List<Long> excludedIds, Pageable pageable);
-
-    List<FuzzTaskPo> findByUserIdAndStatusOrderByCreatedAtDescIdDesc(
-            Long userId, FuzzTaskPo.TaskStatus status, Pageable pageable);
 
     List<FuzzTaskSummaryProjection> findSummaryByUserIdAndStatusOrderByCreatedAtDescIdDesc(
             Long userId, FuzzTaskPo.TaskStatus status, Pageable pageable);

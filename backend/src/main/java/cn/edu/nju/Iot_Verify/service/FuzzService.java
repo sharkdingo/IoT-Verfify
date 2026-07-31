@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingReplayDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRequestDto;
@@ -53,4 +54,9 @@ public interface FuzzService {
     List<FuzzFindingDto> getFindings(Long userId, Long runId);
 
     FuzzFindingDto getFinding(Long userId, Long findingId);
+
+    /**
+     * Loads one owned candidate finding with the frozen run snapshot needed for read-only replay.
+     */
+    FuzzFindingReplayDto getFindingReplay(Long userId, Long findingId);
 }

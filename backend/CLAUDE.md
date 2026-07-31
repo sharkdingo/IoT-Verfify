@@ -48,7 +48,7 @@ component/
     parser/        SmvTraceParser — counterexample parsing
     fixer/         FaultLocalizer + parameter/condition/permanent-removal fix strategies
   fuzz/            deterministic bounded path search + finite safety monitor
-  aitool/          48 AI tools (board/node/rule/scenario/spec/template/simulation/verification/fuzz)
+  aitool/          53 AI tools (board/node/rule/scenario/spec/template/simulation/verification/fuzz)
   ai/              LLM abstraction — domain model + LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, data access
 security/          JWT + Spring Security
@@ -161,13 +161,14 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 - **Fuzz findings are not formal traces.** The bounded explorer supports only its
   documented finite safety subset, and budget exhaustion is never satisfaction. Keep
   `fuzz_finding` separate from NuSMV `trace`; direct automatic fix remains formal-only.
-- **Check the paper before calling modeling semantics a bug.** The modeling, fix, and exploration
-  semantics come from published algorithms ([../docs/architecture/theory-sources.md](../docs/architecture/theory-sources.md)).
-  A construct that looks unmotivated is usually deliberate: the ±1 at a numeric environment boundary
-  is MEDIC's environment disturbance (§3.1, Fig. 2b), not an unauthored step, and removing it makes
-  the model assume a physical quantity is perfectly observed — unsound in the unsafe direction.
-  An over-permissive model produces a false alarm the user can dismiss; an over-restrictive one hides
-  a real violation. When they conflict, prefer the paper and cite the section in a comment.
+- **Use papers as evidence, not as an implicit product override.** The modeling, fix, and exploration
+  semantics draw from published algorithms ([../docs/architecture/theory-sources.md](../docs/architecture/theory-sources.md)),
+  but deliberate abstractions must follow the documented product contract. Numeric environment
+  evolution, for example, exposes MEDIC's per-step `[-1, 1]` disturbance as the required
+  `NaturalChangeRate`: `[-1, 1]` is the exact MEDIC rule, `0` explicitly disables independent drift,
+  and another interval is a visible project extension. Generation uses that declaration once and
+  never layers a second hidden `[-1, 1]` term on top. Read the cited section, name any deviation, and
+  keep formal verification, fuzz, DTOs, tests, docs, and UI wording aligned.
 - **An interrupt flag is thread state, not request state.** `FixStrategyUtils.preserveInterrupt`
   re-arms `Thread.interrupt()` so a cancelled search stops launching solver runs, and
   `FixContext.isExpired()` reports it. Re-arm freely inside a task — it is the search's only stop

@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.repository.projection;
 
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 
 import java.time.LocalDateTime;
@@ -9,6 +10,8 @@ import java.time.LocalDateTime;
 public interface VerificationRunSummaryProjection {
 
     Long getId();
+
+    RunInitiator getInitiator();
 
     VerificationTaskPo.TaskStatus getStatus();
 

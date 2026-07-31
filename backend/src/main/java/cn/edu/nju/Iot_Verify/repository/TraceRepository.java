@@ -18,7 +18,7 @@ public interface TraceRepository extends JpaRepository<TracePo, Long> {
     /**
      * 根据用户ID查询所有轨迹
      */
-    List<TracePo> findByUserIdOrderByCreatedAtDesc(Long userId);
+    List<TracePo> findByUserId(Long userId);
 
     /**
      * 根据ID和用户ID查询轨迹
@@ -30,8 +30,15 @@ public interface TraceRepository extends JpaRepository<TracePo, Long> {
      */
     List<TracePo> findByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
 
-    List<TraceSummaryProjection> findByUserIdAndVerificationTaskIdInOrderByCreatedAtDesc(
-            Long userId, List<Long> verificationTaskIds);
+    @Query("SELECT t.id AS id, t.verificationTaskId AS verificationTaskId, "
+         + "t.violatedSpecId AS violatedSpecId, t.violatedSpecJson AS violatedSpecJson, "
+         + "t.stateCount AS stateCount, t.createdAt AS createdAt "
+         + "FROM TracePo t WHERE t.userId = :userId "
+         + "AND t.verificationTaskId IN :verificationTaskIds "
+         + "ORDER BY t.createdAt DESC, t.id DESC")
+    List<TraceSummaryProjection> findSummariesByUserIdAndVerificationTaskIdIn(
+            @Param("userId") Long userId,
+            @Param("verificationTaskIds") List<Long> verificationTaskIds);
 
     long countByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
 

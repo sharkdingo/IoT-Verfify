@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.controller;
 
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatHistoryPageDto;
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
@@ -8,6 +9,7 @@ import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatPendingConfirmationDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatStopRequestDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatTerminalSeenRequestDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatAdmissionOutcomeUnknownException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -40,15 +42,18 @@ public class ChatController {
     private final ChatService chatService;
     private final Executor executor;
     private final UserOperationGuard userOperationGuard;
+    private final ChatExecutionConfig chatExecutionConfig;
     private final long sseTimeoutMs;
 
     public ChatController(ChatService chatService,
                           @Qualifier("chatExecutor") Executor executor,
                           UserOperationGuard userOperationGuard,
+                          ChatExecutionConfig chatExecutionConfig,
                           @Value("${chat.sse-timeout-ms:3600000}") long sseTimeoutMs) {
         this.chatService = chatService;
         this.executor = executor;
         this.userOperationGuard = userOperationGuard;
+        this.chatExecutionConfig = chatExecutionConfig;
         this.sseTimeoutMs = sseTimeoutMs;
     }
 
@@ -75,12 +80,22 @@ public class ChatController {
                 limit == null ? RequestLimits.DEFAULT_CHAT_HISTORY_PAGE_SIZE : limit));
     }
 
+    @PostMapping("/sessions/{sessionId}/seen")
+    public Result<Void> markTerminalSeen(
+            @CurrentUser Long userId,
+            @PathVariable @Size(max = 64, message = "Session ID must not exceed 64 characters") String sessionId,
+            @Valid @RequestBody ChatTerminalSeenRequestDto request) {
+        chatService.markTerminalSeen(userId, sessionId, request.getTerminalMessageId());
+        return Result.success();
+    }
+
     @PostMapping("/completions")
     public SseEmitter chat(@CurrentUser Long userId, @Valid @RequestBody ChatRequestDto request) {
         log.debug("Received chat request from userId={}, sessionId={}", userId, request.getSessionId());
         SseEmitter emitter = new SseEmitter(sseTimeoutMs);
         UserOperationGuard.Lease userLease = userOperationGuard.acquire(
-                userId, UserOperationGuard.Kind.CHAT, 2, Duration.ofHours(2));
+                userId, UserOperationGuard.Kind.CHAT,
+                chatExecutionConfig.getMaxConcurrentSessionsPerUser(), Duration.ofHours(2));
         String turnId = request.getTurnId().trim();
         String executionId;
         try {

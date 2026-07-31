@@ -29,6 +29,8 @@ import type {
 import { isModelSemanticsConsistent } from './modelSemantics'
 import type { RunPersistence, RunPersistenceStatus } from '@/types/runPersistence'
 import { validateTraceStatePayload } from './traceStateResponse'
+import { isRunInitiator } from '@/types/model'
+import { validateModelPlaybackScene } from './playbackSceneResponse'
 
 export const RUN_RESPONSE_INCOMPLETE_CODE = 'RUN_RESPONSE_INCOMPLETE'
 
@@ -75,6 +77,12 @@ const requireBoolean = (value: Record<string, any>, field: string, context: stri
     throw new RunResponseContractError(context, `${field} must be boolean`)
   }
   return value[field]
+}
+
+const requireRunInitiator = (value: Record<string, any>, context: string) => {
+  if (!isRunInitiator(value.initiator)) {
+    throw new RunResponseContractError(context, 'initiator is invalid')
+  }
 }
 
 const requireInteger = (
@@ -276,6 +284,7 @@ export const activeTaskProgressStage = (
 const validateTaskBase = (value: unknown, context: string): Record<string, any> => {
   const task = requireRecord(value, context)
   requireInteger(task, 'id', context, 1)
+  requireRunInitiator(task, context)
   if (!TASK_STATUSES.has(task.status)) {
     throw new RunResponseContractError(context, 'status is invalid')
   }
@@ -456,6 +465,12 @@ const validateVerificationTraceShape = (
     throw new RunResponseContractError(context, 'modelComplete contradicts generation omissions')
   }
   requireAttackContext(trace, context)
+  validateModelPlaybackScene(
+    trace.playbackScene,
+    trace.modelSnapshot.deviceCount,
+    trace.modelSnapshot.ruleCount,
+    detail => { throw new RunResponseContractError(context, detail) }
+  )
   if (trace.modelSnapshot.specificationCount < 1) {
     throw new RunResponseContractError(context, 'modelSnapshot must include at least one specification')
   }
@@ -617,6 +632,7 @@ const validateVerificationRunBase = (
 ): Record<string, any> => {
   const run = requireRecord(value, context)
   requireInteger(run, 'id', context, 1)
+  requireRunInitiator(run, context)
   requireString(run, 'createdAt', context, false)
   requireString(run, 'startedAt', context, false)
   requireString(run, 'completedAt', context, false)
@@ -653,6 +669,7 @@ export const validateVerificationRunSummary = (value: unknown): VerificationRunS
   const context = 'Verification run summary'
   const candidate = requireRecord(value, context)
   requireInteger(candidate, 'id', context, 1)
+  requireRunInitiator(candidate, context)
   const dataAvailable = requireBoolean(candidate, 'dataAvailable', context)
   requireOptionalTimestamp(candidate, 'createdAt', context)
   requireOptionalTimestamp(candidate, 'startedAt', context)
@@ -714,6 +731,12 @@ const validateSimulationShape = (
     throw new RunResponseContractError(context, 'an unconfirmed history result cannot claim a persisted id')
   }
   requireAttackContext(result, context)
+  validateModelPlaybackScene(
+    result.playbackScene,
+    result.modelSnapshot.deviceCount,
+    result.modelSnapshot.ruleCount,
+    detail => { throw new RunResponseContractError(context, detail) }
+  )
   if (result.modelSnapshot.specificationCount !== 0) {
     throw new RunResponseContractError(context, 'simulation modelSnapshot specificationCount must be 0')
   }
@@ -739,6 +762,7 @@ export const validateSimulationResult = (value: unknown): SimulationResult =>
 
 export const validateSimulationTrace = (value: unknown): SimulationTrace => {
   const result = validateSimulationShape(value, 'Simulation trace', true)
+  requireRunInitiator(result, 'Simulation trace')
   requireString(result, 'createdAt', 'Simulation trace', false)
   return result as unknown as SimulationTrace
 }
@@ -747,6 +771,7 @@ export const validateSimulationTraceSummary = (value: unknown): SimulationTraceS
   const context = 'Simulation history summary'
   const result = requireRecord(value, context)
   requireInteger(result, 'id', context, 1)
+  requireRunInitiator(result, context)
   const dataAvailable = requireBoolean(result, 'dataAvailable', context)
   requireOptionalTimestamp(result, 'createdAt', context)
   if (!dataAvailable) {

@@ -62,6 +62,19 @@ const modelSnapshot = (specificationCount: number) => ({
   templatesFrozen: true
 })
 
+const playbackScene = () => ({
+  nodes: [
+    { id: 'device_1', templateName: 'Motion Detector', label: 'Hall sensor', position: { x: 20, y: 40 }, state: 'idle', width: 160, height: 120 },
+    { id: 'device_2', templateName: 'Alarm', label: 'Hall alarm', position: { x: 360, y: 40 }, state: 'off', width: 160, height: 120 }
+  ],
+  rules: [1, 2, 3].map(id => ({
+    id,
+    conditions: [{ deviceName: 'device_1', attribute: 'state', targetType: 'state', relation: '=', value: 'active' }],
+    command: { deviceName: 'device_2', action: 'on' },
+    ruleString: `Rule ${id}`
+  }))
+})
+
 const validVerification = () => ({
   isAttack: false,
   attackBudget: 0,
@@ -108,6 +121,7 @@ const unpersistedViolation = () => ({
     enablePrivacy: false,
     modelSemantics,
     modelSnapshot: modelSnapshot(1),
+    playbackScene: playbackScene(),
     createdAt: '2026-07-12T00:00:02'
   }],
   specResults: validVerification().specResults.map(result => ({
@@ -123,6 +137,7 @@ const validSimulation = () => ({
   enablePrivacy: false,
   modelSemantics,
   modelSnapshot: modelSnapshot(0),
+  playbackScene: playbackScene(),
   historyPersistence: { status: 'NOT_REQUESTED' },
   modelComplete: true,
   disabledRuleCount: 0,
@@ -136,6 +151,7 @@ const validSimulation = () => ({
 
 const validCompletedVerificationTask = () => ({
   id: 7,
+  initiator: 'USER',
   status: 'COMPLETED',
   createdAt: '2026-07-12T00:00:00',
   startedAt: '2026-07-12T00:00:01',
@@ -160,6 +176,7 @@ const validCompletedVerificationTask = () => ({
 
 const validVerificationRun = () => ({
   id: 7,
+  initiator: 'AI_ASSISTANT',
   createdAt: '2026-07-12T00:00:00',
   startedAt: '2026-07-12T00:00:01',
   completedAt: '2026-07-12T00:00:02',
@@ -183,6 +200,7 @@ const validVerificationRun = () => ({
 
 const validCompletedSimulationTask = () => ({
   id: 8,
+  initiator: 'USER',
   status: 'COMPLETED',
   createdAt: '2026-07-12T00:00:00',
   startedAt: '2026-07-12T00:00:01',
@@ -523,6 +541,7 @@ describe('verification and simulation response contracts', () => {
   it('rejects a simulation history summary with contradictory attack context', () => {
     expect(() => validateSimulationTraceSummary({
       id: 3,
+      initiator: 'USER',
       requestedSteps: 2,
       steps: 2,
       modelComplete: true,

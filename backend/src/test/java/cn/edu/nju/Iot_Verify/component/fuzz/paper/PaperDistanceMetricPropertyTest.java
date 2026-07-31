@@ -9,12 +9,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Paper-level properties of the HAFuzz seed-distance metric (Algorithm 1), as distinct from the
  * internal-consistency checks in {@link PaperMonitorFsmTest}.
  *
- * <p>Line 25 prints the per-level weight as {@code 2^(l_up-l) / 2^(l_up-1)}. Those weights sum to
- * 1.75 at {@code l_up = 3} rather than to 1, which lets {@code Dist_cond} exceed the integer
- * {@code Dist_graph} and drives the returned {@code Dist_graph - Dist_cond} negative.
- * {@code SeedSelection} (line 10) keeps the seed with the <em>minimum</em> distance, so a negative
- * score inverts the ranking: a seed merely close to satisfying its conditions would outrank one
- * already at the violation state. We therefore normalize with {@code 2^l_up - 1}.
+ * <p>Line 25 defines the per-level weight as {@code 2^(l_up-l) / (2^l_up-1)}. The denominator is
+ * the sum of all powers used by the configured predecessor levels, so fully satisfied conditions
+ * contribute exactly one to {@code Dist_cond}. {@code SeedSelection} (line 10) keeps the seed with
+ * the <em>minimum</em> distance, making this normalization part of the search ordering rather than a
+ * presentation detail.
  *
  * <p>These tests pin the consequence, not the arithmetic — they would fail for any denominator that
  * lets the weights sum above 1.
@@ -49,7 +48,7 @@ class PaperDistanceMetricPropertyTest {
         PaperAtom guard = atom("guard");
         PaperMonitorFsm monitor = oneStepMonitor(guard);
         // Every level resolves to a condition that is fully satisfied — the maximum possible
-        // Dist_cond. With the printed denominator this sums to 1.75 and the score goes to -0.75.
+        // Dist_cond. The Algorithm 1 weights must sum to exactly one.
         PaperAtomValuation allTrue = atom -> true;
 
         for (int solverLevels = 1; solverLevels <= 3; solverLevels++) {

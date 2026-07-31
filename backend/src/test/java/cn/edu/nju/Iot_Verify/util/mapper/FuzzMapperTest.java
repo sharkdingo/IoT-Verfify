@@ -5,8 +5,10 @@ import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelFingerprint;
 import cn.edu.nju.Iot_Verify.component.fuzz.FuzzModelInputSnapshotCodec;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzEligibilityDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingReplayDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzInputEventDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzIneligibleSpecDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
@@ -15,6 +17,7 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRunSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
@@ -40,6 +43,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -150,6 +154,7 @@ class FuzzMapperTest {
         SpecificationDto specification = supportedSpecification("spec-1");
         ModelInputSnapshot snapshot = provenanceSnapshot(specification);
         snapshot.devices().get(0).setTemplateName("  sWiTcH  ");
+        snapshot.nodes().get(0).setTemplateName("  sWiTcH  ");
         FuzzTaskPo run = completedRun(
                 List.of(specification), List.of("spec-1"), FuzzEligibilityDto.builder()
                         .eligibleSpecIds(List.of("spec-1"))
@@ -704,6 +709,10 @@ class FuzzMapperTest {
         FuzzFindingPo finding = finding(run, specification);
 
         assertEquals(finding.getId(), mapper.toFindingDto(run, finding, 1L).getId());
+        FuzzFindingReplayDto replay = mapper.toFindingReplayDto(run, finding, 1L);
+        assertEquals(finding.getId(), replay.getFinding().getId());
+        assertNotNull(replay.getModelSnapshot());
+        assertNotNull(replay.getPlaybackScene());
 
         finding.setSeed(43L);
         assertThrows(PersistedDataIntegrityException.class,
@@ -805,11 +814,23 @@ class FuzzMapperTest {
                         .build(), FuzzOutcome.FOUND_VIOLATION, 1);
         RuleDto frozenRule = RuleDto.builder()
                 .id(7L)
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("switch_1")
+                        .attribute("state")
+                        .targetType("state")
+                        .relation("=")
+                        .value("off")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("switch_1")
+                        .action("on")
+                        .build())
                 .ruleString("Frozen rule")
                 .build();
+        ModelInputSnapshot provenance = provenanceSnapshot(specification);
         ModelInputSnapshot frozenInput = new ModelInputSnapshot(
-                List.of(), List.of(), List.of(), List.of(frozenRule),
-                List.of(specification), Map.of());
+                provenance.nodes(), provenance.devices(), provenance.environmentVariables(), List.of(frozenRule),
+                provenance.specifications(), provenance.templateManifests());
         run.setModelInputSnapshotJson(FuzzModelInputSnapshotCodec.encode(frozenInput));
         run.setModelSnapshotJson(JsonUtils.toJson(fuzzSnapshot(run.getCreatedAt(), frozenInput)));
         FuzzFindingPo finding = finding(run, specification);
@@ -818,11 +839,18 @@ class FuzzMapperTest {
                 .ruleId("7")
                 .ruleLabel("Frozen rule")
                 .build();
+        TraceDeviceDto device = new TraceDeviceDto();
+        device.setDeviceId("switch_1");
+        device.setDeviceLabel("switch_1");
+        device.setTemplateName("Switch");
+        device.setModelTokenSource(ModelTokenSource.BUNDLED);
+        device.setVariables(List.of(traceVariable("battery", ModelTokenSource.BUNDLED)));
         TraceStateDto state = TraceStateDto.builder()
                 .stateIndex(0)
-                .devices(List.of())
+                .devices(List.of(device))
                 .triggeredRules(List.of(evidence))
                 .compromisedAutomationLinks(List.of())
+                .envVariables(List.of(traceVariable("temperature", ModelTokenSource.BUNDLED)))
                 .build();
 
         finding.setStatesJson(JsonUtils.toJson(List.of(state)));
@@ -974,6 +1002,7 @@ class FuzzMapperTest {
         FuzzTaskSummaryProjection run = mock(FuzzTaskSummaryProjection.class);
         when(run.getId()).thenReturn(88L);
         when(run.getUserId()).thenReturn(3L);
+        when(run.getInitiator()).thenReturn(RunInitiator.USER);
         when(run.getStatus()).thenReturn(FuzzTaskPo.TaskStatus.COMPLETED);
         when(run.getCreatedAt()).thenReturn(createdAt);
         when(run.getStartedAt()).thenReturn(createdAt);
@@ -1025,6 +1054,7 @@ class FuzzMapperTest {
         FuzzTaskSummaryProjection run = mock(FuzzTaskSummaryProjection.class);
         when(run.getId()).thenReturn(89L);
         when(run.getUserId()).thenReturn(3L);
+        when(run.getInitiator()).thenReturn(RunInitiator.USER);
         when(run.getStatus()).thenReturn(FuzzTaskPo.TaskStatus.COMPLETED);
         when(run.getCreatedAt()).thenReturn(createdAt);
         when(run.getStartedAt()).thenReturn(createdAt);
@@ -1099,6 +1129,7 @@ class FuzzMapperTest {
         FuzzTaskSummaryProjection run = mock(FuzzTaskSummaryProjection.class);
         when(run.getId()).thenReturn(90L);
         when(run.getUserId()).thenReturn(3L);
+        when(run.getInitiator()).thenReturn(RunInitiator.AI_ASSISTANT);
         when(run.getStatus()).thenReturn(FuzzTaskPo.TaskStatus.COMPLETED);
         when(run.getCreatedAt()).thenReturn(createdAt);
         when(run.getStartedAt()).thenReturn(createdAt);
@@ -1230,8 +1261,23 @@ class FuzzMapperTest {
                 .impactedVariables(List.of())
                 .build();
         return new ModelInputSnapshot(
-                List.of(), List.of(device), List.of(), List.of(), List.of(specification),
+                List.of(playbackNode("switch_1", "Switch")), List.of(device), List.of(), List.of(), List.of(specification),
                 Map.of("Switch", manifest));
+    }
+
+    private DeviceNodeDto playbackNode(String id, String templateName) {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId(id);
+        node.setTemplateName(templateName);
+        node.setLabel(id);
+        DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+        position.setX(0.0);
+        position.setY(0.0);
+        node.setPosition(position);
+        node.setState("Working");
+        node.setWidth(160);
+        node.setHeight(120);
+        return node;
     }
 
     private TraceVariableDto traceVariable(String name, ModelTokenSource source) {

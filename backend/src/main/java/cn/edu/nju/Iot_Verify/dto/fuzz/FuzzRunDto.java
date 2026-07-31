@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.dto.fuzz;
 
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelPlaybackSceneDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -16,6 +18,7 @@ import java.util.List;
 @AllArgsConstructor
 public class FuzzRunDto {
     private Long id;
+    private RunInitiator initiator;
     private FuzzOutcome outcome;
     private FuzzExplorationMode explorationMode;
     private Long effectiveSeed;
@@ -23,6 +26,7 @@ public class FuzzRunDto {
     private Long generatedPaths;
     private Long elapsedMs;
     private ModelRunSnapshotDto modelSnapshot;
+    private ModelPlaybackSceneDto playbackScene;
     private FuzzEligibilityDto eligibility;
     @Builder.Default
     private List<String> limitations = new ArrayList<>();

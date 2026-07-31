@@ -133,6 +133,9 @@ public class AuthServiceImpl implements AuthService {
             throw UnauthorizedException.missingToken();
         }
 
+        if (chatService instanceof ChatExecutionControl control) {
+            control.requestUserExecutionStop(userId);
+        }
         blacklistCurrentToken(authHeader);
     }
 

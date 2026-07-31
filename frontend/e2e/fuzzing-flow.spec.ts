@@ -307,20 +307,26 @@ test.describe('bounded counterexample exploration', () => {
       await page.getByTestId('history-result-filter-fuzzing').click()
       await page.getByTestId(`open-fuzzing-run-${runId}`).click()
       let independentFindingReadCount = 0
+      let replayRunDetailReadCount = 0
       page.on('request', request => {
         if (request.method() === 'GET'
             && new URL(request.url()).pathname === `/api/fuzz/findings/${findingId}`) {
           independentFindingReadCount += 1
         }
+        if (request.method() === 'GET'
+            && new URL(request.url()).pathname === `/api/fuzz/runs/${runId}`) {
+          replayRunDetailReadCount += 1
+        }
       })
-      const replayRunResponsePromise = page.waitForResponse(response =>
+      const replayFindingResponsePromise = page.waitForResponse(response =>
         response.request().method() === 'GET'
-          && new URL(response.url()).pathname === `/api/fuzz/runs/${runId}`)
+          && new URL(response.url()).pathname === `/api/fuzz/findings/${findingId}`)
       await page.getByTestId(`replay-fuzzing-finding-${findingId}`).click()
-      const replayRunResponse = await replayRunResponsePromise
-      expect(replayRunResponse.ok()).toBe(true)
+      const replayFindingResponse = await replayFindingResponsePromise
+      expect(replayFindingResponse.ok()).toBe(true)
       await expect(page.getByTestId('trace-timeline')).toBeVisible({ timeout: 30_000 })
-      expect(independentFindingReadCount).toBe(0)
+      expect(independentFindingReadCount).toBe(1)
+      expect(replayRunDetailReadCount).toBe(0)
       await expect(page.getByTestId('fuzzing-playback-notice')).toBeVisible()
       await page.getByTestId('trace-timeline-close').click()
 

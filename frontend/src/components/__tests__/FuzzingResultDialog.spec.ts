@@ -94,6 +94,7 @@ const snapshot = {
 
 const run: AvailableFuzzingRunSummary & { targetSpecIds: string[] } = {
   id: 10,
+  initiator: 'AI_ASSISTANT',
   explorationMode: 'PAPER_COMPATIBLE',
   outcome: 'FOUND_VIOLATION',
   effectiveSeed: 42,

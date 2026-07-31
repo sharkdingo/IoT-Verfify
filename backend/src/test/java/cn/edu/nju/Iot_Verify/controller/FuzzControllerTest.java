@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.controller;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingDto;
+import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzFindingReplayDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzPaperDomainPreviewRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzRequestDto;
@@ -169,15 +170,18 @@ class FuzzControllerTest {
         Method method = FuzzController.class.getMethod("getFinding", Long.class, Long.class);
         GetMapping mapping = method.getAnnotation(GetMapping.class);
         FuzzController controller = new FuzzController(fuzzService);
-        FuzzFindingDto finding = FuzzFindingDto.builder().id(8L).fuzzTaskId(3L).build();
-        when(fuzzService.getFinding(7L, 8L)).thenReturn(finding);
+        FuzzFindingReplayDto replay = FuzzFindingReplayDto.builder()
+                .finding(FuzzFindingDto.builder().id(8L).fuzzTaskId(3L).build())
+                .build();
+        when(fuzzService.getFindingReplay(7L, 8L)).thenReturn(replay);
 
-        Result<FuzzFindingDto> result = controller.getFinding(7L, 8L);
+        Result<FuzzFindingReplayDto> result = controller.getFinding(7L, 8L);
 
         assertEquals(List.of("/api/fuzz"), List.of(root.value()));
         assertEquals(List.of("/findings/{id}"), List.of(mapping.value()));
         assertEquals(200, result.getCode());
-        assertSame(finding, result.getData());
+        assertSame(replay, result.getData());
+        verify(fuzzService).getFindingReplay(7L, 8L);
     }
 
     @Test

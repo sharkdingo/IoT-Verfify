@@ -220,7 +220,8 @@ automation, and therefore has a separate destructive confirmation and search str
 
 The implementation follows Salus §5 for fault-localized parameter/condition solving,
 fixed-counterexample candidate discovery, exclusion of tried assignments, user-preferred
-numeric ranges, and all-initial-state forward verification. It deliberately exposes one
+numeric ranges, and forward verification without the candidate search's counterexample-only
+initial-state constraints. It deliberately exposes one
 verified suggestion per requested strategy and API call. Re-running parameter adjustment
 with a different range can request a different solution, but the service does not persist
 an exclusion history across calls to enumerate the next solution from the same strategy.
@@ -270,6 +271,11 @@ the complete generated model used by that fix attempt; it remains a model-level 
 not a guarantee about unmodelled physical behavior. The ordinary UI therefore presents
 this state as **passed recomputation in the current complete formal model**, rather than
 as an unqualified "verified solution".
+This second check removes the counterexample-replay constraints used to discover the candidate,
+but retains the Board/template initial assignments of the ordinary model. It therefore covers
+every modeled execution reachable from the authored starting state, not every arbitrary value in
+each declared legal domain. This is the product's concrete form of Salus §5's required second
+verification pass.
 For `EXACT_POINTS`, generation first recomputes the candidate rule set's attack surface
 and rejects it unless every selected device remains behavior-changing and every selected
 automation-link rule id still occurs exactly once.

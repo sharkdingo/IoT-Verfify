@@ -50,7 +50,7 @@ security:
 llm:
   provider: ${LLM_PROVIDER:openai}
   api-key: ${IOT_VERIFY_OPENAI_API_KEY:your_api_key_here}
-  model: ${IOT_VERIFY_OPENAI_MODEL:gpt-5.5}
+  model: ${IOT_VERIFY_OPENAI_MODEL:gpt-5.6-luna}
   recommendation-model: ${IOT_VERIFY_OPENAI_RECOMMENDATION_MODEL:}
   base-url: ${IOT_VERIFY_OPENAI_BASE_URL:https://api.openai.com/v1}
   timeout-minutes: ${LLM_TIMEOUT_MINUTES:5}
@@ -58,11 +58,13 @@ llm:
 chat:
   sse-timeout-ms: ${CHAT_SSE_TIMEOUT_MS:3600000}
   execution:
+    max-concurrent-sessions-per-user: ${CHAT_MAX_CONCURRENT_SESSIONS_PER_USER:4}
     max-tool-rounds: ${CHAT_MAX_TOOL_ROUNDS:64}
     max-stagnant-rounds: ${CHAT_MAX_STAGNANT_ROUNDS:2}
     max-tool-result-bytes: ${CHAT_MAX_TOOL_RESULT_BYTES:49152}
     max-tool-calls-per-round: ${CHAT_MAX_TOOL_CALLS_PER_ROUND:16}
     max-messages-per-session: ${CHAT_MAX_MESSAGES_PER_SESSION:5000}
+    history-char-limit: ${CHAT_HISTORY_CHAR_LIMIT:32000}
     lease-ttl-ms: ${CHAT_EXECUTION_LEASE_TTL_MS:30000}
     lease-heartbeat-ms: ${CHAT_EXECUTION_LEASE_HEARTBEAT_MS:10000}
 

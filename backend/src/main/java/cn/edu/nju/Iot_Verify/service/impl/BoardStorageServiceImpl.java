@@ -1552,6 +1552,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                                                   List<DeviceNodeDto> nodes,
                                                   List<BoardEnvironmentVariableDto> variables) {
         Map<String, DeviceManifest> templateManifests = loadTemplateManifestMap(userId);
+        requireActiveEnvironmentDomainConsistency(nodes, templateManifests);
         Map<String, DeviceManifest.InternalVariable> required = collectRequiredEnvironmentVariables(
                 nodes, templateManifests);
         validateSubmittedEnvironmentNames(variables, required);
@@ -1768,6 +1769,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             List<DeviceNodeDto> nodes,
             Map<String, DeviceManifest> templateManifests,
             boolean resetValuesOutsideNewDomains) {
+        requireActiveEnvironmentDomainConsistency(nodes, templateManifests);
         Map<String, DeviceManifest.InternalVariable> required = collectRequiredEnvironmentVariables(
                 nodes, templateManifests);
         List<BoardEnvironmentVariableDto> merged = mergeEnvironmentVariables(
@@ -1861,6 +1863,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             List<BoardEnvironmentVariableDto> variables,
             boolean preserveExistingValues) {
         Map<String, DeviceManifest> templateManifests = loadTemplateManifestMap(userId);
+        requireActiveEnvironmentDomainConsistency(nodes, templateManifests);
         Map<String, DeviceManifest.InternalVariable> required = collectRequiredEnvironmentVariables(
                 nodes, templateManifests);
         validateSubmittedEnvironmentNames(variables, required);
@@ -1885,6 +1888,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             throw new BadRequestException("At least one environment variable patch is required");
         }
         Map<String, DeviceManifest> templateManifests = loadTemplateManifestMap(userId);
+        requireActiveEnvironmentDomainConsistency(nodes, templateManifests);
         Map<String, DeviceManifest.InternalVariable> required = collectRequiredEnvironmentVariables(
                 nodes, templateManifests);
         validateSubmittedEnvironmentNames(patches, required);
@@ -1926,6 +1930,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
 
         Map<String, DeviceManifest> templateManifests = loadTemplateManifestMap(userId);
+        requireActiveEnvironmentDomainConsistency(nodes, templateManifests);
         Map<String, DeviceManifest.InternalVariable> required = collectRequiredEnvironmentVariables(
                 nodes, templateManifests);
         List<BoardEnvironmentVariableDto> persistedBefore = getEnvironmentVariablesInternal(userId);
@@ -3018,6 +3023,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     }
                 }
             }
+        }
+    }
+
+    private void requireActiveEnvironmentDomainConsistency(
+            List<DeviceNodeDto> nodes,
+            Map<String, DeviceManifest> templateManifests) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        validateActiveEnvironmentDomainConsistency(errors, nodes, templateManifests);
+        if (!errors.isEmpty()) {
+            throw new ValidationException(errors);
         }
     }
 

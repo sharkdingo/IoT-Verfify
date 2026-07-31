@@ -1,7 +1,9 @@
 package cn.edu.nju.Iot_Verify.service;
 
-/** Local-process control used to stop in-flight chat work after account deletion commits. */
+/** Account-scoped control for in-flight chat execution lifecycle. */
 public interface ChatExecutionControl {
+
+    void requestUserExecutionStop(Long userId);
 
     void requestLocalUserExecutionStop(Long userId);
 }

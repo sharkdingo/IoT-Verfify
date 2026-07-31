@@ -16,6 +16,10 @@ import java.util.Map;
 /** User-semantic projections for chat tools; persistence/model ids stay out of ordinary output. */
 public final class ModelTraceToolPresenter {
 
+    public static final int DEFAULT_STATE_LIMIT = 10;
+    public static final int MAX_STATE_LIMIT = 10;
+    public static final int MAX_STATE_OFFSET = Integer.MAX_VALUE;
+
     private ModelTraceToolPresenter() {
     }
 
@@ -58,6 +62,29 @@ public final class ModelTraceToolPresenter {
             presented.add(item);
         }
         return List.copyOf(presented);
+    }
+
+    public static StateWindow putStateWindow(Map<String, Object> target,
+                                             List<TraceStateDto> states,
+                                             int requestedOffset,
+                                             int limit) {
+        List<TraceStateDto> source = states == null ? List.of() : states;
+        int windowStart = Math.min(requestedOffset, source.size());
+        int windowEnd = (int) Math.min(source.size(), (long) windowStart + limit);
+        StateWindow window = new StateWindow(windowStart, windowEnd);
+        target.put("stateCount", source.size());
+        target.put("stateOffset", requestedOffset);
+        target.put("stateLimit", limit);
+        target.put("returnedStateCount", windowEnd - windowStart);
+        target.put("hasMoreStates", windowEnd < source.size());
+        if (windowEnd < source.size()) {
+            target.put("nextStateOffset", windowEnd);
+        }
+        target.put("states", states(source.subList(windowStart, windowEnd)));
+        return window;
+    }
+
+    public record StateWindow(int startInclusive, int endExclusive) {
     }
 
     private static List<Map<String, Object>> devices(List<TraceDeviceDto> devices) {

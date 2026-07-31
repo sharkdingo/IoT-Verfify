@@ -175,6 +175,54 @@
   transition: all 0.2s;
 }
 
+.board-nav-bar .ai-assistant-btn {
+  position: relative;
+}
+
+.board-nav-bar .ai-assistant-status {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--surface-control);
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+  .board-nav-bar .ai-assistant-status.is-running {
+    background: #2563eb;
+  }
+
+  .board-nav-bar .ai-assistant-status.is-unread {
+    right: -0.35rem;
+  }
+
+  .board-nav-bar .ai-assistant-btn.has-active-status .ai-assistant-status.is-unread {
+    right: 0.55rem;
+  }
+
+  .board-nav-bar .ai-assistant-status.is-sync-pending {
+    background: #b45309;
+  }
+
+  .board-nav-bar .ai-assistant-btn.has-active-status .ai-assistant-status.is-sync-pending,
+  .board-nav-bar .ai-assistant-btn.has-unread-status .ai-assistant-status.is-sync-pending {
+    right: 0.55rem;
+  }
+
+  .board-nav-bar .ai-assistant-btn.has-active-status.has-unread-status .ai-assistant-status.is-sync-pending {
+    right: 1.45rem;
+  }
+
 .board-nav-bar .scene-action-btn {
   background: var(--surface-control);
   border: 1px solid var(--border);
@@ -330,7 +378,7 @@
     padding: 0;
   }
 
-  .board-nav-bar .ai-assistant-btn span:not(.material-symbols-outlined) {
+  .board-nav-bar .ai-assistant-btn span:not(.material-symbols-outlined):not(.ai-assistant-status) {
     display: none;
   }
 

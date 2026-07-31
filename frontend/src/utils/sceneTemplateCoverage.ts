@@ -1,24 +1,11 @@
 import type { DeviceTemplate } from '@/types/device'
+import { templateManifestSemanticKey } from '@/utils/templateManifestCanonicalization'
 
 const normalizeTemplateName = (value: unknown): string =>
   String(value ?? '').trim().toLowerCase()
 
-const canonicalValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonicalValue)
-  if (value && typeof value === 'object') {
-    return Object.keys(value as Record<string, unknown>)
-      .sort((left, right) => left.localeCompare(right, 'en', { numeric: true, sensitivity: 'base' }))
-      .reduce<Record<string, unknown>>((result, key) => {
-        const next = canonicalValue((value as Record<string, unknown>)[key])
-        if (next !== undefined) result[key] = next
-        return result
-      }, {})
-  }
-  return value
-}
-
 const manifestKey = (template: DeviceTemplate): string =>
-  JSON.stringify(canonicalValue(template.manifest))
+  templateManifestSemanticKey(template.manifest)
 
 export const sceneTemplatesCoveredByCatalog = (
   expectedTemplates: DeviceTemplate[],

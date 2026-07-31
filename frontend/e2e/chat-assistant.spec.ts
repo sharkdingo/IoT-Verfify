@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { type APIRequestContext, type Page } from '@playwright/test'
+import { type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import {
   apiBaseURL,
   createAuthenticatedUser,
@@ -48,6 +48,24 @@ const contrastRatio = (foreground: string, background: string): number => {
 const surfaceLuminance = (color: string) => {
   const [red, green, blue] = rgba(color)
   return relativeLuminance([red, green, blue])
+}
+
+const waitForPanelPositionToSettle = async (panel: Locator) => {
+  await expect.poll(async () => {
+    const bounds = await panel.boundingBox()
+    if (!bounds) return Number.POSITIVE_INFINITY
+    const target = await panel.evaluate(element => {
+      const style = (element as HTMLElement).style
+      return {
+        left: Number.parseFloat(style.left),
+        top: Number.parseFloat(style.top)
+      }
+    })
+    if (!Number.isFinite(target.left) || !Number.isFinite(target.top)) {
+      return Number.POSITIVE_INFINITY
+    }
+    return Math.max(Math.abs(bounds.x - target.left), Math.abs(bounds.y - target.top))
+  }).toBeLessThan(1)
 }
 
 const unwrap = async <T>(response: Awaited<ReturnType<APIRequestContext['get']>>): Promise<T> => {
@@ -168,7 +186,340 @@ test('reopening the assistant exposes existing history without creating or sendi
   await expect(page.getByTestId(`chat-session-${session.id}`)).toBeVisible()
 })
 
-test('keeps the pending reply status inside a compact assistant bubble', async ({ page, request }) => {
+test('closing the browser page preserves an unread terminal result until its history is rendered', async ({
+  page,
+  context,
+  request
+}) => {
+  const auth = await createAuthenticatedUser(request)
+  const sessionId = `offline-result-${auth.userId}`
+  let active = true
+  let hasUnreadUpdate = false
+  const seenMessageIds: number[] = []
+  const result = (data: unknown) => JSON.stringify({ code: 200, message: 'ok', data })
+
+  await context.route('**/api/chat/sessions**', async route => {
+    const requestUrl = new URL(route.request().url())
+    const method = route.request().method()
+    if (method === 'POST' && requestUrl.pathname.endsWith(`/${sessionId}/seen`)) {
+      const body = route.request().postDataJSON() as { terminalMessageId: number }
+      seenMessageIds.push(body.terminalMessageId)
+      hasUnreadUpdate = false
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=UTF-8',
+        body: result(null)
+      })
+      return
+    }
+    if (requestUrl.pathname.endsWith(`/${sessionId}/messages`)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=UTF-8',
+        body: result({
+          messages: [{
+            id: 42,
+            sessionId,
+            role: 'assistant',
+            content: 'The background result is available.',
+            turnId: 'offline-turn',
+            createdAt: '2026-07-31T12:00:00Z',
+            executionStatus: 'FAILED'
+          }],
+          nextBeforeId: null,
+          hasMore: false
+        })
+      })
+      return
+    }
+    if (requestUrl.pathname.endsWith(`/${sessionId}/confirmation`)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=UTF-8',
+        body: result({ sessionId, kinds: [] })
+      })
+      return
+    }
+    if (requestUrl.pathname.endsWith(`/${sessionId}/activity`)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=UTF-8',
+        body: result({ sessionId, active: false })
+      })
+      return
+    }
+    if (method === 'GET' && requestUrl.pathname.endsWith('/api/chat/sessions')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=UTF-8',
+        body: result([{
+          id: sessionId,
+          userId: auth.userId,
+          title: 'Offline result',
+          createdAt: '2026-07-31T11:59:00Z',
+          updatedAt: '2026-07-31T12:00:00Z',
+          active,
+          latestTerminalMessageId: active ? null : 42,
+          latestExecutionStatus: active ? null : 'FAILED',
+          hasUnreadUpdate
+        }])
+      })
+      return
+    }
+    await route.fallback()
+  })
+
+  await openWorkspace(page, auth)
+  await expect(page.getByTestId('ai-assistant-running')).toHaveText('1')
+  await page.close()
+  expect(seenMessageIds).toEqual([])
+
+  active = false
+  hasUnreadUpdate = true
+  const reopenedPage = await context.newPage()
+  await openWorkspace(reopenedPage, auth)
+  await expect(reopenedPage.getByTestId('ai-assistant-unread')).toHaveText('1')
+  await reopenedPage.getByTestId('open-ai-assistant').click()
+  await reopenedPage.getByTestId('chat-sidebar-toggle').click()
+  await expect(reopenedPage.getByTestId('chat-session-status')).toContainText('失败')
+  await reopenedPage.getByTestId(`chat-session-${sessionId}`).click()
+
+  await expect.poll(() => [...seenMessageIds]).toEqual([42])
+  await expect(reopenedPage.getByTestId('ai-assistant-unread')).toHaveCount(0)
+})
+
+test('moves and resizes the assistant panel on a desktop workspace', async ({ page, request }) => {
+  const auth = await createAuthenticatedUser(request)
+  await openWorkspace(page, auth)
+
+  await page.getByTestId('open-ai-assistant').click()
+  const panel = page.getByTestId('chat-panel')
+  await expect(panel).toBeVisible()
+
+  const initialBounds = await panel.boundingBox()
+  const dragHandleBounds = await page.getByTestId('chat-drag-handle').boundingBox()
+  expect(initialBounds).not.toBeNull()
+  expect(dragHandleBounds).not.toBeNull()
+
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2, dragHandleBounds!.y + dragHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2 - 120, dragHandleBounds!.y + dragHandleBounds!.height / 2 + 80)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.x).toBeLessThan(initialBounds!.x - 100)
+  await expect.poll(async () => (await panel.boundingBox())?.y).toBeGreaterThan(initialBounds!.y + 60)
+
+  const resizedBefore = await panel.boundingBox()
+  const resizeHandleBounds = await page.getByTestId('chat-resize-handle').boundingBox()
+  expect(resizedBefore).not.toBeNull()
+  expect(resizeHandleBounds).not.toBeNull()
+
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2, resizeHandleBounds!.y + resizeHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2 - 100, resizeHandleBounds!.y + resizeHandleBounds!.height / 2 - 80)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBeLessThan(resizedBefore!.width - 80)
+  await expect.poll(async () => (await panel.boundingBox())?.height).toBeLessThan(resizedBefore!.height - 60)
+
+  const resizedSmaller = await panel.boundingBox()
+  const resizeHandleAfterShrink = await page.getByTestId('chat-resize-handle').boundingBox()
+  expect(resizedSmaller).not.toBeNull()
+  expect(resizeHandleAfterShrink).not.toBeNull()
+
+  await page.mouse.move(resizeHandleAfterShrink!.x + resizeHandleAfterShrink!.width / 2, resizeHandleAfterShrink!.y + resizeHandleAfterShrink!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(resizeHandleAfterShrink!.x + resizeHandleAfterShrink!.width / 2 + 100, resizeHandleAfterShrink!.y + resizeHandleAfterShrink!.height / 2 + 80)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBeGreaterThan(resizedSmaller!.width + 80)
+  await expect.poll(async () => (await panel.boundingBox())?.height).toBeGreaterThan(resizedSmaller!.height + 60)
+})
+
+test('keeps the panel movable and resizable in a short desktop viewport', async ({ page, request }) => {
+  await page.setViewportSize({ width: 1280, height: 560 })
+  const auth = await createAuthenticatedUser(request)
+  await openWorkspace(page, auth)
+
+  await page.getByTestId('open-ai-assistant').click()
+  const panel = page.getByTestId('chat-panel')
+  await expect(panel).toBeVisible()
+  await expect(page.getByTestId('chat-resize-handle')).toBeVisible()
+
+  const initialBounds = await panel.boundingBox()
+  const dragHandleBounds = await page.getByTestId('chat-drag-handle').boundingBox()
+  expect(initialBounds).not.toBeNull()
+  expect(dragHandleBounds).not.toBeNull()
+
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2, dragHandleBounds!.y + dragHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2, dragHandleBounds!.y + dragHandleBounds!.height / 2 + 60)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.y).toBeGreaterThan(initialBounds!.y + 40)
+
+  const boundsBeforeResize = await panel.boundingBox()
+  const resizeHandleBounds = await page.getByTestId('chat-resize-handle').boundingBox()
+  expect(boundsBeforeResize).not.toBeNull()
+  expect(resizeHandleBounds).not.toBeNull()
+
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2, resizeHandleBounds!.y + resizeHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2 - 80, resizeHandleBounds!.y + resizeHandleBounds!.height / 2 - 70)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBeLessThan(boundsBeforeResize!.width - 60)
+  await expect.poll(async () => (await panel.boundingBox())?.height).toBeLessThan(boundsBeforeResize!.height - 50)
+})
+
+test('keeps the panel interactive when pointer capture is unavailable', async ({ page, request }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', {
+      configurable: true,
+      value: () => { throw new DOMException('Pointer capture unavailable') }
+    })
+  })
+  const auth = await createAuthenticatedUser(request)
+  await openWorkspace(page, auth)
+
+  await page.getByTestId('open-ai-assistant').click()
+  const panel = page.getByTestId('chat-panel')
+  await expect(panel).toBeVisible()
+  const initialBounds = await panel.boundingBox()
+  const dragHandleBounds = await page.getByTestId('chat-drag-handle').boundingBox()
+  expect(initialBounds).not.toBeNull()
+  expect(dragHandleBounds).not.toBeNull()
+
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2, dragHandleBounds!.y + dragHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2 - 100, dragHandleBounds!.y + dragHandleBounds!.height / 2 + 60)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.x).toBeLessThan(initialBounds!.x - 80)
+  await expect.poll(async () => (await panel.boundingBox())?.y).toBeGreaterThan(initialBounds!.y + 40)
+
+  const boundsBeforeResize = await panel.boundingBox()
+  const resizeHandleBounds = await page.getByTestId('chat-resize-handle').boundingBox()
+  expect(boundsBeforeResize).not.toBeNull()
+  expect(resizeHandleBounds).not.toBeNull()
+
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2, resizeHandleBounds!.y + resizeHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2 - 80, resizeHandleBounds!.y + resizeHandleBounds!.height / 2 - 70)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBeLessThan(boundsBeforeResize!.width - 60)
+  await expect.poll(async () => (await panel.boundingBox())?.height).toBeLessThan(boundsBeforeResize!.height - 50)
+})
+
+test('restores desktop panel interaction after leaving the responsive layout', async ({ page, request }) => {
+  await page.setViewportSize({ width: 700, height: 720 })
+  const auth = await createAuthenticatedUser(request)
+  await openWorkspace(page, auth)
+
+  await page.getByTestId('open-ai-assistant').click()
+  const panel = page.getByTestId('chat-panel')
+  await expect(panel).toBeVisible()
+  await expect(page.getByTestId('chat-resize-handle')).toBeHidden()
+
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await expect(page.getByTestId('chat-resize-handle')).toBeVisible()
+  await waitForPanelPositionToSettle(panel)
+
+  const initialBounds = await panel.boundingBox()
+  const dragHandleBounds = await page.getByTestId('chat-drag-handle').boundingBox()
+  expect(initialBounds).not.toBeNull()
+  expect(dragHandleBounds).not.toBeNull()
+
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2, dragHandleBounds!.y + dragHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(dragHandleBounds!.x + dragHandleBounds!.width / 2 + 100, dragHandleBounds!.y + dragHandleBounds!.height / 2 + 60)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.x).toBeGreaterThan(initialBounds!.x + 80)
+  await expect.poll(async () => (await panel.boundingBox())?.y).toBeGreaterThan(initialBounds!.y + 40)
+
+  const boundsBeforeResize = await panel.boundingBox()
+  const resizeHandleBounds = await page.getByTestId('chat-resize-handle').boundingBox()
+  expect(boundsBeforeResize).not.toBeNull()
+  expect(resizeHandleBounds).not.toBeNull()
+
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2, resizeHandleBounds!.y + resizeHandleBounds!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2 - 80, resizeHandleBounds!.y + resizeHandleBounds!.height / 2 - 70)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBeLessThan(boundsBeforeResize!.width - 60)
+  await expect.poll(async () => (await panel.boundingBox())?.height).toBeLessThan(boundsBeforeResize!.height - 50)
+})
+
+test('releases an interrupted panel gesture when the viewport changes', async ({ page, request }) => {
+  const auth = await createAuthenticatedUser(request)
+  await openWorkspace(page, auth)
+
+  await page.getByTestId('open-ai-assistant').click()
+  const panel = page.getByTestId('chat-panel')
+  const dragHandle = page.getByTestId('chat-drag-handle')
+  await expect(panel).toBeVisible()
+
+  const interruptedHandleBounds = await dragHandle.boundingBox()
+  expect(interruptedHandleBounds).not.toBeNull()
+  await dragHandle.dispatchEvent('pointerdown', {
+    pointerId: 41,
+    pointerType: 'mouse',
+    isPrimary: true,
+    button: 0,
+    buttons: 1,
+    clientX: interruptedHandleBounds!.x + interruptedHandleBounds!.width / 2,
+    clientY: interruptedHandleBounds!.y + interruptedHandleBounds!.height / 2
+  })
+  await expect(panel).toHaveClass(/dragging/)
+
+  await page.setViewportSize({ width: 1100, height: 680 })
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await expect(panel).not.toHaveClass(/dragging/)
+
+  const initialBounds = await panel.boundingBox()
+  const dragHandleBounds = await dragHandle.boundingBox()
+  expect(initialBounds).not.toBeNull()
+  expect(dragHandleBounds).not.toBeNull()
+  await dragHandle.dispatchEvent('pointerdown', {
+    pointerId: 42,
+    pointerType: 'mouse',
+    isPrimary: true,
+    button: 0,
+    buttons: 1,
+    clientX: dragHandleBounds!.x + dragHandleBounds!.width / 2,
+    clientY: dragHandleBounds!.y + dragHandleBounds!.height / 2
+  })
+  await expect(panel).toHaveClass(/dragging/)
+  await page.evaluate(({ x, y }) => {
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 42,
+      pointerType: 'mouse',
+      isPrimary: true,
+      buttons: 1,
+      clientX: x - 100,
+      clientY: y + 60
+    }))
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 42,
+      pointerType: 'mouse',
+      isPrimary: true,
+      button: 0,
+      clientX: x - 100,
+      clientY: y + 60
+    }))
+  }, {
+    x: dragHandleBounds!.x + dragHandleBounds!.width / 2,
+    y: dragHandleBounds!.y + dragHandleBounds!.height / 2
+  })
+
+   await expect.poll(async () => (await panel.boundingBox())?.x).toBeLessThan(initialBounds!.x - 80)
+  await expect.poll(async () => (await panel.boundingBox())?.y).toBeGreaterThan(initialBounds!.y + 40)
+})
+
+test('keeps a pending execution trace at the full conversation width', async ({ page, request }) => {
   const auth = await createAuthenticatedUser(request)
   const session = await unwrap<{ id: string }>(
     await request.post(`${apiBaseURL}/api/chat/sessions`, {
@@ -193,21 +544,20 @@ test('keeps the pending reply status inside a compact assistant bubble', async (
   await expect(pending).toBeVisible()
   const layout = await pending.evaluate(element => {
     const bubble = element.closest('article')
-    const row = element.closest('.msg-row')
+    const wrapper = element.closest('.msg-content-wrapper')
     const bubbleRect = bubble?.getBoundingClientRect()
-    const rowRect = row?.getBoundingClientRect()
+    const wrapperRect = wrapper?.getBoundingClientRect()
     return {
       tagName: bubble?.tagName,
       compactClass: bubble?.classList.contains('assistant-pending-body'),
       bubbleWidth: bubbleRect?.width ?? 0,
-      rowWidth: rowRect?.width ?? 0
+      wrapperWidth: wrapperRect?.width ?? 0
     }
   })
 
   expect(layout).toMatchObject({ tagName: 'ARTICLE', compactClass: true })
-  expect(layout.bubbleWidth).toBeGreaterThan(100)
-  expect(layout.bubbleWidth).toBeLessThan(260)
-  expect(layout.bubbleWidth).toBeLessThan(layout.rowWidth / 2)
+  expect(layout.bubbleWidth).toBeGreaterThan(layout.wrapperWidth * 0.95)
+  expect(layout.bubbleWidth).toBeLessThanOrEqual(layout.wrapperWidth + 1)
 
   releaseResponse()
   await expect(pending).toBeHidden()
@@ -220,6 +570,7 @@ test('keeps the pending reply status inside a compact assistant bubble', async (
   await expect(page.getByTestId('chat-execution-trace')).toBeHidden()
   await expect(page.getByTestId('chat-reconciliation-required')).toHaveCount(0)
   await expect(page.getByTestId('chat-history-retry')).toHaveCount(0)
+  await expect(page.getByTestId('chat-input')).toBeEnabled()
 })
 
 test('renders assistant code blocks on a readable dark surface', async ({ page, request }) => {
@@ -364,7 +715,10 @@ test('a rule_list refresh command makes the workspace re-read undo availability'
             title: 'undo parity',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-            active: false
+            active: false,
+            latestTerminalMessageId: null,
+            latestExecutionStatus: null,
+            hasUnreadUpdate: false
           }
         })
       })

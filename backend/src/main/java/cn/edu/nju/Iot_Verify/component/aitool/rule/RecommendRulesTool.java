@@ -41,7 +41,7 @@ public class RecommendRulesTool extends AbstractAiTool {
     private static final Set<String> ALLOWED_CATEGORIES =
             Set.of("all", "security", "energy_saving", "comfort", "automation");
     private static final Set<String> RECOMMENDATION_FIELDS =
-            Set.of("category", "name", "conditions", "command", "requiresUserInput");
+            Set.of("category", "name", "reason", "conditions", "command", "requiresUserInput");
     private static final Set<String> CONDITION_FIELDS =
             Set.of("deviceId", "deviceLabel", "deviceName", "attribute", "targetType", "relation", "value");
     private static final Set<String> COMMAND_FIELDS =
@@ -70,6 +70,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
     {
       "category": "security|energy_saving|comfort|automation",
       "name": "将作为画布规则名称保存的简洁自然语言名称",
+      "reason": "为什么该规则适合用户目标和当前设备能力的简洁说明",
       "conditions": [
         {
           "deviceId": "设备 id（必须来自设备列表的 deviceId 字段）",
@@ -109,6 +110,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 - 同一条规则的所有 conditions 必须能在模板声明的状态/变量定义域中同时成立；如果 command API 声明了非空 StartState，目标设备条件还必须与该前置状态兼容
 - contentDevice 与 content 必须同时为 null，或同时填写；content 必须来自该内容设备的 contents 列表，且目标 API 必须声明 acceptsContent=true。只在动作确实携带该内容并需要分析隐私标签传播时填写
 - 按与用户目标和设备能力的匹配程度从高到低排列；name 是应用后实际保存的规则名称，不要输出不存在于规则模型中的 priority
+- reason 必须用用户要求的语言说明推荐依据，并引用实际设备能力或用户需求，不能只重复 name
 - 不要推荐与现有规则重复的规则
 - 如果设备信息不足，返回空的recommendations数组
 """;
@@ -242,6 +244,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                     devices,
                     BoardSemanticValidator.recommendationContext(nodes, templates, environmentVariables),
                     maxRecommendations,
+                    category,
                     language);
 
             log.debug("Rule recommendation result length: {} chars", result.length());
@@ -500,6 +503,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                                    List<DeviceInfoHelper.DeviceInfo> devices,
                                    BoardSemanticValidator.BoardContext semanticContext,
                                    int maxRecommendations,
+                                   String requestedCategory,
                                    String language) {
         try {
             // 清理 AI 返回的内容，去除 Markdown 代码块标记
@@ -549,7 +553,8 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 
                     // 验证并过滤推荐
                     RecommendationValidation validation = validateRecommendation(
-                            recommendation, deviceMap, semanticContext, language, inspected);
+                            recommendation, deviceMap, semanticContext, requestedCategory,
+                            language, inspected);
                     if (validation.valid()) {
                         recommendation.remove("requiresUserInput");
                         recommendations.add(recommendation);
@@ -606,6 +611,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
     private RecommendationValidation validateRecommendation(Map<String, Object> recommendation,
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap,
             BoardSemanticValidator.BoardContext semanticContext,
+            String requestedCategory,
             String language,
             int recommendationIndex) {
 
@@ -619,6 +625,19 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             return invalid("missingRuleName", language);
         }
         recommendation.put("name", name);
+        String category = asTrimmedString(recommendation.get("category"));
+        if (category != null && (!ALLOWED_CATEGORIES.contains(category) || "all".equals(category))) {
+            return invalid("invalidCategory", language);
+        }
+        if (!"all".equals(requestedCategory) && !requestedCategory.equals(category)) {
+            return invalid("categoryMismatch", language);
+        }
+        String reason = asTrimmedString(recommendation.get("reason"));
+        if (reason != null && reason.length() > 1000) {
+            return invalid("invalidRuleReason", language);
+        }
+        if (category != null) recommendation.put("category", category);
+        if (reason != null) recommendation.put("reason", reason);
         if (!recommendation.containsKey("conditions") || !recommendation.containsKey("command")) {
             return invalid("missingRuleFields", language);
         }
@@ -822,6 +841,15 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             case "missingRuleName" -> zh
                     ? "缺少将实际保存到画布的规则名称。"
                     : "The rule name that would be saved to the board is missing.";
+            case "invalidRuleReason" -> zh
+                    ? "面向用户的推荐理由超过 1000 个字符。"
+                    : "The user-facing recommendation reason exceeds 1000 characters.";
+            case "invalidCategory" -> zh
+                    ? "候选规则缺少有效分类。"
+                    : "The rule candidate does not have a valid category.";
+            case "categoryMismatch" -> zh
+                    ? "候选规则不属于用户当前选择的推荐分类。"
+                    : "The rule candidate does not match the recommendation category selected by the user.";
             case "emptyConditionsOrCommand" -> zh
                     ? "触发条件为空或执行动作为空。"
                     : "The trigger conditions are empty or the command is missing.";
@@ -865,7 +893,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                     ? "内容项不在所选设备模板声明的内容列表中。"
                     : "The content item is not declared by the selected device template.";
             case "actionDoesNotAcceptContent" -> zh
-                    ? "目标动作没有声明可接收内容敏感度标签；该内容流不会被附着到普通设备命令。"
+                    ? "目标动作没有声明可接收内容敏感性标签；该内容流不会被附着到普通设备命令。"
                     : "The target action does not declare a content-sensitivity input, so the content flow cannot be attached to that ordinary device command.";
             case "contradictoryConditionGroup" -> zh
                     ? "这些触发条件在设备声明的合法状态或变量定义域中没有共同可满足的取值。"

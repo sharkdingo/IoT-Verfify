@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.repository.projection.CompletedRunDeletionProjection;
+import cn.edu.nju.Iot_Verify.repository.projection.VerificationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
@@ -58,20 +59,10 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
 
     long countByUserIdAndStatusIn(Long userId, List<VerificationTaskPo.TaskStatus> statuses);
 
-    /**
-     * 根据用户ID查询所有任务（按创建时间降序）
-     */
-    List<VerificationTaskPo> findByUserIdOrderByCreatedAtDesc(Long userId);
-
-    /**
-     * 根据用户ID查询所有任务（按创建时间降序），排除正在由前端专门轮询的任务。
-     */
-    List<VerificationTaskPo> findByUserIdAndIdNotInOrderByCreatedAtDesc(Long userId, List<Long> excludedIds);
-
-    List<VerificationTaskPo> findByUserIdAndStatusNotOrderByCreatedAtDesc(
+    List<VerificationTaskSummaryProjection> findSummaryByUserIdAndStatusNotOrderByCreatedAtDesc(
             Long userId, VerificationTaskPo.TaskStatus status);
 
-    List<VerificationTaskPo> findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
+    List<VerificationTaskSummaryProjection> findSummaryByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
             Long userId, VerificationTaskPo.TaskStatus status, List<Long> excludedIds);
 
     List<VerificationRunSummaryProjection> findByUserIdAndStatusOrderByCompletedAtDescIdDesc(

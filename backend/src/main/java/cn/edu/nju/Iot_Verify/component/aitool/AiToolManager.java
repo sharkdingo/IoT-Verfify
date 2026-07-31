@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.aitool;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.util.InterruptPreservation;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -12,7 +13,6 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -21,15 +21,6 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 public class AiToolManager {
-
-    private static final Set<String> MUTATION_CAPABLE_TOOLS = Set.of(
-            "add_device", "edit_device", "delete_device", "manage_environment", "apply_scenario",
-            "reset_default_templates", "manage_spec", "add_template", "delete_template",
-            "delete_trace", "cancel_verify_task", "apply_fix", "manage_rule",
-            "delete_simulation_trace", "cancel_simulate_task", "verify_model",
-            "verify_model_async", "simulate_model_async",
-            "delete_verification_run", "dismiss_verify_task", "dismiss_simulate_task",
-            "fuzz_model_async", "cancel_fuzz_task", "delete_fuzz_run", "dismiss_fuzz_task");
 
     // Spring 会自动注入所有实现了 AiTool 接口的 Bean (例如 AddNodeTool)
     private final List<AiTool> allTools;
@@ -66,7 +57,7 @@ public class AiToolManager {
 
         log.info("开始执行 AI 工具: {}", functionName);
         try {
-            return boundResult(functionName, tool.execute(argsJson));
+            return boundResult(functionName, attachExecutionEvidence(tool.execute(argsJson)));
         } catch (Exception e) {
             // Broad enough to capture an InterruptedException, which clears the flag as it is thrown.
             // A tool that delegates to synchronous verification or simulation runs work that *is*
@@ -77,32 +68,125 @@ public class AiToolManager {
             // DISCONNECTED, so an escaped flag would abort the *current* turn as well.
             InterruptPreservation.preserveInterrupt(e);
             log.error("AI tool '{}' threw unexpected exception", functionName, e);
+            if (AiToolResultContract.isMutationCapable(functionName)) {
+                return mutationOutcomeUnavailable(
+                        "TOOL_EXECUTION_OUTCOME_UNKNOWN",
+                        "The tool failed unexpectedly after execution started. State may already have changed; "
+                                + "refresh current state before retrying.");
+            }
             return errorJson("Tool execution failed due to an internal error", "TOOL_EXECUTION_ERROR", 500);
+        }
+    }
+
+    /**
+     * Gives every successful tool result the same small execution envelope. Domain payloads stay
+     * flexible; mutation tools are checked separately for their authoritative outcome marker.
+     */
+    private String attachExecutionEvidence(String result) {
+        if (result == null || result.isBlank()) return result;
+        try {
+            var root = objectMapper.readTree(result);
+            if (root == null || !root.isObject() || root.isEmpty()
+                    || AiToolResultContract.isStructuredError(root)
+                    || AiToolResultContract.isUnavailable(root)) {
+                return result;
+            }
+            var object = (com.fasterxml.jackson.databind.node.ObjectNode) root;
+            if (!object.has("resultAvailable")) object.put("resultAvailable", true);
+            if (!object.has("resultStatus")) {
+                object.put("resultStatus",
+                        object.path("requiresUserConfirmation").asBoolean(false)
+                                ? "PREVIEW" : "SUCCESS");
+            }
+            return objectMapper.writeValueAsString(object);
+        } catch (Exception ignored) {
+            return result;
         }
     }
 
     private String boundResult(String functionName, String result) {
         String safeResult = result == null ? "" : result;
         int resultBytes = safeResult.getBytes(StandardCharsets.UTF_8).length;
-        if (resultBytes <= chatExecutionConfig.getMaxToolResultBytes()) {
-            return safeResult;
+        if (resultBytes > chatExecutionConfig.getMaxToolResultBytes()) {
+            boolean mutationMayHaveCommitted = AiToolResultContract.isMutationCapable(functionName);
+            log.warn("AI tool '{}' result exceeded persistence/model limit: bytes={}, limit={}",
+                    functionName, resultBytes, chatExecutionConfig.getMaxToolResultBytes());
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("resultStatus", "RESULT_UNAVAILABLE");
+            body.put("resultAvailable", false);
+            body.put("mutationMayHaveCommitted", mutationMayHaveCommitted);
+            body.put("errorCode", "TOOL_RESULT_TOO_LARGE");
+            body.put("message", mutationMayHaveCommitted
+                    ? "Tool result details exceeded the safe size limit. The operation may already have changed state; refresh current state before retrying with a narrower request."
+                    : "Tool result details exceeded the safe size limit. Retry with a narrower filter or request fewer details.");
+            body.put("resultBytes", resultBytes);
+            body.put("maxResultBytes", chatExecutionConfig.getMaxToolResultBytes());
+            return AiToolResponseHelper.success(objectMapper, body, "Tool result exceeded the safe size limit.",
+                    mutationMayHaveCommitted);
         }
+        if (AiToolResultContract.isMutationCapable(functionName) && !isNonEmptyJsonObject(safeResult)) {
+            log.warn("Mutation-capable AI tool '{}' returned an unusable result", functionName);
+            return mutationOutcomeUnavailable(
+                    "TOOL_RESULT_MALFORMED",
+                    "The tool returned no trustworthy result after execution started. State may already have "
+                            + "changed; refresh current state before retrying.");
+        }
+        JsonNode parsed = parseObject(safeResult);
+        if (AiToolResultContract.isMutationCapable(functionName)
+                && !AiToolResultContract.hasValidControlFields(parsed)) {
+            log.warn("AI mutation tool '{}' returned malformed result control fields", functionName);
+            return mutationOutcomeUnavailable(
+                    "TOOL_RESULT_MALFORMED",
+                    "The tool returned malformed execution evidence after execution started. "
+                            + "State may already have changed; refresh current state before retrying.");
+        }
+        if (AiToolResultContract.isMutationCapable(functionName)
+                && isNonErrorResult(safeResult)
+                && !AiToolResultContract.hasValidKnownToolPayload(functionName, parsed)) {
+            log.warn("AI mutation tool '{}' returned no authoritative completion marker", functionName);
+            return mutationOutcomeUnavailable(
+                    "TOOL_RESULT_MALFORMED",
+                    "The tool returned no authoritative completion marker after execution started. "
+                            + "State may already have changed; refresh current state before retrying.");
+        }
+        return safeResult;
+    }
 
-        boolean mutationMayHaveCommitted = MUTATION_CAPABLE_TOOLS.contains(functionName);
-        log.warn("AI tool '{}' result exceeded persistence/model limit: bytes={}, limit={}",
-                functionName, resultBytes, chatExecutionConfig.getMaxToolResultBytes());
+    private boolean isNonErrorResult(String result) {
+        JsonNode parsed = parseObject(result);
+        if (parsed == null) return false;
+        return !AiToolResultContract.isStructuredError(parsed)
+                && !AiToolResultContract.isUnavailable(parsed);
+    }
+
+    private JsonNode parseObject(String result) {
+        try {
+            JsonNode parsed = objectMapper.readTree(result);
+            return parsed != null && parsed.isObject() ? parsed : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private boolean isNonEmptyJsonObject(String result) {
+        if (result == null || result.isBlank()) return false;
+        try {
+            var parsed = objectMapper.readTree(result);
+            return parsed != null && parsed.isObject() && !parsed.isEmpty();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String mutationOutcomeUnavailable(String errorCode, String message) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("resultStatus", "RESULT_UNAVAILABLE");
         body.put("resultAvailable", false);
-        body.put("mutationMayHaveCommitted", mutationMayHaveCommitted);
-        body.put("errorCode", "TOOL_RESULT_TOO_LARGE");
-        body.put("message", mutationMayHaveCommitted
-                ? "Tool result details exceeded the safe size limit. The operation may already have changed state; refresh current state before retrying with a narrower request."
-                : "Tool result details exceeded the safe size limit. Retry with a narrower filter or request fewer details.");
-        body.put("resultBytes", resultBytes);
-        body.put("maxResultBytes", chatExecutionConfig.getMaxToolResultBytes());
-        return AiToolResponseHelper.success(objectMapper, body, "Tool result exceeded the safe size limit.",
-                mutationMayHaveCommitted);
+        body.put("mutationMayHaveCommitted", true);
+        body.put("errorCode", errorCode);
+        body.put("message", message);
+        return AiToolResponseHelper.success(objectMapper, body,
+                "Tool execution outcome is unavailable.", true);
     }
 
     private String errorJson(String message, String errorCode, int status) {

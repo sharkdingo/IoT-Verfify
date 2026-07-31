@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
+import cn.edu.nju.Iot_Verify.util.NaturalChangeRateParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -554,7 +555,8 @@ public class SmvModelValidator {
                 if (variable == null || variable.getName() == null) {
                     continue;
                 }
-                validateVariableDomain(smv.getVarName(), "InternalVariable '" + variable.getName() + "'", variable);
+                validateVariableDomain(smv.getVarName(), "InternalVariable '" + variable.getName() + "'", variable,
+                        !Boolean.TRUE.equals(variable.getIsInside()));
                 if (Boolean.TRUE.equals(variable.getIsInside())) {
                     writableDomains.putIfAbsent(variable.getName(), variable);
                 }
@@ -566,7 +568,7 @@ public class SmvModelValidator {
                     continue;
                 }
                 validateVariableDomain(smv.getVarName(), "EnvironmentDomain '" + domain.getName() + "'",
-                        EnvironmentDomainUtils.asInternalVariable(domain));
+                        EnvironmentDomainUtils.asInternalVariable(domain), true);
             }
         }
         if (manifest.getImpactedVariables() != null) {
@@ -627,7 +629,8 @@ public class SmvModelValidator {
 
     private void validateVariableDomain(String deviceName,
                                         String context,
-                                        DeviceManifest.InternalVariable variable) {
+                                        DeviceManifest.InternalVariable variable,
+                                        boolean sharedEnvironment) {
         if (variable.getLowerBound() != null && variable.getUpperBound() != null
                 && variable.getLowerBound() > variable.getUpperBound()) {
             throw SmvGenerationException.templateInvalid(deviceName, context + " has LowerBound "
@@ -645,30 +648,25 @@ public class SmvModelValidator {
         }
         String naturalRate = variable.getNaturalChangeRate();
         boolean numeric = variable.getLowerBound() != null && variable.getUpperBound() != null;
-        if (naturalRate != null && !naturalRate.isBlank() && !numeric) {
+        boolean hasRateDeclaration = naturalRate != null;
+        if (numeric && sharedEnvironment && !hasRateDeclaration) {
+            throw SmvGenerationException.templateInvalid(deviceName, context
+                    + " is a shared numeric environment variable and must explicitly define "
+                    + "NaturalChangeRate ('[-1, 1]' for the MEDIC baseline disturbance, or '0' "
+                    + "for no natural change)");
+        }
+        if (hasRateDeclaration && !numeric) {
             throw SmvGenerationException.templateInvalid(deviceName, context
                     + " declares NaturalChangeRate, but only numeric ranges can change by a rate");
         }
-        if (naturalRate != null && !naturalRate.isBlank()) {
-            String[] parts = naturalRate.replace("[", "").replace("]", "").split(",", -1);
+        if (hasRateDeclaration) {
             try {
-                int lowerRate;
-                int upperRate;
-                if (parts.length == 1) {
-                    int rate = Integer.parseInt(parts[0].trim());
-                    lowerRate = Math.min(0, rate);
-                    upperRate = Math.max(0, rate);
-                } else if (parts.length == 2) {
-                    lowerRate = Integer.parseInt(parts[0].trim());
-                    upperRate = Integer.parseInt(parts[1].trim());
-                } else {
-                    throw new NumberFormatException("wrong number of rate values");
-                }
-                if (lowerRate > upperRate) {
+                NaturalChangeRateParser.parse(naturalRate);
+            } catch (NaturalChangeRateParser.ParseException exception) {
+                if (exception.isDescending()) {
                     throw SmvGenerationException.templateInvalid(deviceName, context
                             + " has invalid or descending NaturalChangeRate '" + naturalRate + "'");
                 }
-            } catch (NumberFormatException exception) {
                 throw SmvGenerationException.templateInvalid(deviceName, context
                         + " has invalid NaturalChangeRate '" + naturalRate + "'");
             }

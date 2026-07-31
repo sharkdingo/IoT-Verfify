@@ -7,11 +7,13 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunInitiator;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.projection.SimulationTraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.ModelGenerationDiagnostics;
+import cn.edu.nju.Iot_Verify.util.ModelPlaybackSceneSnapshot;
 import cn.edu.nju.Iot_Verify.util.PersistedModelContextIntegrity;
 import cn.edu.nju.Iot_Verify.util.TraceStateIntegrity;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -32,6 +34,7 @@ public class SimulationTraceMapper {
      */
     public SimulationTraceDto toDto(SimulationTracePo po) {
         if (po == null) return null;
+        requireInitiator(po.getId(), po.getInitiator());
 
         List<String> logs = JsonUtils.readPersisted("simulation trace", po.getId(), "logsJson",
                 () -> JsonUtils.fromJsonToStringList(po.getLogsJson()));
@@ -43,11 +46,13 @@ public class SimulationTraceMapper {
                 po.getSteps(), po.getRequestedSteps());
         int disabledRuleCount = ModelGenerationDiagnostics.disabledRuleCount(generationIssues, logs);
         PersistedModelContextIntegrity.ValidatedContext context = modelContext(po);
+        SimulationRequestDto frozenRequest = readFrozenRequest(po.getId(), po.getRequestJson());
         List<RuleDto> frozenRules = readFrozenRules(
-                po.getId(), po.getRequestJson(), context.modelSnapshot().getRuleCount());
+                po.getId(), frozenRequest, context.modelSnapshot().getRuleCount());
         states = validateRuleEvidence(po.getId(), states, frozenRules);
         SimulationTraceDto dto = SimulationTraceDto.builder()
                 .id(po.getId())
+                .initiator(po.getInitiator())
                 .userId(po.getUserId())
                 .requestedSteps(po.getRequestedSteps())
                 .steps(po.getSteps())
@@ -60,6 +65,10 @@ public class SimulationTraceMapper {
                 .requestJson(po.getRequestJson())
                 .templateSnapshotsJson(po.getTemplateSnapshotsJson())
                 .modelSnapshot(context.modelSnapshot())
+                .playbackScene(JsonUtils.readPersisted(
+                        "simulation trace", po.getId(), "requestJson",
+                        () -> ModelPlaybackSceneSnapshot.canonicalize(
+                                frozenRequest.getPlaybackNodes(), frozenRequest.getDevices(), frozenRules)))
                 .createdAt(po.getCreatedAt())
                 .historyPersistence(RunPersistenceDto.saved(po.getId()))
                 .build();
@@ -69,9 +78,10 @@ public class SimulationTraceMapper {
 
     public SimulationTraceSummaryDto toSummaryProjectionDto(SimulationTraceSummaryProjection projection) {
         if (projection == null) return null;
+        requireInitiator(projection.getId(), projection.getInitiator());
 
-        List<TraceStateDto> states = readRequiredStates(projection.getId(), projection.getStatesJson(),
-                projection.getStateCount(), projection.getSteps(), projection.getRequestedSteps());
+        requireStateMetadata(projection.getId(), projection.getStateCount(),
+                projection.getSteps(), projection.getRequestedSteps());
         List<ModelGenerationIssueDto> generationIssues = JsonUtils.readPersisted(
                 "simulation trace", projection.getId(), "generationIssuesJson",
                 () -> readGenerationIssues(projection.getGenerationIssuesJson()));
@@ -79,11 +89,9 @@ public class SimulationTraceMapper {
                 generationIssues, JsonUtils.readPersisted("simulation trace", projection.getId(), "logsJson",
                         () -> JsonUtils.fromJsonToStringList(projection.getLogsJson())));
         PersistedModelContextIntegrity.ValidatedContext context = modelContext(projection);
-        List<RuleDto> frozenRules = readFrozenRules(
-                projection.getId(), projection.getRequestJson(), context.modelSnapshot().getRuleCount());
-        validateRuleEvidence(projection.getId(), states, frozenRules);
         SimulationTraceSummaryDto dto = SimulationTraceSummaryDto.builder()
                 .id(projection.getId())
+                .initiator(projection.getInitiator())
                 .requestedSteps(projection.getRequestedSteps())
                 .steps(projection.getSteps())
                 .modelComplete(disabledRuleCount == 0)
@@ -110,6 +118,8 @@ public class SimulationTraceMapper {
                         projection != null ? projection.getId() : null, e);
                 return SimulationTraceSummaryDto.builder()
                         .id(projection != null ? projection.getId() : null)
+                        .initiator(projection != null && projection.getInitiator() != null
+                                ? projection.getInitiator() : RunInitiator.UNKNOWN)
                         .createdAt(projection != null ? projection.getCreatedAt() : null)
                         .dataAvailable(false)
                         .unavailableReasonCode("PERSISTED_SEMANTIC_DATA_INVALID")
@@ -120,6 +130,13 @@ public class SimulationTraceMapper {
 
     private List<ModelGenerationIssueDto> readGenerationIssues(String json) {
         return JsonUtils.fromJsonList(json, ModelGenerationIssueDto.class);
+    }
+
+    private void requireInitiator(Long id, RunInitiator initiator) {
+        if (initiator == null) {
+            throw new PersistedDataIntegrityException(
+                    "simulation trace", id, "initiator", "run initiator is missing");
+        }
     }
 
     private List<TraceStateDto> readRequiredStates(
@@ -157,10 +174,14 @@ public class SimulationTraceMapper {
         }
     }
 
-    private List<RuleDto> readFrozenRules(Long id, String requestJson, int expectedRuleCount) {
-        SimulationRequestDto request = JsonUtils.readPersistedJsonRequired(
+    private SimulationRequestDto readFrozenRequest(Long id, String requestJson) {
+        return JsonUtils.readPersistedJsonRequired(
                 "simulation trace", id, "requestJson", requestJson,
                 () -> JsonUtils.fromJson(requestJson, SimulationRequestDto.class));
+    }
+
+    private List<RuleDto> readFrozenRules(
+            Long id, SimulationRequestDto request, int expectedRuleCount) {
         return JsonUtils.readPersisted(
                 "simulation trace", id, "requestJson",
                 () -> TraceStateIntegrity.requireFrozenRules(request.getRules(), expectedRuleCount));

@@ -1,6 +1,7 @@
 // src/types/verify.ts
 
-import type { ModelDevice, ModelEnvironmentVariable, ModelRule, ModelSpecification } from './model'
+import type { ModelDevice, ModelEnvironmentVariable, ModelPlaybackScene, ModelRule, ModelSpecification, RunInitiator } from './model'
+import type { DeviceNode } from './node'
 import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
 import type { Specification } from './spec'
 import type { AsyncTaskStatus, TaskProgressStage } from './task'
@@ -10,6 +11,7 @@ import type { ModelTokenSource } from './modelToken'
 
 export interface VerificationRequest {
   devices: ModelDevice[];
+  playbackNodes: DeviceNode[];
   environmentVariables: ModelEnvironmentVariable[];
   rules: ModelRule[];
   specs: ModelSpecification[];
@@ -87,6 +89,7 @@ export interface TraceEvidence {
   enablePrivacy?: boolean;
   modelSemantics?: ModelSemantics;
   modelSnapshot: ModelRunSnapshot;
+  playbackScene: ModelPlaybackScene;
   createdAt: string;
 }
 
@@ -169,6 +172,7 @@ export interface TraceTrustPrivacy {
 
 export interface VerificationTask {
   id: number;
+  initiator: RunInitiator;
   // userId 已删除 — 后端不返回，前端无使用处
   status: AsyncTaskStatus;
   createdAt: string;
@@ -197,6 +201,7 @@ export interface VerificationTask {
 export type VerificationTaskSummary = Pick<
   VerificationTask,
   | 'id'
+  | 'initiator'
   | 'status'
   | 'createdAt'
   | 'startedAt'
@@ -220,6 +225,7 @@ export type VerificationTaskSummary = Pick<
 
 export interface AvailableVerificationRunSummary {
   id: number
+  initiator: RunInitiator
   createdAt: string
   startedAt: string
   completedAt: string
@@ -242,6 +248,7 @@ export interface AvailableVerificationRunSummary {
 
 export interface UnavailableVerificationRunSummary {
   id: number
+  initiator: RunInitiator
   createdAt?: string
   startedAt?: string
   completedAt?: string

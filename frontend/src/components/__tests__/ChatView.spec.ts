@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,6 +16,7 @@ const chatApi = vi.hoisted(() => ({
   getSessionHistory: vi.fn(),
   getSessionList: vi.fn(),
   getPendingConfirmation: vi.fn(),
+  markSessionTerminalSeen: vi.fn(),
   requestSessionStop: vi.fn(),
   sendStreamChat: vi.fn()
 }))
@@ -29,6 +32,7 @@ vi.mock('@/api/chat', async importOriginal => {
       readonly kind: string
       readonly status?: number
       readonly reasonCode?: string
+      readonly limit?: number
 
       constructor(message: string, options: Record<string, any> = {}) {
         super(message)
@@ -36,6 +40,7 @@ vi.mock('@/api/chat', async importOriginal => {
         this.kind = options.kind ?? 'UNKNOWN'
         this.status = options.status
         this.reasonCode = options.reasonCode
+        this.limit = options.limit
       }
     },
     hasCompletedToolEvidence: actual.hasCompletedToolEvidence,
@@ -59,7 +64,10 @@ const session = {
   userId: 1,
   title: '玄关场景检查',
   updatedAt: '2026-07-13T12:00:00Z',
-  active: false
+  active: false,
+  latestTerminalMessageId: null,
+  latestExecutionStatus: null,
+  hasUnreadUpdate: false
 }
 
 const historyPage = (
@@ -102,15 +110,22 @@ const mountChat = (props: Record<string, unknown> = {}) => mount(ChatView, {
 
 describe('ChatView', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    // Background-session polling changes how many one-shot list/activity responses a case may
+    // consume. Reset implementations as well as call counts so an unused `mockResolvedValueOnce`
+    // cannot leak into the next case.
+    vi.resetAllMocks()
     authStore.logout()
     chatStore.closeChat()
     chatStore.setStreaming(false)
+    chatStore.setActiveCount(0)
+    chatStore.setUnreadCount(0)
+    chatStore.setReconciliationRequired(false)
     i18n.global.locale.value = 'zh-CN'
     chatApi.getSessionList.mockResolvedValue([])
     chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-1', active: false })
     chatApi.getSessionHistory.mockResolvedValue(historyPage())
     chatApi.getPendingConfirmation.mockResolvedValue({ sessionId: 'session-1', kinds: [] })
+    chatApi.markSessionTerminalSeen.mockResolvedValue(undefined)
     chatApi.deleteSession.mockResolvedValue(undefined)
     chatApi.requestSessionStop.mockResolvedValue(undefined)
   })
@@ -119,6 +134,9 @@ describe('ChatView', () => {
     authStore.logout()
     chatStore.closeChat()
     chatStore.setStreaming(false)
+    chatStore.setActiveCount(0)
+    chatStore.setUnreadCount(0)
+    chatStore.setReconciliationRequired(false)
     // `i18n` is a module singleton shared by every spec in this file. A test that switches locale and
     // restores it on its last line leaves the catalogue on `en` if an assertion between the two throws,
     // cascading failures through the later tests that match Chinese strings.
@@ -157,18 +175,28 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
-  it('translates every tool name the backend can report', () => {
-    // Unlabelled tools fell through to `toolName.replace(/_/g, ' ')`, so a user watching the trace
-    // saw raw `fuzz model async`. 14 tools were missing, all of the newer fuzz/dismiss family — the
-    // gap is silent, which is why it needs a check rather than vigilance. Asserting the catalogue
-    // directly, because the mapping table is component-internal.
+  it('provides both locale labels for every tool name the backend can report', () => {
+    // Unlabelled tools fall through to `toolName.replace(/_/g, ' ')`, so a user watching the trace
+    // sees a raw implementation name. Keep the complete backend catalog here: checking only the
+    // most recently added tools lets an older label disappear without failing this contract.
     const labelled = [
-      'edit_device', 'apply_fix', 'delete_verification_run', 'dismiss_verify_task',
-      'dismiss_simulate_task', 'fuzz_model_async', 'fuzz_task_status', 'cancel_fuzz_task',
-      'list_fuzz_runs', 'get_fuzz_run', 'get_fuzz_finding', 'delete_fuzz_run', 'dismiss_fuzz_task'
+      'add_device', 'add_template', 'apply_fix', 'apply_scenario', 'board_overview',
+      'cancel_fuzz_task', 'cancel_simulate_task', 'cancel_verify_task', 'check_duplicate_rule',
+      'check_rule_similarity', 'clear_board', 'delete_device', 'delete_fuzz_run',
+      'delete_simulation_trace', 'delete_template', 'delete_trace', 'delete_verification_run',
+      'dismiss_fuzz_task', 'dismiss_simulate_task', 'dismiss_verify_task', 'edit_device',
+      'fix_violation', 'fuzz_model_async', 'fuzz_task_status', 'get_fuzz_finding', 'get_fuzz_run',
+      'get_simulation_trace', 'get_trace', 'get_verification_run', 'list_async_tasks',
+      'list_fuzz_runs', 'list_rules', 'list_simulation_traces', 'list_specs', 'list_templates',
+      'list_traces', 'list_verification_runs', 'manage_board_history', 'manage_environment',
+      'manage_rule', 'manage_spec', 'recommend_related_devices', 'recommend_rules',
+      'recommend_scenario', 'recommend_specifications', 'reset_default_templates',
+      'search_devices', 'simulate_model', 'simulate_model_async', 'simulate_task_status',
+      'verify_model', 'verify_model_async', 'verify_task_status'
     ]
     const camel = (name: string) =>
       name.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase())
+    const componentSource = readFileSync(resolve(process.cwd(), 'src/components/ChatView.vue'), 'utf8')
 
     // Read the raw per-locale catalogue: the i18n instance sets `fallbackLocale: 'en'`, so a missing
     // zh-CN key resolves to the English message through both `t` and `tm` — the exact gap this guards
@@ -178,6 +206,9 @@ describe('ChatView', () => {
       for (const toolName of labelled) {
         const key = camel(toolName)
         expect(typeof labels[key], `app.chat.toolLabels.${key} missing in ${loc}`).toBe('string')
+        expect(componentSource, `${toolName} missing from TOOL_LABEL_KEYS`).toMatch(
+          new RegExp(`\\b${toolName}:\\s*'app\\.chat\\.toolLabels\\.${key}'`)
+        )
       }
     }
   })
@@ -192,6 +223,75 @@ describe('ChatView', () => {
     expect(chatApi.getSessionList).toHaveBeenCalledTimes(1)
     expect(wrapper.get('[data-testid="chat-session-session-1"]').text()).toContain('玄关场景检查')
 
+    wrapper.unmount()
+  })
+
+  it('surfaces App-owned background reconciliation and clears it only after a full refresh', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.setReconciliationRequired(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(true)
+    expect(chatStore.state.reconciliationRequired).toBe(true)
+
+    await wrapper.get('[data-testid="chat-reconciliation-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(chatStore.state.reconciliationRequired).toBe(false)
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps an offline result unread while hidden and acknowledges it only after rendering', async () => {
+    let resolveHistory!: (page: ChatHistoryPage) => void
+    const pendingHistory = new Promise<ChatHistoryPage>(resolve => {
+      resolveHistory = resolve
+    })
+    const unreadSession = {
+      ...session,
+      latestTerminalMessageId: 42,
+      latestExecutionStatus: 'FAILED' as const,
+      hasUnreadUpdate: true
+    }
+    chatApi.getSessionList.mockResolvedValue([unreadSession])
+    chatApi.getSessionHistory.mockReturnValue(pendingHistory)
+    chatApi.markSessionTerminalSeen.mockImplementation(async () => {
+      chatApi.getSessionList.mockResolvedValue([{
+        ...unreadSession,
+        hasUnreadUpdate: false
+      }])
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="chat-session-status"]').text()).toContain('失败')
+    expect(wrapper.get('[data-testid="chat-session-status"]').classes()).toContain('is-unread')
+
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    chatStore.closeChat()
+    resolveHistory(historyPage([{
+      id: 42,
+      role: 'assistant',
+      content: '后台执行失败，请查看原因。',
+      executionStatus: 'FAILED'
+    }]))
+    await flushPromises()
+
+    expect(chatApi.markSessionTerminalSeen).not.toHaveBeenCalled()
+
+    chatStore.openChat()
+    await flushPromises()
+
+    expect(chatApi.markSessionTerminalSeen).toHaveBeenCalledWith('session-1', 42)
+    expect(chatStore.state.unreadCount).toBe(0)
     wrapper.unmount()
   })
 
@@ -266,6 +366,219 @@ describe('ChatView', () => {
     expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
     wrapper.unmount()
+  })
+
+  it('re-arms background polling when an account switch overlaps an in-flight poll', async () => {
+    vi.useFakeTimers()
+    const aliceSession = { ...session, active: true }
+    const bobSession = {
+      ...session,
+      id: 'session-2',
+      userId: 2,
+      title: 'Bob 的后台任务',
+      active: true
+    }
+    let resolveAlicePoll!: (sessions: Array<typeof aliceSession>) => void
+    chatApi.getSessionList
+      .mockResolvedValueOnce([aliceSession])
+      .mockReturnValueOnce(new Promise(resolve => { resolveAlicePoll = resolve }))
+      .mockResolvedValueOnce([bobSession])
+      .mockResolvedValue([bobSession])
+    chatApi.getSessionActivity.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      active: true
+    }))
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(2)
+
+      authStore.login(validToken('bob'), {
+        userId: 2,
+        phone: '13900139000',
+        username: 'bob'
+      })
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(3)
+
+      // Bob's first timer fires while Alice's obsolete poll still owns the in-flight slot.
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(3)
+
+      resolveAlicePoll([aliceSession])
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(4)
+      expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的后台任务')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('discovers work started in another tab while its local session list is idle', async () => {
+    vi.useFakeTimers()
+    const externalSession = {
+      ...session,
+      id: 'session-from-another-tab',
+      title: '另一个标签页的场景生成',
+      active: true
+    }
+    chatStore.openChat()
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(1)
+      expect(chatStore.state.activeCount).toBe(0)
+
+      chatApi.getSessionList.mockResolvedValue([externalSession])
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="chat-session-session-from-another-tab"]').text())
+        .toContain('另一个标签页的场景生成')
+      expect(chatStore.state.activeCount).toBe(1)
+      expect(wrapper.get('.delete-btn-wrapper').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('.delete-btn-wrapper').attributes('title'))
+        .toBe(i18n.global.t('app.chat.sessionStillRunning'))
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not let an older background poll remove a session that was just created', async () => {
+    vi.useFakeTimers()
+    const activeSession = { ...session, active: true }
+    const createdSession = {
+      ...session,
+      id: 'session-created',
+      title: '刚创建的对话',
+      active: false
+    }
+    let resolveStalePoll!: (sessions: Array<typeof activeSession>) => void
+    chatApi.getSessionList
+      .mockResolvedValueOnce([activeSession])
+      .mockReturnValueOnce(new Promise(resolve => { resolveStalePoll = resolve }))
+    chatApi.getSessionActivity.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      active: true
+    }))
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.createSession.mockResolvedValue(createdSession)
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(2)
+
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="chat-session-session-created"]').element.parentElement
+        ?.classList.contains('active')).toBe(true)
+
+      resolveStalePoll([activeSession])
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="chat-session-session-created"]').text()).toContain('刚创建的对话')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('waits for a foreground session refresh before starting another background poll', async () => {
+    vi.useFakeTimers()
+    const activeSession = { ...session, active: true }
+    let resolveForegroundRefresh!: (sessions: Array<typeof activeSession>) => void
+    chatApi.getSessionList
+      .mockResolvedValueOnce([activeSession])
+      .mockReturnValueOnce(new Promise(resolve => { resolveForegroundRefresh = resolve }))
+      .mockResolvedValue([activeSession])
+    chatApi.getSessionActivity.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      active: true
+    }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      chatStore.closeChat()
+      await flushPromises()
+      chatStore.openChat()
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(2)
+
+      resolveForegroundRefresh([activeSession])
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(chatApi.getSessionList).toHaveBeenCalledTimes(3)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not duplicate a created session that background polling observed first', async () => {
+    vi.useFakeTimers()
+    const activeSession = { ...session, active: true }
+    const createdSession = {
+      ...session,
+      id: 'session-created',
+      title: '新对话',
+      active: false
+    }
+    let resolveSession!: (value: typeof createdSession) => void
+    chatApi.getSessionList
+      .mockResolvedValueOnce([activeSession])
+      .mockResolvedValueOnce([activeSession, createdSession])
+    chatApi.getSessionActivity.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      active: true
+    }))
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.createSession.mockReturnValue(new Promise(resolve => { resolveSession = resolve }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(wrapper.findAll('[data-testid="chat-session-session-created"]')).toHaveLength(1)
+
+      resolveSession(createdSession)
+      await flushPromises()
+
+      expect(wrapper.findAll('[data-testid="chat-session-session-created"]')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 
   it('ignores a delayed Alice stop failure after switching to Bob', async () => {
@@ -567,6 +880,40 @@ describe('ChatView', () => {
     }
   })
 
+  it('keeps the current live stream attached when new-session creation fails', async () => {
+    let streamSignal: AbortSignal | undefined
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.createSession.mockRejectedValue(new Error('session limit reached'))
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      streamSignal = args[3]?.signal
+      return new Promise<void>(resolve =>
+        streamSignal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-input"]').setValue('继续执行长任务')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await flushPromises()
+
+      expect(streamSignal?.aborted).toBe(false)
+      expect(chatApi.requestSessionStop).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="chat-stop"]').exists()).toBe(true)
+      expect(wrapper.get('[data-testid="chat-session-session-1"]').element.parentElement
+        ?.classList.contains('active')).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('treats an incomplete new-session response as a visible failure', async () => {
     const errorMessage = vi.spyOn(feedback, 'notifyError').mockImplementation(() => undefined)
     chatApi.createSession.mockResolvedValue({})
@@ -602,6 +949,71 @@ describe('ChatView', () => {
     resolveSession(session)
     await flushPromises()
     wrapper.unmount()
+  })
+
+  it('keeps the latest user-selected session when an earlier new-chat request finishes later', async () => {
+    const firstSession = { ...session, id: 'session-a', title: '原会话' }
+    const selectedSession = { ...session, id: 'session-b', title: '用户最后选择' }
+    const createdSession = { ...session, id: 'session-c', title: '较早请求创建' }
+    let resolveSession!: (value: typeof createdSession) => void
+    chatApi.getSessionList.mockResolvedValue([firstSession, selectedSession])
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.createSession.mockReturnValue(new Promise(resolve => { resolveSession = resolve }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-a"]').trigger('click')
+      await flushPromises()
+
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await wrapper.get('[data-testid="chat-session-session-b"]').trigger('click')
+      await flushPromises()
+      resolveSession(createdSession)
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="chat-session-session-b"]').element.parentElement
+        ?.classList.contains('active')).toBe(true)
+      expect(wrapper.get('[data-testid="chat-session-session-c"]').element.parentElement
+        ?.classList.contains('active')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('keeps a retried conversation selected when an earlier new-chat request finishes later', async () => {
+    const firstSession = { ...session, id: 'session-a', title: '需要重试的会话' }
+    const createdSession = { ...session, id: 'session-c', title: '较早请求创建' }
+    let resolveSession!: (value: typeof createdSession) => void
+    chatApi.getSessionList.mockResolvedValue([firstSession])
+    chatApi.getSessionHistory
+      .mockRejectedValueOnce(new Error('history unavailable'))
+      .mockResolvedValue(historyPage([], firstSession.id))
+    chatApi.createSession.mockReturnValue(new Promise(resolve => { resolveSession = resolve }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-a"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="chat-history-retry"]').exists()).toBe(true)
+
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await wrapper.get('[data-testid="chat-history-retry"] button').trigger('click')
+      await flushPromises()
+      resolveSession(createdSession)
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="chat-session-session-a"]').element.parentElement
+        ?.classList.contains('active')).toBe(true)
+      expect(wrapper.get('[data-testid="chat-session-session-c"]').element.parentElement
+        ?.classList.contains('active')).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('shows a retryable error instead of an empty conversation when history loading fails', async () => {
@@ -644,6 +1056,7 @@ describe('ChatView', () => {
     await flushPromises()
     await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
     await flushPromises()
+    expect(wrapper.text()).toContain('执行当前预览的受保护操作')
     await wrapper.get('.protected-confirmation__button.is-confirm').trigger('click')
     await flushPromises()
 
@@ -755,7 +1168,7 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
-  it('switches from an idle selection to authoritative active work and keeps the Board locked', async () => {
+  it('keeps an idle selection while another conversation runs and keeps the Board locked', async () => {
     const sessionA = { ...session, id: 'session-a', title: '会话 A', active: false }
     const sessionB = { ...session, id: 'session-b', title: '会话 B', active: false }
     chatApi.getSessionList
@@ -788,15 +1201,268 @@ describe('ChatView', () => {
     chatStore.openChat()
     await flushPromises()
 
-    expect(chatApi.getSessionActivity.mock.calls.at(-1)?.[0]).toBe('session-a')
-    expect(chatApi.getSessionHistory.mock.calls.at(-1)?.[0]).toBe('session-a')
-    expect(wrapper.get('[data-testid="chat-session-session-a"]')
+    expect(chatApi.getSessionActivity.mock.calls.at(-1)?.[0]).toBe('session-b')
+    expect(wrapper.get('[data-testid="chat-session-session-b"]')
       .element.parentElement?.classList.contains('active')).toBe(true)
-    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(false)
     expect(chatStore.state.streaming).toBe(true)
 
     wrapper.unmount()
+  })
+
+  it('reconciles the Board and notifies when a background conversation finishes', async () => {
+    vi.useFakeTimers()
+    const sessionA = { ...session, id: 'session-a', title: '场景生成', active: false }
+    const sessionB = { ...session, id: 'session-b', title: '当前会话', active: false }
+    const notifyInfo = vi.spyOn(feedback, 'notifyInfo').mockImplementation(() => undefined)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatApi.getSessionList
+      .mockResolvedValueOnce([sessionA, sessionB])
+      .mockResolvedValueOnce([{ ...sessionA, active: true }, sessionB])
+      .mockResolvedValue([{
+        ...sessionA,
+        active: false,
+        latestTerminalMessageId: 101,
+        latestExecutionStatus: 'COMPLETED',
+        hasUnreadUpdate: true
+      }, sessionB])
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.getPendingConfirmation.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      kinds: []
+    }))
+    chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-b', active: false })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-b"]').trigger('click')
+      await flushPromises()
+
+      chatStore.closeChat()
+      await flushPromises()
+      chatStore.openChat()
+      await flushPromises()
+      expect(wrapper.find('[data-testid="chat-session-active"]').exists()).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(executeCommand).toHaveBeenCalledWith({
+        type: 'REFRESH_DATA',
+        payload: { target: 'board_state' }
+      })
+      expect(notifyInfo).toHaveBeenCalledWith(i18n.global.t(
+        'app.chat.backgroundSessionCompleted',
+        { title: '场景生成' }
+      ))
+      expect(wrapper.find('[data-testid="chat-session-active"]').exists()).toBe(false)
+      expect(chatStore.state.streaming).toBe(false)
+    } finally {
+      wrapper.unmount()
+      notifyInfo.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconciles and notifies when foreground refresh first observes background completion', async () => {
+    const sessionA = { ...session, id: 'session-a', title: '后台场景生成', active: true }
+    const sessionB = { ...session, id: 'session-b', title: '当前会话', active: false }
+    const notifyInfo = vi.spyOn(feedback, 'notifyInfo').mockImplementation(() => undefined)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatApi.getSessionList
+      .mockResolvedValueOnce([sessionA, sessionB])
+      .mockResolvedValueOnce([{
+        ...sessionA,
+        active: false,
+        latestTerminalMessageId: 102,
+        latestExecutionStatus: 'COMPLETED',
+        hasUnreadUpdate: true
+      }, sessionB])
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.getSessionActivity.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      active: sessionId === sessionA.id
+    }))
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-b"]').trigger('click')
+      await flushPromises()
+
+      chatStore.closeChat()
+      await flushPromises()
+      chatStore.openChat()
+      await flushPromises()
+
+      expect(executeCommand).toHaveBeenCalledWith({
+        type: 'REFRESH_DATA',
+        payload: { target: 'board_state' }
+      })
+      expect(notifyInfo).toHaveBeenCalledWith(i18n.global.t(
+        'app.chat.backgroundSessionCompleted',
+        { title: '后台场景生成' }
+      ))
+      expect(wrapper.find('[data-testid="chat-session-active"]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      notifyInfo.mockRestore()
+    }
+  })
+
+  it('reconciles a foreground terminal message that completed between session-list refreshes', async () => {
+    const fastSession = {
+      ...session,
+      id: 'fast-session',
+      title: '快速后台任务',
+      latestTerminalMessageId: 103,
+      latestExecutionStatus: 'COMPLETED' as const,
+      hasUnreadUpdate: true
+    }
+    const notifyInfo = vi.spyOn(feedback, 'notifyInfo').mockImplementation(() => undefined)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatApi.getSessionList
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([fastSession])
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      window.dispatchEvent(new Event('focus'))
+      await flushPromises()
+
+      expect(executeCommand).toHaveBeenCalledWith({
+        type: 'REFRESH_DATA',
+        payload: { target: 'board_state' }
+      })
+      expect(notifyInfo).toHaveBeenCalledWith(i18n.global.t(
+        'app.chat.backgroundSessionCompleted',
+        { title: '快速后台任务' }
+      ))
+    } finally {
+      wrapper.unmount()
+      notifyInfo.mockRestore()
+    }
+  })
+
+  it('does not show a previous account background-completion notice after account change', async () => {
+    const aliceBackground = { ...session, id: 'session-a', title: 'Alice 后台任务', active: true }
+    const aliceCurrent = { ...session, id: 'session-b', title: 'Alice 当前会话', active: false }
+    const bobSession = {
+      ...session,
+      id: 'session-c',
+      userId: 2,
+      title: 'Bob 会话',
+      active: false
+    }
+    let resolveReconciliation!: (result: boolean) => void
+    const executeCommand = vi.fn().mockReturnValue(new Promise<boolean>(resolve => {
+      resolveReconciliation = resolve
+    }))
+    const notifyInfo = vi.spyOn(feedback, 'notifyInfo').mockImplementation(() => undefined)
+    chatApi.getSessionList
+      .mockResolvedValueOnce([aliceBackground, aliceCurrent])
+      .mockResolvedValueOnce([{ ...aliceBackground, active: false }, aliceCurrent])
+      .mockResolvedValueOnce([bobSession])
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.getSessionActivity.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      active: sessionId === aliceBackground.id
+    }))
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-b"]').trigger('click')
+      await flushPromises()
+      chatStore.closeChat()
+      await flushPromises()
+      chatStore.openChat()
+      await flushPromises()
+      expect(executeCommand).toHaveBeenCalledTimes(1)
+
+      authStore.login(validToken('bob'), {
+        userId: 2,
+        phone: '13900139000',
+        username: 'bob'
+      })
+      await flushPromises()
+      resolveReconciliation(true)
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="chat-session-session-c"]').text()).toContain('Bob 会话')
+      expect(notifyInfo).not.toHaveBeenCalledWith(expect.stringContaining('Alice 后台任务'))
+    } finally {
+      wrapper.unmount()
+      notifyInfo.mockRestore()
+    }
+  })
+
+  it('detaches a long-running conversation when starting another without stopping the server work', async () => {
+    const sessionA = { ...session, id: 'session-a', title: '长任务', active: false }
+    const sessionB = { ...session, id: 'session-b', title: '继续提问', active: false }
+    const sessionC = { ...session, id: 'session-c', title: '新对话', active: false }
+    let firstStreamSignal: AbortSignal | undefined
+    chatApi.getSessionList.mockResolvedValue([sessionA, sessionB])
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.getPendingConfirmation.mockResolvedValue({ sessionId: 'session-a', kinds: [] })
+    chatApi.createSession.mockResolvedValue(sessionC)
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      args[2].onAccepted?.()
+      if (chatApi.sendStreamChat.mock.calls.length === 1) {
+        firstStreamSignal = args[3]?.signal
+        return new Promise<void>(resolve =>
+          firstStreamSignal?.addEventListener('abort', () => resolve(), { once: true }))
+      }
+      const signal = args[3]?.signal as AbortSignal | undefined
+      return new Promise<void>(resolve =>
+        signal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-session-session-a"]').trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-input"]').setValue('生成并替换当前场景')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await flushPromises()
+
+      expect(firstStreamSignal?.aborted).toBe(true)
+      expect(chatApi.requestSessionStop).not.toHaveBeenCalled()
+      expect(wrapper.get('[data-testid="chat-session-session-c"]').element.parentElement
+        ?.classList.contains('active')).toBe(true)
+      expect(wrapper.get('[data-testid="chat-session-active"]').attributes('title'))
+        .toBe('后台任务执行中')
+      expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeUndefined()
+      expect(chatStore.state.streaming).toBe(true)
+
+      await wrapper.get('[data-testid="chat-input"]').setValue('检查当前设备')
+      await wrapper.get('[data-testid="chat-send"]').trigger('click')
+      await flushPromises()
+      expect(chatApi.sendStreamChat).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('keeps a known active session locked when history loading fails', async () => {
@@ -1914,6 +2580,31 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
+  it('reports the configured parallel-conversation limit precisely', async () => {
+    const errorMessage = vi.spyOn(feedback, 'notifyError').mockImplementation(() => undefined)
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.sendStreamChat.mockRejectedValue(new ChatStreamError('busy', {
+      kind: 'HTTP_ERROR',
+      status: 429,
+      reasonCode: 'USER_CHAT_OPERATION_BUSY',
+      limit: 4
+    }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('并行检查另一个场景')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(errorMessage).toHaveBeenCalledWith(
+      '发送消息失败：当前已有 4 个助手会话在运行。你可以查看这些会话，或等待其中一个完成后重试。'
+    )
+    wrapper.unmount()
+  })
+
   it('loads older history through the server cursor without replacing recent messages', async () => {
     chatApi.getSessionList.mockResolvedValue([session])
     chatApi.getSessionHistory
@@ -1972,6 +2663,40 @@ describe('ChatView', () => {
 
     finishStream()
     await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('leaves read-only Board playback before sending a new turn', async () => {
+    const prepareInteraction = vi.fn(() => true)
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      acceptAndFinishStream(args)
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ prepareInteraction })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('继续分析')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(prepareInteraction).toHaveBeenCalledOnce()
+    expect(chatApi.sendStreamChat).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it('does not start a turn when Board preparation observes a replacement in progress', async () => {
+    const prepareInteraction = vi.fn(() => false)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ prepareInteraction })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('继续分析')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(prepareInteraction).toHaveBeenCalledOnce()
+    expect(chatApi.sendStreamChat).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -2170,6 +2895,73 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
+  it('announces an assistant action only after its authoritative refresh succeeds', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    const notifyInfo = vi.spyOn(feedback, 'notifyInfo').mockImplementation(() => undefined)
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      callbacks.onAccepted?.()
+      callbacks.onCommand({
+        type: 'REFRESH_DATA',
+        payload: {
+          target: 'run_history',
+          assistantAction: 'FORMAL_VERIFICATION_RUN'
+        }
+      })
+      callbacks.onMessage('验证完成')
+      callbacks.onFinish?.({ turnId: args[4], executionStatus: 'COMPLETED' })
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('运行验证')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: {
+        target: 'run_history',
+        assistantAction: 'FORMAL_VERIFICATION_RUN'
+      }
+    })
+    expect(notifyInfo).toHaveBeenCalledWith('AI 助手已运行形式化验证，运行历史已同步。')
+    wrapper.unmount()
+  })
+
+  it('announces an exact summary-only receipt after authoritative refresh succeeds', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    const notifyInfo = vi.spyOn(feedback, 'notifyInfo').mockImplementation(() => undefined)
+    const summary = '已清除 4 条撤销/重做记录，当前画布未改变。'
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      callbacks.onAccepted?.()
+      callbacks.onCommand({
+        type: 'REFRESH_DATA',
+        payload: { target: 'board_state', assistantSummary: summary }
+      })
+      callbacks.onMessage('历史已清理')
+      callbacks.onFinish?.({ turnId: args[4], executionStatus: 'COMPLETED' })
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('清理不可用的撤销历史')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state', assistantSummary: summary }
+    })
+    expect(notifyInfo).toHaveBeenCalledWith(summary)
+    wrapper.unmount()
+  })
+
   it('keeps interactions locked until a failed reconciliation is retried successfully', async () => {
     let activeTurnId = ''
     const executeCommand = vi.fn()
@@ -2253,6 +3045,46 @@ describe('ChatView', () => {
       'session-1',
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    wrapper.unmount()
+  })
+
+  it('stops every active conversation before allowing logout', async () => {
+    const sessionA = { ...session, id: 'session-a', title: '场景生成', active: true }
+    const sessionB = { ...session, id: 'session-b', title: '形式化验证', active: true }
+    const stoppedSessions = new Set<string>()
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatApi.getSessionList.mockImplementation(async () => [
+        { ...sessionA, active: false },
+        { ...sessionB, active: false }
+      ].map(candidate => ({
+        ...candidate,
+        active: !stoppedSessions.has(candidate.id)
+      })))
+    chatApi.getSessionHistory.mockImplementation(async (sessionId: string) =>
+      historyPage([], sessionId))
+    chatApi.requestSessionStop.mockImplementation(async (sessionId: string) => {
+      stoppedSessions.add(sessionId)
+    })
+    chatApi.getSessionActivity.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      active: !stoppedSessions.has(sessionId)
+    }))
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+
+    const result = await (wrapper.vm as any).prepareForLogout()
+    await flushPromises()
+
+    expect(result).toBe('ready')
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-b')
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-a', undefined)
+    expect(stoppedSessions).toEqual(new Set(['session-a', 'session-b']))
     expect(executeCommand).toHaveBeenCalledWith({
       type: 'REFRESH_DATA',
       payload: { target: 'board_state' }

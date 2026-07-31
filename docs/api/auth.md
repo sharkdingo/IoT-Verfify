@@ -95,15 +95,18 @@ namespaces. Login classifies the normalized identifier once and queries only tha
 
 ## `POST /api/auth/logout`
 
-Authenticated. Blacklists the current token in Redis (fail-open — see
-[overview.md](overview.md)).
+Authenticated. Requests an explicit stop for every active AI-chat session owned by the
+account, then blacklists the current token in Redis (fail-open — see
+[overview.md](overview.md)). The stop uses the same durable cross-instance execution flags as
+the per-session Stop control. If the durable chat-stop update fails, logout fails before the
+token is blacklisted instead of reporting a logout that left unknown chat work running.
 
 - **Request**: no body. Requires `Authorization: Bearer <token>` (the header is read
   directly to identify the token to revoke).
 - **Response**: `data` is `null`.
-- Logout only revokes the current token and clears the client session. It does not
-  cancel server-side verification/simulation/exploration tasks; those tasks remain associated
-  with the account and can be viewed after the user signs in again.
+- Logout stops active AI-chat responses and revokes the current token. It does not cancel
+  server-side verification/simulation/exploration tasks; those tasks remain associated with the
+  account and can be viewed after the user signs in again.
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/logout \

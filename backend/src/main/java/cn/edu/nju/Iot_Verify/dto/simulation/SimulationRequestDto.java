@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.dto.simulation;
 
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
@@ -31,8 +32,15 @@ public class SimulationRequestDto {
     @Size(max = RequestLimits.MAX_DEVICES, message = "At most 100 devices can be simulated")
     private List<@Valid @NotNull(message = "Device item cannot be null") DeviceVerificationDto> devices;
 
+    /** Frozen canvas layout for faithful read-only replay; it is not part of NuSMV semantics. */
+    @Valid
+    @NotEmpty(message = "Playback nodes cannot be empty")
+    @Size(max = RequestLimits.MAX_DEVICES, message = "At most 100 playback nodes can be captured")
+    private List<@Valid @NotNull(message = "Playback node item cannot be null") DeviceNodeDto> playbackNodes;
+
     /**
-     * Board-level environment pool. Device templates grant read permission; values live here.
+     * Board-level environment pool. Device templates declare modeled reads of these values; this is
+     * model structure, not authorization. Values live in the shared pool.
      */
     @Valid
     @Size(max = RequestLimits.MAX_ENVIRONMENT_VARIABLES, message = "At most 200 environment variables can be simulated")

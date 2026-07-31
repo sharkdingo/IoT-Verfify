@@ -40,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FuzzEngineTest {
@@ -63,6 +64,13 @@ class FuzzEngineTest {
                 bundledState.getEnvVariables().stream()
                         .filter(variable -> "weather".equals(variable.getName()))
                         .findFirst().orElseThrow().getModelTokenSource());
+        assertTrue(bundledDevice.getVariables().stream()
+                .allMatch(variable -> variable.getTrust() == null));
+        assertTrue(bundledState.getEnvVariables().stream()
+                .allMatch(variable -> variable.getTrust() == null));
+        assertTrue(bundledDevice.getTrustPrivacy().isEmpty());
+        assertTrue(bundledDevice.getPrivacies().isEmpty());
+        assertTrue(bundledState.getTrustPrivacies().isEmpty());
 
         FuzzModel mixedModel = FuzzModel.from(provenanceSnapshot(true));
         var mixedState = mixedModel.simulate(new long[0], 1).traceStates().get(0);
@@ -1409,7 +1417,7 @@ class FuzzEngineTest {
     }
 
     @Test
-    void numericEnvironmentUsesPreviousImpactRateAndFormalBoundaryCandidates() {
+    void numericEnvironmentUsesPreviousImpactRateAndDeclaredRateCandidates() {
         FuzzModel centered = FuzzModel.from(numericImpactSnapshot("50"));
         FuzzModel.Simulation centeredPath = centered.simulate(new long[]{0L, 0L}, 3);
 
@@ -1420,6 +1428,44 @@ class FuzzEngineTest {
         FuzzModel.Simulation boundaryPath = upperBoundary.simulate(new long[]{0L}, 2);
 
         assertEquals("99", boundaryPath.traceStates().get(1).getEnvVariables().get(0).getValue());
+    }
+
+    @Test
+    void numericEnvironmentWithExplicitZeroNaturalRateDoesNotInventBoundaryDisturbance() {
+        FuzzModel model = FuzzModel.from(numericImpactSnapshot("100", "0"));
+        FuzzModel.Simulation path = model.simulate(new long[]{0L}, 2);
+
+        assertEquals("100", path.traceStates().get(1).getEnvVariables().get(0).getValue());
+    }
+
+    @Test
+    void numericEnvironmentWithoutDeviceImpactKeepsBothSameDirectionRateEndpoints() {
+        FuzzModel model = FuzzModel.from(numericImpactSnapshot("10", "[2,3]", false));
+        FuzzModel.Simulation path = model.simulate(new long[]{0L}, 2);
+
+        assertEquals("12", path.traceStates().get(1).getEnvVariables().get(0).getValue());
+    }
+
+    @Test
+    void numericLocalVariableKeepsBothSameDirectionRateEndpoints() {
+        FuzzModel model = FuzzModel.from(numericLocalSnapshot("10", "[2,3]"));
+        FuzzModel.Simulation path = model.simulate(new long[]{0L}, 2);
+
+        assertEquals("12", path.traceStates().get(1).getDevices().get(0)
+                .getVariables().get(0).getValue());
+    }
+
+    @Test
+    void boundedModelRejectsRateSyntaxThatFormalAndTemplateAdmissionReject() {
+        IllegalArgumentException unbracketed = assertThrows(IllegalArgumentException.class,
+                () -> FuzzModel.from(numericImpactSnapshot("10", "1,2", false)));
+        assertTrue(unbracketed.getMessage().contains("NaturalChangeRate '1,2'"),
+                unbracketed.getMessage());
+
+        IllegalArgumentException extraEndpoint = assertThrows(IllegalArgumentException.class,
+                () -> FuzzModel.from(numericLocalSnapshot("10", "[1,2,999]")));
+        assertTrue(extraEndpoint.getMessage().contains("NaturalChangeRate '[1,2,999]'"),
+                extraEndpoint.getMessage());
     }
 
     @Test
@@ -2261,6 +2307,19 @@ class FuzzEngineTest {
     }
 
     private static BoardDataConverter.ModelInputSnapshot numericImpactSnapshot(String temperature) {
+        return numericImpactSnapshot(temperature, "[-1,1]");
+    }
+
+    private static BoardDataConverter.ModelInputSnapshot numericImpactSnapshot(
+            String temperature,
+            String naturalChangeRate) {
+        return numericImpactSnapshot(temperature, naturalChangeRate, true);
+    }
+
+    private static BoardDataConverter.ModelInputSnapshot numericImpactSnapshot(
+            String temperature,
+            String naturalChangeRate,
+            boolean hasImpact) {
         DeviceVerificationDto device = new DeviceVerificationDto();
         device.setVarName("climate_1");
         device.setDeviceLabel("Climate device");
@@ -2277,7 +2336,7 @@ class FuzzEngineTest {
                 .privacy("public")
                 .lowerBound(0)
                 .upperBound(100)
-                .naturalChangeRate("[-1,1]")
+                .naturalChangeRate(naturalChangeRate)
                 .build();
         DeviceManifest.Dynamic cooling = DeviceManifest.Dynamic.builder()
                 .variableName("temperature")
@@ -2287,7 +2346,7 @@ class FuzzEngineTest {
                 .name("cool")
                 .trust("trusted")
                 .privacy("public")
-                .dynamics(List.of(cooling))
+                .dynamics(hasImpact ? List.of(cooling) : List.of())
                 .build();
         DeviceManifest.WorkingState idle = DeviceManifest.WorkingState.builder()
                 .name("idle")
@@ -2300,7 +2359,7 @@ class FuzzEngineTest {
                 .modes(List.of("ClimateMode"))
                 .internalVariables(List.of(temperatureDomain))
                 .environmentDomains(List.of())
-                .impactedVariables(List.of("temperature"))
+                .impactedVariables(hasImpact ? List.of("temperature") : List.of())
                 .initState("cool")
                 .workingStates(List.of(cool, idle))
                 .transitions(List.of())
@@ -2314,6 +2373,46 @@ class FuzzEngineTest {
                 List.of(),
                 List.of(),
                 Map.of("Climate", manifest));
+    }
+
+    private static BoardDataConverter.ModelInputSnapshot numericLocalSnapshot(
+            String value,
+            String naturalChangeRate) {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("counter_1");
+        device.setDeviceLabel("Counter");
+        device.setTemplateName("Counter");
+        device.setVariables(List.of(new VariableStateDto("count", value, "trusted")));
+        device.setPrivacies(List.of());
+
+        DeviceManifest.InternalVariable count = DeviceManifest.InternalVariable.builder()
+                .name("count")
+                .isInside(true)
+                .falsifiableWhenCompromised(false)
+                .trust("trusted")
+                .privacy("public")
+                .lowerBound(0)
+                .upperBound(100)
+                .naturalChangeRate(naturalChangeRate)
+                .build();
+        DeviceManifest manifest = DeviceManifest.builder()
+                .name("Counter")
+                .modes(List.of())
+                .internalVariables(List.of(count))
+                .environmentDomains(List.of())
+                .impactedVariables(List.of())
+                .workingStates(List.of())
+                .transitions(List.of())
+                .apis(List.of())
+                .contents(List.of())
+                .build();
+        return new BoardDataConverter.ModelInputSnapshot(
+                List.of(),
+                List.of(device),
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of("Counter", manifest));
     }
 
     private static SpecificationDto specification(String id, String templateId, SpecConditionDto condition) {

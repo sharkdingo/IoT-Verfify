@@ -27,6 +27,7 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceTriggeredRuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
+import cn.edu.nju.Iot_Verify.util.NaturalChangeRateParser;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 
 import java.util.ArrayList;
@@ -1441,7 +1442,6 @@ final class FuzzModel {
             for (Map.Entry<String, String> entry : deviceState.locals.entrySet()) {
                 variables.add(traceVariable(
                         entry.getKey(), entry.getValue(),
-                        device.localDomains.get(entry.getKey()).trust,
                         device.modelTokenSource));
             }
             traceDevice.setVariables(variables);
@@ -1453,7 +1453,7 @@ final class FuzzModel {
         List<TraceVariableDto> environment = new ArrayList<>();
         state.environment.forEach((name, value) ->
                 environment.add(traceVariable(
-                        name, value, environmentDomains.get(name).trust,
+                        name, value,
                         environmentTokenSources.getOrDefault(name, ModelTokenSource.UNKNOWN))));
         Set<RuleDto> triggeredRuleSet = Collections.newSetFromMap(new IdentityHashMap<>());
         triggeredRuleSet.addAll(state.triggeredRules);
@@ -1481,11 +1481,10 @@ final class FuzzModel {
     }
 
     private static TraceVariableDto traceVariable(
-            String name, String value, String trust, ModelTokenSource modelTokenSource) {
+            String name, String value, ModelTokenSource modelTokenSource) {
         TraceVariableDto variable = new TraceVariableDto();
         variable.setName(name);
         variable.setValue(value);
-        variable.setTrust(trust);
         variable.setModelTokenSource(modelTokenSource);
         return variable;
     }
@@ -2078,7 +2077,7 @@ final class FuzzModel {
                         variable.getLowerBound(),
                         variable.getUpperBound(),
                         variable.getNaturalChangeRate(),
-                        variable.getTrust(),
+                        !Boolean.TRUE.equals(variable.getIsInside()),
                         "variable '" + variable.getName() + "'");
                 if (Boolean.TRUE.equals(variable.getIsInside())) {
                     if (locals.putIfAbsent(variable.getName(), domain) != null) {
@@ -2099,7 +2098,7 @@ final class FuzzModel {
                         domain.getLowerBound(),
                         domain.getUpperBound(),
                         domain.getNaturalChangeRate(),
-                        domain.getTrust(),
+                        true,
                         "environment domain '" + domain.getName() + "'");
                 putOwnEnvironmentDomain(ownEnvironmentDomains, domain.getName(), parsedDomain, id);
             }
@@ -2535,21 +2534,18 @@ final class FuzzModel {
         private final Integer upper;
         private final int lowerRate;
         private final int upperRate;
-        private final String trust;
 
         private ValueDomain(
                 List<String> values,
                 Integer lower,
                 Integer upper,
                 int lowerRate,
-                int upperRate,
-                String trust) {
+                int upperRate) {
             this.values = values;
             this.lower = lower;
             this.upper = upper;
             this.lowerRate = lowerRate;
             this.upperRate = upperRate;
-            this.trust = trust;
         }
 
         private static ValueDomain from(
@@ -2557,15 +2553,21 @@ final class FuzzModel {
                 Integer lower,
                 Integer upper,
                 String naturalChangeRate,
-                String trust,
+                boolean requireNaturalChangeRate,
                 String context) {
             boolean discrete = rawValues != null && !rawValues.isEmpty();
             boolean numeric = lower != null && upper != null;
             if (discrete == numeric || lower != null != (upper != null)) {
                 throw error(context + " must declare either values or lower/upper bounds.");
             }
-            if (discrete && hasText(naturalChangeRate)) {
+            boolean hasRateDeclaration = naturalChangeRate != null;
+            if (discrete && hasRateDeclaration) {
                 throw error(context + " declares NaturalChangeRate, but only numeric ranges support it.");
+            }
+            if (numeric && requireNaturalChangeRate && !hasRateDeclaration) {
+                throw error(context + " is a shared numeric environment variable and must explicitly define "
+                        + "NaturalChangeRate ('[-1, 1]' for the MEDIC baseline disturbance, or '0' "
+                        + "for no natural change).");
             }
             int[] rates = parseRate(naturalChangeRate, context);
             if (discrete) {
@@ -2578,12 +2580,12 @@ final class FuzzModel {
                     }
                     values.add(value);
                 }
-                return new ValueDomain(List.copyOf(values), null, null, rates[0], rates[1], trust);
+                return new ValueDomain(List.copyOf(values), null, null, rates[0], rates[1]);
             }
             if (lower > upper) {
                 throw error(context + " has lowerBound greater than upperBound.");
             }
-            return new ValueDomain(List.of(), lower, upper, rates[0], rates[1], trust);
+            return new ValueDomain(List.of(), lower, upper, rates[0], rates[1]);
         }
 
         private boolean isNumeric() {
@@ -2635,11 +2637,11 @@ final class FuzzModel {
             }
             int currentValue = parseInteger(current, "for numeric state");
             LinkedHashSet<String> candidates = new LinkedHashSet<>();
-            if (lowerRate < 0) {
+            if (lowerRate != 0) {
                 candidates.add(Long.toString(clamp((long) currentValue + dynamicRate + lowerRate)));
             }
             candidates.add(Long.toString(clamp((long) currentValue + dynamicRate)));
-            if (upperRate > 0) {
+            if (upperRate != 0) {
                 candidates.add(Long.toString(clamp((long) currentValue + dynamicRate + upperRate)));
             }
             return List.copyOf(candidates);
@@ -2658,50 +2660,16 @@ final class FuzzModel {
             if (!isNumeric()) {
                 throw error("Numeric environment transition requires a bounded numeric domain.");
             }
+
             long currentValue = parseInteger(current, "for numeric environment state");
-            if (!hasNumericImpact) {
-                return nextCandidates(current, 0, null, true);
-            }
-
-            // The ±1 at the boundaries is MEDIC's environment disturbance, mirroring the SMV
-            // generator's numeric environment transition: a shared environment variable moves by the
-            // device effect "with a slight disturbance in the range of [-1, 1] in each time step"
-            // (MEDIC §3.1, Fig. 2b). The explorer must offer the same candidates as the formal model,
-            // or a scene the checker can violate would be unreachable here.
-            long upperBoundary = (long) upper - impactRate;
-            if (currentValue == upperBoundary) {
-                return numericCandidates(
-                        currentValue - 1L + impactRate,
-                        currentValue + impactRate);
-            }
-            if (currentValue > upperBoundary) {
-                return List.of(upper.toString());
-            }
-            long lowerBoundary = (long) lower - impactRate;
-            if (currentValue == lowerBoundary) {
-                return numericCandidates(
-                        currentValue + impactRate,
-                        currentValue + 1L + impactRate);
-            }
-            if (currentValue < lowerBoundary) {
-                return List.of(lower.toString());
-            }
-
+            long effectiveImpactRate = hasNumericImpact ? impactRate : 0L;
             LinkedHashSet<String> candidates = new LinkedHashSet<>();
             if (lowerRate != 0) {
-                candidates.add(Long.toString(clamp(currentValue + lowerRate + impactRate)));
+                candidates.add(Long.toString(clamp(currentValue + lowerRate + effectiveImpactRate)));
             }
-            candidates.add(Long.toString(clamp(currentValue + impactRate)));
+            candidates.add(Long.toString(clamp(currentValue + effectiveImpactRate)));
             if (upperRate != 0) {
-                candidates.add(Long.toString(clamp(currentValue + upperRate + impactRate)));
-            }
-            return List.copyOf(candidates);
-        }
-
-        private List<String> numericCandidates(long... rawValues) {
-            LinkedHashSet<String> candidates = new LinkedHashSet<>();
-            for (long rawValue : rawValues) {
-                candidates.add(Long.toString(clamp(rawValue)));
+                candidates.add(Long.toString(clamp(currentValue + upperRate + effectiveImpactRate)));
             }
             return List.copyOf(candidates);
         }
@@ -2769,27 +2737,12 @@ final class FuzzModel {
         }
 
         private static int[] parseRate(String raw, String context) {
-            if (!hasText(raw)) {
-                return new int[]{0, 0};
-            }
-            String[] parts = raw.replace("[", "").replace("]", "").split(",");
             try {
-                if (parts.length == 1) {
-                    int rate = Integer.parseInt(parts[0].trim());
-                    return rate < 0 ? new int[]{rate, 0} : new int[]{0, rate};
-                }
-                if (parts.length == 2) {
-                    int lower = Integer.parseInt(parts[0].trim());
-                    int upper = Integer.parseInt(parts[1].trim());
-                    if (lower > upper) {
-                        throw error(context + " has an inverted natural change rate.");
-                    }
-                    return new int[]{lower, upper};
-                }
-            } catch (NumberFormatException exception) {
+                NaturalChangeRateParser.RateRange range = NaturalChangeRateParser.parse(raw);
+                return new int[]{range.lower(), range.upper()};
+            } catch (NaturalChangeRateParser.ParseException exception) {
                 throw error(context + " has invalid NaturalChangeRate '" + raw + "'.");
             }
-            throw error(context + " has invalid NaturalChangeRate '" + raw + "'.");
         }
     }
 

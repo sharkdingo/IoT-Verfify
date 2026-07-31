@@ -6,6 +6,9 @@ describe('chat shared operation state', () => {
 
   afterEach(() => {
     store.setStreaming(false)
+    store.setActiveCount(0)
+    store.setUnreadCount(0)
+    store.setReconciliationRequired(false)
     store.closeChat()
   })
 
@@ -24,5 +27,26 @@ describe('chat shared operation state', () => {
 
     expect(store.state.visible).toBe(false)
     expect(store.state.streaming).toBe(true)
+  })
+
+  it('keeps the persistent result count independent from panel visibility', () => {
+    store.setUnreadCount(3)
+    store.closeChat()
+
+    expect(store.state.unreadCount).toBe(3)
+  })
+
+  it('keeps the authoritative active-session count independent from panel visibility', () => {
+    store.setActiveCount(2)
+    store.closeChat()
+
+    expect(store.state.activeCount).toBe(2)
+  })
+
+  it('keeps failed background reconciliation visible and independent from panel visibility', () => {
+    store.setReconciliationRequired(true)
+    store.closeChat()
+
+    expect(store.state.reconciliationRequired).toBe(true)
   })
 })

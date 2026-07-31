@@ -16,7 +16,7 @@ import lombok.Data;
  * - variable: 检查变量值，如 "temperature>30"
  * - api: 检查 API 信号，如 "fanAuto_a=FALSE"
  * - trust: 检查当前模式状态或变量的来源标签
- * - privacy: 检查当前模式状态或变量的敏感度标签
+ * - privacy: 检查当前模式状态或变量的敏感性标签
  */
 @Data
 public class SpecConditionDto {

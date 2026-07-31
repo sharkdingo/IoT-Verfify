@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.controller;
 
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatRequestDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatTerminalSeenRequestDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatStopRequestDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatAdmissionOutcomeUnknownException;
@@ -16,6 +18,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -52,7 +55,15 @@ class ChatControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new ChatController(chatService, executor, userOperationGuard, 600000L);
+        controller = new ChatController(
+                chatService, executor, userOperationGuard, new ChatExecutionConfig(), 600000L);
+    }
+
+    @Test
+    void markTerminalSeen_delegatesTheExactVisibleTerminalMessage() {
+        controller.markTerminalSeen(1L, "s1", new ChatTerminalSeenRequestDto(42L));
+
+        verify(chatService).markTerminalSeen(1L, "s1", 42L);
     }
 
     @Test
@@ -76,6 +87,10 @@ class ChatControllerTest {
 
     @Test
     void chat_executorAccepted_dispatchesToChatService() {
+        ChatExecutionConfig executionConfig = new ChatExecutionConfig();
+        executionConfig.setMaxConcurrentSessionsPerUser(6);
+        controller = new ChatController(
+                chatService, executor, userOperationGuard, executionConfig, 600000L);
         ChatRequestDto request = request("s1", "hello");
         when(userOperationGuard.acquire(any(), any(), anyInt(), any()))
                 .thenReturn(org.mockito.Mockito.mock(UserOperationGuard.Lease.class));
@@ -90,6 +105,8 @@ class ChatControllerTest {
         SseEmitter emitter = controller.chat(1L, request);
 
         assertNotNull(emitter);
+        verify(userOperationGuard).acquire(
+                1L, UserOperationGuard.Kind.CHAT, 6, Duration.ofHours(2));
         verify(chatService).processStreamChat(
                 eq(1L), eq("s1"), eq("execution-s1"), eq("turn-s1"), eq("hello"), eq(null), same(emitter));
         verify(chatService).endStreamRequest(1L, "s1", "execution-s1");

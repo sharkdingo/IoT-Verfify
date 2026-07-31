@@ -22,6 +22,7 @@ import type {
 } from '@/types/fuzzing'
 import { formatTraceSpec } from '@/utils/traceView'
 import { generationIssueReasonKey } from '@/utils/generationIssue'
+import RunInitiatorBadge from '@/components/RunInitiatorBadge.vue'
 
 type HistoryLayer = 'tasks' | 'results'
 type ResultFilter = 'all' | 'verification' | 'fuzzing' | 'simulation'
@@ -224,6 +225,7 @@ const traceSpecTitle = (trace: TraceSummary) => {
 }
 
 const fuzzFindingTitle = (finding: FuzzingFindingSummary) => {
+  if (finding.dataAvailable === false) return t('app.historyItemUnavailable')
   const summary = finding.violatedSpec ? formatTraceSpec(finding.violatedSpec, t) : ''
   return summary || finding.specificationLabel || finding.violatedSpecId || t('app.unknownSpecification')
 }
@@ -244,6 +246,20 @@ const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary) => {
   const current = props.currentBoardScope
   if (!current) return false
   return run.modelSnapshot.modelFingerprint !== current.modelFingerprint
+}
+
+const runScopeHasBoardDrift = (
+  run: AvailableVerificationRunSummary | AvailableSimulationTraceSummary,
+  includeSpecifications: boolean
+) => {
+  const current = props.currentBoardScope
+  if (!current) return false
+  const snapshot = run.modelSnapshot
+  return snapshot.deviceCount !== current.deviceCount
+    || snapshot.ruleCount !== current.ruleCount
+    || snapshot.environmentVariableCount !== current.environmentVariableCount
+    || snapshot.deviceTemplateCount !== current.deviceTemplateCount
+    || (includeSpecifications && snapshot.specificationCount !== current.specificationCount)
 }
 
 const resultErrorEntries = computed(() => {
@@ -471,6 +487,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
                       {{ formatStatus(task.status) }}
                     </span>
+                    <RunInitiatorBadge :initiator="task.initiator" />
                     <span
                       v-if="task.kind === 'fuzzing'"
                       :data-testid="`fuzzing-task-mode-${task.id}`"
@@ -536,6 +553,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
                       {{ formatStatus(task.status) }}
                     </span>
+                    <RunInitiatorBadge :initiator="task.initiator" />
                     <span
                       v-if="task.kind === 'fuzzing'"
                       :data-testid="`fuzzing-task-mode-${task.id}`"
@@ -658,6 +676,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <div class="flex items-center gap-2 text-amber-800">
                     <span class="material-symbols-outlined text-base" aria-hidden="true">warning</span>
                     <span class="text-xs font-bold">{{ t('app.historyItemUnavailable') }}</span>
+                    <RunInitiatorBadge :initiator="item.run.initiator" />
                   </div>
                   <p class="mt-1 text-[11px] leading-4 text-slate-600">
                     {{ t('app.historyItemUnavailableDetail') }}
@@ -691,6 +710,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     >
                       <span class="truncate">{{ verificationOutcomeBadge(item.run).label }}</span>
                     </span>
+                    <RunInitiatorBadge :initiator="item.run.initiator" />
                   </div>
                   <p class="mt-1 text-[11px] text-slate-500">
                     {{ t('app.runScopeCounts', {
@@ -749,6 +769,14 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 </div>
               </div>
 
+              <p
+                v-if="runScopeHasBoardDrift(item.run, true)"
+                class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900"
+                data-testid="verification-history-board-drift"
+              >
+                {{ t('app.historicalRunBoardScopeChanged') }}
+              </p>
+
               <ul v-if="generationIssuesFor(item.run).length" class="mt-2 space-y-1.5">
                 <li
                   v-for="(issue, index) in generationIssuesFor(item.run)"
@@ -760,17 +788,31 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 </li>
               </ul>
 
-              <div v-if="item.run.outcome === 'VIOLATED'" class="mt-3 rounded-lg border border-red-100 bg-red-50/60 p-2.5">
+              <div
+                v-if="tracesForRun(item.run).length"
+                class="mt-3 rounded-lg border p-2.5"
+                :class="item.run.outcome === 'VIOLATED'
+                  ? 'border-red-100 bg-red-50/60'
+                  : 'border-amber-200 bg-amber-50/60'"
+              >
                 <div class="flex flex-wrap items-center justify-between gap-2">
-                  <span class="text-xs font-semibold text-red-800">
-                    {{ t('app.violationEvidenceSummary', {
-                      violations: item.run.violatedSpecCount,
-                      counterexamples: item.run.counterexampleCount
-                    }) }}
+                  <span
+                    class="text-xs font-semibold"
+                    :class="item.run.outcome === 'VIOLATED' ? 'text-red-800' : 'text-amber-900'"
+                  >
+                    {{ item.run.outcome === 'VIOLATED'
+                      ? t('app.violationEvidenceSummary', {
+                        violations: item.run.violatedSpecCount,
+                        counterexamples: item.run.counterexampleCount
+                      })
+                      : t('app.inconclusiveEvidenceSummary', {
+                        counterexamples: item.run.counterexampleCount
+                      }) }}
                   </span>
                 </div>
                 <p
-                  v-if="item.run.counterexampleCount < item.run.violatedSpecCount"
+                  v-if="item.run.outcome === 'VIOLATED'
+                    && item.run.counterexampleCount < item.run.violatedSpecCount"
                   class="mt-1 text-[11px] leading-4 text-amber-800"
                 >
                   {{ t('app.someViolationsHaveNoReplayableCounterexample') }}
@@ -836,6 +878,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     >
                       {{ fuzzingModeLabel(item.run.explorationMode) }}
                     </span>
+                    <RunInitiatorBadge :initiator="item.run.initiator" />
                   </div>
                   <p class="mt-1 text-[11px] text-slate-500">
                     {{ t('app.fuzzRunCounts', {
@@ -908,8 +951,11 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       <p class="truncate text-[11px] font-medium text-slate-700" :title="fuzzFindingTitle(finding)">
                         {{ fuzzFindingTitle(finding) }}
                       </p>
-                      <p class="text-[10px] text-slate-400">
+                      <p v-if="finding.dataAvailable !== false" class="text-[10px] text-slate-400">
                         {{ t('app.fuzzFirstViolationStep', { step: displayStep(finding.firstViolationStep) }) }}
+                      </p>
+                      <p v-else class="text-[10px] font-medium text-amber-700">
+                        {{ t('app.historyFindingUnavailableDetail') }}
                       </p>
                     </div>
                     <div class="flex shrink-0 gap-1">
@@ -917,7 +963,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                         type="button"
                         :data-testid="`view-fuzzing-finding-${finding.id}`"
                         class="min-h-11 rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                        :disabled="actionLocked"
+                        :disabled="actionLocked || finding.dataAvailable === false"
                         @click="emit('view-fuzzing-finding', finding.id, item.run.id)"
                       >
                         {{ t('app.replay') }}
@@ -926,7 +972,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                         type="button"
                         :data-testid="`verify-fuzzing-finding-${finding.id}`"
                         class="min-h-11 rounded bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-200 disabled:opacity-50"
-                        :disabled="actionLocked"
+                        :disabled="actionLocked || finding.dataAvailable === false"
                         @click="emit('verify-fuzzing-finding', finding)"
                       >
                         {{ t('app.verifyFormally') }}
@@ -948,6 +994,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     >
                       <span class="truncate">{{ simulationOutcomeBadge(item.run).label }}</span>
                     </span>
+                    <RunInitiatorBadge :initiator="item.run.initiator" />
                   </div>
                   <p class="mt-1 text-[11px] text-slate-500">
                     {{ t('app.simulationHistoryCounts', {
@@ -980,6 +1027,13 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   </button>
                 </div>
               </div>
+              <p
+                v-if="runScopeHasBoardDrift(item.run, false)"
+                class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900"
+                data-testid="simulation-history-board-drift"
+              >
+                {{ t('app.historicalRunBoardScopeChanged') }}
+              </p>
               <ul v-if="generationIssuesFor(item.run).length" class="mt-2 space-y-1.5">
                 <li
                   v-for="(issue, index) in generationIssuesFor(item.run)"
