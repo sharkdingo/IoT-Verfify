@@ -118,6 +118,12 @@ jobs:
       # 60/hour source cap. The rest of the run then fails with 429 instead of its real result, which
       # buries the one failure that mattered. Raised so a red run points at its actual cause.
       AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR: 2000
+      # Raising the register cap alone is not enough: every account is logged in twice (creation and
+      # cleanup deletion), so the per-source 120/minute login cap is the ceiling a full run actually
+      # reaches — and it burns the same budget again on a retry. A local full run hit it and failed
+      # five board specs with AUTH_LOGIN_RATE_LIMIT_REACHED (scope SOURCE), where the cleanup
+      # fixture's own 429 masked the cause. Raised for the same reason as the register cap.
+      AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE: 4000
       E2E_API_BASE_URL: http://127.0.0.1:8080
       PLAYWRIGHT_HTML_OPEN: never
     steps:
