@@ -723,7 +723,7 @@ const expectTimelineNavigationAndContext = async (
   }).toBe(0)
   const edgeHitareas = page.locator('.edge-hitarea')
   await expect(edgeHitareas.first()).toBeAttached()
-  const edgeMidpoint = await edgeHitareas.evaluateAll((elements: SVGGraphicsElement[]) => {
+  const currentEdgeMidpoint = () => edgeHitareas.evaluateAll((elements: SVGGraphicsElement[]) => {
     for (const element of elements) {
       const svg = element.ownerSVGElement
       const matrix = element.getScreenCTM()
@@ -754,11 +754,15 @@ const expectTimelineNavigationAndContext = async (
     }
     return null
   })
-  expect(edgeMidpoint).toBeTruthy()
-  await page.mouse.move(edgeMidpoint!.x, edgeMidpoint!.y)
-  await expect.poll(async () => page.locator('.edge-label').count(), {
-    timeout: 5_000
-  }).toBeGreaterThan(0)
+  expect(await currentEdgeMidpoint()).toBeTruthy()
+  // The midpoint is a snapshot of a canvas that may still be settling, so a single hover can land
+  // on coordinates the edge has already left and reveal nothing. Re-derive and re-hover each poll.
+  await expect.poll(async () => {
+    const midpoint = await currentEdgeMidpoint()
+    if (!midpoint) return 0
+    await page.mouse.move(midpoint.x, midpoint.y)
+    return page.locator('.edge-label').count()
+  }, { timeout: 15_000 }).toBeGreaterThan(0)
   await page.mouse.move(4, 4)
   await expect.poll(async () => page.locator('.edge-label').count(), {
     timeout: 5_000

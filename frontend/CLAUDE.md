@@ -58,6 +58,12 @@ nothing wrong with them. Two consequences worth knowing before you debug an E2E 
   misleading error. Every failure was the rate limiter, not the product. Raise
   `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` and `AUTH_LOGIN_RATE_LIMIT_PER_MINUTE` alongside the
   register caps on the JVM under test, and read the `reasonCode` before believing a board failure.
+- **A pointer position computed from the canvas is stale the moment you await.** CI runs with
+  `--fail-on-flaky-tests`, so one retry-passing test still fails the job. The edge-label hover check
+  measured a hitarea midpoint once and moved the mouse there; under CI load the canvas was still
+  settling, the edge had moved, and no label appeared. Re-derive the coordinate *inside* the poll and
+  re-hover each attempt rather than widening the timeout around a single stale move — the assertion
+  keeps its original strength and stops depending on when the animation happened to land.
 - **A route mock must satisfy the same validators as the real response.** `api/chat.ts` validates
   every field it depends on, so a fixture returning a convenient subset is rejected at the boundary —
   and the failure surfaces far from the cause. A session mock missing `active`/`userId`/`updatedAt`

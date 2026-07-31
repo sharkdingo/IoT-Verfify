@@ -124,6 +124,11 @@ jobs:
       # five board specs with AUTH_LOGIN_RATE_LIMIT_REACHED (scope SOURCE), where the cleanup
       # fixture's own 429 masked the cause. Raised for the same reason as the register cap.
       AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE: 4000
+      # The readiness probe below polls /api/auth/login for one fixed identifier up to 60 times, and
+      # the rate guard runs before authentication, so each expected 401 still spends budget. At the
+      # 10/minute default, a backend slower than ~20s starts answering 429 instead of 401 and the job
+      # fails as "never became ready" — pointing away from the real startup problem.
+      AUTH_LOGIN_RATE_LIMIT_PER_MINUTE: 500
       E2E_API_BASE_URL: http://127.0.0.1:8080
       PLAYWRIGHT_HTML_OPEN: never
     steps:
