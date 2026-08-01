@@ -390,5 +390,29 @@ class BoardSemanticValidatorTest {
         onReadable.setValue("50");
         assertNull(BoardSemanticValidator.validateRuleCondition(context, onReadable, 0),
                 "a readable shared value stays a valid condition source");
+
+        // The narrowing must not spread to a trust label. The device module declares trust_<name> for
+        // every declared variable, so a property reference to an affect-only value is something the
+        // generated model really permits -- and a check stricter than the model refuses the assistant a
+        // specification the UI offers and NuSMV would have decided.
+        SpecConditionDto trustOfAffectOnly = new SpecConditionDto();
+        trustOfAffectOnly.setDeviceId("light_1");
+        trustOfAffectOnly.setTargetType("trust");
+        trustOfAffectOnly.setPropertyScope("variable");
+        trustOfAffectOnly.setKey("illuminance");
+        trustOfAffectOnly.setRelation("=");
+        trustOfAffectOnly.setValue("untrusted");
+        assertNull(BoardSemanticValidator.validateSpecCondition(context, trustOfAffectOnly, "A", 0),
+                "a trust label on an affect-only value is permitted: asking about a label is not a read");
+
+        // A specification *condition* compares the value itself, so there the narrowing does apply.
+        SpecConditionDto valueOfAffectOnly = new SpecConditionDto();
+        valueOfAffectOnly.setDeviceId("light_1");
+        valueOfAffectOnly.setTargetType("variable");
+        valueOfAffectOnly.setKey("illuminance");
+        valueOfAffectOnly.setRelation(">");
+        valueOfAffectOnly.setValue("50");
+        assertNotNull(BoardSemanticValidator.validateSpecCondition(context, valueOfAffectOnly, "A", 0),
+                "an affect-only value must not be a specification condition source either");
     }
 }

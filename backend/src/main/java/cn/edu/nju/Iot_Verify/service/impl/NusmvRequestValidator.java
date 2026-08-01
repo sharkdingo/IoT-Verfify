@@ -1164,6 +1164,25 @@ final class NusmvRequestValidator {
         return variableOrEnvKey(smv, key) != null;
     }
 
+    /**
+     * Any declared variable, regardless of read capability — for questions about a variable's
+     * <em>existence</em> rather than its use as a condition source. Kept separate from
+     * {@link #internalVariable} so the narrowing there cannot leak into a check that must stay as
+     * permissive as the generated model.
+     */
+    private static DeviceManifest.InternalVariable declaredVariable(DeviceSmvData smv, String name) {
+        if (smv == null || smv.getVariables() == null || !hasText(name)) {
+            return null;
+        }
+        String trimmed = name.trim();
+        for (DeviceManifest.InternalVariable variable : smv.getVariables()) {
+            if (variable != null && trimmed.equals(variable.getName())) {
+                return variable;
+            }
+        }
+        return null;
+    }
+
     private static DeviceManifest.InternalVariable variableOrEnvKey(DeviceSmvData smv, String key) {
         if (!hasText(key)) {
             return null;
@@ -1202,7 +1221,11 @@ final class NusmvRequestValidator {
             return;
         }
         if ("variable".equals(scope)) {
-            if (variableOrEnvKey(smv, key) == null) {
+            // Capability-blind on purpose: the device module declares trust_<name>/privacy_<name> for
+            // every declared variable, so a property reference to an affect-only value is something the
+            // generated model really permits. Asking about a label is not reading the value, and a check
+            // stricter than the model rejects a specification NuSMV would have decided.
+            if (declaredVariable(smv, key) == null) {
                 putError(errors, prefix + ".key", "Unknown property variable for specification: " + key);
             }
             return;

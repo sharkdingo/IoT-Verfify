@@ -1195,12 +1195,30 @@ public final class BoardSemanticValidator {
         if (manifest == null || manifest.getInternalVariables() == null || !hasText(name)) {
             return null;
         }
+        DeviceTemplateDto.DeviceManifest.InternalVariable variable = declaredVariable(manifest, name);
+        if (variable == null) {
+            return null;
+        }
+        boolean affectOnlyShared = !Boolean.TRUE.equals(variable.getIsInside())
+                && Boolean.FALSE.equals(variable.getReads());
+        return affectOnlyShared ? null : variable;
+    }
+
+    /**
+     * Any declared variable, regardless of read capability — for questions about a variable's
+     * <em>existence</em> rather than its eligibility as a condition source. {@link #findVariable} is
+     * this lookup plus one documented narrowing, so the two cannot drift apart.
+     */
+    private static DeviceTemplateDto.DeviceManifest.InternalVariable declaredVariable(
+            DeviceTemplateDto.DeviceManifest manifest,
+            String name) {
+        if (manifest == null || manifest.getInternalVariables() == null || !hasText(name)) {
+            return null;
+        }
         String target = name.trim();
         for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
             if (variable != null && target.equals(variable.getName())) {
-                boolean affectOnlyShared = !Boolean.TRUE.equals(variable.getIsInside())
-                        && Boolean.FALSE.equals(variable.getReads());
-                return affectOnlyShared ? null : variable;
+                return variable;
             }
         }
         return null;
@@ -1225,7 +1243,12 @@ public final class BoardSemanticValidator {
             return prefix + " requires propertyScope='state' or 'variable' for trust/privacy.";
         }
         if ("variable".equals(scope)) {
-            return findVariable(manifest, key) == null
+            // Capability-blind, unlike the condition-source lookup: the device module declares
+            // trust_<name>/privacy_<name> for every declared variable, so a property reference to an
+            // affect-only value is something the generated model really permits. Asking about a label is
+            // not reading the value, and narrowing here would refuse the assistant a specification the
+            // UI offers and NuSMV would decide.
+            return declaredVariable(manifest, key) == null
                     ? prefix + " references unknown property variable '" + key + "'."
                     : null;
         }

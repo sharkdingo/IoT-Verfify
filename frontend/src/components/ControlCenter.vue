@@ -1191,8 +1191,13 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
     variable?.IsInside === true ? t('app.internalVariable') : t('app.environmentVariable')
 
   // Template InternalVariables includes both device-local and shared environment variables.
+  // An affect-only shared declaration (Reads=false) is excluded: the generator emits no
+  // `device.name := a_name` mirror for it, so a specification condition on it would compare a value
+  // this device never observes. The backend refuses it at persist time and again before generation;
+  // offering it here would only let the user build something that gets rejected later.
   if (targetType === 'variable' && template.manifest.InternalVariables) {
     template.manifest.InternalVariables.forEach((v: any) => {
+      if (v.IsInside !== true && v.Reads === false) return
       keys.push({ label: `${formatTemplateModelToken(template, v.Name)} (${variableScopeLabel(v)})`, value: v.Name })
     })
   }

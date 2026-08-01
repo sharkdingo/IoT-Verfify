@@ -3745,8 +3745,17 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return false;
     }
 
+    /**
+     * Existence of a variable a specification may reference by <em>property</em> (trust or privacy).
+     *
+     * <p>Deliberately capability-blind, unlike {@link #conditionSourceVariable}: the device module
+     * declares {@code trust_<name>} and {@code privacy_<name>} for every declared variable, so a trust
+     * label on an affect-only value is something the generated model really permits. Asking about a
+     * label is not reading the value. Narrowing this would reject a specification the model would have
+     * checked, which is the "stricter than the model" failure the backend rules call out.
+     */
     private boolean hasInternalVariable(DeviceManifest manifest, String variableName) {
-        return conditionSourceVariable(manifest, variableName) != null;
+        return internalVariable(manifest, variableName) != null;
     }
 
     private boolean hasVariableOrEnvKey(DeviceManifest manifest, String key) {

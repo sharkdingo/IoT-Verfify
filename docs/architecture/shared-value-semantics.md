@@ -92,14 +92,23 @@ reach storage by three routes and each was independently permissive:
 
 | Gate | Covers | Behaviour |
 | :--- | :--- | :--- |
-| `RuleBuilderDialog.getDeviceVariables` | a person clicking through the UI | an affect-only value is not offered |
-| `BoardStorageServiceImpl.conditionSourceVariable` | persist time — REST board endpoints, the assistant's rule/spec tools, scene import | rejected with the variable named |
+| `RuleBuilderDialog.getDeviceVariables` | a person building a rule | an affect-only value is not offered |
+| `ControlCenter.getAvailableKeys` | a person building a specification | an affect-only value is not offered |
+| `BoardSemanticValidator.findVariable` | the assistant's rule/spec tools, before writing | refused with an actionable reason |
+| `BoardStorageServiceImpl.conditionSourceVariable` | persist time — REST board endpoints, assistant tools, scene import | rejected with the variable named |
 | `NusmvRequestValidator.internalVariable` | a verification/simulation request | rejected before generation |
 
-`BoardSemanticValidator.findVariable` applies the same rule earlier on the assistant path so the
-tool reports an actionable reason rather than a persist-time error. The persist-time gate is
-deliberately narrower than the capability-blind existence lookup beside it: that one answers domain
-resolution and runtime overrides, where an affect-only declaration is a legitimate answer.
+**Two lookups that must stay distinct, and one that must stay permissive.** Each of the gates above
+is a *narrowing* of a capability-blind existence lookup that is kept beside it and left alone: those
+answer whether a declaration exists at all — domain resolution, runtime overrides, contradiction
+detection — where an affect-only declaration is a legitimate answer. Conflating the two questions is
+what made this gap span four boundaries.
+
+A specification may still reference an affect-only value's **trust or privacy label**
+(`propertyScope: variable`). The device module declares `trust_<name>` and `privacy_<name>` for every
+declared variable, so that reference is something the generated model really permits: asking about a
+label is not reading the value. Narrowing it would make admission stricter than the model and refuse
+a specification NuSMV would have decided.
 
 ## 5. Natural evolution
 
@@ -173,7 +182,9 @@ Checkable statements this model must satisfy. Each is enforced somewhere and tes
    placement, absence, or defaults.
 4. **Read implies mirror, and only read implies mirror.** A device gets `device.name := a_name` if
    and only if it reads the value.
-5. **Affect-only cannot be read.** An affect-only declaration is not a rule or specification source.
+5. **Affect-only cannot be read.** An affect-only declaration is not a rule or specification condition
+   source, at every writer boundary (§4). Its trust/privacy label remains referenceable, because the
+   model declares one for every variable and a label is not the value.
 6. **Exact interval.** The admitted numeric delta set equals the declared interval.
 7. **Contemporaneous effects.** A device's effect reaches the value in the step it is acting.
 8. **Additive numeric composition.** Concurrent numeric effects sum.

@@ -42,10 +42,14 @@ history into a technical spec. The spec content itself now lives under
   observes compiles to a condition with no model behind it, which a user cannot tell apart from a
   working rule. Hiding it in the rule builder only closed the click-through route: persist-time
   validation, the verification request validator, and the assistant's own pre-flight validator each
-  still accepted it, so the same intention produced a different model depending on who expressed it
-  and by which route. All four now apply one rule and name the variable when they refuse. The
-  capability-blind existence lookup beside the persist-time gate is unchanged on purpose — its callers
-  ask whether a declaration exists, for domain resolution and runtime overrides.
+  still accepted it, and the specification builder offered it alongside the rule builder that had just
+  stopped doing so — so the same intention produced a different model depending on who expressed it
+  and by which route. All five writer boundaries now apply one rule and name the variable when they
+  refuse. Two things deliberately did *not* change: the capability-blind existence lookup beside each
+  gate, whose callers ask whether a declaration exists at all (domain resolution, runtime overrides,
+  contradiction detection), and a specification's reference to an affect-only value's **trust or
+  privacy label** — the model declares one for every variable, so asking about a label is not reading
+  the value, and refusing it would make admission stricter than what NuSMV would decide.
 
 - **Two devices that disagree about a shared on/off or category value are now refused instead of
   silently resolved.** Enum values have no additive composition, so the generator emitted one `case`
