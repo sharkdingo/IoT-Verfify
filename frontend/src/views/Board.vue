@@ -14071,12 +14071,8 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('scenario')"
             :aria-label="t('app.openScenarioRecommendations')"
             :aria-pressed="showScenarioRecommendationPanel || isRecommendingScenario"
-            :class="[
-              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
-              (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('scenario'))
-                ? 'bg-teal-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-teal-700 hover:bg-teal-800'
-            ]"
+            class="board-tool-button board-tool-button--suggestion transition-colors"
+            style="--board-tool-accent: var(--iot-tool-scenario)"
           >
             <span v-if="isRecommendingScenario" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">account_tree</span>
@@ -14099,12 +14095,8 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('rule')"
             :aria-label="t('app.openRuleRecommendations')"
             :aria-pressed="showRecommendationPanel || isRecommendingRules"
-            :class="[
-              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
-              (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('rule'))
-                ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-amber-700 hover:bg-amber-800'
-            ]"
+            class="board-tool-button board-tool-button--suggestion transition-colors"
+            style="--board-tool-accent: var(--iot-tool-rule)"
           >
             <span v-if="isRecommendingRules" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">rule_settings</span>
@@ -14127,12 +14119,8 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('device')"
             :aria-label="t('app.openDeviceRecommendations')"
             :aria-pressed="showDeviceRecommendationPanel || isRecommendingDevices"
-            :class="[
-              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
-              (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('device'))
-                ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-purple-700 hover:bg-purple-800'
-            ]"
+            class="board-tool-button board-tool-button--suggestion transition-colors"
+            style="--board-tool-accent: var(--iot-tool-device)"
           >
             <span v-if="isRecommendingDevices" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">devices_other</span>
@@ -14155,12 +14143,8 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('spec')"
             :aria-label="t('app.openSpecificationRecommendations')"
             :aria-pressed="showSpecRecommendationPanel || isRecommendingSpecs"
-            :class="[
-              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
-              (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('spec'))
-                ? 'bg-red-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-red-700 hover:bg-red-800'
-            ]"
+            class="board-tool-button board-tool-button--suggestion transition-colors"
+            style="--board-tool-accent: var(--iot-tool-spec)"
           >
             <span v-if="isRecommendingSpecs" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">playlist_add_check</span>

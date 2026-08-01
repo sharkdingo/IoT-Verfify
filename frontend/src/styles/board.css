@@ -463,6 +463,25 @@
     --board-border: var(--border);
     --board-text: var(--text);
     --board-text-muted: var(--text-muted);
+
+    /*
+     * Per-category accents for the AI-suggestion dock group. These are the same hues the group used
+     * as full-bleed button fills; keeping them on the icon and the active state preserves the
+     * recognition that colour coding gives, without four saturated blocks competing with the run
+     * actions beside them. Chosen at 600-weight for contrast against a light card surface.
+     */
+    --iot-tool-scenario: #0f766e;
+    --iot-tool-rule: #b45309;
+    --iot-tool-device: #7e22ce;
+    --iot-tool-spec: #be123c;
+}
+
+/* The same accents lightened for a dark card surface, where the 600-weight versions lose contrast. */
+.dark .iot-board {
+    --iot-tool-scenario: #5eead4;
+    --iot-tool-rule: #fcd34d;
+    --iot-tool-device: #d8b4fe;
+    --iot-tool-spec: #fda4af;
 }
 
 @media (min-width: 1024px) and (min-height: 600px) {
@@ -837,6 +856,51 @@
     letter-spacing: 0;
     line-height: 1.1;
     text-transform: uppercase;
+}
+
+/*
+ * Secondary dock treatment for the AI-suggestion group.
+ *
+ * Every dock button used to be an opaque 700-weight fill in its own hue, so eight of them read as
+ * eight primary actions and the dock had no focal point -- measured at 14 of 38 visible controls
+ * carrying primary weight on an empty Board. Run actions (simulate, verify, explore, history) act on
+ * the model; suggestions propose changes to it. That is a real difference in consequence, so it
+ * should be a visible difference in weight.
+ *
+ * These stay fully visible, keyboard reachable, and named: this is a demotion in emphasis, not
+ * disclosure. Each button keeps its own hue for the icon and its active state, so the categorical
+ * colour coding that helps recognition survives -- it just stops shouting.
+ */
+.iot-board .board-tool-button--suggestion {
+    background-color: color-mix(in srgb, var(--board-card-bg) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--board-border) 85%, transparent);
+    color: var(--board-text);
+    box-shadow: none;
+}
+
+.iot-board .board-tool-button--suggestion:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--board-card-bg) 100%, transparent);
+    border-color: color-mix(in srgb, currentColor 28%, transparent);
+}
+
+/* The icon carries the category colour, so recognition does not depend on a saturated fill. */
+.iot-board .board-tool-button--suggestion .material-symbols-outlined {
+    color: var(--board-tool-accent, currentColor);
+}
+
+/*
+ * Active and running states still need to be unmistakable, and must not rely on colour alone --
+ * the left border gives a non-colour cue for the same state.
+ */
+.iot-board .board-tool-button--suggestion[aria-pressed='true'] {
+    background-color: color-mix(in srgb, var(--board-tool-accent, var(--iot-color-accent)) 14%, var(--board-card-bg));
+    border-color: color-mix(in srgb, var(--board-tool-accent, var(--iot-color-accent)) 55%, transparent);
+    box-shadow: inset 3px 0 0 0 var(--board-tool-accent, var(--iot-color-accent));
+}
+
+.iot-board .board-tool-button--suggestion:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .iot-board .board-tool-wrapper {
