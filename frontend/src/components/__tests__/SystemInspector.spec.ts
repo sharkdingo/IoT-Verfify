@@ -132,6 +132,57 @@ describe('SystemInspector rule execution order', () => {
     wrapper.unmount()
   })
 
+  it('distinguishes a device-written discrete value from an exogenous one', async () => {
+    // The two branches say opposite things about what the verifier does, so the panel must pick the
+    // right one. A device that declares it writes the value makes it hold when no effect applies
+    // (exact); a value nobody writes may move freely (a disclosed abstraction). Showing the
+    // "nondeterministic" wording for a written value is what the old copy did.
+    const writtenTemplate: DeviceTemplate = {
+      name: 'Purifier',
+      defaultTemplate: false,
+      manifest: {
+        Name: 'Purifier',
+        Modes: ['Power'],
+        InitState: 'on',
+        WorkingStates: [{
+          Name: 'on',
+          Trust: 'trusted',
+          Privacy: 'public',
+          Dynamics: [{ VariableName: 'airQuality', Value: 'good' }]
+        }],
+        InternalVariables: [{
+          Name: 'airQuality',
+          IsInside: false,
+          Reads: false,
+          FalsifiableWhenCompromised: false,
+          Trust: 'trusted',
+          Privacy: 'public',
+          Values: ['poor', 'good']
+        }],
+        ImpactedVariables: ['airQuality']
+      }
+    }
+    const wrapper = mount(SystemInspector, {
+      props: {
+        activeSection: 'devices',
+        deviceTemplates: [writtenTemplate],
+        devices: [{ ...devices[0], id: 'purifier-1', label: 'Purifier', templateName: 'Purifier', state: 'on' }],
+        environmentVariables: [{ name: 'airQuality', value: 'poor' }]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('[data-testid="toggle-environment-pool"]').trigger('click')
+    await wrapper.get('article button').trigger('click')
+    const evolution = wrapper.get('[data-testid="environment-evolution-airQuality"]').text()
+    expect(evolution).toContain('Device-written')
+    expect(evolution).not.toContain('External input')
+
+    // Reads=false must not be presented as a read, which is the claim the generator contradicts by
+    // emitting no read mirror for this device.
+    expect(wrapper.text()).not.toContain('Reads this environment variable')
+  })
+
   it('localizes bundled model tokens while preserving canonical edit values and custom states', async () => {
     i18n.global.locale.value = 'zh-CN'
     const bundledTemplate: DeviceTemplate = {
@@ -183,8 +234,13 @@ describe('SystemInspector rule execution order', () => {
     expect(wrapper.text()).toContain('温度')
     await wrapper.get('[data-testid="toggle-environment-pool"]').trigger('click')
     await wrapper.get('article button').trigger('click')
+    // This fixture's `temperature` has an enum domain and no device declaring it writes the value,
+    // so it is an exogenous input and the panel must say so -- including that the free choice is a
+    // deliberate abstraction. The old copy said "may change when no device effect applies", which is
+    // what a DEVICE-WRITTEN value does NOT do: it holds. Pinning the exogenous wording here and the
+    // written wording below keeps the panel honest about which of the two a user is looking at.
     expect(wrapper.get('[data-testid="environment-evolution-temperature"]').text())
-      .toContain('无设备作用时可在声明枚举值内非确定变化')
+      .toContain('外部输入')
     const valueSelect = wrapper.get('[data-testid="environment-value-temperature"]')
     expect(valueSelect.find('option[value="off"]').text()).toBe('关闭')
     await wrapper.setProps({ environmentSaving: true })

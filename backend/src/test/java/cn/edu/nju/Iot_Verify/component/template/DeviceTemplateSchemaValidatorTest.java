@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DeviceTemplateSchemaValidatorTest {
 
@@ -243,6 +244,7 @@ class DeviceTemplateSchemaValidatorTest {
                 .internalVariables(List.of(DeviceManifest.InternalVariable.builder()
                         .name("temperature")
                         .isInside(false)
+                        .reads(true)
                         .falsifiableWhenCompromised(true)
                         .trust("trusted")
                         .privacy("private")
@@ -1229,5 +1231,81 @@ class DeviceTemplateSchemaValidatorTest {
             }
         }
         throw new AssertionError("Missing variable " + templateName + "." + variableName);
+    }
+
+    /**
+     * The template endpoint accepts a raw {@code JsonNode} and builds the DTO with
+     * {@code treeToValue}, so bean validation never runs on that path — the {@code @AssertTrue} guard
+     * on the DTO is dead code there. This schema is the authoritative gate, and a live REST call
+     * proved the gap: a manifest omitting {@code Reads} was accepted with 200 before this clause
+     * existed, which let an AI-created template gain read capability from a missing field.
+     */
+    @Test
+    void sharedDeclarationWithoutReadsIsRejectedBySchema() throws Exception {
+        JsonNode manifest = objectMapper.readTree("""
+                {
+                  "Name": "MissingReads",
+                  "InternalVariables": [{
+                    "Name": "lux",
+                    "IsInside": false,
+                    "FalsifiableWhenCompromised": false,
+                    "Trust": "trusted",
+                    "Privacy": "public",
+                    "Values": ["dim", "bright"]
+                  }],
+                  "ImpactedVariables": ["lux"]
+                }
+                """);
+
+        BadRequestException error = assertThrows(BadRequestException.class,
+                () -> validator.validateRawManifest("MissingReads", manifest));
+        assertTrue(error.getMessage().contains("Reads"), error.getMessage());
+    }
+
+    @Test
+    void deviceLocalDeclarationWithReadsIsRejectedBySchema() throws Exception {
+        // Reads is meaningless on a device-local variable: a device always reads its own state. Allowing
+        // it would create two ways to say one thing and invite a reader to think it changes something.
+        JsonNode manifest = objectMapper.readTree("""
+                {
+                  "Name": "LocalReads",
+                  "InternalVariables": [{
+                    "Name": "battery",
+                    "IsInside": true,
+                    "Reads": true,
+                    "FalsifiableWhenCompromised": false,
+                    "Trust": "trusted",
+                    "Privacy": "public",
+                    "LowerBound": 0,
+                    "UpperBound": 100
+                  }]
+                }
+                """);
+
+        assertThrows(BadRequestException.class,
+                () -> validator.validateRawManifest("LocalReads", manifest));
+    }
+
+    @Test
+    void bothReadCapabilitiesAreAcceptedWhenStatedExplicitly() throws Exception {
+        for (String reads : new String[]{"true", "false"}) {
+            JsonNode manifest = objectMapper.readTree("""
+                    {
+                      "Name": "Explicit",
+                      "InternalVariables": [{
+                        "Name": "lux",
+                        "IsInside": false,
+                        "Reads": %s,
+                        "FalsifiableWhenCompromised": false,
+                        "Trust": "trusted",
+                        "Privacy": "public",
+                        "Values": ["dim", "bright"]
+                      }],
+                      "ImpactedVariables": ["lux"]
+                    }
+                    """.formatted(reads));
+
+            validator.validateRawManifest("Explicit", manifest);
+        }
     }
 }

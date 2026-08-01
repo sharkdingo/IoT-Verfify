@@ -2267,7 +2267,7 @@ class SmvGeneratorFixesTest {
         DeviceTemplateService templateService = mock(DeviceTemplateService.class);
         DeviceManifest.InternalVariable temperature = DeviceManifest.InternalVariable.builder()
                 .name("temperature")
-                .isInside(false)
+                .isInside(false).reads(true)
                 .falsifiableWhenCompromised(true)
                 .trust("untrusted")
                 .privacy("public")
@@ -2337,7 +2337,7 @@ class SmvGeneratorFixesTest {
     @DisplayName("P11: malformed env init is rejected instead of being changed")
     void envDefaultRange_nonNumericInit_rejected() {
         DeviceManifest.InternalVariable mystery = DeviceManifest.InternalVariable.builder()
-                .name("mystery").isInside(false).build();
+                .name("mystery").isInside(false).reads(true).build();
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
                 .internalVariables(List.of(mystery))

@@ -1,6 +1,11 @@
 import type { AttackEffect, EnvironmentEvolutionEffect, ModelSemantics } from '@/types/modelSemantics'
 
-const ENVIRONMENT_EVOLUTION_EFFECTS: ReadonlySet<EnvironmentEvolutionEffect> = new Set([
+/**
+ * The environment-evolution rules the backend reports. Exported so tests can assert that every
+ * rule has user-facing copy: a rule the UI cannot explain is one the user meets first as a surprising
+ * counterexample.
+ */
+export const ENVIRONMENT_EVOLUTION_EFFECTS: ReadonlySet<EnvironmentEvolutionEffect> = new Set([
   'DECLARED_NUMERIC_RATES_AND_DEVICE_EFFECTS_WITHIN_DOMAIN',
   'UNWRITTEN_DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN',
   'DEVICE_WRITTEN_DISCRETE_VALUES_HOLD_WHEN_NO_DECLARED_EFFECT_APPLIES'

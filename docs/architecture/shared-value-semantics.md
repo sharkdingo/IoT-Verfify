@@ -59,9 +59,9 @@ Two independent booleans per (device, shared value):
 
 | reads | affects | Meaning | How declared |
 | :---: | :---: | :---: | :--- |
-| yes | no | A sensor observes the value | shared declaration, `Reads` omitted or true |
+| yes | no | A sensor observes the value | `Reads: true` on the shared declaration |
 | no | yes | An actuator changes it without observing it | `Reads: false` + listed in `ImpactedVariables` |
-| yes | yes | Observes and changes it | `Reads` true + listed in `ImpactedVariables` |
+| yes | yes | Observes and changes it | `Reads: true` + listed in `ImpactedVariables` |
 | no | no | Not a participant | not declared at all |
 
 **[MEDIC]** supplies exactly this pair: Internal Variables are "variables that are supposed to be
@@ -75,6 +75,17 @@ value as a condition source. **[EXACT]**
 No capability may be inferred from array placement, a missing field, a deprecated format, generator
 behaviour, or a historical default. `Reads` is meaningful only on a shared declaration; on a
 device-local variable it is **[REJECTED]** as a contradiction.
+
+**Where that is enforced matters.** The template endpoint accepts a raw `JsonNode` and builds the DTO
+with `treeToValue`, so bean validation never runs on it — the DTO's `@AssertTrue` guard is dead code on
+the path both the REST client and the `add_template` AI tool actually use. A live call proved the gap: a
+manifest omitting `Reads` was accepted with `200`, silently gaining read capability from a missing
+field. The authoritative gates are therefore `device-template-schema.json` (a conditional `allOf`
+clause per `IsInside` value) and `DeviceTemplateNuSmvValidator`, which restates the rule in language a
+template author can act on rather than as a schema path.
+
+The user-facing panel derives its label from the same flag: an affect-only declaration is shown as
+*affects*, never as *reads*, because the generator emits no read mirror for it.
 
 ## 5. Natural evolution
 

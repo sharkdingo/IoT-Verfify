@@ -18,6 +18,26 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-08-01 (later)
 
 #### Fixed
+- **Read capability was not actually enforced where templates are created.** The template endpoint
+  accepts a raw `JsonNode` and builds the DTO with `treeToValue`, so bean validation never ran on it —
+  the `@AssertTrue` guard added when `Reads` became mandatory was dead code on the one path the REST
+  client and the `add_template` AI tool both use. A live call proved it: a manifest omitting `Reads`
+  was accepted with `200`, silently gaining read capability from a missing field, which is exactly the
+  implicit-capability problem that removing `EnvironmentDomains` was meant to end. The JSON schema now
+  requires `Reads` on every shared declaration and rejects it on a device-local one, and the NuSMV
+  validator restates the rule in language a template author can act on rather than as a schema path.
+- **The AI tool prompt told the model to omit `Reads`.** It said "omit Reads (or set true)", so a model
+  following it produced templates that are now correctly rejected. It states the requirement and both
+  values explicitly.
+- **The Environment Pool panel described the opposite of what the verifier does.** A discrete value was
+  labelled "may change nondeterministically when no device effect applies" — the behaviour a
+  device-written value specifically does *not* have, since it holds. The label now branches on
+  authorship exactly as the generator does, names the exogenous case as a deliberate abstraction, and
+  names the device-written case as exact.
+- **An affect-only declaration was shown as "Reads this environment variable".** The inspector derived
+  the role from `IsInside` alone and ignored `Reads`, mislabelling 7 declarations across 5 bundled
+  templates as reads when the generator emits no read mirror for them.
+
 - **Two devices that disagree about a shared on/off or category value are now refused instead of
   silently resolved.** Enum values have no additive composition, so the generator emitted one `case`
   branch per writer and NuSMV took whichever came first — meaning the verdict depended on device

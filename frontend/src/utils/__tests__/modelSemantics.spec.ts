@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { i18n } from '@/assets/i18n'
 import type { ModelSemantics } from '@/types/modelSemantics'
-import { isModelSemanticsConsistent } from '../modelSemantics'
+import { ENVIRONMENT_EVOLUTION_EFFECTS, isModelSemanticsConsistent } from '../modelSemantics'
 
 const semantics = (privacy: ModelSemantics['privacyPropagationPolicy']): ModelSemantics => ({
   attackPointUnit: 'BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK',
@@ -123,5 +124,43 @@ describe('isModelSemanticsConsistent', () => {
       ...semantics('TARGET_PRIVATE_IF_ANY_TRIGGER_OR_SELECTED_CONTENT_PRIVATE'),
       labelPropagationScope: undefined
     } as unknown as ModelSemantics, { isAttack: true, attackBudget: 2, enablePrivacy: true })).toBe(false)
+  })
+})
+
+describe('disclosure of environment evolution abstractions', () => {
+  // The backend reports two distinct discrete rules in modelSemantics. If the UI only ever describes
+  // one of them, a user reading the panel learns the opposite of what the verifier does for the other
+  // -- which is exactly what happened: the copy said "may change when no device effect applies", the
+  // behaviour a DEVICE-WRITTEN value specifically does not have. These assertions fail if either
+  // wording disappears or if a new backend effect arrives with no user-facing explanation.
+  const EFFECT_TO_COPY: Record<string, string> = {
+    UNWRITTEN_DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN:
+      'app.environmentDiscreteExogenousEvolution',
+    DEVICE_WRITTEN_DISCRETE_VALUES_HOLD_WHEN_NO_DECLARED_EFFECT_APPLIES:
+      'app.environmentDiscreteWrittenEvolution',
+    DECLARED_NUMERIC_RATES_AND_DEVICE_EFFECTS_WITHIN_DOMAIN:
+      'app.environmentNumericEvolution'
+  }
+
+  it('has user-facing copy for every environment evolution effect the backend reports', () => {
+    for (const [effect, key] of Object.entries(EFFECT_TO_COPY)) {
+      expect(ENVIRONMENT_EVOLUTION_EFFECTS).toContain(effect)
+      const en = i18n.global.getLocaleMessage('en') as Record<string, any>
+      const zh = i18n.global.getLocaleMessage('zh-CN') as Record<string, any>
+      const path = key.split('.')
+      const resolve = (msgs: Record<string, any>) => path.reduce<any>((acc, part) => acc?.[part], msgs)
+      expect(typeof resolve(en), `${effect} needs English copy at ${key}`).toBe('string')
+      expect(typeof resolve(zh), `${effect} needs Chinese copy at ${key}`).toBe('string')
+    }
+  })
+
+  it('states that the exogenous rule is a deliberate abstraction', () => {
+    // A conservative over-approximation the user was never told about is indistinguishable from a bug
+    // when it produces a counterexample. The exogenous wording must name it as an abstraction.
+    const en = i18n.global.getLocaleMessage('en') as Record<string, any>
+    const copy = String(en.app.environmentDiscreteExogenousEvolution)
+    expect(copy.toLowerCase()).toContain('abstraction')
+    const written = String(en.app.environmentDiscreteWrittenEvolution)
+    expect(written.toLowerCase()).toContain('exact')
   })
 })

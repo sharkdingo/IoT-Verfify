@@ -43,7 +43,7 @@ class NusmvEnvironmentPoolTest {
         DeviceManifest.InternalVariable temperature = envNumber("temperature", 15, 35);
         DeviceManifest.InternalVariable presence = DeviceManifest.InternalVariable.builder()
                 .name("presence")
-                .isInside(false)
+                .isInside(false).reads(true)
                 .values(List.of("away", "home"))
                 .trust("untrusted")
                 .privacy("private")
@@ -71,7 +71,7 @@ class NusmvEnvironmentPoolTest {
     void mergeWithDefaults_treatsUnlabeledExternalEnvironmentAsUntrusted() {
         DeviceManifest.InternalVariable externalReading = DeviceManifest.InternalVariable.builder()
                 .name("externalReading")
-                .isInside(false)
+                .isInside(false).reads(true)
                 .lowerBound(0)
                 .upperBound(10)
                 .build();
@@ -245,7 +245,7 @@ class NusmvEnvironmentPoolTest {
     private static DeviceManifest.InternalVariable envNumber(String name, int lower, int upper) {
         return DeviceManifest.InternalVariable.builder()
                 .name(name)
-                .isInside(false)
+                .isInside(false).reads(true)
                 .falsifiableWhenCompromised(true)
                 .lowerBound(lower)
                 .upperBound(upper)

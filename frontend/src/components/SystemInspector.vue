@@ -384,6 +384,11 @@ const environmentVariables = computed(() => {
     const variables = template?.manifest?.InternalVariables || []
     for (const variable of variables) {
       if (!variable?.Name || variable.IsInside === true) continue
+      // Reads=false is an affect-only declaration: it supplies the domain and the device's effect
+      // but no read. Claiming "reads this environment variable" for it would tell the user the
+      // opposite of what the generator compiles -- the device gets no read mirror and its rules
+      // cannot use the value as a condition source.
+      if (variable.Reads === false) continue
 
       addEnvironmentGroup(grouped, variable.Name, variable, {
         deviceId: device.id,
@@ -440,7 +445,13 @@ const environmentVariables = computed(() => {
                   candidates: naturalChangeCandidateValues(variable.definition.NaturalChangeRate)
                 })
               : t('app.environmentNaturalRateMissing'))
-          : t('app.environmentDiscreteEvolution'),
+          // Branch on authorship exactly as the generator does: a value some device declares it
+          // writes holds when no effect applies, while one nobody writes is an exogenous input the
+          // verifier may move freely. Describing both as "nondeterministic" told the user the
+          // opposite of what gets verified for every device-written value.
+          : (variable.sources.some(source => source.role === 'impact')
+              ? t('app.environmentDiscreteWrittenEvolution')
+              : t('app.environmentDiscreteExogenousEvolution')),
         evolutionEffects: variable.sources.flatMap(source => source.effects.map(effect => ({
           ...effect,
           deviceId: source.deviceId,

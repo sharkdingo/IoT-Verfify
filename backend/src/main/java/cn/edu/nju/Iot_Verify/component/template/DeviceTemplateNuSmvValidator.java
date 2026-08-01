@@ -78,6 +78,25 @@ public class DeviceTemplateNuSmvValidator {
                             "Template '" + templateName + "': shared environment InternalVariable '"
                                     + iv.getName() + "' must explicitly define Trust and Privacy.");
                 }
+                // Read capability is explicit for the same reason Trust/Privacy and IsInside are: a
+                // capability inferred from a missing field is what the removed EnvironmentDomains array
+                // encoded implicitly. The JSON schema also rejects both shapes, but its message is a
+                // schema path; this one names the concept so a template author can act on it.
+                if (!Boolean.TRUE.equals(iv.getIsInside()) && iv.getReads() == null) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': shared environment InternalVariable '"
+                                    + iv.getName() + "' must declare Reads explicitly. Use Reads=true "
+                                    + "when this device observes the value, so its rules and "
+                                    + "specifications may use it as a condition source, or Reads=false "
+                                    + "when it only affects the value.");
+                }
+                if (Boolean.TRUE.equals(iv.getIsInside()) && iv.getReads() != null) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': device-local InternalVariable '"
+                                    + iv.getName() + "' must not declare Reads. Read capability applies "
+                                    + "only to a shared value (IsInside=false); a device always reads "
+                                    + "its own local variable.");
+                }
             }
         }
         if (manifest.getImpactedVariables() != null) {

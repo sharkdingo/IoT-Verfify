@@ -161,7 +161,7 @@
           },
           "Reads": {
             "type": "boolean",
-            "description": "Only meaningful for a shared variable (IsInside=false): whether this device reads the value, i.e. whether its rules and specifications may use it as a condition source. Omitted means it reads. Set false for a device that only affects the value: it contributes the domain and its declared effect but gets no read mirror and no rule/specification source capability."
+            "description": "Only meaningful for a shared variable (IsInside=false): whether this device reads the value, i.e. whether its rules and specifications may use it as a condition source. Required on every shared declaration and rejected on a device-local one, so a capability can never come from a missing field. Set false for a device that only affects the value: it contributes the domain and its declared effect but gets no read mirror and no rule/specification source capability."
           },
           "FalsifiableWhenCompromised": {
             "type": "boolean",
@@ -202,6 +202,21 @@
         },
         "additionalProperties": false,
         "allOf": [
+          {
+            "$comment": "A shared declaration must state its read capability, and a device-local one must not. A capability that comes from a missing field is what the removed EnvironmentDomains array used to encode implicitly. Bean validation cannot enforce it because the template endpoint accepts a raw JsonNode, so this schema is the authoritative gate.",
+            "if": {
+              "properties": {"IsInside": {"const": false}},
+              "required": ["IsInside"]
+            },
+            "then": {"required": ["Reads"]}
+          },
+          {
+            "if": {
+              "properties": {"IsInside": {"const": true}},
+              "required": ["IsInside"]
+            },
+            "then": {"not": {"required": ["Reads"]}}
+          },
           {
             "if": {
               "properties": {
