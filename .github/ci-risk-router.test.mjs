@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { route } from './ci-risk-router.mjs';
+
+const WORKFLOW_DIR = join(dirname(fileURLToPath(import.meta.url)), 'workflows');
 
 /**
  * Routing decides whether a change is allowed to reach main without full validation, so a wrong
@@ -123,5 +128,26 @@ test('every high-risk rule states why it is high risk', () => {
   const decision = route(['backend/pom.xml'], { ref: 'refs/heads/feature/x' });
   for (const reason of decision.reasons) {
     assert.ok(reason.length > 3, `reason too vague: ${reason}`);
+  }
+});
+
+test('every workflow action is pinned to a full commit sha with a version comment', () => {
+  // A wrong pin fails at "Set up job" with an unresolvable-action error, which looks like an
+  // infrastructure outage rather than a typo. It cost one red run here: a download-artifact sha was
+  // copied from the wrong repository's history and resolved fine against that repo, so a naive check
+  // passed. This asserts the shape locally; the comment is what makes a bad pin reviewable.
+  const files = readdirSync(WORKFLOW_DIR).filter((f) => f.endsWith('.yml'));
+  assert.ok(files.length >= 3, `expected the workflow set, found ${files}`);
+
+  for (const file of files) {
+    const text = readFileSync(join(WORKFLOW_DIR, file), 'utf8');
+    for (const line of text.split(/\r?\n/)) {
+      const match = /^\s*uses:\s*([^\s#]+)/.exec(line);
+      if (!match) continue;
+      const ref = match[1];
+      if (ref.startsWith('./')) continue; // local action or reusable workflow
+      assert.match(ref, /@[0-9a-f]{40}$/, `${file}: action must be sha-pinned, got "${ref}"`);
+      assert.match(line, /#\s*v\d/, `${file}: sha pin needs a version comment: "${line.trim()}"`);
+    }
   }
 });

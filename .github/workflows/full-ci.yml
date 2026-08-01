@@ -164,7 +164,7 @@ jobs:
         uses: ./.github/actions/setup-nusmv
 
       - name: Download backend jar
-        uses: actions/download-artifact@abbe72e8d1d283e0d5a4c6f8b2b62e0b4e2c1e33 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: full-backend-jar-${{ github.sha }}
           path: backend/target/
