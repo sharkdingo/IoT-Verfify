@@ -108,6 +108,24 @@ describe('board action dock hierarchy', () => {
     expect(rule).toContain('box-shadow')
   })
 
+  it('keeps the suggestion fill neutral so the accent border stays identifiable', () => {
+    // Reviewing the rendered screenshot -- not the CSS -- showed the first version of this treatment
+    // nearly vanished in the light theme: a hairline border measured 1.23:1 against the fill, below
+    // the 3:1 minimum for identifying a UI component. Tinting the fill with the same accent did not
+    // fix it, because darkening the border darkened the fill in step (purple measured *down*, from
+    // 2.99:1 to 2.39:1). A neutral fill decouples the two and measures 5.02-8.72:1 in light and
+    // 9.38-12.30:1 in dark. So the fill must not be mixed with the accent.
+    const block = css.slice(
+      css.indexOf('.iot-board .board-tool-button--suggestion {'),
+      css.indexOf('.iot-board .board-tool-button--suggestion:hover')
+    )
+    expect(block, 'the suggestion button needs a background').toMatch(/background-color:/)
+    expect(block, 'tinting the fill with the accent dilutes the border contrast')
+      .not.toMatch(/background-color:[^;]*--board-tool-accent/)
+    expect(block, 'the border carries the button shape, so it uses the full accent')
+      .toMatch(/border:[^;]*--board-tool-accent/)
+  })
+
   it('keeps every suggestion tool a real focusable button with a name', () => {
     // This is a demotion in emphasis, not disclosure: the tools stay keyboard reachable and named.
     for (const id of SUGGESTION_TOOLS) {

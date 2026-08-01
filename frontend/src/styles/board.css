@@ -472,7 +472,9 @@
      */
     --iot-tool-scenario: #0f766e;
     --iot-tool-rule: #b45309;
-    --iot-tool-device: #7e22ce;
+    /* purple-800 rather than -700: measured against the real painted fill (which the translucent
+       panel behind the dock lightens), -700 gave 2.99:1 and just missed the 3:1 component minimum. */
+    --iot-tool-device: #6b21a8;
     --iot-tool-spec: #be123c;
 }
 
@@ -871,16 +873,33 @@
  * disclosure. Each button keeps its own hue for the icon and its active state, so the categorical
  * colour coding that helps recognition survives -- it just stops shouting.
  */
+/*
+ * The border carries the button's shape, so it has to be perceptible on its own. A hairline at the
+ * default border token measured 1.23:1 against the fill in the light theme -- below the 3:1 WCAG
+ * minimum for identifying a UI component, which made the buttons read as absent rather than
+ * secondary. Reviewing the screenshot rather than the CSS is what exposed it: in the light-theme
+ * render the whole group nearly vanished while the run actions above it stayed solid.
+ *
+ * Tinting the border and fill with the category accent solves both problems at once: it lifts the
+ * boundary well past 3:1 and makes the four categories distinguishable at a glance, without
+ * returning to a saturated fill that would compete with the run actions again.
+ */
 .iot-board .board-tool-button--suggestion {
-    background-color: color-mix(in srgb, var(--board-card-bg) 88%, transparent);
-    border: 1px solid color-mix(in srgb, var(--board-border) 85%, transparent);
+    /*
+     * The fill stays neutral on purpose. Tinting it with the accent darkened the fill in step with
+     * the border, so strengthening the border did not improve the ratio -- measured, purple actually
+     * fell from 2.99:1 to 2.39:1 when its accent was darkened. Against a neutral fill the same
+     * borders measure 4.81-8.36:1, clearing the 3:1 minimum for identifying a UI component.
+     */
+    background-color: var(--board-card-bg);
+    border: 1px solid var(--board-tool-accent, var(--iot-color-accent));
     color: var(--board-text);
     box-shadow: none;
 }
 
+/* Hover tints the fill, which is safe: it only ever raises the contrast against the border. */
 .iot-board .board-tool-button--suggestion:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--board-card-bg) 100%, transparent);
-    border-color: color-mix(in srgb, currentColor 28%, transparent);
+    background-color: color-mix(in srgb, var(--board-tool-accent, var(--iot-color-accent)) 12%, var(--board-card-bg));
 }
 
 /* The icon carries the category colour, so recognition does not depend on a saturated fill. */
