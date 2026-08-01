@@ -130,6 +130,12 @@ as an artifact, which is reuse of a verified build rather than a stale one.
 
 - **Concurrency cancellation** on non-`main` refs. A superseded push is wasted capacity and leaves a
   misleading red X on an old commit. `main` never cancels: every landed commit needs its own verdict.
+- **Sequential main commits each get their own Full CI run, and that is intentional.** Pushing N
+  commits queues N full runs of ~15 minutes. It looks wasteful, and the temptation is to let a newer
+  push cancel an older one — but that would leave a commit in history with no full validation, which
+  is the gap this design exists to close. Each main commit is releasable, so its verdict is the record
+  you consult when something turns out to be broken. The cost lands on runner queue time, not on
+  developer feedback: Fast CI still answers in ~300s regardless of how many full runs are pending.
 - **Fail-fast ordering**: route → typecheck → unit → build → smoke. Each stage is cheaper than the one
   it gates.
 - **Artifact reuse**: the backend jar and frontend bundle are built once and downloaded by the E2E
