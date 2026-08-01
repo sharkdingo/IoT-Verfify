@@ -18,6 +18,14 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-08-01 (latest)
 
 #### Added
+- **CI now validates documentation cross-references.** A documentation-only push routes as inert and
+  skips every test tier, so nothing in CI read those files: a link could rot and reach `main`
+  unchecked. Because the docs deliberately link between pages instead of repeating facts, a broken
+  link hides the authoritative source a reader was sent to find. The check runs in the one job that
+  executes for every push, resolves relative paths and `#fragment` anchors, ignores links inside
+  fenced examples, and does not fetch external URLs — a network failure must not fail an unrelated
+  commit. It reports the document, the link, the cause, and the correction. Local equivalent in
+  [docs/development/ci.md](docs/development/ci.md#local-equivalents).
 - **A stored run now records why each shared value was allowed to move.** A counterexample was only
   explainable by reading the current Board, which may have changed since the run — so the explanation
   could contradict the trace it claimed to explain. `modelSnapshot.environmentProvenance` now carries,

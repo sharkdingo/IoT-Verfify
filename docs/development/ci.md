@@ -47,7 +47,10 @@ Runs on every push and pull request. Required for merge.
 
 1. **Route by risk** — computes the changed paths and asks [`ci-risk-router.mjs`](../../.github/ci-risk-router.mjs)
    which tiers to run. Runs the router's own tests first, so a broken router fails loudly instead of
-   silently routing everything to the cheap tier.
+   silently routing everything to the cheap tier. It also validates documentation cross-references
+   ([`docs-link-check-cli.mjs`](../../.github/docs-link-check-cli.mjs)), because a documentation-only
+   change routes as inert and skips every tier below — making this the only job that reads those files.
+   Both checks need no dependency install and add about a second.
 2. **Frontend** — `npm ci`, typecheck, unit tests, build. Typecheck runs before tests because it is
    the cheapest check that catches the largest class of mistake.
 3. **Backend** — `mvn package` (tests plus the jar), with NuSMV available so the real-solver tests run.
@@ -162,6 +165,8 @@ runs blocks every such PR forever.
 
 ```bash
 node --test .github/ci-risk-router.test.mjs   # routing logic
+node --test .github/docs-link-check.test.mjs  # the docs checker's own logic
+node .github/docs-link-check-cli.mjs .        # documentation links and anchors
 cd backend  && mvn test                       # backend suite
 cd frontend && npm run test:unit -- --run     # frontend unit
 cd frontend && npm run test:e2e               # full E2E (needs MySQL + Redis + NuSMV)

@@ -49,6 +49,14 @@ jobs:
       - name: Verify routing logic
         run: node --test .github/ci-risk-router.test.mjs
 
+      # Runs here, in the one job that executes for every push, because a documentation-only change
+      # routes as inert and skips every test tier below -- so this is the only place that reads those
+      # files at all. Needs no dependency install and takes about a second.
+      - name: Verify documentation cross-references
+        run: |
+          node --test .github/docs-link-check.test.mjs
+          node .github/docs-link-check-cli.mjs .
+
       - name: Collect changed paths
         id: changes
         shell: bash
