@@ -13,6 +13,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BoardSemanticValidatorTest {
 
@@ -324,5 +325,70 @@ class BoardSemanticValidatorTest {
         condition.setRelation(relation);
         condition.setValue(value);
         return condition;
+    }
+
+    /**
+     * A person and an assistant expressing the same intention must get the same answer.
+     *
+     * <p>An affect-only shared declaration is not a condition source: the generator emits no read
+     * mirror for it. RuleBuilderDialog hides it and NusmvRequestValidator refuses it, so this
+     * assistant-facing validator must refuse it too. Before this, an AI-authored rule could reference a
+     * value the device never observes while the equivalent click-through was impossible — the same
+     * intention producing two different models depending on who expressed it.
+     */
+    @Test
+    void anAssistantCannotUseAnAffectOnlySharedValueAsAConditionSource() {
+        DeviceTemplateDto.DeviceManifest.InternalVariable affectOnly =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("illuminance").isInside(false).reads(false)
+                        .falsifiableWhenCompromised(false)
+                        .trust("trusted").privacy("public")
+                        .lowerBound(0).upperBound(100).naturalChangeRate("[-1, 1]")
+                        .build();
+        DeviceTemplateDto.DeviceManifest.InternalVariable readable =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("lux").isInside(false).reads(true)
+                        .falsifiableWhenCompromised(true)
+                        .trust("untrusted").privacy("public")
+                        .lowerBound(0).upperBound(100).naturalChangeRate("[-1, 1]")
+                        .build();
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Light");
+        template.setManifest(DeviceTemplateDto.DeviceManifest.builder()
+                .name("Light")
+                .modes(List.of("Power"))
+                .initState("on")
+                .internalVariables(List.of(affectOnly, readable))
+                .impactedVariables(List.of("illuminance"))
+                .workingStates(List.of(DeviceTemplateDto.DeviceManifest.WorkingState.builder()
+                        .name("on").trust("trusted").privacy("public").build()))
+                .build());
+
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("light_1");
+        node.setTemplateName("Light");
+        node.setState("on");
+
+        BoardSemanticValidator.BoardContext context = BoardSemanticValidator.context(
+                List.of(node), List.of(template), List.of());
+
+        RuleDto.Condition onAffectOnly = new RuleDto.Condition();
+        onAffectOnly.setDeviceName("light_1");
+        onAffectOnly.setTargetType("variable");
+        onAffectOnly.setAttribute("illuminance");
+        onAffectOnly.setRelation(">");
+        onAffectOnly.setValue("50");
+        String rejection = BoardSemanticValidator.validateRuleCondition(context, onAffectOnly, 0);
+        assertNotNull(rejection, "an affect-only value must not be a condition source");
+        assertTrue(rejection.contains("illuminance"), rejection);
+
+        RuleDto.Condition onReadable = new RuleDto.Condition();
+        onReadable.setDeviceName("light_1");
+        onReadable.setTargetType("variable");
+        onReadable.setAttribute("lux");
+        onReadable.setRelation(">");
+        onReadable.setValue("50");
+        assertNull(BoardSemanticValidator.validateRuleCondition(context, onReadable, 0),
+                "a readable shared value stays a valid condition source");
     }
 }

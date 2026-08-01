@@ -1179,6 +1179,16 @@ public final class BoardSemanticValidator {
         return false;
     }
 
+    /**
+     * Resolves a variable an assistant-authored rule or specification may use as a condition source.
+     *
+     * <p>Excludes an affect-only shared declaration ({@code Reads=false}) for the same reason the rule
+     * builder hides it and {@code NusmvRequestValidator} refuses it: the generator emits no
+     * {@code device.name := a_name} mirror, so the condition would reference a value the device never
+     * observes. An assistant is another product interface, not a compatibility layer, so it must be
+     * held to the capability rule a person clicking through the UI is held to — otherwise the same
+     * intention produces a different model depending on who expressed it.
+     */
     private static DeviceTemplateDto.DeviceManifest.InternalVariable findVariable(
             DeviceTemplateDto.DeviceManifest manifest,
             String name) {
@@ -1188,7 +1198,9 @@ public final class BoardSemanticValidator {
         String target = name.trim();
         for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
             if (variable != null && target.equals(variable.getName())) {
-                return variable;
+                boolean affectOnlyShared = !Boolean.TRUE.equals(variable.getIsInside())
+                        && Boolean.FALSE.equals(variable.getReads());
+                return affectOnlyShared ? null : variable;
             }
         }
         return null;
