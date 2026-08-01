@@ -184,6 +184,11 @@ Rules that follow from this:
 - **Batch stages 3 and 4.** Several fixes in one area share one suite run. Finish the area first.
 - **E2E is the most expensive check in the repo (minutes, needs MySQL + backend).** It earns its
   cost on integration contracts, not on component-local logic a unit test already pins.
+- **Changing a REST request or response shape *is* the E2E trigger, however green the other stages
+  are.** Narrowing the verify/simulate contract to run parameters passed 2148 backend and 1040
+  frontend tests plus a live-backend probe, and still broke three E2E specs — they audited scene
+  semantics by reading the request body, which is a contract only a browser-driven run observes.
+  Reasoning about blast radius works for logic; it does not substitute for E2E on a wire format.
 - Re-running a suite that just passed, with nothing changed in between, is never verification.
 
 ### Delegate long runs to background subagents
