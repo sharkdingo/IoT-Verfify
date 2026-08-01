@@ -56,10 +56,23 @@ jobs:
             base="${{ github.event.before }}"
             head="${{ github.sha }}"
           fi
-          # A new branch, a force-push, or a first commit gives an unusable base. Emitting nothing
-          # makes the router fall back to the fast tier rather than guessing a diff.
+          # A brand-new branch has no `before` commit, and a force-push leaves one that is gone. In
+          # both cases the meaningful comparison is the default branch: that is what the work merges
+          # into and what a reviewer diffs. Falling straight through to "no path list" made a
+          # docs-only branch run the whole fast tier -- safe, but exactly the waste this exists to fix.
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            default="origin/${{ github.event.repository.default_branch }}"
+            if git cat-file -e "$default^{commit}" 2>/dev/null; then
+              base="$(git merge-base "$default" "$head" || true)"
+              echo "no usable push base; comparing against $default ($base)"
+            else
+              base=""
+            fi
+          fi
+          # Still nothing usable (first commit, unrelated history): emit no paths, which routes to the
+          # fast tier rather than guessing a diff.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "changed<<EOF" >> "$GITHUB_OUTPUT"; echo "EOF" >> "$GITHUB_OUTPUT"
             echo "no usable base commit; routing without a path list"
             exit 0

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -149,5 +150,19 @@ test('every workflow action is pinned to a full commit sha with a version commen
       assert.match(ref, /@[0-9a-f]{40}$/, `${file}: action must be sha-pinned, got "${ref}"`);
       assert.match(line, /#\s*v\d/, `${file}: sha pin needs a version comment: "${line.trim()}"`);
     }
+  }
+});
+
+test('every workflow script is committed executable', () => {
+  // A script without the git execute bit fails in CI with exit code 126 -- "Permission denied" -- long
+  // after setup succeeded, which reads like a broken runner rather than a missing file mode. It cost a
+  // red run on both tiers here. Windows checkouts do not carry the bit, so git's index is the only
+  // place the truth lives, and this asserts it there.
+  const modes = execFileSync('git', ['ls-files', '-s', '.github/scripts'], { encoding: 'utf8' });
+  const lines = modes.split(/\r?\n/).filter(Boolean);
+  assert.ok(lines.length > 0, 'expected at least one workflow script');
+  for (const line of lines) {
+    const [mode, , , path] = line.split(/\s+/);
+    assert.equal(mode, '100755', `${path} must be committed executable (git mode 100755), found ${mode}`);
   }
 });
