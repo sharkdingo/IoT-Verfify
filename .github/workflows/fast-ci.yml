@@ -1,0 +1,341 @@
+name: Fast CI
+
+# Every push and PR. Optimized for how quickly it can tell you that you broke something, while
+# still being a real gate: compile, typecheck, unit tests, and a browser-driven smoke barrier that
+# proves the stack actually boots and serves a verification end to end.
+#
+# What it deliberately does not do is run all 93 E2E tests. Measurement on this repo: the full suite
+# is 478s of a 588s job, and two specs are 59% of that. Paying it on a component tweak buys almost
+# nothing; Full CI still pays it wherever risk warrants (see .github/ci-risk-router.mjs).
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A superseded push is wasted capacity and a misleading red X on an old commit. main is exempt:
+# every commit that lands there deserves its own recorded result.
+concurrency:
+  group: fast-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  route:
+    name: Route by risk
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.decide.outputs.backend }}
+      frontend: ${{ steps.decide.outputs.frontend }}
+      smoke: ${{ steps.decide.outputs.fast }}
+      full: ${{ steps.decide.outputs.full }}
+      inert: ${{ steps.decide.outputs.inertOnly }}
+      reasons: ${{ steps.decide.outputs.reasons }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Need enough history to diff against the base commit.
+          fetch-depth: 0
+
+      - name: Verify routing logic
+        run: node --test .github/ci-risk-router.test.mjs
+
+      - name: Collect changed paths
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          # A new branch, a force-push, or a first commit gives an unusable base. Emitting nothing
+          # makes the router fall back to the fast tier rather than guessing a diff.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "changed<<EOF" >> "$GITHUB_OUTPUT"; echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "no usable base commit; routing without a path list"
+            exit 0
+          fi
+          {
+            echo "changed<<EOF"
+            git diff --name-only "$base" "$head"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          git diff --name-only "$base" "$head" | sed 's/^/  changed: /'
+
+      - name: Decide tiers
+        id: decide
+        env:
+          CHANGED_PATHS: ${{ steps.changes.outputs.changed }}
+          GITHUB_REF_INPUT: ${{ github.ref }}
+          GITHUB_EVENT_INPUT: ${{ github.event_name }}
+        run: node .github/ci-risk-router.mjs >> "$GITHUB_OUTPUT"
+
+      - name: Summarize
+        shell: bash
+        run: |
+          {
+            echo "### CI routing"
+            echo
+            echo "| tier | run |"
+            echo "| --- | --- |"
+            echo "| backend unit/integration | ${{ steps.decide.outputs.backend }} |"
+            echo "| frontend unit/build | ${{ steps.decide.outputs.frontend }} |"
+            echo "| E2E smoke | ${{ steps.decide.outputs.fast }} |"
+            echo "| full E2E (separate workflow) | ${{ steps.decide.outputs.full }} |"
+            echo
+            echo "Reasons: ${{ steps.decide.outputs.reasons }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  frontend:
+    name: Frontend unit & build
+    needs: route
+    if: needs.route.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Typecheck first: it is the cheapest check that catches the largest class of mistake, and a
+      # type error makes every downstream failure noise.
+      - name: Typecheck
+        run: npx vue-tsc --noEmit
+
+      - name: Unit tests
+        run: npm run test:unit -- --run
+
+      - name: Build
+        run: npm run build
+
+      # The smoke job needs this bundle; building it twice is pure duplication.
+      - name: Upload frontend bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-dist-${{ github.sha }}
+          path: frontend/dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  backend:
+    name: Backend tests
+    needs: route
+    if: needs.route.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Setup NuSMV
+        uses: ./.github/actions/setup-nusmv
+
+      # `package` rather than `test`: same test run, and it also produces the jar the smoke job needs,
+      # so the E2E tier no longer recompiles the whole tree from scratch.
+      - name: Test and package
+        run: mvn -B package
+
+      - name: Upload backend jar
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-jar-${{ github.sha }}
+          path: backend/target/*.jar
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-surefire-${{ github.sha }}
+          path: backend/target/surefire-reports/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  smoke:
+    name: E2E smoke
+    needs: [route, frontend, backend]
+    # Runs whenever both halves built. `always()` plus explicit result checks so a skipped sibling
+    # (backend-only change) does not silently skip the barrier.
+    if: |
+      always() && needs.route.outputs.smoke == 'true'
+      && needs.frontend.result != 'failure' && needs.backend.result != 'failure'
+      && needs.frontend.result != 'cancelled' && needs.backend.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+        env:
+          MYSQL_DATABASE: iot_verify
+          MYSQL_USER: iot_verify
+          MYSQL_PASSWORD: iot_verify_ci
+          MYSQL_ROOT_PASSWORD: root_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_ci --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+      redis:
+        image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      DB_URL: jdbc:mysql://127.0.0.1:3306/iot_verify?useSSL=false&serverTimezone=UTC&characterEncoding=utf-8&allowPublicKeyRetrieval=true
+      DB_USERNAME: iot_verify
+      DB_PASSWORD: iot_verify_ci
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-only-jwt-secret-must-be-at-least-256-bits-long
+      IOT_VERIFY_OPENAI_API_KEY: sk-ci-unused
+      IOT_VERIFY_TIME_ZONE: UTC
+      SERVER_PORT: 8080
+      NUSMV_MAX_CONCURRENT: 1
+      AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR: 2000
+      AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE: 4000
+      AUTH_LOGIN_RATE_LIMIT_PER_MINUTE: 500
+      E2E_API_BASE_URL: http://127.0.0.1:8080
+      PLAYWRIGHT_HTML_OPEN: never
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup NuSMV
+        uses: ./.github/actions/setup-nusmv
+
+      - name: Download backend jar
+        uses: actions/download-artifact@abbe72e8d1d283e0d5a4c6f8b2b62e0b4e2c1e33 # v7.0.0
+        with:
+          name: backend-jar-${{ github.sha }}
+          path: backend/target/
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Restore Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.0
+        with:
+          path: ~/.cache/ms-playwright
+          # Keyed on the resolved Playwright version, so a dependency bump misses and reinstalls
+          # rather than running new test code against an old browser.
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start backend and run smoke barrier
+        shell: bash
+        run: .github/scripts/run-e2e.sh smoke
+
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-smoke-diagnostics-${{ github.sha }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/backend-e2e.log
+            frontend/playwright-report/
+            frontend/test-results/
+
+  escalate:
+    name: Escalate to Full CI
+    needs: [route, frontend, backend, smoke]
+    # A high-risk branch push runs the complete suite too. main and scheduled runs reach Full CI
+    # through its own triggers, so they are excluded here to avoid two identical runs per commit.
+    if: |
+      always() && needs.route.outputs.full == 'true'
+      && github.ref != 'refs/heads/main'
+      && needs.frontend.result != 'failure' && needs.backend.result != 'failure'
+      && needs.smoke.result != 'failure'
+    uses: ./.github/workflows/full-ci.yml
+    with:
+      reason: ${{ needs.route.outputs.reasons }}
+
+  fast-ci:
+    name: Fast CI
+    # Single required status check for branch protection: it stays green when jobs are legitimately
+    # skipped (docs-only) and red when any tier actually failed, so protection does not have to
+    # enumerate conditional jobs.
+    needs: [route, frontend, backend, smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check tier results
+        shell: bash
+        run: |
+          set -euo pipefail
+          route='${{ needs.route.result }}'
+          frontend='${{ needs.frontend.result }}'
+          backend='${{ needs.backend.result }}'
+          smoke='${{ needs.smoke.result }}'
+          echo "route=$route frontend=$frontend backend=$backend smoke=$smoke"
+          if [ "$route" != "success" ]; then
+            echo "::error::routing failed; no tier decision could be trusted"
+            exit 1
+          fi
+          for result in "$frontend" "$backend" "$smoke"; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::a required tier reported '$result'"; exit 1 ;;
+            esac
+          done
+          echo "Fast CI satisfied (skipped tiers were routed out by risk, not by failure)."

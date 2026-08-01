@@ -1,0 +1,199 @@
+name: Full CI
+
+# The complete real-infrastructure gate: every E2E test except the live-AI suite, against real MySQL,
+# Redis, and NuSMV.
+#
+# It runs where completeness matters rather than on every push:
+#   - main, because that is what gets released;
+#   - a nightly schedule, the only thing that catches decay in code nobody touched;
+#   - manual dispatch, for release candidates and for re-checking a suspicious branch;
+#   - any branch whose changed paths are high-risk, decided by .github/ci-risk-router.mjs.
+#
+# The last case is the important one: a one-line edit to the NuSMV generator, a migration, a security
+# filter, or a shared DTO gets the full suite even though the diff is tiny.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 03:17 UTC. Off the hour so it does not queue behind every other cron on the runner fleet.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      include_live_ai:
+        description: Also run the live-AI suite against the real model endpoint
+        type: boolean
+        default: false
+  # High-risk branch pushes reach this workflow through Fast CI's routing decision.
+  workflow_call:
+    inputs:
+      reason:
+        description: Why full validation was requested
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel on main: each landed commit needs its own recorded verdict. Cancel superseded runs
+  # on other refs, where only the newest state matters.
+  group: full-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build and unit test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup NuSMV
+        uses: ./.github/actions/setup-nusmv
+
+      # One `package` produces the tested jar the E2E job consumes, so the whole tree is compiled
+      # once per run instead of once per job.
+      - name: Backend tests and package
+        working-directory: backend
+        run: mvn -B package
+
+      - name: Frontend typecheck, unit tests, build
+        working-directory: frontend
+        run: |
+          npm ci
+          npx vue-tsc --noEmit
+          npm run test:unit -- --run
+          npm run build
+
+      - name: Upload backend jar
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: full-backend-jar-${{ github.sha }}
+          path: backend/target/*.jar
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e:
+    name: Full-stack E2E
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+        env:
+          MYSQL_DATABASE: iot_verify
+          MYSQL_USER: iot_verify
+          MYSQL_PASSWORD: iot_verify_ci
+          MYSQL_ROOT_PASSWORD: root_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_ci --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+      redis:
+        image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      DB_URL: jdbc:mysql://127.0.0.1:3306/iot_verify?useSSL=false&serverTimezone=UTC&characterEncoding=utf-8&allowPublicKeyRetrieval=true
+      DB_USERNAME: iot_verify
+      DB_PASSWORD: iot_verify_ci
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-only-jwt-secret-must-be-at-least-256-bits-long
+      IOT_VERIFY_OPENAI_API_KEY: sk-ci-unused
+      IOT_VERIFY_TIME_ZONE: UTC
+      SERVER_PORT: 8080
+      NUSMV_MAX_CONCURRENT: 1
+      # The suite registers a worker-scoped account per spec file plus per-test accounts, and every
+      # retry registers again, so a genuine failure plus its retry can pass the default 60/hour cap.
+      # The rest of the run then fails with 429 instead of its real result, burying the one failure
+      # that mattered.
+      AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR: 2000
+      # Every account logs in twice (creation and cleanup deletion), so the per-source login cap is
+      # the ceiling a full run actually reaches, and a retry spends it again.
+      AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE: 4000
+      # The readiness probe polls /api/auth/login up to 60 times and the rate guard runs before
+      # authentication, so each expected 401 spends budget. At the default a slow backend answers 429
+      # and the job fails as "never became ready", pointing away from the real startup problem.
+      AUTH_LOGIN_RATE_LIMIT_PER_MINUTE: 500
+      E2E_API_BASE_URL: http://127.0.0.1:8080
+      PLAYWRIGHT_HTML_OPEN: never
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup NuSMV
+        uses: ./.github/actions/setup-nusmv
+
+      - name: Download backend jar
+        uses: actions/download-artifact@abbe72e8d1d283e0d5a4c6f8b2b62e0b4e2c1e33 # v7.0.0
+        with:
+          name: full-backend-jar-${{ github.sha }}
+          path: backend/target/
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Restore Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run full E2E suite
+        run: .github/scripts/run-e2e.sh full
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: full-stack-e2e-diagnostics-${{ github.sha }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/backend-e2e.log
+            frontend/playwright-report/
+            frontend/test-results/

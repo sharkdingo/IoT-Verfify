@@ -1,0 +1,142 @@
+name: Live AI CI
+
+# The live-AI suite calls a real external model endpoint, so it belongs on its own explicit gate
+# rather than inside a required check. Three reasons, all of them practical:
+#
+#  1. It cannot be a merge blocker. A transport failure at the provider fails the run for reasons
+#     unrelated to the commit — this repo has already seen it, where a different one of the two tests
+#     failed on consecutive runs with the same code. A required check that goes red on someone else's
+#     outage teaches people to ignore red checks.
+#  2. It costs real money and real quota per run.
+#  3. It needs a secret, which is unavailable to fork pull requests, so on a fork it could only ever
+#     fail or be silently skipped.
+#
+# It still runs automatically every night, so a genuine break in the AI path is caught within a day,
+# and on demand for anyone touching that path.
+
+on:
+  schedule:
+    # 04:23 UTC, after the nightly Full CI, so a shared infrastructure failure shows up in the cheaper
+    # workflow first and this one is not the confusing first symptom.
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Only one live-AI run at a time regardless of ref: they share an external quota, so overlapping
+  # runs would make each other flaky.
+  group: live-ai-ci
+  cancel-in-progress: false
+
+jobs:
+  live-ai:
+    name: Live AI end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No secret means no meaningful run. Skipping loudly is better than a green tick that proved
+    # nothing, and better than a red one nobody can fix.
+    if: github.repository == 'sharkdingo/IoT-Verfify'
+    services:
+      mysql:
+        image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+        env:
+          MYSQL_DATABASE: iot_verify
+          MYSQL_USER: iot_verify
+          MYSQL_PASSWORD: iot_verify_ci
+          MYSQL_ROOT_PASSWORD: root_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_ci --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+      redis:
+        image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      DB_URL: jdbc:mysql://127.0.0.1:3306/iot_verify?useSSL=false&serverTimezone=UTC&characterEncoding=utf-8&allowPublicKeyRetrieval=true
+      DB_USERNAME: iot_verify
+      DB_PASSWORD: iot_verify_ci
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-only-jwt-secret-must-be-at-least-256-bits-long
+      IOT_VERIFY_TIME_ZONE: UTC
+      SERVER_PORT: 8080
+      NUSMV_MAX_CONCURRENT: 1
+      AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR: 2000
+      AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE: 4000
+      AUTH_LOGIN_RATE_LIMIT_PER_MINUTE: 500
+      E2E_API_BASE_URL: http://127.0.0.1:8080
+      PLAYWRIGHT_HTML_OPEN: never
+      RUN_LIVE_AI_E2E: '1'
+      IOT_VERIFY_OPENAI_API_KEY: ${{ secrets.IOT_VERIFY_OPENAI_API_KEY }}
+      IOT_VERIFY_OPENAI_BASE_URL: ${{ secrets.IOT_VERIFY_OPENAI_BASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require credentials
+        shell: bash
+        run: |
+          if [ -z "${IOT_VERIFY_OPENAI_API_KEY:-}" ]; then
+            echo "::error::IOT_VERIFY_OPENAI_API_KEY is not configured; this gate cannot run"
+            exit 1
+          fi
+
+      - name: Setup Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup NuSMV
+        uses: ./.github/actions/setup-nusmv
+
+      - name: Build backend
+        working-directory: backend
+        run: mvn -B -DskipTests package
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Restore Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run live-AI suite
+        shell: bash
+        run: .github/scripts/run-e2e.sh live-ai
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-ai-diagnostics-${{ github.sha }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/backend-e2e.log
+            frontend/playwright-report/
+            frontend/test-results/
