@@ -141,6 +141,9 @@ as an artifact, which is reuse of a verified build rather than a stale one.
 
 ## Branch protection
 
+Not currently configured on this repository — `main` accepts direct pushes, which is why every commit
+here also triggers Full CI. The recommendation below applies when protection is enabled.
+
 Require exactly one check: **`Fast CI / fast-ci`**. It rolls up the routed tiers, so a docs-only PR is
 green in about a minute without weakening anything, and a high-risk PR still cannot merge until its
 escalated Full CI run passes.
