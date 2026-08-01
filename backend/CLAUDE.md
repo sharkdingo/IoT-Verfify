@@ -114,7 +114,7 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   `toLowerCase`, and when a lookup can still fail, record a disabled rule rather than `continue`.
 - **Environment domains are active-template and same-manifest scoped.** An
   `ImpactedVariables` name is defined by an external `InternalVariable` or
-  `EnvironmentDomains` entry in that same manifest. Never scan the user's whole template
+  shared `InternalVariables` entry in that same manifest. Never scan the user's whole template
   library to fill a missing domain: unused templates must not alter the current board.
 - **Async task state** uses atomic status predicates to avoid TOCTOU races. Verification,
   simulation, and fuzz queue/running work also use renewable per-instance database leases;

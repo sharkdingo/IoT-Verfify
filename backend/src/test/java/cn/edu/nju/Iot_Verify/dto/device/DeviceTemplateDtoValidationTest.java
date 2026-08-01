@@ -289,22 +289,4 @@ class DeviceTemplateDtoValidationTest {
         assertTrue(hasViolationContaining(violations, "Content Privacy must be public or private"));
     }
 
-    @Test
-    void environmentDomainSecurityLabels_shouldRejectInvalidValues() {
-        var domain = DeviceTemplateDto.DeviceManifest.EnvironmentDomain.builder()
-                .name("temperature")
-                .lowerBound(0)
-                .upperBound(100)
-                .trust("unknown")
-                .privacy("secret")
-                .build();
-        var manifest = DeviceTemplateDto.DeviceManifest.builder()
-                .environmentDomains(List.of(domain))
-                .build();
-
-        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifest));
-
-        assertTrue(hasViolationContaining(violations, "EnvironmentDomain Trust must be trusted or untrusted"));
-        assertTrue(hasViolationContaining(violations, "EnvironmentDomain Privacy must be public or private"));
-    }
 }

@@ -1,65 +1,65 @@
 {
-  "Name": "Swimming Pool Water Pump",
-  "Description": "",
-  "InternalVariables": [
-    {
-      "Name": "waterQuality",
-      "Description": "Swimming pool water quality",
-      "IsInside": false,
-      "Reads": false,
-      "FalsifiableWhenCompromised": false,
-      "Trust": "untrusted",
-      "Privacy": "public",
-      "LowerBound": 0,
-      "UpperBound": 100,
-      "NaturalChangeRate": "[0, 1]"
-    }
-  ],
-  "ImpactedVariables": [
-    "waterQuality"
-  ],
-  "Modes": [
-    "MachineState"
-  ],
-  "InitState": "off",
-  "WorkingStates": [
-    {
-      "Name": "off",
-      "Dynamics": [],
-      "Description": "",
-      "Trust": "trusted",
-      "Privacy": "public"
-    },
-    {
-      "Name": "on",
-      "Dynamics": [
-        {
-          "VariableName": "waterQuality",
-          "ChangeRate": "-1"
-        }
-      ],
-      "Description": "",
-      "Trust": "trusted",
-      "Privacy": "public"
-    }
-  ],
-  "Transitions": [],
-  "APIs": [
-    {
-      "Name": "off",
-      "StartState": "",
-      "EndState": "off",
-      "Trigger": null,
-      "Signal": true,
-      "Description": ""
-    },
-    {
-      "Name": "on",
-      "StartState": "",
-      "EndState": "on",
-      "Trigger": null,
-      "Signal": true,
-      "Description": ""
-    }
-  ]
+	"Name": "Swimming Pool Water Pump",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "waterQuality",
+			"Description": "Swimming pool water quality",
+			"IsInside": false,
+			"Reads": false,
+			"FalsifiableWhenCompromised": false,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[0, 1]"
+		}
+	],
+	"ImpactedVariables": [
+		"waterQuality"
+	],
+	"Modes": [
+		"MachineState"
+	],
+	"InitState": "off",
+	"WorkingStates": [
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "on",
+			"Dynamics": [
+				{
+					"VariableName": "waterQuality",
+					"ChangeRate": "-1"
+				}
+			],
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [],
+	"APIs": [
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": "off",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "on",
+			"StartState": "",
+			"EndState": "on",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		}
+	]
 }

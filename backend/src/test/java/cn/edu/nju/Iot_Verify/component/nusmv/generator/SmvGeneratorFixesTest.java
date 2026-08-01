@@ -429,6 +429,62 @@ class SmvGeneratorFixesTest {
         assertTrue(ex.getMessage().contains("time"));
     }
 
+    /**
+     * Two devices assigning different values to one discrete shared value is a contradiction, not a
+     * merge: enums have no additive composition, so the generator's sequential case branches resolved
+     * it by device iteration order. NuSMV reported AX (airQuality = good) true under one order and
+     * false under the other, for the same scene -- a verdict no user can see or act on.
+     */
+    @Test
+    @DisplayName("Conflicting discrete writers are rejected instead of resolved by device order")
+    void discreteWriterConflict_differentValues_throws() {
+        Map<String, DeviceSmvData> map = discreteWriterScene("good", "poor");
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> validator.validate(map));
+        assertTrue(ex.getMessage().contains("airQuality"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("purifier_1"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("smoker_1"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("good"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("poor"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("Discrete writers that agree are order-independent and allowed")
+    void discreteWriterConflict_sameValue_passes() {
+        validator.validate(discreteWriterScene("good", "good"));
+    }
+
+    private Map<String, DeviceSmvData> discreteWriterScene(String firstValue, String secondValue) {
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        String[] devices = {"purifier_1", "smoker_1"};
+        String[] values = {firstValue, secondValue};
+        for (int index = 0; index < devices.length; index++) {
+            DeviceManifest.InternalVariable domain = DeviceManifest.InternalVariable.builder()
+                    .name("airQuality").isInside(false).reads(false)
+                    .falsifiableWhenCompromised(false)
+                    .trust("trusted").privacy("public")
+                    .values(List.of("poor", "good"))
+                    .build();
+            DeviceManifest manifest = DeviceManifest.builder()
+                    .modes(List.of("Mode"))
+                    .internalVariables(List.of(domain))
+                    .impactedVariables(List.of("airQuality"))
+                    .workingStates(List.of(DeviceManifest.WorkingState.builder()
+                            .name("on").trust("trusted")
+                            .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                    .variableName("airQuality").value(values[index]).build()))
+                            .build()))
+                    .build();
+            DeviceSmvData smv = buildSmvData(devices[index], "Dev" + index,
+                    List.of("Mode"), Map.of("Mode", List.of("on")), List.of(domain), manifest);
+            smv.getImpactedVariables().add("airQuality");
+            smv.getImpactedEnvironmentVariables().put("airQuality", domain);
+            map.put(devices[index], smv);
+        }
+        return map;
+    }
+
     @Test
     @DisplayName("P3: same-name env var with same range passes")
     void envVarConflict_sameRange_passes() {

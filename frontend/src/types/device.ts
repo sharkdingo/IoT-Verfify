@@ -13,8 +13,11 @@ export interface InternalVariable {
     /**
      * Only meaningful for a shared variable (IsInside=false): whether this device reads the value,
      * so its rules and specifications may use it as a condition source. Omitted means it reads.
-     * `false` is a device that only affects the value — which used to require repeating the whole
-     * domain in a second `EnvironmentDomains` array purely to withhold read capability.
+     * `false` is a device that only affects the value: it contributes the domain and its declared
+     * effect but gets no read mirror and no rule/specification source capability.
+     *
+     * Required on a shared declaration and rejected on a device-local one, so a capability can never
+     * come from a missing field.
      */
     Reads?: boolean
     Trust: string           // "trusted" | "untrusted"
@@ -25,18 +28,6 @@ export interface InternalVariable {
     // Required when this is a shared (IsInside=false) numeric domain.
     NaturalChangeRate?: string
     // 枚举型属性
-    Values?: string[]
-}
-
-export interface EnvironmentDomain {
-    Name: string
-    Description?: string
-    Trust: string
-    Privacy: string
-    LowerBound?: number
-    UpperBound?: number
-    // Required for numeric environment domains; invalid for enum domains.
-    NaturalChangeRate?: string
     Values?: string[]
 }
 
@@ -107,7 +98,6 @@ export interface DeviceManifest {
     Modes?: string[]
     InternalVariables?: InternalVariable[]
     // Domain/default for a shared value this template affects; does not grant read access.
-    EnvironmentDomains?: EnvironmentDomain[]
     ImpactedVariables?: string[]
     InitState?: string
     WorkingStates?: WorkingState[]

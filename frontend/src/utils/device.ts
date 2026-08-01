@@ -158,16 +158,10 @@ export const resolveImpactEnvironmentDefinition = (
 ): InternalVariable | undefined => {
     const target = String(name || '').trim()
     if (!manifest || !target) return undefined
-    const readable = manifest.InternalVariables?.find(variable =>
+    // One array holds every shared declaration, read or affect-only, so one lookup resolves the domain.
+    return manifest.InternalVariables?.find(variable =>
         variable?.Name === target && variable.IsInside !== true
     )
-    if (readable) return readable
-    const domain = manifest.EnvironmentDomains?.find(item => item?.Name === target)
-    return domain ? {
-        ...domain,
-        IsInside: false,
-        FalsifiableWhenCompromised: false
-    } : undefined
 }
 
 export const MANIFEST_VALIDATION_MESSAGE_KEYS = {
@@ -331,7 +325,7 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
 
     if (!obj.Name) return invalidManifest('missingName', 'Missing field "Name"')
 
-    for (const field of ['Modes', 'InternalVariables', 'EnvironmentDomains', 'ImpactedVariables', 'WorkingStates', 'Transitions', 'APIs', 'Contents']) {
+    for (const field of ['Modes', 'InternalVariables', 'ImpactedVariables', 'WorkingStates', 'Transitions', 'APIs', 'Contents']) {
         if (obj[field] !== undefined && !Array.isArray(obj[field])) {
             return invalidManifest('fieldMustBeArray', `"${field}" must be an array`, { field })
         }
@@ -521,73 +515,6 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
     }
 
     const domainNames = new Map<string, any>()
-    for (const domain of obj.EnvironmentDomains || []) {
-        const name = normalizedName(domain?.Name)
-        if (!name) {
-            return invalidManifest(
-                'environmentDomainNameRequired',
-                'Every EnvironmentDomains item must contain Name'
-            )
-        }
-        if (domainNames.has(name)) {
-            return invalidManifest(
-                'environmentDomainDuplicate',
-                `Duplicate EnvironmentDomain "${domain.Name}"`,
-                { name: domain.Name }
-            )
-        }
-        if (internalNames.has(name)) {
-            return invalidManifest(
-                'environmentDomainConflictsWithVariable',
-                `EnvironmentDomain "${domain.Name}" duplicates an InternalVariable`,
-                { name: domain.Name }
-            )
-        }
-        if (!validTrust(domain.Trust) || !validPrivacy(domain.Privacy)) {
-            return invalidManifest(
-                'environmentDomainSecurityLabelsRequired',
-                `EnvironmentDomain "${domain.Name}" must define Trust as trusted/untrusted and Privacy as public/private`,
-                { name: domain.Name }
-            )
-        }
-        const hasValues = Array.isArray(domain.Values) && domain.Values.length > 0
-        const hasLowerField = Object.prototype.hasOwnProperty.call(domain, 'LowerBound')
-        const hasUpperField = Object.prototype.hasOwnProperty.call(domain, 'UpperBound')
-        if ((hasLowerField && !isJavaInteger(domain.LowerBound))
-            || (hasUpperField && !isJavaInteger(domain.UpperBound))) {
-            return invalidManifest(
-                'numericBoundsInvalid',
-                `EnvironmentDomain "${domain.Name}" bounds must be 32-bit integers`,
-                { kind: 'EnvironmentDomain', name: domain.Name }
-            )
-        }
-        const hasLower = isJavaInteger(domain.LowerBound)
-        const hasUpper = isJavaInteger(domain.UpperBound)
-        if (hasValues === (hasLower && hasUpper) || hasLower !== hasUpper) {
-            return invalidManifest(
-                'environmentDomainValuesRequired',
-                `EnvironmentDomain "${domain.Name}" must define Values or LowerBound+UpperBound`,
-                { name: domain.Name }
-            )
-        }
-        if (hasLower && hasUpper && domain.LowerBound > domain.UpperBound) {
-            return invalidManifest(
-                'numericBoundsOrderInvalid',
-                `EnvironmentDomain "${domain.Name}" has LowerBound greater than UpperBound`,
-                { kind: 'EnvironmentDomain', name: domain.Name }
-            )
-        }
-        const rateIssue = validateNumericRateContract(
-            domain,
-            'EnvironmentDomain',
-            domain.Name,
-            hasLower && hasUpper,
-            true
-        )
-        if (rateIssue) return rateIssue
-        domainNames.set(name, domain)
-    }
-
     const impactedNames = new Set<string>()
     for (const rawName of obj.ImpactedVariables || []) {
         const name = normalizedName(rawName)

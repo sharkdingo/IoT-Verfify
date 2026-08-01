@@ -66,12 +66,14 @@ describe('device environment-domain semantics', () => {
     })
   })
 
-  it('resolves an impact-only domain without adding a readable InternalVariable', () => {
+  it('resolves an impact-only shared declaration without granting read capability', () => {
     const manifest: DeviceManifest = {
       Name: 'Light',
-      InternalVariables: [],
-      EnvironmentDomains: [{
+      InternalVariables: [{
         Name: 'illuminance',
+        IsInside: false,
+        Reads: false,
+        FalsifiableWhenCompromised: false,
         LowerBound: 0,
         UpperBound: 100,
         NaturalChangeRate: '[-1, 1]',
@@ -81,12 +83,14 @@ describe('device environment-domain semantics', () => {
       ImpactedVariables: ['illuminance']
     }
 
-    expect(manifest.InternalVariables).toEqual([])
+    // One array holds every shared declaration; Reads=false is what withholds read capability,
+    // rather than the declaration living in a separate array.
     expect(resolveImpactEnvironmentDefinition(manifest, 'illuminance')).toMatchObject({
       Name: 'illuminance',
       LowerBound: 0,
       UpperBound: 100,
       IsInside: false,
+      Reads: false,
       FalsifiableWhenCompromised: false
     })
     expect(validateManifest(manifest)).toEqual({ valid: true })
@@ -150,8 +154,11 @@ describe('device environment-domain semantics', () => {
 
     expect(validateManifest({
       Name: 'Descending impact domain',
-      EnvironmentDomains: [{
+      InternalVariables: [{
         Name: 'temperature',
+        IsInside: false,
+        Reads: false,
+        FalsifiableWhenCompromised: false,
         Trust: 'untrusted',
         Privacy: 'public',
         LowerBound: 100,
@@ -231,11 +238,17 @@ describe('device environment-domain semantics', () => {
     })
   })
 
-  it('rejects unused impact-domain metadata', () => {
+  it('accepts a shared declaration that is read but not affected', () => {
+    // With one array, a shared declaration that is absent from ImpactedVariables is just a sensor
+    // reading. The old "unused impact-domain metadata" error existed only because a second array
+    // could carry a domain with no purpose; that shape no longer exists.
     expect(validateManifest({
-      Name: 'Incomplete Light',
-      EnvironmentDomains: [{
+      Name: 'Illuminance Sensor',
+      InternalVariables: [{
         Name: 'illuminance',
+        IsInside: false,
+        Reads: true,
+        FalsifiableWhenCompromised: true,
         LowerBound: 0,
         UpperBound: 100,
         NaturalChangeRate: '[-1, 1]',
@@ -243,12 +256,8 @@ describe('device environment-domain semantics', () => {
         Privacy: 'public'
       }],
       ImpactedVariables: []
-    })).toMatchObject({
-      valid: false,
-      msg: expect.stringContaining('is not listed in ImpactedVariables')
-    })
+    })).toEqual({ valid: true })
   })
-
   it('rejects incomplete multi-mode working-state tuples', () => {
     expect(validateManifest({
       Name: 'Washer',

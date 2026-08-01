@@ -1048,12 +1048,17 @@ class DeviceTemplateSchemaValidatorTest {
     }
 
     @Test
-    void impactOnlyEnvironmentDomain_requiresExplicitTrustAndPrivacy() throws Exception {
+    void impactOnlySharedDeclaration_requiresExplicitTrustAndPrivacy() throws Exception {
+        // Affect-only is now one declaration in the single array, with read capability withheld
+        // explicitly rather than by living in a second array.
         JsonNode manifest = objectMapper.readTree("""
                 {
                   "Name": "Light",
-                  "EnvironmentDomains": [{
+                  "InternalVariables": [{
                     "Name": "illuminance",
+                    "IsInside": false,
+                    "Reads": false,
+                    "FalsifiableWhenCompromised": false,
                     "LowerBound": 0,
                     "UpperBound": 100,
                     "Privacy": "public"

@@ -1651,7 +1651,6 @@ class FuzzEngineTest {
                 .name(name)
                 .modes(List.of())
                 .internalVariables(List.of(profile, weather))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .workingStates(List.of())
                 .transitions(List.of())
@@ -1791,7 +1790,6 @@ class FuzzEngineTest {
                 .name("LocalOnly")
                 .modes(List.of())
                 .internalVariables(List.of(profile))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .workingStates(List.of())
                 .transitions(List.of())
@@ -1845,7 +1843,6 @@ class FuzzEngineTest {
                 .name("Numeric")
                 .modes(List.of())
                 .internalVariables(List.of(temperature))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .workingStates(List.of())
                 .transitions(List.of())
@@ -1884,7 +1881,6 @@ class FuzzEngineTest {
                 .name("WideNumeric")
                 .modes(List.of())
                 .internalVariables(List.of(wideValue))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .workingStates(List.of())
                 .transitions(List.of())
@@ -1955,7 +1951,6 @@ class FuzzEngineTest {
                 .name("SharedWriter")
                 .modes(List.of("PowerMode"))
                 .internalVariables(List.of(weather))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .initState("off")
                 .workingStates(List.of(workingState("off"), workingState("on")))
@@ -2003,7 +1998,6 @@ class FuzzEngineTest {
                 .name("SignalSwitch")
                 .modes(List.of("PowerMode"))
                 .internalVariables(List.of(weather))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .initState("off")
                 .workingStates(List.of(workingState("off"), workingState("on")))
@@ -2042,7 +2036,6 @@ class FuzzEngineTest {
                 .name("FigureNumeric")
                 .modes(List.of())
                 .internalVariables(List.of(temperature))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .workingStates(List.of())
                 .transitions(List.of())
@@ -2101,7 +2094,6 @@ class FuzzEngineTest {
                 .name("ForcedEnvironment")
                 .modes(List.of("PowerMode"))
                 .internalVariables(List.of(temperature))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .initState("off")
                 .workingStates(List.of(off))
@@ -2164,7 +2156,6 @@ class FuzzEngineTest {
                 .name("Switch")
                 .modes(List.of("PowerMode"))
                 .internalVariables(List.of(weather))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .initState("off")
                 .workingStates(List.of(off, on))
@@ -2216,7 +2207,6 @@ class FuzzEngineTest {
                 .name("Multi")
                 .modes(List.of("ModeA", "ModeB"))
                 .internalVariables(List.of())
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .initState("alpha;xray")
                 .workingStates(states)
@@ -2275,9 +2265,12 @@ class FuzzEngineTest {
                 : manifest.getInitState());
         List<VariableStateDto> localValues = new ArrayList<>();
         Map<String, BoardEnvironmentVariableDto> environment = new LinkedHashMap<>();
-        Map<String, DeviceManifest.EnvironmentDomain> impactDomains = new LinkedHashMap<>();
-        for (DeviceManifest.EnvironmentDomain domain : safe(manifest.getEnvironmentDomains())) {
-            impactDomains.put(domain.getName(), domain);
+        // Every shared value, read or affect-only, now lives in one array, so one pass covers both.
+        Map<String, DeviceManifest.InternalVariable> impactDomains = new LinkedHashMap<>();
+        for (DeviceManifest.InternalVariable variable : safe(manifest.getInternalVariables())) {
+            if (!Boolean.TRUE.equals(variable.getIsInside())) {
+                impactDomains.put(variable.getName(), variable);
+            }
         }
         for (DeviceManifest.InternalVariable variable : safe(manifest.getInternalVariables())) {
             String value = initialValue(variable.getValues(), variable.getLowerBound());
@@ -2292,7 +2285,7 @@ class FuzzEngineTest {
             if (environment.containsKey(impacted)) {
                 continue;
             }
-            DeviceManifest.EnvironmentDomain domain = impactDomains.get(impacted);
+            DeviceManifest.InternalVariable domain = impactDomains.get(impacted);
             if (domain != null) {
                 environment.put(impacted, new BoardEnvironmentVariableDto(
                         impacted,
@@ -2381,7 +2374,6 @@ class FuzzEngineTest {
                 .name("Climate")
                 .modes(List.of("ClimateMode"))
                 .internalVariables(List.of(temperatureDomain))
-                .environmentDomains(List.of())
                 .impactedVariables(hasImpact ? List.of("temperature") : List.of())
                 .initState("cool")
                 .workingStates(List.of(cool, idle))
@@ -2422,7 +2414,6 @@ class FuzzEngineTest {
                 .name("Counter")
                 .modes(List.of())
                 .internalVariables(List.of(count))
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .workingStates(List.of())
                 .transitions(List.of())

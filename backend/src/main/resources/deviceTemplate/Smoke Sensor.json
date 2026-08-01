@@ -6,6 +6,7 @@
 			"Name": "smoke",
 			"Description": "",
 			"IsInside": false,
+      "Reads": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "public",

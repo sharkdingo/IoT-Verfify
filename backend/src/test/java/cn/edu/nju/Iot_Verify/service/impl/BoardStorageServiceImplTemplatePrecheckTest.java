@@ -157,7 +157,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void previewDefaultTemplateReset_returnsExactImpactWithoutWriting() {
         DeviceTemplatePo bundled = templatePo("Sensor", """
                 {"Name":"Sensor","Modes":[],"InitState":"","WorkingStates":[],
-                 "InternalVariables":[],"EnvironmentDomains":[],"ImpactedVariables":[],
+                 "InternalVariables":[],"ImpactedVariables":[],
                  "Transitions":[],"APIs":[],"Contents":[]}
                 """);
         bundled.setId(null);
@@ -188,7 +188,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void resetDefaultTemplates_rejectsWhenOnlyUndoHistoryChanged() {
         DeviceTemplatePo bundled = templatePo("Sensor", """
                 {"Name":"Sensor","Modes":[],"InitState":"","WorkingStates":[],
-                 "InternalVariables":[],"EnvironmentDomains":[],"ImpactedVariables":[],
+                 "InternalVariables":[],"ImpactedVariables":[],
                  "Transitions":[],"APIs":[],"Contents":[]}
                 """);
         bundled.setId(null);
@@ -217,7 +217,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void resetDefaultTemplates_clearsThePreviewedUndoHistoryAfterCommit() {
         DeviceTemplatePo bundled = templatePo("Sensor", """
                 {"Name":"Sensor","Modes":[],"InitState":"","WorkingStates":[],
-                 "InternalVariables":[],"EnvironmentDomains":[],"ImpactedVariables":[],
+                 "InternalVariables":[],"ImpactedVariables":[],
                  "Transitions":[],"APIs":[],"Contents":[]}
                 """);
         bundled.setId(null);
@@ -246,9 +246,9 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void previewDefaultTemplateReset_marksBundledEnvironmentAdditionsForSafeLocalization() {
         String manifestJson = """
                 {"Name":"Weather Sensor","Modes":[],"InitState":"","WorkingStates":[],
-                 "InternalVariables":[{"Name":"weather","IsInside":false,
+                 "InternalVariables":[{"Name":"weather","IsInside":false,"Reads":true,
                  "Values":["sunny","rainy"],"Trust":"trusted","Privacy":"public"}],
-                 "EnvironmentDomains":[],"ImpactedVariables":[],"Transitions":[],"APIs":[],"Contents":[]}
+                 "ImpactedVariables":[],"Transitions":[],"APIs":[],"Contents":[]}
                 """;
         DeviceTemplatePo bundled = templatePo("Weather Sensor", manifestJson);
         bundled.setId(null);
@@ -279,7 +279,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         DeviceManifest manifest = new DeviceManifest();
         manifest.setInternalVariables(List.of(DeviceManifest.InternalVariable.builder()
                 .name("weather")
-                .isInside(false)
+                .isInside(false).reads(true)
                 .values(List.of("sunny", "rainy"))
                 .build()));
 
@@ -307,14 +307,14 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void previewDefaultTemplateReset_reportsObsoleteTypeAsBlockingUsedDevice() {
         DeviceTemplatePo bundled = templatePo("Sensor", """
                 {"Name":"Sensor","Modes":[],"InitState":"","WorkingStates":[],
-                 "InternalVariables":[],"EnvironmentDomains":[],"ImpactedVariables":[],
+                 "InternalVariables":[],"ImpactedVariables":[],
                  "Transitions":[],"APIs":[],"Contents":[]}
                 """);
         bundled.setId(null);
         bundled.setDefaultTemplate(true);
         DeviceTemplatePo obsolete = templatePo("Legacy Sensor", """
                 {"Name":"Legacy Sensor","Modes":[],"InitState":"","WorkingStates":[],
-                 "InternalVariables":[],"EnvironmentDomains":[],"ImpactedVariables":[],
+                 "InternalVariables":[],"ImpactedVariables":[],
                  "Transitions":[],"APIs":[],"Contents":[]}
                 """);
         obsolete.setDefaultTemplate(true);
@@ -982,7 +982,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         manifest.setWorkingStates(List.of());
         manifest.setInternalVariables(List.of(
                 DeviceManifest.InternalVariable.builder()
-                        .name("temperature").isInside(false).trust("untrusted").privacy("public")
+                        .name("temperature").isInside(false).reads(true).trust("untrusted").privacy("public")
                         .lowerBound(0).upperBound(100).naturalChangeRate("0").build()));
         manifest.setImpactedVariables(List.of("temperature"));
 
@@ -1017,7 +1017,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         manifest.setWorkingStates(List.of());
         manifest.setInternalVariables(List.of(
                 DeviceManifest.InternalVariable.builder()
-                        .name("humidity").isInside(false).trust("untrusted").privacy("public")
+                        .name("humidity").isInside(false).reads(true).trust("untrusted").privacy("public")
                         .lowerBound(0).upperBound(100).naturalChangeRate("0").build()));
         manifest.setImpactedVariables(List.of("humidity"));
 
@@ -1109,7 +1109,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         manifest.setWorkingStates(List.of());
         manifest.setInternalVariables(List.of(
                 DeviceManifest.InternalVariable.builder()
-                        .name("temperature").isInside(false).trust("untrusted").privacy("public")
+                        .name("temperature").isInside(false).reads(true).trust("untrusted").privacy("public")
                         .lowerBound(0).upperBound(100).naturalChangeRate("0").build(),
                 DeviceManifest.InternalVariable.builder()
                         .name("temperature_rate").isInside(true).lowerBound(-10).upperBound(10).build()));

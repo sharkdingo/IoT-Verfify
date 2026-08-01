@@ -80,19 +80,6 @@ public class DeviceTemplateNuSmvValidator {
                 }
             }
         }
-        if (manifest.getEnvironmentDomains() != null) {
-            for (DeviceManifest.EnvironmentDomain domain : manifest.getEnvironmentDomains()) {
-                validateSmvIdentifier(templateName, "EnvironmentDomain", domain.getName());
-                validateTemplateVariableDomain(templateName, "EnvironmentDomain", domain.getName(),
-                        domain.getValues(), domain.getLowerBound(), domain.getUpperBound(),
-                        domain.getNaturalChangeRate(), true);
-                if (!hasText(domain.getTrust()) || !hasText(domain.getPrivacy())) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': EnvironmentDomain '" + domain.getName()
-                                    + "' must explicitly define Trust and Privacy.");
-                }
-            }
-        }
         if (manifest.getImpactedVariables() != null) {
             for (String impacted : manifest.getImpactedVariables()) {
                 validateSmvIdentifier(templateName, "ImpactedVariable", impacted);
@@ -357,30 +344,6 @@ public class DeviceTemplateNuSmvValidator {
         }
 
         Set<String> environmentDomainNames = new HashSet<>();
-        if (manifest.getEnvironmentDomains() != null) {
-            for (DeviceManifest.EnvironmentDomain domain : manifest.getEnvironmentDomains()) {
-                String cleaned = domain.getName() == null ? "" : domain.getName().replace(" ", "");
-                if (cleaned.isEmpty()) continue;
-
-                String normalized = cleaned.toLowerCase(Locale.ROOT);
-                if (modeNames.contains(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': EnvironmentDomain '" + domain.getName()
-                                    + "' collides with mode name.");
-                }
-                if (internalVarNames.contains(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': EnvironmentDomain '" + domain.getName()
-                                    + "' duplicates an InternalVariable. Use EnvironmentDomains only for "
-                                    + "impact-only values; a readable environment variable already supplies its domain.");
-                }
-                if (!environmentDomainNames.add(normalized)) {
-                    throw new BadRequestException(
-                            "Template '" + templateName + "': duplicate EnvironmentDomain name after normalization: '"
-                                    + domain.getName() + "'.");
-                }
-            }
-        }
 
         // Track impacted variables. They may share a name only with environment
         // InternalVariables, never with local InternalVariables.

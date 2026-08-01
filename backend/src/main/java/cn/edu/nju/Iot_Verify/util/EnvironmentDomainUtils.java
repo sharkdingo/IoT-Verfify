@@ -25,32 +25,7 @@ public final class EnvironmentDomainUtils {
                 }
             }
         }
-        if (manifest.getEnvironmentDomains() != null) {
-            for (DeviceManifest.EnvironmentDomain domain : manifest.getEnvironmentDomains()) {
-                if (domain != null && target.equals(domain.getName())) {
-                    return asInternalVariable(domain);
-                }
-            }
-        }
         return null;
-    }
-
-    public static DeviceManifest.InternalVariable asInternalVariable(DeviceManifest.EnvironmentDomain domain) {
-        if (domain == null) {
-            return null;
-        }
-        return DeviceManifest.InternalVariable.builder()
-                .name(domain.getName())
-                .description(domain.getDescription())
-                .isInside(false)
-                .falsifiableWhenCompromised(false)
-                .trust(domain.getTrust())
-                .privacy(domain.getPrivacy())
-                .lowerBound(domain.getLowerBound())
-                .upperBound(domain.getUpperBound())
-                .naturalChangeRate(domain.getNaturalChangeRate())
-                .values(domain.getValues())
-                .build();
     }
 
     /** Returns a user-facing semantic mismatch, or {@code null} when domains are equivalent. */

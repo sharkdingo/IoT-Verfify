@@ -1,82 +1,82 @@
 {
-  "Name": "Air Purifier",
-  "Description": "",
-  "InternalVariables": [
-    {
-      "Name": "airQuality",
-      "Description": "Ambient air quality index",
-      "IsInside": false,
-      "Reads": false,
-      "FalsifiableWhenCompromised": false,
-      "Trust": "untrusted",
-      "Privacy": "public",
-      "LowerBound": 0,
-      "UpperBound": 100,
-      "NaturalChangeRate": "[-1, 1]"
-    },
-    {
-      "Name": "carbonDioxide",
-      "Description": "Ambient carbon dioxide level",
-      "IsInside": false,
-      "Reads": false,
-      "FalsifiableWhenCompromised": false,
-      "Trust": "untrusted",
-      "Privacy": "public",
-      "LowerBound": 0,
-      "UpperBound": 100,
-      "NaturalChangeRate": "[-1, 1]"
-    }
-  ],
-  "ImpactedVariables": [
-    "airQuality",
-    "carbonDioxide"
-  ],
-  "Modes": [
-    "MachineState"
-  ],
-  "InitState": "on",
-  "WorkingStates": [
-    {
-      "Name": "on",
-      "Dynamics": [
-        {
-          "VariableName": "airQuality",
-          "ChangeRate": "-1"
-        },
-        {
-          "VariableName": "carbonDioxide",
-          "ChangeRate": "-1"
-        }
-      ],
-      "Description": "",
-      "Trust": "trusted",
-      "Privacy": "public"
-    },
-    {
-      "Name": "off",
-      "Dynamics": [],
-      "Description": "",
-      "Trust": "trusted",
-      "Privacy": "public"
-    }
-  ],
-  "Transitions": [],
-  "APIs": [
-    {
-      "Name": "on",
-      "StartState": "",
-      "EndState": "on",
-      "Trigger": null,
-      "Signal": true,
-      "Description": ""
-    },
-    {
-      "Name": "off",
-      "StartState": "",
-      "EndState": "off",
-      "Trigger": null,
-      "Signal": true,
-      "Description": ""
-    }
-  ]
+	"Name": "Air Purifier",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "airQuality",
+			"Description": "Ambient air quality index",
+			"IsInside": false,
+			"Reads": false,
+			"FalsifiableWhenCompromised": false,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		},
+		{
+			"Name": "carbonDioxide",
+			"Description": "Ambient carbon dioxide level",
+			"IsInside": false,
+			"Reads": false,
+			"FalsifiableWhenCompromised": false,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		}
+	],
+	"ImpactedVariables": [
+		"airQuality",
+		"carbonDioxide"
+	],
+	"Modes": [
+		"MachineState"
+	],
+	"InitState": "on",
+	"WorkingStates": [
+		{
+			"Name": "on",
+			"Dynamics": [
+				{
+					"VariableName": "airQuality",
+					"ChangeRate": "-1"
+				},
+				{
+					"VariableName": "carbonDioxide",
+					"ChangeRate": "-1"
+				}
+			],
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [],
+	"APIs": [
+		{
+			"Name": "on",
+			"StartState": "",
+			"EndState": "on",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": "off",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		}
+	]
 }

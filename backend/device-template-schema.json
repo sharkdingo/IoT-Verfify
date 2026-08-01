@@ -161,7 +161,7 @@
           },
           "Reads": {
             "type": "boolean",
-            "description": "Only meaningful for a shared variable (IsInside=false): whether this device reads the value, i.e. whether its rules and specifications may use it as a condition source. Omitted means it reads. Set false for a device that only affects the value, which previously required declaring the same domain again in a separate EnvironmentDomains array purely to withhold read capability."
+            "description": "Only meaningful for a shared variable (IsInside=false): whether this device reads the value, i.e. whether its rules and specifications may use it as a condition source. Omitted means it reads. Set false for a device that only affects the value: it contributes the domain and its declared effect but gets no read mirror and no rule/specification source capability."
           },
           "FalsifiableWhenCompromised": {
             "type": "boolean",
@@ -229,59 +229,6 @@
             "not": {
               "required": ["Values"]
             }
-          }
-        ]
-      }
-    },
-    "EnvironmentDomains": {
-      "type": "array",
-      "maxItems": 100,
-      "description": "Domains/default labels for shared environment variables this template affects without necessarily reading. Each ImpactedVariables name must be defined here or by an IsInside=false InternalVariable in the same manifest.",
-      "uniqueItems": true,
-      "items": {
-        "type": "object",
-        "required": ["Name", "Trust", "Privacy"],
-        "properties": {
-          "Name": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
-          },
-          "Description": {"type": "string"},
-          "Trust": {"type": "string", "enum": ["trusted", "untrusted"], "description": "MEDIC control-source trust label for this shared environment value; not authentication or generic integrity."},
-          "Privacy": {"type": "string", "enum": ["public", "private"]},
-          "Values": {
-            "type": "array",
-            "maxItems": 100,
-            "items": {"type": "string", "minLength": 1},
-            "minItems": 1,
-            "uniqueItems": true
-          },
-          "LowerBound": {"type": "integer"},
-          "UpperBound": {"type": "integer"},
-          "NaturalChangeRate": {
-            "type": "string",
-            "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$",
-            "description": "Required for numeric shared environment domains. Use [-1,1] for MEDIC's exact integer baseline or 0 for no independent natural change. Every integer in a wider interval is modeled as reachable in one step, and the span is bounded because it is a state-space cost."
-          }
-        },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "required": ["LowerBound", "UpperBound"]
-            },
-            "then": {"required": ["NaturalChangeRate"]}
-          }
-        ],
-        "oneOf": [
-          {
-            "required": ["Values"],
-            "not": {"anyOf": [{"required": ["LowerBound"]}, {"required": ["UpperBound"]}]}
-          },
-          {
-            "required": ["LowerBound", "UpperBound"],
-            "not": {"required": ["Values"]}
           }
         ]
       }
@@ -454,5 +401,5 @@
     }
   },
   "additionalProperties": false,
-  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state (22/29 API-bearing templates); 7 templates have non-empty API StartState. 2) Name sanitization differs by context: sanitizeSmvToken removes spaces then replaces non-alnum with '_'; formatApiSignalName replaces non-alnum (including spaces) with '_' then appends '_a'. 3) NuSMV reserved words are rejected case-insensitively by runtime validation. 4) Trust/Privacy values must use the lowercase schema literals and are not normalized on import. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). InitState and WorkingStates are complete configurations; only API/Transition endpoints may use partial tuples. 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) ImpactedVariable may share a name only with an environment InternalVariable (IsInside=false), meaning the device can read and affect the same shared environment variable; it must not share a name with a local InternalVariable (IsInside=true). 9) Generator supports state relation operators = != in 'not in' for state attributes; > < >= <= only for internal variables. 10) Transition.EndState is optional: when absent, no state change occurs but triggered assignments (e.g., variable resets) still execute (see Clock.json). 11) Schema limits that are intentionally paired with runtime checks: (a) Reserved word checks are described in schema and enforced case-insensitively at runtime. (b) Modes must be legal identifiers in raw manifests; runtime repeats mode normalization/collision checks as a defensive semantic pass. (c) APIs.Trigger is constrained to null because API triggers have no generator semantics. (d) Assignments is not an API field because API actions have state-transition semantics only. 12) Prefix-like names such as variable_, a_, trust_, and privacy_ are literal business names, not aliases; runtime rejects only concrete generated NuSMV identifier collisions such as api_a, var_rate, trust_var, privacy_var, and is_attack. 13) IsInside is explicit because variable ownership cannot be inferred safely; omission never defaults to shared scope. 14) FalsifiableWhenCompromised is explicit because API presence does not determine whether a variable is sensor data; attack modeling randomizes only variables marked true and never widens their declared domains. 15) Every InternalVariable has an explicit enum Values list or complete numeric bounds; boolean values use an explicit [TRUE, FALSE] enum rather than an omitted domain."
+  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state (22/29 API-bearing templates); 7 templates have non-empty API StartState. 2) Name sanitization differs by context: sanitizeSmvToken removes spaces then replaces non-alnum with '_'; formatApiSignalName replaces non-alnum (including spaces) with '_' then appends '_a'. 3) NuSMV reserved words are rejected case-insensitively by runtime validation. 4) Trust/Privacy values must use the lowercase schema literals and are not normalized on import. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). InitState and WorkingStates are complete configurations; only API/Transition endpoints may use partial tuples. 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) Every ImpactedVariable name must resolve to an IsInside=false InternalVariable in the same manifest, which supplies its domain. Reads=false on that declaration means affect-only. It must not share a name with a local InternalVariable (IsInside=true). 9) Generator supports state relation operators = != in 'not in' for state attributes; > < >= <= only for internal variables. 10) Transition.EndState is optional: when absent, no state change occurs but triggered assignments (e.g., variable resets) still execute (see Clock.json). 11) Schema limits that are intentionally paired with runtime checks: (a) Reserved word checks are described in schema and enforced case-insensitively at runtime. (b) Modes must be legal identifiers in raw manifests; runtime repeats mode normalization/collision checks as a defensive semantic pass. (c) APIs.Trigger is constrained to null because API triggers have no generator semantics. (d) Assignments is not an API field because API actions have state-transition semantics only. 12) Prefix-like names such as variable_, a_, trust_, and privacy_ are literal business names, not aliases; runtime rejects only concrete generated NuSMV identifier collisions such as api_a, var_rate, trust_var, privacy_var, and is_attack. 13) IsInside is explicit because variable ownership cannot be inferred safely; omission never defaults to shared scope. 14) FalsifiableWhenCompromised is explicit because API presence does not determine whether a variable is sensor data; attack modeling randomizes only variables marked true and never widens their declared domains. 15) Every InternalVariable has an explicit enum Values list or complete numeric bounds; boolean values use an explicit [TRUE, FALSE] enum rather than an omitted domain."
 }

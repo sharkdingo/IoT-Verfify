@@ -2302,9 +2302,6 @@ const getTemplateEnvironmentNames = (template?: DeviceTemplate | null): string[]
   ;(manifest.InternalVariables || []).forEach(variable => {
     if (variable.IsInside !== true && variable.Name?.trim()) names.add(variable.Name.trim())
   })
-  ;(manifest.EnvironmentDomains || []).forEach(variable => {
-    if (variable.Name?.trim()) names.add(variable.Name.trim())
-  })
   ;(manifest.ImpactedVariables || []).forEach(name => {
     if (name?.trim()) names.add(name.trim())
   })

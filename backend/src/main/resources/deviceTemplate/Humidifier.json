@@ -1,65 +1,65 @@
 {
-  "Name": "Humidifier",
-  "Description": "",
-  "InternalVariables": [
-    {
-      "Name": "humidity",
-      "Description": "Ambient humidity",
-      "IsInside": false,
-      "Reads": false,
-      "FalsifiableWhenCompromised": false,
-      "Trust": "untrusted",
-      "Privacy": "public",
-      "LowerBound": 0,
-      "UpperBound": 100,
-      "NaturalChangeRate": "[-1, 1]"
-    }
-  ],
-  "ImpactedVariables": [
-    "humidity"
-  ],
-  "Modes": [
-    "MachineState"
-  ],
-  "InitState": "on",
-  "WorkingStates": [
-    {
-      "Name": "on",
-      "Dynamics": [
-        {
-          "VariableName": "humidity",
-          "ChangeRate": "1"
-        }
-      ],
-      "Description": "",
-      "Trust": "trusted",
-      "Privacy": "public"
-    },
-    {
-      "Name": "off",
-      "Dynamics": [],
-      "Description": "",
-      "Trust": "trusted",
-      "Privacy": "public"
-    }
-  ],
-  "Transitions": [],
-  "APIs": [
-    {
-      "Name": "on",
-      "StartState": "",
-      "EndState": "on",
-      "Trigger": null,
-      "Signal": true,
-      "Description": ""
-    },
-    {
-      "Name": "off",
-      "StartState": "",
-      "EndState": "off",
-      "Trigger": null,
-      "Signal": true,
-      "Description": ""
-    }
-  ]
+	"Name": "Humidifier",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "humidity",
+			"Description": "Ambient humidity",
+			"IsInside": false,
+			"Reads": false,
+			"FalsifiableWhenCompromised": false,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		}
+	],
+	"ImpactedVariables": [
+		"humidity"
+	],
+	"Modes": [
+		"MachineState"
+	],
+	"InitState": "on",
+	"WorkingStates": [
+		{
+			"Name": "on",
+			"Dynamics": [
+				{
+					"VariableName": "humidity",
+					"ChangeRate": "1"
+				}
+			],
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [],
+	"APIs": [
+		{
+			"Name": "on",
+			"StartState": "",
+			"EndState": "on",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": "off",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		}
+	]
 }

@@ -897,12 +897,6 @@ class FuzzServiceImplTest {
                                 .values(List.of("off"))
                                 .build())
                         .toList())
-                .environmentDomains(java.util.stream.IntStream.range(0, itemCount)
-                        .mapToObj(index -> DeviceManifest.EnvironmentDomain.builder()
-                                .name("env" + index)
-                                .values(List.of("low"))
-                                .build())
-                        .toList())
                 .impactedVariables(java.util.stream.IntStream.range(0, itemCount)
                         .mapToObj(index -> "env" + index).toList())
                 .workingStates(java.util.stream.IntStream.range(0, itemCount)
@@ -954,17 +948,20 @@ class FuzzServiceImplTest {
     void operationalComplexityCountsNestedModelLoopsAndPreviewMatchesSubmission() {
         int deviceCount = 20;
         int environmentCount = 20;
-        List<DeviceManifest.EnvironmentDomain> environmentDomains =
+        List<DeviceManifest.InternalVariable> environmentDomains =
                 java.util.stream.IntStream.range(0, environmentCount)
-                        .mapToObj(index -> DeviceManifest.EnvironmentDomain.builder()
+                        .mapToObj(index -> DeviceManifest.InternalVariable.builder()
                                 .name("env" + index)
+                                .isInside(false)
+                                .reads(false)
+                                .falsifiableWhenCompromised(false)
                                 .values(List.of("low"))
                                 .build())
                         .toList();
         DeviceManifest manifest = DeviceManifest.builder()
-                .environmentDomains(environmentDomains)
+                .internalVariables(environmentDomains)
                 .impactedVariables(environmentDomains.stream()
-                        .map(DeviceManifest.EnvironmentDomain::getName)
+                        .map(DeviceManifest.InternalVariable::getName)
                         .toList())
                 .build();
         List<DeviceVerificationDto> devices = java.util.stream.IntStream.range(0, deviceCount)
@@ -1013,10 +1010,6 @@ class FuzzServiceImplTest {
     void operationalComplexityCountsModeTransitionsApisAndRulePredecessors() {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("power", "lock"))
-                .environmentDomains(java.util.stream.IntStream.range(0, 3)
-                        .mapToObj(index -> DeviceManifest.EnvironmentDomain.builder()
-                                .name("env" + index).values(List.of("low")).build())
-                        .toList())
                 .impactedVariables(List.of("env0", "env1", "env2"))
                 .transitions(List.of(
                         DeviceManifest.Transition.builder().name("t1").build(),
@@ -1051,7 +1044,11 @@ class FuzzServiceImplTest {
                         .toList(),
                 rules, List.of(specification), Map.of("CrossProduct", manifest));
 
-        assertEquals(83L, service.modelComplexityUnits(snapshot));
+        // 71, not 83: shared values were counted twice per device, once as a separate
+        // "templateEnvironmentDomains" collection and once as templateImpactedVariables. With one
+        // declaration array there is one collection to count, so the estimate stops inflating a
+        // scene's cost purely because a value was declared in two places.
+        assertEquals(71L, service.modelComplexityUnits(snapshot));
     }
 
     @Test
@@ -1831,7 +1828,6 @@ class FuzzServiceImplTest {
                 .name("Bundled")
                 .modes(List.of())
                 .internalVariables(List.of())
-                .environmentDomains(List.of())
                 .impactedVariables(List.of())
                 .workingStates(List.of())
                 .transitions(List.of())

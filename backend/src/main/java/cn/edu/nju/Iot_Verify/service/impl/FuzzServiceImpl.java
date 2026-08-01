@@ -1234,7 +1234,6 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     private void addManifestComplexity(StructureCounter counter, DeviceManifest manifest) {
         counter.addCollection("templateModes", manifest.getModes());
         counter.addCollection("templateInternalVariables", manifest.getInternalVariables());
-        counter.addCollection("templateEnvironmentDomains", manifest.getEnvironmentDomains());
         counter.addCollection("templateImpactedVariables", manifest.getImpactedVariables());
         counter.addCollection("templateWorkingStates", manifest.getWorkingStates());
         counter.addCollection("templateTransitions", manifest.getTransitions());
@@ -1245,12 +1244,6 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 throw new ValidationException("request", "Template contains a null internal variable");
             }
             counter.addCollection("templateVariableValues", variable.getValues());
-        }
-        for (DeviceManifest.EnvironmentDomain domain : safeList(manifest.getEnvironmentDomains())) {
-            if (domain == null) {
-                throw new ValidationException("request", "Template contains a null environment domain");
-            }
-            counter.addCollection("templateEnvironmentValues", domain.getValues());
         }
         for (DeviceManifest.WorkingState state : safeList(manifest.getWorkingStates())) {
             if (state == null) {

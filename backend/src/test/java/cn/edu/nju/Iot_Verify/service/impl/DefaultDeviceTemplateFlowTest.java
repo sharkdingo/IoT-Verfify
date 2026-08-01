@@ -183,8 +183,6 @@ class DefaultDeviceTemplateFlowTest {
     void anAffectOnlySharedDeclarationNeedsNoSecondArray() throws Exception {
         DeviceManifest light = loadDefaultTemplates().get("Light");
 
-        assertNull(light.getEnvironmentDomains(),
-                "an affect-only declaration must not need a separate domain array");
         DeviceManifest.InternalVariable illuminance = light.getInternalVariables().stream()
                 .filter(variable -> "illuminance".equals(variable.getName()))
                 .findFirst().orElseThrow();
@@ -193,11 +191,19 @@ class DefaultDeviceTemplateFlowTest {
         assertTrue(light.getImpactedVariables().contains("illuminance"),
                 "and still declares that it writes it");
 
-        // No bundled template needs the legacy array any more.
-        assertTrue(loadDefaultTemplates().values().stream()
-                        .allMatch(manifest -> manifest.getEnvironmentDomains() == null
-                                || manifest.getEnvironmentDomains().isEmpty()),
-                "every bundled template should declare shared values in one array");
+        // Every shared declaration in every bundled template states its read capability explicitly;
+        // none is left to a default, because a default would grant capability from a missing field.
+        loadDefaultTemplates().forEach((name, manifest) -> {
+            for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
+                if (Boolean.FALSE.equals(variable.getIsInside())) {
+                    assertNotNull(variable.getReads(),
+                            name + "." + variable.getName() + " must declare Reads explicitly");
+                } else {
+                    assertNull(variable.getReads(),
+                            name + "." + variable.getName() + " is device-local; Reads is meaningless");
+                }
+            }
+        });
     }
 
     private static String generateSmv(SmvGenerator generator,

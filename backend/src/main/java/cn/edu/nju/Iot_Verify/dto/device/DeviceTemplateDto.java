@@ -55,9 +55,6 @@ public class DeviceTemplateDto {
         @Valid
         private List<InternalVariable> internalVariables;
 
-        @JsonProperty("EnvironmentDomains")
-        @Valid
-        private List<EnvironmentDomain> environmentDomains;
 
         @JsonProperty("ImpactedVariables")
         private List<String> impactedVariables;
@@ -103,17 +100,23 @@ public class DeviceTemplateDto {
 
             /**
              * Whether this device reads the shared value, i.e. whether its rules and specifications may
-             * use it as a condition source.
+             * use it as a condition source and whether it gets a {@code device.name := a_name} mirror.
              *
-             * <p>Only meaningful for a shared declaration ({@code IsInside=false}); {@code null} means
-             * "reads it", which is what a shared declaration has always meant. Before this existed, a
-             * device that only <em>affects</em> a shared value had to declare the same domain in a
-             * second array ({@code EnvironmentDomains}) purely to withhold read capability, so the
-             * user expressed one boolean by choosing between two array shapes. Making it explicit lets
-             * one array carry the whole read/affect truth table.
+             * <p>Required on a shared declaration ({@code IsInside=false}) and rejected on a
+             * device-local one, for the same reason {@code IsInside} and
+             * {@code FalsifiableWhenCompromised} are required: a capability must never come from a
+             * missing field. While read capability was implied by <em>which array</em> a declaration
+             * lived in, omitting it silently granted access; a default would reintroduce exactly that.
              */
             @JsonProperty("Reads")
             private Boolean reads;
+
+            @AssertTrue(message = "InternalVariable Reads must be explicit for a shared variable "
+                    + "(IsInside=false) and omitted for a device-local one")
+            private boolean isValidReadCapability() {
+                if (isInside == null) return true; // reported by the IsInside NotNull constraint
+                return isInside ? reads == null : reads != null;
+            }
 
             @JsonProperty("Trust")
             @NotBlank(message = "InternalVariable Trust must be explicit")
@@ -307,47 +310,5 @@ public class DeviceTemplateDto {
          * does not necessarily read. Unlike an external InternalVariable, this entry
          * grants no read capability and creates no device-module variable.
          */
-        @Data
-        @Builder
-        @NoArgsConstructor
-        @AllArgsConstructor
-        @JsonInclude(JsonInclude.Include.NON_NULL)
-        public static class EnvironmentDomain {
-            @JsonProperty("Name")
-            private String name;
-
-            @JsonProperty("Description")
-            private String description;
-
-            @JsonProperty("Trust")
-            @NotBlank(message = "EnvironmentDomain Trust must be explicit")
-            @Pattern(regexp = "trusted|untrusted", message = "EnvironmentDomain Trust must be trusted or untrusted")
-            private String trust;
-
-            @JsonProperty("Privacy")
-            @NotBlank(message = "EnvironmentDomain Privacy must be explicit")
-            @Pattern(regexp = "public|private", message = "EnvironmentDomain Privacy must be public or private")
-            private String privacy;
-
-            @JsonProperty("LowerBound")
-            private Integer lowerBound;
-
-            @JsonProperty("UpperBound")
-            private Integer upperBound;
-
-            @JsonProperty("NaturalChangeRate")
-            private String naturalChangeRate;
-
-            @JsonProperty("Values")
-            private List<String> values;
-
-            @AssertTrue(message = "EnvironmentDomain must have either Values or LowerBound+UpperBound")
-            private boolean isValidDomainDefinition() {
-                boolean hasValues = values != null && !values.isEmpty();
-                boolean hasLower = lowerBound != null;
-                boolean hasUpper = upperBound != null;
-                return hasValues ? !hasLower && !hasUpper : hasLower && hasUpper;
-            }
-        }
     }
 }

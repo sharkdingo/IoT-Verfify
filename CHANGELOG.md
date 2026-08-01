@@ -17,7 +17,29 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-01 (later)
 
+#### Fixed
+- **Two devices that disagree about a shared on/off or category value are now refused instead of
+  silently resolved.** Enum values have no additive composition, so the generator emitted one `case`
+  branch per writer and NuSMV took whichever came first — meaning the verdict depended on device
+  iteration order. The same scene proved `AX (airQuality = good)` *true* under one order and *false*
+  under the other. A verdict nobody can predict is not actionable, so such a scene is rejected naming
+  both devices and both assignments; writers that agree are unaffected, and numeric writers still sum
+  as MEDIC §3.1 defines.
+
 #### Changed
+- **One declaration per shared value, with read capability mandatory.** `EnvironmentDomains` is gone,
+  not deprecated: it only ever existed because read capability was implied by *which array* a
+  declaration lived in. `InternalVariables` now requires an explicit `Reads` on every shared
+  declaration (and rejects it on a device-local one), for the same reason `IsInside` and
+  `FalsifiableWhenCompromised` are required — a capability must never come from a missing field. The
+  earlier `Reads` default of `true` was itself a silent grant and has been removed. The read/affect
+  truth table is now fully representable in one place, and the new
+  [shared-value-semantics.md](docs/architecture/shared-value-semantics.md) is the single authority
+  for it, tagging every rule as paper-defined, a product extension, exact, a disclosed abstraction,
+  or rejected.
+- The AI tool catalog size is no longer hand-maintained in six documents: a test derives it from the
+  code and names any document that disagrees.
+
 - **One declaration per shared value, with read capability stated instead of implied.** A device that
   only *affects* a shared value used to repeat its whole domain in a second array
   (`EnvironmentDomains`) whose only job was to withhold rule/specification source capability — so a

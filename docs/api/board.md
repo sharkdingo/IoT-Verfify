@@ -782,7 +782,7 @@ template owned by another account therefore return the same `404`, without revea
 whether another user's resource exists.
 
 `DeviceManifest` uses **PascalCase** JSON keys (`@JsonProperty`): `Name`,
-`Description`, `Icon`, `Modes`, `InternalVariables`, `EnvironmentDomains`,
+`Description`, `Icon`, `Modes`, `InternalVariables`,
 `ImpactedVariables`, `InitState`,
 `WorkingStates`, `Transitions`, `APIs`, `Contents`. Key nested shapes:
 
@@ -845,12 +845,6 @@ auto-fix parameterization identifiers active in that model.
   variable is shared (`IsInside=false`): `[-1, 1]` reproduces MEDIC §3.1, `0` explicitly
   disables independent natural change, and another interval is a visible endpoint model
   extension whose candidates are the unique lower endpoint, zero, and upper endpoint.
-- `EnvironmentDomain`: `Name`, `Description`, required `Trust`/`Privacy`, and either
-  `Values` or `LowerBound`+`UpperBound`. A numeric domain also requires
-  `NaturalChangeRate`; an enum domain cannot declare it. It supplies
-  the domain for a name this template lists in `ImpactedVariables` but does not read;
-  it creates no device variable or device-scoped rule/spec reference. Every impact
-  must resolve inside the same manifest, and unused/redundant domain entries are rejected.
 - `WorkingState`: `Name`, `Description`, required `Trust`, required `Privacy`, `Dynamics[]`
   (`Dynamic` = `VariableName`, `Value`, `ChangeRate`). In a multi-mode template, every
   working-state name is a complete semicolon-separated tuple with one concrete value per
@@ -879,7 +873,7 @@ auto-fix parameterization identifiers active in that model.
   conflict from applying only part of an accepted-looking action. A variable-changing
   transition requires a trigger. Trigger attributes and values must belong to a readable
   mode/variable domain; enum, mode, and boolean triggers use only `=`/`!=`. Every assignment
-  target must be a declared `InternalVariable` or `EnvironmentDomain`, and its value must
+  target must be a declared `InternalVariable`, and its value must
   belong to that declaration's enum/range/boolean domain. Stateless templates may use
   trigger-plus-assignment transitions, but cannot declare state endpoints. `Signal` is not
   accepted on Transitions because rules and specifications cannot reference an internal

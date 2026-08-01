@@ -169,7 +169,7 @@ class NusmvEnvironmentPoolTest {
                 .modes(List.of("MachineState"))
                 .initState("cool")
                 .impactedVariables(List.of("temperature"))
-                .environmentDomains(List.of(impactNumber("temperature", 15, 35)))
+                .internalVariables(List.of(impactNumber("temperature", 15, 35)))
                 .workingStates(List.of(
                         DeviceManifest.WorkingState.builder().name("cool").trust("trusted")
                                 .privacy("public")
@@ -255,9 +255,13 @@ class NusmvEnvironmentPoolTest {
                 .build();
     }
 
-    private static DeviceManifest.EnvironmentDomain impactNumber(String name, int lower, int upper) {
-        return DeviceManifest.EnvironmentDomain.builder()
+    /** An affect-only shared declaration: one array, read capability explicitly withheld. */
+    private static DeviceManifest.InternalVariable impactNumber(String name, int lower, int upper) {
+        return DeviceManifest.InternalVariable.builder()
                 .name(name)
+                .isInside(false)
+                .reads(false)
+                .falsifiableWhenCompromised(false)
                 .lowerBound(lower)
                 .upperBound(upper)
                 .naturalChangeRate("0")

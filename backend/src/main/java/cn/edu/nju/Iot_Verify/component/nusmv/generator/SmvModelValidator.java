@@ -500,6 +500,68 @@ public class SmvModelValidator {
                 checkEnvVarCompatibility(entry.getKey(), first, sources.get(i));
             }
         }
+
+        validateDiscreteWriterAgreement(deviceSmvMap);
+    }
+
+    /**
+     * Rejects two devices whose declared effects assign different values to one discrete shared value.
+     *
+     * <p>Numeric effects compose additively (MEDIC §3.1 makes {@code env.D.v} additive), so numeric
+     * writers can never conflict. Enum and boolean shared values have no additive composition, so two
+     * simultaneously-active writers assigning different values is a modelling contradiction rather than
+     * a merge. The generator emitted one {@code case} branch per writer, which silently resolved the
+     * contradiction by <em>device iteration order</em>: NuSMV reported {@code AX (airQuality = good)}
+     * true under one order and false under the other, for the same scene. A verdict that depends on an
+     * internal ordering is not something a user can see, predict, or act on, so the scene is refused
+     * with both declarations named and the user decides which one is right.
+     *
+     * <p>Writers that assign the <em>same</em> value are fine: the outcome is order-independent.
+     */
+    private void validateDiscreteWriterAgreement(Map<String, DeviceSmvData> deviceSmvMap) {
+        // sharedValue -> assignedValue -> first device that declares it
+        Map<String, Map<String, String>> assignments = new LinkedHashMap<>();
+        Set<DeviceSmvData> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+
+        for (DeviceSmvData smv : deviceSmvMap.values()) {
+            if (smv == null || smv.getManifest() == null || !seen.add(smv)) continue;
+            if (smv.getManifest().getWorkingStates() == null) continue;
+
+            for (DeviceManifest.WorkingState state : smv.getManifest().getWorkingStates()) {
+                if (state.getDynamics() == null) continue;
+                for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
+                    String name = dynamic == null ? null : dynamic.getVariableName();
+                    String value = dynamic == null ? null : dynamic.getValue();
+                    if (name == null || value == null) continue;
+                    DeviceManifest.InternalVariable domain =
+                            smv.getImpactedEnvironmentVariables().get(name);
+                    if (domain == null || isNumericDomain(domain)) continue;
+
+                    String normalized = value.replace(" ", "");
+                    Map<String, String> byValue =
+                            assignments.computeIfAbsent(name, key -> new LinkedHashMap<>());
+                    String existingDevice = byValue.putIfAbsent(normalized, smv.getVarName());
+                    if (existingDevice != null && existingDevice.equals(smv.getVarName())) {
+                        continue;
+                    }
+                    for (Map.Entry<String, String> other : byValue.entrySet()) {
+                        if (other.getKey().equals(normalized)) continue;
+                        if (other.getValue().equals(smv.getVarName())) continue;
+                        throw SmvGenerationException.envVarConflict(name,
+                                "conflicting declared effects on shared value '" + name + "': device '"
+                                        + other.getValue() + "' sets it to '" + other.getKey()
+                                        + "' while device '" + smv.getVarName() + "' sets it to '"
+                                        + normalized + "'. There is no defined way to combine two "
+                                        + "different values, so change one declaration or remove one "
+                                        + "device");
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean isNumericDomain(DeviceManifest.InternalVariable domain) {
+        return domain.getLowerBound() != null && domain.getUpperBound() != null;
     }
 
     private void checkEnvVarCompatibility(String varName, EnvVarSource a, EnvVarSource b) {
@@ -561,15 +623,6 @@ public class SmvModelValidator {
                 if (Boolean.TRUE.equals(variable.getIsInside())) {
                     writableDomains.putIfAbsent(variable.getName(), variable);
                 }
-            }
-        }
-        if (manifest.getEnvironmentDomains() != null) {
-            for (DeviceManifest.EnvironmentDomain domain : manifest.getEnvironmentDomains()) {
-                if (domain == null || domain.getName() == null) {
-                    continue;
-                }
-                validateVariableDomain(smv.getVarName(), "EnvironmentDomain '" + domain.getName() + "'",
-                        EnvironmentDomainUtils.asInternalVariable(domain), true);
             }
         }
         if (manifest.getImpactedVariables() != null) {

@@ -2099,19 +2099,6 @@ final class FuzzModel {
                     putOwnEnvironmentDomain(ownEnvironmentDomains, variable.getName(), domain, id);
                 }
             }
-            for (DeviceManifest.EnvironmentDomain domain : safe(manifest.getEnvironmentDomains())) {
-                if (domain == null || !hasText(domain.getName())) {
-                    throw error("Manifest for device '" + id + "' contains an invalid environment domain.");
-                }
-                ValueDomain parsedDomain = ValueDomain.from(
-                        domain.getValues(),
-                        domain.getLowerBound(),
-                        domain.getUpperBound(),
-                        domain.getNaturalChangeRate(),
-                        true,
-                        "environment domain '" + domain.getName() + "'");
-                putOwnEnvironmentDomain(ownEnvironmentDomains, domain.getName(), parsedDomain, id);
-            }
 
             Set<String> impactedEnvironment = new LinkedHashSet<>();
             Set<String> numericImpactedEnvironment = new LinkedHashSet<>();

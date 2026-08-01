@@ -33,10 +33,6 @@ public final class RecommendationCapabilityView {
                 .filter(Objects::nonNull)
                 .map(RecommendationCapabilityView::variableView)
                 .toList());
-        result.put("environmentDomains", safeList(manifest.getEnvironmentDomains()).stream()
-                .filter(Objects::nonNull)
-                .map(RecommendationCapabilityView::environmentDomainView)
-                .toList());
         result.put("impactedVariables", safeList(manifest.getImpactedVariables()));
         result.put("transitions", safeList(manifest.getTransitions()).stream()
                 .filter(Objects::nonNull)
@@ -102,20 +98,6 @@ public final class RecommendationCapabilityView {
         result.put("lowerBound", variable.getLowerBound());
         result.put("upperBound", variable.getUpperBound());
         result.put("naturalChangeRate", variable.getNaturalChangeRate());
-        return result;
-    }
-
-    private static Map<String, Object> environmentDomainView(
-            DeviceTemplateDto.DeviceManifest.EnvironmentDomain domain) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("name", domain.getName());
-        putDescription(result, domain.getDescription(), environmentDomainDescription(domain));
-        result.put("trust", domain.getTrust());
-        result.put("privacy", domain.getPrivacy());
-        result.put("values", domain.getValues());
-        result.put("lowerBound", domain.getLowerBound());
-        result.put("upperBound", domain.getUpperBound());
-        result.put("naturalChangeRate", domain.getNaturalChangeRate());
         return result;
     }
 
@@ -240,15 +222,6 @@ public final class RecommendationCapabilityView {
         String naturalChange = hasText(variable.getNaturalChangeRate())
                 ? "; natural change rate " + variable.getNaturalChangeRate() : "";
         return scope + " variable " + variable.getName() + "; " + domain + "; " + compromise
-                + naturalChange + ".";
-    }
-
-    private static String environmentDomainDescription(
-            DeviceTemplateDto.DeviceManifest.EnvironmentDomain domain) {
-        String naturalChange = hasText(domain.getNaturalChangeRate())
-                ? "; natural change rate " + domain.getNaturalChangeRate() : "";
-        return "Shared environment domain " + domain.getName() + "; "
-                + domainDescription(domain.getValues(), domain.getLowerBound(), domain.getUpperBound())
                 + naturalChange + ".";
     }
 

@@ -546,7 +546,7 @@ source for that variable. Rules/specs still use a device prefix such as
 as readable model state and anchors the model identity. It is not account, Board, or API
 authorization; the actual value comes from this pool.
 
-An impact-only template must carry its own `EnvironmentDomains` entry; another installed
+An impact-only template must carry its own shared `InternalVariables` entry (`Reads: false`); another installed
 or submitted device template cannot silently supply it. Only submitted device instances
 contribute semantics. Declarations of the same shared name must agree on literal casing,
 domain/enum order, natural change rate, default trust, and default privacy or the request
