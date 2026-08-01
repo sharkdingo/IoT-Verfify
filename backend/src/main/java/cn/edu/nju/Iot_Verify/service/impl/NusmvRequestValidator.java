@@ -1136,6 +1136,15 @@ final class NusmvRequestValidator {
                 || (variable.getLowerBound() != null && variable.getUpperBound() != null));
     }
 
+    /**
+     * Resolves a variable a rule or specification may use as a condition source.
+     *
+     * <p>Excludes an affect-only shared declaration ({@code Reads=false}): the generator emits no
+     * {@code device.name := a_name} mirror for it, so a condition on it would reference a value the
+     * device never observes. Returning it here accepted the request and then produced a condition with
+     * nothing behind it, which the user could not distinguish from a working rule. The frontend hides
+     * these too; this is the boundary that also covers API and AI-tool callers.
+     */
     private static DeviceManifest.InternalVariable internalVariable(DeviceSmvData smv, String name) {
         if (smv == null || smv.getVariables() == null || !hasText(name)) {
             return null;
@@ -1143,7 +1152,9 @@ final class NusmvRequestValidator {
         String trimmed = name.trim();
         for (DeviceManifest.InternalVariable variable : smv.getVariables()) {
             if (variable != null && trimmed.equals(variable.getName())) {
-                return variable;
+                boolean affectOnlyShared = !Boolean.TRUE.equals(variable.getIsInside())
+                        && Boolean.FALSE.equals(variable.getReads());
+                return affectOnlyShared ? null : variable;
             }
         }
         return null;

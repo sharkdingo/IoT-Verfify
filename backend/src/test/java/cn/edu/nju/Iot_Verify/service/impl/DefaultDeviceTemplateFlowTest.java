@@ -206,6 +206,38 @@ class DefaultDeviceTemplateFlowTest {
         });
     }
 
+    /**
+     * An affect-only shared value is not a rule or specification condition source.
+     *
+     * <p>The rule builder used to offer every shared declaration, and the request validator accepted
+     * them, but the generator emits no read mirror for {@code Reads=false} — so the condition
+     * referenced a value the device never observes and the user could not tell a working rule from a
+     * hollow one. Both surfaces now agree: the UI hides it and this boundary refuses it.
+     */
+    @Test
+    void anAffectOnlySharedValueIsNotAvailableAsAConditionSource() throws Exception {
+        DeviceManifest light = loadDefaultTemplates().get("Light");
+        DeviceManifest.InternalVariable illuminance = light.getInternalVariables().stream()
+                .filter(variable -> "illuminance".equals(variable.getName()))
+                .findFirst().orElseThrow();
+
+        assertEquals(Boolean.FALSE, illuminance.getReads(),
+                "Light affects illuminance without reading it");
+        assertTrue(light.getImpactedVariables().contains("illuminance"));
+
+        // The generator's read-capability set is what a condition source may draw from, and it must
+        // exclude this declaration exactly as the rule builder now does.
+        Map<String, DeviceManifest> templates = loadDefaultTemplates();
+        SmvGenerator generator = generatorFor(templates);
+        DeviceVerificationDto device = device("light_1", "Light", "on");
+        Map<String, DeviceSmvData> map = generator.buildDeviceSmvMap(USER_ID, List.of(device));
+
+        assertFalse(map.get("light_1").getEnvVariables().containsKey("illuminance"),
+                "an affect-only declaration must not appear in the read-capability set");
+        assertTrue(map.get("light_1").getImpactedEnvironmentVariables().containsKey("illuminance"),
+                "but its domain and effect must still be modelled");
+    }
+
     private static String generateSmv(SmvGenerator generator,
                                       List<DeviceVerificationDto> devices,
                                       List<BoardEnvironmentVariableDto> environment,

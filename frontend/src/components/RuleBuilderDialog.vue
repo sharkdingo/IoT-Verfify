@@ -178,14 +178,19 @@ const getDeviceApis = (templateName: string, signalOnly = false): SourceOption[]
   return []
 }
 
-// Rule variable conditions use template InternalVariables, which include both
-// device-local variables and shared environment variables.
+// Rule variable conditions use template InternalVariables, which include both device-local variables
+// and shared environment variables the device reads.
+//
+// An affect-only shared declaration (Reads=false) is deliberately excluded: the generator emits no
+// `device.name := a_name` mirror for it, so a rule condition on it would reference a value the device
+// never observes. Offering it let a user build a rule whose condition silently had no model behind it.
 const getDeviceVariables = (templateName: string): SourceOption[] => {
   const template = resolveDeviceTemplate(templateName)
   const variables: SourceOption[] = []
 
   if (template && template.manifest?.InternalVariables) {
     template.manifest.InternalVariables.forEach((v: any) => {
+      if (v.IsInside !== true && v.Reads === false) return
       if (v.Name || v.name) {
         const name = v.Name || v.name || ''
         const scope = v.IsInside === true ? t('app.internalVariable') : t('app.environmentVariable')
