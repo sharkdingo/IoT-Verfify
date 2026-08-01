@@ -18,6 +18,11 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-08-01 (later)
 
 #### Fixed
+- **A success toast no longer swallows clicks on the controls it covers.** Toasts sit above the
+  whole workspace and stayed pointer-interactive, so the scene-import confirmation overlaid the undo
+  button and absorbed a click aimed at it — undo simply did nothing until the message auto-dismissed.
+  A toast is an announcement, not a control, so it no longer receives pointer events while its own
+  children (the close button) still do.
 - **A shared on/off or category value that a device controls no longer changes on its own.** Such a
   value could previously take any value in its declared domain in any step no declared effect covered,
   so with a humidifier switched off across a step NuSMV still let `airQuality` become `good` — and

@@ -331,8 +331,20 @@
     z-index: var(--z-message-box) !important;
 }
 
+/*
+ * A toast announces something; it is not a control. It sits above everything, so leaving it
+ * pointer-interactive let it swallow clicks aimed at whatever it happened to cover -- the
+ * scene-import success message overlays the undo button, so a user clicking undo right after an
+ * import hit the toast instead and nothing happened until it auto-dismissed. Its own children keep
+ * pointer events so the close button still works.
+ */
 .el-message {
     z-index: var(--z-toast) !important;
+    pointer-events: none;
+}
+
+.el-message > * {
+    pointer-events: auto;
 }
 
 :root[data-theme='dark'] .el-overlay.is-message-box {
