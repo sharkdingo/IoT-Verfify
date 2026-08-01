@@ -530,6 +530,8 @@ const messages = {
 
             simulationTitle: '仿真',
             fuzzSearch: '反例探索',
+            /* 工具栏专用短标签：竖排栏宽度只够约 70px，完整名称会被截断成“反例探…”。 */
+            fuzzSearchShort: '探索',
             fuzzSearchSubtitle: '在有限预算内寻找可能违反规约的候选路径',
             openFuzzSettings: '打开反例探索设置',
             startFuzzSearch: '开始后台探索',
@@ -748,6 +750,7 @@ const messages = {
             actionDockSwitchCompact: '切换为紧凑工具栏',
             actionDockSwitchPacked: '切换为打包工具栏',
             runTools: '运行',
+            reviewTools: '查看',
             aiTools: 'AI 推荐',
             scenarioTool: '场景',
             rulesTool: '规则',
@@ -2934,6 +2937,15 @@ const messages = {
 
             simulationTitle: 'Simulation',
             fuzzSearch: 'Counterexample Search',
+            /*
+             * Short form for the vertical tool rail only, which allows about 70px for a label.
+             * "Counterexample Search" rendered as "Counterex..." there, and a truncated action name
+             * is the one label a user cannot recover from context. "Explore" is the vocabulary the
+             * rest of the product already uses for this component ("the explorer"), so the short
+             * name is not a new concept. The full name stays on the panel heading, the tooltip, and
+             * the accessible name.
+             */
+            fuzzSearchShort: 'Explore',
             fuzzSearchSubtitle: 'Searches within a finite budget for candidate paths that may violate specifications',
             openFuzzSettings: 'Open counterexample search settings',
             startFuzzSearch: 'Start background search',
@@ -3152,6 +3164,8 @@ const messages = {
             actionDockSwitchCompact: 'Switch to compact toolbar',
             actionDockSwitchPacked: 'Switch to packed toolbar',
             runTools: 'Run',
+            /* Reading a stored result is not running one, so the rail groups them separately. */
+            reviewTools: 'Review',
             aiTools: 'AI suggestions',
             scenarioTool: 'Scene',
             rulesTool: 'Rules',

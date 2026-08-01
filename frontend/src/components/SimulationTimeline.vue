@@ -631,7 +631,20 @@ watch(selectedStateIndex, () => {
         </div>
       </section>
 
-      <details class="group pt-2" data-testid="simulation-timeline-state-details">
+      <!--
+        Open by default.
+
+        This block holds the triggered rules, device states, and environment values for the selected
+        step -- that is, the answer to "what changed and why". Collapsed, a counterexample rendered a
+        step number and a violated property but no values, so the reason the property failed was one
+        click away and looked absent. Reviewing a real 14-state trace, the reported experience was
+        "I cannot see what changed from the previous step... State details is collapsed and shows no
+        state values, transition data, or change summary".
+
+        It stays a <details> so a user can collapse it once they know what they are looking at; the
+        default is simply the state that answers the question they arrived with.
+      -->
+      <details open class="group pt-2" data-testid="simulation-timeline-state-details">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
           <span class="inline-flex items-center gap-1.5">
             <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>

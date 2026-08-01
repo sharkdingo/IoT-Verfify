@@ -13986,7 +13986,9 @@ const counterexampleTraceHelpText = computed(() => {
           >
             <span v-if="isFuzzing" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">radar</span>
-            <span class="board-tool-label">{{ t('app.fuzzSearch') }}</span>
+            <!-- Short form: the rail truncated "Counterexample Search" to "Counterex...". The full
+                 name remains in this button's aria-label and tooltip. -->
+            <span class="board-tool-label">{{ t('app.fuzzSearchShort') }}</span>
             <span class="board-tool-tooltip" aria-hidden="true">{{ isSceneReplacementInProgress
               ? t('app.sceneReplacementInProgress')
               : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings') }}</span>
@@ -14022,6 +14024,24 @@ const counterexampleTraceHelpText = computed(() => {
             </span>
           </button>
         </div>
+
+      </div>
+
+      <div class="board-tool-separator" aria-hidden="true"></div>
+
+      <!--
+        Run History is its own group.
+
+        It sat inside the group labelled "Run" beside Simulation, Explore and Verification, styled
+        identically, but it does not run anything -- it reads results that already exist. Two
+        independent visual reviews, one per theme, raised the same point unprompted: "Run History
+        looks like a different kind of action... it suggests reviewing past results rather than
+        running analysis". Grouping follows what an action does, so this is a structural correction
+        rather than a restyle: the button keeps its filled treatment, because reading a stored verdict
+        is a primary task, not a suggestion.
+      -->
+      <div class="board-tool-group" data-testid="review-tool-group" role="group" :aria-label="t('app.reviewTools')">
+        <span class="board-tool-group-label">{{ t('app.reviewTools') }}</span>
 
         <div class="board-tool-wrapper group">
           <button
@@ -17359,7 +17379,19 @@ const counterexampleTraceHelpText = computed(() => {
           {{ t('app.fuzzFindingReplayHint') }}
         </div>
 
-        <details class="group mb-2" data-testid="trace-timeline-state-details">
+        <!--
+          Open by default, for the same reason as the simulation timeline's equivalent block.
+
+          This holds the device states, triggered rules and environment values for the selected step:
+          the answer to "what changed, and why". Collapsed, a 14-state counterexample showed a step
+          number and the violated property but no values, so reviewing it produced "No numeric
+          temperature or humidity value is shown... this screen does not show the temperature rising,
+          the state-by-state values, or a change caused by heating" -- for a trace whose entire point
+          is a value climbing to the forbidden number.
+
+          Still a <details>, so it can be collapsed once the user has their bearings.
+        -->
+        <details open class="group mb-2" data-testid="trace-timeline-state-details">
           <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
             <span class="inline-flex items-center gap-1.5">
               <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>

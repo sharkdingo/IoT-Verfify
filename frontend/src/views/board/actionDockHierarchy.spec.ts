@@ -24,6 +24,8 @@ describe('board action dock hierarchy', () => {
     'open-spec-recommendations'
   ]
 
+  // Run History is deliberately not here: it reads a stored result rather than running one, so it
+  // has its own group. It keeps the filled treatment because reading a verdict is a primary task.
   const RUN_TOOLS = [
     'open-simulation-panel',
     'open-verification-panel',
@@ -133,6 +135,41 @@ describe('board action dock hierarchy', () => {
       expect(markup, `${id} should be a <button>`).toContain('<button')
       expect(markup, `${id} needs an accessible name`).toContain('aria-label')
       expect(markup, `${id} should report its panel state`).toContain('aria-pressed')
+    }
+  })
+
+  it('groups Run History apart from the actions that start a run', () => {
+    // Two independent visual reviews raised the same point unprompted: Run History reads a stored
+    // result rather than producing one, so grouping it under "Run" mislabels what it does.
+    const template = board.slice(board.indexOf('<template>'))
+    const runGroupAt = template.indexOf('data-testid="run-tool-group"')
+    const reviewGroupAt = template.indexOf('data-testid="review-tool-group"')
+    const historyAt = template.indexOf('data-testid="open-history-panel"')
+    expect(reviewGroupAt, 'Run History needs its own group').toBeGreaterThan(-1)
+    expect(historyAt, 'the history button should live after the review group opens')
+      .toBeGreaterThan(reviewGroupAt)
+    expect(reviewGroupAt, 'the review group should come after the run group')
+      .toBeGreaterThan(runGroupAt)
+  })
+
+  it('uses a rail label short enough not to truncate', () => {
+    // "Counterexample Search" rendered as "Counterex..." in a rail that allows about 70px. A
+    // truncated *action name* is the one label a user cannot recover from surrounding context, so
+    // the rail uses a short form while the full name stays on the panel and the accessible name.
+    expect(buttonMarkup('open-fuzzing-panel'), 'the rail should not print the long name')
+      .not.toContain("t('app.fuzzSearch')")
+    expect(board, 'the rail needs a dedicated short label').toContain("t('app.fuzzSearchShort')")
+  })
+
+  it('shows the values for the selected counterexample step without an extra click', () => {
+    // The device states, triggered rules and environment values answer "what changed and why".
+    // Collapsed, a 14-state trace showed a step number and a violated property but no values -- for
+    // a counterexample whose whole point is a value climbing to the forbidden number.
+    for (const testId of ['trace-timeline-state-details']) {
+      const at = board.indexOf(`data-testid="${testId}"`)
+      expect(at, `${testId} should exist`).toBeGreaterThan(-1)
+      const tagStart = board.lastIndexOf('<details', at)
+      expect(board.slice(tagStart, at), `${testId} should be open by default`).toContain(' open')
     }
   })
 })
