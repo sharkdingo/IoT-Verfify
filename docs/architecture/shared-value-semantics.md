@@ -215,6 +215,13 @@ only the semantics it reports:
 | `semantics` = `ABSTRACTION` | the exogenous discrete case below, and only that case |
 | `semantics` = `EXACT` | every other combination |
 
+Note that `EXOGENOUS` splits on type, and the split is the whole point of the tag: an exogenous
+*numeric* value carries a declared `NaturalChangeRate`, so its movement is `EXACT`, while an
+exogenous *discrete* value has no such rule and is therefore `ABSTRACTION`. Both are common — a
+single temperature sensor produces the first — so a trace must name the cause in both cases. Showing
+a bare `20 -> 21` with no cause is the defect this section exists to prevent, and
+`SimulationTimeline.spec.ts` covers all four combinations.
+
 Because a conflicting discrete scene is rejected at board assembly (§8), a `COMPOSED` discrete value
 in a stored run is one whose writers agree. Provenance therefore never has to describe a winner, and
 must not: doing so would tell the user that a verdict invariant 10 guarantees is order-independent

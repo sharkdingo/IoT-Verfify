@@ -225,8 +225,16 @@ const environmentVariableTitle = (name: string, value: string) => {
   if (previous !== undefined && previous !== value) {
     const provenance = getProvenanceForVariable(name)
     if (provenance) {
-      if (provenance.authorship === 'EXOGENOUS' && provenance.semantics === 'ABSTRACTION') {
-        title += ` (${t('app.traceVisualization.provenance.externalInput')})`
+      if (provenance.authorship === 'EXOGENOUS') {
+        // A value no submitted device writes moved on its own. Which rule permitted that depends on
+        // its type: a numeric value has a declared per-step interval, so the change is exactly what
+        // the user wrote; a discrete one has no such rule, so the model lets it take any declared
+        // value -- an abstraction the user needs named before they act on the trace.
+        title += provenance.semantics === 'ABSTRACTION'
+          ? ` (${t('app.traceVisualization.provenance.externalInput')})`
+          : ` (${t('app.traceVisualization.provenance.naturalEvolution', {
+              rate: provenance.naturalChangeRate ?? ''
+            })})`
       } else if (provenance.authorship === 'DEVICE_CONTROLLED' && provenance.writers.length > 0) {
         const writer = provenance.writers[0]
         const writerLabel = formatDeviceModelToken?.({ varName: writer.deviceVarName } as any, writer.deviceVarName) || writer.deviceVarName

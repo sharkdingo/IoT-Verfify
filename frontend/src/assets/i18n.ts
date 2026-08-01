@@ -2350,7 +2350,8 @@ const messages = {
                 provenance: {
                     externalInput: '外部输入',
                     affectedBy: '受 {device} 影响',
-                    affectedByMultiple: '受 {count} 个设备影响'
+                    affectedByMultiple: '受 {count} 个设备影响',
+                    naturalEvolution: '自然演化 {rate}'
                 },
                 security: '安全',
                 attacked: '被攻击',
@@ -4752,7 +4753,8 @@ const messages = {
                 provenance: {
                     externalInput: 'external input',
                     affectedBy: 'affected by {device}',
-                    affectedByMultiple: 'affected by {count} devices'
+                    affectedByMultiple: 'affected by {count} devices',
+                    naturalEvolution: 'natural evolution {rate}'
                 },
                 security: 'security',
                 attacked: 'Attacked',

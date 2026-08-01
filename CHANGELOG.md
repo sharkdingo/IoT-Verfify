@@ -31,6 +31,12 @@ history into a technical spec. The spec content itself now lives under
   [shared-value-semantics.md](docs/architecture/shared-value-semantics.md) §10.
 
 #### Fixed
+- **The most common shared value showed a change with no cause.** A numeric value no device writes —
+  what a single temperature sensor produces — matched none of the timeline's provenance branches, so
+  its trace step read `20 -> 21` with nothing saying why. That is the one thing provenance exists to
+  prevent: the user cannot tell whether their own rule moved it or the model did. It now cites the
+  declared interval, and `SimulationTimeline.spec.ts` covers all four authorship/semantics
+  combinations so an unhandled one fails rather than rendering silently.
 - **Provenance described composed discrete values as an order-dependent race.** Both the DTO javadoc
   and the user-visible summary said "last active effect wins" — the device-iteration-order behaviour
   removed in `eceaf2d`, which the product now guarantees against (invariant 10). Conflicting discrete

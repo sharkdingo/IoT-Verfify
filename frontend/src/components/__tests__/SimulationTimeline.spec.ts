@@ -78,6 +78,12 @@ const i18n = createI18n({
           stateDetails: 'State details',
           transitionNumber: 'State after transition {index}',
           environmentVariables: 'Environment variables',
+          provenance: {
+            externalInput: 'external input',
+            affectedBy: 'affected by {device}',
+            affectedByMultiple: 'affected by {count} devices',
+            naturalEvolution: 'natural evolution {rate}'
+          },
           changed: 'Changed',
           deviceBecameCompromised: 'Device became compromised',
           deviceNoLongerCompromised: 'Device is no longer compromised'
@@ -511,5 +517,122 @@ describe('SimulationTimeline', () => {
     const links = wrapper.get('[data-testid="simulation-timeline-compromised-links"]')
     expect(links.text()).toContain('Hall motion turns on light')
     expect(links.text()).not.toContain('iot_verify_automation_link_compromised_0')
+  })
+
+  describe('a changed shared value names the rule that permitted the change', () => {
+    // A value that moved with no stated cause is the case a user cannot act on: they cannot tell
+    // whether their own rule did it or the model allowed it. So every combination the backend can
+    // report must produce a cause, not just the ones that were easy to render first.
+    const provenanceStates = (name: string, from: string, to: string): SimulationState[] => [
+      {
+        stateIndex: 1,
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        devices: [],
+        envVariables: [{ name, value: from, modelTokenSource: 'BUNDLED' }]
+      },
+      {
+        stateIndex: 2,
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        devices: [],
+        envVariables: [{ name, value: to, modelTokenSource: 'BUNDLED' }]
+      }
+    ]
+
+    const titleForChangedValue = async (
+      name: string,
+      from: string,
+      to: string,
+      provenance: Record<string, unknown>
+    ) => {
+      const wrapper = mount(SimulationTimeline, {
+        props: {
+          visible: true,
+          states: provenanceStates(name, from, to),
+          modelSnapshot: {
+            capturedAt: '2026-08-01T10:00:00',
+            deviceCount: 1,
+            ruleCount: 0,
+            specificationCount: 0,
+            environmentVariableCount: 1,
+            deviceTemplateCount: 1,
+            templatesFrozen: true,
+            environmentProvenance: [provenance]
+          } as never
+        },
+        global: { plugins: [i18n] }
+      })
+      // Index 1 is the second state -- the one that changed. Index 0 has no predecessor, so it
+      // deliberately carries no cause annotation.
+      await wrapper.get('[data-testid="simulation-timeline-state-1"]').trigger('click')
+      return wrapper.get('[data-testid="simulation-timeline-env"]').html()
+    }
+
+    it('reports a device when exactly one device declares it writes the value', async () => {
+      const html = await titleForChangedValue('illuminance', 'dim', 'bright', {
+        name: 'illuminance',
+        type: 'DISCRETE_ENUM',
+        values: ['dim', 'bright'],
+        authorship: 'DEVICE_CONTROLLED',
+        semantics: 'EXACT',
+        writers: [{ deviceVarName: 'light_1', templateName: 'Light', templateSource: 'BUNDLED' }],
+        readers: [],
+        evolutionSummary: 'Controlled by device light_1 (Light).'
+      })
+      expect(html).toContain('affected by light_1')
+    })
+
+    it('names the abstraction when nobody writes a discrete value', async () => {
+      const html = await titleForChangedValue('weather', 'sunny', 'rainy', {
+        name: 'weather',
+        type: 'DISCRETE_ENUM',
+        values: ['sunny', 'rainy'],
+        authorship: 'EXOGENOUS',
+        semantics: 'ABSTRACTION',
+        writers: [],
+        readers: [{ deviceVarName: 'weather_1' }],
+        evolutionSummary: 'External input.'
+      })
+      // The user must be able to tell this apart from a change their scene caused.
+      expect(html).toContain('external input')
+    })
+
+    it('cites the declared interval when nobody writes a numeric value', async () => {
+      // This is the most common shared value in the product -- every bundled sensor declares one --
+      // and it fell through every branch, so the trace showed a bare "20 -> 21" with no cause.
+      const html = await titleForChangedValue('temperature', '20', '21', {
+        name: 'temperature',
+        type: 'NUMERIC',
+        lowerBound: 0,
+        upperBound: 100,
+        naturalChangeRate: '[-1, 1]',
+        authorship: 'EXOGENOUS',
+        semantics: 'EXACT',
+        writers: [],
+        readers: [{ deviceVarName: 'temp_1' }],
+        evolutionSummary: 'External input; natural evolution [-1, 1].'
+      })
+      expect(html).toContain('natural evolution [-1, 1]')
+      // Exact semantics must not be presented as the disclosed over-approximation.
+      expect(html).not.toContain('external input')
+    })
+
+    it('reports the writer count when several devices write the value', async () => {
+      const html = await titleForChangedValue('airQuality', 'poor', 'good', {
+        name: 'airQuality',
+        type: 'DISCRETE_ENUM',
+        values: ['poor', 'good'],
+        authorship: 'COMPOSED',
+        semantics: 'EXACT',
+        writers: [
+          { deviceVarName: 'purifier_1', templateName: 'Air Purifier', templateSource: 'BUNDLED' },
+          { deviceVarName: 'fan_1', templateName: 'Range Hood', templateSource: 'BUNDLED' }
+        ],
+        readers: [],
+        evolutionSummary: 'Affected by 2 devices: purifier_1, fan_1.'
+      })
+      expect(html).toContain('affected by 2 devices')
+    })
   })
 })
