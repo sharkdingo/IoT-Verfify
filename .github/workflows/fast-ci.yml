@@ -318,6 +318,13 @@ jobs:
       && github.ref != 'refs/heads/main'
       && needs.frontend.result != 'failure' && needs.backend.result != 'failure'
       && needs.smoke.result != 'failure'
+    # The reusable workflow uploads and downloads the build artifacts it shares between its own jobs,
+    # which needs actions: write. A called workflow does not inherit the caller's block, so it is
+    # granted explicitly here rather than failing at the upload step with a permissions error that
+    # points at artifacts instead of at this line.
+    permissions:
+      contents: read
+      actions: write
     uses: ./.github/workflows/full-ci.yml
     with:
       reason: ${{ needs.route.outputs.reasons }}

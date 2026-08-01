@@ -34,6 +34,8 @@ on:
 
 permissions:
   contents: read
+  # Needed for the artifact handoff between this workflow's own build and e2e jobs.
+  actions: write
 
 concurrency:
   # Never cancel on main: each landed commit needs its own recorded verdict. Cancel superseded runs
