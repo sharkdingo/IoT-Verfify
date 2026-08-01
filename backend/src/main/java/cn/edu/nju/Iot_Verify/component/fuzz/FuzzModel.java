@@ -1130,8 +1130,20 @@ final class FuzzModel {
                 } else if (!entry.getValue().isNumeric() && device.impactedEnvironment.contains(name)) {
                     hasDeclaredWriter = true;
                     DynamicEffect dynamic = dynamicEffect(device.activeWorkingState(deviceState.modes), name);
-                    if (discreteDynamic == null) {
-                        discreteDynamic = dynamic.discreteValue();
+                    String declared = dynamic.discreteValue();
+                    if (hasText(declared)) {
+                        if (discreteDynamic == null) {
+                            discreteDynamic = declared;
+                        } else if (!discreteDynamic.equals(declared)) {
+                            // Two simultaneously-active writers assigning different values. Enums have no
+                            // additive composition, so taking the first would make the outcome depend on
+                            // device iteration order -- the same order dependence the formal generator
+                            // used to have. Refuse, matching SmvModelValidator, so a finding and a
+                            // counterexample cannot disagree about whether the scene is even modelable.
+                            throw error("Conflicting declared effects on shared value '" + name
+                                    + "': '" + discreteDynamic + "' versus '" + declared
+                                    + "'. There is no defined way to combine two different values.");
+                        }
                     }
                 }
             }
