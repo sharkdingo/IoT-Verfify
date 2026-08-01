@@ -87,6 +87,20 @@ template author can act on rather than as a schema path.
 The user-facing panel derives its label from the same flag: an affect-only declaration is shown as
 *affects*, never as *reads*, because the generator emits no read mirror for it.
 
+**Condition-source eligibility is gated three times, once per writer boundary**, because a rule can
+reach storage by three routes and each was independently permissive:
+
+| Gate | Covers | Behaviour |
+| :--- | :--- | :--- |
+| `RuleBuilderDialog.getDeviceVariables` | a person clicking through the UI | an affect-only value is not offered |
+| `BoardStorageServiceImpl.conditionSourceVariable` | persist time — REST board endpoints, the assistant's rule/spec tools, scene import | rejected with the variable named |
+| `NusmvRequestValidator.internalVariable` | a verification/simulation request | rejected before generation |
+
+`BoardSemanticValidator.findVariable` applies the same rule earlier on the assistant path so the
+tool reports an actionable reason rather than a persist-time error. The persist-time gate is
+deliberately narrower than the capability-blind existence lookup beside it: that one answers domain
+resolution and runtime overrides, where an affect-only declaration is a legitimate answer.
+
 ## 5. Natural evolution
 
 A shared numeric value declares `NaturalChangeRate`, an integer interval constraining the per-step

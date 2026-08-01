@@ -37,6 +37,15 @@ history into a technical spec. The spec content itself now lives under
 - **An affect-only declaration was shown as "Reads this environment variable".** The inspector derived
   the role from `IsInside` alone and ignored `Reads`, mislabelling 7 declarations across 5 bundled
   templates as reads when the generator emits no read mirror for them.
+- **An affect-only shared value could be used as a rule or specification condition source on every
+  path except the one that was fixed first.** A rule whose condition reads a value the device never
+  observes compiles to a condition with no model behind it, which a user cannot tell apart from a
+  working rule. Hiding it in the rule builder only closed the click-through route: persist-time
+  validation, the verification request validator, and the assistant's own pre-flight validator each
+  still accepted it, so the same intention produced a different model depending on who expressed it
+  and by which route. All four now apply one rule and name the variable when they refuse. The
+  capability-blind existence lookup beside the persist-time gate is unchanged on purpose — its callers
+  ask whether a declaration exists, for domain resolution and runtime overrides.
 
 - **Two devices that disagree about a shared on/off or category value are now refused instead of
   silently resolved.** Enum values have no additive composition, so the generator emitted one `case`

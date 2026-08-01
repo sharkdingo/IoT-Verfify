@@ -3302,7 +3302,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
         switch (targetType) {
             case "variable" -> {
-                DeviceManifest.InternalVariable variable = internalVariable(manifest, attribute);
+                DeviceManifest.InternalVariable variable = conditionSourceVariable(manifest, attribute);
                 if (variable == null) {
                     errors.putIfAbsent(field + ".attribute",
                             "Unknown internal variable for rule condition: " + attribute);
@@ -3746,7 +3746,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     private boolean hasInternalVariable(DeviceManifest manifest, String variableName) {
-        return internalVariable(manifest, variableName) != null;
+        return conditionSourceVariable(manifest, variableName) != null;
     }
 
     private boolean hasVariableOrEnvKey(DeviceManifest manifest, String key) {
@@ -3758,7 +3758,31 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return null;
         }
         String normalized = key.trim();
-        return internalVariable(manifest, normalized);
+        return conditionSourceVariable(manifest, normalized);
+    }
+
+    /**
+     * Resolves a variable a rule or specification may name as a condition source.
+     *
+     * <p>Deliberately narrower than {@link #internalVariable}: it withholds an affect-only shared
+     * declaration ({@code Reads=false}), because the generator emits no {@code device.name := a_name}
+     * mirror for one, so a condition naming it would reference a value the device never observes.
+     * {@code internalVariable} stays capability-blind on purpose — its other callers ask whether a
+     * declaration <em>exists</em> (domain resolution, runtime overrides), where an affect-only
+     * declaration is a legitimate answer.
+     *
+     * <p>This is the persist-time gate, so it holds for every writer: the REST board endpoints, the
+     * assistant's rule and specification tools, and scene import alike. Without it a rule the UI
+     * refuses to build and the verification request validator refuses to run could still be stored.
+     */
+    private DeviceManifest.InternalVariable conditionSourceVariable(DeviceManifest manifest, String variableName) {
+        DeviceManifest.InternalVariable variable = internalVariable(manifest, variableName);
+        if (variable == null) {
+            return null;
+        }
+        boolean affectOnlyShared = !Boolean.TRUE.equals(variable.getIsInside())
+                && Boolean.FALSE.equals(variable.getReads());
+        return affectOnlyShared ? null : variable;
     }
 
     private DeviceManifest.InternalVariable internalVariable(DeviceManifest manifest, String variableName) {

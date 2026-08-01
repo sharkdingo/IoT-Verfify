@@ -62,6 +62,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -2093,5 +2094,41 @@ class BoardStorageServiceImplBatchTest {
                 .privacy("public")
                 .dynamics(List.of())
                 .build();
+    }
+
+    @Test
+    void persistTimeValidationRefusesAnAffectOnlySharedValueAsAConditionSource() {
+        DeviceTemplateDto.DeviceManifest.InternalVariable affectOnly =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("illuminance").isInside(false).reads(false)
+                        .falsifiableWhenCompromised(false)
+                        .lowerBound(0).upperBound(100).naturalChangeRate("0")
+                        .trust("trusted").privacy("public").build();
+        DeviceTemplateDto.DeviceManifest.InternalVariable readable =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("temperature").isInside(false).reads(true)
+                        .falsifiableWhenCompromised(true)
+                        .lowerBound(15).upperBound(35).naturalChangeRate("0")
+                        .trust("trusted").privacy("public").build();
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Light")
+                .internalVariables(List.of(affectOnly, readable))
+                .impactedVariables(List.of("illuminance"))
+                .build();
+
+        // The capability-blind existence lookup still finds it, and must: its other callers ask whether
+        // a declaration exists at all (domain resolution, runtime overrides), where affect-only is a
+        // legitimate answer.
+        assertNotNull(ReflectionTestUtils.invokeMethod(
+                service, "internalVariable", manifest, "illuminance"));
+
+        // The condition-source resolver withholds it. The generator emits no read mirror for an
+        // affect-only value, so a stored condition on it would name something the device never
+        // observes. This is the persist-time gate every writer shares -- the REST board endpoints, the
+        // assistant's rule and specification tools, and scene import alike.
+        assertNull(ReflectionTestUtils.invokeMethod(
+                service, "conditionSourceVariable", manifest, "illuminance"));
+        assertNotNull(ReflectionTestUtils.invokeMethod(
+                service, "conditionSourceVariable", manifest, "temperature"));
     }
 }
