@@ -20,6 +20,27 @@ all of it, including a README fix.
 It also redid work the other jobs had already done: Java setup, Node setup, NuSMV install, a full
 backend recompile, and a second `npm ci` — **~73s per run** of pure duplication.
 
+## Measured result
+
+Verified by pushing real branches, not by reasoning about the config:
+
+| scenario | before | after |
+| :--- | ---: | ---: |
+| docs-only change | ~700s | **25s** (every tier skipped) |
+| low-risk source change | ~700s | ~290s (fast tier only) |
+| high-risk one-line change | ~700s | ~290s to a fast verdict, Full CI running alongside |
+
+The high-risk proof was a two-line comment in `SmvMainModuleBuilder.java`. It escalated with the
+reason `NuSMV model generation`, which is the property that matters: the trigger was the *area*, not
+the size.
+
+Setup reuse inside the E2E tier, per run:
+
+| step | before | after |
+| :--- | ---: | ---: |
+| backend jar | 33s (full recompile) | 2s (artifact download) |
+| npm install + browsers | 25s | 17s (browsers cached) |
+
 ## Tier 1 — Fast CI (`fast-ci.yml`)
 
 Runs on every push and pull request. Required for merge.
