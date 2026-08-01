@@ -166,3 +166,21 @@ test('every workflow script is committed executable', () => {
     assert.equal(mode, '100755', `${path} must be committed executable (git mode 100755), found ${mode}`);
   }
 });
+
+test('main runs cannot be superseded by a later push', () => {
+  // Cancelling a main run destroys the recorded verdict for a commit that is already released.
+  // `cancel-in-progress: false` alone did not hold: a Full CI run on main was cancelled the moment
+  // the next commit landed. Including the sha in the group makes each main commit its own group, so
+  // supersession is impossible by construction rather than by a boolean evaluating as hoped.
+  for (const file of ['fast-ci.yml', 'full-ci.yml']) {
+    const text = readFileSync(join(WORKFLOW_DIR, file), 'utf8');
+    const group = /^concurrency:[\s\S]*?group:\s*(.+)$/m.exec(text);
+    assert.ok(group, `${file} must declare a concurrency group`);
+    assert.match(
+      group[1],
+      /github\.sha/,
+      `${file}: the group must include github.sha for main so a later push cannot cancel it`,
+    );
+    assert.match(group[1], /refs\/heads\/main/, `${file}: the sha must apply only to main`);
+  }
+});

@@ -38,9 +38,12 @@ permissions:
   actions: write
 
 concurrency:
-  # Never cancel on main: each landed commit needs its own recorded verdict. Cancel superseded runs
-  # on other refs, where only the newest state matters.
-  group: full-ci-${{ github.ref }}
+  # On main the group includes the commit, so a later push cannot supersede an earlier
+  # commit's run: each landed commit keeps its own recorded verdict. Relying on
+  # cancel-in-progress being false was not enough -- a main run was cancelled in practice
+  # the moment the next commit landed, which is exactly the history this is meant to keep.
+  # On other refs the group omits the sha, so a superseded push is cancelled as intended.
+  group: full-ci-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'latest' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
