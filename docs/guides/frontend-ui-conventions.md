@@ -180,3 +180,33 @@ ends up destroying work.
   authoritative board update. Because this read runs outside the mutation queue, an authoritative
   mutation response invalidates every read already in flight, and only the latest-started concurrent
   read may update the affordance.
+
+## 4. Action emphasis
+
+A user needs to know which control is *the* next step. If several controls claim that role, none of
+them holds it.
+
+This was measured, not assumed: on an empty Board, 14 of 38 visible controls carried primary-action
+weight, 8 of them in the action dock, because every dock button was an opaque 700-weight fill in its
+own hue. The dock already grouped run actions and AI suggestions separately in markup, but both
+groups were painted identically, so the grouping was invisible.
+
+### Rules
+
+- **Emphasis follows consequence.** A control that drives the verifier or writes the model is
+  primary and may carry a saturated fill. A control that only *proposes* a change — the AI
+  suggestion tools — is secondary: card surface, hairline border, no shadow.
+- **Demote rather than hide or disable.** A quieter control is still visible, focusable, named, and
+  full-size. Hiding it costs discoverability, and a `disabled` element is unreachable for assistive
+  technology, so neither is a substitute for lowering emphasis.
+- **A category keeps its colour, but not as a fill.** The AI tools each keep their hue on the icon
+  and active state. Removing the hue entirely would make four similar buttons harder to tell apart —
+  the opposite of the goal. Colour distinguishes *kind*; weight distinguishes *importance*.
+- **State never depends on colour alone.** The open-panel state adds an inset border alongside its
+  tint, and a running tool keeps its animated halo.
+- **Do not spend a new hue on a new category.** Eight saturated hues accumulated one feature at a
+  time, each locally reasonable. A new dock entry belongs in an existing group at that group's
+  weight.
+
+`views/board/actionDockHierarchy.spec.ts` pins this, including that run actions must *stay* primary:
+demoting everything is the same failure as emphasising everything.
