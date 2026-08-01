@@ -362,8 +362,6 @@ public class DeviceTemplateNuSmvValidator {
             }
         }
 
-        Set<String> environmentDomainNames = new HashSet<>();
-
         // Track impacted variables. They may share a name only with environment
         // InternalVariables, never with local InternalVariables.
         Set<String> impactedVarNames = new HashSet<>();
@@ -393,17 +391,10 @@ public class DeviceTemplateNuSmvValidator {
                 if (EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted) == null) {
                     throw new BadRequestException(
                             "Template '" + templateName + "': ImpactedVariable '" + impacted
-                                    + "' has no domain in this manifest. Add EnvironmentDomains[].Name='" + impacted
-                                    + "', or declare a readable InternalVariable with the same name and IsInside=false.");
+                                    + "' has no domain in this manifest. Declare an InternalVariable named '" + impacted
+                                    + "' with IsInside=false carrying its type and domain, and Reads=false if this "
+                                    + "device only affects the value without observing it.");
                 }
-            }
-        }
-
-        for (String domainName : environmentDomainNames) {
-            if (!impactedVarNames.contains(domainName)) {
-                throw new BadRequestException(
-                        "Template '" + templateName + "': EnvironmentDomain '" + domainName
-                                + "' is unused. EnvironmentDomains may only describe names listed in ImpactedVariables.");
             }
         }
 

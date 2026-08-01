@@ -210,7 +210,6 @@ public class DeviceTemplateSchemaValidator {
 
     private void validateVariableDomains(String templateName, JsonNode manifestNode) {
         validateDomainDeclarations(templateName, "InternalVariable", manifestNode.path("InternalVariables"));
-        validateDomainDeclarations(templateName, "EnvironmentDomain", manifestNode.path("EnvironmentDomains"));
     }
 
     private void validateDomainDeclarations(String templateName, String kind, JsonNode declarations) {
@@ -316,7 +315,6 @@ public class DeviceTemplateSchemaValidator {
             impactedVariables.forEach(value -> impactedNames.add(value.asText()));
         }
         collectNamedDomains(internalVariables, impactedDomains);
-        collectNamedDomains(manifestNode.path("EnvironmentDomains"), impactedDomains);
 
         for (JsonNode state : workingStates) {
             String stateName = state.path("Name").asText("<unnamed>");
@@ -539,8 +537,7 @@ public class DeviceTemplateSchemaValidator {
         if (domain == null) {
             throw new BadRequestException("Template '" + templateName + "': Transition '"
                     + transitionName + "' reads unknown trigger attribute '" + attribute
-                    + "'. Triggers may read a Mode or an InternalVariable; EnvironmentDomains are "
-                    + "assignment-only declarations.");
+                    + "'. Triggers may read a Mode or any declared InternalVariable.");
         }
         if (domain.numeric()) {
             final int value;
@@ -610,7 +607,6 @@ public class DeviceTemplateSchemaValidator {
     private Map<String, JsonNode> collectAssignmentDomains(JsonNode manifestNode) {
         Map<String, JsonNode> domains = new LinkedHashMap<>();
         collectNamedDomains(manifestNode.path("InternalVariables"), domains);
-        collectNamedDomains(manifestNode.path("EnvironmentDomains"), domains);
         return domains;
     }
 
@@ -636,7 +632,7 @@ public class DeviceTemplateSchemaValidator {
         if (domain == null) {
             throw new BadRequestException("Template '" + templateName + "': Transition '"
                     + transitionName + "' assigns unknown variable '" + attribute
-                    + "'. Assignment targets must be declared in InternalVariables or EnvironmentDomains.");
+                    + "'. Every assignment target must be declared in InternalVariables.");
         }
 
         JsonNode values = domain.path("Values");

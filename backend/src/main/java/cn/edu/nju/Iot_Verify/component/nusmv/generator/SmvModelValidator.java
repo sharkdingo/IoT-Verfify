@@ -285,7 +285,7 @@ public class SmvModelValidator {
             if (domain == null) {
                 throw SmvGenerationException.templateInvalid(smv.getVarName(), context
                         + " assigns unknown variable '" + a.getAttribute()
-                        + "'; targets must be declared in InternalVariables or EnvironmentDomains");
+                        + "'; every assignment target must be declared in InternalVariables");
             }
             validateAssignmentValue(smv.getVarName(), context, a, domain);
         }
@@ -604,8 +604,9 @@ public class SmvModelValidator {
                     || !smv.getImpactedEnvironmentVariables().containsKey(impacted)) {
                 throw SmvGenerationException.smvGenerationError(
                         "Template '" + smv.getTemplateName() + "' impacts environment variable '" + impacted
-                                + "', but its own manifest does not define that domain. Add EnvironmentDomains[].Name='"
-                                + impacted + "', or declare a readable InternalVariable with the same name and IsInside=false.");
+                                + "', but its own manifest does not define that domain. Declare an InternalVariable named '"
+                                + impacted + "' with IsInside=false carrying its type and domain, and Reads=false if this "
+                                + "device only affects the value without observing it.");
             }
         }
     }

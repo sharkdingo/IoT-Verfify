@@ -37,6 +37,13 @@ history into a technical spec. The spec content itself now lives under
 - **An affect-only declaration was shown as "Reads this environment variable".** The inspector derived
   the role from `IsInside` alone and ignored `Reads`, mislabelling 7 declarations across 5 bundled
   templates as reads when the generator emits no read mirror for them.
+- **Five error messages told template authors to add a field that no longer exists.** Removing
+  `EnvironmentDomains` left behind messages instructing the author to "Add `EnvironmentDomains[].Name=`"
+  to resolve a rejection — advice the JSON schema now refuses, so following it produced a second error
+  with no path forward. They now name the `InternalVariables` entry to declare, with `IsInside=false`
+  and an explicit `Reads`. Three dead reads of the deleted array were removed along with one
+  unreachable validation loop, and a test now fails on any production line that looks up the removed
+  key or names it in a message, so this class of residue cannot return quietly.
 - **An affect-only shared value could be used as a rule or specification condition source on every
   path except the one that was fixed first.** A rule whose condition reads a value the device never
   observes compiles to a condition with no model behind it, which a user cannot tell apart from a

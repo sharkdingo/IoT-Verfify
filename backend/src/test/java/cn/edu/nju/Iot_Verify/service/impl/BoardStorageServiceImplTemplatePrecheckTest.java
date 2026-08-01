@@ -1209,7 +1209,11 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
         org.assertj.core.api.Assertions.assertThat(exception.getMessage())
                 .contains("has no domain in this manifest")
-                .contains("EnvironmentDomains");
+                // The remedy must name a field that still exists. This assertion used to require the
+                // message to say "EnvironmentDomains", so it actively pinned advice the schema rejects.
+                .contains("IsInside=false")
+                .contains("Reads=false")
+                .doesNotContain("EnvironmentDomains");
         verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
     }
 

@@ -2987,8 +2987,9 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             if (EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted) == null) {
                 errors.putIfAbsent(field + ".templateName",
                         "Template '" + templateName + "' impacts environment variable '" + impacted
-                                + "', but its own manifest does not define that domain. Add EnvironmentDomains[].Name='"
-                                + impacted + "', or declare a readable InternalVariable with the same name and IsInside=false.");
+                                + "', but its own manifest does not define that domain. Declare an InternalVariable named '"
+                                + impacted + "' with IsInside=false carrying its type and domain, and Reads=false if this "
+                                + "device only affects the value without observing it.");
             }
         }
     }

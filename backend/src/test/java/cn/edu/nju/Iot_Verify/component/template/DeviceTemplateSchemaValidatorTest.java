@@ -615,7 +615,10 @@ class DeviceTemplateSchemaValidatorTest {
                 validator.validateRawManifest("Counter", unknownTarget));
         org.assertj.core.api.Assertions.assertThat(unknownTargetException.getMessage())
                 .contains("assigns unknown variable 'missing'")
-                .contains("InternalVariables or EnvironmentDomains");
+                // The message must name the array that still exists. It used to tell the author to add an
+                // EnvironmentDomains entry, which the schema now rejects -- a dead-end instruction.
+                .contains("declared in InternalVariables")
+                .doesNotContain("EnvironmentDomains");
     }
 
     @Test
