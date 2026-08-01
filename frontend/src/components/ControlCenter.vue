@@ -2565,7 +2565,7 @@ watch(() => props.readOnly, readOnly => {
 
                   <div class="grid grid-cols-[minmax(0,1fr)_5.8rem_5.8rem] gap-2">
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[9px] font-bold uppercase text-slate-400">{{ t('app.variableValue') }}</span>
+                      <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableValue') }}</span>
                       <select
                         v-if="templateVariableHasEnumValues(variable)"
                         v-model="singleDeviceRuntime.variables[variable.Name]"
@@ -2586,7 +2586,7 @@ watch(() => props.readOnly, readOnly => {
                     </label>
 
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[9px] font-bold uppercase text-slate-400">{{ t('app.variableTrust') }}</span>
+                      <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableTrust') }}</span>
                       <select
                         v-model="singleDeviceRuntime.variableTrusts[variable.Name]"
                         :data-testid="`single-device-variable-trust-${variable.Name}`"
@@ -2598,7 +2598,7 @@ watch(() => props.readOnly, readOnly => {
                     </label>
 
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[9px] font-bold uppercase text-slate-400">{{ t('app.privacy') }}</span>
+                      <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.privacy') }}</span>
                       <select
                         v-model="singleDeviceRuntime.privacies[variable.Name]"
                         :data-testid="`single-device-privacy-${variable.Name}`"
@@ -2967,7 +2967,7 @@ watch(() => props.readOnly, readOnly => {
                             </h4>
                             <span class="template-card__drag-cue material-symbols-outlined" aria-hidden="true">drag_indicator</span>
                           </div>
-                          <div class="template-card__stats text-[9px] mt-0.5 flex items-center gap-1.5">
+                          <div class="template-card__stats text-[10px] mt-0.5 flex items-center gap-1.5">
                             <span class="template-card__pill px-1.5 py-0.5 rounded">{{ template.manifest.InternalVariables?.length || 0 }} {{ t('app.varsShort') }}</span>
                             <span class="template-card__pill px-1.5 py-0.5 rounded">{{ template.manifest.APIs?.length || 0 }} {{ t('app.apisShort') }}</span>
                           </div>

@@ -708,22 +708,22 @@ watch(selectedStateIndex, () => {
             <span class="max-w-[20rem] break-words font-mono font-normal">{{ deviceSummary(device) }}</span>
             <span
               v-if="deviceChanged(device)"
-              class="max-w-[24rem] truncate rounded bg-indigo-200 px-1 text-[9px] text-indigo-800"
+              class="max-w-[24rem] truncate rounded bg-indigo-200 px-1 text-[10px] text-indigo-800"
               :title="deviceChangeSummary(device)"
             >
               {{ deviceChangeSummary(device) }}
             </span>
-            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded bg-red-100 px-1 text-[9px] text-red-700">{{ t('app.traceVisualization.attacked') }}</span>
+            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded bg-red-100 px-1 text-[10px] text-red-700">{{ t('app.traceVisualization.attacked') }}</span>
             <span
               v-if="deviceSecurityFacts(device).untrustedLabels.length > 0"
-              class="rounded bg-amber-100 px-1 text-[9px] text-amber-800"
+              class="rounded bg-amber-100 px-1 text-[10px] text-amber-800"
               :title="t('app.traceVisualization.untrustedLabelDetails', { labels: formattedDeviceSecurityLabels(device, deviceSecurityFacts(device).untrustedLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesUntrustedSource') }}
             </span>
             <span
               v-if="deviceSecurityFacts(device).privateLabels.length > 0"
-              class="rounded bg-fuchsia-100 px-1 text-[9px] text-fuchsia-800"
+              class="rounded bg-fuchsia-100 px-1 text-[10px] text-fuchsia-800"
               :title="t('app.traceVisualization.privateLabelDetails', { labels: formattedDeviceSecurityLabels(device, deviceSecurityFacts(device).privateLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesPrivateData') }}
@@ -750,7 +750,7 @@ watch(selectedStateIndex, () => {
           >
             <span class="max-w-[7rem] truncate">{{ formatEnvironmentModelToken(envVar.name, envVar.name) }}</span>
             <span class="font-mono">{{ formatEnvironmentModelToken(envVar.name, envVar.value) }}</span>
-            <span v-if="environmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[9px] text-amber-800">{{ t('app.traceVisualization.changed') }}</span>
+            <span v-if="environmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[10px] text-amber-800">{{ t('app.traceVisualization.changed') }}</span>
           </span>
         </div>
       </section>

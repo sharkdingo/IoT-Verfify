@@ -593,7 +593,7 @@ const frozenTargetScope = computed(() => {
             </span>
             <span
               v-if="!isSpecEligible(spec)"
-              class="shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold text-slate-600"
+              class="shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600"
             >
               {{ t('app.fuzzFormalOnly') }}
             </span>

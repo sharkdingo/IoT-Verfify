@@ -16,6 +16,20 @@
     --iot-font-title: 1.3rem;
     --iot-font-subtitle: 1.1rem;
     --iot-font-caption: 0.875rem;
+    /*
+     * Smallest size any interface text may use (11px at a 16px root).
+     *
+     * The dense panels accumulated their own micro-type: a multimodal review of real screenshots
+     * reported metadata and status badges as not comfortably readable at normal viewing distance,
+     * and a DOM scan found 9px and 10px text carrying real data -- trace status badges, device
+     * labels, and instructional prose. Sizes were written as arbitrary Tailwind values at 222 call
+     * sites, so a theme entry cannot reach them (arbitrary values bypass the scale) and editing each
+     * one invites missing half of them.
+     *
+     * The floor below applies wherever those utilities land, which is why this is a variable rather
+     * than a per-component fix.
+     */
+    --iot-font-min: 0.6875rem;
 
     /* 圆角 */
     --iot-radius-card: 1.125rem;
@@ -114,6 +128,21 @@
 
     /* Smooth movement for docking */
     --iot-transition-dock: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/*
+ * Minimum interface text size.
+ *
+ * Targets the exact utility classes the dense panels use for micro-type, rather than every element,
+ * so this cannot reach the canvas device labels -- those are deliberately zoom-compensated
+ * (`clamp(0.4rem, 0.5rem / zoom, 0.9rem)`) and must stay proportional to the zoom level.
+ *
+ * Written as one rule because the sizes appear at 222 call sites across ten components; editing each
+ * one risks leaving some behind, and a Tailwind theme entry cannot override an arbitrary value.
+ */
+.text-\[9px\],
+.text-\[10px\] {
+    font-size: var(--iot-font-min);
 }
 
 /* ========== 深色主题（默认） ========== */

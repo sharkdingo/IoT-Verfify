@@ -13491,7 +13491,7 @@ const counterexampleTraceHelpText = computed(() => {
 
               <div class="grid grid-cols-[minmax(0,1fr)_5.8rem_5.8rem] gap-2 max-[520px]:grid-cols-1">
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[9px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.variableValue') }}</span>
+                  <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.variableValue') }}</span>
                   <select
                     v-if="templateVariableHasEnumValues(variable)"
                     v-model="templateInstanceRuntime.variables[variable.Name]"
@@ -13512,7 +13512,7 @@ const counterexampleTraceHelpText = computed(() => {
                 </label>
 
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[9px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.variableTrust') }}</span>
+                  <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.variableTrust') }}</span>
                   <select
                     v-model="templateInstanceRuntime.variableTrusts[variable.Name]"
                     :data-testid="`template-instance-variable-trust-${variable.Name}`"
@@ -13524,7 +13524,7 @@ const counterexampleTraceHelpText = computed(() => {
                 </label>
 
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[9px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.privacy') }}</span>
+                  <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.privacy') }}</span>
                   <select
                     v-model="templateInstanceRuntime.privacies[variable.Name]"
                     :data-testid="`template-instance-privacy-${variable.Name}`"
@@ -14041,7 +14041,7 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="board-tool-label">{{ t('app.runHistory') }}</span>
             <span
               v-if="unreadFuzzNotificationCount > 0"
-              class="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-black text-white"
+              class="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-black text-white"
               data-testid="fuzz-unread-badge"
               aria-hidden="true"
             >{{ unreadFuzzNotificationCount > 99 ? '99+' : unreadFuzzNotificationCount }}</span>
@@ -15050,7 +15050,7 @@ const counterexampleTraceHelpText = computed(() => {
                 <ul class="space-y-1">
                   <li v-for="(rule, index) in recommendedScenarioScene.rules" :key="index" class="rounded bg-slate-50 px-2 py-1.5">
                     <div class="flex items-center gap-1.5 font-medium text-slate-700">
-                      <span class="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-bold text-amber-800">#{{ index + 1 }}</span>
+                      <span class="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-bold text-amber-800">#{{ index + 1 }}</span>
                       <span>{{ rule.name || t('app.ruleNumber', { number: index + 1 }) }}</span>
                     </div>
                     <div class="mt-0.5 text-[11px] text-slate-500">
@@ -17456,22 +17456,22 @@ const counterexampleTraceHelpText = computed(() => {
           >
             <span class="font-bold">{{ device.deviceLabel || device.deviceId }}</span>
             <span class="max-w-[20rem] break-words font-mono font-normal">{{ traceDeviceSummary(device) }}</span>
-            <span v-if="traceDeviceChanged(device)" class="rounded bg-red-200 px-1 text-[9px] text-red-800">
+            <span v-if="traceDeviceChanged(device)" class="rounded bg-red-200 px-1 text-[10px] text-red-800">
               {{ t('app.traceVisualization.changed') }}
             </span>
-            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded bg-red-100 px-1 text-[9px] text-red-700">
+            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded bg-red-100 px-1 text-[10px] text-red-700">
               {{ t('app.traceVisualization.attacked') }}
             </span>
             <span
               v-if="traceDeviceSecurityFacts(device).untrustedLabels.length > 0"
-              class="rounded bg-amber-100 px-1 text-[9px] text-amber-800"
+              class="rounded bg-amber-100 px-1 text-[10px] text-amber-800"
               :title="t('app.traceVisualization.untrustedLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).untrustedLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesUntrustedSource') }}
             </span>
             <span
               v-if="traceDeviceSecurityFacts(device).privateLabels.length > 0"
-              class="rounded bg-fuchsia-100 px-1 text-[9px] text-fuchsia-800"
+              class="rounded bg-fuchsia-100 px-1 text-[10px] text-fuchsia-800"
               :title="t('app.traceVisualization.privateLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).privateLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesPrivateData') }}
@@ -17496,7 +17496,7 @@ const counterexampleTraceHelpText = computed(() => {
           >
             <span class="max-w-[7rem] truncate">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.name) }}</span>
             <span class="font-mono">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.value) }}</span>
-            <span v-if="traceEnvironmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[9px] text-amber-800">
+            <span v-if="traceEnvironmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[10px] text-amber-800">
               {{ t('app.traceVisualization.changed') }}
             </span>
           </span>
