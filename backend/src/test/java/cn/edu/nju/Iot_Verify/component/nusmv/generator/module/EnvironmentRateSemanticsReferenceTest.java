@@ -181,6 +181,40 @@ class EnvironmentRateSemanticsReferenceTest {
         assertFalse(NaturalChangeRateParser.parse("[0, 1]").isStatic());
     }
 
+    /**
+     * A shared enum a device declares it writes must hold when no declared effect applies.
+     *
+     * <p>Free choice is right for an exogenous input nobody in the scene controls, and wrong for a
+     * value a template declares it changes: "while running, set airQuality := good" says nothing
+     * about the value moving on its own. With the humidifier off across a step, the free model still
+     * let airQuality flip to good and refuted a property the user cannot act on; holding it makes the
+     * same property true. This pins both directions so the split cannot silently regress.
+     */
+    @Test
+    void aDeviceWrittenEnumHoldsWhileAnExogenousOneMayChooseFreely() throws Exception {
+        String nusmv = resolveNusmvPath();
+        Assumptions.assumeTrue(nusmv != null && Files.exists(Path.of(nusmv)),
+                "NuSMV executable is required for this comparison");
+
+        String property = "CTLSPEC AG ((humidifier = off & airQuality = poor)"
+                + " -> AX (humidifier = off -> airQuality = poor))\n";
+        String prefix = "MODULE main\nVAR\n  humidifier : {off, on};\n"
+                + "  airQuality : {poor, good};\nASSIGN\n"
+                + "  init(humidifier) := off;\n  init(airQuality) := poor;\n"
+                + "  next(humidifier) := {off, on};\n"
+                + "  next(airQuality) := case\n    humidifier = on : good;\n    TRUE : ";
+
+        List<String> written = runNusmv(nusmv,
+                prefix + "airQuality;\n  esac;\n" + property);
+        assertTrue(written.stream().anyMatch(line -> line.contains("is true")),
+                () -> "a device-written enum must hold when nothing writes it: " + written);
+
+        List<String> exogenous = runNusmv(nusmv,
+                prefix + "{poor, good};\n  esac;\n" + property);
+        assertTrue(exogenous.stream().anyMatch(line -> line.contains("is false")),
+                () -> "free choice must be shown to invent an uncaused change: " + exogenous);
+    }
+
     private static List<String> runNusmv(String nusmv, String model) throws Exception {
         Path modelFile = Files.createTempFile("rate-reference", ".smv");
         try {

@@ -17,6 +17,19 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-01 (later)
 
+#### Fixed
+- **A shared on/off or category value that a device controls no longer changes on its own.** Such a
+  value could previously take any value in its declared domain in any step no declared effect covered,
+  so with a humidifier switched off across a step NuSMV still let `airQuality` become `good` — and
+  refuted the natural property "air quality only improves while the humidifier runs" with a trace
+  containing no cause. Evolution now follows authorship: a value no submitted device declares it
+  writes stays a free exogenous input (weather, a clock, an occupant), while one a device declares it
+  writes follows that device's declared `Dynamics` and otherwise holds, matching the policy already
+  used for device-local variables. `modelSemantics.environmentEvolutionEffects` reports the two rules
+  separately instead of claiming all discrete values are nondeterministic. Every bundled template is
+  unaffected: all six shared enum values they declare (weather, season, date, motion, smoke, soil
+  moisture) are genuinely exogenous.
+
 #### Changed
 - **A declared `NaturalChangeRate` interval now means exactly itself, so "this always changes" is
   finally expressible.** The interval excluding zero (`[-4, -2]`, "this tank always drains 2-4 per

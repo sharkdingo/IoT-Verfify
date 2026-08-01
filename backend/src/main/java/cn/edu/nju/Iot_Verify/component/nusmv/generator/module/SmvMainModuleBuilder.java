@@ -1234,22 +1234,66 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
                 if (var.getValues() != null && !var.getValues().isEmpty()) {
                     appendDiscreteImpactBranches(content, varName, devices, deviceSmvMap);
-                    // Unconstrained environment evolution remains nondeterministic inside the declared enum.
                     List<String> cleanValues = new ArrayList<>();
                     for (String v : var.getValues()) {
                         cleanValues.add(v.replace(" ", ""));
                     }
-                    content.append("\t\tTRUE: {").append(String.join(", ", cleanValues)).append("};\n");
+                    content.append("\t\tTRUE: ")
+                           .append(discreteEnvironmentFallback(varName, devices, deviceSmvMap,
+                                   smvVarName, "{" + String.join(", ", cleanValues) + "}"))
+                           .append(";\n");
                 } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
                     // Numeric environment variable transition with natural change and impacted rates.
                     appendNumericEnvTransition(content, smvVarName, var, varName, devices, deviceSmvMap);
                 } else {
                     appendDiscreteImpactBranches(content, varName, devices, deviceSmvMap);
-                    content.append("\t\tTRUE: {TRUE, FALSE};\n");
+                    content.append("\t\tTRUE: ")
+                           .append(discreteEnvironmentFallback(varName, devices, deviceSmvMap,
+                                   smvVarName, "{TRUE, FALSE}"))
+                           .append(";\n");
                 }
 
                 content.append("\tesac;");
         }
+    }
+
+    /**
+     * What a shared enum/boolean value does in a step no declared effect covers.
+     *
+     * <p>Free choice inside the declared domain is the right model for a genuinely exogenous input —
+     * weather, a clock, an occupant — which no device in the scene controls. It is the wrong model for
+     * a value a device declares it <em>writes</em>: a template that declares "while running, set
+     * airQuality := good" says nothing about the value changing on its own, so letting it flip freely
+     * in every other state invents a cause the scene does not contain. NuSMV showed the cost with the
+     * humidifier off in both the current and the next step: the free-choice model still let
+     * {@code airQuality} become {@code good}, refuting a property the user could not act on, while
+     * holding the value makes the same property true.
+     *
+     * <p>So the split is on authorship, using the same {@code ImpactedVariables} declaration that
+     * already means "this device may change it", and the same stutter-when-nothing-applies policy the
+     * product already uses for device-local variables. This narrows the model, so it can turn a
+     * spurious counterexample into a pass — but only by removing behaviour no declaration supported.
+     */
+    private String discreteEnvironmentFallback(String varName,
+                                               List<DeviceVerificationDto> devices,
+                                               Map<String, DeviceSmvData> deviceSmvMap,
+                                               String smvVarName,
+                                               String declaredDomain) {
+        return hasDeclaredWriter(varName, devices, deviceSmvMap) ? smvVarName : declaredDomain;
+    }
+
+    /** True when some submitted device declares this shared value in its {@code ImpactedVariables}. */
+    private boolean hasDeclaredWriter(String varName,
+                                      List<DeviceVerificationDto> devices,
+                                      Map<String, DeviceSmvData> deviceSmvMap) {
+        for (DeviceVerificationDto device : devices) {
+            DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
+            if (smv != null && smv.getImpactedVariables() != null
+                    && smv.getImpactedVariables().contains(varName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void appendDiscreteImpactBranches(StringBuilder content,
@@ -1877,13 +1921,6 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             }
         }
         return String.join(" & ", guards);
-    }
-
-    private boolean isNumericImpactVariable(DeviceSmvData smv, String varName) {
-        DeviceManifest.InternalVariable impactedDomain = smv.getImpactedEnvironmentVariables().get(varName);
-        return impactedDomain != null
-                && impactedDomain.getLowerBound() != null
-                && impactedDomain.getUpperBound() != null;
     }
 
     private String normalizeAssignmentLiteral(String value) {

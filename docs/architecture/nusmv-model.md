@@ -136,9 +136,16 @@ made the mandatory form unstatable and produced traces in which a required chang
 happen. Because the span is a
 state-space cost it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN`, and a wider
 declaration is rejected at authoring and generation instead of being narrowed. No second hidden
-`[-1, 1]` term is added. A shared
-enum/boolean environment value is an uncontrolled model input and may otherwise choose
-any value in its declared domain on each step. These assumptions are returned, rather than merely documented, through
+`[-1, 1]` term is added.
+
+A shared enum/boolean environment value evolves according to **who declares they write it**. If no
+submitted device lists it in `ImpactedVariables`, it is a genuinely exogenous input — weather, a
+clock, an occupant — and may choose any value in its declared domain on each step. If some device
+does declare it writes the value, then its declared `Dynamics` branches apply and it otherwise
+**holds**, the same stutter-when-nothing-applies policy the product already uses for device-local
+variables. Letting a device-written value flip freely in every undeclared state invented a cause the
+scene did not contain: with a humidifier off across a step, NuSMV still let `airQuality` become
+`good`, refuting a property whose counterexample the user could not act on. These assumptions are returned, rather than merely documented, through
 `modelSemantics.environmentEvolutionEffects` and `localVariableFallbackPolicy`.
 
 ### Environment authority

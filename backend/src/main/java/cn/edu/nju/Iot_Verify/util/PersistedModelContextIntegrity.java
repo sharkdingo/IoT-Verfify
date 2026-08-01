@@ -18,7 +18,9 @@ public final class PersistedModelContextIntegrity {
             ModelSemanticsDto.EnvironmentEvolutionEffect
                     .DECLARED_NUMERIC_RATES_AND_DEVICE_EFFECTS_WITHIN_DOMAIN,
             ModelSemanticsDto.EnvironmentEvolutionEffect
-                    .DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN);
+                    .UNWRITTEN_DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN,
+            ModelSemanticsDto.EnvironmentEvolutionEffect
+                    .DEVICE_WRITTEN_DISCRETE_VALUES_HOLD_WHEN_NO_DECLARED_EFFECT_APPLIES);
 
     private PersistedModelContextIntegrity() {
     }

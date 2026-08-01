@@ -1110,6 +1110,10 @@ final class FuzzModel {
             String discreteDynamic = null;
             long currentImpactRate = 0L;
             boolean hasNumericImpact = false;
+            // Whether any device declares it writes this shared value. A written value holds when no
+            // declared effect applies; only a genuinely exogenous one may choose freely. Matches the
+            // formal generator, so a finding and a counterexample describe the same system.
+            boolean hasDeclaredWriter = false;
             for (DeviceModel device : devices) {
                 if (forced == null) {
                     forced = transitionAssignment(selectedTransitions.get(device.id), name);
@@ -1124,6 +1128,7 @@ final class FuzzModel {
                     currentImpactRate += dynamicEffect(
                             device.activeWorkingState(deviceState.modes), name).numericRate();
                 } else if (!entry.getValue().isNumeric() && device.impactedEnvironment.contains(name)) {
+                    hasDeclaredWriter = true;
                     DynamicEffect dynamic = dynamicEffect(device.activeWorkingState(deviceState.modes), name);
                     if (discreteDynamic == null) {
                         discreteDynamic = dynamic.discreteValue();
@@ -1160,7 +1165,7 @@ final class FuzzModel {
                     candidates = List.of(cleanLiteral(targetBase.environment.get(name)));
                 } else {
                     candidates = entry.getValue().nextCandidates(
-                            transitionSource.environment.get(name), 0, null, true);
+                            transitionSource.environment.get(name), 0, null, !hasDeclaredWriter);
                 }
             }
             int selectedIndex = cursor.choose(candidates.size());

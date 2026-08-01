@@ -49,7 +49,17 @@ public class ModelSemanticsDto {
 
     public enum EnvironmentEvolutionEffect {
         DECLARED_NUMERIC_RATES_AND_DEVICE_EFFECTS_WITHIN_DOMAIN,
-        DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN
+        /**
+         * A discrete shared value that no submitted device declares it writes is an exogenous input
+         * and may take any value in its declared domain each step.
+         */
+        UNWRITTEN_DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN,
+        /**
+         * A discrete shared value some device declares it writes follows that device's declared
+         * {@code Dynamics} and otherwise holds. Letting it choose freely would invent a cause the
+         * scene does not contain, producing counterexamples the user cannot act on.
+         */
+        DEVICE_WRITTEN_DISCRETE_VALUES_HOLD_WHEN_NO_DECLARED_EFFECT_APPLIES
     }
 
     public enum LocalVariableFallbackPolicy {
@@ -157,7 +167,10 @@ public class ModelSemanticsDto {
                 .labelPropagationScope(LabelPropagationScope.AUTOMATION_RULE_COMMANDS_ONLY)
                 .environmentEvolutionEffects(List.of(
                         EnvironmentEvolutionEffect.DECLARED_NUMERIC_RATES_AND_DEVICE_EFFECTS_WITHIN_DOMAIN,
-                        EnvironmentEvolutionEffect.DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN))
+                        EnvironmentEvolutionEffect
+                                .UNWRITTEN_DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN,
+                        EnvironmentEvolutionEffect
+                                .DEVICE_WRITTEN_DISCRETE_VALUES_HOLD_WHEN_NO_DECLARED_EFFECT_APPLIES))
                 .localVariableFallbackPolicy(
                         LocalVariableFallbackPolicy.STUTTER_WHEN_NO_DECLARED_EVOLUTION)
                 .build();

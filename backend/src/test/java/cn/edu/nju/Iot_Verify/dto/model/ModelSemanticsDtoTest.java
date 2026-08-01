@@ -37,11 +37,17 @@ class ModelSemanticsDtoTest {
         assertEquals(2, semantics.getModeledFalsifiableReadingDeviceCount());
         assertEquals(4, semantics.getModeledAutomationLinkAttackPointCount());
         assertEquals(7, semantics.getModeledAttackPointCount());
+        // Discrete shared values are reported as two distinct rules, because they are: an exogenous
+        // value may choose freely, while one a device declares it writes holds when no declared
+        // effect applies. Reporting a single "all discrete values are nondeterministic" claim would
+        // describe a model the generator no longer builds.
         assertEquals(List.of(
                         ModelSemanticsDto.EnvironmentEvolutionEffect
                                 .DECLARED_NUMERIC_RATES_AND_DEVICE_EFFECTS_WITHIN_DOMAIN,
                         ModelSemanticsDto.EnvironmentEvolutionEffect
-                                .DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN),
+                                .UNWRITTEN_DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN,
+                        ModelSemanticsDto.EnvironmentEvolutionEffect
+                                .DEVICE_WRITTEN_DISCRETE_VALUES_HOLD_WHEN_NO_DECLARED_EFFECT_APPLIES),
                 semantics.getEnvironmentEvolutionEffects());
         assertEquals(ModelSemanticsDto.LocalVariableFallbackPolicy
                         .STUTTER_WHEN_NO_DECLARED_EVOLUTION,
