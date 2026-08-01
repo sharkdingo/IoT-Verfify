@@ -3072,11 +3072,10 @@ class SmvGeneratorFixesTest {
         temperature.setNaturalChangeRate("[2,3]");
         String increasingResult = mainBuilder.build(
                 1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
-        // A wholly positive interval keeps the stutter candidate: a step may apply no drift.
-        assertTrue(increasingResult.contains("TRUE: {max(15, min(35, a_temperature)), "
-                        + "max(15, min(35, a_temperature + 2)), "
+        // "[2, 3]" excludes 0, so the value must rise every step: no stutter candidate is emitted.
+        assertTrue(increasingResult.contains("TRUE: {max(15, min(35, a_temperature + 2)), "
                         + "max(15, min(35, a_temperature + 3))}"),
-                "same-direction ranges must admit every declared drift and the stutter, got:\n"
+                "a mandatory rise must admit exactly its declared drifts, got:\n"
                         + increasingResult);
     }
 
@@ -3280,13 +3279,12 @@ class SmvGeneratorFixesTest {
         var.setNaturalChangeRate("[2,3]");
         String sameDirection = mainBuilder.build(
                 1L, List.of(device), List.of(), map, AttackScenarioDto.none(), false);
-        // "[2, 3]" admits +2 and +3, and a step may apply no drift, so the dynamic-only candidate
-        // remains. All three combine with the ChangeRate of +1.
-        assertTrue(sameDirection.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature + 1)), max(0, min(100, dev_1.waterTemperature + 2 + 1)), max(0, min(100, dev_1.waterTemperature + 3 + 1))};"),
-                "Local dynamics must admit every declared drift plus the dynamic-only candidate, got:\n"
+        // "[2, 3]" excludes 0, so each declared drift combines with the state's ChangeRate of +1 and
+        // there is no dynamic-only candidate: the natural change is mandatory.
+        assertTrue(sameDirection.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature + 2 + 1)), max(0, min(100, dev_1.waterTemperature + 3 + 1))};"),
+                "Local dynamics must admit exactly the declared drifts, got:\n"
                         + sameDirection);
-        assertTrue(sameDirection.contains("TRUE: {max(0, min(100, dev_1.waterTemperature)), "
-                        + "max(0, min(100, dev_1.waterTemperature + 2)), "
+        assertTrue(sameDirection.contains("TRUE: {max(0, min(100, dev_1.waterTemperature + 2)), "
                         + "max(0, min(100, dev_1.waterTemperature + 3))}"),
                 "The local fallback must admit every declared drift and the stutter, got:\n"
                         + sameDirection);

@@ -36,12 +36,24 @@ their own copy; the citations below are precise enough to check against any copy
   `NaturalChangeRate` parameter. `[-1, 1]` therefore reproduces the paper rule exactly; `0`
   explicitly disables independent natural change; another declared interval is a visible
   parameterized extension. The declaration is a **constraint on `v' - v`**, so the formal
-  generator and the bounded explorer both admit *every* integer in it — combined with the active
-  device effect and clamped to the declared domain. Modelling only the endpoints was unsound: for
-  `[-3, 3]` it omitted ±1 and ±2, and NuSMV then *proved* `AG (v = 5 -> AX v != 6)` for a variable
-  the declaration lets reach 6 in one step. Because the span is therefore a state-space cost, it is
-  bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN` and a wider declaration is rejected rather
-  than silently narrowed.
+  generator and the bounded explorer both admit *exactly* the integers in it — combined with the
+  active device effect and clamped to the declared domain. **The interval is the whole meaning: no
+  value is added to it and none omitted.** Two failure modes bracket this, and both actually shipped:
+
+  - *Omitting interior values* is **unsound**. Emitting only `{lower, 0, upper}` made NuSMV *prove*
+    `AG (v = 5 -> AX v != 6)` for a variable declared `[-3, 3]`, i.e. a `SATISFIED` verdict for a step
+    the declaration permits.
+  - *Adding a stutter* is **unfaithful**. Injecting `0` into every interval made
+    `[-4, -2]` ("this tank always drains 2–4 per step") unstatable: NuSMV reported `AF (level = 0)`
+    false and `EG (level = 10)` true, offering a trace where the mandatory drain never happened — a
+    pseudo-counterexample the user cannot act on. MEDIC never re-adds a stutter either, because `0` is
+    already inside `[-1, 1]`.
+
+  So an interval **excluding** `0` means the value *always* changes; one **including** `0` means it
+  *may* hold. A user who wants "drains 2–4, or holds" writes `[-4, 0]`, which is a strictly weaker
+  claim and says so on its face. This is exact semantics, not a verification abstraction. Because the
+  span is a state-space cost, it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN` and a
+  wider declaration is rejected rather than silently narrowed.
 - **Device effect timing** — Fig. 2b combines the device effect and the environment step in the same
   transition, so each device's `<var>_rate` is a `DEFINE` over its current state rather than a state
   variable. A stored rate is read unprimed while it is itself computed from the current mode, which
@@ -85,9 +97,9 @@ These are intentional, not drift. Keep the list honest when adding more.
   deliberate domain-specific widening. The interval is modeled exhaustively rather than as a
   shortlist of interesting values, so a wider interval is a genuinely weaker assumption instead of a
   different one. The generator never layers a second hidden `[-1, 1]` term on top of that
-  declaration. A declaration is always allowed to apply no drift in a step, so an interval that
-  excludes zero (say `[2, 4]`) still permits the value to hold still. Optional device-local numeric
-  rates use the same convention as a project extension; they are not part of MEDIC's shared
+  declaration. An interval that excludes zero (say `[2, 4]`) is a *mandatory* per-step change; to
+  allow holding still the user writes an interval containing zero (`[0, 4]`). Optional device-local
+  numeric rates use the same convention as a project extension; they are not part of MEDIC's shared
   physical-environment equation.
 - Specification templates 1–7 extend MEDIC's two primitive security templates with safety and
   reachability shapes. MEDIC §4.1 explicitly anticipates this ("More CTL templates ... can be defined

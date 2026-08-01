@@ -119,13 +119,54 @@ class NaturalChangeRateIntervalSoundnessTest {
                 () -> "[-1, 1] must still admit its own +1 endpoint: " + results);
     }
 
+    /**
+     * An interval that excludes zero is a <em>mandatory</em> change, and the model must say so.
+     *
+     * <p>Injecting a stutter into every interval was reliable but unfaithful: for a tank declared
+     * {@code [-4, -2]} ("always drains 2-4 per step") NuSMV reported {@code AF (level = 0)} false and
+     * {@code EG (level = 10)} true, offering a trace in which the mandatory drain never happened.
+     * That is a pseudo-counterexample — the user cannot act on behaviour their declaration forbids.
+     * Both verdicts invert once the interval means exactly itself.
+     */
     @Test
-    void aDeclarationExcludingZeroStillPermitsAStutterStep() {
-        // "[2, 4]" describes the drift a step may apply, not one it must, so staying put remains
-        // legal. Omitting 0 would make the model claim the value can never hold still.
-        assertEquals(List.of(0, 2, 3, 4),
-                NaturalChangeRateParser.parse("[2, 4]").admissibleDeltas());
-        assertFalse(NaturalChangeRateParser.parse("[2, 4]").isStatic());
+    void anIntervalExcludingZeroForcesTheChangeAndInvertsBothVerdicts() throws Exception {
+        String nusmv = resolveNusmvPath();
+        Assumptions.assumeTrue(nusmv != null && Files.exists(Path.of(nusmv)),
+                "NuSMV executable is required for this soundness check");
+
+        assertEquals(List.of(-4, -3, -2),
+                NaturalChangeRateParser.parse("[-4, -2]").admissibleDeltas());
+
+        String faithful = "MODULE main\nVAR\n  level : 0..10;\nASSIGN\n  init(level) := 10;\n"
+                + "  next(level) := {" + transitionCandidates("[-4, -2]", "level", 0, 10) + "};\n"
+                + "CTLSPEC AF (level = 0)\nCTLSPEC EG (level = 10)\n";
+        List<String> faithfulResults = runNusmv(nusmv, faithful);
+        assertTrue(faithfulResults.stream().anyMatch(line ->
+                        line.contains("AF level = 0") && line.contains("is true")),
+                () -> "a mandatory drain must empty the tank: " + faithfulResults);
+        assertTrue(faithfulResults.stream().anyMatch(line ->
+                        line.contains("EG level = 10") && line.contains("is false")),
+                () -> "a mandatory drain forbids staying full: " + faithfulResults);
+
+        // The same model with a stutter injected -- the old behaviour -- must disagree on both, which
+        // is what lets this test fail if the injection ever returns.
+        String withStutter = "MODULE main\nVAR\n  level : 0..10;\nASSIGN\n  init(level) := 10;\n"
+                + "  next(level) := {max(0, min(10, level - 4)), max(0, min(10, level - 3)), "
+                + "max(0, min(10, level - 2)), max(0, min(10, level))};\n"
+                + "CTLSPEC AF (level = 0)\nCTLSPEC EG (level = 10)\n";
+        List<String> stutterResults = runNusmv(nusmv, withStutter);
+        assertTrue(stutterResults.stream().anyMatch(line ->
+                        line.contains("AF level = 0") && line.contains("is false")),
+                () -> "an injected stutter must be shown to break the mandatory drain: "
+                        + stutterResults);
+    }
+
+    @Test
+    void holdingStillIsADifferentDeclarationTheUserWrites() {
+        // "may drain 2-4, or hold" is [-4, 0]: strictly weaker, and it says so on its face.
+        assertEquals(List.of(-4, -3, -2, -1, 0),
+                NaturalChangeRateParser.parse("[-4, 0]").admissibleDeltas());
+        assertFalse(NaturalChangeRateParser.parse("[-4, 0]").isStatic());
     }
 
     private static List<String> runNusmv(String nusmv, String model) throws Exception {

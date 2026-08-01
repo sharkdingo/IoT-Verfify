@@ -130,8 +130,10 @@ at-boundary branch. `NaturalChangeRate=[-1, 1]` is MEDIC §3.1, Fig. 2b's exact
 physical disturbance; `0` explicitly means no independent natural change, so only active
 device effects remain and the value stutters when there are none. A wider interval is therefore a
 strictly weaker assumption rather than a different one — modelling only its endpoints would prove
-properties the declaration does not support — and a step that applies no drift is always admitted,
-so an interval excluding zero (say `[2, 4]`) still lets the value hold still. Because the span is a
+properties the declaration does not support. An interval that excludes zero is a *mandatory* change:
+`[2, 4]` always rises by 2–4, while `[0, 4]` may also hold. Adding a hidden stutter to every interval
+made the mandatory form unstatable and produced traces in which a required change simply did not
+happen. Because the span is a
 state-space cost it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN`, and a wider
 declaration is rejected at authoring and generation instead of being narrowed. No second hidden
 `[-1, 1]` term is added. A shared

@@ -1461,8 +1461,9 @@ class FuzzEngineTest {
                     .traceStates().get(1).getEnvVariables().get(0).getValue());
         }
 
-        // "[2, 3]" permits +2 and +3, and a step may always apply no drift at all.
-        assertEquals(Set.of("10", "12", "13"), reachable);
+        // "[2, 3]" excludes 0, so every step must rise by 2 or 3. Holding still would be a
+        // different declaration ([0, 3]) and the explorer must not invent it.
+        assertEquals(Set.of("12", "13"), reachable);
     }
 
     @Test
@@ -1474,7 +1475,7 @@ class FuzzEngineTest {
                     .traceStates().get(1).getDevices().get(0).getVariables().get(0).getValue());
         }
 
-        assertEquals(Set.of("10", "12", "13"), reachable);
+        assertEquals(Set.of("12", "13"), reachable);
     }
 
     @Test

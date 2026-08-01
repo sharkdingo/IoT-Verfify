@@ -255,22 +255,21 @@ export const canonicalNaturalChangeRate = (value: unknown): string => {
     return parsed ? `${parsed.lower}..${parsed.upper}` : String(value)
 }
 
-/**
- * Every per-step change the declared interval admits, matching the generated model.
- *
- * The declaration constrains the change rather than listing interesting values, so a wide interval
- * has to read as a wide interval here too: showing a user "2, 0, 3" for `[2, 4]` would describe an
- * under-approximation the backend no longer generates. A step that applies no drift is always
- * admitted, which is why `0` appears even when the interval excludes it.
- */
 const MAX_NATURAL_CHANGE_RATE_SPAN = REQUEST_LIMITS.naturalChangeRateSpan
 
+/**
+ * Exactly the per-step changes the declared interval admits, matching the generated model.
+ *
+ * The interval is the meaning, so nothing is added to it. An interval that excludes `0` says the
+ * value *always* changes; one that includes `0` says it *may* hold. The user chooses between those
+ * meanings by writing the interval they mean, and this panel must show the same set both engines
+ * explore — otherwise the explanation and the verdict describe different models.
+ */
 export const naturalChangeDeltas = (value: unknown): number[] | null => {
     const parsed = parseNaturalChangeRate(value)
     if (!parsed) return null
     const deltas: number[] = []
     for (let delta = parsed.lower; delta <= parsed.upper; delta += 1) deltas.push(delta)
-    if (!deltas.includes(0)) deltas.splice(parsed.lower > 0 ? 0 : deltas.length, 0, 0)
     return deltas
 }
 

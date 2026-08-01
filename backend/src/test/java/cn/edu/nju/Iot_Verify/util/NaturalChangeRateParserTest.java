@@ -69,12 +69,26 @@ class NaturalChangeRateParserTest {
         assertEquals(List.of(0), NaturalChangeRateParser.parse("0").admissibleDeltas());
     }
 
+    /**
+     * The interval is the declaration's whole meaning, so an interval that excludes zero says the
+     * value <em>always</em> changes. Injecting a stutter made "this tank always drains 2-4 per step"
+     * unstatable: NuSMV then reported {@code AF (level = 0)} false and offered a trace where the
+     * mandatory drain never happened, which the user cannot act on.
+     */
     @Test
-    void admissibleDeltasAlwaysAllowAStutterStepEvenWhenTheIntervalExcludesZero() {
-        assertEquals(List.of(0, 2, 3, 4),
+    void anIntervalExcludingZeroMeansTheValueAlwaysChanges() {
+        assertEquals(List.of(2, 3, 4),
                 NaturalChangeRateParser.parse("[2, 4]").admissibleDeltas());
-        assertEquals(List.of(-4, -3, -2, 0),
+        assertEquals(List.of(-4, -3, -2),
                 NaturalChangeRateParser.parse("[-4, -2]").admissibleDeltas());
+    }
+
+    @Test
+    void holdingStillIsExpressedByWritingAnIntervalThatContainsZero() {
+        assertEquals(List.of(0, 1, 2, 3, 4),
+                NaturalChangeRateParser.parse("[0, 4]").admissibleDeltas());
+        assertEquals(List.of(-4, -3, -2, -1, 0),
+                NaturalChangeRateParser.parse("[-4, 0]").admissibleDeltas());
     }
 
     @Test

@@ -81,21 +81,30 @@ public final class NaturalChangeRateParser {
         }
 
         /**
-         * Every integer delta the declaration admits, ascending, always including {@code 0}.
+         * Exactly the integers the declaration admits, ascending. Nothing is added.
          *
-         * <p>Zero is always present because a step in which the value does not drift is permitted
-         * even by an interval that excludes it arithmetically (for example {@code [1, 3]}): the
-         * product treats a declared rate as the drift a step <em>may</em> apply, not one it must.
-         * Callers combine each delta with the active device effect for that step.
+         * <p>The interval <em>is</em> the meaning: MEDIC §3.1, Fig. 2b constrains {@code v' - v} to
+         * {@code [-1 + D, 1 + D]} and never re-adds a stutter, because {@code 0} is arithmetically
+         * inside {@code [-1, 1]} already. So an interval that excludes {@code 0} says the value
+         * <em>always</em> changes, and an interval that includes it says the value <em>may</em> hold —
+         * the user picks between those two meanings by writing the interval they mean.
+         *
+         * <p>Injecting {@code 0} into every interval collapsed that distinction and produced
+         * unactionable counterexamples. For a tank declared {@code [-4, -2]} ("always drains 2-4 per
+         * step"), NuSMV reported {@code AF (level = 0)} <em>false</em> and {@code EG (level = 10)}
+         * <em>true</em> — it offered a trace where a mandatory drain simply did not happen, which the
+         * declaration forbids and the user cannot act on. Both verdicts invert once the interval means
+         * itself. No bundled template was affected either way: every one of them declares
+         * {@code [-1, 1]}, {@code [0, 1]}, or {@code 0}, all of which contain {@code 0} already.
+         *
+         * <p>Callers combine each delta with the active device effect for that step, so a device
+         * effect can still hold a value steady even when the natural rate cannot.
          */
         public List<Integer> admissibleDeltas() {
             List<Integer> deltas = new ArrayList<>();
             for (int delta = lower; delta <= upper; delta++) {
                 deltas.add(delta);
                 if (delta == Integer.MAX_VALUE) break;
-            }
-            if (!deltas.contains(Integer.valueOf(0))) {
-                deltas.add(lower > 0 ? 0 : deltas.size(), Integer.valueOf(0));
             }
             return List.copyOf(deltas);
         }

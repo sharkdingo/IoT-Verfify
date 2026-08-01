@@ -193,7 +193,7 @@
           "NaturalChangeRate": {
             "type": "string",
             "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$",
-            "description": "Per-step constraint on the value change: every integer in the interval is modeled as reachable in one step, so a wider interval is a weaker assumption, not a different one. A single value '1' means the interval 0..1; an interval that excludes zero still permits a step with no drift. Required for shared numeric variables (IsInside=false): [-1,1] is MEDIC's exact integer baseline and 0 explicitly means no independent natural change. The span is bounded because it is a state-space cost."
+            "description": "Per-step constraint on the value change: every integer in the interval is modeled as reachable in one step, so a wider interval is a weaker assumption, not a different one. A single value '1' means the interval 0..1. An interval that excludes zero is a mandatory per-step change (for example '[2, 4]' always rises by 2-4); write an interval containing zero (such as '[0, 4]') when the value may also hold still. Required for shared numeric variables (IsInside=false): [-1,1] is MEDIC's exact integer baseline and 0 explicitly means no independent natural change. The span is bounded because it is a state-space cost."
           }
         },
         "additionalProperties": false,

@@ -184,16 +184,22 @@ describe('device environment-domain semantics', () => {
     expect(canonicalNaturalChangeRate('')).toBe('')
   })
 
-  // The declaration constrains the per-step change, so the UI must not describe an
-  // under-approximation the generator no longer produces. A step with no drift is always allowed,
-  // which is why 0 appears even for an interval that excludes it.
-  it('lists every per-step change the declared interval admits, including a stutter', () => {
+  // The interval is the meaning, so the panel shows exactly what the engines explore -- nothing
+  // added. An interval excluding 0 says the value always changes; including 0 says it may hold.
+  it('lists exactly the per-step changes the declared interval admits', () => {
     expect(naturalChangeDeltas('[-1, 1]')).toEqual([-1, 0, 1])
     expect(naturalChangeDeltas('[-3, 3]')).toEqual([-3, -2, -1, 0, 1, 2, 3])
-    expect(naturalChangeDeltas('[2, 4]')).toEqual([0, 2, 3, 4])
     expect(naturalChangeDeltas('0')).toEqual([0])
     expect(naturalChangeCandidateValues('[-1, 1]')).toBe('-1, 0, +1')
-    expect(naturalChangeCandidateValues('[2, 4]')).toBe('0, +2, +3, +4')
+  })
+
+  it('distinguishes a mandatory change from one that may not happen', () => {
+    // "[2, 4]" always rises; "[0, 4]" may hold. The user picks by writing the interval.
+    expect(naturalChangeDeltas('[2, 4]')).toEqual([2, 3, 4])
+    expect(naturalChangeCandidateValues('[2, 4]')).toBe('+2, +3, +4')
+    expect(naturalChangeDeltas('[0, 4]')).toEqual([0, 1, 2, 3, 4])
+    expect(naturalChangeDeltas('[-4, -2]')).toEqual([-4, -3, -2])
+    expect(naturalChangeDeltas('[-4, 0]')).toEqual([-4, -3, -2, -1, 0])
   })
 
   it('rejects a rate interval too wide to model exhaustively', () => {

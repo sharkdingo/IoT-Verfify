@@ -18,6 +18,17 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-08-01 (later)
 
 #### Changed
+- **A declared `NaturalChangeRate` interval now means exactly itself, so "this always changes" is
+  finally expressible.** The interval excluding zero (`[-4, -2]`, "this tank always drains 2-4 per
+  step") is a *mandatory* per-step change; including zero (`[-4, 0]`) means the value may also hold.
+  Previously zero was injected into every interval, which silently rewrote the first meaning into the
+  second — the only declarations whose meaning depends on zero being absent. NuSMV showed the cost:
+  for that tank it reported `AF (level = 0)` false and `EG (level = 10)` true, offering a trace in
+  which the mandatory drain never happened. That is a pseudo-counterexample; a user cannot act on
+  behaviour their own declaration forbids. Both verdicts invert now. MEDIC §3.1 Fig. 2b never re-adds
+  a stutter either, because zero is already inside `[-1, 1]` — which is also why no bundled template
+  changes behaviour: every one declares `[-1, 1]`, `[0, 1]`, or `0`.
+
 - **A verification or simulation run now always describes the board you saved.** The request carries
   run parameters only (`attackScenario`, `enablePrivacy`, and simulation's `steps`); the server reads
   devices, rules, specifications, the environment pool, and the canvas layout from your own persisted
