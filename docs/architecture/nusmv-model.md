@@ -75,8 +75,9 @@ a NuSMV probe generation. Invalid templates are rejected, not partially imported
 | Manifest declaration | Model meaning |
 | :--- | :--- |
 | `InternalVariables[].IsInside=true` | Device-local variable, emitted as `device.variable` |
-| `InternalVariables[].IsInside=false` | Shared environment reading, stored once in the board environment pool and emitted internally as `a_<name>` |
-| `EnvironmentDomains[]` | Domain/default metadata for an impact-only shared value; no device read mirror or device-scoped rule/spec reference |
+| `InternalVariables[].IsInside=false` | Shared environment value, stored once in the board environment pool and emitted internally as `a_<name>`. `Reads` (default true) says whether *this* device reads it, i.e. whether its rules/specs may use it as a condition source and whether it gets a `device.name := a_name` read mirror |
+| `InternalVariables[].Reads=false` | This device only *affects* the shared value: it contributes the domain and its declared effect, but gets no read mirror and no rule/spec source capability |
+| `EnvironmentDomains[]` | Deprecated spelling of `IsInside=false, Reads=false`. Still parsed for hand-authored manifests; no bundled template uses it. It existed only because read capability was implied by *which array* a declaration lived in, so one boolean was expressed as a choice between two array shapes |
 | `ImpactedVariables[]` | Shared environment value the device may change; this declares a modeled effect, not a modeled read or any authorization |
 | `FalsifiableWhenCompromised=true` | The compromise model may replace this reported value with any value in its declared domain and marks its trust label untrusted |
 

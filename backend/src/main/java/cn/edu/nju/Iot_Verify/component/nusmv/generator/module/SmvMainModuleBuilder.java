@@ -460,7 +460,11 @@ public class SmvMainModuleBuilder {
 
             if (smv.getManifest().getInternalVariables() != null) {
                 for (DeviceManifest.InternalVariable var : smv.getManifest().getInternalVariables()) {
-                    if (var.getIsInside() == null || !var.getIsInside()) {
+                    // A read mirror exists only for a value the device actually reads. An affect-only
+                    // declaration (Reads=false) contributes a domain and an effect, not a reading, so
+                    // mirroring it would hand the device a value it never observes.
+                    if ((var.getIsInside() == null || !var.getIsInside())
+                            && !Boolean.FALSE.equals(var.getReads())) {
                         content.append("\n\t").append(varName).append(".").append(var.getName()).append(" := ");
                         if (isAttack && Boolean.TRUE.equals(var.getFalsifiableWhenCompromised())) {
                             content.append("\n\tcase\n")

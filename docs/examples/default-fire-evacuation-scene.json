@@ -131,11 +131,13 @@
       "manifest": {
         "Name": "Light",
         "Description": "",
-        "InternalVariables": [],
-        "EnvironmentDomains": [
+        "InternalVariables": [
           {
             "Name": "illuminance",
             "Description": "Ambient illuminance",
+            "IsInside": false,
+            "Reads": false,
+            "FalsifiableWhenCompromised": false,
             "Trust": "untrusted",
             "Privacy": "public",
             "LowerBound": 0,

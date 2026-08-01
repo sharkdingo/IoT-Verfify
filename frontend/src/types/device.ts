@@ -10,6 +10,13 @@ export interface InternalVariable {
     Description?: string
     IsInside: boolean
     FalsifiableWhenCompromised: boolean
+    /**
+     * Only meaningful for a shared variable (IsInside=false): whether this device reads the value,
+     * so its rules and specifications may use it as a condition source. Omitted means it reads.
+     * `false` is a device that only affects the value — which used to require repeating the whole
+     * domain in a second `EnvironmentDomains` array purely to withhold read capability.
+     */
+    Reads?: boolean
     Trust: string           // "trusted" | "untrusted"
     Privacy: string         // "public" | "private"
     // 数值型属性

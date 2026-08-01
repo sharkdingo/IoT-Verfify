@@ -17,6 +17,18 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-01 (later)
 
+#### Changed
+- **One declaration per shared value, with read capability stated instead of implied.** A device that
+  only *affects* a shared value used to repeat its whole domain in a second array
+  (`EnvironmentDomains`) whose only job was to withhold rule/specification source capability — so a
+  single boolean was expressed by choosing between two array shapes, and three arrays encoded a 2x2
+  truth table. `InternalVariables` now carries an explicit `Reads` flag (default true), so
+  `IsInside=false, Reads=false` says "affects but does not read" in the same place as everything
+  else. All five bundled templates that used the second array were migrated and it is now unused;
+  it remains parsed as a deprecated spelling for hand-authored manifests. Capability now keys off the
+  declaration rather than off which array it happened to live in, which also fixed a latent bug: the
+  read-mirror emitter had ignored the distinction entirely.
+
 #### Fixed
 - **A success toast no longer swallows clicks on the controls it covers.** Toasts sit above the
   whole workspace and stayed pointer-interactive, so the scene-import confirmation overlaid the undo

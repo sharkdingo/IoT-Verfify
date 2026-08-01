@@ -1,61 +1,65 @@
 {
-	"Name": "Light",
-	"Description": "",
-	"InternalVariables": [
-	],
-	"EnvironmentDomains": [
-		{
-			"Name": "illuminance",
-			"Description": "Ambient illuminance",
-			"Trust": "untrusted",
-			"Privacy": "public",
-			"LowerBound": 0,
-			"UpperBound": 100,
-			"NaturalChangeRate": "[-1, 1]"
-		}
-	],
-	"ImpactedVariables": ["illuminance"],
-	"Modes": ["SwitchState"],
-	"InitState": "on",
-	"WorkingStates": [
-		{
-			"Name": "on",
-			"Dynamics": [
-				{
-					"VariableName":"illuminance",
-					"ChangeRate":"1"
-				}
-			],
-			"Description": "",
-			"Trust": "trusted",
-			"Privacy": "public"
-		},
-		{
-			"Name": "off",
-			"Dynamics": [],
-			"Description": "",
-			"Trust": "trusted",
-			"Privacy": "public"
-		}
-	],
-	"Transitions": [
-	],
-	"APIs": [
-		{
-			"Name": "on",
-			"StartState": "",
-			"EndState": "on",
-			"Trigger": null,
-			"Signal": true,
-			"Description": ""
-		},
-		{
-			"Name": "off",
-			"StartState": "",
-			"EndState": "off",
-			"Trigger": null,
-			"Signal": true,
-			"Description": ""
-		}
-	]
+  "Name": "Light",
+  "Description": "",
+  "InternalVariables": [
+    {
+      "Name": "illuminance",
+      "Description": "Ambient illuminance",
+      "IsInside": false,
+      "Reads": false,
+      "FalsifiableWhenCompromised": false,
+      "Trust": "untrusted",
+      "Privacy": "public",
+      "LowerBound": 0,
+      "UpperBound": 100,
+      "NaturalChangeRate": "[-1, 1]"
+    }
+  ],
+  "ImpactedVariables": [
+    "illuminance"
+  ],
+  "Modes": [
+    "SwitchState"
+  ],
+  "InitState": "on",
+  "WorkingStates": [
+    {
+      "Name": "on",
+      "Dynamics": [
+        {
+          "VariableName": "illuminance",
+          "ChangeRate": "1"
+        }
+      ],
+      "Description": "",
+      "Trust": "trusted",
+      "Privacy": "public"
+    },
+    {
+      "Name": "off",
+      "Dynamics": [],
+      "Description": "",
+      "Trust": "trusted",
+      "Privacy": "public"
+    }
+  ],
+  "Transitions": [],
+  "APIs": [
+    {
+      "Name": "on",
+      "StartState": "",
+      "EndState": "on",
+      "Trigger": null,
+      "Signal": true,
+      "Description": ""
+    },
+    {
+      "Name": "off",
+      "StartState": "",
+      "EndState": "off",
+      "Trigger": null,
+      "Signal": true,
+      "Description": ""
+    }
+  ]
 }

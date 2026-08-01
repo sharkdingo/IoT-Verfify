@@ -159,6 +159,10 @@
             "type": "boolean",
             "description": "Required ownership choice: true = device-local value on this instance; false = scene-wide environment value shared across devices. Omission is rejected because silently choosing shared scope changes rule, import, and attack semantics."
           },
+          "Reads": {
+            "type": "boolean",
+            "description": "Only meaningful for a shared variable (IsInside=false): whether this device reads the value, i.e. whether its rules and specifications may use it as a condition source. Omitted means it reads. Set false for a device that only affects the value, which previously required declaring the same domain again in a separate EnvironmentDomains array purely to withhold read capability."
+          },
           "FalsifiableWhenCompromised": {
             "type": "boolean",
             "description": "Whether a compromised instance may report any value from this variable's declared domain and force its trust label to untrusted. Set true only for sensor readings or received data that compromise can falsify; actuator state, progress, and setpoints should normally be false."

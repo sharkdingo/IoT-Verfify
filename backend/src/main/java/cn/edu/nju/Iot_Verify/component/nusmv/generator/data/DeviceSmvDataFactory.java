@@ -118,6 +118,7 @@ public class DeviceSmvDataFactory {
             extractSignalVars(smv, manifest);
             if (manifest.getImpactedVariables() != null) smv.getImpactedVariables().addAll(manifest.getImpactedVariables());
             extractEnvVariables(smv, manifest);
+            extractSharedDeclarations(smv, manifest);
             extractImpactedEnvironmentVariables(smv, manifest);
             extractContents(smv, manifest);
             computeIdentifiers(smv, device.getVarName());
@@ -279,11 +280,28 @@ public class DeviceSmvDataFactory {
         }
     }
 
+    /**
+     * Shared values this device <em>reads</em>. This map is the rule/spec source-capability set, so a
+     * declaration that only affects a shared value ({@code Reads=false}) must not land here — that is
+     * the distinction the separate {@code EnvironmentDomains} array used to encode by its mere
+     * existence. Omitting {@code Reads} keeps the historical meaning of a shared declaration: it reads.
+     */
     private void extractEnvVariables(DeviceSmvData smv, DeviceManifest manifest) {
         if (manifest.getInternalVariables() == null) return;
         for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
-            if (iv.getIsInside() == null || !iv.getIsInside()) {
+            if ((iv.getIsInside() == null || !iv.getIsInside())
+                    && !Boolean.FALSE.equals(iv.getReads())) {
                 smv.getEnvVariables().put(iv.getName(), iv);
+            }
+        }
+    }
+
+    /** Every shared declaration, whether read or affect-only, for domain resolution. */
+    private void extractSharedDeclarations(DeviceSmvData smv, DeviceManifest manifest) {
+        if (manifest.getInternalVariables() == null) return;
+        for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
+            if (iv.getIsInside() == null || !iv.getIsInside()) {
+                smv.getSharedDeclarations().put(iv.getName(), iv);
             }
         }
     }
@@ -296,7 +314,10 @@ public class DeviceSmvDataFactory {
             if (impacted == null || impacted.isBlank()) {
                 continue;
             }
-            DeviceManifest.InternalVariable definition = smv.getEnvVariables().get(impacted);
+            // Any shared declaration supplies the domain, including an affect-only one that
+            // deliberately carries no read capability.
+            DeviceManifest.InternalVariable definition =
+                    smv.getSharedDeclarations().get(impacted);
             if (definition == null) {
                 definition = EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted);
             }

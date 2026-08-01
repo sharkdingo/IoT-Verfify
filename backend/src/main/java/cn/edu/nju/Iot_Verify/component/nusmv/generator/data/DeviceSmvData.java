@@ -36,6 +36,16 @@ public class DeviceSmvData {
     private List<String> impactedVariables = new ArrayList<>();
     private Map<String, DeviceManifest.InternalVariable> impactedEnvironmentVariables = new HashMap<>();
 
+    /**
+     * Every shared declaration this template makes, read or affect-only, keyed by name.
+     *
+     * <p>Separate from {@code envVariables}, which is narrower: that map is the rule/spec
+     * source-capability set and therefore excludes affect-only declarations. Domain resolution needs
+     * all of them, capability needs only the readable ones, and conflating the two is what forced a
+     * second manifest array to exist.
+     */
+    private Map<String, DeviceManifest.InternalVariable> sharedDeclarations = new HashMap<>();
+
     // ── API event signal variables (APIs[Signal=true]) ──
     private List<SignalInfo> signalVars = new ArrayList<>();
 

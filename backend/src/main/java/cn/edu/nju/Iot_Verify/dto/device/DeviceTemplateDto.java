@@ -101,6 +101,20 @@ public class DeviceTemplateDto {
             @NotNull(message = "InternalVariable FalsifiableWhenCompromised must explicitly define compromise behavior")
             private Boolean falsifiableWhenCompromised;
 
+            /**
+             * Whether this device reads the shared value, i.e. whether its rules and specifications may
+             * use it as a condition source.
+             *
+             * <p>Only meaningful for a shared declaration ({@code IsInside=false}); {@code null} means
+             * "reads it", which is what a shared declaration has always meant. Before this existed, a
+             * device that only <em>affects</em> a shared value had to declare the same domain in a
+             * second array ({@code EnvironmentDomains}) purely to withhold read capability, so the
+             * user expressed one boolean by choosing between two array shapes. Making it explicit lets
+             * one array carry the whole read/affect truth table.
+             */
+            @JsonProperty("Reads")
+            private Boolean reads;
+
             @JsonProperty("Trust")
             @NotBlank(message = "InternalVariable Trust must be explicit")
             @Pattern(regexp = "trusted|untrusted", message = "InternalVariable Trust must be trusted or untrusted")

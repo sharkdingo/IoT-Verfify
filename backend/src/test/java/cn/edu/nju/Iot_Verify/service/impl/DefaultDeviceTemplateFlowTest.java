@@ -30,7 +30,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -159,10 +161,43 @@ class DefaultDeviceTemplateFlowTest {
         String smv = generateSmv(generator, expanded, environment, List.of());
 
         assertTrue(smv.contains("a_illuminance: 0..100;"), smv);
+        // The sensor reads the shared value, so it gets a read mirror.
         assertTrue(smv.contains("lux_1.illuminance := a_illuminance;"), smv);
+        // The light only affects it. Both devices now declare the value in the SAME array; the
+        // difference is the explicit Reads flag, not which array the declaration lives in. So the
+        // light gets no read mirror while still contributing its effect.
         assertFalse(smv.contains("light_1.illuminance := a_illuminance;"), smv);
         assertTrue(smv.contains("illuminance_rate := case"), smv);
         assertTrue(smv.contains("a_illuminance + light_1.illuminance_rate"), smv);
+    }
+
+    /**
+     * One array, one declaration per shared value, with read capability stated rather than implied.
+     *
+     * <p>An affect-only declaration used to require repeating the whole domain in a second array
+     * ({@code EnvironmentDomains}) whose only job was to withhold rule/spec source capability — so the
+     * user expressed one boolean by choosing between two array shapes, and three arrays encoded a
+     * 2x2 truth table. This pins that the merged form still separates the two capabilities.
+     */
+    @Test
+    void anAffectOnlySharedDeclarationNeedsNoSecondArray() throws Exception {
+        DeviceManifest light = loadDefaultTemplates().get("Light");
+
+        assertNull(light.getEnvironmentDomains(),
+                "an affect-only declaration must not need a separate domain array");
+        DeviceManifest.InternalVariable illuminance = light.getInternalVariables().stream()
+                .filter(variable -> "illuminance".equals(variable.getName()))
+                .findFirst().orElseThrow();
+        assertEquals(Boolean.FALSE, illuminance.getIsInside(), "shared, not device-local");
+        assertEquals(Boolean.FALSE, illuminance.getReads(), "affects it without reading it");
+        assertTrue(light.getImpactedVariables().contains("illuminance"),
+                "and still declares that it writes it");
+
+        // No bundled template needs the legacy array any more.
+        assertTrue(loadDefaultTemplates().values().stream()
+                        .allMatch(manifest -> manifest.getEnvironmentDomains() == null
+                                || manifest.getEnvironmentDomains().isEmpty()),
+                "every bundled template should declare shared values in one array");
     }
 
     private static String generateSmv(SmvGenerator generator,

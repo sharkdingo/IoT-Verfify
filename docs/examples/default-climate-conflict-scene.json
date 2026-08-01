@@ -7,11 +7,13 @@
       "manifest": {
         "Name": "Air Conditioner",
         "Description": "",
-        "InternalVariables": [],
-        "EnvironmentDomains": [
+        "InternalVariables": [
           {
             "Name": "temperature",
             "Description": "Ambient temperature",
+            "IsInside": false,
+            "Reads": false,
+            "FalsifiableWhenCompromised": false,
             "Trust": "untrusted",
             "Privacy": "public",
             "LowerBound": 0,
@@ -21,6 +23,9 @@
           {
             "Name": "humidity",
             "Description": "Ambient humidity",
+            "IsInside": false,
+            "Reads": false,
+            "FalsifiableWhenCompromised": false,
             "Trust": "untrusted",
             "Privacy": "public",
             "LowerBound": 0,
