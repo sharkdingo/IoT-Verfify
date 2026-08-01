@@ -1,4 +1,5 @@
 import type { SelectedAttackPoint } from './attackScenario'
+import type { EnvironmentValueProvenance } from './model'
 
 export type AttackPointUnit = 'BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK'
 
@@ -55,6 +56,7 @@ export interface ModelRunSnapshot {
   deviceTemplateCount: number
   modelFingerprint?: string | null
   templatesFrozen: true
+  environmentProvenance?: EnvironmentValueProvenance[]
 }
 
 /** Local UI comparison between a submitted run input and the board currently open in this tab. */

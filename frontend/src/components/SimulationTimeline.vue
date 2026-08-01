@@ -3,6 +3,7 @@ import { ref, computed, nextTick, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SimulationState } from '../types/simulation'
 import type { ModelRunSnapshot, ModelSemantics, RunBoardComparison } from '../types/modelSemantics'
+import type { EnvironmentValueProvenance } from '../types/model'
 import type { TraceTriggeredRule } from '../types/verify'
 import { isModelSemanticsConsistent } from '../utils/modelSemantics'
 import {
@@ -208,14 +209,35 @@ const getPreviousEnvValue = (name: string) =>
 const environmentVariableChanged = (name: string, value: string) =>
   selectedStateIndex.value > 0 && getPreviousEnvValue(name) !== value
 
+const getProvenanceForVariable = (name: string) =>
+  props.modelSnapshot?.environmentProvenance?.find((p: EnvironmentValueProvenance) => p.name === name) || null
+
 const environmentVariableTitle = (name: string, value: string) => {
   const previous = getPreviousEnvValue(name)
   const displayName = formatEnvironmentModelToken(name, name)
   const displayValue = formatEnvironmentModelToken(name, value)
-  if (previous === undefined || previous === value) {
-    return `${displayName}: ${displayValue}`
+
+  let title = previous === undefined || previous === value
+    ? `${displayName}: ${displayValue}`
+    : `${displayName}: ${formatEnvironmentModelToken(name, previous)} -> ${displayValue}`
+
+  // Add concise cause explanation when value changed
+  if (previous !== undefined && previous !== value) {
+    const provenance = getProvenanceForVariable(name)
+    if (provenance) {
+      if (provenance.authorship === 'EXOGENOUS' && provenance.semantics === 'ABSTRACTION') {
+        title += ` (${t('app.traceVisualization.provenance.externalInput')})`
+      } else if (provenance.authorship === 'DEVICE_CONTROLLED' && provenance.writers.length > 0) {
+        const writer = provenance.writers[0]
+        const writerLabel = formatDeviceModelToken?.({ varName: writer.deviceVarName } as any, writer.deviceVarName) || writer.deviceVarName
+        title += ` (${t('app.traceVisualization.provenance.affectedBy', { device: writerLabel })})`
+      } else if (provenance.authorship === 'COMPOSED') {
+        title += ` (${t('app.traceVisualization.provenance.affectedByMultiple', { count: provenance.writers.length })})`
+      }
+    }
   }
-  return `${displayName}: ${formatEnvironmentModelToken(name, previous)} -> ${displayValue}`
+
+  return title
 }
 
 // Runtime compromised-point count from NuSMV globals, not the configured attack budget.

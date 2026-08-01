@@ -6,10 +6,11 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /** User-facing scope of the immutable model input captured for one run. */
 @Data
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 public class ModelRunSnapshotDto {
@@ -28,6 +29,12 @@ public class ModelRunSnapshotDto {
 
     /** True when model generation reused the captured manifests instead of reading mutable templates again. */
     private boolean templatesFrozen;
+
+    /**
+     * Per-value semantic provenance for every environment variable in this run.
+     * Makes historical counterexamples self-explanatory without consulting the current Board.
+     */
+    private List<EnvironmentValueProvenanceDto> environmentProvenance;
 
     public static ModelRunSnapshotDto captured(LocalDateTime capturedAt,
                                                int deviceCount,

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SimulationOutput;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.EnvironmentProvenanceCollector;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
@@ -12,6 +13,7 @@ import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.EnvironmentValueProvenanceDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
@@ -79,6 +81,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             SimulationTaskPo.TaskStatus.RUNNING);
 
     private final SmvGenerator smvGenerator;
+    private final EnvironmentProvenanceCollector provenanceCollector;
     private final SmvTraceParser smvTraceParser;
     private final NusmvExecutor nusmvExecutor;
     private final NusmvConfig nusmvConfig;
@@ -107,6 +110,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     @Autowired
     public SimulationServiceImpl(SmvGenerator smvGenerator,
+                                 EnvironmentProvenanceCollector provenanceCollector,
                                  SmvTraceParser smvTraceParser,
                                  NusmvExecutor nusmvExecutor,
                                  NusmvConfig nusmvConfig,
@@ -125,6 +129,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  BoardDataConverter boardDataConverter) {
         super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
+        this.provenanceCollector = provenanceCollector;
         this.smvTraceParser = smvTraceParser;
         this.nusmvExecutor = nusmvExecutor;
         this.nusmvConfig = nusmvConfig;
@@ -143,6 +148,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     SimulationServiceImpl(SmvGenerator smvGenerator,
+                          EnvironmentProvenanceCollector provenanceCollector,
                           SmvTraceParser smvTraceParser,
                           NusmvExecutor nusmvExecutor,
                           NusmvConfig nusmvConfig,
@@ -158,7 +164,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                           ChatExecutionLeaseGuard chatExecutionLeaseGuard,
                           FormalOperationAdmission formalOperationAdmission,
                           BoardDataConverter boardDataConverter) {
-        this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+        this(smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, objectMapper,
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
@@ -419,13 +425,19 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             Map<String, DeviceSmvData> expandedDeviceSmvMap =
                     smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(
                             expandedDevices, capturedDeviceModel.templateManifests());
+            List<EnvironmentValueProvenanceDto> environmentProvenance =
+                    provenanceCollector.collectEnvironmentProvenance(
+                            mergedEnvironmentVariables, expandedDevices, expandedDeviceSmvMap);
             ModelRunSnapshotDto modelSnapshot = ModelRunSnapshotDto.captured(
                     capturedAt,
                     expandedDevices.size(),
                     rules != null ? rules.size() : 0,
                     0,
                     mergedEnvironmentVariables.size(),
-                    capturedDeviceModel.templateManifests().size());
+                    capturedDeviceModel.templateManifests().size())
+                    .toBuilder()
+                    .environmentProvenance(environmentProvenance)
+                    .build();
             return new ModelBoundaryInput(expandedDevices, mergedEnvironmentVariables, attackSurface,
                     expandedDeviceSmvMap, capturedDeviceModel.templateManifests(), modelSnapshot);
         } catch (SmvGenerationException e) {

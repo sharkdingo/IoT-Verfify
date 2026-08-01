@@ -73,3 +73,51 @@ export interface ModelPlaybackScene {
 }
 
 export type ModelSpecification = Specification
+
+export type ValueType = 'NUMERIC' | 'DISCRETE_ENUM' | 'DISCRETE_BOOLEAN'
+export type AuthorshipCategory = 'EXOGENOUS' | 'DEVICE_CONTROLLED' | 'COMPOSED'
+export type SemanticsTag = 'EXACT' | 'ABSTRACTION'
+
+export const MODEL_TOKEN_SOURCES = ['BUNDLED', 'CUSTOM', 'UNKNOWN'] as const
+export type ModelTokenSource = typeof MODEL_TOKEN_SOURCES[number]
+
+export interface DeviceWriter {
+  deviceVarName: string
+  templateName: string
+  templateSource: ModelTokenSource
+}
+
+export interface DeviceReader {
+  deviceVarName: string
+}
+
+/**
+ * Per-value semantic provenance for one environment variable in a frozen run.
+ * Makes historical counterexamples self-explanatory without consulting the current Board.
+ */
+export interface EnvironmentValueProvenance {
+  name: string
+  type: ValueType
+  lowerBound?: number | null
+  upperBound?: number | null
+  naturalChangeRate?: string | null
+  values?: string[]
+  authorship: AuthorshipCategory
+  writers: DeviceWriter[]
+  readers: DeviceReader[]
+  semantics: SemanticsTag
+  evolutionSummary: string
+}
+
+export interface ModelRunSnapshot {
+  capturedAt: string
+  deviceCount: number
+  ruleCount: number
+  specificationCount: number
+  environmentVariableCount: number
+  deviceTemplateCount: number
+  modelFingerprint?: string | null
+  templatesFrozen?: boolean
+  environmentProvenance?: EnvironmentValueProvenance[]
+}
+

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SimulationOutput;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.EnvironmentProvenanceCollector;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
@@ -91,6 +92,7 @@ import static org.mockito.Mockito.*;
 class SimulationServiceImplTest {
 
     @Mock private SmvGenerator smvGenerator;
+    @Mock private EnvironmentProvenanceCollector provenanceCollector;
     @Mock private SmvTraceParser smvTraceParser;
     @Mock private NusmvExecutor nusmvExecutor;
     @Mock private NusmvConfig nusmvConfig;
@@ -174,11 +176,11 @@ class SimulationServiceImplTest {
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(1).get());
 
         service = new SimulationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission, boardDataConverter);
+                chatExecutionLeaseGuard, formalOperationAdmission, new AsyncTaskAdmissionConfig(), boardDataConverter);
         lenient().when(simulationTaskRepository.currentDatabaseTime())
                 .thenAnswer(invocation -> LocalDateTime.now());
         lenient().when(simulationTaskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
@@ -212,16 +214,16 @@ class SimulationServiceImplTest {
 
     private SimulationServiceImpl serviceWithSimulationExecutor(ThreadPoolTaskExecutor executor) {
         return new SimulationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 executor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
-                formalOperationAdmission, boardDataConverter);
+                formalOperationAdmission, new AsyncTaskAdmissionConfig(), boardDataConverter);
     }
 
     private SimulationServiceImpl serviceWithAdmissionConfig(AsyncTaskAdmissionConfig admissionConfig) {
         return new SimulationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,

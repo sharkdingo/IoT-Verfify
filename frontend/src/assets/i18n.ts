@@ -2347,6 +2347,11 @@ const messages = {
                 violationPoint: '违规点',
                 compromisedPointCount: '当前受损点数',
                 attack: '攻击',
+                provenance: {
+                    externalInput: '外部输入',
+                    affectedBy: '受 {device} 影响',
+                    affectedByMultiple: '受 {count} 个设备影响'
+                },
                 security: '安全',
                 attacked: '被攻击',
                 attackedBang: '被攻击！',
@@ -4744,6 +4749,11 @@ const messages = {
                 violationPoint: 'Violation Point!',
                 compromisedPointCount: 'Current Compromised Points',
                 attack: 'Attack',
+                provenance: {
+                    externalInput: 'external input',
+                    affectedBy: 'affected by {device}',
+                    affectedByMultiple: 'affected by {count} devices'
+                },
                 security: 'security',
                 attacked: 'Attacked',
                 attackedBang: 'Attacked!',

@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.EnvironmentProvenanceCollector;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
@@ -99,6 +100,7 @@ import static org.mockito.Mockito.*;
 class VerificationServiceImplBuildResultTest {
 
     @Mock private SmvGenerator smvGenerator;
+    @Mock private EnvironmentProvenanceCollector provenanceCollector;
     @Mock private SmvTraceParser smvTraceParser;
     @Mock private NusmvExecutor nusmvExecutor;
     @Mock private NusmvConfig nusmvConfig;
@@ -167,11 +169,11 @@ class VerificationServiceImplBuildResultTest {
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(1).get());
 
         service = new VerificationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission, boardDataConverter);
+                chatExecutionLeaseGuard, formalOperationAdmission, new AsyncTaskAdmissionConfig(), boardDataConverter);
         lenient().when(taskRepository.currentDatabaseTime()).thenAnswer(invocation -> LocalDateTime.now());
         lenient().when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
                 .thenReturn(1);
@@ -270,25 +272,25 @@ class VerificationServiceImplBuildResultTest {
 
     private VerificationServiceImpl serviceWithVerificationExecutor(ThreadPoolTaskExecutor executor) {
         return new VerificationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 executor, syncVerificationExecutor, transactionTemplate, chatExecutionLeaseGuard,
-                formalOperationAdmission, boardDataConverter);
+                formalOperationAdmission, new AsyncTaskAdmissionConfig(), boardDataConverter);
     }
 
     private VerificationServiceImpl serviceWithTransactionTemplate(TransactionTemplate transactionTemplate) {
         return new VerificationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission, boardDataConverter);
+                chatExecutionLeaseGuard, formalOperationAdmission, new AsyncTaskAdmissionConfig(), boardDataConverter);
     }
 
     private VerificationServiceImpl serviceWithAdmissionConfig(AsyncTaskAdmissionConfig admissionConfig) {
         return new VerificationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                smvGenerator, provenanceCollector, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
