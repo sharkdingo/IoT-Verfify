@@ -99,8 +99,9 @@ the list stays a standard rather than folklore.
 
 ## Tier 3 — Live AI (`live-ai-ci.yml`)
 
-The two tests that call a real external model endpoint, on their own gate: nightly and on demand,
-never a merge blocker. Three reasons:
+The two tests that call a real external model endpoint, on their own gate: nightly at 04:23 UTC
+(after Full CI, so a shared infrastructure failure shows up in the cheaper workflow first) and on
+demand, never a merge blocker. Three reasons:
 
 - A provider outage would fail the run for reasons unrelated to the commit. This repo has already seen
   it — a different one of the two tests failed on consecutive runs with identical code. A required
