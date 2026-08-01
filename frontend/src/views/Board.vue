@@ -677,6 +677,7 @@ import {
 import { isEdgeActiveInTrace, isEdgeCompromisedInTrace } from '@/utils/traceEdgePlayback'
 import {
   buildSimulationRequestPayload,
+  buildLocalSceneFingerprint,
   buildModelRunSignature,
   buildVerificationRequestPayload,
   normalizeModelRelation,
@@ -6183,25 +6184,17 @@ const compareRunToCurrentBoard = (result: any, kind: 'verification' | 'simulatio
   const submission = result?.localRunSubmission as RunSubmission<VerificationRequest | SimulationRequest> | undefined
   if (!submission) return 'NOT_COMPARED'
   try {
-    const request = kind === 'verification'
-      ? buildVerificationRequestPayload({
-          nodes: nodes.value,
-          deviceTemplates: deviceTemplates.value,
-          environmentVariables: environmentVariables.value,
-          rules: rules.value,
-          specifications: specifications.value,
-          attackScenario: submission.request.attackScenario,
-          enablePrivacy: submission.request.enablePrivacy
-        })
-      : buildSimulationRequestPayload({
-          nodes: nodes.value,
-          deviceTemplates: deviceTemplates.value,
-          environmentVariables: environmentVariables.value,
-          rules: rules.value,
-          steps: (submission.request as SimulationRequest).steps,
-          attackScenario: submission.request.attackScenario,
-          enablePrivacy: submission.request.enablePrivacy
-        })
+    // Compare the scene this tab holds against the one captured at submission. The request itself
+    // no longer carries a scene, so the fingerprint is built locally for this warning only.
+    const request = buildLocalSceneFingerprint({
+      nodes: nodes.value,
+      deviceTemplates: deviceTemplates.value,
+      environmentVariables: environmentVariables.value,
+      rules: rules.value,
+      attackScenario: submission.request.attackScenario,
+      enablePrivacy: submission.request.enablePrivacy,
+      ...(kind === 'verification' ? { specifications: specifications.value } : {})
+    })
     return buildModelRunSignature(request, deviceTemplates.value) === submission.signature
       ? 'UNCHANGED'
       : 'CHANGED'
@@ -11878,19 +11871,21 @@ const handleVerify = async (): Promise<boolean> => {
 
   try {
     const req = buildVerificationRequestPayload({
-      nodes: nodes.value,
-      deviceTemplates: deviceTemplates.value,
-      environmentVariables: environmentVariables.value,
-      rules: rules.value,
-      specifications: specifications.value,
       attackScenario: buildRunAttackScenario(verificationForm),
       enablePrivacy: verificationForm.enablePrivacy
     })
     const submission: RunSubmission<VerificationRequest> = {
       request: req,
-      signature: buildModelRunSignature(req, deviceTemplates.value)
+      signature: buildModelRunSignature(buildLocalSceneFingerprint({
+        nodes: nodes.value,
+        deviceTemplates: deviceTemplates.value,
+        environmentVariables: environmentVariables.value,
+        rules: rules.value,
+        specifications: specifications.value,
+        attackScenario: req.attackScenario,
+        enablePrivacy: req.enablePrivacy
+      }), deviceTemplates.value)
     }
-    activeVerificationSubmission.value = submission
 
     // Handle async or sync verification
     if (verificationForm.isAsync) {
@@ -12219,17 +12214,20 @@ const handleSimulate = async (simConfig: {
 
   try {
     const req = buildSimulationRequestPayload({
-      nodes: nodes.value,
-      deviceTemplates: deviceTemplates.value,
-      environmentVariables: environmentVariables.value,
-      rules: rules.value,
       steps: requestSteps,
       attackScenario: buildRunAttackScenario(normalizedSimConfig),
       enablePrivacy: normalizedSimConfig.enablePrivacy
     })
     const submission: RunSubmission<SimulationRequest> = {
       request: req,
-      signature: buildModelRunSignature(req, deviceTemplates.value)
+      signature: buildModelRunSignature(buildLocalSceneFingerprint({
+        nodes: nodes.value,
+        deviceTemplates: deviceTemplates.value,
+        environmentVariables: environmentVariables.value,
+        rules: rules.value,
+        attackScenario: req.attackScenario,
+        enablePrivacy: req.enablePrivacy
+      }), deviceTemplates.value)
     }
     activeSimulationSubmission.value = submission
     

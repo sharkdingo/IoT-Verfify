@@ -43,6 +43,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
@@ -100,6 +101,7 @@ class SimulationServiceImplTest {
     @Mock private FormalOperationAdmission formalOperationAdmission;
     @Mock private SimulationTraceMapper simulationTraceMapper;
     @Mock private SimulationTaskMapper simulationTaskMapper;
+    @Mock private BoardDataConverter boardDataConverter;
     private TransactionTemplate transactionTemplate;
     private SimpleTransactionStatus lastTransactionStatus;
 
@@ -176,7 +178,7 @@ class SimulationServiceImplTest {
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission);
+                chatExecutionLeaseGuard, formalOperationAdmission, boardDataConverter);
         lenient().when(simulationTaskRepository.currentDatabaseTime())
                 .thenAnswer(invocation -> LocalDateTime.now());
         lenient().when(simulationTaskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
@@ -214,7 +216,7 @@ class SimulationServiceImplTest {
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 executor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
-                formalOperationAdmission);
+                formalOperationAdmission, boardDataConverter);
     }
 
     private SimulationServiceImpl serviceWithAdmissionConfig(AsyncTaskAdmissionConfig admissionConfig) {
@@ -223,7 +225,7 @@ class SimulationServiceImplTest {
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission, admissionConfig);
+                chatExecutionLeaseGuard, formalOperationAdmission, admissionConfig, boardDataConverter);
     }
 
     @Test
@@ -312,6 +314,16 @@ class SimulationServiceImplTest {
                                                    int attackBudget,
                                                    boolean enablePrivacy) {
         SimulationRequestDto request = new SimulationRequestDto();
+        // The service reads the scene from the board, so the scene a test wants simulated has to be
+        // the board it presents. An answer (not a value) mirrors the real per-call immutable read.
+        lenient().when(boardDataConverter.getModelInputSnapshot(anyLong())).thenAnswer(invocation ->
+                new BoardDataConverter.ModelInputSnapshot(
+                        playbackNodes(devices) == null ? List.of() : List.copyOf(playbackNodes(devices)),
+                        devices == null ? List.of() : List.copyOf(devices),
+                        List.of(),
+                        rules == null ? List.of() : List.copyOf(rules),
+                        List.of(),
+                        Map.of()));
         request.setDevices(devices);
         request.setPlaybackNodes(playbackNodes(devices));
         request.setRules(rules);
@@ -538,7 +550,7 @@ class SimulationServiceImplTest {
                 () -> service.submitSimulation(
                         1L, simRequest(List.of(), List.of(), 10, false, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        assertTrue(ex.getMessage().contains("Add at least one device to the board before simulating"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
     }
 
@@ -734,7 +746,7 @@ class SimulationServiceImplTest {
                 () -> service.simulateAsync(
                         1L, 12L, simRequest(List.of(), List.of(), 10, false, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        assertTrue(ex.getMessage().contains("Add at least one device to the board before simulating"));
         verify(simulationTaskRepository).findById(12L);
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
@@ -978,7 +990,7 @@ class SimulationServiceImplTest {
         ValidationException ex = assertThrows(ValidationException.class,
                 () -> service.simulate(1L, simRequest(null, List.of(), 10, false, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        assertTrue(ex.getMessage().contains("Add at least one device to the board before simulating"));
     }
 
     @Test
@@ -986,7 +998,7 @@ class SimulationServiceImplTest {
         ValidationException ex = assertThrows(ValidationException.class,
                 () -> service.simulate(1L, simRequest(List.of(), List.of(), 10, false, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        assertTrue(ex.getMessage().contains("Add at least one device to the board before simulating"));
     }
 
     @Test
@@ -1231,12 +1243,15 @@ class SimulationServiceImplTest {
     @Test
     void simulateAndSave_invalidRequest_throwsValidationException() {
         SimulationRequestDto request = new SimulationRequestDto();
-        request.setDevices(null);
         request.setAttackScenario(AttackScenarioDto.none());
+        // An empty board is the only way to be device-less now: the request cannot supply a scene.
+        lenient().when(boardDataConverter.getModelInputSnapshot(anyLong())).thenReturn(
+                new BoardDataConverter.ModelInputSnapshot(
+                        List.of(), List.of(), List.of(), List.of(), List.of(), Map.of()));
 
         ValidationException ex = assertThrows(ValidationException.class,
                 () -> service.simulateAndSave(1L, request));
-        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        assertTrue(ex.getMessage().contains("Add at least one device to the board before simulating"));
     }
 
     // ==================== CRUD tests ====================
@@ -1483,6 +1498,16 @@ class SimulationServiceImplTest {
     private SimulationRequestDto simRequest(List<DeviceVerificationDto> devices, List<RuleDto> rules,
                                             int steps, boolean isAttack, int attackBudget, boolean enablePrivacy) {
         SimulationRequestDto r = new SimulationRequestDto();
+        // The service reads the scene from the board, so the scene a test wants simulated has to be
+        // the board it presents. An answer (not a value) mirrors the real per-call immutable read.
+        lenient().when(boardDataConverter.getModelInputSnapshot(anyLong())).thenAnswer(invocation ->
+                new BoardDataConverter.ModelInputSnapshot(
+                        playbackNodes(devices) == null ? List.of() : List.copyOf(playbackNodes(devices)),
+                        devices == null ? List.of() : List.copyOf(devices),
+                        List.of(),
+                        rules == null ? List.of() : List.copyOf(rules),
+                        List.of(),
+                        Map.of()));
         r.setDevices(devices);
         r.setPlaybackNodes(playbackNodes(devices));
         r.setRules(rules);

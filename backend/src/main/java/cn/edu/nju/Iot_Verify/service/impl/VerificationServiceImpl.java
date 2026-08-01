@@ -57,6 +57,8 @@ import cn.edu.nju.Iot_Verify.repository.projection.TraceSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.VerificationRunSummaryProjection;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.ModelPlaybackSceneSnapshot;
 import cn.edu.nju.Iot_Verify.util.RunInitiatorResolver;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
@@ -118,6 +120,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private final ChatExecutionLeaseGuard chatExecutionLeaseGuard;
     private final FormalOperationAdmission formalOperationAdmission;
     private final AsyncTaskAdmissionConfig.Limits taskAdmissionLimits;
+    /** Reads the board that defines what a run verifies; the request only chooses run parameters. */
+    private final BoardDataConverter boardDataConverter;
     private final String workerId = UUID.randomUUID().toString();
     private final ScheduledExecutorService leaseMaintenanceExecutor =
             Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -145,8 +149,10 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                    TransactionTemplate transactionTemplate,
                                    ChatExecutionLeaseGuard chatExecutionLeaseGuard,
                                    FormalOperationAdmission formalOperationAdmission,
-                                   AsyncTaskAdmissionConfig taskAdmissionConfig) {
+                                   AsyncTaskAdmissionConfig taskAdmissionConfig,
+                                   BoardDataConverter boardDataConverter) {
         super(objectMapper, "VerificationTask");
+        this.boardDataConverter = boardDataConverter;
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
         this.nusmvExecutor = nusmvExecutor;
@@ -180,13 +186,15 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                             ThreadPoolTaskExecutor syncVerificationExecutor,
                             TransactionTemplate transactionTemplate,
                             ChatExecutionLeaseGuard chatExecutionLeaseGuard,
-                            FormalOperationAdmission formalOperationAdmission) {
+                            FormalOperationAdmission formalOperationAdmission,
+                            BoardDataConverter boardDataConverter) {
         this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig, taskRepository,
                 traceRepository, traceMapper, userRepository, specificationMapper,
                 verificationTaskMapper, objectMapper, verificationTaskExecutor,
                 syncVerificationExecutor, transactionTemplate, chatExecutionLeaseGuard,
                 formalOperationAdmission,
-                new AsyncTaskAdmissionConfig());
+                new AsyncTaskAdmissionConfig(),
+                boardDataConverter);
     }
 
     private void requireChatExecutionLease() {
@@ -508,14 +516,31 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         }
         AttackScenarioDto attackScenario = AttackScenarioValidator.canonicalizeForVerification(
                 request.getAttackScenario());
+        // The board defines WHAT is verified; the request only selects run parameters. Accepting a
+        // caller-supplied scene was an authority inversion: an account whose board held no devices
+        // could post a fabricated two-device scene and have the VIOLATED verdict persisted into its
+        // own run history, where the UI presents it as "this saved scene was checked". Fuzz and the
+        // AI tools already read the board here, so this makes one rule out of two.
+        //
+        // The board read happens BEFORE snapshotRequest so the frozen snapshot deep-copies the board
+        // scene too. Assigning it afterwards would leave the run holding the live board objects.
+        ModelInputSnapshot board = boardDataConverter.getModelInputSnapshot(userId);
+        request.setDevices(board.devices());
+        request.setSpecs(board.specifications());
+        request.setRules(board.rules());
+        request.setEnvironmentVariables(board.environmentVariables());
+        request.setPlaybackNodes(board.nodes());
+
         VerificationRequestDto snapshot = snapshotRequest(request, attackScenario);
         List<DeviceVerificationDto> devices = copyRequiredList(
-                snapshot.getDevices(), "devices", "Devices list cannot be empty");
+                snapshot.getDevices(), "devices",
+                "Add at least one device to the board before verifying");
         List<SpecificationDto> specs = copyRequiredList(
-                snapshot.getSpecs(), "specs", "Specs list cannot be empty");
+                snapshot.getSpecs(), "specs",
+                "Add at least one specification to the board before verifying");
         List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
-        List<BoardEnvironmentVariableDto> environmentVariables = copyOptionalList(
-                snapshot.getEnvironmentVariables(), "environmentVariables");
+        List<BoardEnvironmentVariableDto> environmentVariables =
+                copyOptionalList(snapshot.getEnvironmentVariables(), "environmentVariables");
         snapshot.setDevices(devices);
         snapshot.setRules(rules);
         snapshot.setSpecs(specs);

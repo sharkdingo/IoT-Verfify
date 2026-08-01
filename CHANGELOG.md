@@ -17,6 +17,18 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-01 (later)
 
+#### Changed
+- **A verification or simulation run now always describes the board you saved.** The request carries
+  run parameters only (`attackScenario`, `enablePrivacy`, and simulation's `steps`); the server reads
+  devices, rules, specifications, the environment pool, and the canvas layout from your own persisted
+  board. Sending a scene is refused with an explanatory `400` rather than silently ignored. Previously
+  the client supplied the model and the server only checked it for internal consistency, so an account
+  whose board held no devices could post a fabricated two-device scene and have the resulting
+  `VIOLATED` verdict persisted into its own run history — where the UI presents a run as "this saved
+  scene was checked". Counterexample exploration and the AI assistant already read the board this way,
+  so verification and simulation now follow one rule instead of two, and the board read happens before
+  the run snapshot is frozen so persisted evidence copies the scene instead of aliasing live objects.
+
 #### Fixed
 - **A device now moves a shared environment value in the same step it is acting.** Its per-variable
   impact rate was a state variable, so the environment transition read the *previous* step's rate:

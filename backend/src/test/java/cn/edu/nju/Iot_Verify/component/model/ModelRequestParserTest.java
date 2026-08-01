@@ -27,16 +27,6 @@ class ModelRequestParserTest {
     void verificationRejectsMisspelledAttackFlagInsteadOfSilentlyDisablingAttackModeling() throws Exception {
         JsonNode body = objectMapper.readTree("""
                 {
-                  "devices": [{"varName": "sensor_1", "templateName": "Sensor"}],
-                  "specs": [{
-                    "id": "spec-1",
-                    "templateId": "3",
-                    "templateLabel": "Never",
-                    "aConditions": [],
-                    "ifConditions": [],
-                    "thenConditions": [],
-                    "devices": []
-                  }],
                   "attackEnabled": true
                 }
                 """);
@@ -51,22 +41,11 @@ class ModelRequestParserTest {
 
     @Test
     void verificationRejectsUnknownNestedRuntimeFieldWithExactPath() throws Exception {
+        // Devices are no longer client input, so the nested-path guarantee is pinned on the one
+        // nested structure a run request still owns: its attack selection.
         JsonNode body = objectMapper.readTree("""
                 {
-                  "devices": [{
-                    "varName": "sensor_1",
-                    "templateName": "Sensor",
-                    "currentStateTrsut": "untrusted"
-                  }],
-                  "specs": [{
-                    "id": "spec-1",
-                    "templateId": "3",
-                    "templateLabel": "Never",
-                    "aConditions": [],
-                    "ifConditions": [],
-                    "thenConditions": [],
-                    "devices": []
-                  }]
+                  "attackScenario": {"mode": "EXACT_POINTS", "points": [{"kind": "DEVICE", "devceId": "x"}]}
                 }
                 """);
 
@@ -74,15 +53,14 @@ class ModelRequestParserTest {
                 BadRequestException.class, () -> parser.parseVerification(body));
 
         assertThat(exception.getMessage())
-                .contains("currentStateTrsut")
-                .contains("devices[0].currentStateTrsut");
+                .contains("devceId")
+                .contains("attackScenario.points[0].devceId");
     }
 
     @Test
     void simulationRejectsMisspelledPrivacyFlagInsteadOfSilentlyDisablingPropagation() throws Exception {
         JsonNode body = objectMapper.readTree("""
                 {
-                  "devices": [{"varName": "sensor_1", "templateName": "Sensor"}],
                   "privacyEnabled": true
                 }
                 """);
@@ -97,7 +75,6 @@ class ModelRequestParserTest {
     void beanValidationStillRunsAfterStrictParsing() throws Exception {
         JsonNode body = objectMapper.readTree("""
                 {
-                  "devices": [],
                   "steps": 10
                 }
                 """);
@@ -105,8 +82,10 @@ class ModelRequestParserTest {
         ConstraintViolationException exception = assertThrows(
                 ConstraintViolationException.class, () -> parser.parseSimulation(body));
 
+        // attackScenario is the required run parameter; the scene is not validated here because the
+        // server supplies it from the board.
         assertThat(exception.getConstraintViolations())
                 .anySatisfy(violation -> assertThat(violation.getPropertyPath().toString())
-                        .isEqualTo("devices"));
+                        .isEqualTo("attackScenario"));
     }
 }

@@ -87,12 +87,9 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
                         "VALIDATION_ERROR", 400);
             }
 
+            // The service reads the scene from the same board this tool just inspected, so the
+            // request carries only run parameters.
             VerificationRequestDto request = new VerificationRequestDto();
-            request.setDevices(devices);
-            request.setPlaybackNodes(board.nodes());
-            request.setEnvironmentVariables(board.environmentVariables());
-            request.setRules(rules);
-            request.setSpecs(specs);
             request.setAttackScenario(attackScenario);
             request.setEnablePrivacy(enablePrivacy);
 

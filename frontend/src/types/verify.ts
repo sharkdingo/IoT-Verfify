@@ -1,7 +1,6 @@
 // src/types/verify.ts
 
-import type { ModelDevice, ModelEnvironmentVariable, ModelPlaybackScene, ModelRule, ModelSpecification, RunInitiator } from './model'
-import type { DeviceNode } from './node'
+import type { ModelPlaybackScene, RunInitiator } from './model'
 import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
 import type { Specification } from './spec'
 import type { AsyncTaskStatus, TaskProgressStage } from './task'
@@ -9,12 +8,11 @@ import type { RunPersistence } from './runPersistence'
 import type { AttackScenario } from './attackScenario'
 import type { ModelTokenSource } from './modelToken'
 
+/**
+ * Run parameters only. The scene is read server-side from the caller's persisted board, so a run
+ * always describes the saved board rather than a client-supplied model.
+ */
 export interface VerificationRequest {
-  devices: ModelDevice[];
-  playbackNodes: DeviceNode[];
-  environmentVariables: ModelEnvironmentVariable[];
-  rules: ModelRule[];
-  specs: ModelSpecification[];
   attackScenario: AttackScenario;
   enablePrivacy: boolean;
 }

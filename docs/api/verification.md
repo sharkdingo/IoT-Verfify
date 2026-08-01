@@ -31,16 +31,18 @@ simulation.
 The request is strict at every nesting level. Unknown fields and scalar type coercions
 return HTTP `400`; a misspelled `attackScenario`, `enablePrivacy`, device label, rule field, or
 environment override is never ignored and cannot silently weaken the model. DTO shape
-constraints (for example empty `devices`/`specs`) also return structured HTTP `400`
-errors; model/template semantic mismatches discovered after parsing return `422`.
+constraints also return structured HTTP `400` errors; model/template semantic mismatches
+discovered after parsing return `422`.
+
+**The request carries run parameters only — the scene comes from your saved board.** Sending
+`devices`, `rules`, `specs`, `environmentVariables`, or `playbackNodes` returns HTTP `400`. The
+server reads those from the caller's own persisted board so a run always describes the board the
+user saved; while they were client input, an account with an empty board could post a fabricated
+scene and have the resulting `VIOLATED` verdict stored in its own run history. A board with no
+devices, or none with a specification, returns `422` naming what to add.
 
 | Field | Type | Required | Default | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | 1–100 device instances; each device accepts at most 100 variable and 100 privacy overrides |
-| `playbackNodes` | `DeviceNodeDto[]` | yes (`@NotEmpty`) | — | Frozen visual node data for read-only replay. It must contain every submitted `devices[].varName` exactly once after normalizing its `id`; template name and display label must match the model device, and position/size must be finite and within the Board layout bounds. It is not part of NuSMV semantics. |
-| `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | At most 200 Board-level environment pool overrides. Names must be unique. A missing item or a `null` value/trust/privacy field uses the referenced template default; an explicit blank or invalid field is rejected before defaults are merged |
-| `rules` | `RuleDto[]` | no | `[]` | At most 100 automation rules. Every non-null `id` must be positive and unique within the request; unsaved rules may share the omitted/null value. A persisted id is correlation identity for user-facing triggered-rule/link snapshots and does not change model behavior |
-| `specs` | `SpecificationDto[]` | yes (`@NotEmpty`) | — | 1–100 specifications to check |
 | `attackScenario` | `AttackScenarioDto` | yes | — | Explicit per-run attack selection, independent from persistent trust labels. `mode` is required. Verification accepts `NONE`, `EXACT_POINTS`, or `ANY_UP_TO_BUDGET`. Exact mode requires `1..50` explicit points and no budget. Exhaustive mode requires budget `1..50`, no explicit points, and a budget no greater than the current behavior-changing attack surface. |
 | `enablePrivacy` | `boolean` | no | `false` | Adds privacy-label variables and enlarges state space. Any privacy condition in a submitted specification makes the effective value `true`, even if the caller omitted or set this field to `false`; responses return the effective value |
 

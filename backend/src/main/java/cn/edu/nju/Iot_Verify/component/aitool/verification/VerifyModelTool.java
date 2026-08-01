@@ -111,12 +111,9 @@ public class VerifyModelTool extends AbstractAiTool {
                     devices.size(), rules.size(), specs.size(), attackScenario.getMode(),
                     attackScenario.effectiveBudget(), enablePrivacy);
 
+            // The service reads the scene from the same board this tool just inspected, so the
+            // request carries only run parameters.
             VerificationRequestDto request = new VerificationRequestDto();
-            request.setDevices(devices);
-            request.setPlaybackNodes(board.nodes());
-            request.setEnvironmentVariables(board.environmentVariables());
-            request.setRules(rules);
-            request.setSpecs(specs);
             request.setAttackScenario(attackScenario);
             request.setEnablePrivacy(enablePrivacy);
 

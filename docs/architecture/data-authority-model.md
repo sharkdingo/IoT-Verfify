@@ -343,6 +343,19 @@ a sparse trace.
 Frontend builder: `frontend/src/utils/modelRequest.ts`. Backend converter:
 `BoardDataConverter`.
 
+**A run request carries run parameters only; the scene is read server-side from the caller's own
+persisted board.** `attackScenario`, `enablePrivacy`, and (for simulation) `steps` are the whole
+client contract. `devices`, `rules`, `specs`, `environmentVariables`, and `playbackNodes` are
+**rejected** by `ModelRequestParser` if a client sends them, because a run must describe the board
+the user saved: while they were client input, an account whose board held no devices could post a
+fabricated two-device scene and have the resulting `VIOLATED` verdict persisted into its own run
+history. Verification and simulation now call `BoardDataConverter.getModelInputSnapshot(userId)` —
+the same read fuzz and the AI tools already used — before freezing the request snapshot, so the
+persisted evidence deep-copies the board scene rather than aliasing live objects.
+
+The table below therefore describes the **frozen snapshot** the service builds from that board read
+and persists as run evidence, not fields a client may supply.
+
 | Field | Authority | Purpose | Downstream |
 | --- | --- | --- | --- |
 | `devices[].varName` | Normalized `DeviceNode.id` | NuSMV instance variable name | Generator map key, traces, fix |

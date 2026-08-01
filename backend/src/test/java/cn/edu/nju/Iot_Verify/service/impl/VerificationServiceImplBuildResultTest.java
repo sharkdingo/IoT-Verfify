@@ -55,6 +55,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -109,6 +110,7 @@ class VerificationServiceImplBuildResultTest {
     @Mock private UserRepository userRepository;
     @Mock private SpecificationMapper specificationMapper;
     @Mock private VerificationTaskMapper verificationTaskMapper;
+    @Mock private BoardDataConverter boardDataConverter;
 
     private static class DirectThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
         @Override
@@ -169,7 +171,7 @@ class VerificationServiceImplBuildResultTest {
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission);
+                chatExecutionLeaseGuard, formalOperationAdmission, boardDataConverter);
         lenient().when(taskRepository.currentDatabaseTime()).thenAnswer(invocation -> LocalDateTime.now());
         lenient().when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
                 .thenReturn(1);
@@ -272,7 +274,7 @@ class VerificationServiceImplBuildResultTest {
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 executor, syncVerificationExecutor, transactionTemplate, chatExecutionLeaseGuard,
-                formalOperationAdmission);
+                formalOperationAdmission, boardDataConverter);
     }
 
     private VerificationServiceImpl serviceWithTransactionTemplate(TransactionTemplate transactionTemplate) {
@@ -281,7 +283,7 @@ class VerificationServiceImplBuildResultTest {
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission);
+                chatExecutionLeaseGuard, formalOperationAdmission, boardDataConverter);
     }
 
     private VerificationServiceImpl serviceWithAdmissionConfig(AsyncTaskAdmissionConfig admissionConfig) {
@@ -290,7 +292,7 @@ class VerificationServiceImplBuildResultTest {
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard, formalOperationAdmission, admissionConfig);
+                chatExecutionLeaseGuard, formalOperationAdmission, admissionConfig, boardDataConverter);
     }
 
     private TransactionTemplate inlineTransactionTemplate() {
@@ -663,7 +665,7 @@ class VerificationServiceImplBuildResultTest {
                 () -> service.submitVerification(
                         1L, makeRequest(singleDevice(), List.of(), List.of(), false, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Specs list cannot be empty"));
+        assertTrue(ex.getMessage().contains("Add at least one specification to the board before verifying"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
     }
 
@@ -686,7 +688,7 @@ class VerificationServiceImplBuildResultTest {
                 () -> service.verifyAsync(
                         1L, 7L, makeRequest(singleDevice(), List.of(), List.of(), false, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Specs list cannot be empty"));
+        assertTrue(ex.getMessage().contains("Add at least one specification to the board before verifying"));
         verify(taskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
                 anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
@@ -1856,10 +1858,23 @@ class VerificationServiceImplBuildResultTest {
                                                 List<SpecificationDto> specs, boolean isAttack,
                                                 int attackBudget, boolean enablePrivacy) {
         VerificationRequestDto r = new VerificationRequestDto();
+        // The service reads the scene from the board, not from the request, so the scene a test
+        // wants verified has to be the board it presents. The request fields are still populated
+        // because they are the frozen snapshot the service overwrites and then persists.
         r.setDevices(devices);
         r.setPlaybackNodes(playbackNodes(devices));
         r.setRules(rules);
         r.setSpecs(specs);
+        // Answer, not a fixed value: the real board read happens per call and returns its own
+        // immutable lists, so a test that mutates its inputs afterwards must not see the change.
+        lenient().when(boardDataConverter.getModelInputSnapshot(anyLong())).thenAnswer(invocation ->
+                new BoardDataConverter.ModelInputSnapshot(
+                        playbackNodes(devices) == null ? List.of() : List.copyOf(playbackNodes(devices)),
+                        devices == null ? List.of() : List.copyOf(devices),
+                        List.of(),
+                        rules == null ? List.of() : List.copyOf(rules),
+                        specs == null ? List.of() : List.copyOf(specs),
+                        Map.of()));
         r.setAttackScenario(AttackScenarioDto.builder()
                 .mode(isAttack ? AttackScenarioDto.Mode.ANY_UP_TO_BUDGET : AttackScenarioDto.Mode.NONE)
                 .budget(attackBudget)

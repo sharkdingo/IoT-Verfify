@@ -25,45 +25,24 @@ import java.util.Objects;
  */
 @Data
 public class VerificationRequestDto {
-    /**
-     * 设备验证数据列表（仅包含验证所需字段，不含 UI 布局信息）
-     */
-    @Valid
-    @NotEmpty(message = "Devices list cannot be empty")
-    @Size(max = RequestLimits.MAX_DEVICES, message = "At most 100 devices can be verified")
-    private List<@Valid @NotNull(message = "Device item cannot be null") DeviceVerificationDto> devices;
+    // The scene is NOT part of this request. The server reads devices, rules, specifications, the
+    // environment pool, and the canvas layout from the caller's own persisted board, so a run always
+    // describes the board the user saved. Accepting them here let an account with an empty board
+    // post a fabricated scene and keep the resulting verdict in its run history. The fields below
+    // are the frozen snapshot the service fills in from that board read; the strict request parser
+    // rejects any attempt to supply them, so they are never client input.
+    private List<DeviceVerificationDto> devices;
 
     /** Frozen canvas layout for faithful read-only replay; it is not part of NuSMV semantics. */
-    @Valid
-    @NotEmpty(message = "Playback nodes cannot be empty")
-    @Size(max = RequestLimits.MAX_DEVICES, message = "At most 100 playback nodes can be captured")
-    private List<@Valid @NotNull(message = "Playback node item cannot be null") DeviceNodeDto> playbackNodes;
+    private List<DeviceNodeDto> playbackNodes;
 
-    /**
-     * Board-level environment pool. Device prefixes in rules/specs identify which modeled device
-     * reads the shared value; they are model references, not authorization. The scenario value comes
-     * from this shared pool.
-     */
-    @Valid
-    @Size(max = RequestLimits.MAX_ENVIRONMENT_VARIABLES, message = "At most 200 environment variables can be verified")
-    private List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> environmentVariables = new ArrayList<>();
+    /** Board-level environment pool, captured with the same board read as the devices. */
+    private List<BoardEnvironmentVariableDto> environmentVariables = new ArrayList<>();
 
-    /**
-     * 规则列表
-     */
-    @Valid
-    @Size(max = RequestLimits.MAX_RULES, message = "At most 100 rules can be verified")
-    private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules = new ArrayList<>();
+    private List<RuleDto> rules = new ArrayList<>();
 
-    /**
-     * 
-     * 规格列表
-     */
-    @Valid
-    @NotEmpty(message = "Specs list cannot be empty")
-    @Size(max = RequestLimits.MAX_SPECS, message = "At most 100 specifications can be verified")
-    private List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs;
-    
+    private List<SpecificationDto> specs;
+
     /** Per-run attack selection. Trust labels remain independent board/model inputs. */
     @Valid
     @NotNull(message = "Attack scenario is required")

@@ -260,13 +260,6 @@ const buildEnvironmentVariables = (environmentVariables?: ModelEnvironmentVariab
       }
     })
 
-const buildPlaybackNodes = (nodes: DeviceNode[]): DeviceNode[] => nodes.map(node => ({
-  ...node,
-  position: { ...node.position },
-  ...(node.variables ? { variables: node.variables.map(variable => ({ ...variable })) } : {}),
-  ...(node.privacies ? { privacies: node.privacies.map(privacy => ({ ...privacy })) } : {})
-}))
-
 const buildAttackScenario = (attackScenario: AttackScenario): AttackScenario => {
   if (attackScenario.mode === 'NONE') {
     return { mode: 'NONE', budget: 0, points: [] }
@@ -286,28 +279,39 @@ const buildAttackScenario = (attackScenario: AttackScenario): AttackScenario => 
   }
 }
 
+/**
+ * Run parameters only. The server reads the scene from the caller's persisted board, so sending
+ * devices/rules/specs/environment would be rejected by its strict request parser — and the whole
+ * point is that a run describes the saved board rather than whatever this tab happens to hold.
+ */
 export const buildVerificationRequestPayload = (
-  params: ModelRequestBase & { specifications: Specification[] }
+  params: Pick<ModelRequestBase, 'attackScenario' | 'enablePrivacy'>
 ): VerificationRequest => ({
-  devices: buildDevices(params.nodes, params.deviceTemplates),
-  playbackNodes: buildPlaybackNodes(params.nodes),
-  environmentVariables: buildEnvironmentVariables(params.environmentVariables),
-  rules: buildRules(params.rules),
-  specs: buildSpecs(params.specifications),
   attackScenario: buildAttackScenario(params.attackScenario),
   enablePrivacy: params.enablePrivacy
 })
 
 export const buildSimulationRequestPayload = (
-  params: ModelRequestBase & { steps: number }
+  params: Pick<ModelRequestBase, 'attackScenario' | 'enablePrivacy'> & { steps: number }
 ): SimulationRequest => ({
-  devices: buildDevices(params.nodes, params.deviceTemplates),
-  playbackNodes: buildPlaybackNodes(params.nodes),
-  environmentVariables: buildEnvironmentVariables(params.environmentVariables),
-  rules: buildRules(params.rules),
   steps: params.steps,
   attackScenario: buildAttackScenario(params.attackScenario),
   enablePrivacy: params.enablePrivacy
+})
+
+/**
+ * The scene this tab believes is current, used only to warn locally when the board changed while a
+ * run was in flight. It is never sent: the server's own board read is authoritative.
+ */
+export const buildLocalSceneFingerprint = (
+  params: Omit<ModelRequestBase, 'attackScenario' | 'enablePrivacy'>
+    & Partial<Pick<ModelRequestBase, 'attackScenario' | 'enablePrivacy'>>
+    & { specifications?: Specification[]; steps?: number }
+) => ({
+  devices: buildDevices(params.nodes, params.deviceTemplates),
+  environmentVariables: buildEnvironmentVariables(params.environmentVariables),
+  rules: buildRules(params.rules),
+  ...(params.specifications ? { specs: buildSpecs(params.specifications) } : {})
 })
 
 const canonicalizeModelValue = (value: unknown): unknown => {
@@ -327,11 +331,12 @@ const canonicalizeModelValue = (value: unknown): unknown => {
  * lets the current tab warn when its board changed while a run was in flight.
  */
 export const buildModelRunSignature = (
-  request: VerificationRequest | SimulationRequest,
+  scene: Record<string, unknown>,
   deviceTemplates: DeviceTemplate[]
 ): string => {
-  const { playbackNodes: _playbackNodes, ...semanticRequest } = request
-  const referencedNames = new Set(request.devices
+  const semanticRequest = scene
+  const sceneDevices = (scene.devices as Array<{ templateName?: string }> | undefined) ?? []
+  const referencedNames = new Set(sceneDevices
     .map(device => String(device.templateName || '').trim().toLowerCase())
     .filter(Boolean))
   const templates = deviceTemplates

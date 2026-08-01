@@ -105,11 +105,9 @@ public class SimulateModelTool extends AbstractAiTool {
                     devices.size(), rules.size(), steps, attackScenario.getMode(),
                     attackScenario.effectiveBudget(), enablePrivacy);
 
+            // The service reads the scene from the same board this tool just inspected, so the
+            // request carries only run parameters.
             SimulationRequestDto request = new SimulationRequestDto();
-            request.setDevices(devices);
-            request.setPlaybackNodes(board.nodes());
-            request.setEnvironmentVariables(board.environmentVariables());
-            request.setRules(rules);
             request.setSteps(steps);
             request.setAttackScenario(attackScenario);
             request.setEnablePrivacy(enablePrivacy);

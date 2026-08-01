@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.List;
 /** Strict JSON boundary for requests whose fields define the checked model. */
 @Component
 @RequiredArgsConstructor
@@ -31,9 +32,26 @@ public class ModelRequestParser {
         return parse(body, SimulationRequestDto.class, "Simulation");
     }
 
+    /**
+     * Fields that describe the scene rather than the run. They are serialized on the way out (the
+     * persisted run snapshot and the fix path read them back) but the server owns them: it reads the
+     * scene from the caller's board. Jackson would silently ignore them on input, and a silently
+     * different run is exactly what this parser exists to prevent, so a stale client that still
+     * sends a scene gets told rather than quietly given a run it did not describe.
+     */
+    private static final List<String> SERVER_OWNED_SCENE_FIELDS = List.of(
+            "devices", "rules", "specs", "environmentVariables", "playbackNodes");
+
     private <T> T parse(JsonNode body, Class<T> type, String requestKind) {
         if (body == null || !body.isObject()) {
             throw new BadRequestException(requestKind + " request must be a JSON object.");
+        }
+        for (String sceneField : SERVER_OWNED_SCENE_FIELDS) {
+            if (body.has(sceneField)) {
+                throw new BadRequestException("Field '" + sceneField + "' is not accepted: the "
+                        + requestKind.toLowerCase() + " scene is read from your saved board, so a run "
+                        + "always describes the board you saved. Send only run parameters.");
+            }
         }
 
         final T request;

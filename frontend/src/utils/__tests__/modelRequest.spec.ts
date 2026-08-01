@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildLocalSceneFingerprint,
   buildModelRunSignature,
   buildSimulationRequestPayload,
   buildVerificationRequestPayload,
@@ -88,7 +89,7 @@ describe('modelRequest', () => {
   })
 
   it('builds identical devices and rules for verification and simulation', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules,
@@ -97,7 +98,7 @@ describe('modelRequest', () => {
       enablePrivacy: true
     })
 
-    const simulation = buildSimulationRequestPayload({
+    const simulation = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules,
@@ -127,7 +128,7 @@ describe('modelRequest', () => {
   })
 
   it('keeps temporary UI rule ids out of the model boundary', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [{ ...rules[0], id: 'rule_1712345678' }] as any[],
@@ -141,18 +142,11 @@ describe('modelRequest', () => {
 
   it('canonicalizes disabled attack inputs to a NONE scenario', () => {
     const verification = buildVerificationRequestPayload({
-      nodes,
-      deviceTemplates,
-      rules,
-      specifications,
       attackScenario: { mode: 'NONE', budget: 9, points: [] },
       enablePrivacy: false
     })
 
     const simulation = buildSimulationRequestPayload({
-      nodes,
-      deviceTemplates,
-      rules,
       steps: 8,
       attackScenario: { mode: 'NONE', budget: 9, points: [] },
       enablePrivacy: false
@@ -163,7 +157,7 @@ describe('modelRequest', () => {
   })
 
   it('preserves explicit state trust overrides for mode templates', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes: [
         {
           id: 'node-1',
@@ -191,7 +185,7 @@ describe('modelRequest', () => {
   })
 
   it('does not reserve variable_ as a hidden template prefix', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes: [
         { id: 'variable-sensor-1', label: 'Variable Sensor', templateName: 'variable_sensor' }
       ] as any[],
@@ -224,7 +218,7 @@ describe('modelRequest', () => {
   })
 
   it('does not send state fields for templates without modes', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes: [
         { id: 'smoke-1', label: 'Smoke', templateName: 'Smoke Sensor', state: 'Working' }
       ] as any[],
@@ -257,7 +251,7 @@ describe('modelRequest', () => {
   })
 
   it('does not send state fields for templates with modes but no working states', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes: [
         { id: 'draft-1', label: 'Draft', templateName: 'Draft Template', state: 'on', currentStateTrust: 'trusted' }
       ] as any[],
@@ -285,7 +279,7 @@ describe('modelRequest', () => {
   })
 
   it('matches device templates by repository name or manifest name', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes: [
         {
           id: 'shade-1',
@@ -320,7 +314,7 @@ describe('modelRequest', () => {
   })
 
   it('sends only explicit device instance runtime overrides', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes: [
         {
           id: 'sensor-1',
@@ -356,7 +350,7 @@ describe('modelRequest', () => {
   })
 
   it('keeps scenario environment variables out of device instance requests', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes: [
         {
           id: 'temperature-sensor-1',
@@ -393,7 +387,7 @@ describe('modelRequest', () => {
   })
 
   it('sends the environment pool as a top-level model request field', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [],
@@ -406,7 +400,7 @@ describe('modelRequest', () => {
       enablePrivacy: true
     })
 
-    const simulation = buildSimulationRequestPayload({
+    const simulation = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [],
@@ -428,7 +422,7 @@ describe('modelRequest', () => {
   })
 
   it('rejects a nameless environment entry instead of silently omitting model input', () => {
-    expect(() => buildVerificationRequestPayload({
+    expect(() => buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [],
@@ -448,7 +442,7 @@ describe('modelRequest', () => {
       content: 'photo'
     }
 
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [contentRule],
@@ -466,7 +460,7 @@ describe('modelRequest', () => {
   })
 
   it('normalizes specification condition and selected-device ids for model requests', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [],
@@ -475,12 +469,12 @@ describe('modelRequest', () => {
       enablePrivacy: false
     })
 
-    expect(verification.specs[0].aConditions[0]).toMatchObject({
+    expect(verification.specs![0].aConditions[0]).toMatchObject({
       deviceId: 'node_1',
       deviceLabel: 'node-1',
       value: '1'
     })
-    expect(verification.specs[0].devices?.[0]).toMatchObject({
+    expect(verification.specs![0].devices?.[0]).toMatchObject({
       deviceId: 'node_1',
       deviceLabel: 'node-1',
       selectedApis: ['turnOn']
@@ -488,7 +482,7 @@ describe('modelRequest', () => {
   })
 
   it('normalizes rule and specification relation aliases at the model boundary', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [
@@ -518,11 +512,11 @@ describe('modelRequest', () => {
     })
 
     expect(verification.rules[0].conditions[0].relation).toBe('>=')
-    expect(verification.specs[0].aConditions[0].relation).toBe('not in')
+    expect(verification.specs![0].aConditions[0].relation).toBe('not in')
   })
 
   it('preserves falsy zero condition values in rules and specifications', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [
@@ -550,11 +544,11 @@ describe('modelRequest', () => {
     })
 
     expect(verification.rules[0].conditions[0].value).toBe('0')
-    expect(verification.specs[0].aConditions[0].value).toBe('0')
+    expect(verification.specs![0].aConditions[0].value).toBe('0')
   })
 
   it('rejects incomplete value-based rule conditions at the model boundary', () => {
-    expect(() => buildVerificationRequestPayload({
+    expect(() => buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [
@@ -572,7 +566,7 @@ describe('modelRequest', () => {
   })
 
   it('omits relation and value for API signal rule triggers', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [
@@ -598,7 +592,7 @@ describe('modelRequest', () => {
   })
 
   it('keeps mode and full-state rule triggers as backend-recognized attributes', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [
@@ -622,7 +616,7 @@ describe('modelRequest', () => {
   })
 
   it('normalizes full-state rule attributes even when imported data omits fromApi', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [
@@ -648,7 +642,7 @@ describe('modelRequest', () => {
   })
 
   it('defaults API specification conditions to an explicit true signal check', () => {
-    const verification = buildVerificationRequestPayload({
+    const verification = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules: [],
@@ -674,7 +668,7 @@ describe('modelRequest', () => {
       enablePrivacy: false
     })
 
-    expect(verification.specs[0].aConditions[0]).toMatchObject({
+    expect(verification.specs![0].aConditions[0]).toMatchObject({
       deviceId: 'node_1',
       targetType: 'api',
       key: 'turnOn',
@@ -684,7 +678,7 @@ describe('modelRequest', () => {
   })
 
   it('changes the local run signature when model input or a referenced template changes', () => {
-    const request = buildVerificationRequestPayload({
+    const request = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules,
@@ -705,7 +699,7 @@ describe('modelRequest', () => {
   })
 
   it('ignores unused templates and object key order in the local run signature', () => {
-    const request = buildVerificationRequestPayload({
+    const request = buildLocalSceneFingerprint({
       nodes,
       deviceTemplates,
       rules,
@@ -714,13 +708,10 @@ describe('modelRequest', () => {
       enablePrivacy: false
     })
     const reorderedRequest = {
-      enablePrivacy: request.enablePrivacy,
       specs: request.specs,
       rules: request.rules,
       environmentVariables: request.environmentVariables,
-      devices: request.devices,
-      playbackNodes: request.playbackNodes,
-      attackScenario: request.attackScenario
+      devices: request.devices
     }
     const withUnusedTemplate = [
       ...deviceTemplates,
@@ -730,12 +721,18 @@ describe('modelRequest', () => {
     expect(buildModelRunSignature(reorderedRequest, withUnusedTemplate)).toBe(
       buildModelRunSignature(request, deviceTemplates)
     )
-    expect(buildModelRunSignature({
-      ...request,
-      playbackNodes: request.playbackNodes.map((node, index) => ({
-        ...node,
-        position: { x: node.position.x + index + 100, y: node.position.y + 50 }
-      }))
-    }, deviceTemplates)).toBe(buildModelRunSignature(request, deviceTemplates))
+    // Canvas layout is not semantic, so moving a device must not make a verdict look stale. The
+    // fingerprint now excludes layout entirely rather than carrying it and ignoring it later.
+    expect(Object.keys(request)).not.toContain('playbackNodes')
+    const movedNodes = nodes.map((node, index) => ({
+      ...node,
+      position: { x: 100 + index, y: 50 + index }
+    }))
+    expect(buildModelRunSignature(buildLocalSceneFingerprint({
+      nodes: movedNodes,
+      deviceTemplates,
+      rules,
+      specifications
+    }), deviceTemplates)).toBe(buildModelRunSignature(request, deviceTemplates))
   })
 })

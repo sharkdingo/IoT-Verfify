@@ -43,6 +43,8 @@ import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.ModelPlaybackSceneSnapshot;
 import cn.edu.nju.Iot_Verify.util.RunInitiatorResolver;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -91,6 +93,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private final ChatExecutionLeaseGuard chatExecutionLeaseGuard;
     private final FormalOperationAdmission formalOperationAdmission;
     private final AsyncTaskAdmissionConfig.Limits taskAdmissionLimits;
+    /** Reads the board that defines what a run simulates; the request only chooses parameters. */
+    private final BoardDataConverter boardDataConverter;
     private final String workerId = UUID.randomUUID().toString();
     private final ScheduledExecutorService leaseMaintenanceExecutor =
             Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -117,7 +121,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  TransactionTemplate transactionTemplate,
                                  ChatExecutionLeaseGuard chatExecutionLeaseGuard,
                                  FormalOperationAdmission formalOperationAdmission,
-                                 AsyncTaskAdmissionConfig taskAdmissionConfig) {
+                                 AsyncTaskAdmissionConfig taskAdmissionConfig,
+                                 BoardDataConverter boardDataConverter) {
         super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
@@ -134,6 +139,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         this.chatExecutionLeaseGuard = chatExecutionLeaseGuard;
         this.formalOperationAdmission = formalOperationAdmission;
         this.taskAdmissionLimits = taskAdmissionConfig.getSimulation();
+        this.boardDataConverter = boardDataConverter;
     }
 
     SimulationServiceImpl(SmvGenerator smvGenerator,
@@ -150,13 +156,15 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                           ThreadPoolTaskExecutor syncSimulationExecutor,
                           TransactionTemplate transactionTemplate,
                           ChatExecutionLeaseGuard chatExecutionLeaseGuard,
-                          FormalOperationAdmission formalOperationAdmission) {
+                          FormalOperationAdmission formalOperationAdmission,
+                          BoardDataConverter boardDataConverter) {
         this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, objectMapper,
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
                 formalOperationAdmission,
-                new AsyncTaskAdmissionConfig());
+                new AsyncTaskAdmissionConfig(),
+                boardDataConverter);
     }
 
     private void requireChatExecutionLease() {
@@ -323,12 +331,22 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         }
         AttackScenarioDto attackScenario = AttackScenarioValidator.canonicalizeForSimulation(
                 request.getAttackScenario());
+        // The board defines WHAT is simulated; the request only selects run parameters. See
+        // VerificationServiceImpl for the authority inversion this closes. The board read precedes
+        // snapshotRequest so the frozen snapshot deep-copies the board scene rather than aliasing it.
+        ModelInputSnapshot board = boardDataConverter.getModelInputSnapshot(userId);
+        request.setDevices(board.devices());
+        request.setRules(board.rules());
+        request.setEnvironmentVariables(board.environmentVariables());
+        request.setPlaybackNodes(board.nodes());
+
         SimulationRequestDto snapshot = snapshotRequest(request, attackScenario);
         List<DeviceVerificationDto> devices = copyRequiredList(
-                snapshot.getDevices(), "devices", "Devices list cannot be empty");
+                snapshot.getDevices(), "devices",
+                "Add at least one device to the board before simulating");
         List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
-        List<BoardEnvironmentVariableDto> environmentVariables = copyOptionalList(
-                snapshot.getEnvironmentVariables(), "environmentVariables");
+        List<BoardEnvironmentVariableDto> environmentVariables =
+                copyOptionalList(snapshot.getEnvironmentVariables(), "environmentVariables");
         int steps = snapshot.getSteps();
         if (steps < 1 || steps > 100) {
             throw new ValidationException("steps", "Steps must be between 1 and 100");

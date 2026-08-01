@@ -1,7 +1,6 @@
 // src/types/simulation.ts - 模拟功能相关类型定义
 
-import type { ModelDevice, ModelEnvironmentVariable, ModelPlaybackScene, ModelRule, RunInitiator } from './model'
-import type { DeviceNode } from './node'
+import type { ModelPlaybackScene, RunInitiator } from './model'
 import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
 import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { ModelGenerationIssue, TraceTriggeredRule } from './verify'
@@ -10,11 +9,8 @@ import type { AttackScenario } from './attackScenario'
 import type { ModelTokenSource } from './modelToken'
 
 // 模拟请求 DTO
+// Run parameters only; the scene comes from the caller's persisted board server-side.
 export interface SimulationRequest {
-  devices: ModelDevice[]
-  playbackNodes: DeviceNode[]
-  environmentVariables: ModelEnvironmentVariable[]
-  rules: ModelRule[]
   steps: number
   attackScenario: AttackScenario
   enablePrivacy: boolean
