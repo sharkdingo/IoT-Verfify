@@ -33,8 +33,11 @@ public class EnvironmentValueProvenanceDto {
      *     (deliberate abstraction for discrete, exact for numeric with natural rate).</li>
      * <li>DEVICE_CONTROLLED: at least one device declares ImpactedVariables; stutters when no
      *     declared effect applies (exact semantics).</li>
-     * <li>COMPOSED: multiple devices declare ImpactedVariables; effects are summed for numeric,
-     *     last-writer-wins for discrete (exact semantics).</li>
+     * <li>COMPOSED: several devices declare ImpactedVariables. Numeric effects sum, which is
+     *     MEDIC's additive {@code env.D.v}. Discrete writers must agree: a scene whose declared
+     *     effects assign different values to one discrete value is rejected at board assembly,
+     *     because resolving it by iteration order made the same scene produce opposite verdicts.
+     *     So a COMPOSED discrete value here is one whose writers agree (exact semantics).</li>
      * </ul>
      */
     public enum AuthorshipCategory {

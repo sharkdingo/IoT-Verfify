@@ -2,6 +2,7 @@ import type { NodePrivacyState, NodeVariableState } from './node'
 import type { RuleSourceItemType } from './rule'
 import type { Specification } from './spec'
 import type { DeviceNode } from './node'
+import type { ModelTokenSource } from './modelToken'
 
 export const RUN_INITIATORS = ['USER', 'AI_ASSISTANT', 'UNKNOWN'] as const
 export type RunInitiator = typeof RUN_INITIATORS[number]
@@ -74,12 +75,17 @@ export interface ModelPlaybackScene {
 
 export type ModelSpecification = Specification
 
+/** Domain shape of a shared value, mirroring `EnvironmentValueProvenanceDto.ValueType`. */
 export type ValueType = 'NUMERIC' | 'DISCRETE_ENUM' | 'DISCRETE_BOOLEAN'
-export type AuthorshipCategory = 'EXOGENOUS' | 'DEVICE_CONTROLLED' | 'COMPOSED'
-export type SemanticsTag = 'EXACT' | 'ABSTRACTION'
 
-export const MODEL_TOKEN_SOURCES = ['BUNDLED', 'CUSTOM', 'UNKNOWN'] as const
-export type ModelTokenSource = typeof MODEL_TOKEN_SOURCES[number]
+/**
+ * Who may change a shared value during a run. See
+ * `docs/architecture/shared-value-semantics.md` §7 for the authoritative rules.
+ */
+export type AuthorshipCategory = 'EXOGENOUS' | 'DEVICE_CONTROLLED' | 'COMPOSED'
+
+/** Whether the evolution rule means exactly what the user declared, or over-approximates it. */
+export type SemanticsTag = 'EXACT' | 'ABSTRACTION'
 
 export interface DeviceWriter {
   deviceVarName: string
@@ -109,15 +115,6 @@ export interface EnvironmentValueProvenance {
   evolutionSummary: string
 }
 
-export interface ModelRunSnapshot {
-  capturedAt: string
-  deviceCount: number
-  ruleCount: number
-  specificationCount: number
-  environmentVariableCount: number
-  deviceTemplateCount: number
-  modelFingerprint?: string | null
-  templatesFrozen?: boolean
-  environmentProvenance?: EnvironmentValueProvenance[]
-}
+// ModelRunSnapshot lives in ./modelSemantics — every consumer imports it from there, and a
+// second declaration here would let the two drift apart silently.
 

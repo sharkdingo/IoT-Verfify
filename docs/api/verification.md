@@ -92,7 +92,7 @@ still expose derived `isAttack` and `attackBudget` summary fields for convenient
 | `attackBudget` | `int` | Derived run size: exhaustive mode returns its upper bound; exact mode returns the fixed selected-point count; no-attack mode returns `0` |
 | `enablePrivacy` | `boolean` | Whether privacy-label propagation was modeled |
 | `modelSemantics` | `ModelSemanticsDto` | Machine-readable environment-evolution, local-variable, attack, trust, and privacy assumptions required to interpret the conclusion |
-| `modelSnapshot` | `ModelRunSnapshotDto` | User-facing scope captured at the model boundary, including item counts and confirmation that referenced template manifests were frozen for this run |
+| `modelSnapshot` | `ModelRunSnapshotDto` | User-facing scope captured at the model boundary: item counts, confirmation that referenced template manifests were frozen for this run, and the per-shared-value evolution rules that keep a stored trace explainable |
 | `outcome` | `SATISFIED \| VIOLATED \| INCONCLUSIVE` | User-facing conclusion. `INCONCLUSIVE` means no reliable property conclusion was produced; it is not a violation. |
 | `modelComplete` | `boolean` | Whether every submitted rule/spec entered the generated model and the emitted result set was parsed reliably |
 | `traces` | `TraceDto[]` | Counterexample traces for parsed property violations. An `INCONCLUSIVE` run can retain traces parsed before another result became incomplete; clients must present them as partial evidence, not as a complete verdict. |
@@ -457,12 +457,45 @@ tasks, task summaries, and persisted trace detail/summary DTOs.
 | `deviceTemplateCount` | `int` | Distinct referenced template manifests captured for the run |
 | `templatesFrozen` | `boolean` | Always `true`; generation reused the captured manifests and did not reload mutable definitions |
 | `modelFingerprint` | `String` | Optional canonical semantic fingerprint. Counterexample-exploration runs populate it for exact current-Board drift checks; verification and simulation currently omit it |
+| `environmentProvenance` | `EnvironmentValueProvenanceDto[]` | Per-shared-value evolution rules frozen for this run, so a stored trace stays explainable after the Board changes. Empty when the run had no shared values. See [`EnvironmentValueProvenanceDto`](#environmentvalueprovenancedto) |
 
 `modelSnapshot` is scope metadata, not a claim that the current Board still matches.
 The Board compares current modelable input with an in-memory submission signature only
 for runs submitted in the same browser tab. It labels changed input explicitly; after a
 reload or when opening historical results, it says the current Board was not compared
 and limits the conclusion to this snapshot.
+
+### `EnvironmentValueProvenanceDto`
+
+One entry per shared value in the run, recording which rule permitted that value to move.
+Without it, explaining a stored counterexample would require re-reading the current Board —
+which may have changed since the run, so the explanation could contradict the trace.
+
+| Field | Type | Meaning |
+| :--- | :--- | :--- |
+| `name` | `String` | User-facing shared value name, matching the `envVariables` entries in trace states |
+| `type` | `NUMERIC` \| `DISCRETE_ENUM` \| `DISCRETE_BOOLEAN` | Domain shape resolved from the declaring manifest |
+| `lowerBound` / `upperBound` | `Integer` | Declared numeric domain; both `null` for a discrete value |
+| `naturalChangeRate` | `String` | Declared per-step interval for a numeric value; `null` for a discrete value, which has no ordering to move along |
+| `values` | `String[]` | Declared discrete domain; `null` for a numeric value |
+| `authorship` | `EXOGENOUS` \| `DEVICE_CONTROLLED` \| `COMPOSED` | Who may change it: nobody in the scene, exactly one device, or several |
+| `writers` | `DeviceWriter[]` | Submitted devices declaring this name in `ImpactedVariables`, each with `deviceVarName`, `templateName`, and `templateSource` |
+| `readers` | `DeviceReader[]` | Submitted devices declaring `Reads: true` for it, each with `deviceVarName` |
+| `semantics` | `EXACT` \| `ABSTRACTION` | Whether the evolution rule means exactly what the user declared, or deliberately over-approximates it |
+| `evolutionSummary` | `String` | Prose statement of the same rule, for direct display next to a changed value |
+
+`authorship` is derived from `writers`, so the two cannot disagree: an empty list is
+`EXOGENOUS`, one writer is `DEVICE_CONTROLLED`, and more than one is `COMPOSED`.
+
+`semantics` is `ABSTRACTION` for exactly one case — an `EXOGENOUS` discrete value, which the
+model lets take any declared value each step because no device in the scene controls it and a
+discrete domain has no natural-evolution rule to fall back on. Every other combination is
+`EXACT`. The rules behind both tags live in
+[shared-value-semantics.md](../architecture/shared-value-semantics.md) §7, which this DTO
+reports rather than defines.
+
+Conflicting discrete writers never reach this DTO: board assembly rejects that scene before
+generation, so a `COMPOSED` discrete value is one whose writers agree.
 
 ### Other verification endpoints
 

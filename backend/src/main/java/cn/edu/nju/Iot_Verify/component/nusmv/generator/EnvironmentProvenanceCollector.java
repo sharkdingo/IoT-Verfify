@@ -269,7 +269,11 @@ public class EnvironmentProvenanceCollector {
                 }
                 sb.append(". ");
                 if (domain.isDiscrete()) {
-                    sb.append("Last active effect wins; holds when no effect applies.");
+                    // These writers necessarily agree: board assembly rejects a scene whose declared
+                    // effects assign different values to one discrete value, so there is no
+                    // order-dependent resolution to describe here.
+                    sb.append("These devices declare the same value, which applies while one of their "
+                            + "declared effects is active; the value holds otherwise.");
                 } else {
                     sb.append("Effects are summed");
                     if (domain.naturalChangeRate != null && !domain.naturalChangeRate.isBlank()) {

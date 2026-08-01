@@ -136,6 +136,25 @@ See the NuSMV timeout/concurrency keys in [../getting-started/configuration.md](
 
 The access token has passed its expiration window. Log in again to obtain a new token. See [../api/auth.md](../api/auth.md); token lifetime is controlled by `JWT_EXPIRATION` in [../getting-started/configuration.md](../getting-started/configuration.md).
 
+## Test compilation cannot find a class that exists
+
+```text
+无法访问SimulationTraceMapper / cannot access SimulationTraceMapper
+  找不到SimulationTraceMapper的类文件 / class file for SimulationTraceMapper not found
+```
+
+The named class compiles fine and `target/classes/**/SimulationTraceMapper.class` is present, yet
+`mvn test` fails to resolve it. This is stale incremental-compilation state, not a code defect —
+usually after interrupting a build or mixing `mvn clean` with a later incremental `mvn test`.
+
+```bash
+cd backend && mvn clean test-compile
+```
+
+Diagnose before assuming a real error: if `ls target/classes/.../<Name>.class` shows the file, the
+source is correct and only the build state is wrong. Treating this as a missing dependency and
+"fixing" imports would change working code to satisfy a stale artifact.
+
 ## Related
 
 - Installation: [../getting-started/installation.md](../getting-started/installation.md)

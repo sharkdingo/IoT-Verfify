@@ -15,6 +15,33 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-01 (latest)
+
+#### Added
+- **A stored run now records why each shared value was allowed to move.** A counterexample was only
+  explainable by reading the current Board, which may have changed since the run — so the explanation
+  could contradict the trace it claimed to explain. `modelSnapshot.environmentProvenance` now carries,
+  per shared value, its type, domain, declared writers and readers, whether evolution is exogenous,
+  device-controlled or composed, and whether that rule is exact or a disclosed abstraction. It is
+  captured at the model boundary before generation and persisted with the run, so editing the Board
+  afterwards cannot change a stored run's explanation. The simulation timeline annotates a changed
+  value with its cause. New API field, documented in
+  [docs/api/verification.md](docs/api/verification.md#environmentvalueprovenancedto); the semantics it
+  reports are owned by
+  [shared-value-semantics.md](docs/architecture/shared-value-semantics.md) §10.
+
+#### Fixed
+- **Provenance described composed discrete values as an order-dependent race.** Both the DTO javadoc
+  and the user-visible summary said "last active effect wins" — the device-iteration-order behaviour
+  removed in `eceaf2d`, which the product now guarantees against (invariant 10). Conflicting discrete
+  writers are rejected at board assembly, so writers that reach a run agree and there is no winner to
+  pick; the wording claimed a verdict the user can trust is arbitrary. Both now state the actual rule,
+  and `EnvironmentProvenanceCollectorTest` fails on the old phrasing.
+- **`ModelRunSnapshot` and `ModelTokenSource` were each declared twice in the frontend.** The
+  duplicates were unreferenced — every consumer imports `ModelRunSnapshot` from `types/modelSemantics`
+  and `ModelTokenSource` from `types/modelToken` — so the second copies could drift from the contract
+  without breaking a build. Removed; `types/model.ts` now imports the canonical token source.
+
 ### 2026-08-01 (later)
 
 #### Fixed

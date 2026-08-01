@@ -192,15 +192,58 @@ Checkable statements this model must satisfy. Each is enforced somewhere and tes
    declared effect is active.
 10. **No order-dependent outcome.** No verdict depends on device iteration order.
 11. **Both engines agree.** NuSMV and the bounded explorer implement one transition relation.
-12. **Disclosure.** Every abstraction in this page appears in `modelSemantics`.
+12. **Disclosure.** Every abstraction in this page appears in `modelSemantics`, and the rule that
+    applied to each individual value appears in that run's frozen provenance (§10).
 
-## 10. What is deliberately abstract
+## 10. How a stored run stays explainable
+
+A verdict is only actionable if the user can tell *why* a value moved. Reading the current Board to
+answer that is wrong: the Board may have changed since the run, so the explanation could contradict
+the trace it claims to explain.
+
+So each run freezes, per shared value, the rule this page assigned to it. That record is
+`EnvironmentValueProvenanceDto`, carried on `modelSnapshot.environmentProvenance`, captured at the
+model boundary before generation and persisted with the run. Its field-level contract lives in
+[../api/verification.md](../api/verification.md#environmentvalueprovenancedto); this section owns
+only the semantics it reports:
+
+| Reported | Source in this page |
+| :--- | :--- |
+| `authorship` = `EXOGENOUS` | no submitted device declares the value in `ImpactedVariables` (§7 row 1) |
+| `authorship` = `DEVICE_CONTROLLED` | exactly one submitted device declares it (§7 rows 2–3) |
+| `authorship` = `COMPOSED` | several declare it — summing for numeric (§7), agreeing for discrete (§8) |
+| `semantics` = `ABSTRACTION` | the exogenous discrete case below, and only that case |
+| `semantics` = `EXACT` | every other combination |
+
+Because a conflicting discrete scene is rejected at board assembly (§8), a `COMPOSED` discrete value
+in a stored run is one whose writers agree. Provenance therefore never has to describe a winner, and
+must not: doing so would tell the user that a verdict invariant 10 guarantees is order-independent
+depends on ordering. `EnvironmentProvenanceCollectorTest` fails on that wording.
+
+Editing the Board afterwards does not change a stored run's provenance, which is the point.
+
+## 11. What is deliberately abstract
 
 Only two things, both disclosed:
 
 - A purely exogenous discrete value may take any declared value each step (§7). This is an
   over-approximation: it can produce counterexamples driven by an input nobody controls, which is
   correct for weather or an occupant but must be recognisable as such.
+
+  This is **[ABSTRACTION]**, not **[EXACT]**, and the distinction is real: a user who declares
+  `weather: {sunny, cloudy, rainy}` gets a model admitting `sunny → rainy` in one step, which they
+  may not consider physically plausible. Three narrower alternatives were compared and rejected:
+
+  | Alternative | Why rejected |
+  | :--- | :--- |
+  | Hold until an external event updates it | Needs an external-event model the product does not have. Inventing one would fabricate a cause the user never declared — the same defect as injecting a stutter into a numeric interval (§5). |
+  | Let the user declare permitted transitions | Sound, and strictly more expressive. Rejected for now as authoring cost: it asks every user to model transition structure to describe a value, and most cannot say which transitions are realistic. Revisit if users ask for it. |
+  | An opt-in "adjacent values only" mode | Requires a total order the domain does not have. `{sunny, cloudy, rainy}` has no defensible adjacency, so the mode would silently impose the authoring order. |
+
+  Retaining free choice keeps the model sound (it never omits a transition the user's declaration
+  permits) and keeps the cost visible instead of hidden: the value is labelled an external input
+  before a run, and each stored run records the same rule in its provenance (§10). A narrower rule
+  would need to come from the user's declaration, not from the product's guess.
 - A numeric interval wider than `[-1, 1]` weakens the physical assumption relative to MEDIC. It is
   the user's declaration, so it is exact with respect to what they wrote, and `[-1, 1]` recovers the
   paper baseline exactly.
