@@ -11055,7 +11055,13 @@ const openHistoryFromActionDock = () => {
     void toggleHistoryPanel(layer)
     return
   }
-  void toggleHistoryPanel()
+  // Land on the layer that has something to show. "Task Status" tracks work still in flight, so
+  // with nothing running it renders "No tasks need attention" -- which reads as "no results" to
+  // someone who just finished a run and came here to read the verdict. Reviewing a real VIOLATED
+  // run this way, the completed result was one unvisited tab away and the empty inbox was all the
+  // user saw. When work is genuinely active the inbox is still the right landing place.
+  const workInFlight = isVerifying.value || isSimulating.value || isFuzzing.value
+  void toggleHistoryPanel(workInFlight ? 'tasks' : 'results')
 }
 
 const openRuleRecommendationsFromActionDock = () => {
