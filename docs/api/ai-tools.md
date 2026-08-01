@@ -129,6 +129,14 @@ The three state-sequence detail tools, `get_trace`, `get_simulation_trace`, and
 window rather than a validation failure. Fuzz-finding input events are restricted to the
 same returned state window.
 
+`get_trace` and `get_simulation_trace` return the run's `modelSnapshot`, which carries
+`environmentProvenance` — the frozen per-shared-value evolution rules. The assistant needs it to
+explain a changed environment value: the states alone show that `temperature` moved from `20` to
+`21`, not whether a device did it or the declared interval permitted it. Because the rules come from
+the snapshot rather than the live Board, an assistant explanation of a historical run stays correct
+after the Board changes, and matches what the frontend shows for the same run. Field contract:
+[verification.md](verification.md#environmentvalueprovenancedto).
+
 All recommendation tools share one behavior-capability projection. It includes explicit
 `modeValues`, full variable/environment domains, falsifiability and natural change,
 working-state dynamics, transition triggers/assignments, API triggers and start/end

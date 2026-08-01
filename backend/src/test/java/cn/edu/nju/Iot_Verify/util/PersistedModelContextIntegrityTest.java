@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.util;
 
 import cn.edu.nju.Iot_Verify.dto.model.AttackPointDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
+import cn.edu.nju.Iot_Verify.dto.model.EnvironmentValueProvenanceDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
@@ -29,6 +30,54 @@ class PersistedModelContextIntegrityTest {
 
         assertEquals(1, context.modelSemantics().getModeledDeviceAttackPointCount());
         assertEquals(1, context.modelSnapshot().getDeviceCount());
+    }
+
+    @Test
+    void restoresPerValueProvenanceSoAStoredTraceStaysExplainable() {
+        // Provenance is the only record of why a value was allowed to move. If it did not survive
+        // persistence, explaining a stored trace would fall back to the current Board -- which may
+        // have changed since the run, so the explanation could contradict the trace.
+        ModelRunSnapshotDto captured = VERIFICATION_SNAPSHOT.toBuilder()
+                .environmentProvenance(List.of(EnvironmentValueProvenanceDto.builder()
+                        .name("weather")
+                        .type(EnvironmentValueProvenanceDto.ValueType.DISCRETE_ENUM)
+                        .values(List.of("sunny", "rainy"))
+                        .authorship(EnvironmentValueProvenanceDto.AuthorshipCategory.EXOGENOUS)
+                        .semantics(EnvironmentValueProvenanceDto.SemanticsTag.ABSTRACTION)
+                        .writers(List.of())
+                        .readers(List.of(EnvironmentValueProvenanceDto.DeviceReader.builder()
+                                .deviceVarName("weather_1").build()))
+                        .evolutionSummary("External input.")
+                        .build()))
+                .build();
+
+        PersistedModelContextIntegrity.ValidatedContext context = readVerification(
+                JsonUtils.toJson(NO_ATTACK_SEMANTICS), JsonUtils.toJson(captured));
+
+        List<EnvironmentValueProvenanceDto> restored =
+                context.modelSnapshot().getEnvironmentProvenance();
+        assertEquals(1, restored.size(), "provenance must survive the persisted JSON round trip");
+        EnvironmentValueProvenanceDto weather = restored.get(0);
+        assertEquals("weather", weather.getName());
+        // The abstraction tag is the part a user acts on, so losing it silently would be worse than
+        // losing the whole entry: the trace would look exact.
+        assertEquals(EnvironmentValueProvenanceDto.SemanticsTag.ABSTRACTION, weather.getSemantics());
+        assertEquals(EnvironmentValueProvenanceDto.AuthorshipCategory.EXOGENOUS,
+                weather.getAuthorship());
+        assertEquals(List.of("sunny", "rainy"), weather.getValues());
+        assertEquals("weather_1", weather.getReaders().get(0).getDeviceVarName());
+    }
+
+    @Test
+    void acceptsARunThatHadNoSharedValues() {
+        // A board of purely device-local variables produces no provenance. That is an ordinary run,
+        // not corrupt persisted data, so it must not be rejected.
+        PersistedModelContextIntegrity.ValidatedContext context = readVerification(
+                JsonUtils.toJson(NO_ATTACK_SEMANTICS),
+                JsonUtils.toJson(VERIFICATION_SNAPSHOT.toBuilder()
+                        .environmentProvenance(List.of()).build()));
+
+        assertTrue(context.modelSnapshot().getEnvironmentProvenance().isEmpty());
     }
 
     @Test
