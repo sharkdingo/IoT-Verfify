@@ -1020,22 +1020,29 @@ test.describe('authority model full-stack audit', () => {
 
     const simStarted = Date.now()
     const simulation = await runSyncSimulation(page)
+    // The run request carries parameters only; the scene comes from the saved board. So the scene is
+    // audited at its authority (the board API) and at its destination (the generated SMV), not in the
+    // request body.
     const simPayload = lastCapturedPost(capturedPosts, '/api/simulate/traces')?.payload
     expect(simPayload).toBeTruthy()
     expect(simPayload.enablePrivacy).toBe(true)
-    expect(simPayload.devices).toHaveLength(9)
-    expect(simPayload.rules).toHaveLength(9)
+    expect(simPayload.devices).toBeUndefined()
+    expect(simPayload.rules).toBeUndefined()
     expect(simPayload.specs).toBeUndefined()
-    expect(simPayload.devices.find((device: any) => device.varName === smvName.motion).variables || []).toHaveLength(0)
-    expect(simPayload.environmentVariables).toEqual(expect.arrayContaining([expect.objectContaining({
+    const boardNodes = await waitForApi<any[]>(request, auth, '/api/board/nodes', nodes => nodes.length >= 9)
+    const boardRules = await waitForApi<any[]>(request, auth, '/api/board/rules', rules => rules.length >= 9)
+    const boardEnvironment = await waitForApi<any[]>(
+      request, auth, '/api/board/environment', items => items.length >= 1)
+    expect(boardNodes).toHaveLength(9)
+    expect(boardRules).toHaveLength(9)
+    expect(boardEnvironment).toEqual(expect.arrayContaining([expect.objectContaining({
       name: 'motion',
       value: 'active',
       trust: 'trusted'
     })]))
-    expect(simPayload.rules.some((rule: any) =>
-      rule.command.contentDevice === normalizeNuSmvDeviceName(phone.id)
-      && rule.command.content === 'photo'
-      && rule.conditions[0].targetType === 'api')).toBeTruthy()
+    expect(boardRules.some((rule: any) =>
+      normalizeNuSmvDeviceName(rule.command?.contentDevice ?? '') === normalizeNuSmvDeviceName(phone.id)
+      && rule.command?.content === 'photo')).toBeTruthy()
 
     const simSmv = latestSmv('nusmv_sim_', simStarted, [
       `MODULE Camera_${smvName.camera}`,
@@ -1062,11 +1069,14 @@ test.describe('authority model full-stack audit', () => {
     expect(verification.specResults.some((result: any) => result.outcome === 'VIOLATED')).toBeTruthy()
     const verifyPayload = lastCapturedPost(capturedPosts, '/api/verify')?.payload
     expect(verifyPayload.enablePrivacy).toBe(true)
-    expect(verifyPayload.specs).toHaveLength(6)
-    expect(verifyPayload.specs.some((spec: any) =>
+    expect(verifyPayload.specs).toBeUndefined()
+    // Specifications are audited where they are authored and stored, since that is what the run reads.
+    const boardSpecs = await waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length >= 6)
+    expect(boardSpecs).toHaveLength(6)
+    expect(boardSpecs.some((spec: any) =>
       spec.aConditions?.some((condition: any) => condition.targetType === 'trust'
         && condition.propertyScope === 'variable' && condition.key === 'temperature'))).toBeTruthy()
-    expect(verifyPayload.specs.some((spec: any) =>
+    expect(boardSpecs.some((spec: any) =>
       spec.aConditions?.some((condition: any) => condition.targetType === 'privacy'
         && condition.propertyScope === 'state' && condition.key === 'MachineState'))).toBeTruthy()
 
@@ -1275,8 +1285,10 @@ test.describe('authority model full-stack audit', () => {
     const simStarted = Date.now()
     await runSyncSimulation(page)
     const simPayload = lastCapturedPost(capturedPosts, '/api/simulate/traces')?.payload
-    expect(simPayload.rules[0].conditions[0]).toMatchObject({
-      deviceName: normalizeNuSmvDeviceName(homeMode.id),
+    expect(simPayload.rules).toBeUndefined()
+    const boardRules = await waitForApi<any[]>(request, auth, '/api/board/rules', r => r.length >= 1)
+    expect(boardRules[0].conditions[0]).toMatchObject({
+      deviceName: homeMode.id,
       attribute: 'Mode',
       targetType: 'mode',
       relation: 'in'
@@ -1296,15 +1308,16 @@ test.describe('authority model full-stack audit', () => {
     const verification = await runSyncVerification(page)
     expect(verification.outcome).toBe('VIOLATED')
     expect(verification.modelComplete).toBe(true)
-    const verifyPayload = lastCapturedPost(capturedPosts, '/api/verify')?.payload
-    expect(verifyPayload.specs[0].aConditions[0]).toMatchObject({
-      deviceId: normalizeNuSmvDeviceName(homeMode.id),
+    expect(lastCapturedPost(capturedPosts, '/api/verify')?.payload.specs).toBeUndefined()
+    const boardSpecs = await waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length >= 1)
+    expect(boardSpecs[0].aConditions[0]).toMatchObject({
+      deviceId: homeMode.id,
       targetType: 'mode',
       key: 'Mode',
       relation: 'in'
     })
-    expect(verifyPayload.specs[0].aConditions[0].value).toContain('sleep')
-    expect(verifyPayload.specs[0].aConditions[0].value).toContain('home')
+    expect(boardSpecs[0].aConditions[0].value).toContain('sleep')
+    expect(boardSpecs[0].aConditions[0].value).toContain('home')
     const verifySmv = latestSmv('nusmv_verify_', verifyStarted, [
       `${homeModeSmvName}.Mode`
     ])
@@ -1493,8 +1506,10 @@ test.describe('authority model full-stack audit', () => {
     const simulation = await runSyncSimulation(page)
     expect(simulation.states.length).toBeGreaterThan(1)
     const simPayload = lastCapturedPost(capturedPosts, '/api/simulate/traces')?.payload
-    expect(simPayload.devices).toHaveLength(7)
-    expect(simPayload.rules).toHaveLength(5)
+    expect(simPayload.devices).toBeUndefined()
+    expect(simPayload.rules).toBeUndefined()
+    expect(await waitForApi<any[]>(request, auth, '/api/board/nodes', n => n.length >= 7)).toHaveLength(7)
+    expect(await waitForApi<any[]>(request, auth, '/api/board/rules', r => r.length >= 5)).toHaveLength(5)
     const simSmv = latestSmv('nusmv_sim_', simStarted, [
       `MODULE SmokeSensor_${smvName.smoke}`,
       `MODULE RangeHood_${smvName.hood}`
@@ -1513,8 +1528,10 @@ test.describe('authority model full-stack audit', () => {
     expect(verification.outcome).toBe('VIOLATED')
     expect(verification.modelComplete).toBe(true)
     const verifyPayload = lastCapturedPost(capturedPosts, '/api/verify')?.payload
-    expect(verifyPayload.devices).toHaveLength(7)
-    expect(verifyPayload.specs).toHaveLength(5)
+    expect(verifyPayload.devices).toBeUndefined()
+    expect(verifyPayload.specs).toBeUndefined()
+    expect(await waitForApi<any[]>(request, auth, '/api/board/nodes', n => n.length >= 7)).toHaveLength(7)
+    expect(await waitForApi<any[]>(request, auth, '/api/board/specs', sp => sp.length >= 5)).toHaveLength(5)
     const verifySmv = latestSmv('nusmv_verify_', verifyStarted, [
       `MODULE SmokeSensor_${smvName.smoke}`,
       `MODULE RangeHood_${smvName.hood}`,
