@@ -27,8 +27,8 @@ Verified by pushing real branches, not by reasoning about the config:
 | scenario | before | after |
 | :--- | ---: | ---: |
 | docs-only change | ~700s | **25s** (every tier skipped) |
-| low-risk source change | ~700s | ~290s (fast tier only) |
-| high-risk one-line change | ~700s | ~290s to a fast verdict, Full CI running alongside |
+| low-risk source change | ~700s | **300s** (fast tier only, warm caches) |
+| high-risk one-line change | ~700s | 300s to a fast verdict, Full CI running alongside |
 
 The high-risk proof was a two-line comment in `SmvMainModuleBuilder.java`. It escalated with the
 reason `NuSMV model generation`, which is the property that matters: the trigger was the *area*, not
