@@ -4453,6 +4453,21 @@ details > summary::-webkit-details-marker {
   opacity: 0.6;
 }
 
+/*
+ * The filled variant desaturates instead of fading, because fading took its label with it.
+ *
+ * `opacity: 0.6` over the dialog surface moved the fill to #d2986b and the white label to a wash of the
+ * same: **2.49:1**, down from 5.02:1 — a disabled control is exempt from AA, but a user still has to be
+ * able to read which button they cannot press. Mixing the fill toward a neutral says "inactive" through
+ * saturation and keeps the ink at 5.14:1. Same treatment as `AccountDeleteDialog`'s danger button, where
+ * the identical fade had made a destructive control read as armed.
+ */
+.template-reset-dialog__btn.primary:disabled {
+  background: color-mix(in srgb, var(--warning-fill) 34%, #64748b);
+  box-shadow: none;
+  opacity: 1;
+}
+
 .template-reset-dialog__spinner {
   width: 0.9rem;
   height: 0.9rem;

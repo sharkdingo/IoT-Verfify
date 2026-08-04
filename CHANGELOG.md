@@ -32,6 +32,15 @@ history into a technical spec. The spec content itself now lives under
 - **The attacked-device ring was drawn in two different reds.** Its pulse had been tokenised while
   `border: 3px solid #EF4444` had not, so one indicator disagreed with itself. As a non-text indicator it
   owes 3:1 (WCAG 1.4.11); `--danger-fill` measures 4.41:1 on the light canvas against the literal's 3.44:1.
+- **Two filled buttons became unreadable when disabled.** `opacity` multiplies the whole control, so a white
+  label on a role fill moves toward the fill as the fill moves toward the page: the template-reset primary
+  measured **5.02:1 → 2.49:1** at `opacity: 0.6`, and the protected-action confirm **4.83:1 → 2.51:1** at
+  `0.55`. A disabled control is exempt from AA, but a user still has to read which button they cannot press —
+  and on a confirmation, which one they are being asked about. Both now desaturate the fill toward a neutral,
+  keeping the ink above 5:1 while plainly reading as drained, the treatment `AccountDeleteDialog` already used
+  after a faded-but-saturated danger button had read as *armed*. `disabledFillLegibility.spec.ts` scopes the
+  rule to role-filled controls: loading states (`cursor: wait`), label-less controls, and panels that already
+  desaturate via `filter` keep their fade, because opacity is the right answer there.
 - **A chat style referenced a token that does not exist.** `ChatMarkdown`'s image-alt colour read
   `var(--chat-text-muted, …)`; the token `ChatView` declares is `--chat-muted`. The typo was invisible
   because the fallback resolved to the same colour by coincidence, and would have surfaced the first time the

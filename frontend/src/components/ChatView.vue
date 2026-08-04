@@ -4058,6 +4058,20 @@ const scrollToBottom = (force = false) => {
   opacity: 0.55;
 }
 
+/*
+ * The filled confirm desaturates rather than fading, for the reason the root CLAUDE.md gives: opacity
+ * fades the label with the control. Measured, `opacity: 0.55` took white-on-`--danger-fill` from 4.83:1
+ * to **2.51:1**, so the one button a user needs to read before confirming a protected action became the
+ * hardest to read. Mixed toward a warm neutral it says "inactive" through saturation and keeps the ink at
+ * 7.29:1. `AccountDeleteDialog` solves the same problem by mixing toward its surface; this banner already
+ * sits on a danger tint, so a neutral reads as drained here rather than as a lighter danger.
+ */
+.protected-confirmation__button.is-confirm:disabled {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--danger-fill) 34%, #57534e);
+  opacity: 1;
+}
+
 .input-card {
   max-width: 48rem;
   margin: 0 auto;
