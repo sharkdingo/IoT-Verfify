@@ -4052,14 +4052,14 @@ watch(() => props.readOnly, readOnly => {
 .modern-panel {
   background: var(--board-panel-bg, linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.95) 100%));
   backdrop-filter: blur(20px);
-  border: 1px solid var(--board-border, rgba(255, 255, 255, 0.3));
+  border: 1px solid var(--board-border);
 }
 
 /* Glass panel effect */
 .glass-panel {
-  background: var(--board-panel-bg, rgba(255, 255, 255, 0.7));
+  background: var(--board-panel-bg);
   backdrop-filter: blur(16px);
-  border: 1px solid var(--board-border, rgba(226, 232, 240, 0.8));
+  border: 1px solid var(--board-border);
 }
 
 /* Custom scrollbar */
@@ -4069,33 +4069,16 @@ watch(() => props.readOnly, readOnly => {
 
 .custom-scrollbar::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.02);
-  border-radius: 10px;
+  border-radius: var(--iot-radius-well);
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #cbd5e1;
-  border-radius: 10px;
+  border-radius: var(--iot-radius-well);
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
-}
-
-/* Utility classes */
-.text-primary {
-  color: #8B5CF6;
-}
-
-.text-secondary {
-  color: #C026D3;
-}
-
-.bg-online {
-  background-color: #10B981;
-}
-
-.bg-offline {
-  background-color: var(--danger);
 }
 
 /* Material Symbols font */
@@ -4117,18 +4100,18 @@ details > summary::-webkit-details-marker {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.35rem;
-  border: 1px solid var(--board-border, #e2e8f0);
-  border-radius: 0.75rem;
-  background: var(--board-control-bg, #f1f5f9);
+  border: 1px solid var(--board-border);
+  border-radius: var(--iot-radius-well);
+  background: var(--board-control-bg);
   padding: 0.25rem;
 }
 
 .control-mode-tabs button {
   min-width: 0;
   border: 0;
-  border-radius: 0.55rem;
+  border-radius: var(--iot-radius-action);
   padding: 0.45rem 0.35rem;
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
   font-size: var(--iot-font-min);
   font-weight: 800;
   line-height: 1.1;
@@ -4152,9 +4135,9 @@ details > summary::-webkit-details-marker {
 }
 
 .device-preview-box {
-  border: 1px solid var(--board-border, #e2e8f0);
-  border-radius: 0.75rem;
-  background: color-mix(in srgb, var(--board-card-bg, #ffffff) 88%, transparent);
+  border: 1px solid var(--board-border);
+  border-radius: var(--iot-radius-well);
+  background: color-mix(in srgb, var(--board-card-bg) 88%, transparent);
   padding: 0.65rem;
 }
 
@@ -4164,10 +4147,10 @@ details > summary::-webkit-details-marker {
   min-width: 0;
   align-items: center;
   gap: 0.45rem;
-  border: 1px solid color-mix(in srgb, var(--iot-color-accent, #8b5cf6) 24%, var(--board-border, #e2e8f0));
-  border-radius: 0.65rem;
-  background: color-mix(in srgb, var(--board-control-bg, #f8fafc) 86%, var(--iot-color-accent, #8b5cf6) 8%);
-  color: var(--board-text-muted, #64748b);
+  border: 1px solid color-mix(in srgb, var(--iot-color-accent) 24%, var(--board-border));
+  border-radius: var(--iot-radius-well);
+  background: color-mix(in srgb, var(--board-control-bg) 86%, var(--iot-color-accent) 8%);
+  color: var(--board-text-muted);
   padding: 0.55rem 0.65rem;
   font-size: var(--iot-font-min);
   font-weight: 700;
@@ -4179,7 +4162,7 @@ details > summary::-webkit-details-marker {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
   font-size: var(--iot-font-min);
   font-weight: 800;
   letter-spacing: 0.03em;
@@ -4187,9 +4170,9 @@ details > summary::-webkit-details-marker {
 }
 
 .device-preview-box__header strong {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 14%, var(--board-control-bg, #f1f5f9));
-  color: var(--board-text, #0f172a);
+  border-radius: var(--iot-radius-pill);
+  background: color-mix(in srgb, var(--accent) 14%, var(--board-control-bg));
+  color: var(--board-text);
   padding: 0.1rem 0.45rem;
 }
 
@@ -4210,30 +4193,30 @@ details > summary::-webkit-details-marker {
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
   gap: 0.45rem;
   align-items: center;
-  border: 1px solid color-mix(in srgb, var(--board-border, #e2e8f0) 70%, transparent);
-  border-radius: 0.55rem;
-  background: var(--board-control-bg, #f8fafc);
+  border: 1px solid color-mix(in srgb, var(--board-border) 70%, transparent);
+  border-radius: var(--iot-radius-action);
+  background: var(--board-control-bg);
   padding: 0.4rem 0.5rem;
 }
 
 .device-preview-row span {
   min-width: 0;
-  color: var(--board-text, #0f172a);
+  color: var(--board-text);
   font-size: 0.7rem;
   font-weight: 800;
 }
 
 .device-preview-row small {
   min-width: 0;
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
   font-size: var(--iot-font-min);
   font-weight: 700;
   text-align: right;
 }
 
 .device-preview-row.has-error {
-  border-color: color-mix(in srgb, var(--danger) 38%, var(--board-border, #e2e8f0));
-  background: color-mix(in srgb, var(--danger) 9%, var(--board-card-bg, #ffffff));
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--board-border));
+  background: color-mix(in srgb, var(--danger) 9%, var(--board-card-bg));
 }
 
 .device-preview-row.has-error small {
@@ -4241,27 +4224,27 @@ details > summary::-webkit-details-marker {
 }
 
 .device-preview-row.has-warning {
-  border-color: color-mix(in srgb, var(--warning) 42%, var(--board-border, #e2e8f0));
-  background: color-mix(in srgb, var(--warning) 11%, var(--board-card-bg, #ffffff));
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--board-border));
+  background: color-mix(in srgb, var(--warning) 11%, var(--board-card-bg));
 }
 
 .device-preview-row.has-warning small {
-  color: color-mix(in srgb, #d97706 88%, var(--board-text, #0f172a));
+  color: color-mix(in srgb, #d97706 88%, var(--board-text));
 }
 
 .device-preview-more,
 .device-preview-empty {
   margin-top: 0.45rem;
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
   font-size: var(--iot-font-min);
   font-weight: 700;
   text-align: center;
 }
 
 .device-runtime-box {
-  background: color-mix(in srgb, var(--board-card-bg, #ffffff) 88%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 26%, var(--board-border, #e2e8f0));
-  color: var(--board-text, #0f172a);
+  background: color-mix(in srgb, var(--board-card-bg) 88%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--board-border));
+  color: var(--board-text);
 }
 
 .device-runtime-box summary,
@@ -4272,19 +4255,19 @@ details > summary::-webkit-details-marker {
 
 .device-runtime-box input,
 .device-runtime-box select {
-  background: var(--board-card-bg, #ffffff);
-  border-color: var(--board-border, #e2e8f0);
-  color: var(--board-text, #0f172a);
+  background: var(--board-card-bg);
+  border-color: var(--board-border);
+  color: var(--board-text);
 }
 
 .device-runtime-box input::placeholder {
-  color: var(--board-text-muted, #94a3b8);
+  color: var(--board-text-muted);
 }
 
 .device-runtime-box .text-slate-400,
 .device-runtime-box .text-slate-500,
 .device-runtime-box .text-slate-600 {
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
 }
 
 .template-group[open] .template-group__chevron {
@@ -4294,27 +4277,27 @@ details > summary::-webkit-details-marker {
 .template-group {
   position: relative;
   overflow: visible;
-  background: color-mix(in srgb, var(--board-card-bg, #ffffff) 84%, transparent);
-  border-color: var(--board-border, #e2e8f0);
+  background: color-mix(in srgb, var(--board-card-bg) 84%, transparent);
+  border-color: var(--board-border);
 }
 
 .template-group__summary {
-  color: var(--board-text, #0f172a);
-  border-radius: 0.5rem;
+  color: var(--board-text);
+  border-radius: var(--iot-radius-action);
 }
 
 .template-group__summary:hover {
-  background: color-mix(in srgb, var(--warning) 13%, var(--board-card-bg, #ffffff));
+  background: color-mix(in srgb, var(--warning) 13%, var(--board-card-bg));
 }
 
 .template-group__label,
 .template-group__chevron {
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
 }
 
 .template-group__count {
-  background: color-mix(in srgb, var(--warning) 16%, var(--board-control-bg, #f1f5f9));
-  color: var(--board-text, #0f172a);
+  background: color-mix(in srgb, var(--warning) 16%, var(--board-control-bg));
+  color: var(--board-text);
 }
 
 .template-group__grid {
@@ -4322,21 +4305,32 @@ details > summary::-webkit-details-marker {
 }
 
 .template-group__empty {
-  color: var(--board-text-muted, #64748b);
-  background: color-mix(in srgb, var(--board-card-bg, #ffffff) 78%, transparent);
-  border-color: var(--board-border, #e2e8f0);
+  color: var(--board-text-muted);
+  background: color-mix(in srgb, var(--board-card-bg) 78%, transparent);
+  border-color: var(--board-border);
 }
 
 .template-reset-dialog {
-  background: var(--board-panel-bg, #ffffff);
-  border-color: var(--board-border, rgba(226, 232, 240, 0.9));
-  color: var(--board-text, #0f172a);
+  background: var(--board-panel-bg);
+  border-color: var(--board-border);
+  color: var(--board-text);
 }
 
+/*
+ * Single-level token references, not three-deep fallback chains.
+ *
+ * These read `var(--board-panel-bg)`. Both fallbacks are unreachable:
+ * `--board-*` is declared at `:root` in `board.css` (hoisted there precisely so teleported surfaces can
+ * reach it), so the guard never fires — measured, all seven of these tokens have three `:root` definitions
+ * in the shipped bundle, one per theme. What the chain did instead was put a light-theme hex in front of a
+ * reader trying to learn what a dark panel is painted with, implying the dark theme might degrade to a white
+ * card. That is the "silent fallback" the root CLAUDE.md rules out: robustness for a case that cannot occur,
+ * paid for in comprehension.
+ */
 .control-center-dialog-surface {
-  background: var(--board-panel-bg, var(--surface-panel, #ffffff));
-  border-color: var(--board-border, var(--border, #e2e8f0));
-  color: var(--board-text, var(--text, #0f172a));
+  background: var(--board-panel-bg);
+  border-color: var(--board-border);
+  color: var(--board-text);
 }
 
 .control-center-spec-dialog {
@@ -4351,18 +4345,18 @@ details > summary::-webkit-details-marker {
 
 .control-center-dialog-header,
 .control-center-dialog-footer {
-  background: var(--board-control-bg, var(--surface-control, #f1f5f9));
-  border-color: var(--board-border, var(--border, #e2e8f0));
+  background: var(--board-control-bg);
+  border-color: var(--board-border);
 }
 
 .control-center-dialog-body {
-  background: var(--board-panel-bg, var(--surface-panel, #ffffff));
+  background: var(--board-panel-bg);
 }
 
 .control-center-dialog-surface :is(input, select, textarea) {
-  background: var(--board-card-bg, var(--field-bg, #ffffff)) !important;
-  border-color: var(--board-border, var(--field-border, #cbd5e1)) !important;
-  color: var(--board-text, var(--text, #0f172a)) !important;
+  background: var(--board-card-bg) !important;
+  border-color: var(--board-border) !important;
+  color: var(--board-text) !important;
 }
 
 /* These controls declare `focus:outline-none focus:border-[color:var(--accent-border)]`, i.e. the border colour is meant
@@ -4374,27 +4368,27 @@ details > summary::-webkit-details-marker {
 }
 
 .control-center-dialog-surface :is(.bg-white, .bg-slate-50, .bg-slate-100, .bg-slate-200) {
-  background-color: var(--board-card-bg, var(--surface-elevated, #ffffff)) !important;
+  background-color: var(--board-card-bg) !important;
 }
 
 .control-center-dialog-surface .board-chip-danger {
-  background-color: color-mix(in srgb, var(--danger) 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
+  background-color: color-mix(in srgb, var(--danger) 12%, var(--board-card-bg)) !important;
 }
 
 .control-center-dialog-surface .board-chip-warning {
-  background-color: color-mix(in srgb, var(--warning) 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
+  background-color: color-mix(in srgb, var(--warning) 12%, var(--board-card-bg)) !important;
 }
 
 .control-center-dialog-surface :is(.text-black, .text-slate-700, .text-slate-800, .text-slate-900) {
-  color: var(--board-text, var(--text, #0f172a)) !important;
+  color: var(--board-text) !important;
 }
 
 .control-center-dialog-surface :is(.text-slate-400, .text-slate-500, .text-slate-600) {
-  color: var(--board-text-muted, var(--text-muted, #64748b)) !important;
+  color: var(--board-text-muted) !important;
 }
 
 .control-center-dialog-surface :is(.border-slate-100, .border-slate-200, .border-slate-300, .border-slate-400) {
-  border-color: var(--board-border, var(--border, #e2e8f0)) !important;
+  border-color: var(--board-border) !important;
 }
 
 .template-reset-dialog__icon {
@@ -4403,19 +4397,19 @@ details > summary::-webkit-details-marker {
   height: 2.75rem;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 0.9rem;
-  background: color-mix(in srgb, var(--warning) 16%, var(--board-panel-bg, #ffffff));
+  border-radius: var(--iot-radius-card);
+  background: color-mix(in srgb, var(--warning) 16%, var(--board-panel-bg));
   color: #ea580c;
 }
 
 .template-reset-dialog p {
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
 }
 
 .template-reset-dialog__notice {
-  background: color-mix(in srgb, var(--warning) 8%, var(--board-panel-bg, #ffffff));
-  border-color: color-mix(in srgb, var(--warning) 28%, var(--board-border, #e2e8f0));
-  color: var(--board-text, #334155);
+  background: color-mix(in srgb, var(--warning) 8%, var(--board-panel-bg));
+  border-color: color-mix(in srgb, var(--warning) 28%, var(--board-border));
+  color: var(--board-text);
 }
 
 .template-reset-dialog__btn {
@@ -4425,7 +4419,7 @@ details > summary::-webkit-details-marker {
   gap: 0.35rem;
   min-height: 2.35rem;
   padding: 0 0.95rem;
-  border-radius: 0.75rem;
+  border-radius: var(--iot-radius-well);
   font-size: 0.8rem;
   font-weight: 800;
   transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
@@ -4436,16 +4430,22 @@ details > summary::-webkit-details-marker {
 }
 
 .template-reset-dialog__btn.secondary {
-  border: 1px solid var(--board-border, #cbd5e1);
-  background: var(--board-control-bg, #f8fafc);
-  color: var(--board-text-muted, #475569);
+  border: 1px solid var(--board-border);
+  background: var(--board-control-bg);
+  color: var(--board-text-muted);
 }
 
 .template-reset-dialog__btn.primary {
   border: 1px solid transparent;
-  background: var(--warning);
+  /* `var(--warning)` is the ink half: the dark theme lightens it to #fcd34d, which left this white label at
+     1.44:1 — the worst reading in the interface. The fill half is 5.02:1 in both themes, deepening to
+     5.45:1 at the shaded stop. Same 160deg deepening as the attacked-device badge, so the two filled
+     warnings read as one treatment. */
+  background: linear-gradient(160deg,
+      var(--warning-fill) 0%,
+      color-mix(in srgb, var(--warning-fill) 85%, #78350f) 100%);
   color: #ffffff;
-  box-shadow: 0 10px 20px rgba(249, 115, 22, 0.22);
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--warning-fill) 22%, transparent);
 }
 
 .template-reset-dialog__btn:disabled {
@@ -4458,7 +4458,7 @@ details > summary::-webkit-details-marker {
   height: 0.9rem;
   border: 2px solid rgba(255, 255, 255, 0.38);
   border-top-color: #ffffff;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   animation: template-reset-spin 0.8s linear infinite;
 }
 
@@ -4469,9 +4469,9 @@ details > summary::-webkit-details-marker {
 .template-card {
   z-index: 0;
   min-height: 5.15rem;
-  background: var(--board-card-bg, #ffffff);
-  border-color: var(--board-border, #e2e8f0);
-  color: var(--board-text, #0f172a);
+  background: var(--board-card-bg);
+  border-color: var(--board-border);
+  color: var(--board-text);
   cursor: pointer;
 }
 
@@ -4489,7 +4489,7 @@ details > summary::-webkit-details-marker {
   z-index: 30;
   /* Tokens, not hex: `var(--warning)` and `#e2e8f0` are a light-theme amber and a light border, so on a dark card
      they painted a light-theme treatment. The role tokens resolve per theme. */
-  border-color: color-mix(in srgb, var(--warning) 58%, var(--board-border, var(--border)));
+  border-color: color-mix(in srgb, var(--warning) 58%, var(--board-border));
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
 }
 
@@ -4509,34 +4509,34 @@ details > summary::-webkit-details-marker {
 .template-card > button:focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: 3px;
-  border-radius: 0.35rem;
+  border-radius: var(--iot-radius-control);
 }
 
 .template-card__icon {
-  background: color-mix(in srgb, var(--warning) 13%, var(--board-control-bg, #f1f5f9));
+  background: color-mix(in srgb, var(--warning) 13%, var(--board-control-bg));
 }
 
 .template-card:hover .template-card__icon,
 .template-card--active .template-card__icon {
-  background: color-mix(in srgb, var(--warning) 22%, var(--board-control-bg, #f1f5f9));
+  background: color-mix(in srgb, var(--warning) 22%, var(--board-control-bg));
 }
 
 .template-card__title {
-  color: var(--board-text, #0f172a);
+  color: var(--board-text);
 }
 
 .template-card:hover .template-card__title,
 .template-card--active .template-card__title {
-  color: color-mix(in srgb, var(--warning) 78%, var(--board-text, #0f172a));
+  color: color-mix(in srgb, var(--warning) 78%, var(--board-text));
 }
 
 .template-card__stats {
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
 }
 
 .template-card__drag-cue {
   flex: 0 0 auto;
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
   font-size: 0.9rem;
   line-height: 1;
   opacity: 0.72;
@@ -4544,17 +4544,17 @@ details > summary::-webkit-details-marker {
 
 .template-card:hover .template-card__drag-cue,
 .template-card--active .template-card__drag-cue {
-  color: color-mix(in srgb, var(--warning) 85%, var(--board-text, #0f172a));
+  color: color-mix(in srgb, var(--warning) 85%, var(--board-text));
   opacity: 1;
 }
 
 .template-card__pill {
-  background: var(--board-control-bg, #f1f5f9);
-  color: var(--board-text-muted, #64748b);
+  background: var(--board-control-bg);
+  color: var(--board-text-muted);
 }
 
 .template-card__actions {
-  border-color: var(--board-border, #e2e8f0);
+  border-color: var(--board-border);
 }
 
 .template-card__action {
@@ -4563,7 +4563,7 @@ details > summary::-webkit-details-marker {
   min-height: 2rem;
   align-items: center;
   justify-content: center;
-  color: var(--board-text-muted, #64748b);
+  color: var(--board-text-muted);
 }
 
 @media (pointer: coarse) {
@@ -4574,21 +4574,21 @@ details > summary::-webkit-details-marker {
 }
 
 .template-card__action:hover {
-  color: color-mix(in srgb, var(--warning) 82%, var(--board-text, #0f172a));
-  background: color-mix(in srgb, var(--warning) 15%, var(--board-control-bg, #f1f5f9));
+  color: color-mix(in srgb, var(--warning) 82%, var(--board-text));
+  background: color-mix(in srgb, var(--warning) 15%, var(--board-control-bg));
 }
 
 .template-card__action--danger:hover {
   color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 14%, var(--board-control-bg, #f1f5f9));
+  background: color-mix(in srgb, var(--danger) 14%, var(--board-control-bg));
 }
 
 .template-preview {
-  --template-preview-card-bg: var(--board-card-bg, var(--surface-elevated, #ffffff));
-  --template-preview-control-bg: var(--board-control-bg, var(--surface-control, #f1f5f9));
-  --template-preview-border: var(--board-border, var(--border, #e2e8f0));
-  --template-preview-text: var(--board-text, var(--text, #0f172a));
-  --template-preview-muted: var(--board-text-muted, var(--text-muted, #64748b));
+  --template-preview-card-bg: var(--board-card-bg);
+  --template-preview-control-bg: var(--board-control-bg);
+  --template-preview-border: var(--board-border);
+  --template-preview-text: var(--board-text);
+  --template-preview-muted: var(--board-text-muted);
 
   position: fixed;
   z-index: 45;
@@ -4597,7 +4597,7 @@ details > summary::-webkit-details-marker {
   overscroll-behavior: contain;
   padding: 0.75rem;
   border: 1px solid var(--template-preview-border);
-  border-radius: 0.75rem;
+  border-radius: var(--iot-radius-well);
   background: color-mix(in srgb, var(--template-preview-card-bg) 96%, transparent);
   color: var(--template-preview-text);
   backdrop-filter: blur(16px);
@@ -4635,7 +4635,7 @@ details > summary::-webkit-details-marker {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--template-preview-border);
-  border-radius: 0.45rem;
+  border-radius: var(--iot-radius-action);
   background: var(--template-preview-control-bg);
   color: var(--template-preview-muted);
 }
@@ -4665,7 +4665,7 @@ details > summary::-webkit-details-marker {
 .template-preview__meta > div {
   min-width: 0;
   border: 1px solid var(--template-preview-border);
-  border-radius: 0.55rem;
+  border-radius: var(--iot-radius-action);
   background: var(--template-preview-control-bg);
   padding: 0.45rem;
 }
@@ -4708,7 +4708,7 @@ details > summary::-webkit-details-marker {
 .template-preview__empty {
   max-width: 100%;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   padding: 0.18rem 0.45rem;
   background: var(--template-preview-control-bg);
   color: var(--template-preview-text);
@@ -4733,15 +4733,6 @@ details > summary::-webkit-details-marker {
 
 .animate-pulse-glow {
   animation: pulse-glow 2s infinite;
-}
-
-/* Text color */
-.text-primary {
-  color: #334155;
-}
-
-.text-secondary {
-  color: #475569;
 }
 
 /* Input focus animation */

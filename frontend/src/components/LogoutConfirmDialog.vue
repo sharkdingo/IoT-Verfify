@@ -108,7 +108,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   max-width: 380px;
   padding: 2rem;
   background: linear-gradient(145deg, #1e293b, var(--text));
-  border-radius: 20px;
+  border-radius: var(--iot-radius-surface);
   border: 1px solid rgba(148, 163, 184, 0.15);
   box-shadow: 
     0 25px 50px -12px rgba(0, 0, 0, 0.5),
@@ -202,7 +202,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   padding: 0.875rem 1.5rem;
   font-size: 0.9375rem;
   font-weight: 600;
-  border-radius: 12px;
+  border-radius: var(--iot-radius-well);
   cursor: pointer;
   transition: all 0.2s ease;
   border: none;
@@ -222,13 +222,19 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 .logout-btn-confirm {
   background: linear-gradient(135deg, var(--danger-fill), var(--danger-fill));
   color: white;
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+  /* The glow is the fill's own shadow: `rgba(239, 68, 68, …)` here was a light-theme red that stayed
+     put while the fill beside it followed the theme. A destructive action has to read as destructive
+     in both themes, so the halo derives from the same token the button is painted with. */
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--danger-fill) 30%, transparent);
 }
 
 .logout-btn-confirm:hover:not(:disabled) {
+  /* `#f87171` stays a literal: this is a *fill* under white text, and the theme-aware `--danger` is
+     tuned as ink (dark theme lightens it to #fca5a5), so substituting it here would drop the label
+     below AA. Only the halo below is tokenised. */
   background: linear-gradient(135deg, #f87171, var(--danger-fill));
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--danger-fill) 40%, transparent);
 }
 
 .logout-btn:disabled {

@@ -70,7 +70,7 @@ withDefaults(defineProps<{
   align-items: center;
   justify-content: center;
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   /* Theme token, not `white`: the hardcoded blend made the dark override below the only rule that
      could set a usable background, which in turn outranked hover/focus and killed both cues. */
   background: color-mix(in srgb, currentColor 8%, var(--surface-elevated));

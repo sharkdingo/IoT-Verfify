@@ -220,7 +220,7 @@ const navigateTo = (target?: string) => {
   min-height: 36px;
   max-width: 180px;
   padding: 0 16px;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   border: 1px solid transparent;
   font-size: 0.875rem;
   font-weight: 700;
@@ -258,7 +258,7 @@ const navigateTo = (target?: string) => {
   background: var(--accent-fill);
   border-color: var(--accent);
   color: #ffffff;
-  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
+  box-shadow: 0 12px 24px color-mix(in srgb, var(--accent-fill) 22%, transparent);
 }
 
 .public-header__button--secondary {

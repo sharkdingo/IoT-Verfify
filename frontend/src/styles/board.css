@@ -31,7 +31,7 @@
   right: 0;
   z-index: var(--z-board-nav);
   display: flex;
-  height: var(--board-nav-height, 4.3125rem);
+  height: var(--board-nav-height);
   box-sizing: border-box;
   justify-content: center;
   padding: 0.75rem 2rem;
@@ -139,7 +139,7 @@
   width: 11rem;
   padding: 0.4rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--iot-radius-action);
   background: var(--surface-overlay);
   box-shadow: 0 16px 36px rgba(15, 23, 42, 0.2);
 }
@@ -151,7 +151,7 @@
   gap: 0.65rem;
   padding: 0 0.75rem;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--iot-radius-control);
   background: transparent;
   color: var(--text);
   cursor: pointer;
@@ -200,7 +200,7 @@
      genuine primary action, so it keeps a filled treatment; it just uses the product's accent. */
   background: var(--accent-fill);
   border: none;
-  border-radius: 20px;
+  border-radius: var(--iot-radius-surface);
   color: #fff;
   font-weight: 500;
   font-size: 0.875rem;
@@ -223,7 +223,7 @@
   align-items: center;
   justify-content: center;
   border: 2px solid var(--surface-control);
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   background: var(--danger-fill);
   color: #fff;
   font-size: var(--iot-font-min);
@@ -260,7 +260,7 @@
   background: var(--surface-control);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 16px;
+  border-radius: var(--iot-radius-panel);
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
 }
 
@@ -424,7 +424,7 @@
     width: 2.75rem;
     height: 2.75rem;
     justify-content: center;
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     padding: 0;
   }
 
@@ -792,7 +792,7 @@
     justify-content: center;
     align-self: flex-end;
     border: 1px solid var(--board-border);
-    border-radius: 1rem;
+    border-radius: var(--iot-radius-panel);
     background: color-mix(in srgb, var(--surface-overlay) 88%, transparent);
     box-shadow: var(--shadow-elevated);
     color: var(--board-text);
@@ -820,7 +820,7 @@
     right: 0.55rem;
     width: 0.55rem;
     height: 0.55rem;
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     background: var(--iot-color-accent);
     box-shadow: 0 0 0 0.25rem color-mix(in srgb, var(--iot-color-accent) 20%, transparent);
 }
@@ -832,7 +832,7 @@
     gap: 0.4rem;
     padding: 0.45rem;
     border: 1px solid var(--board-border);
-    border-radius: 0.95rem;
+    border-radius: var(--iot-radius-panel);
     background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
     box-shadow: var(--shadow-elevated);
     color: var(--board-text);
@@ -885,7 +885,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid color-mix(in srgb, var(--board-border) 80%, transparent);
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     background: color-mix(in srgb, var(--surface-muted) 78%, transparent);
     color: var(--board-text-muted);
     transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
@@ -982,20 +982,6 @@
 }
 
 /*
- * Selected tab in a panel's segmented control.
- *
- * The four Control Center tabs each had their own active colour -- orange Templates, purple Devices,
- * blue Rules, red Specifications. "This tab is selected" is one state, and the tab's own label and
- * icon already say which tab it is, so four hues encoded nothing and gave the panel a shifting
- * identity as the user moved between sections.
- */
-.board-tab-active {
-    background-color: var(--accent-fill);
-    color: #fff;
-    box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-/*
  * Panel submit button.
  *
  * The two setup panels had a green and an indigo submit button, neither matching the panel they sat
@@ -1011,7 +997,7 @@
     /* 44px floor: measured 38px, and this is a panel primary action. */
     min-height: 2.75rem;
     padding: 0.625rem 0;
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     background-color: var(--accent-fill);
     color: #fff;
     font-size: 0.75rem;
@@ -1047,7 +1033,7 @@
     gap: 0.375rem;
     min-height: 2.75rem;
     padding: 0.5rem 1rem;
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     color: #fff;
     font-weight: 700;
     transition: background-color 0.18s, box-shadow 0.18s;
@@ -1081,7 +1067,7 @@
     gap: 0.375rem;
     min-height: 2.75rem;
     padding: 0.5rem 1rem;
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     background-color: var(--danger-fill);
     color: #fff;
     font-weight: 700;
@@ -1115,7 +1101,7 @@
     min-height: 2.75rem;
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--accent-border);
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     background-color: var(--accent-surface);
     color: var(--accent);
     font-weight: 600;
@@ -1158,7 +1144,7 @@
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     transition: color 0.18s, background-color 0.18s;
 }
 
@@ -1212,22 +1198,17 @@
 }
 
 /*
- * Drop zone / import affordance.
+ * There is no `.board-dropzone` here, and that is a decision rather than an omission.
  *
- * The dashed border is the part that carries meaning -- "you may drop a file here" -- so it stays.
- * The orange did not: it had no dark counterpart, so on a dark Board it read as a separate warm
- * widget ("the dashed orange border, orange icon, and pale button are substantially warmer and more
- * attention-grabbing than neighboring controls. It reads as a separate workflow widget").
+ * One existed, styling a drop target with `--accent-surface` / `--accent-border`, carrying a note that the
+ * orange "read as a separate warm widget" on a dark board. Nothing ever used it. Both real drop targets —
+ * the template-import panel and the canvas `template-drop-overlay` — are dashed `--warning-border`, so the
+ * accent version was a proposal the product did not adopt, not a migration left half-done. Two independent
+ * implementations agreeing is the convention; a third, unreferenced opinion in a stylesheet is not.
+ *
+ * If the warm reading is worth revisiting, change both call sites together and delete this note. Do not
+ * reintroduce a global class that neither of them reaches.
  */
-.board-dropzone {
-    background-color: var(--accent-surface);
-    border: 2px dashed var(--accent-border);
-    color: var(--text-muted);
-}
-
-.board-dropzone:hover {
-    border-color: var(--accent);
-}
 
 /* Role text colours, for use on the matching tinted surface. Both themes come from the role token,
    so a warning message stays legible in dark mode instead of keeping a light-theme amber. */
@@ -1284,7 +1265,7 @@
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    border-radius: 0.625rem;
+    border-radius: var(--iot-radius-well);
     background-color: var(--accent-surface);
     border: 1px solid var(--accent-border);
     color: var(--accent);
@@ -1293,7 +1274,7 @@
 .board-section-icon--lg {
     width: 2.5rem;
     height: 2.5rem;
-    border-radius: 0.75rem;
+    border-radius: var(--iot-radius-well);
 }
 
 /* The glyphs inside were `text-white` against a saturated fill; on a tinted tile they take the
@@ -1451,7 +1432,7 @@
 .iot-board .board-tool-pulse {
     position: absolute;
     inset: 0.15rem;
-    border-radius: 0.65rem;
+    border-radius: var(--iot-radius-well);
     opacity: 0.55;
     animation: board-tool-ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
@@ -1476,7 +1457,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.45rem;
-    border-radius: 0.65rem;
+    border-radius: var(--iot-radius-well);
     padding: 0 0.55rem;
     overflow: hidden;
     white-space: nowrap;
@@ -1642,7 +1623,7 @@
     z-index: 20;
     max-width: min(18rem, 52vw);
     padding: 0.45rem 0.65rem;
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     background: var(--surface-elevated);
     box-shadow: var(--shadow-elevated);
     color: #fff;
@@ -1684,7 +1665,7 @@
 .iot-board .board-action-dock--compact .board-action-dock__panel {
     gap: 0.55rem;
     padding: 0.375rem;
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
 }
 
 .iot-board .board-action-dock--compact .board-action-dock__header {
@@ -1700,7 +1681,7 @@
 .iot-board .board-action-dock--compact .board-action-dock__toggle {
     width: 2.75rem;
     height: 2.75rem;
-    border-radius: 0.85rem;
+    border-radius: var(--iot-radius-card);
 }
 
 .iot-board .board-action-dock--compact .board-tool-button {
@@ -1726,7 +1707,7 @@
 .iot-board .board-action-dock--packed .board-action-dock__launcher {
     width: 3.5rem;
     height: 3.5rem;
-    border-radius: 1.05rem;
+    border-radius: var(--iot-radius-panel);
 }
 
 @media (max-width: 860px) {
@@ -1743,7 +1724,7 @@
     background: var(--surface-overlay);
     border-color: var(--board-border);
     color: var(--board-text);
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
 }
 
 .iot-board .board-floating-panel > .p-3 {
@@ -1753,7 +1734,6 @@
 .iot-board .board-panel-header,
 .iot-board .board-panel-tabs,
 .iot-board .board-panel-body,
-.iot-board .board-form-surface,
 .iot-board .board-card-surface,
 .iot-board .board-muted-surface {
     color: var(--board-text);
@@ -1761,8 +1741,7 @@
 }
 
 .iot-board .board-panel-header,
-.iot-board .board-card-surface,
-.iot-board .board-form-surface {
+.iot-board .board-card-surface {
     background: var(--board-card-bg);
 }
 
@@ -1772,7 +1751,6 @@
     background: var(--board-card-muted-bg);
 }
 
-.iot-board .board-control-surface,
 .iot-board .board-segmented {
     background: var(--board-control-bg);
     border-color: var(--board-border);
@@ -2033,7 +2011,7 @@
         min-height: 0;
         max-height: 100%;
         overflow-y: auto;
-        border-radius: 0.85rem;
+        border-radius: var(--iot-radius-card);
         gap: 0.3rem;
         padding: 0.3rem;
     }
@@ -2113,7 +2091,7 @@
     justify-content: center;
     gap: 0.1rem;
     border: 1px solid var(--board-border);
-    border-radius: 0.45rem;
+    border-radius: var(--iot-radius-action);
     background: var(--surface-control);
     color: var(--text);
     font-size: var(--iot-font-min);
@@ -2156,8 +2134,8 @@
 }
 
 .iot-board .canvas-map__viewport-rect {
-    fill: color-mix(in srgb, var(--iot-color-accent, #3b82f6) 18%, transparent);
-    stroke: var(--iot-color-accent, #3b82f6);
+    fill: color-mix(in srgb, var(--iot-color-accent) 18%, transparent);
+    stroke: var(--iot-color-accent);
     stroke-width: 1.5;
     stroke-dasharray: 4 3;
     vector-effect: non-scaling-stroke;
@@ -2170,7 +2148,7 @@
     height: 1.375rem;
     align-items: center;
     justify-content: center;
-    border-radius: 0.375rem;
+    border-radius: var(--iot-radius-control);
     color: var(--text-muted);
     transition: background-color 0.15s ease, color 0.15s ease;
 }
@@ -2203,7 +2181,7 @@
     background: var(--surface-overlay);
     border-color: var(--board-border);
     color: var(--board-text);
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     overflow: hidden;
     backdrop-filter: blur(14px);
 }
@@ -2269,7 +2247,7 @@
     color: var(--board-text);
     background: color-mix(in srgb, var(--surface-overlay) 94%, transparent);
     border: 1px solid color-mix(in srgb, var(--iot-color-accent) 28%, var(--board-border));
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     box-shadow: var(--shadow-elevated);
     backdrop-filter: blur(14px);
 }
@@ -2366,8 +2344,8 @@
 
 .board-timeline-host {
     position: fixed;
-    left: calc(var(--board-control-width, 20rem) + var(--board-floating-gap, 1rem));
-    right: calc(var(--board-inspector-width, 22rem) + var(--board-floating-gap, 1rem));
+    left: calc(var(--board-control-width) + var(--board-floating-gap));
+    right: calc(var(--board-inspector-width) + var(--board-floating-gap));
     bottom: clamp(1rem, 3dvh, 2rem);
     z-index: 40;
     display: flex;
@@ -2404,7 +2382,7 @@
     background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 0.75rem;
+    border-radius: var(--iot-radius-well);
     padding: 0.75rem;
     box-shadow: var(--shadow-elevated);
     backdrop-filter: blur(14px);
@@ -2456,8 +2434,8 @@
     }
 
     .board-timeline-host {
-        left: var(--board-floating-gap, 1rem);
-        right: var(--board-floating-gap, 1rem);
+        left: var(--board-floating-gap);
+        right: var(--board-floating-gap);
         z-index: 49;
     }
 
@@ -2501,7 +2479,7 @@
     }
 
     .iot-board.has-playback-change-popover .board-timeline-host {
-        right: calc(min(22rem, 42vw) + (var(--board-floating-gap, 1rem) * 2));
+        right: calc(min(22rem, 42vw) + (var(--board-floating-gap) * 2));
     }
 }
 
@@ -2564,16 +2542,16 @@
 .iot-board .edge-layer .edge-line--active {
     opacity: 1 !important;
     stroke-width: 4.4;
-    filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.58));
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent-fill) 58%, transparent));
     stroke-dasharray: 6, 6;
 }
 
 .iot-board .edge-layer .edge-base-line.edge-line--compromised,
 .iot-board .edge-layer .edge-line--compromised {
     opacity: 1 !important;
-    stroke: #dc2626 !important;
+    stroke: var(--danger-fill) !important;
     stroke-width: 4.4;
-    filter: drop-shadow(0 0 9px rgba(220, 38, 38, 0.58));
+    filter: drop-shadow(0 0 9px color-mix(in srgb, var(--danger-fill) 58%, transparent));
     stroke-dasharray: 3, 7;
 }
 
@@ -2581,7 +2559,8 @@
 .iot-board .edge-layer .edge-line--focused {
     opacity: 1 !important;
     stroke-width: 4.8;
-    filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.7)) drop-shadow(0 0 18px rgba(59, 130, 246, 0.5));
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent-fill) 70%, transparent))
+            drop-shadow(0 0 18px color-mix(in srgb, var(--accent-fill) 50%, transparent));
     stroke-dasharray: 6, 5;
     animation: focusedEdgePulse 1.2s ease-in-out infinite;
 }
@@ -2592,16 +2571,12 @@
 }
 
 /* 可选：如果你的箭头 marker 需要单独类名 */
-.iot-board .edge-layer .edge-arrow {
-    fill: var(--iot-color-edge);
-}
-
 /* ========== 节点 ========== */
 
 .iot-board .device-node {
     position: absolute;
     background: transparent;
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     display: grid;
     grid-template-rows: 1fr;
     cursor: grab;
@@ -2697,6 +2672,11 @@
     animation: traceContentSettle 0.72s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/*
+ * Also intentionally unrendered, and kept for the same reason as `__previous` above: `CanvasBoard.spec.ts`
+ * asserts `[data-testid="trace-change-badge"]` must **not** exist, recording the same measurement — a node
+ * has no room for a `previous → current` badge, so the transition belongs in the popover.
+ */
 .iot-board .trace-change-badge {
     position: absolute;
     top: -0.8rem;
@@ -2707,7 +2687,7 @@
     align-items: center;
     gap: 0.25rem;
     border: 1px solid color-mix(in srgb, var(--iot-color-accent) 55%, white);
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     background: color-mix(in srgb, var(--surface-overlay) 92%, var(--iot-color-accent) 8%);
     color: color-mix(in srgb, var(--iot-color-accent) 82%, var(--text));
     padding: 0.2rem 0.45rem;
@@ -2755,7 +2735,11 @@
     left: -6px;
     right: -6px;
     bottom: -6px;
-    border: 3px solid #EF4444;
+    /* The ring and its pulse are one signal, so they come from one token. The pulse was tokenised while
+       this border kept `#EF4444`, leaving the same mark drawn in two reds. As a non-text indicator this
+       owes 3:1 (WCAG 1.4.11): `--danger-fill` measures 4.41:1 on the light canvas and 3.70:1 on the dark,
+       against 3.44 / 4.74 for the literal — better where it was weakest. */
+    border: 3px solid var(--danger-fill);
     border-radius: 50%;
     animation: attackedCirclePulse 1s ease-in-out infinite;
     pointer-events: none;
@@ -2764,7 +2748,8 @@
 
 .iot-board .device-node.trace-active.device-attacked::before {
     animation: none;
-    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18), 0 0 14px rgba(239, 68, 68, 0.48);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger-fill) 18%, transparent),
+                0 0 14px color-mix(in srgb, var(--danger-fill) 48%, transparent);
 }
 
 @keyframes traceChangedPulse {
@@ -2822,7 +2807,6 @@
     .iot-board .device-node.trace-change-pulse::after,
     .iot-board .device-node.trace-change-pulse .device-node-content,
     .iot-board .device-node.device-attacked::before,
-    .iot-board .pulse-status,
     .iot-board .animate-ping,
     .iot-board .animate-pulse,
     .iot-board .animate-pulse-glow,
@@ -2844,28 +2828,23 @@
      * keeps the liveness cue. `linear` and `steps()` would both work; `steps(8)` also reduces the perceived
      * smoothness, which is the point.
      */
-    .iot-board .animate-spin,
-    .iot-board .animate-spin-slow {
+    .iot-board .animate-spin {
         animation-duration: 2.4s !important;
         animation-timing-function: steps(8, end) !important;
     }
 }
 
+/* "This device is under attack" is a danger statement, so the pulse is the danger token rather than a
+   light-theme red frozen into a keyframe. The 0-alpha stops expand a transparent ring, so they mix to
+   0% and stay invisible in both themes. */
 @keyframes attackedCirclePulse {
     0%, 100% {
-        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7), 0 0 10px rgba(239, 68, 68, 0.5);
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger-fill) 70%, transparent),
+                    0 0 10px color-mix(in srgb, var(--danger-fill) 50%, transparent);
     }
     50% {
-        box-shadow: 0 0 0 4px rgba(239, 68, 68, 0), 0 0 20px rgba(239, 68, 68, 0.8);
-    }
-}
-
-@keyframes attackedPulse {
-    0%, 100% {
-        box-shadow: var(--iot-node-shadow), 0 0 0 0 rgba(239, 68, 68, 0.7), 0 0 15px rgba(239, 68, 68, 0.5);
-    }
-    50% {
-        box-shadow: var(--iot-node-shadow), 0 0 0 4px rgba(239, 68, 68, 0), 0 0 25px rgba(239, 68, 68, 0.8);
+        box-shadow: 0 0 0 4px transparent,
+                    0 0 20px color-mix(in srgb, var(--danger-fill) 80%, transparent);
     }
 }
 
@@ -2905,7 +2884,7 @@
 }
 
 .iot-board .device-node--compact {
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     padding: clamp(0.18rem, 5%, 0.45rem);
 }
 
@@ -2949,7 +2928,7 @@
     overflow: hidden;
     padding: 0.08rem 0.24rem;
     border: 1px solid color-mix(in srgb, var(--board-border) 70%, transparent);
-    border-radius: 0.3rem;
+    border-radius: var(--iot-radius-marker);
     background: color-mix(in srgb, var(--surface-overlay) 88%, var(--node-accent-color, #64748b));
     color: var(--board-text);
     max-height: 1.2em;
@@ -3069,7 +3048,7 @@
     align-items: center;
     gap: 0.2rem;
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
     color: var(--text-muted);
     padding: clamp(0.125rem, 1.2cqmin, 0.28rem) clamp(0.35rem, 2.4cqmin, 0.7rem);
@@ -3124,18 +3103,19 @@
     color: var(--text);
 }
 
-.iot-board .device-runtime-chip__delta {
-    display: inline-flex;
-    min-width: 0;
-    align-items: center;
-    gap: 0.1rem;
-}
-
-.iot-board .device-runtime-chip__delta .material-symbols-outlined {
-    flex: 0 0 auto;
-    font-size: 0.75rem;
-}
-
+/*
+ * `__previous` renders nowhere **on purpose**, and it stays for that reason.
+ *
+ * `.device-runtime-chip--changed` is capped at `58cqmin` — 64px on a standard 150x110 node — so
+ * "Temperature 24 → 26" truncates to a fragment there; the node shows the destination value and the
+ * `--changed` tint, and the full transition lives in the popover and in `badge.title`. Someone already
+ * rendered the pair to test that reasoning and measured it back out again.
+ *
+ * `CanvasBoard.vue`, `Board.vue` and `CanvasBoard.spec.ts` all cite this selector as the evidence for that
+ * decision, one of them saying outright that the style exists here. Deleting it would leave three comments
+ * pointing at nothing and invite the next reader to re-litigate the measurement from an absence. Its sibling
+ * `__delta` carried no such reference and is gone.
+ */
 .iot-board .device-runtime-chip__previous {
     min-width: 0;
     overflow: hidden;
@@ -3174,7 +3154,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     border: 1px solid color-mix(in srgb, var(--iot-color-accent) 20%, var(--border));
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     background: color-mix(in srgb, var(--iot-color-accent) 12%, var(--surface-elevated));
     color: color-mix(in srgb, var(--iot-color-accent) 72%, var(--text));
     padding: clamp(0.15rem, 1.3cqmin, 0.3rem) clamp(0.45rem, 2.8cqmin, 0.8rem);
@@ -3214,7 +3194,7 @@
     width: 100%;
     aspect-ratio: 1;
     max-height: 46cqmin;
-    border-radius: 0.5rem;
+    border-radius: var(--iot-radius-action);
     background: color-mix(in srgb, var(--surface-elevated) 78%, transparent);
     border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
     box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 14%, transparent);
@@ -3268,7 +3248,7 @@
     color: var(--text);
     font-size: var(--iot-font-min);
     background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
-    border-radius: 0.35rem;
+    border-radius: var(--iot-radius-control);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
     border: 1px solid var(--border);
     line-height: 1.2;
@@ -3355,13 +3335,6 @@
 
 /* Canvas container with sidebars */
 
-/* Grid background pattern */
-.grid-bg {
-    background-size: 40px 40px;
-    background-image: linear-gradient(to right, rgba(0, 0, 0, 0.15) 1px, transparent 1px),
-                      linear-gradient(to bottom, rgba(0, 0, 0, 0.15) 1px, transparent 1px);
-}
-
 /* Particle line animation */
 .particle-line {
     stroke-dasharray: 7, 10;
@@ -3383,74 +3356,29 @@
     }
 }
 
-/* Node container hover effects */
-.node-container {
-    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.node-container:hover {
-    transform: scale(1.02);
-    z-index: 50;
-}
-
-/* Glass node effect */
-.glass-node {
-    backdrop-filter: blur(12px);
-    background: rgba(255, 255, 255, 0.7);
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
-}
-
-/* Glow icon effect */
-.glow-icon {
-    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.1));
-}
-
-/* Data badge */
-.data-badge {
-    position: absolute;
-    right: -12px;
-    top: 0;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: var(--iot-font-min);
-    font-weight: bold;
-    letter-spacing: 0.025em;
-    background: white;
-    border: 1px solid rgba(226, 232, 240, 0.8);
-    box-shadow: 0 0 8px rgba(0, 0, 0, 0.05);
-    z-index: 10;
-    color: var(--text-muted);
-}
-
-/* Pulse status animation */
-.pulse-status {
-    animation: pulse-border 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-@keyframes pulse-border {
-    0%, 100% { box-shadow: 0 0 0 0px rgba(34, 197, 94, 0.7); }
-    50% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
-}
-
-/* Slow spin animation for sensors */
-.animate-spin-slow {
-    animation: spin 3s linear infinite;
-}
-
-/* Color utilities */
-.text-primary { color: #2563EB; }
-.text-secondary { color: #C026D3; }
-.bg-online { background-color: #059669; }
-.bg-offline { background-color: #dc2626; }
 /*
- * Five global redefinitions of Tailwind's own utilities lived here — `.bg-green-200`,
- * `.border-blue-100`, `.border-green-200`, `.border-purple-100`, `.border-purple-200` — each pinned to a
- * light-theme hex, unscoped, and so applying anywhere in the app rather than inside `.iot-board`. All five
- * had 0 consumers left after the role-class migration, but any future use of those Tailwind classes would
- * silently have got a hardcoded light colour instead of the palette value. Removed with their callers.
+ * Nine global redefinitions of Tailwind's own utilities lived here — `.bg-green-200`, `.border-blue-100`,
+ * `.border-green-200`, `.border-purple-100`, `.border-purple-200`, then `.text-primary`, `.text-secondary`,
+ * `.bg-online` and `.bg-offline` — each pinned to a light-theme hex, unscoped, and so applying anywhere in
+ * the app rather than inside `.iot-board`. All nine had 0 consumers, but any future use of those Tailwind
+ * classes would silently have got a hardcoded light colour instead of the palette value.
  *
- * The four named utilities above are still in use (ControlCenter, SystemInspector) and stay.
+ * `.text-primary` proved that concretely: this file loads *after* Tailwind, so its `#2563EB` won over the
+ * generated `color: var(--iot-color-accent)` — both rules were in the bundle, and the theme-aware one lost.
+ *
+ * The last four survived the first pass because a note here claimed they were "still in use (ControlCenter,
+ * SystemInspector)". Those files *redefined* the same class names in their own `scoped` blocks; neither
+ * template ever applied one. Three files, 13 declarations, no consumer — and the same concept spelled four
+ * different ways (`.bg-online` was `#059669`, `#10B981` and `var(--success)`), which is what a class nobody
+ * renders looks like as it rots. Read the templates, not the stylesheets, before calling a class used.
+ *
+ * A later sweep of all 250 global classes took seven more from right here — `.node-container`, `.glass-node`,
+ * `.glow-icon`, `.data-badge`, `.pulse-status` with its `pulse-border` keyframes, and `.animate-spin-slow`.
+ * Two were provably broken rather than merely unused: `.animate-spin-slow` animated `spin`, which this file
+ * never defines, and `.data-badge` hardcoded `background: white`. That sweep needed three fixes before its
+ * output could be trusted — it first counted Element Plus's runtime classes, Vue `<Transition>` names, and
+ * template-literal class construction (`board-action-dock--${mode}`) as dead, and it also read a *spec
+ * documenting a class as dead* as a consumer of it. 35 reported, 15 real.
  */
 
 .board-panel--interaction-read-only {

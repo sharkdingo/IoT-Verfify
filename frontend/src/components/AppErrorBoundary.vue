@@ -93,7 +93,7 @@ const reloadPage = () => window.location.reload()
   min-height: 38px;
   padding: 8px 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--iot-radius-control);
   background: var(--surface-elevated);
   color: var(--text);
   cursor: pointer;

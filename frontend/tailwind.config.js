@@ -16,16 +16,10 @@ export default {
         // render at full strength. For a translucent accent use
         // `color-mix(in srgb, var(--iot-color-accent) N%, transparent)`.
         primary: "var(--iot-color-accent)",
-        secondary: "#C026D3",
-      },
-      fontFamily: {
-        display: ["var(--iot-font-display)"],
-        body: ["var(--iot-font-body)"],
       },
       borderRadius: {
         DEFAULT: "0.75rem",
         '2xl': '1.5rem',
-        '3xl': '2rem',
       },
     },
   },

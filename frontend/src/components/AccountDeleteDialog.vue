@@ -208,7 +208,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   padding: 1rem;
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: color-mix(in srgb, var(--text, var(--text)) 56%, transparent);
+  background: color-mix(in srgb, var(--text) 56%, transparent);
   backdrop-filter: blur(5px);
 }
 
@@ -222,10 +222,10 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border, var(--border)));
-  border-radius: 1.25rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  border-radius: var(--iot-radius-surface);
   background: var(--surface-overlay);
-  color: var(--text, var(--text));
+  color: var(--text);
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
 }
 
@@ -235,7 +235,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   margin: 0 auto 1rem;
   display: grid;
   place-items: center;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   background: color-mix(in srgb, var(--danger) 14%, var(--surface-muted));
   color: var(--danger);
 }
@@ -256,7 +256,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
 .account-delete-copy p {
   margin: 0.5rem 0 0;
-  color: var(--text-muted, var(--text-muted));
+  color: var(--text-muted);
   font-size: 0.9rem;
   line-height: 1.55;
 }
@@ -266,8 +266,8 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   gap: 0.5rem;
   margin: 1.25rem 0;
   padding: 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border, var(--border)));
-  border-radius: 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  border-radius: var(--iot-radius-card);
   background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
   color: var(--danger);
   font-size: 0.8rem;
@@ -283,7 +283,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   margin: -0.5rem 0 1.25rem;
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 0.875rem;
+  border-radius: var(--iot-radius-card);
   background: var(--surface-muted);
   color: var(--text-muted);
   font-size: 0.8125rem;
@@ -305,17 +305,17 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   margin-top: 0.85rem;
   font-size: 0.78rem;
   font-weight: 700;
-  color: var(--text-muted, var(--text-muted));
+  color: var(--text-muted);
 }
 
 .account-delete-field input {
   width: 100%;
   margin-top: 0.4rem;
   padding: 0.7rem 0.8rem;
-  border: 1px solid var(--border, var(--border-strong));
-  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--iot-radius-well);
   background: var(--surface);
-  color: var(--text, var(--text));
+  color: var(--text);
   font-size: 0.9rem;
   outline: none;
 }
@@ -332,7 +332,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 .account-delete-field small {
   display: block;
   margin-top: 0.35rem;
-  color: var(--text-muted, var(--text-muted));
+  color: var(--text-muted);
   font-weight: 500;
   line-height: 1.4;
 }
@@ -351,7 +351,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   flex: 1;
   min-height: 2.75rem;
   border: 0;
-  border-radius: 0.85rem;
+  border-radius: var(--iot-radius-card);
   font-size: 0.9rem;
   font-weight: 800;
   cursor: pointer;
@@ -365,13 +365,14 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 .account-delete-btn.secondary {
   background: var(--surface-muted);
   color: var(--text-muted);
-  border: 1px solid var(--border, var(--border-strong));
+  border: 1px solid var(--border);
 }
 
 .account-delete-btn.danger {
   background: var(--danger-fill);
   color: #ffffff;
-  box-shadow: 0 12px 24px rgba(220, 38, 38, 0.24);
+  /* Derived from the fill it belongs to, so the halo follows the theme the button already follows. */
+  box-shadow: 0 12px 24px color-mix(in srgb, var(--danger-fill) 24%, transparent);
 }
 
 /* A disarmed destructive button must look disarmed.
@@ -403,7 +404,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   height: 1rem;
   border: 2px solid rgba(255, 255, 255, 0.35);
   border-top-color: #ffffff;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   animation: account-delete-spin 0.8s linear infinite;
 }
 

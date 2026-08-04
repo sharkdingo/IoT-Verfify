@@ -1635,7 +1635,7 @@ onMounted(() => {
 
 .edge-hitarea:focus-visible {
   outline: none;
-  stroke: color-mix(in srgb, var(--iot-color-accent, var(--accent)) 18%, transparent);
+  stroke: color-mix(in srgb, var(--iot-color-accent) 18%, transparent);
 }
 
 .edge-base-line,
@@ -1651,12 +1651,12 @@ onMounted(() => {
 
 .edge-label__bg {
   fill: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
-  stroke: color-mix(in srgb, var(--border, var(--border-strong)) 88%, transparent);
+  stroke: color-mix(in srgb, var(--border) 88%, transparent);
   stroke-width: 1;
 }
 
 .edge-label__text {
-  fill: var(--text, var(--text));
+  fill: var(--text);
   font-size: var(--iot-font-min);
   font-weight: 700;
   letter-spacing: 0;
@@ -1668,14 +1668,21 @@ onMounted(() => {
   top: -32px;
   left: 50%;
   transform: translateX(-50%);
-  background: linear-gradient(135deg, var(--danger) 0%, var(--danger) 100%);
-  color: white;
+  /* `var(--danger)` is the ink half of the role — the dark theme lightens it to #fca5a5, which put this
+     badge's white label at 1.90:1. The fill half is theme-stable and solved for white ink.
+     The gradient was `135deg, X 0%, X 100%`: gradient syntax with nothing to interpolate. It now deepens
+     rather than lightens, so both stops clear AA (4.83:1 at the lit end, 5.36:1 at the shaded end) —
+     mixing the fill toward white for a highlight had dropped the top stop to 4.22:1. */
+  background: linear-gradient(160deg,
+      var(--danger-fill) 0%,
+      color-mix(in srgb, var(--danger-fill) 85%, #7f1d1d) 100%);
+  color: #ffffff;
   padding: 3px 8px;
-  border-radius: 12px;
+  border-radius: var(--iot-radius-well);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.5);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--danger-fill) 50%, transparent);
   z-index: 20;
   animation: attackBounce 0.8s ease-in-out infinite;
   white-space: nowrap;
@@ -1711,7 +1718,7 @@ onMounted(() => {
   width: 82%;
   padding: clamp(0.18rem, 1.7cqmin, 1.5rem) clamp(0.4rem, 4cqmin, 4rem);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   background: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
   color: var(--text);
   font-weight: 700;
@@ -1785,7 +1792,7 @@ onMounted(() => {
   transform: translateX(-50%);
   width: 90%;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--iot-radius-control);
   font-size: var(--iot-font-min);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   z-index: 10;

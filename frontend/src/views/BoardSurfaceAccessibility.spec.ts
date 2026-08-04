@@ -127,7 +127,11 @@ describe('Board surface accessibility contracts', () => {
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-playback-change-popover')
     expect(shortLandscapePlayback).toContain('width: min(22rem, 42vw)')
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-timeline-host')
-    expect(shortLandscapePlayback).toContain('right: calc(min(22rem, 42vw) + (var(--board-floating-gap, 1rem) * 2))')
+    // The contract is the geometry — the timeline yields the inspector's width plus a gap on each side.
+    // Asserted without the fallback that used to sit inside the `var()`: `--board-floating-gap` is declared
+    // at `:root`, so `, 1rem` could never be reached, and pinning the assertion to that dead text made a
+    // stylesheet cleanup look like a layout regression.
+    expect(shortLandscapePlayback).toContain('right: calc(min(22rem, 42vw) + (var(--board-floating-gap) * 2))')
   })
 
   it('pairs disabled formal-run controls with visible reasons', () => {

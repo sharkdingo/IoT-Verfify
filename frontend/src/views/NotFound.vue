@@ -157,7 +157,7 @@ const attemptedPath = computed(() => {
 .not-found__path-value {
   max-width: 100%;
   overflow-wrap: anywhere;
-  border-radius: 0.375rem;
+  border-radius: var(--iot-radius-control);
   background: var(--surface-elevated);
   border: 1px solid var(--border);
   padding: 0.125rem 0.5rem;
@@ -182,7 +182,7 @@ const attemptedPath = computed(() => {
   justify-content: center;
   gap: 0.375rem;
   border: 1px solid var(--border-strong);
-  border-radius: 0.5rem;
+  border-radius: var(--iot-radius-action);
   padding: 0.5rem 1rem;
   font-weight: 600;
   color: var(--text);

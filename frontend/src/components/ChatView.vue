@@ -2923,13 +2923,13 @@ const scrollToBottom = (force = false) => {
    * moving in the direction a hover is expected to move. */
   --chat-accent-strong: color-mix(in srgb, var(--chat-accent) 82%, #000);
   --chat-success: var(--success);
-  --chat-bg: color-mix(in srgb, var(--surface-overlay, rgba(255, 255, 255, 0.94)) 94%, transparent);
+  --chat-bg: color-mix(in srgb, var(--surface-overlay) 94%, transparent);
   --chat-sidebar-bg: color-mix(in srgb, var(--surface-panel) 92%, var(--surface-control));
   --chat-input-bg: var(--surface-elevated);
   --chat-control-bg: var(--surface-control);
-  --chat-text: var(--text, var(--text));
-  --chat-muted: var(--text-muted, var(--text-muted));
-  --chat-border: var(--border, var(--border));
+  --chat-text: var(--text);
+  --chat-muted: var(--text-muted);
+  --chat-border: var(--border);
   --chat-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
   --chat-user-bg: color-mix(in srgb, var(--accent-strong) 12%, var(--surface-control));
   --chat-ai-bg: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
@@ -2966,7 +2966,7 @@ const scrollToBottom = (force = false) => {
   pointer-events: auto;
   overflow: hidden;
   border: 1px solid var(--chat-border);
-  border-radius: 1rem;
+  border-radius: var(--iot-radius-panel);
   background: var(--chat-bg);
   color: var(--chat-text);
   box-shadow: var(--chat-shadow);
@@ -3020,7 +3020,7 @@ const scrollToBottom = (force = false) => {
   justify-content: center;
   gap: 0.45rem;
   border: 1px solid color-mix(in srgb, var(--chat-accent) 40%, var(--chat-border));
-  border-radius: 0.65rem;
+  border-radius: var(--iot-radius-well);
   background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
   color: var(--chat-text);
   cursor: pointer;
@@ -3055,7 +3055,7 @@ const scrollToBottom = (force = false) => {
   justify-content: center;
   gap: 0.5rem;
   border: 1px dashed color-mix(in srgb, var(--chat-border) 82%, transparent);
-  border-radius: 0.65rem;
+  border-radius: var(--iot-radius-well);
   background: color-mix(in srgb, var(--chat-control-bg) 42%, transparent);
   color: var(--chat-muted);
   padding: 0.75rem;
@@ -3090,7 +3090,7 @@ const scrollToBottom = (force = false) => {
   margin-bottom: 0.25rem;
   padding: 0.6rem 0.55rem;
   border: 1px solid transparent;
-  border-radius: 0.6rem;
+  border-radius: var(--iot-radius-well);
   color: var(--chat-muted);
   font-size: 0.82rem;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
@@ -3121,7 +3121,7 @@ const scrollToBottom = (force = false) => {
 }
 
 .session-select-button:focus-visible {
-  border-radius: 0.35rem;
+  border-radius: var(--iot-radius-control);
   outline: 2px solid color-mix(in srgb, var(--chat-accent) 72%, transparent);
   outline-offset: 2px;
 }
@@ -3202,7 +3202,7 @@ const scrollToBottom = (force = false) => {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 0.45rem;
+  border-radius: var(--iot-radius-action);
   background: transparent;
   color: var(--chat-muted);
   cursor: pointer;
@@ -3326,7 +3326,7 @@ const scrollToBottom = (force = false) => {
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: 0.6rem;
+  border-radius: var(--iot-radius-well);
   background: transparent;
   color: var(--chat-muted);
   cursor: pointer;
@@ -3355,7 +3355,7 @@ const scrollToBottom = (force = false) => {
   width: 2rem;
   height: 2rem;
   border: 0;
-  border-radius: 0.35rem;
+  border-radius: var(--iot-radius-control);
   background:
       linear-gradient(135deg, transparent 0 45%, color-mix(in srgb, var(--chat-muted) 64%, transparent) 46% 54%, transparent 55%),
       linear-gradient(135deg, transparent 0 62%, color-mix(in srgb, var(--chat-muted) 64%, transparent) 63% 71%, transparent 72%);
@@ -3409,9 +3409,9 @@ const scrollToBottom = (force = false) => {
   justify-content: center;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--chat-accent) 34%, var(--chat-border));
-  border-radius: 1rem;
+  border-radius: var(--iot-radius-panel);
   background: color-mix(in srgb, var(--chat-accent) 12%, var(--chat-control-bg));
-  box-shadow: 0 12px 28px rgba(124, 58, 237, 0.18);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--chat-accent) 18%, transparent);
 }
 
 .custom-logo-img {
@@ -3450,7 +3450,7 @@ const scrollToBottom = (force = false) => {
   align-items: flex-start;
   gap: 0.6rem;
   border: 1px solid var(--chat-border);
-  border-radius: 0.8rem;
+  border-radius: var(--iot-radius-card);
   background: var(--chat-ai-bg);
   color: var(--chat-text);
   cursor: pointer;
@@ -3486,7 +3486,7 @@ const scrollToBottom = (force = false) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0.65rem;
+  border-radius: var(--iot-radius-well);
   background: color-mix(in srgb, var(--chat-accent) 14%, var(--chat-control-bg));
   color: var(--chat-accent);
   font-size: 1rem;
@@ -3555,7 +3555,7 @@ const scrollToBottom = (force = false) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0.65rem;
+  border-radius: var(--iot-radius-well);
   font-size: 0.85rem;
 }
 
@@ -3579,7 +3579,7 @@ const scrollToBottom = (force = false) => {
 .msg-body {
   min-width: 0;
   border: 1px solid var(--chat-border);
-  border-radius: 0.9rem;
+  border-radius: var(--iot-radius-card);
   padding: 0.7rem 0.85rem;
   color: var(--chat-text);
   font-size: 0.88rem;
@@ -3637,7 +3637,7 @@ const scrollToBottom = (force = false) => {
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: 0.45rem;
+  border-radius: var(--iot-radius-action);
   background: transparent;
   color: var(--chat-muted);
   cursor: pointer;
@@ -3687,7 +3687,7 @@ const scrollToBottom = (force = false) => {
   justify-content: space-between;
   gap: 0.75rem;
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--chat-border));
-  border-radius: 0.65rem;
+  border-radius: var(--iot-radius-well);
   background: color-mix(in srgb, var(--danger) 8%, var(--chat-ai-bg));
   color: var(--chat-text);
   font-size: 0.8rem;
@@ -3724,7 +3724,7 @@ const scrollToBottom = (force = false) => {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--chat-border);
-  border-radius: 0.4rem;
+  border-radius: var(--iot-radius-control);
   color: var(--chat-muted);
   transition: transform 0.16s ease, color 0.16s ease, border-color 0.16s ease;
 }
@@ -3753,7 +3753,7 @@ const scrollToBottom = (force = false) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0.4rem;
+  border-radius: var(--iot-radius-control);
   background: color-mix(in srgb, var(--chat-accent) 11%, var(--chat-control-bg));
   color: var(--chat-accent);
 }
@@ -3793,7 +3793,7 @@ const scrollToBottom = (force = false) => {
 .chat-execution-state {
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--chat-border);
-  border-radius: 0.35rem;
+  border-radius: var(--iot-radius-control);
   background: var(--chat-control-bg);
   color: var(--chat-muted);
   font-size: 0.72rem;
@@ -3837,7 +3837,7 @@ const scrollToBottom = (force = false) => {
   align-items: baseline;
   gap: 0.25rem;
   padding: 0.18rem 0.45rem;
-  border-radius: 0.35rem;
+  border-radius: var(--iot-radius-control);
   background: var(--chat-control-bg);
   color: var(--chat-muted);
 }
@@ -3925,7 +3925,7 @@ const scrollToBottom = (force = false) => {
   justify-self: end;
   padding: 0.12rem 0.4rem;
   border: 1px solid var(--chat-border);
-  border-radius: 0.35rem;
+  border-radius: var(--iot-radius-control);
   background: var(--chat-control-bg);
   color: var(--chat-muted);
   font-size: 0.7rem;
@@ -3967,7 +3967,7 @@ const scrollToBottom = (force = false) => {
   min-height: 2rem;
   padding: 0.35rem 0.65rem;
   border: 1px solid var(--chat-accent);
-  border-radius: 0.5rem;
+  border-radius: var(--iot-radius-action);
   background: var(--chat-accent);
   color: #fff;
   cursor: pointer;
@@ -3997,7 +3997,7 @@ const scrollToBottom = (force = false) => {
   flex-wrap: wrap;
   gap: 0.75rem;
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--chat-border));
-  border-radius: 0.65rem;
+  border-radius: var(--iot-radius-well);
   /* The theme-aware danger tokens, not `#fff1f2` / `#991b1b` mixed with chat tokens. Those are rose-50
      and red-800: at 88% and 84% they dominated the mix, so in dark theme this error banner stayed a
      near-white card with dark red text — a light-theme surface inside a dark interface, which is the one
@@ -4006,7 +4006,7 @@ const scrollToBottom = (force = false) => {
   background: color-mix(in srgb, var(--danger-surface) 88%, var(--chat-input-bg));
   color: var(--danger);
   padding: 0.65rem 0.75rem;
-  box-shadow: 0 10px 28px rgba(127, 29, 29, 0.14);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--danger-fill) 14%, transparent);
 }
 
 .protected-confirmation.is-load-error {
@@ -4037,7 +4037,7 @@ const scrollToBottom = (force = false) => {
 .protected-confirmation__button {
   gap: 0.3rem;
   border: 1px solid var(--chat-border);
-  border-radius: 0.45rem;
+  border-radius: var(--iot-radius-action);
   padding: 0.4rem 0.6rem;
   background: var(--chat-input-bg);
   color: var(--chat-text);
@@ -4064,7 +4064,7 @@ const scrollToBottom = (force = false) => {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--chat-border);
-  border-radius: 0.9rem;
+  border-radius: var(--iot-radius-card);
   background: var(--chat-input-bg);
   box-shadow: 0 14px 35px rgba(15, 23, 42, 0.16);
   padding: 0.65rem;
@@ -4119,7 +4119,7 @@ const scrollToBottom = (force = false) => {
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: 0.6rem;
+  border-radius: var(--iot-radius-well);
   background: transparent;
   color: var(--chat-muted);
   cursor: pointer;
@@ -4170,7 +4170,7 @@ const scrollToBottom = (force = false) => {
   width: 0.36rem;
   height: 0.36rem;
   margin: 0 0.1rem;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   background: var(--chat-muted);
   animation: typing 1.4s infinite ease-in-out both;
 }
@@ -4249,7 +4249,7 @@ const scrollToBottom = (force = false) => {
     left: var(--chat-safe-left);
     width: auto;
     height: auto;
-    border-radius: 0.9rem;
+    border-radius: var(--iot-radius-card);
   }
 
   .control-icon-button,

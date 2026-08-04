@@ -705,7 +705,7 @@ onUnmounted(() => {
   position: relative;
   overflow: hidden;
   border: none;
-  border-radius: 9999px;
+  border-radius: var(--iot-radius-pill);
   background: rgba(255, 255, 255, 0.01);
   background-blend-mode: luminosity;
   backdrop-filter: blur(4px);
@@ -771,9 +771,13 @@ onUnmounted(() => {
 }
 
 .emphasis {
-  color: hsl(210, 100%, 70%);
+  /* The landing hero sits on a fixed dark video, not on a theme surface, so this pair is deliberately
+     literal rather than tokenised — the role tokens would flip with a theme this section never adopts.
+     The glow derives from the ink beside it so the two cannot drift apart. */
+  --emphasis-ink: hsl(210, 100%, 70%);
+  color: var(--emphasis-ink);
   font-style: normal;
-  text-shadow: 0 0 30px rgba(100, 200, 255, 0.4);
+  text-shadow: 0 0 30px color-mix(in srgb, var(--emphasis-ink) 40%, transparent);
 }
 
 .hero-subtext {
@@ -795,7 +799,7 @@ onUnmounted(() => {
   position: relative;
   width: min(100%, 430px);
   margin-top: 2.25rem;
-  border-radius: 18px;
+  border-radius: var(--iot-radius-surface);
   background: rgba(8, 16, 24, 0.58);
   background-blend-mode: luminosity;
   backdrop-filter: blur(18px);
@@ -852,7 +856,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
-  border-radius: 9999px;
+  border-radius: var(--iot-radius-pill);
   background: rgba(255, 255, 255, 0.08);
   padding: 4px;
 }
@@ -860,7 +864,7 @@ onUnmounted(() => {
 .auth-tabs button {
   min-height: 38px;
   border: 0;
-  border-radius: 9999px;
+  border-radius: var(--iot-radius-pill);
   background: transparent;
   color: rgba(255, 255, 255, 0.72);
   cursor: pointer;
@@ -914,7 +918,7 @@ onUnmounted(() => {
   width: 100%;
   min-height: 40px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 10px;
+  border-radius: var(--iot-radius-well);
   background: rgba(255, 255, 255, 0.10);
   color: #ffffff;
   padding: 0 0.75rem;
@@ -960,7 +964,7 @@ onUnmounted(() => {
   gap: 0.5rem;
   margin: 0 0 0.9rem;
   border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 8px;
+  border-radius: var(--iot-radius-action);
   background: rgba(255, 255, 255, 0.1);
   padding: 0.65rem 0.75rem;
   color: rgba(255, 255, 255, 0.92);
@@ -979,7 +983,7 @@ onUnmounted(() => {
   gap: 0.5rem;
   margin: 0 0 0.8rem;
   border: 1px solid rgba(252, 165, 165, 0.5);
-  border-radius: 8px;
+  border-radius: var(--iot-radius-action);
   background: rgba(127, 29, 29, 0.34);
   padding: 0.65rem 0.75rem;
   color: var(--danger-surface);
@@ -1005,7 +1009,7 @@ onUnmounted(() => {
   min-height: 42px;
   margin-top: 0.1rem;
   border: 0;
-  border-radius: 9999px;
+  border-radius: var(--iot-radius-pill);
   background: rgba(255, 255, 255, 0.9);
   color: hsl(0, 0%, 4%);
   cursor: pointer;
@@ -1094,7 +1098,7 @@ onUnmounted(() => {
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767.98px) {
   .hero-section {
     padding-top: 7rem;
     padding-bottom: 3rem;
@@ -1120,7 +1124,7 @@ onUnmounted(() => {
   }
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1100.98px) {
   .hero-section--with-auth {
     align-items: center;
     padding-right: 1.5rem;

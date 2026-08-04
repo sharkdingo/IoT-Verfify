@@ -67,7 +67,7 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
 <style scoped>
 .code-block-container {
   margin: 16px 0;
-  border-radius: 8px;
+  border-radius: var(--iot-radius-action);
   overflow: hidden;
   border: 1px solid #e5e5e5;
   background: #f8f8f8; /* 默认浅色底 */

@@ -1622,25 +1622,9 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
 <style scoped>
 /* Glass panel effect */
 .glass-panel {
-  background: var(--board-panel-bg, rgba(255, 255, 255, 0.7));
+  background: var(--board-panel-bg);
   backdrop-filter: blur(16px);
-  border: 1px solid var(--board-border, rgba(226, 232, 240, 0.8));
-}
-
-/* Utility classes */
-.text-primary {
-  color: var(--accent);
-}
-
-.bg-online {
-  /* `var(--success)`, matching `.bg-offline` directly below which already uses `var(--danger)`. A raw `#059669`
-     beside a tokenised sibling is the clearest possible sign of a missed migration: the same concept, one line
-     apart, expressed two different ways. */
-  background-color: var(--success);
-}
-
-.bg-offline {
-  background-color: var(--danger);
+  border: 1px solid var(--board-border);
 }
 
 [data-full-text] {

@@ -35,7 +35,11 @@ const remarkRehypeOptions = { allowDangerousHtml: false };
 
 <style scoped>
 :deep(.markdown-image-alt) {
-  color: var(--chat-text-muted, var(--text-muted));
+  /* `--chat-muted` is the token `ChatView` actually declares. This read `--chat-text-muted`, which is
+     defined nowhere — a name that never existed, held up by its own fallback. It happened to render the
+     right colour because `--chat-muted` resolves to `var(--text-muted)` too, so the typo was invisible;
+     it would have surfaced the first time the chat panel's muted tone diverged from the page's. */
+  color: var(--chat-muted);
   font-style: italic;
 }
 </style>

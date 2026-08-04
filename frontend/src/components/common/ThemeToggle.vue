@@ -58,7 +58,7 @@ const iconName = computed(() => {
   min-width: 104px;
   height: 36px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   border: 1px solid transparent;
   font-size: 0.875rem;
   font-weight: 700;
@@ -128,7 +128,10 @@ const iconName = computed(() => {
 
 .theme-toggle--light:hover {
   background: var(--surface-muted);
-  border-color: rgba(53, 158, 255, 0.45);
+  /* `rgba(53, 158, 255, 0.45)` measured **1.54:1** against the `--surface-muted` it sits on — a hover
+     border almost nobody could see, and the same `#359eff` that `focusIndicator.spec.ts` records as a
+     failed focus ring elsewhere. `--accent-border` is the token for a 3:1 edge and measures 3.15:1. */
+  border-color: var(--accent-border);
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
 }
 

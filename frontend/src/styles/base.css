@@ -14,8 +14,6 @@
     /* 文本字号 */
     --iot-font-base: 1rem;
     --iot-font-title: 1.3rem;
-    --iot-font-subtitle: 1.1rem;
-    --iot-font-caption: 0.875rem;
     /*
      * Smallest size any interface text may use (11px at a 16px root).
      *
@@ -31,23 +29,36 @@
      */
     --iot-font-min: 0.6875rem;
 
-    /* 圆角 */
-    --iot-radius-card: 1.125rem;
-    --iot-radius-node: 0.8rem;
-    --iot-radius-input: 0.625rem;
+    /*
+     * Corner radius is a containment scale, not a decoration.
+     *
+     * In this product a larger radius means "a bigger, more independent thing": a status marker sits
+     * inside a button, a button inside a well, a well inside a card, a card inside a floating panel, a
+     * panel inside a modal surface. Reading the radius, a user should be able to tell which level of the
+     * board they are looking at — so the steps are named for the role, and a component picks its step by
+     * asking what it *is*, never by eye.
+     *
+     * These replaced 29 distinct hand-written values across 115 declarations, where the same role was
+     * spelled several ways one file apart (`0.6rem`, `0.625rem`, `0.65rem`, `10px` were all "a well").
+     * Nothing was tuned to a number: each value is the role's existing centre of mass, so the only visible
+     * shifts are within 2px and always toward the neighbours a component already sits beside.
+     *
+     * `radiusScale.spec.ts` keeps new literals out. If a component needs a step that does not exist, the
+     * question is which containment level it belongs to — add the level here, do not write the number.
+     */
+    --iot-radius-marker: 0.25rem;   /*  4px — badges, tags, tiny value chips */
+    --iot-radius-control: 0.375rem; /*  6px — labels, inline focus rings, small handles */
+    --iot-radius-action: 0.5rem;    /*  8px — buttons, menu items, nodes, tooltips, popovers */
+    --iot-radius-well: 0.7rem;      /* 11px — inset groups, icon tiles, segmented wells */
+    --iot-radius-card: 0.875rem;    /* 14px — cards, task/message bodies, previews */
+    --iot-radius-panel: 1.05rem;    /* 17px — floating panels, docks, the chat surface */
+    --iot-radius-surface: 1.25rem;  /* 20px — modal dialogs, the auth panel: largest containers */
+    --iot-radius-pill: 999px;       /*        fully round: toggles, dots, status pills */
     --iot-radius-resize: 0.2rem;
 
     /* 间距（基于 16px 根字号） */
-    --iot-space-2xs: 0.25rem;  /* 4px */
     --iot-space-xs: 0.375rem;  /* 6px */
     --iot-space-sm: 0.5rem;    /* 8px */
-    --iot-space-md: 0.75rem;   /* 12px */
-    --iot-space-lg: 1rem;      /* 16px */
-
-    /* 卡片宽度（Input / Status 浮动卡片） */
-    --iot-card-width: 24vw;
-    --iot-card-width-min: 12rem;
-    --iot-card-width-max: 24rem;
 
     /* Shared semantic surfaces used by newer board components. */
     --surface: #ffffff;
@@ -192,25 +203,9 @@
 
     /* 画布网格尺寸 */
     --iot-grid-size: 2rem;
-    --iot-canvas-size: 300%;
-
-    /* 节点间距 */
-    --iot-node-gap: 0.5rem;
 
     /* 缩放手柄尺寸（节点四角的小圆点） */
     --iot-resize-size: 0.7rem;
-    --iot-resize-offset: 0.25rem;
-
-    /* 设备图标缩略图 */
-    --iot-thumb-width: 3.5rem;
-    --iot-thumb-height: 2.6rem;
-
-    /* 连线颜色基础值（实际连线颜色由设备颜色动态决定） */
-    --iot-color-edge: #2563eb;
-
-    /* Dialog 公共尺寸（设备详情弹窗等） */
-    --iot-dialog-width: 26rem;       /* 整体宽度 ≈ 416px */
-    --iot-dialog-label-width: 6rem;  /* 左侧 label 列宽 ≈ 96px */
 
     /* MessageBox 公共尺寸（Element Plus MessageBox） */
     --iot-messagebox-min-width: 22.5rem; /* 360px */
@@ -225,13 +220,6 @@
     --iot-toast-padding-y: 0.5rem;
     --iot-toast-padding-x: 0.875rem;
     --iot-toast-gap: 0.5rem;
-
-    /* Docking & Transition Variables */
-    --iot-dock-icon-size: 3rem;       /* 48px */
-    --iot-dock-snap-threshold: 100px; /* Drag snap distance */
-
-    /* Smooth movement for docking */
-    --iot-transition-dock: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 /*
@@ -262,12 +250,8 @@
     --iot-color-card-bg-strong: rgba(15, 23, 42, 0.7);
     --iot-color-card-border: rgba(56, 189, 248, 0.75);
     --iot-color-card-shadow: 0 1.6rem 3.2rem rgba(15, 23, 42, 0.9);
-    --iot-color-card-header-glow: rgba(56, 189, 248, 0.18);
 
     /* 节点 */
-    --iot-color-node-bg: rgba(15, 23, 42, 0.98);
-    --iot-color-node-border: rgba(59, 130, 246, 0.9);
-    --iot-color-node-highlight: rgba(30, 64, 175, 0.6);
     --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.9);
     --iot-color-accent: #60a5fa;
     --iot-node-accent-0: #60a5fa;
@@ -280,11 +264,9 @@
     --iot-node-accent-7: #94a3b8;
 
     /* 表格与文字 */
-    --iot-color-table-border: rgba(30, 64, 175, 0.75);
     --iot-color-text: #e5e7eb;
     --iot-color-text-muted: #767c87;
     --iot-color-title: #f9fafb;
-    --iot-color-subtitle: #c7d2fe;
     --surface: #0f172a;
     --surface-muted: #1e293b;
     --surface-elevated: #111827;
@@ -369,58 +351,10 @@
     --info-surface: #10272f;
     --info-border: #377e8a;
 
-    /* 设备列表 */
-    --iot-color-device-item-bg: rgba(15, 23, 42, 0.96);
-    --iot-color-device-item-bg-hover: linear-gradient(
-            135deg,
-            rgba(56, 189, 248, 0.28),
-            rgba(37, 99, 235, 0.42)
-    );
-    --iot-color-device-item-border: rgba(148, 163, 184, 0.45);
-    --iot-color-device-item-text: #e5e7eb;
-    --iot-shadow-device-hover: 0 0.4rem 1rem rgba(15, 23, 42, 0.9);
-
-    /* 规约小卡片 */
-    --iot-color-spec-bg: rgba(15, 23, 42, 0.98);
-    --iot-color-spec-bg-strong: rgba(15, 23, 42, 0.94);
-    --iot-color-spec-border: rgba(30, 64, 175, 0.85);
-
-    /* 输入组件 */
-    --iot-color-input-bg: rgba(15, 23, 42, 0.96);
-    --iot-color-input-border: rgba(148, 163, 184, 0.55);
-    --iot-color-input-border-strong: rgba(148, 163, 184, 0.6);
-
-    /* 分割线 / 表格 hover */
-    --iot-color-divider: rgba(37, 99, 235, 0.5);
-    --iot-color-table-row-hover: rgba(56, 189, 248, 0.18);
-
     /* 缩放手柄配色 */
     --iot-color-resize-border: rgba(148, 163, 184, 0.35);
     --iot-color-resize-bg: rgba(15, 23, 42, 0.9);
     --iot-color-resize-shadow: rgba(15, 23, 42, 0.8);
-
-    /* Header 专用变量 */
-    --iot-header-bg: radial-gradient(
-            circle at top left,
-            rgba(15, 23, 42, 0.98),
-            rgba(15, 23, 42, 0.96)
-    );
-    --iot-header-border: rgba(56, 189, 248, 0.55);
-    --iot-header-shadow: 0 10px 26px rgba(15, 23, 42, 0.9);
-
-    --iot-lang-btn-border: rgba(56, 189, 248, 0.9);
-    --iot-lang-btn-bg: radial-gradient(
-            circle at top,
-            rgba(15, 23, 42, 0.9),
-            rgba(15, 23, 42, 0.98)
-    );
-    --iot-lang-btn-text: #e0f2fe;
-    --iot-lang-btn-hover-bg: linear-gradient(
-            135deg,
-            rgba(56, 189, 248, 0.28),
-            rgba(37, 99, 235, 0.45)
-    );
-    --iot-lang-btn-shadow: 0 0 0 1px rgba(15, 23, 42, 0.8);
 }
 
 /* ========== 亮色主题 ========== */
@@ -435,12 +369,8 @@
     --iot-color-card-bg-strong: rgba(255, 255, 255, 0.7);
     --iot-color-card-border: rgba(148, 163, 184, 0.55);
     --iot-color-card-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
-    --iot-color-card-header-glow: rgba(129, 140, 248, 0.24);
 
     /* 节点 */
-    --iot-color-node-bg: rgba(255, 255, 255, 0.9);
-    --iot-color-node-border: rgba(129, 140, 248, 0.7);
-    --iot-color-node-highlight: rgba(129, 140, 248, 0.55);
     --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.08);
     --iot-color-accent: #2563eb;
     --iot-node-accent-0: #1d4ed8;
@@ -453,11 +383,9 @@
     --iot-node-accent-7: #475569;
 
     /* 表格与文字 */
-    --iot-color-table-border: rgba(148, 163, 184, 0.65);
     --iot-color-text: #0f172a;
     --iot-color-text-muted: #2d3035;
     --iot-color-title: #111827;
-    --iot-color-subtitle: #2563eb;
     --surface: #ffffff;
     --surface-muted: #f8fafc;
     --surface-elevated: #ffffff;
@@ -563,50 +491,11 @@
     --info-surface: #ecfeff;
     --info-border: #3e9db3;
 
-    /* 设备列表 */
-    --iot-color-device-item-bg: #f9fafb;
-    --iot-color-device-item-bg-hover: linear-gradient(
-            135deg,
-            rgba(191, 219, 254, 0.9),
-            rgba(219, 234, 254, 0.95)
-    );
-    --iot-color-device-item-border: rgba(148, 163, 184, 0.7);
-    --iot-color-device-item-text: #111827;
-    --iot-shadow-device-hover: 0 0.4rem 1rem rgba(15, 23, 42, 0.12);
-
-    /* 规约小卡片 */
-    --iot-color-spec-bg: rgba(243, 244, 255, 0.96);
-    --iot-color-spec-bg-strong: rgba(255, 255, 255, 0.98);
-    --iot-color-spec-border: rgba(148, 163, 184, 0.6);
-
-    /* 输入组件 */
-    --iot-color-input-bg: #ffffff;
-    --iot-color-input-border: rgba(148, 163, 184, 0.6);
-    --iot-color-input-border-strong: rgba(148, 163, 184, 0.8);
-
-    /* 分割线 / 表格 hover */
-    --iot-color-divider: rgba(148, 163, 184, 0.6);
-    --iot-color-table-row-hover: rgba(191, 219, 254, 0.9);
-
     /* 缩放手柄配色（浅色背景下更柔和） */
     --iot-color-resize-border: rgba(148, 163, 184, 0.5);
     --iot-color-resize-bg: rgba(255, 255, 255, 0.95);
     --iot-color-resize-shadow: rgba(148, 163, 184, 0.55);
 
-    /* Header + 语言按钮的亮色版 */
-    --iot-header-bg: linear-gradient(90deg, #eef2ff, #f9fafb);
-    --iot-header-border: rgba(148, 163, 184, 0.55);
-    --iot-header-shadow: 0 10px 26px rgba(15, 23, 42, 0.1);
-
-    --iot-lang-btn-border: rgba(59, 130, 246, 0.85);
-    --iot-lang-btn-bg: radial-gradient(circle at top, #eff6ff, #ffffff);
-    --iot-lang-btn-text: #1d4ed8;
-    --iot-lang-btn-hover-bg: linear-gradient(
-            135deg,
-            rgba(59, 130, 246, 0.18),
-            rgba(37, 99, 235, 0.28)
-    );
-    --iot-lang-btn-shadow: 0 0 0 1px rgba(191, 219, 254, 0.9);
 }
 
 /* ===================== Element Plus MessageBox & Message 统一风格 ===================== */
@@ -654,7 +543,7 @@
  */
 
 .el-message-box {
-    border-radius: var(--iot-radius-card);
+    border-radius: var(--iot-radius-surface);
     padding: var(--iot-messagebox-padding-y) var(--iot-messagebox-padding-x)
     var(--iot-messagebox-padding-bottom);
     min-width: var(--iot-messagebox-min-width);
@@ -733,7 +622,7 @@
 
 /* 取消按钮：浅描边，透明背景 */
 .el-message-box__btns .el-button:not(.el-button--primary) {
-    border-radius: var(--iot-radius-card);
+    border-radius: var(--iot-radius-action);
     padding: 0.25rem 1rem;
 }
 
@@ -750,7 +639,7 @@
  * Now the accent role, so a confirmation looks like the rest of the product.
  */
 .el-message-box__btns .el-button--primary {
-    border-radius: var(--iot-radius-card);
+    border-radius: var(--iot-radius-action);
     padding: 0.25rem 1.125rem;
     border: none;
     background: var(--accent-fill);
@@ -792,7 +681,7 @@
 
     width: 1.75rem;
     height: 1.75rem;
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     border: none;
     background: transparent;
 
@@ -846,7 +735,7 @@
     max-width: var(--iot-toast-max-width);
     padding: var(--iot-toast-padding-y) var(--iot-toast-padding-x);
 
-    border-radius: var(--iot-radius-card);
+    border-radius: var(--iot-radius-panel);
     border: 1px solid var(--iot-color-card-border);
     box-shadow: var(--iot-color-card-shadow);
     backdrop-filter: blur(14px);
@@ -892,7 +781,7 @@
     display: block;
     width: 0.25rem;
     align-self: stretch;
-    border-radius: var(--iot-radius-card) 0 0 var(--iot-radius-card);
+    border-radius: var(--iot-radius-panel) 0 0 var(--iot-radius-panel);
     /* Role token rather than a hardcoded orange→amber ramp: a warning bar should be the same colour
        as every other warning surface, and should follow the theme. */
     background: var(--warning);
@@ -974,7 +863,7 @@
 
 .iot-scroll-region::-webkit-scrollbar-thumb {
     background: var(--border-strong);
-    border-radius: 999px;
+    border-radius: var(--iot-radius-pill);
     /* Inset the thumb so it reads as floating over the surface instead of a hard rail. */
     border: 2px solid transparent;
     background-clip: content-box;

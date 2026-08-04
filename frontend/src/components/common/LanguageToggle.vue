@@ -89,7 +89,7 @@ const toggleLocale = () => {
   min-width: 72px;
   height: 36px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   border: 1px solid transparent;
   font-size: 0.875rem;
   font-weight: 700;
@@ -181,7 +181,9 @@ const toggleLocale = () => {
 
 .language-toggle--light:hover {
   background: var(--surface-muted);
-  border-color: rgba(53, 158, 255, 0.45);
+  /* 1.54:1 as `rgba(53, 158, 255, 0.45)`; `--accent-border` is 3.15:1. Same fix as `ThemeToggle`, which
+     sits beside this control in the public header and had the identical value. */
+  border-color: var(--accent-border);
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
 }
 

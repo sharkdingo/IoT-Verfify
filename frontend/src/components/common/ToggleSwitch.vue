@@ -66,7 +66,7 @@ const emit = defineEmits<{ (e: 'change', checked: boolean): void }>()
   height: 1.5rem;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   /* Was a private grey literal that stayed light in dark theme, so an off switch glowed against the
      dark panel instead of receding. */
   background: var(--border);
@@ -90,7 +90,7 @@ const emit = defineEmits<{ (e: 'change', checked: boolean): void }>()
   left: 0.25rem;
   width: 1rem;
   height: 1rem;
-  border-radius: 999px;
+  border-radius: var(--iot-radius-pill);
   background: #fff;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.4);
   transition: transform 0.2s ease;

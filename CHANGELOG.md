@@ -15,7 +15,81 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-03 (latest)
+### 2026-08-04 (latest)
+
+#### Fixed
+
+- **Two filled controls were unreadable in dark theme.** The attacked-device badge and the template-reset
+  button painted their surface with a role's *ink* token and wrote white on it — `--danger` and `--warning`
+  are tuned as text and the dark theme lightens them, so the labels measured **1.90:1** and **1.44:1**, the
+  worst readings in the interface. Both passed in light theme (6.47 and 5.02), which is why looking at one
+  theme never found them. They now use the `-fill` half and deepen rather than lighten across the gradient,
+  so both stops clear AA. `inkFillSeparation.spec.ts` makes the pattern unrepeatable.
+- **The theme and language toggles now show a hover border you can see.** Both used
+  `rgba(53, 158, 255, 0.45)`, which measures **1.54:1** against the surface it sits on — the same `#359eff`
+  `focusIndicator.spec.ts` already records as a failed focus ring elsewhere. `--accent-border` is the token
+  for a 3:1 edge and measures 3.15:1.
+- **The attacked-device ring was drawn in two different reds.** Its pulse had been tokenised while
+  `border: 3px solid #EF4444` had not, so one indicator disagreed with itself. As a non-text indicator it
+  owes 3:1 (WCAG 1.4.11); `--danger-fill` measures 4.41:1 on the light canvas against the literal's 3.44:1.
+- **A chat style referenced a token that does not exist.** `ChatMarkdown`'s image-alt colour read
+  `var(--chat-text-muted, …)`; the token `ChatView` declares is `--chat-muted`. The typo was invisible
+  because the fallback resolved to the same colour by coincidence, and would have surfaced the first time the
+  chat panel's muted tone diverged from the page's. `tokenReferenceIntegrity.spec.ts` now requires every
+  `var(--x)` to name a token that is either declared or provably injected at runtime.
+- **A destructive action's red halo now stays red in dark theme.** Fourteen coloured shadows carried raw
+  light-theme hues (`rgba(239, 68, 68, …)`, `rgba(220, 38, 38, …)`, `rgba(37, 99, 235, …)`) while the
+  `background` one line above them already read `var(--danger-fill)` / `var(--accent-fill)` — the fill
+  followed the theme and its own glow did not, on the logout confirmation, the account-deletion button, the
+  attacked-device pulse, the compromised/active/focused edge glows and the chat error banner. A red halo is
+  how the interface says "this destroys something", so it has to survive a theme switch. All of them now
+  derive from the token the element is painted with. `shadowRoleOwnership.spec.ts` covers `box-shadow`,
+  `text-shadow` and `filter: drop-shadow()` — the last two were the gap that let five edge glows through a
+  box-shadow-only sweep.
+- **The landing hero's auth panel no longer half-collapses at fractional viewport widths.** `max-width:
+  1100px` paired with `min-width: 1101px` left 1100.5px — routine on a scaled display — matching neither
+  rule, so `.hero-section--with-auth` kept the ~418px corridor reserved for an absolutely positioned panel
+  while the panel itself fell back into the flow and stacked under the title. `.hero-title` had the same
+  shape at 767/768px. Both now split at one value, and `breakpointComplement.spec.ts` checks every
+  complementary pair on both axes.
+
+#### Changed
+
+- **Corner radius is now a containment scale instead of 29 hand-written values.** The radius in this product
+  encodes depth — a marker inside a button, a button inside a well, a well inside a card, a card inside a
+  floating panel, a panel inside a modal surface — so a user reading the corner can tell which level they are
+  looking at. That only holds while one role has one radius, and it did not: `0.6rem`, `0.625rem`, `0.65rem`
+  and `10px` were all "a well", and `.el-message-box` shared a single token with the buttons *inside* it,
+  three levels apart. Eight role-named steps (`--iot-radius-marker` … `--iot-radius-pill`) replace 115
+  declarations; the largest visible shift is 2px, on the auth panel, toward the step its neighbours already
+  used. `radiusScale.spec.ts` keeps literals out.
+
+#### Removed
+
+- Four dead global utility classes (`.text-primary`, `.text-secondary`, `.bg-online`, `.bg-offline`) defined
+  13 times across three files with no template consuming any of them. `board.css` loads after Tailwind, so
+  its `.text-primary { color: #2563EB }` silently beat the generated theme-aware `var(--iot-color-accent)` —
+  both rules shipped and the palette-driven one lost. A note claiming the four were "still in use" had read
+  those files' own redefinitions as usage.
+- 47 CSS custom properties in `base.css` that were defined (colour roles twice, once per theme) and consumed
+  nowhere, plus the orphaned `tsconfig.app.json` and three unused Tailwind theme entries.
+- Twelve more dead global classes and an orphaned `attackedPulse` keyframes block, found by sweeping all 250
+  classes in the global stylesheets rather than by eye. Two were broken rather than merely unused:
+  `.animate-spin-slow` animated a `spin` keyframes that file never defines, and `.data-badge` hardcoded
+  `background: white`. `.trace-change-badge` and `.device-runtime-chip__previous` **stay** — they render
+  nowhere on purpose (a 64px node cannot fit `24 → 26` without truncating to a fragment), and three comments
+  plus a spec cite them as the evidence for that decision, so deleting them would leave the record pointing
+  at nothing.
+- The unused `.board-dropzone`, whose note argued for an accent-tinted drop target. Both real drop targets —
+  the import panel and the canvas overlay — are dashed `--warning-border`, so this was a proposal the product
+  did not adopt rather than a half-finished migration.
+- 120 unreachable `var()` fallbacks, including three-deep chains like
+  `var(--board-panel-bg, var(--surface-panel, #ffffff))`. Every token in them is declared at `:root` in all
+  three theme blocks, so no fallback could ever fire; what they did instead was put a light-theme hex in front
+  of a reader trying to learn what a dark panel is painted with. The fallbacks on runtime-injected tokens
+  (`--node-accent-color`, `--canvas-zoom`, `--resize-hit-size`, …) are the real default and were kept.
+
+### 2026-08-03
 
 #### Added
 
