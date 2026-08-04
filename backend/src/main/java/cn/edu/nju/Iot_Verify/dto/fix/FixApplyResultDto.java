@@ -23,10 +23,11 @@ public class FixApplyResultDto {
     /** 已应用的策略。 */
     private String strategy;
 
-    /** Whether the server recomputed and forward-verified the applied suggestion. */
-    private boolean verificationRechecked;
-
-    /** Whether prior verification evidence was reused after the complete model snapshot matched. */
+    /**
+     * Whether prior verification evidence was reused after the complete model snapshot matched.
+     * Apply never repeats the strategy search, so this is the only evidence basis this response
+     * can report; a "re-verified" variant would need its own endpoint and result shape.
+     */
     private boolean verificationEvidenceReused;
 
     /** The signed suggestion that was actually applied. */

@@ -863,10 +863,10 @@ const getSourceTypeIcon = (type?: RuleSourceItemType | '') => {
 }
 
 const getSourceTypeClass = (type?: RuleSourceItemType) => {
-  if (type === 'api') return 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400'
-  if (type === 'variable') return 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'
-  if (type === 'mode') return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
-  if (type === 'state') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  if (type === 'api') return 'board-chip-info board-text-info'
+  if (type === 'variable') return 'board-chip-success board-text-success'
+  if (type === 'mode') return 'board-chip-info board-text-info'
+  if (type === 'state') return 'board-chip-warning board-text-warning'
   return 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
 }
 
@@ -898,13 +898,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
       <div class="px-[clamp(1rem,3vw,2rem)] py-[clamp(1rem,2vw,1.5rem)] border-b border-slate-100 dark:border-slate-700">
         <div class="flex items-center justify-between mb-4">
           <h2 id="rule-builder-title" class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
-            <span class="material-icons-round text-blue-500" aria-hidden="true">auto_fix_high</span>
+            <span class="material-icons-round board-text-info" aria-hidden="true">auto_fix_high</span>
             {{ t('app.createNewRule') }}
           </h2>
           <button
             type="button"
             @click="handleClose"
-            class="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 transition-colors"
+            class="flex min-h-11 min-w-11 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 transition-colors"
             :aria-label="t('app.close')"
           >
             <span class="material-icons-round" aria-hidden="true">close</span>
@@ -919,17 +919,17 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             v-model="ruleData.name"
             type="text"
             :placeholder="t('app.ruleNamePlaceholder')"
-            class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 placeholder:text-slate-600 dark:placeholder:text-slate-400"
+            class="w-full min-h-11 px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 placeholder:text-slate-600 dark:placeholder:text-slate-400"
           />
         </div>
       </div>
 
       <!-- Content -->
-      <div class="rule-builder-content p-[clamp(1rem,3vw,2rem)] space-y-8 overflow-y-auto">
+      <div class="rule-builder-content iot-scroll-region p-[clamp(1rem,3vw,2rem)] space-y-8">
         <!-- IF (Trigger) Section -->
         <section class="space-y-4">
           <div class="flex items-center gap-2 mb-2">
-            <span class="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-bold px-2 py-1 rounded uppercase tracking-wider">
+            <span class="board-chip-info board-text-info text-xs font-bold px-2 py-1 rounded uppercase tracking-wider">
               {{ t('app.ifTrigger') }}
             </span>
             <h2 class="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
@@ -946,13 +946,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2">
               <label for="rule-source-device" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   {{ currentSource.fromId ? getDeviceIcon(resolveDeviceNode(currentSource.fromId)) : 'sensors' }}
                 </span>
                 <select
                   id="rule-source-device"
                   v-model="currentSource.fromId"
-                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-11 pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="deviceNodes.length === 0"
                 >
                   <option v-if="deviceNodes.length === 0" value="">{{ t('app.none') }}</option>
@@ -969,13 +969,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2">
               <label for="rule-source-type" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.type') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   {{ getSourceTypeIcon(currentSource.itemType) }}
                 </span>
                 <select
                   id="rule-source-type"
                   v-model="currentSource.itemType"
-                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-11 pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="!currentSource.fromId || sourceItemTypeOptions.length === 0"
                 >
                   <option v-if="!currentSource.fromId && deviceNodes.length > 0" value="">{{ t('app.selectPlaceholder') }}</option>
@@ -997,13 +997,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2" v-if="currentSource.itemType === 'api'">
               <label for="rule-source-api" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.actionEvent') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   bolt
                 </span>
                 <select
                   id="rule-source-api"
                   v-model="currentSource.fromApi"
-                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-11 pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="filteredSourceItems.length === 0"
                 >
                   <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
@@ -1020,13 +1020,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
               <label for="rule-source-variable" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.variable') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   tune
                 </span>
                 <select
                   id="rule-source-variable"
                   v-model="currentSource.fromApi"
-                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-11 pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="filteredSourceItems.length === 0"
                 >
                   <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
@@ -1043,13 +1043,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2" v-if="currentSource.itemType === 'mode'">
               <label for="rule-source-mode" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.modes') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   toggle_on
                 </span>
                 <select
                   id="rule-source-mode"
                   v-model="currentSource.fromApi"
-                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-11 pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="filteredSourceItems.length === 0"
                 >
                   <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
@@ -1066,13 +1066,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2" v-if="sourceShowsRelationValue(currentSource.itemType || undefined)">
               <label for="rule-source-condition" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.condition') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   compare_arrows
                 </span>
                 <select
                   id="rule-source-condition"
                   v-model="currentSource.relation"
-                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-11 pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="currentSource.itemType !== 'state' && !currentSource.fromApi"
                 >
                   <option v-for="rel in conditionRelationOptions" :key="rel.value" :value="rel.value">
@@ -1087,7 +1087,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2" v-if="sourceShowsRelationValue(currentSource.itemType || undefined)">
               <label for="rule-source-value" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.value') }}</label>
               <div v-if="currentValueOptions.length > 0 && isSetRelation" class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   checklist
                 </span>
                 <select
@@ -1095,7 +1095,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   v-model="currentSourceValueList"
                   multiple
                   size="4"
-                  class="w-full min-h-[7.5rem] pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-[7.5rem] pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="!currentSource.relation"
                 >
                   <option v-for="value in currentValueOptions" :key="value" :value="value">
@@ -1104,13 +1104,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                 </select>
               </div>
               <div v-else-if="currentValueOptions.length > 0" class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   list
                 </span>
                 <select
                   id="rule-source-value"
                   v-model="currentSource.value"
-                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  class="w-full min-h-11 pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="!currentSource.relation"
                 >
                   <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
@@ -1126,7 +1126,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                 v-model="currentSource.value"
                 type="text"
                 :placeholder="currentValuePlaceholder"
-                class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-600 dark:placeholder:text-slate-400"
+                class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-600 dark:placeholder:text-slate-400"
                 :disabled="!currentSource.relation"
                 @keydown.enter.prevent="addSource"
               />
@@ -1137,7 +1137,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             type="button"
             @click="addSource"
             data-testid="rule-add-source"
-            class="flex items-center gap-2 text-blue-500 font-medium text-sm hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-2 rounded-lg transition-all group"
+            class="flex min-h-11 items-center gap-2 board-text-info font-medium text-sm hover:board-chip-info dark:hover:bg-[color:var(--accent-strong)]/20 px-3 py-2 rounded-lg transition-all group"
             :disabled="!canAddSource"
           >
             <span class="material-icons-round text-lg group-hover:scale-110 transition-transform">add_circle_outline</span>
@@ -1152,20 +1152,21 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
               class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border"
               :class="resolveDeviceNode(source.fromId)
                 ? 'border-slate-200 dark:border-slate-600'
-                : 'border-red-400 bg-red-50 dark:border-red-500 dark:bg-red-950/30'"
+                : 'board-border-subtle board-chip-danger'"
             >
-              <span class="material-icons-round text-blue-500 text-sm">sensors</span>
+              <!-- Decorative: the device label sits immediately beside it and carries the meaning. -->
+              <span class="material-icons-round board-text-info text-sm" aria-hidden="true">sensors</span>
               <span class="text-sm text-slate-700 dark:text-slate-200 truncate" :title="resolveDeviceNode(source.fromId)?.label || source.fromId">
                 {{ resolveDeviceNode(source.fromId)?.label || source.fromId }}
               </span>
               <span
                 v-if="!resolveDeviceNode(source.fromId)"
-                class="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-800 dark:bg-red-900/50 dark:text-red-200"
+                class="shrink-0 rounded board-chip-danger px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-danger"
               >
                 {{ t('app.missingDevice') }}
               </span>
-              <span class="text-xs text-slate-400">•</span>
-              <span class="text-sm font-medium text-blue-600 dark:text-blue-400 truncate" :title="formatRuleSourceName(source)">
+              <span class="text-xs text-slate-500">•</span>
+              <span class="text-sm font-medium board-text-info truncate" :title="formatRuleSourceName(source)">
                 {{ formatRuleSourceName(source) }}
               </span>
               <span class="text-xs px-1.5 py-0.5 rounded" :class="getSourceTypeClass(source.itemType)">
@@ -1173,8 +1174,8 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
               </span>
               <!-- 条件和值仅对值条件类型显示 -->
               <template v-if="sourceShowsRelationValue(source.itemType)">
-                <span class="text-xs text-slate-400">→</span>
-                <span class="text-sm font-medium text-orange-600 dark:text-orange-400">
+                <span class="text-xs text-slate-500">→</span>
+                <span class="text-sm font-medium board-text-warning">
                   {{ relationOptions.find(r => r.value === source.relation)?.label || source.relation || '=' }}
                 </span>
                 <span class="text-sm text-slate-600 dark:text-slate-300 truncate" :title="formatSourceValue(source.value, `(${t('app.anyValue')})`, resolveDeviceNode(source.fromId)?.templateName)">
@@ -1184,7 +1185,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
               <button
                 type="button"
                 @click="removeSource(index)"
-                class="ml-auto text-red-500 hover:text-red-700 text-sm transition-colors"
+                class="ml-auto board-text-danger hover:text-sm transition-colors"
                 :aria-label="t('app.remove')"
               >
                 <span class="material-icons-round text-sm" aria-hidden="true">close</span>
@@ -1197,7 +1198,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
         <!-- THEN (Action) Section -->
         <section class="space-y-4">
           <div class="flex items-center gap-2 mb-2">
-            <span class="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 text-xs font-bold px-2 py-1 rounded uppercase tracking-wider">
+            <span class="board-chip-success board-text-success text-xs font-bold px-2 py-1 rounded uppercase tracking-wider">
               {{ t('app.thenAction') }}
             </span>
             <h2 class="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
@@ -1209,13 +1210,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2">
               <label for="rule-target-device" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   {{ ruleData.toId ? getDeviceIcon(resolveDeviceNode(ruleData.toId)) : 'sensors' }}
                 </span>
                 <select
                   id="rule-target-device"
                   v-model="ruleData.toId"
-                  class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                  class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200"
                   :disabled="deviceNodes.length === 0"
                 >
                   <option v-if="deviceNodes.length === 0" value="">{{ t('app.none') }}</option>
@@ -1231,13 +1232,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             <div class="space-y-2">
               <label for="rule-target-action" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.action') }}</label>
               <div class="relative group select-wrapper">
-                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                   bolt
                 </span>
                 <select
                   id="rule-target-action"
                   v-model="ruleData.toApi"
-                  class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                  class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200"
                   :disabled="!ruleData.toId || availableTargetApis.length === 0"
                 >
                   <option v-if="!ruleData.toId && deviceNodes.length > 0" value="" disabled hidden>{{ t('app.selectAction') }}</option>
@@ -1257,7 +1258,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             class="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-900/40"
           >
             <div class="mb-3 flex items-start gap-2">
-              <span class="material-icons-round text-sm text-emerald-500" aria-hidden="true">inventory_2</span>
+              <span class="material-icons-round text-sm board-text-success" aria-hidden="true">inventory_2</span>
               <div class="min-w-0">
                 <p class="text-xs font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">
                   {{ t('app.contentPayload') }}
@@ -1274,14 +1275,14 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   {{ t('app.contentSourceDevice') }}
                 </label>
                 <div class="relative group select-wrapper">
-                  <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                     source
                   </span>
                   <select
                     id="rule-content-device"
                     v-model="ruleData.contentDevice"
                     data-testid="rule-content-device"
-                    class="w-full pl-10 pr-10 py-3 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                    class="w-full pl-10 pr-10 py-3 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200"
                   >
                     <option value="">{{ t('app.noContentPayload') }}</option>
                     <option v-for="node in contentCapableNodes" :key="node.id" :value="node.id">
@@ -1297,14 +1298,14 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
                   {{ t('app.contentItem') }}
                 </label>
                 <div class="relative group select-wrapper">
-                  <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  <span class="material-icons-round select-icon text-slate-400 group-focus-within:board-text-info transition-colors" aria-hidden="true">
                     photo_library
                   </span>
                   <select
                     id="rule-content-name"
                     v-model="ruleData.content"
                     data-testid="rule-content-name"
-                    class="w-full pl-10 pr-10 py-3 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                    class="w-full pl-10 pr-10 py-3 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200"
                     :disabled="!ruleData.contentDevice || availableContentItems.length === 0"
                   >
                     <option v-if="!ruleData.contentDevice" value="">{{ t('app.selectContentDeviceFirst') }}</option>
@@ -1323,43 +1324,44 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
 
         <!-- Rule Preview -->
         <div v-if="rulePreview" class="p-6 rounded-2xl bg-slate-50 dark:bg-slate-900/50 border border-dashed border-slate-300 dark:border-slate-600">
-          <p class="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">{{ t('app.rulePreview') }}</p>
+          <p class="text-xs font-bold text-slate-500 dark:text-slate-500 uppercase tracking-widest mb-4">{{ t('app.rulePreview') }}</p>
           <div class="flex items-center gap-3 text-sm font-medium text-slate-600 dark:text-slate-300">
             <!-- Source devices with conditions -->
             <div class="flex flex-wrap items-center gap-2">
               <template v-for="(source, index) in rulePreview.sourceConditions" :key="source.fromId + index">
                 <div class="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs">
-                  <span class="material-icons-round text-blue-500 text-sm">sensors</span>
+                  <!-- Decorative: the device label sits immediately beside it and carries the meaning. -->
+              <span class="material-icons-round board-text-info text-sm" aria-hidden="true">sensors</span>
                   <span class="truncate" :title="resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown')">{{ resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown') }}</span>
-                  <span class="text-slate-400">→</span>
-                  <span class="text-blue-600 dark:text-blue-400 truncate" :title="formatRuleSourceName(source)">{{ formatRuleSourceName(source) }}</span>
+                  <span class="text-slate-500">→</span>
+                  <span class="board-text-info truncate" :title="formatRuleSourceName(source)">{{ formatRuleSourceName(source) }}</span>
                   <span class="text-xs px-1 py-0.5 rounded" :class="getSourceTypeClass(source.itemType)">
                     {{ getSourceTypeLabel(source.itemType) }}
                   </span>
                   <!-- 条件和值仅对值条件类型显示 -->
                   <template v-if="sourceShowsRelationValue(source.itemType)">
-                    <span class="text-orange-600 dark:text-orange-400">{{ relationOptions.find(r => r.value === source.relation)?.label.split(' ')[0] || '=' }}</span>
+                    <span class="board-text-warning">{{ relationOptions.find(r => r.value === source.relation)?.label.split(' ')[0] || '=' }}</span>
                     <span class="text-slate-700 dark:text-slate-300">{{ formatSourceValue(source.value, '*', resolveDeviceNode(source.fromId)?.templateName) }}</span>
                   </template>
                 </div>
                 <!-- Add "AND" connector if not the last source -->
-                <span v-if="index < rulePreview.sourceConditions.length - 1" class="text-xs font-bold text-slate-400 dark:text-slate-500 px-1">
+                <span v-if="index < rulePreview.sourceConditions.length - 1" class="text-xs font-bold text-slate-500 dark:text-slate-500 px-1">
                   {{ t('app.and') }}
                 </span>
               </template>
             </div>
 
             <!-- Arrow -->
-            <span class="material-icons-round text-slate-300 dark:text-slate-500">trending_flat</span>
+            <span class="material-icons-round text-slate-500 dark:text-slate-500">trending_flat</span>
 
             <!-- Target device -->
             <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 min-w-[60px] justify-center">
-              <span class="material-icons-round text-emerald-500 text-base">{{ getDeviceIcon(rulePreview.target!) }}</span>
+              <span class="material-icons-round board-text-success text-base">{{ getDeviceIcon(rulePreview.target!) }}</span>
               <span>{{ rulePreview.target?.label }}</span>
             </div>
 
             <!-- Description -->
-            <div class="ml-auto text-xs text-slate-400 italic max-w-xs">
+            <div class="ml-auto text-xs text-slate-500 italic max-w-xs">
               <template v-if="rulePreview.sources.length === 1">
                 {{ t('app.singleSourceRulePreview', { source: rulePreview.sources[0]?.label, target: rulePreview.target?.label, action: formatTargetModelToken(rulePreview.action) }) }}
               </template>
@@ -1369,7 +1371,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
               <template v-else>
                 {{ t('app.multiSourceRulePreview', { source: rulePreview.sources[0]?.label, count: rulePreview.sources.length - 1, target: rulePreview.target?.label, action: formatTargetModelToken(rulePreview.action) }) }}
               </template>
-              <span v-if="rulePreview.contentDevice && rulePreview.content" class="mt-1 block not-italic text-emerald-600 dark:text-emerald-300">
+              <span v-if="rulePreview.contentDevice && rulePreview.content" class="mt-1 block not-italic board-text-success">
                 {{ t('app.copyFrom') }} {{ rulePreview.contentDevice.label }}.{{ formatContentModelToken(rulePreview.content) }}
               </span>
             </div>
@@ -1384,7 +1386,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
           type="button"
           @click="handleClose"
           :disabled="savingRule"
-          class="px-6 py-2.5 text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
+          class="min-h-11 px-6 py-2.5 text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
         >
           {{ t('app.cancel') }}
         </button>
@@ -1399,15 +1401,19 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             {{ ruleDraftIncompleteReason }}
           </p>
           <div class="flex flex-wrap items-center justify-end gap-3">
+            <!-- No `disabled:opacity-50` on this one: it is a *text* button on a role colour already close to
+                 the contrast floor, so halving it measured 2.09:1 in light theme. The cursor and the
+                 `disabled` attribute carry the state without spending contrast — same call as the exploration
+                 panel's "Select all". -->
             <button
               type="button"
               @click="handleCheckSimilarity"
               data-testid="rule-check-duplicate"
               :disabled="!isRuleDraftComplete || ruleActionBusy"
               :aria-describedby="ruleDraftIncompleteReason ? 'rule-draft-readiness' : undefined"
-              class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="min-h-11 px-6 py-2.5 text-sm font-semibold board-text-warning hover:board-chip-warning dark:hover:bg-[color:var(--warning-surface)]/20 rounded-xl transition-all flex items-center gap-2 disabled:cursor-not-allowed"
             >
-              <span v-if="checkingSimilarity" class="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></span>
+              <span v-if="checkingSimilarity" class="inline-block w-4 h-4 border-2 board-border-progress border-t-transparent rounded-full animate-spin"></span>
               <span>{{ checkingSimilarity ? t('app.checkingAiSimilarity') : t('app.aiSimilarityCheck') }}</span>
             </button>
             <button
@@ -1416,7 +1422,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
               data-testid="rule-save"
               :disabled="!isRuleDraftComplete || ruleActionBusy"
               :aria-describedby="ruleDraftIncompleteReason ? 'rule-draft-readiness' : undefined"
-              class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+              class="min-h-11 px-8 py-2.5 text-sm font-semibold text-white bg-[color:var(--accent-fill)] active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 board-action-disarmed disabled:cursor-not-allowed disabled:active:scale-100"
             >
               {{ savingRule ? t('app.saving') : t('app.createRule') }}
             </button>
@@ -1484,24 +1490,6 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
   }
 }
 
-/* Custom scrollbar for sources list */
-.space-y-2::-webkit-scrollbar {
-  width: 4px;
-}
-
-.space-y-2::-webkit-scrollbar-track {
-  background: rgba(241, 245, 249, 0.5);
-}
-
-.space-y-2::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 2px;
-}
-
-.space-y-2::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
-}
-
 /* Focus styles for selects */
 select:focus {
   outline: none;
@@ -1527,13 +1515,13 @@ select {
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 18px;
   transition: color 0.2s ease;
 }
 
 .select-wrapper:hover .dropdown-arrow {
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 /* Ensure icons are perfectly aligned with select text */

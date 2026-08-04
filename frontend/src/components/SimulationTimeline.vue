@@ -436,7 +436,7 @@ watch(selectedStateIndex, () => {
     :aria-label="t('app.traceVisualization.stateSequence')"
   >
     <div
-      class="board-timeline board-timeline--simulation"
+      class="board-timeline board-timeline--simulation iot-scroll-region"
       data-testid="simulation-timeline"
       :data-selected-state-index="selectedStateIndex"
     >
@@ -444,32 +444,32 @@ watch(selectedStateIndex, () => {
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
             <h2 class="text-sm font-bold text-slate-800">{{ t('app.traceVisualization.modelTracePlayback') }}</h2>
-            <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700" aria-live="polite">
+            <span class="rounded-full board-chip-info px-2 py-0.5 text-xs font-semibold board-text-info" aria-live="polite">
               {{ totalStates > 0 ? selectedStateIndex + 1 : 0 }} / {{ totalStates }}
             </span>
-            <span v-if="runtimeCompromisedPointCount !== null" class="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+            <span v-if="runtimeCompromisedPointCount !== null" class="inline-flex items-center gap-1 rounded-full board-chip-danger px-2 py-0.5 text-xs font-semibold board-text-danger">
               <span class="material-symbols-outlined text-xs" aria-hidden="true">warning</span>
               {{ t('app.traceVisualization.runtimeCompromisedPoints') }}: {{ runtimeCompromisedPointCount }}
             </span>
-            <span v-if="isAttack" class="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
+            <span v-if="isAttack" class="rounded-full board-chip-warning px-2 py-0.5 text-xs font-semibold board-text-warning">
               {{ attackSelectionShortText }}
             </span>
-            <span v-if="enablePrivacy && modelSemanticsConsistent" class="rounded-full bg-fuchsia-100 px-2 py-0.5 text-xs font-semibold text-fuchsia-700">
+            <span v-if="enablePrivacy && modelSemanticsConsistent" class="rounded-full board-chip-info px-2 py-0.5 text-xs font-semibold board-text-info">
               {{ t('app.traceVisualization.privacyPropagationEnabled') }}
             </span>
-            <span v-if="hasAttackedDevices" class="inline-flex items-center gap-1 rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">
+            <span v-if="hasAttackedDevices" class="inline-flex items-center gap-1 rounded-full bg-[color:var(--danger-fill)] px-2 py-0.5 text-xs font-semibold text-white">
               <span class="material-symbols-outlined text-xs" aria-hidden="true">security</span>
               {{ t('app.traceVisualization.attackedBang') }}
             </span>
           </div>
-          <p class="mt-0.5 text-[10px] leading-4 text-slate-500">{{ t('app.traceVisualization.modelTraceNotPrediction') }}</p>
+          <p class="mt-0.5 text-[length:var(--iot-font-min)] leading-4 text-slate-500">{{ t('app.traceVisualization.modelTraceNotPrediction') }}</p>
         </div>
 
         <div class="flex flex-shrink-0 items-center gap-1.5">
           <button
             type="button"
             data-testid="simulation-timeline-run-details"
-            class="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+            class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
             :title="t('app.viewSimulationRunDetails')"
             :aria-label="t('app.viewSimulationRunDetails')"
             @click="emit('open-run-details')"
@@ -484,10 +484,10 @@ watch(selectedStateIndex, () => {
             :aria-label="isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play')"
             class="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold transition-colors"
             :class="isPlaying
-              ? 'bg-indigo-600 text-white'
+              ? 'bg-[color:var(--accent-fill)] text-white'
               : totalStates <= 1
-                ? 'cursor-not-allowed bg-slate-100 text-slate-400'
-                : 'bg-indigo-600 text-white hover:bg-indigo-700'"
+                ? 'cursor-not-allowed bg-slate-100 text-slate-500'
+                : 'bg-[color:var(--accent-fill)] text-white hover:bg-[color:var(--accent-fill-hover)]'"
             @click="play"
           >
             <span class="material-symbols-outlined text-base" aria-hidden="true">{{ isPlaying ? 'pause' : 'play_arrow' }}</span>
@@ -507,7 +507,7 @@ watch(selectedStateIndex, () => {
 
       <div
         v-if="modelComplete === false"
-        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-800"
+        class="mb-2 rounded-lg board-surface-warning px-3 py-2 text-[11px] font-medium leading-4 board-text-warning"
         data-testid="simulation-timeline-incomplete-warning"
       >
         {{ t('app.traceVisualization.modelIncompletePlayback', { rules: disabledRuleCount || 0 }) }}
@@ -515,7 +515,7 @@ watch(selectedStateIndex, () => {
 
       <div
         v-if="actualSteps !== undefined && requestedSteps !== undefined && actualSteps < requestedSteps"
-        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-800"
+        class="mb-2 rounded-lg board-surface-warning px-3 py-2 text-[11px] font-medium leading-4 board-text-warning"
         data-testid="simulation-timeline-short-horizon-warning"
       >
         {{ t('app.simulationStoppedBeforeRequestedSteps', { actual: actualSteps, requested: requestedSteps }) }}
@@ -523,14 +523,14 @@ watch(selectedStateIndex, () => {
 
       <div
         v-if="!modelSemanticsConsistent"
-        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-4 text-amber-800"
+        class="mb-2 rounded-lg board-surface-warning px-3 py-2 text-[11px] font-semibold leading-4 board-text-warning"
       >
         {{ t('app.modelSemanticsUnavailable') }}
       </div>
 
       <div
         v-if="boardComparison === 'CHANGED'"
-        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-900"
+        class="mb-2 rounded-lg board-surface-warning px-3 py-2 text-[11px] font-medium leading-4 board-text-warning"
         data-testid="simulation-board-drift-warning"
       >
         {{ t('app.runBoardInputChanged') }}
@@ -541,14 +541,14 @@ watch(selectedStateIndex, () => {
           <div class="flex items-center gap-1">
             <button
               type="button"
-              class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+              class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
               :disabled="selectedStateIndex <= 0"
               :aria-label="t('app.traceVisualization.previousState')"
               @click="selectPreviousState"
             >
               <span class="material-symbols-outlined text-lg" aria-hidden="true">chevron_left</span>
             </button>
-            <label class="flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600">
+            <label class="board-card flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-600">
               <span>{{ t('app.traceVisualization.stateLabel') }}</span>
               <input
                 v-model.number="selectedStateNumber"
@@ -560,11 +560,11 @@ watch(selectedStateIndex, () => {
                 class="w-10 bg-transparent text-center font-bold text-slate-800 outline-none"
                 :aria-label="t('app.traceVisualization.jumpToState')"
               >
-              <span class="text-slate-400">/ {{ totalStates }}</span>
+              <span class="text-slate-500">/ {{ totalStates }}</span>
             </label>
             <button
               type="button"
-              class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+              class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
               :disabled="selectedStateIndex >= totalStates - 1"
               :aria-label="t('app.traceVisualization.nextState')"
               @click="selectNextState"
@@ -579,17 +579,17 @@ watch(selectedStateIndex, () => {
             :min="0"
             :max="Math.max(totalStates - 1, 0)"
             :disabled="totalStates <= 1"
-            class="min-w-0 flex-1 accent-indigo-600"
+            class="min-w-0 flex-1 accent-[color:var(--accent)]"
             :aria-label="t('app.traceVisualization.jumpToState')"
           >
-          <span class="text-right text-[10px] font-semibold text-slate-500">
+          <span class="text-right text-[length:var(--iot-font-min)] font-semibold text-slate-500">
             {{ selectedStateIndex === 0
               ? t('app.traceVisualization.initialModelState')
               : t('app.traceVisualization.transitionNumber', { index: selectedStateIndex }) }}
           </span>
         </div>
 
-        <div data-testid="simulation-timeline-scroll" class="mt-1 overflow-x-auto scrollbar-thin py-1">
+        <div data-testid="simulation-timeline-scroll" class="iot-scroll-region-x mt-1 py-1">
           <div
             class="relative h-12"
             data-testid="simulation-timeline-track"
@@ -599,7 +599,7 @@ watch(selectedStateIndex, () => {
             <div class="absolute left-2 right-2 top-1/2 h-2 -translate-y-1/2 rounded bg-slate-200"></div>
             <div
               v-if="selectedStateIndex > 0 && totalStates > 1"
-              class="absolute top-1/2 h-2 -translate-y-1/2 rounded bg-indigo-600 transition-all duration-300"
+              class="absolute top-1/2 h-2 -translate-y-1/2 rounded bg-[color:var(--accent)] transition-all duration-300"
               :style="{
                 left: '8px',
                 width: `calc((100% - 16px) * ${selectedStateIndex / (totalStates - 1)})`
@@ -612,19 +612,32 @@ watch(selectedStateIndex, () => {
                 type="button"
                 :tabindex="index === selectedStateIndex ? 0 : -1"
                 :aria-label="getStateAriaLabel(index)"
+                :title="getStateAriaLabel(index)"
                 :aria-current="index === selectedStateIndex ? 'step' : undefined"
                 :data-testid="`simulation-timeline-state-${index}`"
-                class="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                class="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] focus:ring-offset-2"
                 :class="index === selectedStateIndex
-                  ? 'scale-125 border-indigo-600 bg-indigo-600 shadow-md'
+                  ? 'scale-125 border-[color:var(--accent-border)] bg-[color:var(--accent)] shadow-md'
                   : index < selectedStateIndex
-                    ? 'border-indigo-300 bg-indigo-200'
-                    : 'border-slate-300 bg-white hover:border-indigo-400'"
+                    ? 'board-border-subtle board-chip-info'
+                    : 'border-slate-300 bg-white hover:border-[color:var(--accent)]'"
                 @click="selectState(index)"
                 @keydown="handleStateKeydown($event, index)"
               >
-                <span v-if="index === selectedStateIndex" class="text-[8px] font-bold text-white">{{ index + 1 }}</span>
-                <span v-else class="text-[7px] font-semibold text-slate-500">{{ index + 1 }}</span>
+                <!--
+                  The rail shows shape, not numbers — the same decision as the counterexample rail in
+                  `Board.vue`, applied here so the two playback surfaces do not diverge.
+
+                  These printed the step number at `text-[7px]`, and `text-[8px]` when selected, against
+                  the product's 11px `--iot-font-min` floor. A 28px marker cannot hold a legible two-digit
+                  number, and the number is already available three other ways: the `n / total` badge, the
+                  scrub control, and this button's own `aria-label` and `title`.
+                -->
+                <span
+                  v-if="index === selectedStateIndex"
+                  class="h-1.5 w-1.5 rounded-full bg-white"
+                  aria-hidden="true"
+                ></span>
               </button>
             </div>
           </div>
@@ -644,7 +657,11 @@ watch(selectedStateIndex, () => {
         It stays a <details> so a user can collapse it once they know what they are looking at; the
         default is simply the state that answers the question they arrived with.
       -->
-      <details open class="group pt-2" data-testid="simulation-timeline-state-details">
+      <!-- `simulation-step-values`, matching `trace-step-values` on the counterexample side. The old name
+           shared a prefix with the `simulation-timeline-state-{i}` step buttons, so a selector looking for
+           steps matched this panel too — the same collision that produced four false findings when
+           measuring the trace rail. -->
+      <details open class="group pt-2" data-testid="simulation-step-values">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
           <span class="inline-flex items-center gap-1.5">
             <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
@@ -654,7 +671,7 @@ watch(selectedStateIndex, () => {
         </summary>
         <div class="mt-1.5 border-t border-slate-200">
       <section class="border-b border-slate-200 py-2" data-testid="simulation-timeline-triggered-rules">
-        <div class="text-[10px] font-bold uppercase text-slate-500">
+        <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
           {{ selectedStateIndex === 0
             ? t('app.traceVisualization.initialModelState')
             : t('app.traceVisualization.rulesAppliedToReachState') }}
@@ -663,10 +680,10 @@ watch(selectedStateIndex, () => {
           <span
             v-for="(rule, index) in currentTriggeredRules"
             :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[length:var(--iot-font-min)] font-semibold"
             :class="triggeredRuleExistsOnCurrentBoard(rule)
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-amber-300 bg-amber-50 text-amber-800'"
+              ? 'board-surface-success board-text-success'
+              : 'board-surface-warning board-text-warning'"
             :title="triggeredRuleExistsOnCurrentBoard(rule) ? undefined : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
           >
             <span class="max-w-[14rem] truncate">{{ triggeredRuleLabel(rule, index) }}</span>
@@ -680,17 +697,17 @@ watch(selectedStateIndex, () => {
 
       <section
         v-if="currentCompromisedAutomationLinks.length > 0"
-        class="border-b border-red-200 bg-red-50 px-2 py-2"
+        class="board-surface-danger border-b px-2 py-2"
         data-testid="simulation-timeline-compromised-links"
       >
-        <div class="text-[10px] font-bold uppercase text-red-700">
+        <div class="text-[length:var(--iot-font-min)] font-bold uppercase board-text-danger">
           {{ t('app.traceVisualization.compromisedAutomationLinks') }}
         </div>
         <div class="mt-1.5 flex flex-wrap gap-1.5">
           <span
             v-for="(rule, index) in currentCompromisedAutomationLinks"
             :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-            class="inline-flex max-w-full items-center gap-1 rounded-full border border-red-200 bg-white px-2 py-1 text-[10px] font-semibold text-red-700"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border board-border-subtle bg-white px-2 py-1 text-[length:var(--iot-font-min)] font-semibold board-text-danger"
             :title="triggeredRuleExistsOnCurrentBoard(rule) ? t('app.traceVisualization.compromisedAutomationLinkHint') : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
           >
             <span class="material-symbols-outlined text-[12px]" aria-hidden="true">link_off</span>
@@ -701,7 +718,7 @@ watch(selectedStateIndex, () => {
       </section>
 
       <section v-if="currentDevices.length > 0" class="border-b border-slate-200 py-2" data-testid="simulation-timeline-devices">
-        <div class="mb-1.5 inline-flex items-center gap-1 text-[10px] font-bold uppercase text-slate-500">
+        <div class="mb-1.5 inline-flex items-center gap-1 text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
           <span class="material-symbols-outlined text-[13px]" aria-hidden="true">devices</span>
           {{ t('app.traceVisualization.devicesInCurrentState') }}
         </div>
@@ -709,11 +726,11 @@ watch(selectedStateIndex, () => {
           <span
             v-for="device in currentDevices"
             :key="device.deviceId"
-            class="inline-flex max-w-full flex-wrap items-center gap-1 rounded border px-2 py-1 text-[10px] font-semibold"
+            class="inline-flex max-w-full flex-wrap items-center gap-1 rounded border px-2 py-1 text-[length:var(--iot-font-min)] font-semibold"
             :class="!deviceExistsOnCurrentBoard(device.deviceId)
-              ? 'border-amber-300 bg-amber-50 text-amber-800'
+              ? 'board-surface-warning board-text-warning'
               : deviceChanged(device)
-                ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                ? 'board-border-subtle board-chip-info board-text-info'
                 : 'border-slate-200 bg-slate-50 text-slate-700'"
             :title="deviceExistsOnCurrentBoard(device.deviceId) ? undefined : t('app.traceVisualization.historicalDeviceNotOnCurrentBoard')"
           >
@@ -721,22 +738,35 @@ watch(selectedStateIndex, () => {
             <span class="max-w-[20rem] break-words font-mono font-normal">{{ deviceSummary(device) }}</span>
             <span
               v-if="deviceChanged(device)"
-              class="max-w-[24rem] truncate rounded bg-indigo-200 px-1 text-[10px] text-indigo-800"
+              class="max-w-[24rem] truncate rounded board-chip-info px-1 text-[length:var(--iot-font-min)] board-text-info"
               :title="deviceChangeSummary(device)"
             >
               {{ deviceChangeSummary(device) }}
             </span>
-            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded bg-red-100 px-1 text-[10px] text-red-700">{{ t('app.traceVisualization.attacked') }}</span>
+            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded board-chip-danger px-1 text-[length:var(--iot-font-min)] board-text-danger">{{ t('app.traceVisualization.attacked') }}</span>
+            <!--
+              Provenance, not a hazard — so `info`, not `warning`.
+
+              `nusmv-model.md` is explicit: "Trust labels describe provenance and propagation; `untrusted` does not
+              mean the device is selected as compromised", and the origin defaults "do not claim that motion
+              sensing is inherently more accurate... it states only the modeled origin assumption". A schedule
+              value, an inbound email or a door-contact reading starts `untrusted` because nothing in the house
+              vouched for it, which is a fact about the model, not a problem with the design.
+
+              Both desktop reviews of an ordinary simulation read the amber exactly as the docs warn against — "it
+              may imply a security defect even though this is an ordinary trace", "颜色和措辞像警告". The `attacked`
+              chip beside it keeps `danger`, because a selected compromise genuinely is one.
+            -->
             <span
               v-if="deviceSecurityFacts(device).untrustedLabels.length > 0"
-              class="rounded bg-amber-100 px-1 text-[10px] text-amber-800"
+              class="rounded board-chip-info px-1 text-[length:var(--iot-font-min)] board-text-info"
               :title="t('app.traceVisualization.untrustedLabelDetails', { labels: formattedDeviceSecurityLabels(device, deviceSecurityFacts(device).untrustedLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesUntrustedSource') }}
             </span>
             <span
               v-if="deviceSecurityFacts(device).privateLabels.length > 0"
-              class="rounded bg-fuchsia-100 px-1 text-[10px] text-fuchsia-800"
+              class="rounded board-chip-info px-1 text-[length:var(--iot-font-min)] board-text-info"
               :title="t('app.traceVisualization.privateLabelDetails', { labels: formattedDeviceSecurityLabels(device, deviceSecurityFacts(device).privateLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesPrivateData') }}
@@ -747,7 +777,7 @@ watch(selectedStateIndex, () => {
       </section>
 
       <section v-if="currentEnvironmentVariables.length > 0" class="border-b border-slate-200 py-2" data-testid="simulation-timeline-env">
-        <div class="mb-1.5 inline-flex items-center gap-1 text-[10px] font-bold uppercase text-slate-500">
+        <div class="mb-1.5 inline-flex items-center gap-1 text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
           <span class="material-symbols-outlined text-[13px]" aria-hidden="true">terrain</span>
           {{ t('app.traceVisualization.environmentVariables') }}
         </div>
@@ -755,15 +785,15 @@ watch(selectedStateIndex, () => {
           <span
             v-for="envVar in currentEnvironmentVariables"
             :key="envVar.name"
-            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[length:var(--iot-font-min)] font-bold"
             :class="environmentVariableChanged(envVar.name, envVar.value)
-              ? 'border-amber-300 bg-amber-50 text-amber-700'
+              ? 'board-surface-warning board-text-warning'
               : 'border-slate-200 bg-slate-50 text-slate-600'"
             :title="environmentVariableTitle(envVar.name, envVar.value)"
           >
             <span class="max-w-[7rem] truncate">{{ formatEnvironmentModelToken(envVar.name, envVar.name) }}</span>
             <span class="font-mono">{{ formatEnvironmentModelToken(envVar.name, envVar.value) }}</span>
-            <span v-if="environmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[10px] text-amber-800">{{ t('app.traceVisualization.changed') }}</span>
+            <span v-if="environmentVariableChanged(envVar.name, envVar.value)" class="rounded-full board-chip-warning px-1 text-[length:var(--iot-font-min)] board-text-warning">{{ t('app.traceVisualization.changed') }}</span>
           </span>
         </div>
       </section>
@@ -771,16 +801,16 @@ watch(selectedStateIndex, () => {
       <details class="group pt-2 text-[11px] text-slate-600" data-testid="simulation-timeline-snapshot-notice">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 font-semibold text-slate-700 hover:bg-slate-100">
           <span class="inline-flex min-w-0 items-center gap-1.5">
-            <span class="material-symbols-outlined text-base text-sky-700" aria-hidden="true">inventory_2</span>
+            <span class="material-symbols-outlined text-base board-text-info" aria-hidden="true">inventory_2</span>
             <span>{{ t('app.runScopeAndSnapshot') }}</span>
           </span>
           <span class="flex items-center gap-1.5">
             <span
-              class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+              class="rounded-full px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
               :class="boardComparison === 'UNCHANGED'
-                ? 'bg-emerald-100 text-emerald-700'
+                ? 'board-chip-success board-text-success'
                 : boardComparison === 'CHANGED'
-                  ? 'bg-amber-100 text-amber-800'
+                  ? 'board-chip-warning board-text-warning'
                   : 'bg-slate-100 text-slate-600'"
               data-testid="simulation-board-comparison"
             >
@@ -795,7 +825,7 @@ watch(selectedStateIndex, () => {
             <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
           </span>
         </summary>
-        <div class="mt-1.5 space-y-1.5 border-l-2 border-sky-200 pl-3 leading-5">
+        <div class="mt-1.5 space-y-1.5 border-l-2 board-border-subtle pl-3 leading-5">
           <p class="font-bold text-slate-700">{{ t('app.modelRunSnapshotTitle') }}</p>
           <p v-if="modelSnapshot">
             {{ t('app.modelRunSnapshotSummary', {

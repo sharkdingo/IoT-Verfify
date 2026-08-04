@@ -232,7 +232,9 @@ the returned counts rather than parsing the English message.
 An async task reaches `progress=100` only in the same atomic completion operation that
 stores its final result and counterexamples. If that completion write does not commit,
 the task is marked `FAILED` when possible; clients must never interpret an earlier 100%
-progress update as a completed result.
+progress update as a completed result. The expired-lease sweep therefore leaves `progress`
+untouched when it fails an abandoned task: overwriting it with 100 would publish a
+completed-work claim for work that stopped partway.
 
 Every accepted verification task is owned by one backend instance through a renewable
 database lease, including its time in the executor queue. The two-minute lease is renewed
@@ -373,7 +375,9 @@ tasks carry the same conclusion and per-spec fields as synchronous verification:
 `disabledRuleCount`, `skippedSpecCount`, and `generationIssues`.
 Failed async tasks may still carry `checkLogs` for the steps reached before failure.
 Task fields are status-dependent: active tasks do not publish `outcome` or
-`modelComplete`; terminal tasks have `completedAt` and `progress=100`; timestamps cannot
+`modelComplete`; terminal tasks have `completedAt`, and only `COMPLETED` has `progress=100` —
+a `FAILED` or `CANCELLED` task keeps the progress its last heartbeat reported, because it did not
+finish the work and `status` is what reports the outcome; timestamps cannot
 precede creation or start; processing duration cannot be negative or exist without both
 boundary timestamps; `FAILED` has a non-blank `errorMessage`; and `COMPLETED` has a start
 time, processing duration, non-negative result counts, and the complete conclusion fields above.
@@ -1256,8 +1260,7 @@ changed; apply does not repeat the expensive strategy search.
 | :--- | :--- | :--- |
 | `applied` | `boolean` | `true` on success |
 | `strategy` | `String` | The applied strategy |
-| `verificationRechecked` | `boolean` | Always `false`: signed-suggestion apply verifies snapshot drift but does not repeat the strategy search |
-| `verificationEvidenceReused` | `boolean` | `true` for the public signed-suggestion flow: existing verification evidence was reused only after all rule/template/spec/device/environment drift checks passed atomically |
+| `verificationEvidenceReused` | `boolean` | Always `true` for the public signed-suggestion flow: existing verification evidence was reused only after all rule/template/spec/device/environment drift checks passed atomically. Apply never repeats the strategy search, so this is the only evidence basis the response can report; the client rejects the response if it is not `true` |
 | `appliedSuggestion` | `FixSuggestionDto` | Server-trusted suggestion actually applied; user-facing descriptions are included while internal rule/condition positions remain hidden |
 | `previousRuleCount` / `currentRuleCount` | `int` | Rule-set size before/after the atomic write; particularly important for the destructive `remove` strategy |
 | `message` | `String` | English API summary for logs and non-localized callers; the frontend uses the structured fields above to render a localized, scope-qualified result instead of treating this text as an unconditional guarantee |

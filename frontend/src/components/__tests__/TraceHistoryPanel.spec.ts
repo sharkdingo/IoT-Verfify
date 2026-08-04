@@ -26,6 +26,10 @@ const i18n = createI18n({
         historicalFixMayFailIfBoardChanged:
           'This fix was found for the board as it was; it may no longer apply.',
         runHistorySubtitle: 'Task status and completed results',
+        // Real copy for the same reason as the block above: without it, `t()` echoes the key and intlify
+        // logs a missing-key warning that reads exactly like a product defect. It is not — both locales
+        // carry this key — but the warning was reported as one, which is the cost of a partial fixture.
+        adjustAndRunAgain: 'Adjust and run again',
         close: 'Close',
         taskStatusLayer: 'Task Status',
         historyResultsLayer: 'History Results',
@@ -89,6 +93,7 @@ const i18n = createI18n({
         statesCount: '{count} states',
         replay: 'Replay',
         fix: 'Fix',
+        fixRules: 'Fix rules',
         unknownModelItem: 'Unknown item',
         unknownOmissionReason: 'Unknown reason',
         generationIssueSpecUnknownDevice: 'The referenced device is unavailable.',
@@ -249,8 +254,13 @@ describe('TraceHistoryPanel two-layer semantics', () => {
 
     expect(wrapper.text()).toContain('1 active, 1 without a result')
     expect(wrapper.text()).toContain('The task failed without a result.')
-    expect(wrapper.text()).toContain('NuSMV could not start')
-    expect(wrapper.find('details').attributes('open')).toBeUndefined()
+    // The reported cause must be visible, not folded into a collapsed disclosure. It previously sat
+    // inside `<details>`; `wrapper.text()` includes collapsed content, so this file asserted the
+    // message was "shown" while a real browser showed only the summary — two reviews of an actual
+    // failed run reported the cause as missing. Assert on the element that renders it.
+    const failureReason = wrapper.get('[data-testid="task-failure-reason-simulation-3"]')
+    expect(failureReason.text()).toContain('NuSMV could not start')
+    expect(wrapper.find('details').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Checked specifications passed')
     expect(wrapper.findAll('button').some(button => button.text().includes('Dismiss'))).toBe(true)
     const cancelButton = wrapper.findAll('button').find(button => button.text().includes('Cancel'))!
@@ -265,6 +275,71 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(wrapper.text()).toContain('7/13/2026')
     expect(wrapper.text()).toContain('Started by AI assistant')
     expect(wrapper.text()).toContain('Source unavailable')
+  })
+
+  // A failed run must offer a way forward. Dismiss only hides it, so without this the user's only
+  // options were to hide the failure or reconstruct the settings from memory.
+  it('offers a route back to the launching panel for a failed run', async () => {
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'tasks',
+        fuzzingTasks: [{
+          id: 12,
+          initiator: 'USER' as const,
+          status: 'FAILED' as const,
+          progress: 40,
+          createdAt: '2026-08-02T10:00:00',
+          startedAt: '2026-08-02T10:00:01',
+          completedAt: '2026-08-02T10:00:09',
+          errorMessage: 'The counterexample search stopped before the task completed',
+          explorationMode: 'BOARD_SNAPSHOT' as const,
+          modelSnapshot: snapshot(1),
+          maxIterations: 40,
+          pathLength: 6,
+          populationSize: 4,
+          targetSpecIds: []
+        }]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    // The cause is stated outright rather than folded away.
+    expect(wrapper.get('[data-testid="task-failure-reason-fuzzing-12"]').text())
+      .toContain('stopped before the task completed')
+
+    await wrapper.get('[data-testid="reopen-task-settings-fuzzing-12"]').trigger('click')
+    // Emits the kind, not the stale request: the owning panel re-validates against the current board.
+    expect(wrapper.emitted('reopen-task-settings')).toEqual([['fuzzing']])
+  })
+
+  // A running task that has not reported progress yet must read 0, not full. The bar is rendered
+  // only for PENDING/RUNNING tasks, so there is no honest reading of "complete" available here.
+  it('reports zero progress for a running task that has not reported any yet', () => {
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'tasks',
+        verificationTasks: [
+          {
+            id: 9,
+            initiator: 'USER' as const,
+            status: 'RUNNING' as const,
+            createdAt: '2026-08-02T10:00:00',
+            startedAt: '2026-08-02T10:00:01',
+            isAttack: false,
+            attackBudget: 0,
+            enablePrivacy: false,
+            modelSemantics: semantics,
+            modelSnapshot: snapshot(1)
+          }
+        ]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('0')
+    expect(wrapper.text()).not.toContain('100%')
   })
 
   it('distinguishes what each passing run actually covered, and warns before a historical fix', () => {
@@ -426,7 +501,7 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(wrapper.text()).toContain('2 violations, 1 counterexamples')
     expect(wrapper.text()).toContain('Some violations have no replayable counterexample.')
     expect(wrapper.findAll('button').some(button => button.text() === 'Replay')).toBe(true)
-    expect(wrapper.findAll('button').some(button => button.text() === 'Fix')).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === 'Fix rules')).toBe(true)
   })
 
   it('keeps replayable counterexamples visible when the overall verification is inconclusive', () => {
@@ -812,7 +887,7 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(wrapper.get('[data-testid="fuzzing-history-mode-41"]').text()).toContain('Board snapshot')
     expect(wrapper.text()).toContain('This is not a safety proof.')
     expect(wrapper.get('[data-testid="fuzzing-history-board-drift"]').text()).toContain('Current Board scope changed.')
-    expect(wrapper.findAll('button').some(button => button.text() === 'Fix')).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === 'Fix rules')).toBe(false)
     expect(wrapper.findAll('button').some(button => button.text() === 'Verify formally')).toBe(false)
   })
 

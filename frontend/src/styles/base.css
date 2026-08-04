@@ -58,12 +58,116 @@
     --surface-overlay: rgba(255, 255, 255, 0.94);
     --surface-control: #f1f5f9;
     --text: #0f172a;
-    --text-muted: #64748b;
+    /* Solved against every surface this can land on, not just white. At #64748b it cleared AA on
+     * white (4.76) but failed on the accent (4.37) and danger (4.35) tints — and muted text sits on
+     * those routinely, e.g. the dropzone hint. Darkened 3%; now 4.55–4.98 across white and all five
+     * role surfaces. A token used on many grounds has to be checked against the worst of them. */
+    --text-muted: #617187;
     --border: #e2e8f0;
     --border-strong: #cbd5e1;
     --field-bg: #ffffff;
     --field-border: #cbd5e1;
     --shadow-elevated: 0 18px 42px rgba(15, 23, 42, 0.16);
+
+    /* ===== Semantic accents =====
+     * One named role per meaning, in the same spirit as the --z-* scale below: reach for a role,
+     * never for a raw palette hue.
+     *
+     * This layer exists because the modules had no shared vocabulary for "this is a warning" or
+     * "this succeeded", so each picked its own colour locally. Measured across the Vue sources:
+     * 16 distinct hues across 3469 palette utilities plus 547 raw hex literals, with
+     * amber/orange/yellow and green/emerald/teal all used for overlapping meanings. The result was
+     * that every module had its own signature colour -- Control Center red/orange, Inspector
+     * amber/blue, Fuzzing indigo, Rule builder blue -- which is why the product read as separate
+     * tools stitched together rather than one.
+     *
+     * `-surface` and `-border` are the tinted-container pair; the bare role is for text and icons.
+     * All three are theme-aware, so a warning surface stops being a light-theme leftover in dark
+     * mode -- which is what reviewing the dark Board exposed: "muddy brown/olive ... looks like a
+     * light-theme warning surface carried into dark mode".
+     */
+    --accent: #2563eb;
+    --accent-strong: #1d4ed8;
+    --accent-surface: #eff6ff;
+    /* 3.04 against `--accent-surface`, solved the same way as the four role borders below. This value
+     * also serves as a focus ring (`focus:ring-[color:var(--accent-border)]`), where 3:1 against the
+     * adjacent background is likewise the requirement, so the darker value is correct on both counts. */
+    --accent-border: #588bf1;
+    /*
+     * The accent to *fill* with, as opposed to the accent to *write* with.
+     *
+     * One token cannot be both. `--accent` is tuned to be legible **as text on the page ground**, so the
+     * dark theme lightens it to #60a5fa -- correct for that job, and exactly backwards when the same value
+     * becomes a **fill with white text on top**: measured **2.54:1** on every primary action in dark mode,
+     * below AA. Hover made it worse rather than better (`--accent-strong` at #93c5fd is **1.80**), so
+     * contrast fell as the user interacted with the control.
+     *
+     * In light theme these equal `--accent`/`--accent-strong`, because one dark blue happens to serve both
+     * jobs here -- which is why the defect stayed invisible for so long.
+     *
+     * Both values satisfy two constraints at once: white ink on the fill (>= 4.5:1, AA text) and the fill
+     * against the panel behind it (>= 3:1, so the control has a visible edge).
+     *
+     * The **base** fill is identical in every theme, and that is the point: a ground that does not flip means
+     * one ink is correct everywhere and no markup has to guess. The **hover** is the one value that must
+     * differ, because "darker" and "brighter" swap meaning with the ground — light darkens to #1d4ed8
+     * (white 6.70, edge 6.70), dark brightens to #2f6fe4 (white 4.65, edge 3.15). Both clear AA, which the
+     * `--accent-strong` hover this replaces did in neither theme.
+     */
+    --accent-fill: #2563eb;
+    --accent-fill-hover: #1d4ed8;
+    /*
+     * The disabled fill for a filled primary action.
+     *
+     * Deliberately a desaturated **neutral**, not a weak accent. The previous treatment mixed the accent
+     * 38% into the card, which on a white light-theme card left white ink at **1.75:1** -- worse than the
+     * opacity-50 approach it was meant to replace, because desaturating toward a light ground removes the
+     * very contrast the ink depends on. A disabled control still has to be readable to explain why it is
+     * disabled.
+     *
+     * This value carries white ink at 4.76 and has a visible edge against both cards (4.76 light,
+     * 3.07 dark). Neutral also reads better semantically: unavailable is not a faint version of primary.
+     */
+    --accent-fill-disabled: #64748b;
+    /*
+     * Fill halves of the semantic roles, for a filled chip or button carrying white ink.
+     *
+     * The same defect as --accent-fill, on three more roles. Each bare role is tuned to be legible **as
+     * text**, so the dark theme lightens it -- and white ink on the lightened value collapses: measured
+     * warning **1.44**, danger **1.90**, success **1.52** in dark, against 5.02 / 4.83 / 3.77 in light
+     * (success failed in both). Five call sites put white text on these fills.
+     *
+     * These values are theme-stable and solved for white ink at >= 4.5:1. They are deliberately *not* also
+     * solved for a 3:1 edge against a dark card: a filled role chip is a text container, and the ink it
+     * carries is what must be readable. Where one of these is used as a control boundary rather than a
+     * label, the border token (--danger-border and friends) supplies the edge.
+     */
+    --danger-fill: #dc2626;
+    --warning-fill: #b45309;
+    --success-fill: #15803d;
+
+    /* Role borders are solved to at least 3:1 against their own surface — the contrast minimum for a
+     * component boundary, which the dark theme already met (3.21–3.34) while light did not. The light
+     * borders were left at the untouched tint ramp and measured **1.16–1.32**, so a role surface had a
+     * near-invisible edge: adopting the role in place of a raw `border-amber-200` would have *removed*
+     * a visible boundary, which is what blocked the token migration. Each value is the original tint
+     * mixed toward its own role colour until it clears 3:1, so hue identity is preserved rather than
+     * replaced by a neutral. Measured after: danger 3.04, warning 3.03, success 3.01, info 3.03. */
+    --danger: #b91c1c;
+    --danger-surface: #fef2f2;
+    --danger-border: #d96c6c;
+
+    --warning: #b45309;
+    --warning-surface: #fffbeb;
+    --warning-border: #cb8131;
+
+    --success: #15803d;
+    --success-surface: #f0fdf4;
+    --success-border: #45a368;
+
+    --info: #0e7490;
+    --info-surface: #ecfeff;
+    --info-border: #3e9db3;
 
     /* ===== Stacking layers =====
      * One ordered scale for everything that floats. Add a named layer here instead of
@@ -196,6 +300,75 @@
     --field-border: #475569;
     --shadow-elevated: 0 20px 48px rgba(2, 6, 23, 0.42);
 
+    /* Semantic accents, dark. The role text lightens for contrast on a dark surface, and the
+       tinted containers are opaque dark tints of the same hue -- NOT low-alpha washes.
+
+       The washes were the first attempt and they were wrong, for a reason worth recording. The dark
+       ground is navy (#020617: B=23, G=6), so a translucent red at 16% composited to rgb(31,10,24) --
+       a blue-to-red ratio of 0.67, which the eye reads as mauve, not red. Reviewing the dark Run
+       History named exactly that: "a large muted mauve/pink verification-result panel ... looks like
+       an imported error theme". Nothing in the DOM was pink; the alpha was borrowing the ground's
+       blue. They also could not nest, since two stacked washes double the tint.
+
+       These are the same hues composited at 22% onto a neutral near-black and baked opaque, which
+       drops danger's blue-to-red ratio to 0.06. Opaque also means a tinted container can sit inside
+       another without compounding. */
+    --accent: #60a5fa;
+    --accent-strong: #93c5fd;
+    --accent-surface: #152343;
+    --accent-border: #4271b1;
+    /* The fill pair, solved for dark: #2563eb gives white ink 5.17 and the panel edge 3.46; the hover
+     * *lightens* to #2f6fe4 (white 4.65, edge 3.15), keeping the dark-theme convention that hover
+     * brightens while staying above AA. See the light block for why this is a separate token from
+     * --accent, which must stay light here to work as text. */
+    --accent-fill: #2563eb;
+    --accent-fill-hover: #2f6fe4;
+    /*
+     * The disabled fill for a filled primary action.
+     *
+     * Deliberately a desaturated **neutral**, not a weak accent. The previous treatment mixed the accent
+     * 38% into the card, which on a white light-theme card left white ink at **1.75:1** -- worse than the
+     * opacity-50 approach it was meant to replace, because desaturating toward a light ground removes the
+     * very contrast the ink depends on. A disabled control still has to be readable to explain why it is
+     * disabled.
+     *
+     * This value carries white ink at 4.76 and has a visible edge against both cards (4.76 light,
+     * 3.07 dark). Neutral also reads better semantically: unavailable is not a faint version of primary.
+     */
+    --accent-fill-disabled: #64748b;
+    /*
+     * Fill halves of the semantic roles, for a filled chip or button carrying white ink.
+     *
+     * The same defect as --accent-fill, on three more roles. Each bare role is tuned to be legible **as
+     * text**, so the dark theme lightens it -- and white ink on the lightened value collapses: measured
+     * warning **1.44**, danger **1.90**, success **1.52** in dark, against 5.02 / 4.83 / 3.77 in light
+     * (success failed in both). Five call sites put white text on these fills.
+     *
+     * These values are theme-stable and solved for white ink at >= 4.5:1. They are deliberately *not* also
+     * solved for a 3:1 edge against a dark card: a filled role chip is a text container, and the ink it
+     * carries is what must be readable. Where one of these is used as a control boundary rather than a
+     * label, the border token (--danger-border and friends) supplies the edge.
+     */
+    --danger-fill: #dc2626;
+    --warning-fill: #b45309;
+    --success-fill: #15803d;
+
+    --danger: #fca5a5;
+    --danger-surface: #361315;
+    --danger-border: #995c5d;
+
+    --warning: #fcd34d;
+    --warning-surface: #352011;
+    --warning-border: #8f712c;
+
+    --success: #6ee7b7;
+    --success-surface: #12291c;
+    --success-border: #3b7e62;
+
+    --info: #67e8f9;
+    --info-surface: #10272f;
+    --info-border: #377e8a;
+
     /* 设备列表 */
     --iot-color-device-item-bg: rgba(15, 23, 42, 0.96);
     --iot-color-device-item-bg-hover: linear-gradient(
@@ -293,12 +466,102 @@
     --surface-overlay: rgba(255, 255, 255, 0.94);
     --surface-control: #f1f5f9;
     --text: #0f172a;
-    --text-muted: #64748b;
+    /* Solved against every surface this can land on, not just white. At #64748b it cleared AA on
+     * white (4.76) but failed on the accent (4.37) and danger (4.35) tints — and muted text sits on
+     * those routinely, e.g. the dropzone hint. Darkened 3%; now 4.55–4.98 across white and all five
+     * role surfaces. A token used on many grounds has to be checked against the worst of them. */
+    --text-muted: #617187;
     --border: #e2e8f0;
     --border-strong: #cbd5e1;
     --field-bg: #ffffff;
     --field-border: #cbd5e1;
     --shadow-elevated: 0 18px 42px rgba(15, 23, 42, 0.16);
+
+    /* Semantic accents, light. Restated here because the dark block is the default theme
+       (`:root:not([data-theme])`), so an explicit light theme has to reset every role it overrides
+       rather than inheriting the dark values. */
+    --accent: #2563eb;
+    --accent-strong: #1d4ed8;
+    --accent-surface: #eff6ff;
+    /* 3.04 against `--accent-surface`, solved the same way as the four role borders below. This value
+     * also serves as a focus ring (`focus:ring-[color:var(--accent-border)]`), where 3:1 against the
+     * adjacent background is likewise the requirement, so the darker value is correct on both counts. */
+    --accent-border: #588bf1;
+    /*
+     * The accent to *fill* with, as opposed to the accent to *write* with.
+     *
+     * One token cannot be both. `--accent` is tuned to be legible **as text on the page ground**, so the
+     * dark theme lightens it to #60a5fa -- correct for that job, and exactly backwards when the same value
+     * becomes a **fill with white text on top**: measured **2.54:1** on every primary action in dark mode,
+     * below AA. Hover made it worse rather than better (`--accent-strong` at #93c5fd is **1.80**), so
+     * contrast fell as the user interacted with the control.
+     *
+     * In light theme these equal `--accent`/`--accent-strong`, because one dark blue happens to serve both
+     * jobs here -- which is why the defect stayed invisible for so long.
+     *
+     * Both values satisfy two constraints at once: white ink on the fill (>= 4.5:1, AA text) and the fill
+     * against the panel behind it (>= 3:1, so the control has a visible edge).
+     *
+     * The **base** fill is identical in every theme, and that is the point: a ground that does not flip means
+     * one ink is correct everywhere and no markup has to guess. The **hover** is the one value that must
+     * differ, because "darker" and "brighter" swap meaning with the ground — light darkens to #1d4ed8
+     * (white 6.70, edge 6.70), dark brightens to #2f6fe4 (white 4.65, edge 3.15). Both clear AA, which the
+     * `--accent-strong` hover this replaces did in neither theme.
+     */
+    --accent-fill: #2563eb;
+    --accent-fill-hover: #1d4ed8;
+    /*
+     * The disabled fill for a filled primary action.
+     *
+     * Deliberately a desaturated **neutral**, not a weak accent. The previous treatment mixed the accent
+     * 38% into the card, which on a white light-theme card left white ink at **1.75:1** -- worse than the
+     * opacity-50 approach it was meant to replace, because desaturating toward a light ground removes the
+     * very contrast the ink depends on. A disabled control still has to be readable to explain why it is
+     * disabled.
+     *
+     * This value carries white ink at 4.76 and has a visible edge against both cards (4.76 light,
+     * 3.07 dark). Neutral also reads better semantically: unavailable is not a faint version of primary.
+     */
+    --accent-fill-disabled: #64748b;
+    /*
+     * Fill halves of the semantic roles, for a filled chip or button carrying white ink.
+     *
+     * The same defect as --accent-fill, on three more roles. Each bare role is tuned to be legible **as
+     * text**, so the dark theme lightens it -- and white ink on the lightened value collapses: measured
+     * warning **1.44**, danger **1.90**, success **1.52** in dark, against 5.02 / 4.83 / 3.77 in light
+     * (success failed in both). Five call sites put white text on these fills.
+     *
+     * These values are theme-stable and solved for white ink at >= 4.5:1. They are deliberately *not* also
+     * solved for a 3:1 edge against a dark card: a filled role chip is a text container, and the ink it
+     * carries is what must be readable. Where one of these is used as a control boundary rather than a
+     * label, the border token (--danger-border and friends) supplies the edge.
+     */
+    --danger-fill: #dc2626;
+    --warning-fill: #b45309;
+    --success-fill: #15803d;
+
+    /* Role borders are solved to at least 3:1 against their own surface — the contrast minimum for a
+     * component boundary, which the dark theme already met (3.21–3.34) while light did not. The light
+     * borders were left at the untouched tint ramp and measured **1.16–1.32**, so a role surface had a
+     * near-invisible edge: adopting the role in place of a raw `border-amber-200` would have *removed*
+     * a visible boundary, which is what blocked the token migration. Each value is the original tint
+     * mixed toward its own role colour until it clears 3:1, so hue identity is preserved rather than
+     * replaced by a neutral. Measured after: danger 3.04, warning 3.03, success 3.01, info 3.03. */
+    --danger: #b91c1c;
+    --danger-surface: #fef2f2;
+    --danger-border: #d96c6c;
+
+    --warning: #b45309;
+    --warning-surface: #fffbeb;
+    --warning-border: #cb8131;
+
+    --success: #15803d;
+    --success-surface: #f0fdf4;
+    --success-border: #45a368;
+
+    --info: #0e7490;
+    --info-surface: #ecfeff;
+    --info-border: #3e9db3;
 
     /* 设备列表 */
     --iot-color-device-item-bg: #f9fafb;
@@ -474,23 +737,51 @@
     padding: 0.25rem 1rem;
 }
 
-/* 确认按钮：和整体蓝色高光保持一致 */
+/*
+ * Confirm button.
+ *
+ * Was a pink→purple gradient (`#f838ab → #b325eb`) with a blue shadow, applied to every confirm
+ * button. Two problems. It was the loudest colour in the product and belonged to no role, and it
+ * overrode `el-button--danger` -- so `confirmDestructive` asked for a danger button and got a
+ * decorative gradient. Reviewing the Clear Scene confirmation caught it: "magenta is primarily a
+ * product accent rather than an unmistakable danger color, and the button has no warning icon or
+ * explicit destructive styling."
+ *
+ * Now the accent role, so a confirmation looks like the rest of the product.
+ */
 .el-message-box__btns .el-button--primary {
     border-radius: var(--iot-radius-card);
     padding: 0.25rem 1.125rem;
     border: none;
-    background: linear-gradient(135deg, #f838ab, #b325eb);
-    color: #f9fafb;
-    box-shadow: 0 0.5rem 1.125rem rgba(37, 99, 235, 0.45);
+    background: var(--accent-fill);
+    color: #fff;
+    box-shadow: 0 0.5rem 1.125rem color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
 .el-message-box__btns .el-button--primary:hover {
-    filter: brightness(1.05);
+    background: var(--accent-fill-hover);
+}
+
+/*
+ * Destructive confirmation.
+ *
+ * `confirmDestructive` adds `el-button--danger`, and it must win over the accent above: irreversible
+ * actions are the one case where the button should not look like every other confirm. Placed after
+ * the primary rule so the later declaration wins without needing `!important`.
+ */
+.el-message-box__btns .el-button--danger {
+    background: var(--danger-fill);
+    color: #fff;
+    box-shadow: 0 0.5rem 1.125rem color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
+.el-message-box__btns .el-button--danger:hover {
+    background: color-mix(in srgb, var(--danger) 84%, #000);
 }
 
 /* 警告图标颜色（type='warning'） */
 .el-message-box__status.el-message-box__status--warning {
-    color: #f97316;
+    color: var(--warning);
 }
 
 /* 关闭按钮：右上角圆形“小胶囊” */
@@ -591,7 +882,7 @@
 
 /* 左侧一条细竖条，暗示“警告”，同时不太打断整体蓝色主题 */
 .el-message--warning {
-    border-color: rgba(248, 180, 88, 0.9);
+    border-color: var(--warning-border);
     /* ⚠️ 不要再写 position 了 */
     padding-left: calc(var(--iot-toast-padding-x) - 0.25rem);
 }
@@ -602,10 +893,103 @@
     width: 0.25rem;
     align-self: stretch;
     border-radius: var(--iot-radius-card) 0 0 var(--iot-radius-card);
-    background: linear-gradient(180deg, #f97316, #fbbf24);
+    /* Role token rather than a hardcoded orange→amber ramp: a warning bar should be the same colour
+       as every other warning surface, and should follow the theme. */
+    background: var(--warning);
     margin-right: var(--iot-space-xs);
 }
 
 .el-message--warning .el-message__icon {
     color: #f97316;
 }
+
+/* ===== Scroll regions =====
+ * One owner for every scrollable panel body, dialog body, and inner list.
+ *
+ * This replaces five separate declarations that disagreed with each other: ControlCenter,
+ * DeviceDialog, and SystemInspector each defined `.custom-scrollbar` in their own `<style scoped>`
+ * with different widths (6px/6px/4px) and different thumbs (#cbd5e1 / #cbd5e1 / rgba(0,0,0,.1)).
+ * `<style scoped>` does not scope a ::-webkit-scrollbar pseudo-element away from the class name, so
+ * all three matched every `.custom-scrollbar` in the app and the winner was decided by stylesheet
+ * order rather than by which component rendered the element. RuleBuilderDialog was worse still: it
+ * keyed its scrollbar to the Tailwind utility `.space-y-2`, so an unrelated layout class silently
+ * carried a scrollbar skin.
+ *
+ * `scrollbar-width`/`scrollbar-color` is the standard property and covers Firefox, which the
+ * webkit-only rules left on the platform default. The webkit block stays for Chromium/WebKit, which
+ * ignore the standard shorthand's colour pairing on some versions.
+ */
+.iot-scroll-region {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+    /* Keeps a programmatically revealed target clear of the boundary, so `scrollIntoView` and
+       sequential focus never leave a control flush against the edge of the region. */
+    scroll-padding-bottom: 2rem;
+}
+
+/* Variant for a scroll region whose bottom edge abuts a solid action bar.
+ *
+ * Reviews of two different dialogs, in two languages, read whatever sat exactly at the fold as "cut
+ * off by the bottom action bar" — an element showing only part of itself against a solid edge reads
+ * as broken rather than as continuing. A fade was tried first and rejected (see the note below); the
+ * honest fix is end padding, so content settles clear of the boundary instead of being bisected.
+ *
+ * 4rem, not 2rem: at 2rem a section's final line still landed against the divider and both themes
+ * still reported it obscured. This is sized to clear a full line of body text plus its leading, so
+ * the last thing visible is always either complete or plainly the middle of something.
+ *
+ * Wins over the Tailwind `p-5`/`p-6` on the same element because `base.css` is ordered after the
+ * utility layer — verified in a browser (`padding-bottom: 64px`, not the utility's 24px). Both are
+ * single-class selectors, so that ordering is what decides it. */
+.iot-scroll-region--inset-end {
+    padding-bottom: 4rem;
+}
+
+/* Horizontal counterpart, for a rail that scrolls sideways — the simulation timeline's step strip and
+ * the trace rails.
+ *
+ * Those regions carried `scrollbar-thin`, a class **defined nowhere** in this project and with no
+ * Tailwind plugin providing it, so six horizontal rails had the default browser scrollbar while every
+ * vertical region used the token skin. In dark theme that meant a light scrollbar on a dark rail. The
+ * inline `scroll-padding` is the horizontal analogue of the vertical rule: a step revealed by keyboard
+ * navigation should not land flush against the edge of its rail. */
+.iot-scroll-region-x {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+    scroll-padding-inline: 2rem;
+}
+
+.iot-scroll-region::-webkit-scrollbar {
+    width: 8px;
+}
+
+.iot-scroll-region::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.iot-scroll-region::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+    /* Inset the thumb so it reads as floating over the surface instead of a hard rail. */
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.iot-scroll-region::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+    background-clip: content-box;
+}
+
+/* Deliberately no bottom-fade variant here.
+ *
+ * A fade was tried and removed. In the automatic-fix dialog the last control (`Try This Strategy`)
+ * ends 19px below the scroll fold, so a 2.5rem fade dimmed exactly the part that was already half
+ * out of view and made a reachable button read as broken -- two independent reviews called it
+ * "cut off and unreadable". Masking the fold hides the symptom of a layout that ends mid-control
+ * and worsens it. Size scroll regions so a control is either fully visible or clearly below the
+ * fold instead. */

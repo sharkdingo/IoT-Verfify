@@ -5,6 +5,15 @@ const shouldStartFrontend = !process.env.E2E_BASE_URL
 
 export default defineConfig({
   testDir: './e2e',
+  /**
+   * Diagnose an exhausted auth budget before any browser starts.
+   *
+   * A full pass needs ~67 registrations against a per-source default of 60/hour, so it cannot pass on the
+   * defaults — and it fails as a scatter of raw 429s inside the shared fixture, which reads as sixteen
+   * unrelated product regressions. This prints what to set and what the headroom is. See
+   * `e2e/support/authBudget.ts`.
+   */
+  globalSetup: './e2e/global-setup.ts',
   timeout: 60_000,
   expect: {
     timeout: 5_000

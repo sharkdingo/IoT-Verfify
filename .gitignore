@@ -145,3 +145,10 @@ dump.rdb
 
 # ======================= Docker =============================
 docker-compose.override.yml
+
+# ================= Local audit workspace =====================
+# Probe scripts, screenshots and the ledger for the UI/UX + cross-layer audit. Every file in here is a
+# measurement artifact, not a deliverable: they hardcode localhost, register throwaway accounts, and are
+# written to be edited between runs. Ignored so a `git add -A` cannot sweep them into a commit — each one
+# already says "not for commit" in its header, and a comment is not enforcement.
+frontend/.audit/

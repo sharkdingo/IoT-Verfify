@@ -8,6 +8,7 @@ import { useAuth } from '@/stores/auth'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { isValidNormalizedUsername, normalizeAccountIdentifier } from '@/utils/accountIdentifier'
 import { notifySuccess } from '@/utils/feedback'
+import { CREDENTIAL_LIMITS } from '@/constants/requestLimits'
 
 type AuthMode = 'login' | 'register'
 
@@ -54,6 +55,14 @@ const formErrors = reactive<Record<string, string>>({})
 const isRegisterMode = computed(() => authMode.value === 'register')
 const panelTitle = computed(() => isRegisterMode.value ? t('auth.getStarted') : t('auth.welcomeBack'))
 const panelSubtitle = computed(() => isRegisterMode.value ? t('auth.getStartedSubtitle') : t('auth.welcomeBackSubtitle'))
+/**
+ * The session ended rather than the user choosing to sign in.
+ *
+ * `loginRedirectTarget` sets this only when it also sets `redirect`, i.e. when a rejected token ejected someone
+ * from an authenticated route. Reading the query rather than any client state keeps a single owner: the redirect
+ * helper decides, this only reports.
+ */
+const sessionExpired = computed(() => route.query.reason === 'session-expired' && !isRegisterMode.value)
 const loadingLabel = computed(() => isRegisterMode.value ? t('auth.creatingAccount') : t('auth.signingIn'))
 // Only same-origin absolute paths are honoured, and the login-surface parameters are
 // stripped so a successful sign-in always lands on a clean workspace URL instead of
@@ -121,14 +130,17 @@ const openAuthPanel = () => {
   setAuthMode('login')
 }
 
-// Mirrors the backend's RegisterRequestDto `^1[3-9]\d{9}$` constraint. Keep the two in
-// step: loosening only this side moves the rejection to the server.
+// The pattern comes from `CREDENTIAL_LIMITS`, which mirrors `RequestLimits.PHONE_PATTERN`.
+//
+// It used to be a regex literal here with a comment asking the reader to "keep the two in step" — the same
+// instruction-instead-of-enforcement pattern this audit kept finding. `credentialLimitsMirror.spec.ts` now checks
+// that the two files agree, so the request no longer depends on being remembered.
 const validatePhone = (phone: string, key: string) => {
   if (!phone.trim()) {
     formErrors[key] = t('auth.phoneRequired')
     return false
   }
-  if (!/^1[3-9]\d{9}$/.test(phone.trim())) {
+  if (!CREDENTIAL_LIMITS.phonePattern.test(phone.trim())) {
     formErrors[key] = t('auth.phoneInvalid')
     return false
   }
@@ -161,7 +173,8 @@ const validateRegister = () => {
 
   if (!username) {
     formErrors.registerUsername = t('auth.usernameRequired')
-  } else if (usernameLength < 3 || usernameLength > 20) {
+  } else if (usernameLength < CREDENTIAL_LIMITS.minUsernameDisplayLength
+      || usernameLength > CREDENTIAL_LIMITS.maxUsernameDisplayLength) {
     formErrors.registerUsername = t('auth.usernameLength')
   } else if (!isValidNormalizedUsername(username)) {
     formErrors.registerUsername = t('auth.usernameInvalidCharacters')
@@ -169,9 +182,9 @@ const validateRegister = () => {
 
   if (!registerForm.password) {
     formErrors.registerPassword = t('auth.passwordRequired')
-  } else if (registerForm.password.length < 10
-      || registerForm.password.length > 64
-      || new TextEncoder().encode(registerForm.password).length > 72) {
+  } else if (registerForm.password.length < CREDENTIAL_LIMITS.minPasswordLength
+      || registerForm.password.length > CREDENTIAL_LIMITS.maxPasswordLength
+      || new TextEncoder().encode(registerForm.password).length > CREDENTIAL_LIMITS.maxPasswordBcryptBytes) {
     formErrors.registerPassword = t('auth.passwordLength')
   }
 
@@ -423,6 +436,28 @@ onUnmounted(() => {
           <p>{{ panelSubtitle }}</p>
         </div>
 
+        <!--
+          Why the user is on this screen, when they did not choose to be.
+
+          A rejected token redirects here with the route they were on, and until now nothing said the session had
+          ended: verified that a real 401 lands on `#/?mode=login&redirect=/board` with the token cleared and no
+          explanation anywhere. Two reviews of a mid-task ejection reported the same consequence — "it is unclear
+          whether the board and any edits are safe, and what action is required next" — and one observed that an
+          empty Run History after the interruption "could be mistaken for lost verification results".
+
+          The reassurance is the substance, not the notice: this says the work is still there. `role="status"`
+          rather than `alert`, because an expired session is expected and recoverable, not an error to escalate.
+        -->
+        <p
+          v-if="sessionExpired"
+          class="auth-session-notice"
+          role="status"
+          data-testid="auth-session-expired"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">schedule</span>
+          <span>{{ t('auth.sessionExpiredNotice') }}</span>
+        </p>
+
         <div
           v-if="requestError"
           ref="requestErrorRef"
@@ -486,7 +521,13 @@ onUnmounted(() => {
             </small>
           </label>
 
-          <button class="auth-submit" type="submit" :disabled="loading">
+          <button
+            class="auth-submit"
+            :class="{ 'auth-submit--busy': loading }"
+            type="submit"
+            :disabled="loading"
+            :aria-busy="loading ? 'true' : undefined"
+          >
             <span v-if="loading" class="material-symbols-outlined auth-submit__spinner" aria-hidden="true">progress_activity</span>
             {{ loading ? loadingLabel : t('auth.signInToConsole') }}
           </button>
@@ -589,7 +630,13 @@ onUnmounted(() => {
             </small>
           </label>
 
-          <button class="auth-submit" type="submit" :disabled="loading">
+          <button
+            class="auth-submit"
+            :class="{ 'auth-submit--busy': loading }"
+            type="submit"
+            :disabled="loading"
+            :aria-busy="loading ? 'true' : undefined"
+          >
             <span v-if="loading" class="material-symbols-outlined auth-submit__spinner" aria-hidden="true">progress_activity</span>
             {{ loading ? loadingLabel : t('auth.registerNow') }}
           </button>
@@ -884,7 +931,7 @@ onUnmounted(() => {
 }
 
 .auth-form input[aria-invalid="true"] {
-  border-color: #fca5a5;
+  border-color: var(--danger-border);
 }
 
 .auth-form input:disabled {
@@ -899,7 +946,31 @@ onUnmounted(() => {
 }
 
 .auth-form__hint--error {
-  color: #fecaca !important;
+  color: var(--danger-border) !important;
+}
+
+/* Deliberately not styled like `.auth-request-error` below.
+ *
+ * An expired session is expected and recoverable, so it reads as information on the panel's own glass rather
+ * than as a failure in danger red. Using the error treatment would tell the user something went wrong with
+ * their sign-in attempt, when in fact nothing has gone wrong at all and their work is intact. */
+.auth-session-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.65rem 0.75rem;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.auth-session-notice .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 1.05rem;
 }
 
 .auth-request-error {
@@ -911,7 +982,7 @@ onUnmounted(() => {
   border-radius: 8px;
   background: rgba(127, 29, 29, 0.34);
   padding: 0.65rem 0.75rem;
-  color: #fee2e2;
+  color: var(--danger-surface);
   font-size: 0.78rem;
   line-height: 1.45;
 }
@@ -950,13 +1021,27 @@ onUnmounted(() => {
   to { transform: rotate(360deg); }
 }
 
+/* "Submitting" and "you cannot submit yet" are different states and must not look identical.
+ *
+ * Both used `:disabled` with `opacity: 0.72`, separated only by `cursor: wait` — invisible in a
+ * screenshot and absent on touch. A review of the sign-in panel read the in-progress button as
+ * disabled: "it reads somewhat like a disabled control, but the spinner and active status imply
+ * progress". Waiting is not refusal, so the busy state keeps full opacity and its accent, and says so
+ * through `aria-busy` as well as the spinner and the changed label. */
 .auth-submit:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.72;
 }
 
+.auth-submit--busy:disabled {
+  cursor: progress;
+  opacity: 1;
+  background: var(--surface-elevated);
+  color: var(--accent);
+}
+
 .auth-submit:not(:disabled):hover {
-  background: #ffffff;
+  background: var(--surface-elevated);
 }
 
 @keyframes fade-rise {

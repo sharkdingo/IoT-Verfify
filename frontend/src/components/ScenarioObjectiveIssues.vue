@@ -13,7 +13,7 @@ defineProps<{
   <div
     v-if="status === 'PARTIAL' && issues.length > 0"
     data-testid="scenario-objective-issues"
-    class="mt-3 flex w-full items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-left text-xs text-amber-900"
+    class="board-surface-warning mt-3 flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs"
     role="status"
   >
     <span class="material-symbols-outlined text-base" aria-hidden="true">flag</span>

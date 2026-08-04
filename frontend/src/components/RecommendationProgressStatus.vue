@@ -50,10 +50,10 @@ const phaseLabel = computed(() => {
 
 <style scoped>
 .recommendation-progress {
-  border-left: 3px solid #0f766e;
-  background: color-mix(in srgb, #0f766e 7%, white);
+  border-left: 3px solid var(--info);
+  background: color-mix(in srgb, var(--info) 7%, white);
   padding: 0.65rem 0.75rem;
-  color: #475569;
+  color: var(--text-muted);
   font-size: 0.75rem;
   line-height: 1.45;
 }
@@ -62,12 +62,12 @@ const phaseLabel = computed(() => {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  color: #0f172a;
+  color: var(--text);
 }
 
 .recommendation-progress__heading span:last-child {
   margin-left: auto;
-  color: #64748b;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -76,7 +76,7 @@ const phaseLabel = computed(() => {
 }
 
 .recommendation-progress__phase {
-  color: #0f766e;
+  color: var(--info);
   font-weight: 650;
 }
 

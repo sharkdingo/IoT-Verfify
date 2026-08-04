@@ -374,6 +374,40 @@ class FixServiceImplTest {
         verify(boardStorageService, never()).updateRulesAgainstSnapshot(anyLong(), any());
     }
 
+    /**
+     * An incomplete source model returns before any strategy runs, so a caller's pinned range is
+     * honoured by nothing. Reporting an empty `unusedPreferredRangeSelections` there dropped the
+     * user's explicit constraint silently — which is the failure this field exists to surface.
+     */
+    @Test
+    void incompleteSourceModel_reportsEveryPreferredRangeAsUnused() {
+        TracePo po = new TracePo();
+        po.setId(1L);
+        po.setUserId(1L);
+        attachTemplateSnapshot(po, "d1");
+        po.setRequestJson("{\"devices\":[{\"varName\":\"d1\",\"templateName\":\"t1\"}],"
+                + "\"rules\":[],\"specs\":[],\"attackScenario\":{\"mode\":\"NONE\"},\"enablePrivacy\":false}");
+        when(traceRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(po));
+
+        TraceDto traceDto = new TraceDto();
+        traceDto.setViolatedSpecId("s0");
+        traceDto.setStates(List.of());
+        traceDto.setModelComplete(false);
+        when(traceMapper.toDto(po)).thenReturn(traceDto);
+        when(ruleFixer.localizeFaults(anyList(), anyList(), anyMap())).thenReturn(List.of());
+
+        String targetId = "param_abcdefghijklmnopqrstuvwx";
+        // Lower == upper is the "lock this threshold exactly" case, the one worst served by
+        // dropping the selection without saying so.
+        Map<String, PreferredRange> pinned = Map.of(targetId, new PreferredRange(70, 70));
+
+        FixResultDto result = fixService.fix(1L, 1L, null, pinned);
+
+        assertFalse(result.isFixable());
+        assertEquals(1, result.getUnusedPreferredRangeSelections().size());
+        assertEquals(targetId, result.getUnusedPreferredRangeSelections().get(0).getTargetId());
+    }
+
     @Test
     void fix_environmentPool_passesToRuleFixer() {
         TracePo po = new TracePo();
@@ -633,7 +667,6 @@ class FixServiceImplTest {
         FixApplyResultDto result = applySigned("parameter", suggestion);
 
         assertTrue(result.isApplied());
-        assertFalse(result.isVerificationRechecked());
         assertTrue(result.isVerificationEvidenceReused());
         verify(fixSuggestionTokenService).verify(
                 1L, 1L, "parameter", suggestion, "signed-token", null);

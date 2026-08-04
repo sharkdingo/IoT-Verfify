@@ -40,8 +40,13 @@ export const useBoardUndo = (options: {
    * Undo is a semantic scene change, so recommendations built on the pre-undo scene are stale. The
    * mutation queue's own scene-change hook cannot do this: undo passes `trackSemanticChange: false`
    * because the commit path already owns verification staleness.
+   *
+   * Receives the result so the caller can say *what* was reversed. The server sends `entityType` and
+   * `originalOperation` on every applied undo and nothing read them, so a successful undo changed the
+   * board silently — fine when the affected object is on screen, and not fine when it is a rule or a
+   * specification the user cannot currently see.
    */
-  onApplied?: () => void
+  onApplied?: (result: BoardUndoResult) => void
   /**
    * True for a rejection that is a normal lifecycle outcome, not a failure to report — the board
    * unmounting or the auth scope changing while the request sat in the queue. Reporting those pops
@@ -108,7 +113,7 @@ export const useBoardUndo = (options: {
         return
       }
       options.applyResult(result)
-      options.onApplied?.()
+      options.onApplied?.(result)
     } catch (error) {
       // A queued request can be rejected because the board went away, not because the undo failed.
       if (options.isIgnorableError?.(error)) return

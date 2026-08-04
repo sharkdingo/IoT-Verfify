@@ -41,6 +41,14 @@ interface Props {
   readOnlyMessage?: string
   environmentSaving?: boolean
   rulesReordering?: boolean
+  /**
+   * The authoritative board snapshot failed to load.
+   *
+   * Without this the panel renders "No devices on canvas" during a failed load -- a factual claim it
+   * cannot actually verify, and one that reads identically to a genuinely empty board. The load
+   * banner disambiguates it, but the empty state should not assert something it does not know.
+   */
+  dataUnavailable?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -53,7 +61,8 @@ const props = withDefaults(defineProps<Props>(), {
   readOnly: false,
   readOnlyMessage: '',
   environmentSaving: false,
-  rulesReordering: false
+  rulesReordering: false,
+  dataUnavailable: false
 })
 
 const ensureWritable = (): boolean => {
@@ -122,10 +131,25 @@ const isCollapsed = computed({
   }
 })
 
-const panelWidth = computed(() => {
-  const width = Number.isFinite(props.width) ? props.width : 320
-  return `${Math.min(520, Math.max(240, width))}px`
-})
+const resolvedPanelWidth = computed(() =>
+  Math.min(520, Math.max(240, Number.isFinite(props.width) ? props.width : 320)))
+
+const panelWidth = computed(() => `${resolvedPanelWidth.value}px`)
+
+/**
+ * Whether a tab can show its icon without squeezing its label.
+ *
+ * Derived from the panel's own width rather than the viewport, because this panel is resizable
+ * (240–520px) and a viewport query would hide the icon on a wide screen with a narrow panel and show
+ * it on a narrow screen with a wide one — both wrong.
+ *
+ * The arithmetic, for one of three `grid-cols-3` tabs: the panel spends 32px on its own padding and
+ * 8px on the tablist's, leaving `(width - 40) / 3` per tab; each tab spends 16px on `px-2`, 12px on two
+ * gaps and about 20px on the count badge. The widest label ("Devices" at 43px, "规则" narrower) needs
+ * roughly 48px of comfortable room, so the icon's 14px only fits from about 370px up. Below that the
+ * label had 28px and read as "De…", which is worse than no icon.
+ */
+const tabIconsFit = computed(() => resolvedPanelWidth.value >= 370)
 
 const activeSection = computed<InspectorSection>({
   // `activeSection` is optional: when a parent controls it, the prop is authoritative;
@@ -798,12 +822,17 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
 </script>
 
 <template>
+  <!-- Collapsed width is 3.5rem, matching ControlCenter and COLLAPSED_PANEL_RAIL_WIDTH in Board.vue.
+       It was 3rem while the opposite rail was 4rem — a 16px mismatch between two rails that each hold exactly one
+       44x44 Expand button, so identical content rendered at different widths on either side of the canvas. That
+       reads as accidental, and during replay it is what makes a focused view look evacuated rather than composed.
+       3.5rem also gives that 44px target a symmetric 6px inset rather than 3rem's cramped 2px. -->
   <aside
     data-testid="system-inspector"
     class="absolute right-0 top-0 bottom-0 glass-panel board-side-panel z-40 flex flex-col overflow-hidden border-l transition-all duration-300 ease-in-out"
     :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"
     :aria-disabled="props.readOnly ? 'true' : undefined"
-    :style="{ width: isCollapsed ? '3rem' : panelWidth }"
+    :style="{ width: isCollapsed ? '3.5rem' : panelWidth }"
     @pointerover="syncFullTextTitle"
     @focusin="syncFullTextTitle"
   >
@@ -816,18 +845,18 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           <button
             type="button"
             @click="togglePanel"
-            class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-800"
+            class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
             :title="t('app.collapse')"
             :aria-label="t('app.collapse')"
           >
             <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
           </button>
-          <div class="p-2 bg-blue-50 rounded-lg border border-blue-100/50 shadow-sm">
-            <span class="material-symbols-outlined text-blue-600">fact_check</span>
+          <div class="p-2 board-chip-info rounded-lg border board-border-subtle/50 shadow-sm">
+            <span class="material-symbols-outlined board-text-info">fact_check</span>
           </div>
           <div class="min-w-0">
             <h2 class="board-panel-title text-sm font-bold leading-none truncate" :data-full-text="t('app.systemInspector')">{{ t('app.systemInspector') }}</h2>
-            <p class="board-panel-subtitle text-[10px] font-medium mt-0.5 truncate" :data-full-text="t('app.currentBoardContent')">{{ t('app.currentBoardContent') }}</p>
+            <p class="board-panel-subtitle text-[length:var(--iot-font-min)] font-medium mt-0.5 truncate" :data-full-text="t('app.currentBoardContent')">{{ t('app.currentBoardContent') }}</p>
           </div>
         </div>
       </div>
@@ -835,7 +864,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
         <button
           type="button"
           @click="togglePanel"
-          class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-800"
+          class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
           :title="t('app.expand')"
           :aria-label="t('app.expand')"
         >
@@ -846,7 +875,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
 
     <div
       v-if="!isCollapsed"
-      class="board-panel-body flex-1 overflow-y-auto custom-scrollbar transition-all duration-300 p-4 space-y-4"
+      class="board-panel-body flex-1 iot-scroll-region transition-all duration-300 p-4 space-y-4"
     >
       <div
         class="board-segmented grid grid-cols-3 gap-1 rounded-xl border p-1"
@@ -866,17 +895,43 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           @click="activeSection = tab.id"
           @keydown="handleInspectorTabKeydown($event, tab.id)"
           :class="[
-            'min-w-0 rounded-lg px-2 py-2 text-[11px] font-bold transition-all flex items-center justify-start gap-1.5',
+            // min-h-11: the tabs measured 33px, and a tab strip is a primary navigation target.
+            'min-w-0 min-h-11 rounded-lg px-2 py-2 text-[11px] font-bold transition-all flex items-center justify-start gap-1.5',
             activeSection === tab.id
-              ? 'bg-blue-600 text-white shadow-sm'
+              ? 'bg-[color:var(--accent-fill)] text-white shadow-sm'
               : 'text-slate-500 hover:bg-white hover:text-slate-800'
           ]"
         >
-          <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
+          <!--
+            The icon is hidden below the width where the label fits beside it.
+
+            Budget in this 320px panel: three `grid-cols-3` tabs get ~96px each, and `px-2` (16px) plus
+            the icon (14px), two gaps (12px) and the count badge (~20px) left the label **28px** where
+            "Devices" needs 43px — so the tab that names the section rendered as "De…". The icon and the
+            label say the same thing, and only the label says it unambiguously, so the icon yields.
+            It is `aria-hidden` either way, so nothing is lost to assistive technology.
+          -->
+          <span v-if="tabIconsFit" class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
           <span class="min-w-0 flex-1 truncate text-left" :data-full-text="tab.label">{{ tab.label }}</span>
+          <!--
+            The ACTIVE badge darkens its ground instead of lightening it.
+
+            Measured on a 12-device board: `bg-white/20 text-white` puts white text on the accent fill lightened by
+            20% white — **3.62:1**, under the 4.5 floor that applies because this text is 11px. Lightening a fill and
+            then writing white on it moves both sides toward each other, so `white/30` is worse still (3.02:1).
+            `black/20` darkens the same fill instead: **7.24:1**, and it reads as a recessed pill rather than a
+            washed-out one, which is also the more honest depth cue for a count sitting inside its tab.
+
+            The inactive badge measures 4.54:1 (`rgb(97,113,135)` on `rgb(241,245,249)`) and needed no change — I
+            changed it first on a class-name guess before measuring the computed colours, which is what identified the
+            active badge as the real offender.
+
+            It took a dense board to surface at all: the count is the whole point of the badge — how a reader knows a
+            section holds twelve devices without opening it — and with two devices the digit is easy to overlook.
+          -->
           <span
-            class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none"
-            :class="activeSection === tab.id ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-500'"
+            class="shrink-0 rounded-full px-1.5 py-0.5 text-[length:var(--iot-font-min)] leading-none"
+            :class="activeSection === tab.id ? 'bg-black/20 text-white' : 'bg-slate-200 text-slate-600'"
           >
             {{ tab.count }}
           </span>
@@ -885,26 +940,44 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
 
       <slot name="overview" />
 
+      <!-- Uses the shared warning role rather than raw amber utilities. The previous
+           `board-chip-warning` had no dark counterpart for the tint, so on a near-black ground it
+           composited into the "muddy brown/olive" surface two dark-theme reviews flagged as
+           looking like a light-theme panel carried over. The role is theme-aware. -->
       <section
         data-testid="environment-pool"
-        class="rounded-xl border border-amber-100 bg-amber-50/60 p-3 shadow-sm dark:border-amber-500/20 dark:bg-amber-500/10"
+        aria-labelledby="environment-pool-title"
+        class="board-surface-info rounded-xl p-3 shadow-sm"
       >
         <div class="mb-2 flex items-start gap-2">
           <button
             type="button"
             data-testid="toggle-environment-pool"
-            class="flex min-w-0 flex-1 items-start justify-between gap-3 rounded-lg text-left transition-colors hover:bg-amber-100/70 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:hover:bg-amber-400/10"
+            class="flex min-w-0 flex-1 items-start justify-between gap-3 rounded-lg text-left transition-colors hover:bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color:var(--warning-border)]"
             :aria-expanded="environmentPoolExpanded"
             @click="environmentPoolExpanded = !environmentPoolExpanded"
           >
           <div class="min-w-0 p-1">
             <div class="flex min-w-0 items-center gap-2">
-              <span class="material-symbols-outlined text-base text-amber-600 dark:text-amber-300" aria-hidden="true">public</span>
-              <h3 class="truncate text-xs font-bold uppercase tracking-widest text-amber-700 dark:text-amber-200" :data-full-text="t('app.environmentPool')">
+              <span class="material-symbols-outlined board-text-info text-base" aria-hidden="true">public</span>
+              <!--
+                `tracking-widest` on an all-caps heading pushed this 3px past its 167px row, so it
+                rendered as "ENVIRONMENT PO…" -- named in every visual review of the inspector. The
+                wide tracking bought nothing at this size; `tracking-wide` fits and still reads as a
+                section label. Colour comes from the warning role rather than raw amber utilities,
+                which had a light-only value for the icon.
+              -->
+              <!--
+                The id exists so the enclosing <section> can point at this heading. A bare <section> is an implicit
+                `region` landmark, and an unnamed region is invisible in a screen reader's landmark list — measured, it
+                was the one unnamed landmark on the board. Labelling by reference rather than with an aria-label keeps
+                one translated string instead of two that can drift apart.
+              -->
+              <h3 id="environment-pool-title" class="board-text-info truncate text-xs font-bold uppercase tracking-wide" :data-full-text="t('app.environmentPool')">
                 {{ t('app.environmentPool') }}
               </h3>
             </div>
-            <p v-if="environmentPoolExpanded" class="mt-1 text-[11px] font-medium leading-snug text-amber-700/75 dark:text-amber-100/75">
+            <p v-if="environmentPoolExpanded" class="mt-1 text-[11px] font-medium leading-snug board-text-info">
               {{ t('app.environmentPoolShortHint') }}
             </p>
             <div
@@ -915,19 +988,19 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <span
                 v-for="variable in environmentVariables.slice(0, 3)"
                 :key="variable.name"
-                class="max-w-[6.5rem] truncate rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-slate-950/40 dark:text-amber-100"
+                class="max-w-[6.5rem] truncate board-chip-info rounded-full px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold"
               >
                 {{ variable.displayName }}
               </span>
               <span
                 v-if="environmentVariables.length > 3"
-                class="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-slate-950/40 dark:text-amber-100"
+                class="board-chip-info rounded-full px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold"
               >
                 +{{ environmentVariables.length - 3 }}
               </span>
             </div>
           </div>
-          <span class="mt-1 inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-400/20 dark:text-amber-100">
+          <span class="mt-1 inline-flex shrink-0 items-center gap-1 rounded-full board-chip-info px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-info">
             {{ environmentVariables.length }}
             <span class="material-symbols-outlined text-sm" aria-hidden="true">
               {{ environmentPoolExpanded ? 'expand_less' : 'expand_more' }}
@@ -938,7 +1011,6 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             :text="t('app.environmentPoolHint')"
             :label="t('app.showHelpFor', { topic: t('app.environmentPool') })"
             placement="left"
-            tone="amber"
             test-id="environment-pool-help"
           />
         </div>
@@ -951,12 +1023,12 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           >
             <button
               type="button"
-              class="flex w-full min-w-0 items-center justify-between gap-2 rounded-md p-1 text-left transition-colors hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:hover:bg-amber-400/10"
+              class="flex w-full min-w-0 items-center justify-between gap-2 rounded-md p-1 text-left transition-colors hover:board-chip-info focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] dark:hover:bg-[color:var(--warning-surface)]"
               :aria-expanded="isEnvironmentVariableExpanded(variable.name)"
               @click="toggleEnvironmentVariable(variable.name)"
             >
               <span class="flex min-w-0 items-center gap-2">
-                <span class="material-symbols-outlined text-sm text-amber-600 dark:text-amber-300" aria-hidden="true">
+                <span class="material-symbols-outlined text-sm board-text-info" aria-hidden="true">
                   {{ isEnvironmentVariableExpanded(variable.name) ? 'expand_less' : 'expand_more' }}
                 </span>
                 <span class="min-w-0">
@@ -966,19 +1038,19 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 </span>
               </span>
               <span class="flex shrink-0 items-center gap-1.5">
-                <span class="max-w-[5.5rem] truncate rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500 dark:bg-slate-800 dark:text-slate-300" :data-full-text="variable.rangeLabel">
+                <span class="max-w-[5.5rem] truncate rounded-full bg-slate-100 px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold text-slate-500 dark:bg-slate-800 dark:text-slate-300" :data-full-text="variable.rangeLabel">
                   {{ variable.rangeLabel }}
                 </span>
-                <span class="max-w-[4.5rem] truncate rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-400/20 dark:text-amber-100" :data-full-text="variable.valueLabel">
+                <span class="max-w-[4.5rem] truncate rounded-full board-chip-info px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-info" :data-full-text="variable.valueLabel">
                   {{ variable.valueLabel }}
                 </span>
               </span>
             </button>
 
             <div v-if="isEnvironmentVariableExpanded(variable.name)" class="mt-2 space-y-2">
-              <div class="grid grid-cols-1 gap-2 text-[10px]">
+              <div class="grid grid-cols-1 gap-2 text-[length:var(--iot-font-min)]">
                 <label class="min-w-0 rounded-md bg-slate-50 p-1.5 dark:bg-slate-800">
-                  <span class="block font-bold uppercase text-slate-400">{{ t('app.modelInitialValue') }}</span>
+                  <span class="block font-bold uppercase text-slate-500">{{ t('app.modelInitialValue') }}</span>
                   <select
                     v-if="variable.enumValues.length > 0"
                     :data-testid="`environment-value-${variable.name}`"
@@ -986,7 +1058,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     :aria-label="`${variable.displayName} ${t('app.modelInitialValue')}`"
                     :disabled="props.readOnly || props.environmentSaving || !variable.editable"
                     :aria-busy="props.environmentSaving ? 'true' : undefined"
-                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-[color:var(--accent-border)] disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   >
                     <option v-for="option in variable.enumValues" :key="option" :value="option">
@@ -1004,29 +1076,29 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     :aria-label="`${variable.displayName} ${t('app.modelInitialValue')}`"
                     :disabled="props.readOnly || props.environmentSaving || !variable.editable"
                     :aria-busy="props.environmentSaving ? 'true' : undefined"
-                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-[color:var(--accent-border)] disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   />
                   <p
                     v-if="variable.conflicts.length > 0"
                     :data-testid="`environment-conflict-${variable.name}`"
-                    class="mt-1 text-[10px] leading-4 text-red-600 dark:text-red-300"
+                    class="mt-1 text-[length:var(--iot-font-min)] leading-4 board-text-danger"
                   >
                     {{ t('app.environmentDefinitionConflict', { reasons: variable.conflicts.join('; ') }) }}
                   </p>
                   <p
                     v-else-if="!variable.editable"
                     :data-testid="`environment-not-editable-${variable.name}`"
-                    class="mt-1 text-[10px] leading-4 text-amber-600 dark:text-amber-300"
+                    class="mt-1 text-[length:var(--iot-font-min)] leading-4 board-text-info"
                   >
                     {{ t('app.environmentValueNotEditable') }}
                   </p>
                 </label>
                 <div
                   :data-testid="`environment-evolution-${variable.name}`"
-                  class="rounded-md border border-slate-200 bg-white/70 p-2 text-[10px] leading-4 text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300"
+                  class="rounded-md border border-slate-200 bg-white/70 p-2 text-[length:var(--iot-font-min)] leading-4 text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300"
                 >
-                  <p class="font-bold uppercase text-slate-400">{{ t('app.modelEvolution') }}</p>
+                  <p class="font-bold uppercase text-slate-500">{{ t('app.modelEvolution') }}</p>
                   <p>{{ t('app.naturalChangeRate') }}: <strong>{{ variable.naturalChangeRateLabel }}</strong></p>
                   <ul v-if="variable.evolutionEffects.length > 0" class="mt-1 space-y-0.5">
                     <li v-for="effect in variable.evolutionEffects" :key="`${effect.deviceId}:${effect.state}:${effect.value}`">
@@ -1034,21 +1106,21 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     </li>
                   </ul>
                   <p v-else class="mt-1">{{ t('app.environmentNoDeviceEffects') }}</p>
-                  <p class="mt-1 text-slate-400">{{ t('app.environmentEvolutionHint') }}</p>
+                  <p class="mt-1 text-slate-500">{{ t('app.environmentEvolutionHint') }}</p>
                 </div>
                 <details class="rounded-md border border-slate-200 bg-white/70 p-1.5 dark:border-slate-700 dark:bg-slate-900/60">
-                  <summary class="cursor-pointer text-[10px] font-bold text-slate-500">{{ t('app.advancedTrustPrivacyOverrides') }}</summary>
-                  <p class="mt-1 text-[10px] leading-4 text-slate-400">{{ t('app.environmentTrustOverrideHint') }}</p>
+                  <summary class="cursor-pointer text-[length:var(--iot-font-min)] font-bold text-slate-500">{{ t('app.advancedTrustPrivacyOverrides') }}</summary>
+                  <p class="mt-1 text-[length:var(--iot-font-min)] leading-4 text-slate-500">{{ t('app.environmentTrustOverrideHint') }}</p>
                   <div class="mt-1.5 grid grid-cols-2 gap-1.5">
                   <label class="min-w-0 rounded-md bg-slate-50 p-1.5 dark:bg-slate-800">
-                    <span class="block font-bold uppercase text-slate-400">{{ t('app.trust') }}</span>
+                    <span class="block font-bold uppercase text-slate-500">{{ t('app.trust') }}</span>
                     <select
                       :data-testid="`environment-trust-${variable.name}`"
                       :value="variable.trust"
                       :aria-label="`${variable.displayName} ${t('app.trust')}`"
                       :disabled="props.readOnly || props.environmentSaving || !variable.editable"
                       :aria-busy="props.environmentSaving ? 'true' : undefined"
-                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-[color:var(--accent-border)] disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       @change="updateEnvironmentVariable(variable.name, { trust: eventValue($event) })"
                     >
                       <option value="trusted">{{ t('app.trusted') }}</option>
@@ -1056,14 +1128,14 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     </select>
                   </label>
                   <label class="min-w-0 rounded-md bg-slate-50 p-1.5 dark:bg-slate-800">
-                    <span class="block font-bold uppercase text-slate-400">{{ t('app.privacy') }}</span>
+                    <span class="block font-bold uppercase text-slate-500">{{ t('app.privacy') }}</span>
                     <select
                       :data-testid="`environment-privacy-${variable.name}`"
                       :value="variable.privacy"
                       :aria-label="`${variable.displayName} ${t('app.privacy')}`"
                       :disabled="props.readOnly || props.environmentSaving || !variable.editable"
                       :aria-busy="props.environmentSaving ? 'true' : undefined"
-                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 outline-none focus:border-[color:var(--accent-border)] disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       @change="updateEnvironmentVariable(variable.name, { privacy: eventValue($event) })"
                     >
                       <option value="public">{{ t('app.public') }}</option>
@@ -1079,7 +1151,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                   v-for="source in variable.sources"
                   :key="`${source.deviceId}:${source.role}`"
                   type="button"
-                  class="max-w-full truncate rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700 transition-colors hover:border-amber-400 hover:bg-amber-100 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100"
+                  class="board-chip-info max-w-full truncate rounded-full px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold transition-colors"
                   :title="getEnvironmentSourceTitle(source)"
                   @click="handleDeviceClick(source.deviceId)"
                 >
@@ -1090,7 +1162,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           </article>
         </div>
 
-        <div v-else-if="environmentPoolExpanded" class="rounded-lg border border-dashed border-amber-200 bg-white/60 px-3 py-4 text-center text-xs font-medium text-amber-700/70 dark:border-amber-400/20 dark:bg-slate-900/40 dark:text-amber-100/70">
+        <div v-else-if="environmentPoolExpanded" class="rounded-lg border border-dashed board-border-subtle board-chip-info px-3 py-4 text-center text-xs font-medium">
           {{ t('app.noEnvironmentVariables') }}
         </div>
       </section>
@@ -1107,7 +1179,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           <button
             type="button"
             data-testid="inspector-section-toggle-devices"
-            class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+            class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
             :aria-expanded="sectionExpanded.devices"
             @click="toggleEntitySection('devices')"
           >
@@ -1118,16 +1190,19 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <h3 class="min-w-0 truncate text-xs font-bold uppercase tracking-widest text-slate-500" :data-full-text="t('app.devicesTool')">
               {{ t('app.devicesTool') }}
             </h3>
-            <span class="ml-auto shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+            <span class="ml-auto shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold text-slate-500">
               {{ sectionCounts.devices.filtered }}/{{ sectionCounts.devices.total }}
             </span>
           </button>
+          <!-- A 44px target. Measured at **26×36px**, the smallest control in this panel and the primary way to
+               add a device to the board — `p-1.5` around a `text-sm` glyph gives whatever size the glyph happens
+               to be, which is not a target size. -->
           <button
             type="button"
             data-testid="inspector-add-device"
             @click="handleAddDevice"
             :disabled="props.readOnly"
-            class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
+            class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-all hover:board-text-info hover:board-chip-info"
             :title="mutationTitle(t('app.openDeviceCreator'))"
             :aria-label="t('app.openDeviceCreator')"
           >
@@ -1142,14 +1217,14 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               v-model="sectionSearch.devices"
               data-testid="inspector-search-devices"
               type="search"
-              class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              class="w-full min-h-11 rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
               :placeholder="t('app.searchDevice')"
               :aria-label="t('app.searchDevice')"
             />
             <button
               v-if="sectionSearch.devices"
               type="button"
-              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
               :title="t('app.clearSearch')"
               :aria-label="t('app.clearSearch')"
               @click="clearSectionSearch('devices')"
@@ -1162,38 +1237,65 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             v-for="device in filteredDevices"
             :key="device.id"
             :data-device-id="device.id"
-            class="group relative p-4 rounded-xl bg-white border border-slate-200/60 hover:border-blue-300/50 shadow-sm hover:shadow-md transition-all"
-            :class="device.id === props.focusedDeviceId ? 'ring-2 ring-blue-400 border-blue-300 bg-blue-50/70 shadow-md' : ''"
+            class="group relative p-4 rounded-xl bg-white border border-slate-200/60 hover:border-[color:var(--accent)]/50 shadow-sm hover:shadow-md transition-all"
+            :class="device.id === props.focusedDeviceId ? 'ring-2 ring-[color:var(--accent-border)] board-border-subtle board-chip-info shadow-md' : ''"
           >
             <!-- Hover gradient background -->
-            <div class="pointer-events-none absolute inset-0 bg-gradient-to-r from-blue-50/0 to-indigo-50/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+            <div class="pointer-events-none absolute inset-0 bg-[color:var(--accent-surface)] opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
             <div class="relative flex min-w-0 items-center justify-between gap-2">
+              <!--
+                The name gets its own line; the qualifiers get the next one.
+
+                Three items competed for one 320px row before this — name, template chip, state chip —
+                and the name lost every time. It carried `flex-1`, i.e. `flex-basis: 0`, so it entered
+                the squeeze at zero width and grew only from whatever the chips left over, while each
+                chip sized from its own content first. Measured at 1440px: "Air Conditioner" was given
+                **23px of the 102px it needs (77% lost)**, rendering as "A…", with "Window" at 23/55px.
+                An earlier pass tried to fix this by re-ranking the flex factors, but no ranking wins
+                when the row cannot hold all three: at 320px the chips' own ceilings (4.5rem + 4rem)
+                plus the icon and delete button already consume the width.
+
+                Reviews across six passes, both themes, both locales, desktop and mobile, all reported
+                the same thing — unidentifiable device names. `title` and `data-full-text` were present
+                throughout, which is why it kept being recorded as "recoverable" and left alone. A
+                tooltip is not identification: it answers one device at a time, on hover, and never
+                helps a keyboard or touch user scanning a list for the one they want.
+              -->
               <button
                 type="button"
-                class="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-md py-1 text-left focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
+                class="flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-md py-1 text-left focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--accent)]"
                 :title="device.name"
                 :aria-label="device.name"
                 @click="handleDeviceClick(device.id)"
               >
-                <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-cyan-100 bg-cyan-50 text-cyan-700">
-                  <span class="material-symbols-outlined text-base" aria-hidden="true">devices_other</span>
-                </div>
-                <span class="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:text-blue-600 transition-colors" :data-full-text="device.name">
-                  {{ device.name }}
+                <span class="flex min-w-0 max-w-full items-center gap-2">
+                  <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border board-border-subtle board-chip-info board-text-info">
+                    <span class="material-symbols-outlined text-base" aria-hidden="true">devices_other</span>
+                  </span>
+                  <span class="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:board-text-info transition-colors" :data-full-text="device.name">
+                    {{ device.name }}
+                  </span>
                 </span>
-                <span v-if="device.type" class="max-w-[7rem] shrink-0 truncate px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200" :data-full-text="device.type">
-                  {{ device.type }}
-                </span>
-                <span v-if="device.state" class="max-w-[6rem] shrink-0 truncate px-2 py-0.5 rounded text-[10px] font-medium bg-cyan-50 text-cyan-700 border border-cyan-100" :data-full-text="device.state">
-                  {{ device.state }}
+                <!--
+                  Secondary line, indented to the name's text edge. The chips keep `data-full-text` for
+                  the inspector's on-demand tooltip, but now they truncate against the full panel width
+                  instead of against whatever the name did not take.
+                -->
+                <span v-if="device.type || device.state" class="flex min-w-0 max-w-full items-center gap-1 pl-9">
+                  <span v-if="device.type" class="min-w-0 shrink truncate px-2 py-0.5 rounded-full text-[length:var(--iot-font-min)] font-medium bg-slate-100 text-slate-500 border border-slate-200" :data-full-text="device.type">
+                    {{ device.type }}
+                  </span>
+                  <span v-if="device.state" class="min-w-0 shrink truncate px-2 py-0.5 rounded text-[length:var(--iot-font-min)] font-medium board-chip-info board-text-info border board-border-subtle" :data-full-text="device.state">
+                    {{ device.state }}
+                  </span>
                 </span>
               </button>
               <button
                 type="button"
                 @click.stop="handleDeleteDevice(device.id)"
                 :disabled="props.readOnly"
-                class="relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+                class="relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 opacity-0 transition-all hover:board-chip-danger hover:board-text-danger focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
                 :title="mutationTitle(t('app.removeDevice'))"
                 :aria-label="t('app.removeDevice')"
               >
@@ -1202,20 +1304,23 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             </div>
           </div>
 
-          <div v-if="displayDevices.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          <div v-if="displayDevices.length === 0" class="text-center py-6 text-slate-500 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">devices</span>
-            <p class="text-xs mb-3">{{ t('app.noDevicesOnCanvas') }}</p>
+            <!-- "No devices" is a claim about the board. During a failed load the panel does not know
+                 whether the board is empty, so it says what it actually knows instead. -->
+            <p v-if="props.dataUnavailable" class="text-xs mb-3">{{ t('app.boardDataUnavailableShort') }}</p>
+            <p v-else class="text-xs mb-3">{{ t('app.noDevicesOnCanvas') }}</p>
             <button
               type="button"
               @click="handleAddDevice"
               :disabled="props.readOnly"
-              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-[color:var(--accent-fill)] px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-[color:var(--accent-fill-hover)]"
             >
               <span class="material-symbols-outlined text-sm">add</span>
               {{ t('app.openDeviceCreator') }}
             </button>
           </div>
-          <div v-else-if="filteredDevices.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          <div v-else-if="filteredDevices.length === 0" class="text-center py-6 text-slate-500 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">search_off</span>
             <p class="text-xs font-semibold">{{ t('app.noMatchingDevices') }}</p>
             <p class="mt-1 text-[11px]">{{ t('app.tryDifferentSearchTerm') }}</p>
@@ -1235,7 +1340,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           <button
             type="button"
             data-testid="inspector-section-toggle-rules"
-            class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+            class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
             :aria-expanded="sectionExpanded.rules"
             @click="toggleEntitySection('rules')"
           >
@@ -1246,7 +1351,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <h3 class="min-w-0 truncate text-xs font-bold uppercase tracking-widest text-slate-500" :data-full-text="t('app.rulesTool')">
               {{ t('app.rulesTool') }}
             </h3>
-            <span class="ml-auto shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+            <span class="ml-auto shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold text-slate-500">
               {{ sectionCounts.rules.filtered }}/{{ sectionCounts.rules.total }}
             </span>
           </button>
@@ -1255,7 +1360,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             data-testid="inspector-add-rule"
             @click="handleAddRule"
             :disabled="props.readOnly"
-            class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
+            class="text-slate-500 hover:board-text-info hover:board-chip-info p-1.5 rounded-lg transition-all"
             :title="mutationTitle(t('app.createRule'))"
             :aria-label="t('app.createRule')"
           >
@@ -1270,14 +1375,14 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               v-model="sectionSearch.rules"
               data-testid="inspector-search-rules"
               type="search"
-              class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              class="w-full min-h-11 rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
               :placeholder="t('app.searchRules')"
               :aria-label="t('app.searchRules')"
             />
             <button
               v-if="sectionSearch.rules"
               type="button"
-              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
               :title="t('app.clearSearch')"
               :aria-label="t('app.clearSearch')"
               @click="clearSectionSearch('rules')"
@@ -1289,7 +1394,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           <div
             v-if="displayRules.length > 1"
             data-testid="rule-execution-order-hint"
-            class="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-medium leading-4 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+            class="flex items-start gap-2 rounded-lg board-surface-warning px-2.5 py-2 text-[11px] font-medium leading-4 board-text-warning"
           >
             <span class="material-symbols-outlined mt-0.5 text-sm" aria-hidden="true">low_priority</span>
             <span>{{ t('app.ruleExecutionOrderHint') }}</span>
@@ -1300,22 +1405,22 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             :key="rule.id"
             :data-rule-id="rule.originalId"
             tabindex="-1"
-            class="p-3 rounded-lg border relative transition-all hover:shadow-md group bg-blue-50 border-blue-200 hover:border-blue-400"
-            :class="rule.originalId && rule.originalId === props.focusedRuleId ? 'ring-2 ring-blue-400 border-blue-400 shadow-md' : ''"
+            class="p-3 rounded-lg border relative transition-all hover:shadow-md group board-chip-info board-border-subtle hover:border-[color:var(--accent-border)]"
+            :class="rule.originalId && rule.originalId === props.focusedRuleId ? 'ring-2 ring-[color:var(--accent-border)] border-[color:var(--accent-border)] shadow-md' : ''"
           >
             <!-- 蓝色背景装饰 -->
-            <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500 rounded-l-lg"></div>
+            <div class="absolute left-0 top-0 bottom-0 w-1 bg-[color:var(--accent)] rounded-l-lg"></div>
             
             <div class="flex items-start justify-between mb-2">
               <div class="flex min-w-0 items-center gap-2">
-                <span class="material-symbols-outlined text-sm text-blue-600">
+                <span class="material-symbols-outlined text-sm board-text-info">
                   auto_awesome
                 </span>
-                <h4 class="min-w-0 truncate text-sm font-bold text-blue-800" :data-full-text="rule.name">
+                <h4 class="min-w-0 truncate text-sm font-bold board-text-info" :data-full-text="rule.name">
                   {{ rule.name }}
                 </h4>
                 <span
-                  class="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700"
+                  class="shrink-0 rounded board-chip-info px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-info"
                   :title="t('app.ruleExecutionOrder')"
                 >
                   #{{ rule.executionOrder }}
@@ -1326,7 +1431,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 <button
                   type="button"
                   :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isFirst"
-                  class="rounded p-1 text-blue-500 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-30"
+                  class="rounded p-1 board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-30"
                   :title="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleEarlier'))"
                   :aria-label="t('app.moveRuleEarlier')"
                   @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'up')"
@@ -1336,7 +1441,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 <button
                   type="button"
                   :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isLast"
-                  class="rounded p-1 text-blue-500 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-30"
+                  class="rounded p-1 board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-30"
                   :title="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleLater'))"
                   :aria-label="t('app.moveRuleLater')"
                   @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'down')"
@@ -1347,7 +1452,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                   type="button"
                   @click.stop="rule.originalId && handleDeleteRule(rule.originalId)"
                   :disabled="props.readOnly"
-                  class="rounded p-1 text-blue-400 transition hover:bg-red-50 hover:text-red-500"
+                  class="rounded p-1 board-text-muted transition hover:board-chip-danger hover:board-text-danger"
                   :title="mutationTitle(t('app.deleteRule'))"
                   :aria-label="t('app.deleteRule')"
                 >
@@ -1356,26 +1461,26 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               </div>
             </div>
 
-            <p class="ml-6 line-clamp-2 break-words text-[11px] font-medium leading-tight text-blue-600" :data-full-text="rule.description">
+            <p class="ml-6 line-clamp-2 break-words text-[11px] font-medium leading-tight board-text-info" :data-full-text="rule.description">
               {{ rule.description }}
             </p>
           </div>
 
           <!-- Empty state when no rules -->
-          <div v-if="displayRules.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          <div v-if="displayRules.length === 0" class="text-center py-6 text-slate-500 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">rule</span>
             <p class="text-xs mb-3">{{ t('app.noRulesActive') }}</p>
             <button
               type="button"
               @click="handleAddRule"
               :disabled="props.readOnly"
-              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-[color:var(--accent-fill)] px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-[color:var(--accent-fill-hover)]"
             >
               <span class="material-symbols-outlined text-sm">add</span>
               {{ t('app.createRule') }}
             </button>
           </div>
-          <div v-else-if="filteredRules.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          <div v-else-if="filteredRules.length === 0" class="text-center py-6 text-slate-500 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">search_off</span>
             <p class="text-xs font-semibold">{{ t('app.noMatchingRules') }}</p>
             <p class="mt-1 text-[11px]">{{ t('app.tryDifferentSearchTerm') }}</p>
@@ -1395,7 +1500,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           <button
             type="button"
             data-testid="inspector-section-toggle-specs"
-            class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+            class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
             :aria-expanded="sectionExpanded.specs"
             @click="toggleEntitySection('specs')"
           >
@@ -1406,7 +1511,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <h3 class="min-w-0 truncate text-xs font-bold uppercase tracking-widest text-slate-500" :data-full-text="t('app.specificationsTool')">
               {{ t('app.specificationsTool') }}
             </h3>
-            <span class="ml-auto shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+            <span class="ml-auto shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold text-slate-500">
               {{ sectionCounts.specs.filtered }}/{{ sectionCounts.specs.total }}
             </span>
           </button>
@@ -1415,7 +1520,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             data-testid="inspector-add-spec"
             @click="handleAddSpec"
             :disabled="props.readOnly"
-            class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
+            class="text-slate-500 hover:board-text-info hover:board-chip-info p-1.5 rounded-lg transition-all"
             :title="mutationTitle(t('app.openSpecificationCreator'))"
             :aria-label="t('app.openSpecificationCreator')"
           >
@@ -1430,14 +1535,14 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               v-model="sectionSearch.specs"
               data-testid="inspector-search-specs"
               type="search"
-              class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              class="w-full min-h-11 rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
               :placeholder="t('app.searchSpecifications')"
               :aria-label="t('app.searchSpecifications')"
             />
             <button
               v-if="sectionSearch.specs"
               type="button"
-              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
               :title="t('app.clearSearch')"
               :aria-label="t('app.clearSearch')"
               @click="clearSectionSearch('specs')"
@@ -1451,15 +1556,15 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             :key="spec.id"
             :data-spec-id="spec.id"
             tabindex="-1"
-            class="p-3 rounded-lg border border-cyan-100 relative transition-all hover:shadow-md bg-white group"
-            :class="spec.id === props.focusedSpecId ? 'ring-2 ring-cyan-300 border-cyan-300 shadow-md' : ''"
+            class="p-3 rounded-lg border board-border-subtle relative transition-all hover:shadow-md bg-white group"
+            :class="spec.id === props.focusedSpecId ? 'ring-2 ring-[color:var(--accent-border)] board-border-subtle shadow-md' : ''"
           >
             <!-- Subtle background pulse -->
-            <div class="absolute inset-0 bg-cyan-50/30 pointer-events-none"></div>
+            <div class="absolute inset-0 board-chip-info/30 pointer-events-none"></div>
 
             <div class="relative flex items-start justify-between mb-2">
               <div class="flex min-w-0 items-center gap-2">
-                <span class="material-symbols-outlined text-sm text-cyan-600">policy</span>
+                <span class="material-symbols-outlined text-sm board-text-info">policy</span>
                 <h4 class="min-w-0 truncate text-sm font-bold text-slate-800" :data-full-text="spec.name">
                   {{ spec.name }}
                 </h4>
@@ -1468,7 +1573,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 type="button"
                 @click="handleDeleteSpec(spec.id)"
                 :disabled="props.readOnly"
-                class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-all"
+                class="text-slate-500 hover:board-text-danger p-1 rounded hover:board-chip-danger opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-all"
                 :title="mutationTitle(t('app.deleteSpecification'))"
                 :aria-label="t('app.deleteSpecification')"
               >
@@ -1476,29 +1581,33 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               </button>
             </div>
 
-            <div class="ml-7 mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+            <div class="ml-7 mb-1 text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">
               {{ t('app.formulaPreview') }}
             </div>
-            <p class="ml-7 block max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded border border-slate-100 bg-slate-50 p-1.5 font-mono text-[11px] leading-tight text-slate-600" :data-full-text="spec.formula">
+            <!-- No scroll region: this wraps. `whitespace-pre-wrap break-all` and horizontal scrolling
+                 are mutually exclusive, so the `overflow-x-auto` that used to be here never did
+                 anything — and converting it to the horizontal primitive would have added
+                 `overflow-y: hidden`, clipping any formula longer than one line. -->
+            <p class="ml-7 block max-w-full whitespace-pre-wrap break-all rounded border border-slate-100 bg-slate-50 p-1.5 font-mono text-[11px] leading-tight text-slate-600" :data-full-text="spec.formula">
               {{ spec.formula }}
             </p>
           </div>
 
           <!-- Empty state when no specifications -->
-          <div v-if="displaySpecs.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          <div v-if="displaySpecs.length === 0" class="text-center py-6 text-slate-500 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">fact_check</span>
             <p class="text-xs mb-3">{{ t('app.noSpecificationsVerified') }}</p>
             <button
               type="button"
               @click="handleAddSpec"
               :disabled="props.readOnly"
-              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-[color:var(--accent-fill)] px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-[color:var(--accent-fill-hover)]"
             >
               <span class="material-symbols-outlined text-sm">add</span>
               {{ t('app.openSpecificationCreator') }}
             </button>
           </div>
-          <div v-else-if="filteredSpecs.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          <div v-else-if="filteredSpecs.length === 0" class="text-center py-6 text-slate-500 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">search_off</span>
             <p class="text-xs font-semibold">{{ t('app.noMatchingSpecifications') }}</p>
             <p class="mt-1 text-[11px]">{{ t('app.tryDifferentSearchTerm') }}</p>
@@ -1518,35 +1627,20 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
   border: 1px solid var(--board-border, rgba(226, 232, 240, 0.8));
 }
 
-/* Custom scrollbar */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.02);
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 10px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
-}
-
 /* Utility classes */
 .text-primary {
-  color: #2563EB;
+  color: var(--accent);
 }
 
 .bg-online {
-  background-color: #059669;
+  /* `var(--success)`, matching `.bg-offline` directly below which already uses `var(--danger)`. A raw `#059669`
+     beside a tokenised sibling is the clearest possible sign of a missed migration: the same concept, one line
+     apart, expressed two different ways. */
+  background-color: var(--success);
 }
 
 .bg-offline {
-  background-color: #dc2626;
+  background-color: var(--danger);
 }
 
 [data-full-text] {

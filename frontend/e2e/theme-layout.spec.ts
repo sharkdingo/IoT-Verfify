@@ -265,7 +265,11 @@ test.describe('public theme and layout', () => {
     const panel = page.locator('[data-testid="simulation-panel"]')
     await expectDarkSurface(panel)
     await expectDarkSurface(panel.locator(':scope > .p-3'))
-    await expectDarkSurface(panel.locator(':scope > .p-3 > .bg-white').first())
+    // Was `:scope > .p-3 > .bg-white` — a hardcoded light-theme utility used as the handle for "the card
+    // inside the panel body". That class is exactly what the role-token migration removed, so the assertion
+    // depended on the defect it was checking for. `board-card` is the role class that owns a card surface in
+    // either theme, which is the thing this test is actually about.
+    await expectDarkSurface(panel.locator(':scope > .p-3 .board-card').first())
 
     await page.locator('[data-testid="close-simulation-panel"]').click()
     await page.locator('[data-testid="open-history-panel"]').click()

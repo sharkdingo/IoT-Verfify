@@ -109,7 +109,7 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
 }
 
 .copy-btn:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -137,19 +137,19 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
 :global(:root[data-theme='dark'] .code-block-container .code-header) {
   background: #161b22;
   border-bottom-color: #333;
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 :global(:root[data-theme='dark'] .code-block-container .lang-label) {
-  color: #c9d1d9;
+  color: var(--text);
 }
 
 :global(:root[data-theme='dark'] .code-block-container .copy-btn) {
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 :global(:root[data-theme='dark'] .code-block-container .copy-btn:hover) {
-  color: #c9d1d9;
+  color: var(--text);
 }
 
 /* 强制让 Shiki 的 pre 背景透明，以便显示我们容器的背景 */

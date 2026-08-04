@@ -198,27 +198,38 @@ them as background subagents with a read-only, single-purpose brief ("run X, rep
 root cause, modify nothing"), keep reviewing source in the foreground, and relay results when they
 land. Never predict or assume a pending agent's outcome.
 
-```bash
-# backend
-cd backend && mvn compile        # or: mvn test  (delegate: several minutes)
-# frontend
-cd frontend && npm run build     # vue-tsc type-check + build
-cd frontend && npm run test:unit # Vitest
-cd frontend && npm run test:e2e  # delegate; needs MySQL + the backend on :8080
-```
+The commands themselves live with the stack that owns them — [backend/CLAUDE.md](backend/CLAUDE.md) and
+[frontend/CLAUDE.md](frontend/CLAUDE.md) — where their prerequisites and traps are documented alongside
+them. Restating them here created a second place to keep in sync for no benefit.
 
 Report results honestly: if a step failed, say so with the output; if you skipped one, say that.
 
 **Two E2E environment facts, both learned from real false results:**
 
-- E2E serves a production build (`vite preview`), not the dev server — on-demand transforms made
-  parallel browsers exceed the board's load timeout and failed unrelated tests. A failure that only
-  appears under `--workers=2` is usually this class of cause, so diagnose it rather than forcing
-  `--workers=1`.
-- `reuseExistingServer` is off. Otherwise a dev server left on :3000 is adopted silently, the build
-  is skipped, and the suite reports green **against stale code**. A `PreToolUse` hook
-  (`.claude/hooks/guard-e2e-port.sh`) blocks an E2E command while the port is held, so this is
-  enforced rather than remembered. Free port 3000, or set `E2E_BASE_URL` to a server you manage.
+- **A reused server tests stale code and reports green.** E2E deliberately refuses to adopt an existing
+  server, and a `PreToolUse` hook (`.claude/hooks/guard-e2e-port.sh`) enforces that rather than trusting
+  anyone to remember it. The port, the proxy and the escape hatch are frontend mechanics:
+  [frontend/CLAUDE.md](frontend/CLAUDE.md).
+- **A stale JVM is the backend's version of that stale dev server, and nothing guards it.** A
+  `spring-boot:run` process started before your last edit serves the old classes, so a fix looks
+  ineffective and an already-fixed defect looks live. This cost five wrong hypotheses in one session.
+  Start the dev backend with its output redirected (`> backend/run.log 2>&1`, already gitignored) so
+  the next unexplained failure begins with a stack trace.
+  **Compare the process start time against the modified `.java` sources, not against
+  `target/classes`.** A full `mvn compile` rewrites *every* class file, so class timestamps are all
+  identical and always newer than the JVM — comparing against them reports a stale JVM whenever
+  anything was compiled, which is a false alarm every time. It produced one here: the classes read
+  28 minutes newer than the process, while the only source edited after startup was a set of
+  `static final` constants whose values matched the literals they replaced, and a live probe
+  confirmed current behaviour. `git status` names the changed sources; their mtimes are the ones that
+  matter.
+
+**`git checkout -- <file>` and `git restore <file>` are destructive here.** They discard every uncommitted
+change in that file, and in a working session that is all of it. This is not theoretical: undoing a
+two-character test mutation that way erased a raw-hue migration, a scroll-region migration, a type-floor pass
+and a session of colour-role work from one component, and `git fsck` could not help because nothing had been
+staged. To undo a temporary edit, copy the file first and restore from the copy. The danger is that this
+command reads as "revert my last thing" while meaning "revert everything since the last commit".
 
 Do not commit or push unless explicitly asked. Direct pushes to `main` are allowed when the user
 explicitly requests them, but only after reviewing the complete change set, running the
@@ -267,9 +278,6 @@ Layout: there are no `backend/AGENTS.md` or `frontend/AGENTS.md` files. This roo
 mirrors the cross-cutting rules of `CLAUDE.md` — keep the two bodies identical, differing only in
 the header/footer. Stack-specific guidance lives in `backend/CLAUDE.md` and `frontend/CLAUDE.md`.
 
-### Change log
-
-- **2026-07-27** — Merged "Maintainability and Change Discipline" into "No AI slop" (they had
-  drifted into near-duplicates); added the autonomy tiers and the traceability check; reframed
-  verification around reading source first, with the three ways a green suite misleads; added the
-  rule to delegate long runs to background subagents.
+Each rule above carries its own rationale inline, which is where the "why" belongs — a separate change log
+of this file duplicated those reasons and `git log -p CLAUDE.md` already holds the history. Product and
+behaviour changes go in [CHANGELOG.md](CHANGELOG.md); that is its job, not this file's.

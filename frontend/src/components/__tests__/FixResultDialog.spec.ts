@@ -393,12 +393,15 @@ describe('FixResultDialog strategy workflow', () => {
     expect(boardApi.getFaultRules).toHaveBeenCalledWith(7)
     expect(boardApi.fixTrace).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toContain('flex-shrink-0')
-    expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toEqual(expect.arrayContaining([
-      'dark:border-blue-800',
-      'dark:bg-blue-950/50'
-    ]))
+    // On open there is no attempt and no verified suggestion, so the header states "nothing has been
+    // tried yet" — informational, not a warning or a failure. Asserted as the role rather than as a
+    // blue ramp with its `dark:` counterpart, which pinned the implementation and broke when the
+    // theme-aware token replaced it.
+    expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toContain('board-chip-info')
     expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('min-h-0')
-    expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('fix-result-scroll')
+    // The shared scroll primitive owns overflow and the scrollbar skin; a private per-dialog
+    // scrollbar is what let three components disagree on the same class name.
+    expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('iot-scroll-region')
     expect(wrapper.get('[role="dialog"]').classes()).toEqual(expect.arrayContaining([
       'dark:border-slate-700',
       'dark:bg-slate-900'
@@ -1103,7 +1106,6 @@ describe('FixResultDialog strategy workflow', () => {
     boardApi.applyFix.mockResolvedValueOnce({
       applied: true,
       strategy,
-      verificationRechecked: false,
       verificationEvidenceReused: true,
       appliedSuggestion: result.suggestions[0],
       previousRuleCount: 3,
@@ -1265,8 +1267,7 @@ describe('FixResultDialog strategy workflow', () => {
     boardApi.applyFix.mockResolvedValueOnce({
       applied: true,
       strategy: 'condition',
-      verificationRechecked: true,
-      verificationEvidenceReused: false,
+      verificationEvidenceReused: true,
       appliedSuggestion: conditionResult().suggestions[0],
       previousRuleCount: 1,
       currentRuleCount: 1,
@@ -1300,7 +1301,7 @@ describe('FixResultDialog strategy workflow', () => {
       conditionResult().suggestions[0],
       undefined
     )
-    expect(elementPlus.success).toHaveBeenCalledWith('fixAppliedWithRecheck')
+    expect(elementPlus.success).toHaveBeenCalledWith('fixAppliedWithSignedEvidence')
     expect(wrapper.emitted('applied')?.[0]?.[0]).toMatchObject({
       strategy: 'condition',
       currentRuleCount: 1
@@ -1312,7 +1313,6 @@ describe('FixResultDialog strategy workflow', () => {
     boardApi.applyFix.mockResolvedValueOnce({
       applied: true,
       strategy: 'parameter',
-      verificationRechecked: false,
       verificationEvidenceReused: true,
       appliedSuggestion: parameterResult().suggestions[0],
       previousRuleCount: 1,
@@ -1352,7 +1352,6 @@ describe('FixResultDialog strategy workflow', () => {
     boardApi.applyFix.mockResolvedValueOnce({
       applied: true,
       strategy: 'remove',
-      verificationRechecked: false,
       verificationEvidenceReused: true,
       appliedSuggestion: removeResult().suggestions[0],
       previousRuleCount: 1,
@@ -1461,7 +1460,27 @@ describe('FixResultDialog strategy workflow', () => {
     await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
     await flush()
 
-    expect(wrapper.get('[data-testid="fix-apply-current"]').attributes('disabled')).toBeDefined()
+    const apply = wrapper.get('[data-testid="fix-apply-current"]')
+    expect(apply.attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('fixTemplateSnapshotChangedLimitation')
+    // A disabled submit must say why inline, and the button must point at that explanation rather
+    // than leaving a screen-reader user with a dead control and no stated reason.
+    const describedBy = apply.attributes('aria-describedby')
+    expect(describedBy).toBe('fix-apply-readiness')
+    expect(wrapper.get(`#${describedBy}`).text()).toContain('fixTemplateSnapshotChangedLimitation')
+  })
+
+  it('does not attach a blocked explanation while apply is available', async () => {
+    boardApi.fixTrace.mockResolvedValueOnce(parameterResult())
+    const wrapper = mountDialog()
+    await flush()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await flush()
+
+    const apply = wrapper.get('[data-testid="fix-apply-current"]')
+    expect(apply.attributes('disabled')).toBeUndefined()
+    // No standing precondition, so nothing to describe — an empty region would be noise.
+    expect(apply.attributes('aria-describedby')).toBeUndefined()
+    expect(wrapper.find('[data-testid="fix-apply-readiness"]').exists()).toBe(false)
   })
 })

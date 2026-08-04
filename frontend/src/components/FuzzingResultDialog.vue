@@ -38,8 +38,8 @@ const outcome = computed(() => {
       icon: 'warning',
       label: t('app.fuzzViolationFound'),
       detail: t('app.fuzzViolationFoundDetail'),
-      className: 'border-red-200 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/50 dark:text-red-100',
-      iconClass: 'bg-red-100 text-red-700 dark:bg-red-900/70 dark:text-red-200'
+      className: 'board-surface-danger',
+      iconClass: 'board-surface-danger board-text-danger'
     }
   }
   if (props.run?.outcome === 'BUDGET_EXHAUSTED') {
@@ -47,16 +47,16 @@ const outcome = computed(() => {
       icon: 'search_off',
       label: t('app.fuzzBudgetExhausted'),
       detail: t('app.fuzzNoViolationWithinBudget'),
-      className: 'border-sky-200 bg-sky-50 text-sky-950 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-100',
-      iconClass: 'bg-sky-100 text-sky-700 dark:bg-sky-900/70 dark:text-sky-200'
+      className: 'board-surface-info',
+      iconClass: 'board-surface-info board-text-info'
     }
   }
   return {
     icon: 'help',
     label: t('app.fuzzInconclusive'),
     detail: t('app.fuzzInconclusiveDetail'),
-    className: 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100',
-    iconClass: 'bg-amber-100 text-amber-700 dark:bg-amber-900/70 dark:text-amber-200'
+    className: 'board-surface-warning',
+    iconClass: 'board-surface-warning board-text-warning'
   }
 })
 
@@ -150,7 +150,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
     >
       <header class="flex items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-700 dark:bg-slate-950">
         <div class="flex min-w-0 items-center gap-3">
-          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-200">
+          <div class="board-section-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">
             <span class="material-symbols-outlined" aria-hidden="true">radar</span>
           </div>
           <div class="min-w-0">
@@ -170,13 +170,16 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
         </button>
       </header>
 
-      <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+      <div
+        data-testid="fuzzing-result-scroll"
+        class="iot-scroll-region iot-scroll-region--inset-end min-h-0 flex-1 space-y-4 p-5"
+      >
         <div v-if="loading" class="flex flex-col items-center justify-center py-16 text-slate-500 dark:text-slate-300">
-          <span class="material-symbols-outlined animate-spin text-4xl text-indigo-600 dark:text-indigo-300" aria-hidden="true">sync</span>
+          <span class="material-symbols-outlined animate-spin text-4xl board-text-progress dark:board-text-progress" aria-hidden="true">sync</span>
           <p class="mt-3 text-sm">{{ t('app.loadingFuzzRun') }}</p>
         </div>
 
-        <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-100" role="alert">
+        <div v-else-if="error" class="board-surface-danger rounded-lg p-4 text-sm leading-6" role="alert">
           {{ error }}
         </div>
 
@@ -191,16 +194,22 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             </div>
           </div>
 
+          <!-- Only PAPER_COMPATIBLE gets a semantic tint: it is the paper-faithful mode whose
+               guarantees are narrower, which is a caveat worth colouring. BOARD_SNAPSHOT is the
+               recommended default, so it is ordinary run metadata and takes the neutral panel
+               treatment — tinting it made two reviews read the recommended mode as a second warning
+               competing with the budget-exhausted notice above it. A role is a meaning, not a
+               decoration for whatever section needs a box. -->
           <section
             data-testid="fuzzing-result-mode"
             class="rounded-lg border px-3 py-2.5"
             :class="run.explorationMode === 'PAPER_COMPATIBLE'
-              ? 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100'
-              : 'border-indigo-100 bg-indigo-50 text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100'"
+              ? 'board-surface-warning'
+              : 'board-surface-panel board-border-subtle'"
             :aria-label="t('app.fuzzExplorationMode')"
           >
             <div class="flex flex-wrap items-center gap-2">
-              <span class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-300">{{ t('app.fuzzExplorationMode') }}</span>
+              <span class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-300">{{ t('app.fuzzExplorationMode') }}</span>
               <span class="max-w-full rounded-full bg-white px-2 py-0.5 text-[11px] font-bold shadow-sm dark:bg-slate-800">
                 {{ explorationModeLabel }}
               </span>
@@ -212,19 +221,19 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             <h4 id="fuzz-run-summary-title" class="text-sm font-bold text-slate-800 dark:text-slate-100">{{ t('app.runSummary') }}</h4>
             <div class="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-4 dark:border-slate-700 dark:bg-slate-700">
               <div class="bg-white p-3 dark:bg-slate-800">
-                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzIterations') }}</div>
+                <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzIterations') }}</div>
                 <div class="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{{ run.iterations }}</div>
               </div>
               <div class="bg-white p-3 dark:bg-slate-800">
-                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzGeneratedPaths') }}</div>
+                <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzGeneratedPaths') }}</div>
                 <div class="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{{ run.generatedPaths }}</div>
               </div>
               <div class="bg-white p-3 dark:bg-slate-800">
-                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzElapsed') }}</div>
+                <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzElapsed') }}</div>
                 <div class="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">{{ elapsedLabel }}</div>
               </div>
               <div class="bg-white p-3 dark:bg-slate-800">
-                <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzEffectiveSeed') }}</div>
+                <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-400">{{ t('app.fuzzEffectiveSeed') }}</div>
                 <div class="mt-1 truncate font-mono text-sm font-bold text-slate-900 dark:text-slate-100" :title="String(run.effectiveSeed)">{{ run.effectiveSeed }}</div>
               </div>
             </div>
@@ -239,7 +248,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
               <button
                 type="button"
                 data-testid="reuse-fuzzing-settings"
-                class="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-50 dark:border-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-200 dark:hover:bg-indigo-900/70"
+                class="board-action-inline-subtle shrink-0 text-[11px]"
                 :disabled="actionLocked"
                 @click="emit('reuseSettings')"
               >
@@ -284,7 +293,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             </p>
             <p
               v-if="boardDrifted"
-              class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
+              class="board-surface-warning mt-2 rounded-md px-2 py-1.5 text-[11px] font-semibold leading-4"
               data-testid="fuzzing-board-drift-warning"
             >
               {{ t('app.fuzzBoardScopeChanged') }}
@@ -294,7 +303,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 
           <div
             v-if="run.eligibility.ineligibleSpecs.length > 0"
-            class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
+            class="board-surface-warning rounded-lg px-3 py-2 text-xs leading-5"
           >
             <div class="font-bold">{{ t('app.fuzzIneligibleSpecifications', { count: run.eligibility.ineligibleSpecs.length }) }}</div>
             <ul class="mt-1 list-disc space-y-1 pl-4">
@@ -323,14 +332,14 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
               <li v-for="target in targetResults" :key="target.specId" class="flex items-start gap-2 bg-white px-3 py-2.5 dark:bg-slate-800">
                 <span
                   class="material-symbols-outlined mt-0.5 text-base"
-                  :class="target.finding ? 'text-red-600 dark:text-red-300' : 'text-sky-600 dark:text-sky-300'"
+                  :class="target.finding ? 'board-text-danger' : 'board-text-info'"
                   aria-hidden="true"
                 >{{ target.finding ? 'warning' : 'search_off' }}</span>
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-xs font-semibold text-slate-800 dark:text-slate-100" :title="target.finding ? findingTitle(target.finding) : target.label">
                     {{ target.finding ? findingTitle(target.finding) : target.label }}
                   </p>
-                  <p class="mt-0.5 text-[11px] leading-4" :class="target.finding ? 'text-red-700 dark:text-red-300' : 'text-sky-800 dark:text-sky-300'">
+                  <p class="mt-0.5 text-[11px] leading-4" :class="target.finding ? 'board-text-danger' : 'board-text-info'">
                     {{ target.finding ? t('app.fuzzTargetCandidateFound') : t('app.fuzzTargetNoCandidateWithinBudget') }}
                   </p>
                 </div>
@@ -340,7 +349,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 
           <p
             data-testid="fuzz-formal-verification-current-board-notice"
-            class="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100"
+            class="board-surface-info rounded-lg px-3 py-2 text-xs leading-5"
           >
             {{ t('app.fuzzFormalVerificationCurrentBoardNotice') }}
           </p>
@@ -366,7 +375,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
                     <button
                       type="button"
                       :data-testid="`replay-fuzzing-finding-${finding.id}`"
-                      class="inline-flex min-h-11 items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                      class="board-action-inline text-[11px]"
                       :disabled="actionLocked"
                       @click="emit('replay', finding.id)"
                     >
@@ -375,7 +384,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
                     <button
                       type="button"
                       :data-testid="`verify-fuzzing-finding-${finding.id}`"
-                      class="inline-flex min-h-11 items-center gap-1 rounded-md bg-emerald-100 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-200 disabled:opacity-50 dark:bg-emerald-900/60 dark:text-emerald-100 dark:hover:bg-emerald-800"
+                      class="board-surface-success board-text-success inline-flex min-h-11 items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50"
                       :disabled="actionLocked"
                       @click="emit('verify', finding)"
                     >
@@ -387,21 +396,30 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             </div>
           </section>
 
-          <button
-            v-if="run.findings.length === 0"
-            type="button"
-            data-testid="verify-current-board-without-finding"
-            class="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
-            :disabled="actionLocked"
-            @click="emit('verifyCurrentBoard')"
-          >
-            <span class="material-symbols-outlined text-base" aria-hidden="true">fact_check</span>{{ t('app.verifyCurrentBoard') }}
-          </button>
-
-          <p class="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100">
+          <p class="board-surface-info rounded-lg px-3 py-2 text-xs leading-5">
             {{ t('app.fuzzFindingNotFixable') }}
           </p>
         </template>
+      </div>
+
+      <!-- Footer: the one whole-dialog action, outside the scroll region.
+           `Verify the current board` was the last child of the scrolling body, which measured 384px
+           below the fold with 458px of content hidden — both themes reported it as unreachable and
+           read the per-section controls as the dialog's only actions. Per-finding Replay/Verify stay
+           in the list, where they belong to their row; this one applies to the whole result. -->
+      <div
+        v-if="run && run.findings.length === 0"
+        class="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950"
+      >
+        <button
+          type="button"
+          data-testid="verify-current-board-without-finding"
+          class="board-action-inline-affirm px-6 text-sm"
+          :disabled="actionLocked"
+          @click="emit('verifyCurrentBoard')"
+        >
+          <span class="material-symbols-outlined text-base" aria-hidden="true">fact_check</span>{{ t('app.verifyCurrentBoard') }}
+        </button>
       </div>
     </section>
   </div>

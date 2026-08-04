@@ -70,12 +70,75 @@ describe('board action dock hierarchy', () => {
     }
   })
 
-  it('keeps run actions visually primary', () => {
-    // If a run action were demoted too, the dock would have no primary action at all, which is the
-    // opposite failure: a user could not tell what the Board is for.
+  it('keeps run actions above the suggestion tier', () => {
+    // If a run action were demoted to a suggestion, the dock would have no primary action at all, which is
+    // the opposite failure: a user could not tell what the Board is for.
     for (const id of RUN_TOOLS) {
-      expect(buttonMarkup(id), `${id} must stay a primary action`)
+      expect(buttonMarkup(id), `${id} must not be demoted to a suggestion`)
         .not.toContain('board-tool-button--suggestion')
+    }
+  })
+
+  it('separates a formal proof from candidate evidence and from a view', () => {
+    // The sharper version of the rule above, and it was needed: the four run-group buttons rendered
+    // **byte-identical** — same `rgb(37, 99, 235)` fill, 400 weight, 124x44 box, 10.4px radius, same shadow —
+    // while doing three different things. "Keep run actions primary" was satisfied by that, because it only
+    // forbade demotion to the suggestion tier and said nothing about the differences *inside* the group.
+    //
+    // Verification is the only control whose output is a formal conclusion. Simulation produces one concrete
+    // trace and Explore produces bounded candidate evidence, which `CLAUDE.md` requires never be dressed as a
+    // verdict — painting them exactly like the verifier is that overclaim in the visual layer. Run History
+    // writes nothing at all.
+    expect(buttonMarkup('open-verification-panel'), 'verification returns a proof and stays the filled primary')
+      .toContain('board-tool-button--primary')
+
+    for (const id of ['open-simulation-panel', 'open-fuzzing-panel']) {
+      const markup = buttonMarkup(id)
+      expect(markup, `${id} produces candidate evidence, not a verdict, so it is the evidence tier`)
+        .toContain('board-tool-button--evidence')
+      expect(markup, `${id} must not carry the verifier's filled treatment`)
+        .not.toContain('board-tool-button--primary')
+    }
+
+    expect(buttonMarkup('open-history-panel'), 'run history opens a view and writes nothing')
+      .toContain('board-tool-button--view')
+
+    // Each tier must actually be defined, or a typo silently yields an unstyled button.
+    for (const tier of ['--primary', '--evidence', '--view']) {
+      expect(css, `board-tool-button${tier} should be defined`).toContain(`.board-tool-button${tier}`)
+    }
+  })
+
+  it('gives every quiet tier a visible boundary', () => {
+    // A demoted tier is still a control, and its edge has to be findable. Both quiet tiers have a surface
+    // barely distinguishable from the panel behind the dock — 1.22:1 for `--evidence`, 1.10 for `--view` — so
+    // the border alone carries the boundary and has to clear the 3:1 minimum by itself.
+    //
+    // Two independent design reviews, one per theme, both called Run History "too quiet" and "easy to miss".
+    // That reads like taste until it is measured: its border was **1.48:1**. The reviews were describing a
+    // real boundary failure, so the fix is a value rather than an opinion — and a later edit that softens
+    // either border back toward the panel would reintroduce it invisibly.
+    for (const tier of ['--evidence', '--view']) {
+      const at = css.indexOf(`.iot-board .board-tool-button${tier} {`)
+      expect(at, `board-tool-button${tier} should exist`).toBeGreaterThan(-1)
+      const rule = css.slice(at, at + css.slice(at).indexOf('}'))
+      expect(rule, `${tier} needs an explicit border to carry its boundary`).toMatch(/border:\s*1px solid/)
+      // A low percentage blends into the panel: 42% measured 1.87:1. 80% is the floor that clears 3:1.
+      const mix = /border:\s*1px solid color-mix\(in srgb, var\(--accent\) (\d+)%/.exec(rule)
+      if (mix) {
+        expect(Number(mix[1]), `${tier} border at ${mix[1]}% accent is too close to the panel`)
+          .toBeGreaterThanOrEqual(80)
+      }
+    }
+  })
+
+  it('marks an open panel with more than colour in every tier', () => {
+    // A tinted tier is a weaker signal than a fill, so its pressed state has to work harder — and the
+    // pressed state is how a user knows which panel is currently covering the canvas.
+    for (const tier of ['--evidence', '--view']) {
+      const rule = css.slice(css.indexOf(`.iot-board .board-tool-button${tier}[aria-pressed='true']`))
+      expect(rule.slice(0, rule.indexOf('}')), `${tier} pressed state needs a non-colour cue`)
+        .toMatch(/box-shadow:\s*inset/)
     }
   })
 
@@ -165,7 +228,9 @@ describe('board action dock hierarchy', () => {
     // The device states, triggered rules and environment values answer "what changed and why".
     // Collapsed, a 14-state trace showed a step number and a violated property but no values -- for
     // a counterexample whose whole point is a value climbing to the forbidden number.
-    for (const testId of ['trace-timeline-state-details']) {
+    // Renamed from `trace-timeline-state-details`, which shared a prefix with the per-step buttons
+    // (`trace-timeline-state-{i}`) and so was matched by selectors meant to find steps.
+    for (const testId of ['trace-step-values']) {
       const at = board.indexOf(`data-testid="${testId}"`)
       expect(at, `${testId} should exist`).toBeGreaterThan(-1)
       const tagStart = board.lastIndexOf('<details', at)

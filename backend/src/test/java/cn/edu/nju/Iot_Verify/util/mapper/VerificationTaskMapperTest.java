@@ -166,6 +166,44 @@ class VerificationTaskMapperTest {
         assertEquals(false, dto.getModelComplete());
     }
 
+    /**
+     * A run the user cancelled partway keeps the progress it reached, and must still be readable.
+     *
+     * The mapper previously required `progress == 100` of every terminal status while the write path
+     * had stopped forcing it, so a cancelled row became unmappable: `GET /api/verify/tasks/{id}` and
+     * the whole task list answered HTTP 500 for a run the user had simply stopped. No test covered a
+     * cancelled task in any of the three mappers, which is why the two sides could disagree.
+     */
+    @Test
+    void mapsACancelledTaskThatStoppedBeforeFinishingItsWork() {
+        VerificationTaskPo po = VerificationTaskPo.builder()
+                .id(9L)
+                .userId(1L)
+                .status(VerificationTaskPo.TaskStatus.CANCELLED)
+                .createdAt(CREATED_AT)
+                .startedAt(CREATED_AT)
+                .completedAt(CREATED_AT.plusSeconds(1))
+                .processingTimeMs(1_000L)
+                .progress(30)
+                .isAttack(false)
+                .attackBudget(0)
+                .modeledDeviceAttackPointCount(3)
+                .modeledFalsifiableReadingDeviceCount(1)
+                .modeledAutomationLinkAttackPointCount(2)
+                .enablePrivacy(false)
+                .modelSemanticsJson(NO_ATTACK_MODEL_SEMANTICS_JSON)
+                .modelSnapshotJson(MODEL_SNAPSHOT_JSON)
+                .outcome(VerificationOutcome.INCONCLUSIVE)
+                .checkLogsJson("[]")
+                .build();
+
+        VerificationTaskDto dto = mapper.toDto(po);
+
+        assertEquals(VerificationTaskPo.TaskStatus.CANCELLED.name(), dto.getStatus());
+        assertEquals(30, dto.getProgress());
+        assertEquals(VerificationOutcome.INCONCLUSIVE, dto.getOutcome());
+    }
+
     @Test
     void runMappersKeepTheReplayableCountSuppliedByTheService() {
         VerificationTaskPo po = VerificationTaskPo.builder()

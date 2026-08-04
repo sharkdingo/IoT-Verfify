@@ -76,7 +76,7 @@ const isInternalVariableEdge = (edge: DeviceEdge): boolean => {
 const getParticleColorByEdge = (edge: DeviceEdge): string => {
   // 内部变量连线使用简单的灰色
   if (isInternalVariableEdge(edge)) {
-    return '#94a3b8'
+    return 'var(--text-muted)'
   }
 
   const sourceNode = props.nodes.find(n => n.id === edge.from)
@@ -133,9 +133,9 @@ const getParticleFillColor = (edge: DeviceEdge): string => {
 }
 
 const fallbackDeviceSvg = `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect x="14" y="12" width="44" height="48" rx="10" fill="#E2E8F0" stroke="#64748B" stroke-width="3"/>
-  <circle cx="36" cy="32" r="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="3"/>
-  <path d="M26 50h20" stroke="#64748B" stroke-width="4" stroke-linecap="round"/>
+  <rect x="14" y="12" width="44" height="48" rx="10" fill="var(--border)" stroke="var(--text-muted)" stroke-width="3"/>
+  <circle cx="36" cy="32" r="10" fill="#FFFFFF" stroke="var(--text-muted)" stroke-width="3"/>
+  <path d="M26 50h20" stroke="var(--text-muted)" stroke-width="4" stroke-linecap="round"/>
 </svg>`
 
 const svgDataUri = (svg: string): string =>
@@ -188,7 +188,17 @@ const hasDisplayStateMachine = (node: DeviceNode): boolean => {
 }
 
 const getNodeDisplayState = (node: DeviceNode): string => {
-  if (!hasDisplayStateMachine(node)) return t('app.noStateMachine')
+  // A device with no modelled state machine has no state to show, so the pill says so in the shape a value takes
+  // rather than in a sentence.
+  //
+  // It used to render "No state machine" — a three-word phrase in a pill sized for values like "Auto" or
+  // "Working". Measured during playback on a 184×135 node: **42px of the 85px it needs, 51% lost**, so it read as
+  // "No sta…" and two reviews took it for a broken or missing reading rather than a modelling fact. A value's
+  // prefix identifies it; a phrase's does not.
+  //
+  // The full wording stays in `getNodeStateTitle` on the pill's own `title`, so nothing is unavailable — it is
+  // only no longer attempting a sentence in 42 pixels.
+  if (!hasDisplayStateMachine(node)) return t('app.noStateMachineShort')
   const state = getNodeState(node)
   if (!isTraceActive.value) return formatNodeModelToken(node, state)
   const traceDevice = getLatestTraceDeviceForNode(node.id)
@@ -804,12 +814,26 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
         previousValue: displayPreviousValue,
         trust,
         changed,
-        title: `${displayLabel}: ${displayValue}${trustLabel ? ` (${trustLabel})` : ''}`
+        // The title carries the transition too. The visual pair is `aria-hidden` — an arrow glyph read
+        // aloud between two numbers is noise — so this string is the only place a screen reader learns
+        // that the value moved, and from what.
+        title: displayPreviousValue
+          ? `${displayLabel}: ${displayPreviousValue} → ${displayValue}${trustLabel ? ` (${trustLabel})` : ''}`
+          : `${displayLabel}: ${displayValue}${trustLabel ? ` (${trustLabel})` : ''}`
       }
     })
 }
 
-const getNodeSecurityBadges = (node: DeviceNode) => {
+/**
+ * A node provenance pill, in the two lengths its two surfaces can actually hold.
+ *
+ * `label` is the full statement and belongs anywhere with room — the node's own `title`, and the
+ * hover text. `shortLabel` is what the pill prints: it is 54px wide inside a 187px node, so the
+ * sentence was ellipsized to a fragment there no matter what the font size was.
+ */
+type SecurityBadge = { kind: 'trust' | 'privacy'; label: string; shortLabel: string; title: string }
+
+const getNodeSecurityBadges = (node: DeviceNode): SecurityBadge[] => {
   if (isTraceActive.value) {
     const traceDevice = getLatestTraceDeviceForNode(node.id)
     if (!traceDevice) return []
@@ -825,17 +849,19 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
       return formatPlaybackModelToken(variable?.modelTokenSource ?? traceDevice.modelTokenSource, label)
     }
     const formatSecurityLabels = (labels: string[]) => labels.map(formatSecurityLabel).join(', ')
-    const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
+    const badges: SecurityBadge[] = []
     if (facts.untrustedLabels.length > 0) {
       badges.push({
         kind: 'trust',
         label: t('app.traceVisualization.includesUntrustedSource'),
+        shortLabel: t('app.traceVisualization.includesUntrustedSourceShort'),
         title: t('app.traceVisualization.untrustedLabelDetails', { labels: formatSecurityLabels(facts.untrustedLabels) })
       })
     } else if (facts.hasTrustLabels) {
       badges.push({
         kind: 'trust',
         label: t('app.traceVisualization.shownSourcesTrusted'),
+        shortLabel: t('app.traceVisualization.shownSourcesTrustedShort'),
         title: t('app.traceVisualization.shownSourcesTrustedDetails')
       })
     }
@@ -843,6 +869,7 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
       badges.push({
         kind: 'privacy',
         label: t('app.traceVisualization.includesPrivateData'),
+        shortLabel: t('app.traceVisualization.includesPrivateDataShort'),
         title: t('app.traceVisualization.privateLabelDetails', { labels: formatSecurityLabels(facts.privateLabels) })
       })
     }
@@ -892,7 +919,7 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
     }
   }
 
-  const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
+  const badges: SecurityBadge[] = []
   const untrustedLabels = trustLabels
     .filter(entry => entry.trust === 'untrusted')
     .map(entry => withSource(entry.label, entry.source))
@@ -900,12 +927,14 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
     badges.push({
       kind: 'trust',
       label: t('app.traceVisualization.includesUntrustedSource'),
+      shortLabel: t('app.traceVisualization.includesUntrustedSourceShort'),
       title: t('app.traceVisualization.untrustedLabelDetails', { labels: untrustedLabels.join(', ') })
     })
   } else if (trustLabels.length > 0) {
     badges.push({
       kind: 'trust',
       label: t('app.traceVisualization.shownSourcesTrusted'),
+      shortLabel: t('app.traceVisualization.shownSourcesTrustedShort'),
       title: t('app.traceVisualization.configuredTrustedLabelDetails', {
         labels: trustLabels.map(entry => withSource(entry.label, entry.source)).join(', ')
       })
@@ -952,6 +981,7 @@ const getNodeSecurityBadges = (node: DeviceNode) => {
     badges.push({
       kind: 'privacy',
       label: t('app.traceVisualization.includesPrivateData'),
+      shortLabel: t('app.traceVisualization.includesPrivateDataShort'),
       title: t('app.traceVisualization.configuredPrivateLabelDetails', { labels: privateLabels.join(', ') })
     })
   }
@@ -967,7 +997,9 @@ const isNodeTraceChanged = (node: DeviceNode) => {
 
 const getNodeStateTitle = (node: DeviceNode) => {
   const current = getNodeDisplayState(node)
-  if (!hasDisplayStateMachine(node)) return current
+  // The pill's short label is deliberately terse, so the hover carries the full sentence and says why the device
+  // has no state rather than repeating the abbreviation.
+  if (!hasDisplayStateMachine(node)) return t('app.noStateMachineDetail')
   const previousDevice = isTraceActive.value ? getPreviousTraceDeviceForNode(node.id) : null
   const previous = previousDevice?.state?.trim() || null
   if (previous && previous !== getNodeState(node)) {
@@ -1476,8 +1508,8 @@ onMounted(() => {
           '--canvas-zoom': props.zoom,
           '--node-accent-color': getNodeAccentColor(node.id),
           backgroundColor: getNodeSurfaceColor(node.id),
-          borderColor: isDeviceAttacked(node.id) ? '#EF4444' : getNodeBorderColor(node.id),
-          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? '#EF4444' : getNodeBorderColor(node.id) } : {})
+          borderColor: isDeviceAttacked(node.id) ? 'var(--danger)' : getNodeBorderColor(node.id),
+          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? 'var(--danger)' : getNodeBorderColor(node.id) } : {})
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
           @contextmenu.stop.prevent="onNodeContextInternal(node, $event)"
@@ -1528,6 +1560,21 @@ onMounted(() => {
                 :title="badge.title"
             >
               <span class="device-runtime-chip__label">{{ badge.label }}</span>
+              <!--
+                The chip shows only the destination value, and that is deliberate.
+
+                `getNodeRuntimeBadges` computes `previousValue`, `board.css` styles
+                `.device-runtime-chip__previous` with a line-through, and `CanvasBoard.spec.ts` asserts the
+                element must **not** render. That looked like an oversight, so I rendered the pair — and
+                measurement showed the old assertion was right: `.device-runtime-chip--changed` is capped at
+                `58cqmin`, which is **64px on a standard 150×110 node**. "Temperature 24 → 26" cannot fit
+                there; it truncates to a fragment, which is worse than the destination value alone.
+
+                The transition therefore belongs where there is room for it — the popover anchored to this
+                node — while the node carries the destination value plus the `--changed` tint that says
+                *this* is what moved. `badge.title` keeps the full `previous → current` for hover and for
+                assistive technology, so the fact is never unavailable, only unprinted at 64px.
+              -->
               <span class="device-runtime-chip__value">{{ badge.value }}</span>
             </span>
           </div>
@@ -1537,9 +1584,11 @@ onMounted(() => {
               :key="badge.kind"
               class="device-node-trust"
               :class="`device-node-trust--${badge.kind}`"
-              :title="badge.title"
+              :title="`${badge.label} — ${badge.title}`"
             >
-              {{ badge.label }}
+              <!-- The pill prints the category; the node's `title` and this one carry the full statement. -->
+              {{ badge.shortLabel }}
+              <span class="sr-only">{{ badge.label }}</span>
             </span>
           </div>
         </div>
@@ -1586,7 +1635,7 @@ onMounted(() => {
 
 .edge-hitarea:focus-visible {
   outline: none;
-  stroke: color-mix(in srgb, var(--iot-color-accent, #2563eb) 18%, transparent);
+  stroke: color-mix(in srgb, var(--iot-color-accent, var(--accent)) 18%, transparent);
 }
 
 .edge-base-line,
@@ -1601,14 +1650,14 @@ onMounted(() => {
 }
 
 .edge-label__bg {
-  fill: color-mix(in srgb, var(--surface-elevated, #ffffff) 92%, transparent);
-  stroke: color-mix(in srgb, var(--border, #cbd5e1) 88%, transparent);
+  fill: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  stroke: color-mix(in srgb, var(--border, var(--border-strong)) 88%, transparent);
   stroke-width: 1;
 }
 
 .edge-label__text {
-  fill: var(--text, #0f172a);
-  font-size: 10px;
+  fill: var(--text, var(--text));
+  font-size: var(--iot-font-min);
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -1619,7 +1668,7 @@ onMounted(() => {
   top: -32px;
   left: 50%;
   transform: translateX(-50%);
-  background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
+  background: linear-gradient(135deg, var(--danger) 0%, var(--danger) 100%);
   color: white;
   padding: 3px 8px;
   border-radius: 12px;
@@ -1630,7 +1679,7 @@ onMounted(() => {
   z-index: 20;
   animation: attackBounce 0.8s ease-in-out infinite;
   white-space: nowrap;
-  font-size: 9px;
+  font-size: var(--iot-font-min);
   font-weight: bold;
   gap: 3px;
   height: auto;
@@ -1693,7 +1742,12 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: clamp(0.625rem, 5cqmin, 5rem);
+  /*
+   * Static for the same reason as the node chips in `board.css`: `5cqmin` of a node whose measured height is
+   * 110-137px is 5.5-6.9px, so the middle term never won and this rendered at its 10px floor. The `5rem`
+   * ceiling made it look like a size that could grow.
+   */
+  font-size: var(--iot-font-min);
   line-height: 1;
 }
 
@@ -1732,19 +1786,19 @@ onMounted(() => {
   width: 90%;
   padding: 4px 6px;
   border-radius: 6px;
-  font-size: 10px;
+  font-size: var(--iot-font-min);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   z-index: 10;
 }
 
 .trace-info-card.violated {
-  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
-  border: 1px solid #fca5a5;
+  background: linear-gradient(135deg, #fef2f2 0%, var(--danger-surface) 100%);
+  border: 1px solid var(--danger-border);
 }
 
 .trace-info-card.intermediate {
   background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%);
-  border: 1px solid #fde047;
+  border: 1px solid var(--warning);
 }
 
 .trace-state-row {
@@ -1761,14 +1815,14 @@ onMounted(() => {
 }
 
 .violated .trace-state-dot {
-  background-color: #ef4444;
-  box-shadow: 0 0 4px #ef4444;
+  background-color: var(--danger);
+  box-shadow: 0 0 4px var(--danger);
   animation: pulse-red 1s infinite;
 }
 
 .intermediate .trace-state-dot {
-  background-color: #f59e0b;
-  box-shadow: 0 0 4px #f59e0b;
+  background-color: var(--warning);
+  box-shadow: 0 0 4px var(--warning);
   animation: pulse-amber 1s infinite;
 }
 
@@ -1783,7 +1837,7 @@ onMounted(() => {
 }
 
 .trace-state-label {
-  color: #6b7280;
+  color: var(--text-muted);
   font-weight: 500;
 }
 
@@ -1792,11 +1846,11 @@ onMounted(() => {
 }
 
 .violated .trace-state-value {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .intermediate .trace-state-value {
-  color: #d97706;
+  color: var(--warning);
 }
 
 .trace-variables-list {
@@ -1808,11 +1862,11 @@ onMounted(() => {
 }
 
 .violated .trace-variables-list {
-  border-color: #fecaca;
+  border-color: var(--danger-border);
 }
 
 .intermediate .trace-variables-list {
-  border-color: #fde047;
+  border-color: var(--warning);
 }
 
 .trace-variable-item {
@@ -1822,14 +1876,16 @@ onMounted(() => {
 }
 
 .trace-var-name {
-  color: #4b5563;
-  font-size: 9px;
+  color: var(--text-muted);
+  font-size: var(--iot-font-min);
 }
 
 .trace-var-value {
   font-weight: bold;
-  color: #1f2937;
-  font-size: 10px;
+  /* Token, not a light-theme slate: `#1f2937` rendered dark-on-dark, and a trace value is the number the
+     replay exists to show. */
+  color: var(--text);
+  font-size: var(--iot-font-min);
 }
 
 /* Device content keeps a stable footprint while trace values cross-fade. */

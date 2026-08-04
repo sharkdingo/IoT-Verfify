@@ -2186,11 +2186,10 @@ const validateFixApplyResult = (
 ): Omit<FixApplyResult, 'rules'> & { rules: BackendRuleDto[] } => {
     const context = 'Automatic fix apply'
     const result = requireResponseRecord(value, context)
-    if (result.applied !== true
-        || (result.verificationRechecked !== true && result.verificationEvidenceReused !== true)) {
+    if (result.applied !== true || result.verificationEvidenceReused !== true) {
         throw new BoardResponseContractError(
             context,
-            'the response must confirm either fresh verification or reused verification evidence'
+            'the response must confirm that verification evidence backed the applied suggestion'
         )
     }
     if (result.strategy !== expectedStrategy) {

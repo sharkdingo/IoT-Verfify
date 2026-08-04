@@ -41,7 +41,9 @@ describe('board modal surfaces', () => {
     expect(overlay.classes()).toContain('z-[var(--z-modal)]')
     expect(dialog.classes()).toContain('control-center-dialog-surface')
     expect(dialog.classes()).toContain('control-center-spec-dialog')
-    expect(dialog.get('.control-center-dialog-body').classes()).toContain('overflow-y-auto')
+    // Asserted as the shared primitive rather than the bare utility: it owns overflow together with
+    // overscroll containment, the token scrollbar, and scroll-padding for revealed controls.
+    expect(dialog.get('.control-center-dialog-body').classes()).toContain('iot-scroll-region')
     expect(dialog.get('.control-center-dialog-footer').classes()).toContain('shrink-0')
     wrapper.unmount()
   })

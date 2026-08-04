@@ -485,9 +485,13 @@ describe('chat stream lifecycle semantics', () => {
     )).rejects.toMatchObject({ status: 401 })
 
     expect(authMocks.logoutIfTokenMatches).toHaveBeenCalledWith(null)
+    // `reason` is part of the shape now, and this test's own name is why it belongs here: the SSE transport must
+    // redirect through *the same* route as axios. Both reach the login surface because a token was rejected, so
+    // both say so — that is what lets the landing panel explain the ejection instead of leaving the user to
+    // conclude the application lost their work.
     expect(routerMocks.push).toHaveBeenCalledWith({
       path: '/',
-      query: { mode: 'login', redirect: '/board' }
+      query: { mode: 'login', redirect: '/board', reason: 'session-expired' }
     })
   })
 

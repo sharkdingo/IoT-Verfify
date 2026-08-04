@@ -1831,12 +1831,27 @@ const activeSection = computed<ControlCenterSection>({
 
 // Mirrors SystemInspector's tab strip so both side panels expose the same tablist
 // semantics and keyboard model.
+/*
+ * One active-tab treatment, not four.
+ *
+ * Each tab used to carry its own `activeClass` — orange, purple, blue, red — so "this tab is selected" was
+ * said in four different colours. The state is identical in every case; only the section differs, and the
+ * label already says which section. That is the "do not spend a new hue on a new category" rule in
+ * `frontend-ui-conventions.md` §4, and the per-tab property was the mechanism that made it easy to break.
+ *
+ * `--accent-fill` is the fill half of the accent role, so white ink on it is legible in both themes
+ * (`--accent` alone measures 2.54:1 in dark). Matches SystemInspector's strip exactly, which is the point:
+ * the two side panels should not look like two products.
+ */
 const controlTabs = computed(() => [
-  { id: 'templates' as const, label: t('app.templates'), icon: 'inventory_2', activeClass: 'bg-orange-700 text-white shadow-md' },
-  { id: 'devices' as const, label: t('app.devices'), icon: 'devices', activeClass: 'bg-purple-700 text-white shadow-md' },
-  { id: 'rules' as const, label: t('app.rules'), icon: 'rule', activeClass: 'bg-blue-700 text-white shadow-md' },
-  { id: 'specs' as const, label: t('app.specifications'), icon: 'verified', activeClass: 'bg-red-700 text-white shadow-md' }
+  { id: 'templates' as const, label: t('app.templates'), icon: 'inventory_2' },
+  { id: 'devices' as const, label: t('app.devices'), icon: 'devices' },
+  { id: 'rules' as const, label: t('app.rules'), icon: 'rule' },
+  { id: 'specs' as const, label: t('app.specifications'), icon: 'verified' }
 ])
+
+/** The selected-tab treatment, shared by every tab in the strip. */
+const CONTROL_TAB_ACTIVE_CLASS = 'bg-[color:var(--accent-fill)] text-white shadow-sm'
 
 const { handleTablistKeydown: handleControlTabKeydown } = useRovingTablist<ControlCenterSection>({
   tabIds: () => controlTabs.value.map(tab => tab.id),
@@ -2307,12 +2322,16 @@ watch(() => props.readOnly, readOnly => {
 </script>
 
 <template>
+  <!-- Collapsed width is 3.5rem, matching SystemInspector and COLLAPSED_PANEL_RAIL_WIDTH in Board.vue.
+       It was 4rem while the opposite rail was 3rem — a 16px mismatch between two rails that each hold exactly one
+       44x44 Expand button, so identical content rendered at different widths on either side of the canvas. See the
+       note in SystemInspector for why that matters during replay. -->
   <aside
     v-bind="attrs"
     data-testid="control-center"
     class="absolute left-0 top-0 bottom-0 modern-panel board-side-panel z-40 flex flex-col overflow-hidden border-r border-white/20 shadow-xl transition-all duration-300 ease-in-out"
     :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"
-    :style="{ width: isCollapsed ? '4rem' : panelWidth }"
+    :style="{ width: isCollapsed ? '3.5rem' : panelWidth }"
   >
     <!-- 顶部标题区域 -->
     <div
@@ -2372,22 +2391,22 @@ watch(() => props.readOnly, readOnly => {
           @click="activeSection = tab.id"
           @keydown="handleControlTabKeydown($event, tab.id)"
           :class="[
-            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
-            activeSection === tab.id
-              ? tab.activeClass
-              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
-          ]"
+ 'min-w-0 min-h-11 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
+ activeSection === tab.id
+ ? CONTROL_TAB_ACTIVE_CLASS
+ : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
+ ]"
           :title="tab.label"
         >
           <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
-          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ tab.label }}</span>
+          <span class="w-full truncate px-0.5 text-center text-[length:var(--iot-font-min)]">{{ tab.label }}</span>
         </button>
       </div>
     </div>
 
     <div
       v-if="!isCollapsed"
-      class="board-panel-body flex-1 overflow-y-auto custom-scrollbar transition-all duration-300 max-h-[calc(100vh-140px)] p-2"
+      class="board-panel-body flex-1 iot-scroll-region transition-all duration-300 max-h-[calc(100vh-140px)] p-2"
     >
       <!-- Devices -->
       <div
@@ -2398,17 +2417,17 @@ watch(() => props.readOnly, readOnly => {
         data-testid="control-section-devices"
       >
         <details class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
-        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-purple-50 transition-all list-none select-none">
+        <summary class="flex items-center justify-between p-4 cursor-pointer hover:board-chip-accent transition-all list-none select-none">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-purple-500 rounded-xl flex items-center justify-center">
-              <span class="material-symbols-outlined text-white text-lg">add_circle</span>
+            <div class="w-10 h-10 bg-[color:var(--accent-fill)] rounded-xl flex items-center justify-center">
+              <span aria-hidden="true" class="material-symbols-outlined text-white text-lg">add_circle</span>
             </div>
             <div>
               <span class="text-sm font-bold text-slate-800">{{ t('app.deviceManager') }}</span>
               <p class="text-xs text-slate-500">{{ t('app.addAndManageDevices') }}</p>
             </div>
           </div>
-          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
+          <span class="material-symbols-outlined text-slate-500 transition-transform group-open:rotate-180 text-lg">expand_more</span>
         </summary>
 
         <div class="px-3 pb-4 space-y-3 bg-slate-50/50 pt-2">
@@ -2446,13 +2465,13 @@ watch(() => props.readOnly, readOnly => {
             class="m-0 min-w-0 space-y-3 border-0 p-0"
           >
             <div class="relative">
-              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.type') }}</label>
+              <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.type') }}</label>
               <div class="relative">
-                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">devices</span>
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-500 text-xs">devices</span>
                 <select
                   v-model="deviceForm.type"
                   data-testid="single-device-template"
-                  class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 transition-all appearance-none shadow-sm"
+                  class="w-full min-h-11 bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] transition-all appearance-none shadow-sm"
                   :class="isTemplateSelectorDisabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'"
                   :disabled="isTemplateSelectorDisabled"
                   :title="templateSelectorTitle"
@@ -2466,16 +2485,16 @@ watch(() => props.readOnly, readOnly => {
             </div>
 
             <div class="relative">
-              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.deviceName') }}</label>
+              <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.deviceName') }}</label>
               <div class="relative">
-                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">badge</span>
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-500 text-xs">badge</span>
                 <input
                   v-model="deviceForm.name"
                   data-testid="single-device-name"
-                  class="w-full bg-white border-2 rounded-lg px-8 py-2 text-xs text-slate-700 focus:ring-2 placeholder:text-slate-400 transition-all shadow-sm"
+                  class="w-full min-h-11 bg-white border-2 rounded-lg px-8 py-2 text-xs text-slate-700 focus:ring-2 placeholder:text-slate-400 transition-all shadow-sm"
                   :class="singleDeviceNameConflict
-                    ? 'border-red-300 focus:border-red-400 focus:ring-red-100/50'
-                    : 'border-slate-200 focus:border-purple-400 focus:ring-purple-100/50'"
+ ? 'border-[color:var(--danger-border)] focus:border-[color:var(--accent-border)] focus:ring-[color:var(--accent-border)]'
+ : 'border-slate-200 focus:border-[color:var(--accent-border)] focus:ring-[color:var(--accent-border)]'"
                   :placeholder="t('app.deviceNamePlaceholder')"
                   :title="deviceForm.name || t('app.deviceNamePlaceholder')"
                   :aria-invalid="singleDeviceNameConflict ? 'true' : undefined"
@@ -2487,7 +2506,7 @@ watch(() => props.readOnly, readOnly => {
                 v-if="singleDeviceNameConflict"
                 id="single-device-name-conflict"
                 role="alert"
-                class="mt-1 text-[10px] font-semibold text-red-600"
+                class="mt-1 text-[length:var(--iot-font-min)] font-semibold board-text-danger"
                 data-testid="single-device-name-conflict"
               >
                 {{ t('app.deviceNameAlreadyExists') }}
@@ -2497,40 +2516,40 @@ watch(() => props.readOnly, readOnly => {
             <details
               v-if="hasSingleDeviceRuntimeFields"
               data-testid="single-device-runtime"
-              class="device-runtime-box rounded-xl border border-purple-100 bg-white/80 p-3 shadow-sm"
+              class="device-runtime-box rounded-xl border border-[color:var(--accent-border)] bg-white/80 p-3 shadow-sm"
             >
               <summary
                 data-testid="single-device-runtime-toggle"
                 class="flex cursor-pointer select-none items-center justify-between gap-2 text-[11px] font-bold text-slate-600"
               >
                 <span class="inline-flex items-center gap-1.5">
-                  <span class="material-symbols-outlined text-sm text-purple-500" aria-hidden="true">tune</span>
+                  <span class="material-symbols-outlined text-sm board-text-accent" aria-hidden="true">tune</span>
                   {{ t('app.advancedInitialValuesOverrides') }}
                 </span>
                 <span class="material-symbols-outlined text-sm text-slate-400 transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
               </summary>
-              <p class="mt-2 text-[10px] leading-relaxed text-slate-500">
+              <p class="mt-2 text-[length:var(--iot-font-min)] leading-relaxed text-slate-500">
                 {{ t('app.initialValuesHint') }}
               </p>
 
               <div v-if="selectedTemplateHasModes" class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.initialState') }}</span>
+                  <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">{{ t('app.initialState') }}</span>
                   <select
                     v-model="singleDeviceRuntime.state"
                     data-testid="single-device-state"
-                    class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50"
+                    class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)]"
                   >
                     <option v-for="state in selectedWorkingStates" :key="state.Name" :value="state.Name">{{ formatTemplateModelToken(selectedDeviceTemplate, state.Name) }}</option>
                   </select>
                 </label>
 
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.stateTrust') }}</span>
+                  <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">{{ t('app.stateTrust') }}</span>
                   <select
                     v-model="singleDeviceRuntime.currentStateTrust"
                     data-testid="single-device-state-trust"
-                    class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50"
+                    class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)]"
                   >
                     <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStateTrust(selectedDeviceTemplate, singleDeviceRuntime.state) || 'trusted'}`) }) }}</option>
                     <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
@@ -2538,11 +2557,11 @@ watch(() => props.readOnly, readOnly => {
                 </label>
 
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.statePrivacy') }}</span>
+                  <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">{{ t('app.statePrivacy') }}</span>
                   <select
                     v-model="singleDeviceRuntime.currentStatePrivacy"
                     data-testid="single-device-state-privacy"
-                    class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50"
+                    class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)]"
                   >
                     <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStatePrivacy(selectedDeviceTemplate, singleDeviceRuntime.state) || 'public'}`) }) }}</option>
                     <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
@@ -2558,14 +2577,14 @@ watch(() => props.readOnly, readOnly => {
                 >
                   <div class="mb-2 flex items-center justify-between gap-2">
                     <span class="truncate text-[11px] font-bold text-slate-700" :title="formatTemplateModelToken(selectedDeviceTemplate, variable.Name)">{{ formatTemplateModelToken(selectedDeviceTemplate, variable.Name) }}</span>
-                    <span v-if="templateVariableUsesNumericBounds(variable)" class="text-[10px] font-semibold text-slate-400">
+                    <span v-if="templateVariableUsesNumericBounds(variable)" class="text-[length:var(--iot-font-min)] font-semibold text-slate-500">
                       {{ variableInputPlaceholder(variable) }}
                     </span>
                   </div>
 
                   <div class="grid grid-cols-[minmax(0,1fr)_5.8rem_5.8rem] gap-2">
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableValue') }}</span>
+                      <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.variableValue') }}</span>
                       <select
                         v-if="templateVariableHasEnumValues(variable)"
                         v-model="singleDeviceRuntime.variables[variable.Name]"
@@ -2586,7 +2605,7 @@ watch(() => props.readOnly, readOnly => {
                     </label>
 
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableTrust') }}</span>
+                      <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.variableTrust') }}</span>
                       <select
                         v-model="singleDeviceRuntime.variableTrusts[variable.Name]"
                         :data-testid="`single-device-variable-trust-${variable.Name}`"
@@ -2598,7 +2617,7 @@ watch(() => props.readOnly, readOnly => {
                     </label>
 
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.privacy') }}</span>
+                      <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.privacy') }}</span>
                       <select
                         v-model="singleDeviceRuntime.privacies[variable.Name]"
                         :data-testid="`single-device-privacy-${variable.Name}`"
@@ -2617,7 +2636,7 @@ watch(() => props.readOnly, readOnly => {
               @click="createDevice()"
               data-testid="single-device-create"
               :disabled="isTemplateSelectorDisabled || creatingSingleDevice || !deviceForm.name.trim() || singleDeviceNameConflict"
-              class="w-full py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-300 disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
+              class="w-full min-h-11 py-2.5 bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)] disabled:bg-[color:var(--accent-fill)] disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
             >
               <span class="material-symbols-outlined text-sm">add_location</span>
               {{ creatingSingleDevice ? t('app.saving') : `${t('app.add')} ${t('app.dropNode')}` }}
@@ -2631,11 +2650,11 @@ watch(() => props.readOnly, readOnly => {
             class="m-0 min-w-0 space-y-3 border-0 p-0"
           >
             <div class="relative">
-              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.type') }}</label>
+              <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.type') }}</label>
               <select
                 v-model="batchDeviceForm.type"
                 data-testid="batch-device-template"
-                class="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 transition-all appearance-none shadow-sm"
+                class="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] transition-all appearance-none shadow-sm"
                 :disabled="isTemplateSelectorDisabled"
               >
                 <option v-if="props.templatesLoading" value="">{{ t('app.loadingDeviceTemplates') }}</option>
@@ -2647,21 +2666,21 @@ watch(() => props.readOnly, readOnly => {
 
             <div class="grid grid-cols-[minmax(0,1fr)_5.5rem] gap-2">
               <div>
-                <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.deviceNamePrefix') }}</label>
+                <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.deviceNamePrefix') }}</label>
                 <input
                   v-model="batchDeviceForm.prefix"
                   data-testid="batch-device-prefix"
-                  class="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 placeholder:text-slate-400 transition-all shadow-sm"
+                  class="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] placeholder:text-slate-400 transition-all shadow-sm"
                   :placeholder="t('app.devicePrefixPlaceholder')"
                   type="text"
                 />
               </div>
               <div>
-                <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.count') }}</label>
+                <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.count') }}</label>
                 <input
                   v-model.number="batchDeviceForm.count"
                   data-testid="batch-device-count"
-                  class="w-full bg-white border-2 border-slate-200 rounded-lg px-2 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 transition-all shadow-sm"
+                  class="w-full bg-white border-2 border-slate-200 rounded-lg px-2 py-2 text-xs text-slate-700 focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] transition-all shadow-sm"
                   type="number"
                   min="1"
                   :max="MAX_BATCH_DEVICE_COUNT"
@@ -2672,7 +2691,7 @@ watch(() => props.readOnly, readOnly => {
                   v-if="batchDeviceCountError"
                   id="batch-device-count-error"
                   role="alert"
-                  class="mt-1 text-[10px] font-semibold leading-4 text-red-600"
+                  class="mt-1 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger"
                 >
                   {{ batchDeviceCountError }}
                 </p>
@@ -2700,7 +2719,7 @@ watch(() => props.readOnly, readOnly => {
               @click="handleCreateBatchDevices"
               data-testid="batch-device-create"
               :disabled="Boolean(batchDeviceCountError) || batchDevicePreview.length === 0 || creatingMultipleDevices"
-              class="w-full py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-300 disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
+              class="w-full py-2.5 bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)] disabled:bg-[color:var(--accent-fill)] disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
             >
               <span class="material-symbols-outlined text-sm">playlist_add</span>
               {{ creatingMultipleDevices ? t('app.saving') : t('app.createDevicesWithCount', { count: batchDevicePreview.length }) }}
@@ -2726,17 +2745,17 @@ watch(() => props.readOnly, readOnly => {
               />
             </div>
             <div class="flex items-center justify-between gap-2">
-              <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-purple-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-purple-700 transition-colors hover:bg-purple-50">
+ <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-[color:var(--accent-border)] px-2.5 py-1.5 text-[length:var(--iot-font-min)] font-bold board-text-accent transition-colors hover:board-chip-accent">
                 <input data-testid="device-import-file" type="file" accept=".json,.csv,.txt" class="hidden" @change="handleDeviceImportFile">
                 <span class="material-symbols-outlined text-xs">upload_file</span>
                 {{ t('app.chooseFile') }}
               </label>
-              <span class="text-[10px] font-semibold text-slate-400">{{ t('app.jsonOrCsv') }}</span>
+              <span class="text-[length:var(--iot-font-min)] font-semibold text-slate-500">{{ t('app.jsonOrCsv') }}</span>
             </div>
             <textarea
               v-model="importDeviceForm.text"
               data-testid="device-import-text"
-              class="min-h-32 w-full resize-y rounded-lg border-2 border-slate-200 bg-white px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 shadow-sm transition-all placeholder:text-slate-400 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50"
+              class="min-h-32 w-full resize-y rounded-lg border-2 border-slate-200 bg-white px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 shadow-sm transition-all placeholder:text-slate-400 focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)]"
               :placeholder="deviceImportPlaceholder"
             ></textarea>
 
@@ -2763,7 +2782,7 @@ watch(() => props.readOnly, readOnly => {
             <div
               v-if="importedEnvironmentMerge.conflicts.length > 0"
               data-testid="device-import-environment-conflicts"
-              class="space-y-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[10px] font-semibold leading-4 text-red-700"
+              class="space-y-1 rounded-lg border border-[color:var(--danger-border)] board-chip-danger px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger"
             >
               <div v-for="(conflict, index) in importedEnvironmentMerge.conflicts" :key="`${conflict.name}-${conflict.field}-${index}`">
                 {{ formatImportedEnvironmentConflict(conflict) }}
@@ -2774,7 +2793,7 @@ watch(() => props.readOnly, readOnly => {
               @click="handleCreateImportedDevices"
               data-testid="device-import-create"
               :disabled="validImportedDevices.length === 0 || importedDevicesHaveErrors || importedEnvironmentMerge.conflicts.length > 0 || creatingMultipleDevices"
-              class="w-full py-2.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-300 disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
+              class="w-full py-2.5 bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)] disabled:bg-[color:var(--accent-fill)] disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
             >
               <span class="material-symbols-outlined text-sm">library_add</span>
               {{ creatingMultipleDevices ? t('app.saving') : t('app.createDevicesWithCount', { count: validImportedDevices.length }) }}
@@ -2794,9 +2813,9 @@ watch(() => props.readOnly, readOnly => {
         class="space-y-3"
       >
         <details data-testid="control-template-create" class="group rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
-          <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-orange-50 transition-all list-none select-none">
+          <summary class="flex items-center justify-between p-4 cursor-pointer hover:board-chip-warning transition-all list-none select-none">
             <div class="flex items-center gap-3">
-              <div class="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center">
+              <div class="w-10 h-10 bg-[color:var(--warning-fill)] rounded-xl flex items-center justify-center">
                 <span class="material-symbols-outlined text-white text-lg">add_box</span>
               </div>
               <div>
@@ -2804,11 +2823,11 @@ watch(() => props.readOnly, readOnly => {
                 <p class="text-xs text-slate-500">{{ t('app.createTemplateSubtitleShort') }}</p>
               </div>
             </div>
-            <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
+            <span class="material-symbols-outlined text-slate-500 transition-transform group-open:rotate-180 text-lg">expand_more</span>
           </summary>
 
           <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
-            <div class="relative overflow-hidden rounded-lg border-2 border-dashed border-orange-300 bg-orange-50 transition-all hover:border-orange-500 hover:shadow-md">
+            <div class="relative overflow-hidden rounded-lg border-2 border-dashed border-[color:var(--warning-border)] board-chip-warning transition-all hover:border-[color:var(--warning-border)] hover:shadow-md">
               <label
                 class="group block"
                 :class="props.readOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'"
@@ -2816,12 +2835,15 @@ watch(() => props.readOnly, readOnly => {
               >
                 <input type="file" accept=".json" class="hidden" :disabled="props.readOnly" @change="handleImportTemplate">
                 <div class="p-3 flex items-center gap-3">
-                  <div class="w-9 h-9 bg-orange-400 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-orange-500 transition-colors">
+                  <div class="w-9 h-9 bg-[color:var(--warning-fill)] rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-[color:var(--warning-fill)] transition-colors">
                     <span class="material-symbols-outlined text-white text-base">upload_file</span>
                   </div>
                   <div class="min-w-0 flex-1">
-                    <div class="text-xs font-bold text-orange-700">{{ t('app.importJsonTemplate') }}</div>
-                    <p class="text-[10px] text-orange-600 truncate" :title="t('app.deviceTemplateSchemaHint')">
+                    <div class="text-xs font-bold board-text-warning">{{ t('app.importJsonTemplate') }}</div>
+                    <!-- A sentence wraps; it does not truncate. This hint was cut at 26% of its length, breaking off
+                     mid-word — a name's prefix still identifies it, but a fragment of guidance identifies nothing.
+                     Clamped to three lines so it cannot push the panel out of shape. -->
+                <p class="text-[length:var(--iot-font-min)] board-text-warning line-clamp-3" :title="t('app.deviceTemplateSchemaHint')">
                       {{ t('app.deviceTemplateSchemaHint') }}
                     </p>
                   </div>
@@ -2829,7 +2851,7 @@ watch(() => props.readOnly, readOnly => {
               </label>
               <button
                 type="button"
-                class="mx-3 mb-3 inline-flex items-center gap-1.5 rounded-md border border-orange-200 bg-white/80 px-2 py-1 text-[10px] font-bold text-orange-700 transition-colors hover:bg-orange-100"
+ class="mx-3 mb-3 min-h-11 inline-flex items-center gap-1.5 rounded-md border border-[color:var(--warning-border)] px-2 py-1 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning"
                 :title="t('app.downloadTemplateSchema')"
                 @click="downloadTemplateSchema"
               >
@@ -2841,9 +2863,9 @@ watch(() => props.readOnly, readOnly => {
         </details>
 
         <details data-testid="control-template-repository" class="group rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
-          <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-orange-50 transition-all list-none select-none">
+          <summary class="flex items-center justify-between p-4 cursor-pointer hover:board-chip-warning transition-all list-none select-none">
             <div class="flex items-center gap-3">
-              <div class="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center">
+              <div class="w-10 h-10 bg-[color:var(--warning-fill)] rounded-xl flex items-center justify-center">
                 <span class="material-symbols-outlined text-white text-lg">inventory_2</span>
               </div>
               <div>
@@ -2851,11 +2873,11 @@ watch(() => props.readOnly, readOnly => {
                 <p class="text-xs text-slate-500">{{ t('app.templateRepositoryHint') }}</p>
               </div>
             </div>
-            <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
+            <span class="material-symbols-outlined text-slate-500 transition-transform group-open:rotate-180 text-lg">expand_more</span>
           </summary>
 
           <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
-            <div class="rounded-lg border border-orange-200 bg-orange-50/70 px-3 py-2 text-[10px] font-semibold leading-relaxed text-orange-700">
+            <div class="rounded-lg border border-[color:var(--warning-border)] board-chip-warning/70 px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-relaxed board-text-warning">
               {{ t('app.dragTemplateToCanvasHint') }}
             </div>
 
@@ -2863,7 +2885,7 @@ watch(() => props.readOnly, readOnly => {
               <span aria-hidden="true" class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">search</span>
               <input
                 v-model="templateSearchQuery"
-                class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-orange-400 focus:ring-2 focus:ring-orange-100/50 placeholder:text-slate-400 transition-all shadow-sm"
+                class="w-full min-h-11 bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] placeholder:text-slate-400 transition-all shadow-sm"
                 :placeholder="t('app.searchTemplates')"
                 :aria-label="t('app.searchTemplates')"
                 type="text"
@@ -2874,7 +2896,7 @@ watch(() => props.readOnly, readOnly => {
                 :aria-label="t('app.clearSearch')"
                 :title="t('app.clearSearch')"
                 @click="templateSearchQuery = ''"
-                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600 transition-colors"
               >
                 <span aria-hidden="true" class="material-symbols-outlined text-xs">close</span>
               </button>
@@ -2882,14 +2904,14 @@ watch(() => props.readOnly, readOnly => {
 
             <div class="flex items-center justify-between px-1">
               <div class="flex items-center gap-1.5">
-                <span class="material-symbols-outlined text-slate-400 text-xs">folder_open</span>
-                <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">{{ t('app.templates') }}</span>
+                <span class="material-symbols-outlined text-slate-500 text-xs">folder_open</span>
+                <span class="text-[length:var(--iot-font-min)] font-bold text-slate-500 uppercase tracking-wide">{{ t('app.templates') }}</span>
               </div>
               <div class="flex items-center gap-1.5">
                 <button
                   type="button"
                   data-testid="reset-default-templates"
-                  class="inline-flex min-h-11 items-center gap-1 rounded-full border border-orange-200 bg-white px-2 py-0.5 text-[10px] font-bold text-orange-700 transition-colors hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
+ class="inline-flex min-h-11 items-center gap-1 rounded-full border border-[color:var(--warning-border)] px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning disabled:cursor-not-allowed disabled:opacity-60"
                   :disabled="props.readOnly || props.templatesLoading || isLoadingDefaultTemplateResetPreview"
                   :title="mutationTitle(t('app.resetDefaultTemplates'))"
                   @click="openResetDefaultsConfirm"
@@ -2902,7 +2924,10 @@ watch(() => props.readOnly, readOnly => {
                   <span v-else class="material-symbols-outlined text-xs" aria-hidden="true">restart_alt</span>
                   <span class="truncate">{{ t('app.resetDefaultTemplatesShort') }}</span>
                 </button>
-                <span class="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full">
+                <!-- A count is not a status. `board-chip-warning` here was read by a review as a queue of
+                     things needing attention when it is only how many templates are listed;
+                     `board-chip-neutral` exists so a number does not have to borrow a role's meaning. -->
+                <span class="text-[length:var(--iot-font-min)] font-bold board-chip-neutral px-2 py-0.5 rounded-full">
                   {{ filteredTemplates.length }}
                 </span>
               </div>
@@ -2910,30 +2935,48 @@ watch(() => props.readOnly, readOnly => {
 
             <div
               v-if="props.templatesLoading"
-              class="rounded-xl border border-dashed border-orange-200 bg-orange-50/60 px-3 py-6 text-center text-xs text-orange-700"
+              class="rounded-xl border border-dashed border-[color:var(--warning-border)] board-chip-warning/60 px-3 py-6 text-center text-xs board-text-warning"
             >
               <span class="material-symbols-outlined mb-2 block animate-spin text-2xl">sync</span>
               <p class="font-semibold">{{ t('app.loadingDeviceTemplates') }}</p>
-              <p class="mt-1 text-[10px] text-orange-500">{{ t('app.preparingDefaultTemplates') }}</p>
+              <p class="mt-1 text-[length:var(--iot-font-min)] board-text-warning">{{ t('app.preparingDefaultTemplates') }}</p>
             </div>
 
             <div v-else-if="filteredTemplates.length > 0" class="space-y-2.5">
+              <!--
+                A group opens when it has something to show.
+
+                `open` was unconditional, so on a dense board "Custom Templates 0" rendered expanded while holding
+                nothing — a heading, a border and vertical space spent on an empty set, in the panel where space is
+                scarcest. Measured on a 12-device board: 6 of 7 detail sections expanded at once, one of them empty.
+
+                An empty group is still listed rather than hidden: its absence would leave a user wondering where
+                custom templates go, and "Custom Templates 0" is a truthful answer to that question. Collapsed is
+                the honest middle — the fact stays available, the space does not.
+              -->
               <details
                 v-for="group in templateGroups"
                 :key="group.key"
                 class="template-group rounded-lg border shadow-sm"
                 :data-testid="`template-group-${group.key}`"
-                open
+                :open="group.templates.length > 0"
               >
                 <summary class="template-group__summary flex cursor-pointer select-none items-center justify-between gap-2 px-2.5 py-2 transition-colors">
                   <div class="flex min-w-0 items-center gap-2">
                     <span class="template-group__chevron material-symbols-outlined text-sm transition-transform">expand_more</span>
-                    <span class="template-group__label truncate text-[10px] font-bold uppercase tracking-wide" :title="group.label">{{ group.label }}</span>
+                    <span class="template-group__label truncate text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide" :title="group.label">{{ group.label }}</span>
                   </div>
-                  <span class="template-group__count rounded-full px-2 py-0.5 text-[10px] font-bold">{{ group.templates.length }}</span>
+                  <span class="template-group__count rounded-full px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold">{{ group.templates.length }}</span>
                 </summary>
 
-                <div v-if="group.templates.length > 0" class="template-group__grid grid grid-cols-2 gap-2 px-2.5 pb-2.5">
+                <!-- Columns follow the available width, not a fixed count. `grid-cols-2` in a 320px panel gave
+                     each template title 51px regardless of the name, and one default template needs 217px.
+                     11rem is the floor at which the longest bundled name stops truncating, so a narrow panel
+                     drops to one column rather than printing two unreadable ones. -->
+                <div
+                  v-if="group.templates.length > 0"
+                  class="template-group__grid grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-2 px-2.5 pb-2.5"
+                >
                   <div
                     v-for="template in group.templates"
                     :key="template.id"
@@ -2962,12 +3005,20 @@ watch(() => props.readOnly, readOnly => {
                         </div>
                         <div class="min-w-0 flex-1">
                           <div class="flex min-w-0 items-start gap-1">
-                            <h4 class="template-card__title min-w-0 flex-1 text-xs font-bold transition-colors truncate" :title="getTemplateName(template)">
+                            <!--
+                              h3, not h4. The nearest heading above this is the panel's own h2 ("Control Center"), so
+                              h4 skipped a level: measured on a 12-device board, the outline read
+                              `h1 → h2 控制中心 → h4 Air Conditioner`. A screen-reader user stepping that outline is
+                              told an h3 exists and hunts for a section that was never there.
+                              The group label above ("Default Templates") is a <span> inside a <summary> and carries no
+                              level, so h3 is the correct rung for the card titles themselves rather than a new heading.
+                            -->
+                            <h3 class="template-card__title min-w-0 flex-1 text-xs font-bold transition-colors truncate" :title="getTemplateName(template)">
                               {{ getTemplateName(template) }}
-                            </h4>
+                            </h3>
                             <span class="template-card__drag-cue material-symbols-outlined" aria-hidden="true">drag_indicator</span>
                           </div>
-                          <div class="template-card__stats text-[10px] mt-0.5 flex items-center gap-1.5">
+                          <div class="template-card__stats text-[length:var(--iot-font-min)] mt-0.5 flex items-center gap-1.5">
                             <span class="template-card__pill px-1.5 py-0.5 rounded">{{ template.manifest.InternalVariables?.length || 0 }} {{ t('app.varsShort') }}</span>
                             <span class="template-card__pill px-1.5 py-0.5 rounded">{{ template.manifest.APIs?.length || 0 }} {{ t('app.apisShort') }}</span>
                           </div>
@@ -3001,28 +3052,28 @@ watch(() => props.readOnly, readOnly => {
                   </div>
                 </div>
 
-                <div v-else class="template-group__empty mx-2.5 mb-2.5 rounded-lg border border-dashed px-3 py-2 text-center text-[10px]">
+                <div v-else class="template-group__empty mx-2.5 mb-2.5 rounded-lg border border-dashed px-3 py-2 text-center text-[length:var(--iot-font-min)]">
                   {{ group.key === 'default' ? t('app.noDefaultTemplates') : t('app.noCustomTemplates') }}
                 </div>
               </details>
             </div>
 
             <div v-else class="relative overflow-hidden text-center py-8 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-              <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 via-orange-400 to-orange-300"></div>
+              <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[color:var(--warning)] via-[color:var(--warning)] to-[color:var(--warning)]"></div>
               <div class="relative">
-                <div class="w-14 h-14 mx-auto bg-orange-100 rounded-full flex items-center justify-center mb-3 shadow-inner">
-                  <span class="material-symbols-outlined text-orange-400 text-2xl">inventory_2</span>
+                <div class="w-14 h-14 mx-auto board-chip-warning rounded-full flex items-center justify-center mb-3 shadow-inner">
+                  <span class="material-symbols-outlined board-text-warning text-2xl">inventory_2</span>
                 </div>
                 <p class="text-xs text-slate-600 mb-1 font-semibold">
                   {{ templateSearchQuery ? t('app.noMatchingTemplates') : t('app.noTemplatesYet') }}
                 </p>
-                <p class="text-[10px] text-slate-400">
+                <p class="text-[length:var(--iot-font-min)] text-slate-500">
                   {{ templateSearchQuery ? t('app.tryDifferentSearchTerm') : t('app.importJsonTemplateHint') }}
                 </p>
                 <button
                   v-if="templateSearchQuery"
                   @click="templateSearchQuery = ''"
-                  class="mt-3 px-4 py-1.5 text-[10px] font-semibold text-orange-600 bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors"
+                  class="mt-3 px-4 py-1.5 text-[length:var(--iot-font-min)] font-semibold board-text-warning board-chip-warning hover:board-chip-warning rounded-lg transition-colors"
                 >
                   {{ t('app.clearSearch') }}
                 </button>
@@ -3041,9 +3092,9 @@ watch(() => props.readOnly, readOnly => {
         data-testid="control-section-rules"
       >
         <details class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
-        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-blue-50 transition-all list-none select-none">
+        <summary class="flex items-center justify-between p-4 cursor-pointer hover:board-chip-info transition-all list-none select-none">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center">
+            <div class="w-10 h-10 bg-[color:var(--accent-fill)] rounded-xl flex items-center justify-center">
               <span class="material-symbols-outlined text-white text-lg">function</span>
             </div>
             <div>
@@ -3051,7 +3102,7 @@ watch(() => props.readOnly, readOnly => {
               <p class="text-xs text-slate-500">{{ t('app.createConditionalLogic') }}</p>
             </div>
           </div>
-          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
+          <span class="material-symbols-outlined text-slate-500 transition-transform group-open:rotate-180 text-lg">expand_more</span>
         </summary>
 
         <div class="px-3 pb-4 bg-slate-50/50 pt-2 grid grid-cols-1 gap-3">
@@ -3060,19 +3111,28 @@ watch(() => props.readOnly, readOnly => {
             type="button"
             data-testid="open-rule-builder"
             :disabled="props.readOnly"
-            class="relative w-full overflow-hidden border-0 text-left group cursor-pointer rounded-xl bg-blue-500 hover:bg-blue-600 transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+            class="relative w-full overflow-hidden border-0 text-left group cursor-pointer rounded-xl bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)] transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--accent-border)]"
             :title="mutationTitle(t('app.createRule'))"
             @click="openRuleBuilder"
           >
             <div class="relative p-3 flex items-center gap-3">
-              <div class="w-10 h-10 bg-blue-400 rounded-lg flex items-center justify-center">
-                <span class="material-symbols-outlined text-black text-lg">add_circle</span>
+              <div class="w-10 h-10 bg-[color:var(--accent-fill)] rounded-lg flex items-center justify-center">
+                <span aria-hidden="true" class="material-symbols-outlined text-black text-lg">add_circle</span>
               </div>
               <div class="flex-1">
                 <span class="text-sm font-bold text-white block">{{ t('app.createRule') }}</span>
-                <span class="text-xs text-blue-100">{{ t('app.ifThenLogic') }}</span>
+                <!--
+                  This card's ground is an accent *fill*, so its subtitle needs the ink that belongs on a
+                  fill. `board-text-info` is the accent-family *text* colour, meant for a neutral page
+                  ground: accent-on-accent measured **1.04:1** in light theme, making the subtitle of the
+                  most prominent action on the panel very nearly invisible.
+
+                  `/90` rather than `/85`: /85 measures 4.19, under AA. Chosen by measurement after picking
+                  the wrong one by eye first.
+                -->
+                <span class="text-xs text-white/90">{{ t('app.ifThenLogic') }}</span>
               </div>
-              <div class="w-7 h-7 bg-blue-400 rounded-lg flex items-center justify-center">
+              <div class="w-7 h-7 bg-[color:var(--accent-fill)] rounded-lg flex items-center justify-center">
                 <span class="material-symbols-outlined text-white text-sm">arrow_forward</span>
               </div>
             </div>
@@ -3090,9 +3150,9 @@ watch(() => props.readOnly, readOnly => {
         data-testid="control-section-specs"
       >
         <details class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
-        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-red-50 transition-all list-none select-none">
+        <summary class="flex items-center justify-between p-4 cursor-pointer hover:board-chip-danger transition-all list-none select-none">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-red-500 rounded-xl flex items-center justify-center">
+            <div class="w-10 h-10 bg-[color:var(--danger-fill)] rounded-xl flex items-center justify-center">
               <span class="material-symbols-outlined text-white text-lg">verified</span>
             </div>
             <div>
@@ -3100,7 +3160,7 @@ watch(() => props.readOnly, readOnly => {
               <p class="text-xs text-slate-500">{{ t('app.ltlVerificationRules') }}</p>
             </div>
           </div>
-          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
+          <span class="material-symbols-outlined text-slate-500 transition-transform group-open:rotate-180 text-lg">expand_more</span>
         </summary>
 
         <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
@@ -3113,12 +3173,12 @@ watch(() => props.readOnly, readOnly => {
           >
             <!-- Step 1: Select Template -->
             <div>
-              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-2">{{ t('app.selectTemplate') }}</label>
+              <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-600 uppercase tracking-wide mb-2">{{ t('app.selectTemplate') }}</label>
               <select
                 v-model="specForm.templateId"
                 data-testid="spec-template-select"
                 @change="handleTemplateChange"
-                class="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-red-400 focus:ring-2 focus:ring-red-100/50 transition-all shadow-sm appearance-none cursor-pointer"
+                class="w-full min-h-11 bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)] transition-all shadow-sm appearance-none cursor-pointer"
               >
                 <option value="" disabled hidden>{{ t('app.selectSpecificationTemplate') }}</option>
                 <option
@@ -3130,7 +3190,7 @@ watch(() => props.readOnly, readOnly => {
                   {{ templateMessage(template.labelKey, template.label) }}
                 </option>
               </select>
-              <p v-if="currentTemplateDetail" class="text-[10px] text-slate-500 mt-1.5 px-1">
+              <p v-if="currentTemplateDetail" class="text-[length:var(--iot-font-min)] text-slate-500 mt-1.5 px-1">
                 <span class="line-clamp-2">
                   {{ templateMessage(currentTemplateDetail.descriptionKey, currentTemplateDetail.description) }}
                 </span>
@@ -3139,23 +3199,23 @@ watch(() => props.readOnly, readOnly => {
 
             <!-- Step 2: Add Conditions based on template requirements -->
             <div v-if="specForm.templateId" class="space-y-2">
-              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide">{{ t('app.configureConditions') }}</label>
+              <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-600 uppercase tracking-wide">{{ t('app.configureConditions') }}</label>
 
               <!-- A Conditions (Always/Forall) -->
-              <div v-if="isSideRequired('a')" class="relative overflow-hidden rounded-lg bg-red-50 border border-red-200 p-2.5">
+              <div v-if="isSideRequired('a')" class="relative overflow-hidden rounded-lg board-chip-danger border border-[color:var(--danger-border)] p-2.5">
                 <div class="relative flex items-center justify-between mb-2">
                   <div class="flex items-center gap-2">
-                    <span class="w-6 h-6 bg-red-500 rounded-md flex items-center justify-center">
+                    <span class="w-6 h-6 bg-[color:var(--danger-fill)] rounded-md flex items-center justify-center">
                       <svg class="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                       </svg>
                     </span>
-                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">{{ t('app.aConditions') }}</span>
+                    <span class="text-[length:var(--iot-font-min)] font-bold board-text-danger uppercase tracking-wide">{{ t('app.aConditions') }}</span>
                   </div>
                   <button
                     @click="openConditionDialog('a')"
                     data-testid="spec-add-condition-a"
-                    class="px-2.5 py-1 bg-red-500 text-white rounded-md text-[10px] font-bold uppercase tracking-wide hover:bg-red-600 transition-all shadow-sm flex items-center gap-1"
+                    class="px-2.5 py-1 bg-[color:var(--danger-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--danger-fill)] transition-all shadow-sm flex items-center gap-1"
                   >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -3163,34 +3223,34 @@ watch(() => props.readOnly, readOnly => {
                     {{ t('app.add') }}
                   </button>
                 </div>
-                <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
+                <div class="space-y-1.5 max-h-36 iot-scroll-region pr-1">
                   <div
                     v-for="(condition, index) in specForm.aConditions"
                     :key="condition.id"
-                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-red-100 shadow-sm hover:shadow-md transition-all"
+                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-[color:var(--danger-border)] shadow-sm hover:shadow-md transition-all"
                   >
                     <div class="flex items-center gap-2 overflow-hidden flex-1">
-                      <div class="w-6 h-6 bg-red-100 rounded-md flex items-center justify-center flex-shrink-0">
-                        <svg class="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <div class="w-6 h-6 board-chip-danger rounded-md flex items-center justify-center flex-shrink-0">
+                        <svg class="w-3.5 h-3.5 board-text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
                         </svg>
                       </div>
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
                         <span
-                          class="text-[10px] font-medium truncate min-w-0"
+                          class="text-[length:var(--iot-font-min)] font-medium truncate min-w-0"
                           :class="isSpecConditionDeviceMissing(condition.deviceId)
-                            ? 'text-red-600 line-through dark:text-red-300'
-                            : 'text-slate-700'"
+ ? 'board-text-danger line-through'
+ : 'text-slate-700'"
                           :title="getDeviceLabel(condition.deviceId)"
                         >
                           {{ getDeviceLabel(condition.deviceId) }}
                         </span>
-                        <span class="text-slate-300 flex-shrink-0">·</span>
-                        <span class="text-[10px] text-red-600 font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
-                        <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
+                        <span class="text-slate-500 flex-shrink-0">·</span>
+                        <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
-                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
+                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
                           {{ formatConditionValue(condition.value, condition.deviceId) }}
                         </span>
                       </div>
@@ -3199,7 +3259,7 @@ watch(() => props.readOnly, readOnly => {
                       <button
                         type="button"
                         @click="openConditionDialog('a', index)"
-                        class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                        class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
                         :title="t('app.edit')"
                         :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
                       >
@@ -3210,7 +3270,7 @@ watch(() => props.readOnly, readOnly => {
                       <button
                         type="button"
                         @click="removeCondition('a', index)"
-                        class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                        class="p-1 text-slate-500 hover:board-text-danger hover:board-chip-danger rounded transition-colors"
                         :title="t('app.delete')"
                         :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
                       >
@@ -3220,27 +3280,27 @@ watch(() => props.readOnly, readOnly => {
                       </button>
                     </div>
                   </div>
-                  <div v-if="specForm.aConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-red-200">
+                  <div v-if="specForm.aConditions.length === 0" class="text-center py-2 text-[length:var(--iot-font-min)] text-slate-500 italic bg-white/50 rounded border border-dashed border-[color:var(--danger-border)]">
                     {{ t('app.noConditionsAdded') }}
                   </div>
                 </div>
               </div>
 
               <!-- IF Conditions (Antecedent) -->
-              <div v-if="isSideRequired('if')" class="relative overflow-hidden rounded-lg bg-red-50 border border-red-200 p-2.5">
+              <div v-if="isSideRequired('if')" class="relative overflow-hidden rounded-lg board-chip-danger border border-[color:var(--danger-border)] p-2.5">
                 <div class="relative flex items-center justify-between mb-2">
                   <div class="flex items-center gap-2">
-                    <span class="w-6 h-6 bg-red-500 rounded-md flex items-center justify-center">
+                    <span class="w-6 h-6 bg-[color:var(--danger-fill)] rounded-md flex items-center justify-center">
                       <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                       </svg>
                     </span>
-                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">{{ t('app.ifConditions') }}</span>
+                    <span class="text-[length:var(--iot-font-min)] font-bold board-text-danger uppercase tracking-wide">{{ t('app.ifConditions') }}</span>
                   </div>
                   <button
                     @click="openConditionDialog('if')"
                     data-testid="spec-add-condition-if"
-                    class="px-2.5 py-1 bg-red-500 text-white rounded-md text-[10px] font-bold uppercase tracking-wide hover:bg-red-600 transition-all shadow-sm flex items-center gap-1"
+                    class="px-2.5 py-1 bg-[color:var(--danger-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--danger-fill)] transition-all shadow-sm flex items-center gap-1"
                   >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -3248,34 +3308,34 @@ watch(() => props.readOnly, readOnly => {
                     {{ t('app.add') }}
                   </button>
                 </div>
-                <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
+                <div class="space-y-1.5 max-h-36 iot-scroll-region pr-1">
                   <div
                     v-for="(condition, index) in specForm.ifConditions"
                     :key="condition.id"
-                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-red-100 shadow-sm hover:shadow-md transition-all"
+                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-[color:var(--danger-border)] shadow-sm hover:shadow-md transition-all"
                   >
                     <div class="flex items-center gap-2 overflow-hidden flex-1">
-                      <div class="w-6 h-6 bg-red-100 rounded-md flex items-center justify-center flex-shrink-0">
-                        <svg class="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <div class="w-6 h-6 board-chip-danger rounded-md flex items-center justify-center flex-shrink-0">
+                        <svg class="w-3.5 h-3.5 board-text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
                         </svg>
                       </div>
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
                         <span
-                          class="text-[10px] font-medium truncate min-w-0"
+                          class="text-[length:var(--iot-font-min)] font-medium truncate min-w-0"
                           :class="isSpecConditionDeviceMissing(condition.deviceId)
-                            ? 'text-red-600 line-through dark:text-red-300'
-                            : 'text-slate-700'"
+ ? 'board-text-danger line-through'
+ : 'text-slate-700'"
                           :title="getDeviceLabel(condition.deviceId)"
                         >
                           {{ getDeviceLabel(condition.deviceId) }}
                         </span>
-                        <span class="text-slate-300 flex-shrink-0">·</span>
-                        <span class="text-[10px] text-red-600 font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
-                        <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
+                        <span class="text-slate-500 flex-shrink-0">·</span>
+                        <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
-                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
+                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
                           {{ formatConditionValue(condition.value, condition.deviceId) }}
                         </span>
                       </div>
@@ -3284,7 +3344,7 @@ watch(() => props.readOnly, readOnly => {
                       <button
                         type="button"
                         @click="openConditionDialog('if', index)"
-                        class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                        class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
                         :title="t('app.edit')"
                         :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
                       >
@@ -3295,7 +3355,7 @@ watch(() => props.readOnly, readOnly => {
                       <button
                         type="button"
                         @click="removeCondition('if', index)"
-                        class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                        class="p-1 text-slate-500 hover:board-text-danger hover:board-chip-danger rounded transition-colors"
                         :title="t('app.delete')"
                         :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
                       >
@@ -3305,27 +3365,27 @@ watch(() => props.readOnly, readOnly => {
                       </button>
                     </div>
                   </div>
-                  <div v-if="specForm.ifConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-red-200">
+                  <div v-if="specForm.ifConditions.length === 0" class="text-center py-2 text-[length:var(--iot-font-min)] text-slate-500 italic bg-white/50 rounded border border-dashed border-[color:var(--danger-border)]">
                     {{ t('app.noConditionsAdded') }}
                   </div>
                 </div>
               </div>
 
               <!-- THEN Conditions (Consequent) -->
-              <div v-if="isSideRequired('then')" class="relative overflow-hidden rounded-lg bg-yellow-50 border border-yellow-200 p-2.5">
+              <div v-if="isSideRequired('then')" class="relative overflow-hidden rounded-lg board-chip-warning border border-[color:var(--warning-border)] p-2.5">
                 <div class="relative flex items-center justify-between mb-2">
                   <div class="flex items-center gap-2">
-                    <span class="w-6 h-6 bg-yellow-500 rounded-md flex items-center justify-center">
+                    <span class="w-6 h-6 bg-[color:var(--warning-fill)] rounded-md flex items-center justify-center">
                       <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
                       </svg>
                     </span>
-                    <span class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide">{{ t('app.thenConditions') }}</span>
+                    <span class="text-[length:var(--iot-font-min)] font-bold board-text-warning uppercase tracking-wide">{{ t('app.thenConditions') }}</span>
                   </div>
                   <button
                     @click="openConditionDialog('then')"
                     data-testid="spec-add-condition-then"
-                    class="px-2.5 py-1 bg-yellow-500 text-white rounded-md text-[10px] font-bold uppercase tracking-wide hover:bg-yellow-600 transition-all shadow-sm flex items-center gap-1"
+                    class="px-2.5 py-1 bg-[color:var(--warning-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--warning-fill)] transition-all shadow-sm flex items-center gap-1"
                   >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -3333,34 +3393,34 @@ watch(() => props.readOnly, readOnly => {
                     {{ t('app.add') }}
                   </button>
                 </div>
-                <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
+                <div class="space-y-1.5 max-h-36 iot-scroll-region pr-1">
                   <div
                     v-for="(condition, index) in specForm.thenConditions"
                     :key="condition.id"
-                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-yellow-100 shadow-sm hover:shadow-md transition-all"
+                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-[color:var(--warning-border)] shadow-sm hover:shadow-md transition-all"
                   >
                     <div class="flex items-center gap-2 overflow-hidden flex-1">
-                      <div class="w-6 h-6 bg-yellow-100 rounded-md flex items-center justify-center flex-shrink-0">
-                        <svg class="w-3.5 h-3.5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <div class="w-6 h-6 board-chip-warning rounded-md flex items-center justify-center flex-shrink-0">
+                        <svg class="w-3.5 h-3.5 board-text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
                         </svg>
                       </div>
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
                         <span
-                          class="text-[10px] font-medium truncate min-w-0"
+                          class="text-[length:var(--iot-font-min)] font-medium truncate min-w-0"
                           :class="isSpecConditionDeviceMissing(condition.deviceId)
-                            ? 'text-red-600 line-through dark:text-red-300'
-                            : 'text-slate-700'"
+ ? 'board-text-danger line-through'
+ : 'text-slate-700'"
                           :title="getDeviceLabel(condition.deviceId)"
                         >
                           {{ getDeviceLabel(condition.deviceId) }}
                         </span>
-                        <span class="text-slate-300 flex-shrink-0">·</span>
-                        <span class="text-[10px] text-yellow-600 font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
-                        <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
+                        <span class="text-slate-500 flex-shrink-0">·</span>
+                        <span class="text-[length:var(--iot-font-min)] board-text-warning font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
-                        <span class="text-[10px] bg-yellow-50 text-yellow-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-yellow-200 flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
+                        <span class="text-[length:var(--iot-font-min)] board-chip-warning board-text-warning px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--warning-border)] flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
                           {{ formatConditionValue(condition.value, condition.deviceId) }}
                         </span>
                       </div>
@@ -3369,7 +3429,7 @@ watch(() => props.readOnly, readOnly => {
                       <button
                         type="button"
                         @click="openConditionDialog('then', index)"
-                        class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                        class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
                         :title="t('app.edit')"
                         :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
                       >
@@ -3380,7 +3440,7 @@ watch(() => props.readOnly, readOnly => {
                       <button
                         type="button"
                         @click="removeCondition('then', index)"
-                        class="p-1 text-slate-400 hover:text-yellow-500 hover:bg-yellow-50 rounded transition-colors"
+                        class="p-1 text-slate-500 hover:board-text-warning hover:board-chip-warning rounded transition-colors"
                         :title="t('app.delete')"
                         :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
                       >
@@ -3390,7 +3450,7 @@ watch(() => props.readOnly, readOnly => {
                       </button>
                     </div>
                   </div>
-                  <div v-if="specForm.thenConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-yellow-200">
+                  <div v-if="specForm.thenConditions.length === 0" class="text-center py-2 text-[length:var(--iot-font-min)] text-slate-500 italic bg-white/50 rounded border border-dashed border-[color:var(--warning-border)]">
                     {{ t('app.noConditionsAdded') }}
                   </div>
                 </div>
@@ -3398,23 +3458,26 @@ watch(() => props.readOnly, readOnly => {
             </div>
 
             <!-- Step 3: Generated Specification Description -->
-            <div v-if="specForm.templateId" class="relative overflow-hidden rounded-lg bg-white border border-red-200 p-3 shadow-sm">
+            <div v-if="specForm.templateId" class="relative overflow-hidden rounded-lg bg-white border border-[color:var(--danger-border)] p-3 shadow-sm">
               <div class="relative">
                 <div class="flex items-center gap-2 mb-2">
-                  <span class="w-6 h-6 bg-red-100 rounded-md flex items-center justify-center">
-                    <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <span class="w-6 h-6 board-chip-danger rounded-md flex items-center justify-center">
+                    <svg class="w-4 h-4 board-text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"/>
                     </svg>
                   </span>
-                  <span class="text-[10px] font-bold text-red-600 uppercase tracking-wide">{{ t('app.specificationDescription') }}</span>
+                  <span class="text-[length:var(--iot-font-min)] font-bold board-text-danger uppercase tracking-wide">{{ t('app.specificationDescription') }}</span>
                 </div>
                 <div class="text-xs text-slate-700 leading-relaxed pl-8">
                   {{ naturalLanguageRule }}
                 </div>
                 <div class="mt-2 pt-2 border-t border-slate-200 flex items-center gap-2">
-                  <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">{{ t('app.formulaPreview') }}</span>
-                  <span class="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] font-bold text-slate-600 uppercase">{{ specFormulaKind }}</span>
-                  <code class="flex-1 text-[10px] bg-slate-100 text-slate-700 px-2 py-1 rounded font-mono overflow-x-auto">
+                  <span class="text-[length:var(--iot-font-min)] font-bold text-slate-500 uppercase tracking-wide">{{ t('app.formulaPreview') }}</span>
+                  <span class="px-1.5 py-0.5 bg-slate-100 rounded text-[length:var(--iot-font-min)] font-bold text-slate-600 uppercase">{{ specFormulaKind }}</span>
+                  <!-- `iot-scroll-region-x` rather than raw `overflow-x-auto`: the primitive owns the token
+                       scrollbar and overscroll containment, which a bare overflow does not. Type at the
+                       product floor, since a formula is the thing a user is trying to read here. -->
+                  <code class="iot-scroll-region-x flex-1 text-[length:var(--iot-font-min)] bg-slate-100 text-slate-700 px-2 py-1 rounded font-mono">
                     {{ specForm.formula }}
                   </code>
                 </div>
@@ -3426,7 +3489,7 @@ watch(() => props.readOnly, readOnly => {
               v-if="specificationBlockedReason"
               id="spec-create-blocked-reason"
               role="status"
-              class="mb-2 text-[10px] font-semibold leading-4 text-red-600"
+              class="mb-2 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger"
               data-testid="spec-create-blocked-reason"
             >
               {{ specificationBlockedReason }}
@@ -3436,7 +3499,7 @@ watch(() => props.readOnly, readOnly => {
               data-testid="spec-create"
               :disabled="Boolean(specificationBlockedReason) || creatingSpecification"
               :aria-describedby="specificationBlockedReason ? 'spec-create-blocked-reason' : undefined"
-              class="w-full py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100 flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+              class="w-full min-h-11 py-2.5 bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)] disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100 flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -3500,7 +3563,7 @@ watch(() => props.readOnly, readOnly => {
       </div>
 
       <!-- Content Body -->
-      <div class="control-center-dialog-body min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain p-6">
+      <div class="control-center-dialog-body min-h-0 flex-1 space-y-6 iot-scroll-region overscroll-contain p-6">
         <!-- Device Selection -->
         <div class="space-y-2">
           <div class="flex items-center gap-2">
@@ -3511,7 +3574,7 @@ watch(() => props.readOnly, readOnly => {
               v-model="editingConditionData.deviceId"
               data-testid="spec-condition-device"
               @change="editingConditionData.key = ''"
-              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-[color:var(--accent-border)] focus:outline-none appearance-none cursor-pointer"
               :class="deviceNodes.length === 0 ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'"
               :disabled="deviceNodes.length === 0"
             >
@@ -3541,7 +3604,7 @@ watch(() => props.readOnly, readOnly => {
               v-model="editingConditionData.targetType"
               data-testid="spec-condition-type"
               @change="handleTargetTypeChange"
-              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-[color:var(--accent-border)] focus:outline-none appearance-none cursor-pointer"
             >
               <option v-if="localizedTargetTypes.length === 0" value="">{{ t('app.none') }}</option>
               <option v-else value="" hidden>{{ t('app.type') }}</option>
@@ -3564,7 +3627,7 @@ watch(() => props.readOnly, readOnly => {
             <select
               v-model="conditionKeySelection"
               data-testid="spec-condition-key"
-              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-[color:var(--accent-border)] focus:outline-none appearance-none cursor-pointer"
               :class="availableKeys.length === 0 ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'"
               :disabled="availableKeys.length === 0"
             >
@@ -3595,7 +3658,7 @@ watch(() => props.readOnly, readOnly => {
               <select
                 v-model="editingConditionData.relation"
                 data-testid="spec-condition-relation"
-                class="w-full bg-white border-2 border-slate-300 rounded-lg px-2 py-2.5 text-sm text-center font-bold text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+                class="w-full bg-white border-2 border-slate-300 rounded-lg px-2 py-2.5 text-sm text-center font-bold text-black focus:border-[color:var(--accent-border)] focus:outline-none appearance-none cursor-pointer"
               >
                 <option v-for="op in filteredRelationOperators" :key="op.value" :value="op.value">
                   {{ op.label }}
@@ -3610,7 +3673,7 @@ watch(() => props.readOnly, readOnly => {
                 data-testid="spec-condition-value"
                 multiple
                 size="4"
-                class="w-full min-h-[7.5rem] bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none cursor-pointer"
+                class="w-full min-h-[7.5rem] bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-[color:var(--accent-border)] focus:outline-none cursor-pointer"
               >
                 <option v-for="val in conditionValueOptions" :key="val" :value="val">
                   {{ formatEditingConditionModelToken(val) }}
@@ -3620,7 +3683,7 @@ watch(() => props.readOnly, readOnly => {
                 v-else-if="conditionValueOptions.length > 0"
                 v-model="editingConditionData.value"
                 data-testid="spec-condition-value"
-                class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+                class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-[color:var(--accent-border)] focus:outline-none appearance-none cursor-pointer"
               >
                 <option value="" hidden>{{ t('app.value') }}</option>
                 <option v-for="val in conditionValueOptions" :key="val" :value="val">
@@ -3631,7 +3694,7 @@ watch(() => props.readOnly, readOnly => {
                 v-else
                 v-model="editingConditionData.value"
                 data-testid="spec-condition-value"
-                class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black placeholder:text-slate-400 focus:border-red-400 focus:outline-none"
+                class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black placeholder:text-slate-400 focus:border-[color:var(--accent-border)] focus:outline-none"
                 :placeholder="t('app.enterValuePlaceholder')"
               />
             </div>
@@ -3648,10 +3711,10 @@ watch(() => props.readOnly, readOnly => {
             <span class="text-xs font-bold uppercase text-black tracking-wider">{{ t('app.preview') }}</span>
           </div>
           <div class="font-mono text-xs bg-slate-100 rounded-lg px-3 py-2.5 border border-slate-300 text-black break-all w-full">
-            <span class="text-red-600 font-bold">{{ getDeviceLabel(editingConditionData.deviceId || t('app.device')) }}</span>
+            <span class="board-text-danger font-bold">{{ getDeviceLabel(editingConditionData.deviceId || t('app.device')) }}</span>
             <template v-if="editingConditionData.targetType !== 'state' && editingConditionData.key">
-              <span class="text-slate-400">.</span>
-              <span class="text-red-600 font-bold">{{ formatEditingConditionModelToken(editingConditionData.key) }}</span>
+              <span class="text-slate-500">.</span>
+              <span class="board-text-danger font-bold">{{ formatEditingConditionModelToken(editingConditionData.key) }}</span>
             </template>
             <template v-if="showRelationAndValue">
               <span class="text-slate-500 mx-1">{{ getRelationLabel(editingConditionData.relation || '=') }}</span>
@@ -3667,7 +3730,7 @@ watch(() => props.readOnly, readOnly => {
           v-if="specConditionBlockedReason"
           id="spec-condition-blocked-reason"
           role="status"
-          class="mr-auto text-xs font-semibold text-red-600"
+          class="mr-auto text-xs font-semibold board-text-danger"
           data-testid="spec-condition-blocked-reason"
         >
           {{ specConditionBlockedReason }}
@@ -3681,7 +3744,7 @@ watch(() => props.readOnly, readOnly => {
         <button
           @click="saveCondition"
           data-testid="spec-condition-save"
-          class="px-5 py-2.5 text-sm font-bold text-black bg-gradient-to-r from-red-500 to-red-600 rounded-lg hover:from-red-600 hover:to-red-700 transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="px-5 py-2.5 text-sm font-bold text-black bg-gradient-to-r from-[color:var(--danger)] to-[color:var(--danger)] rounded-lg hover:from-[color:var(--danger)] hover:to-[color:var(--danger)] transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           :disabled="props.readOnly || Boolean(specConditionBlockedReason)"
           :aria-describedby="specConditionBlockedReason ? 'spec-condition-blocked-reason' : undefined"
         >
@@ -3770,7 +3833,7 @@ watch(() => props.readOnly, readOnly => {
   >
     <div
       :ref="setTemplateDeleteDialogRef"
-      class="control-center-dialog-surface control-center-delete-dialog w-full max-w-md overflow-y-auto rounded-lg border p-6 shadow-2xl"
+      class="control-center-dialog-surface control-center-delete-dialog w-full max-w-md iot-scroll-region rounded-lg border p-6 shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-template-dialog-title"
@@ -3778,7 +3841,7 @@ watch(() => props.readOnly, readOnly => {
       @click.stop
     >
       <!-- 警告头部 -->
-      <div class="relative -mx-6 -top-6 mb-6 bg-red-600 rounded-t-2xl p-6 text-center">
+      <div class="relative -mx-6 -top-6 mb-6 bg-[color:var(--danger-fill)] rounded-t-2xl p-6 text-center">
         <div class="relative">
           <div class="w-16 h-16 mx-auto bg-white/20 rounded-full flex items-center justify-center mb-3">
             <span class="material-symbols-outlined text-white text-3xl">warning</span>
@@ -3788,26 +3851,26 @@ watch(() => props.readOnly, readOnly => {
       </div>
 
       <div v-if="templateToDelete" class="text-center mb-6">
-        <div class="inline-flex items-center gap-3 px-6 py-3 bg-red-50 rounded-xl border-2 border-red-200">
-          <span class="material-symbols-outlined text-red-500 text-xl">inventory_2</span>
-          <p class="text-lg font-bold text-red-600">{{ templateToDelete.manifest.Name }}</p>
+        <div class="inline-flex items-center gap-3 px-6 py-3 board-chip-danger rounded-xl border-2 border-[color:var(--danger-border)]">
+          <span class="material-symbols-outlined board-text-danger text-xl">inventory_2</span>
+          <p class="text-lg font-bold board-text-danger">{{ templateToDelete.manifest.Name }}</p>
         </div>
-        <p class="text-xs text-slate-400 mt-3">{{ t('app.actionCannotBeUndone') }}</p>
+        <p class="text-xs text-slate-500 mt-3">{{ t('app.actionCannotBeUndone') }}</p>
       </div>
 
       <div
         v-if="templateDeletePreview && !templateDeletePreview.canDelete"
-        class="mb-5 rounded-lg border border-amber-300 bg-amber-50 p-3 text-left"
+        class="mb-5 rounded-lg border border-[color:var(--warning-border)] board-chip-warning p-3 text-left"
       >
-        <p class="text-sm font-bold text-amber-800">{{ t('app.templateDeleteBlocked') }}</p>
-        <p class="mt-1 text-xs leading-5 text-amber-700">{{ t('app.templateDeleteBlockedDetail') }}</p>
+        <p class="text-sm font-bold board-text-warning">{{ t('app.templateDeleteBlocked') }}</p>
+        <p class="mt-1 text-xs leading-5 board-text-warning">{{ t('app.templateDeleteBlockedDetail') }}</p>
         <ul class="mt-2 space-y-1.5">
           <li
             v-for="blocker in templateDeletePreview.blockers"
             :key="blocker.itemId"
-            class="flex items-center gap-2 rounded border border-amber-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+            class="flex items-center gap-2 rounded border border-[color:var(--warning-border)] bg-white px-2 py-1.5 text-xs text-slate-700"
           >
-            <span class="material-symbols-outlined text-sm text-amber-600" aria-hidden="true">devices</span>
+            <span class="material-symbols-outlined text-sm board-text-warning" aria-hidden="true">devices</span>
             <span class="min-w-0 truncate" :title="blocker.itemLabel">{{ blocker.itemLabel }}</span>
           </li>
         </ul>
@@ -3830,7 +3893,7 @@ watch(() => props.readOnly, readOnly => {
         <button
           @click="confirmDeleteTemplate"
           :disabled="props.readOnly || isDeletingTemplate || !templateDeletePreview?.canDelete"
-          class="px-6 py-2.5 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-500 transition-all shadow-md flex items-center gap-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+          class="px-6 py-2.5 text-sm font-semibold text-white bg-[color:var(--danger-fill)] rounded-lg hover:bg-[color:var(--danger-fill)] transition-all shadow-md flex items-center gap-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
         >
           <span class="material-symbols-outlined text-sm">delete</span>
           {{ isDeletingTemplate ? t('app.deleting') : t('app.deleteTemplate') }}
@@ -3848,7 +3911,7 @@ watch(() => props.readOnly, readOnly => {
   >
     <div
       :ref="setResetDefaultsDialogRef"
-      class="template-reset-dialog max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border p-5 shadow-2xl"
+      class="template-reset-dialog max-h-[calc(100vh-2rem)] w-full max-w-md iot-scroll-region rounded-2xl border p-5 shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="reset-default-templates-title"
@@ -3878,7 +3941,7 @@ watch(() => props.readOnly, readOnly => {
           }) }}
         </div>
 
-        <div class="mt-3 max-h-44 overflow-y-auto border-y border-slate-200 py-1 dark:border-slate-700">
+        <div class="mt-3 max-h-44 iot-scroll-region border-y border-slate-200 py-1 dark:border-slate-700">
           <div
             v-for="change in defaultTemplateResetPreview.templateChanges"
             :key="`${change.changeType}:${change.templateName}`"
@@ -3894,7 +3957,7 @@ watch(() => props.readOnly, readOnly => {
 
         <div v-if="defaultTemplateResetPreview.affectedDevices.length" class="mt-3 text-xs">
           <div class="font-bold">{{ t('app.devicesUsingChangedTemplates') }}</div>
-          <div class="mt-1 max-h-20 overflow-y-auto text-slate-600 dark:text-slate-300">
+          <div class="mt-1 max-h-20 iot-scroll-region text-slate-600 dark:text-slate-300">
             <div
               v-for="device in defaultTemplateResetPreview.affectedDevices"
               :key="device.deviceId"
@@ -3913,7 +3976,7 @@ watch(() => props.readOnly, readOnly => {
           <div class="font-bold">{{ t('app.environmentVariablesWillChange', {
             count: defaultTemplateResetPreview.environmentChanges.length
           }) }}</div>
-          <ul class="mt-1 max-h-28 list-disc space-y-1 overflow-y-auto pl-5 text-slate-600 dark:text-slate-300">
+          <ul class="mt-1 max-h-28 list-disc space-y-1 iot-scroll-region pl-5 text-slate-600 dark:text-slate-300">
             <li
               v-for="change in defaultTemplateResetPreview.environmentChanges"
               :key="`${change.changeType}:${change.name}`"
@@ -3926,7 +3989,7 @@ watch(() => props.readOnly, readOnly => {
 
         <div
           v-if="defaultTemplateResetPreview.blockers.length"
-          class="mt-3 border-l-2 border-red-500 pl-3 text-xs text-red-700 dark:text-red-300"
+          class="mt-3 border-l-2 border-[color:var(--danger-border)] pl-3 text-xs board-text-danger"
           role="alert"
         >
           <div class="font-bold">{{ t('app.defaultTemplateResetBlocked') }}</div>
@@ -3938,9 +4001,9 @@ watch(() => props.readOnly, readOnly => {
             <div>
               <strong>{{ blocker.itemLabel }}</strong>: {{ defaultTemplateResetBlockerReason(blocker.reasonCode) }}
             </div>
-            <details class="mt-1 text-[11px] text-red-700/80 dark:text-red-300/80">
+            <details class="mt-1 text-[11px] board-text-danger/80">
               <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
-              <code class="mt-1 block whitespace-pre-wrap break-words rounded bg-red-100/70 px-2 py-1 dark:bg-red-950/50">{{ blocker.reason }}</code>
+              <code class="mt-1 block whitespace-pre-wrap break-words rounded board-chip-danger/70 px-2 py-1">{{ blocker.reason }}</code>
             </details>
           </div>
         </div>
@@ -3953,7 +4016,7 @@ watch(() => props.readOnly, readOnly => {
         <p
           v-if="defaultTemplateResetChangesBoardModel(defaultTemplateResetPreview)"
           data-testid="default-template-reset-reverification-warning"
-          class="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+          class="mt-2 rounded-lg border border-[color:var(--warning-border)] board-chip-warning px-3 py-2 text-xs font-semibold leading-relaxed board-text-warning"
           role="alert"
         >
           {{ t('app.defaultTemplateResetReverificationRequired') }}
@@ -4032,7 +4095,7 @@ watch(() => props.readOnly, readOnly => {
 }
 
 .bg-offline {
-  background-color: #EF4444;
+  background-color: var(--danger);
 }
 
 /* Material Symbols font */
@@ -4066,16 +4129,26 @@ details > summary::-webkit-details-marker {
   border-radius: 0.55rem;
   padding: 0.45rem 0.35rem;
   color: var(--board-text-muted, #64748b);
-  font-size: 0.62rem;
+  font-size: var(--iot-font-min);
   font-weight: 800;
   line-height: 1.1;
   transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  /* 44px floor: these measured 26px, and a mode switch is primary navigation. */
+  min-height: 2.75rem;
 }
 
 .control-mode-tabs button.active {
-  background: #a855f7;
+  /*
+   * `--accent-fill`, not a raw purple. `var(--accent)` under white ink measures **3.96:1** — under AA, and the kind
+   * of near-miss nobody sees by looking. It was also a hue this component used nowhere else, so "the selected
+   * mode" was said in a colour that meant nothing in particular.
+   *
+   * The fill half specifically: `--accent` alone is tuned as *text* and lightens in dark theme, where white
+   * ink on it drops to 2.54:1.
+   */
+  background: var(--accent-fill);
   color: #ffffff;
-  box-shadow: 0 8px 18px rgba(168, 85, 247, 0.22);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent-fill) 22%, transparent);
 }
 
 .device-preview-box {
@@ -4096,7 +4169,7 @@ details > summary::-webkit-details-marker {
   background: color-mix(in srgb, var(--board-control-bg, #f8fafc) 86%, var(--iot-color-accent, #8b5cf6) 8%);
   color: var(--board-text-muted, #64748b);
   padding: 0.55rem 0.65rem;
-  font-size: 0.68rem;
+  font-size: var(--iot-font-min);
   font-weight: 700;
   line-height: 1.2;
 }
@@ -4107,7 +4180,7 @@ details > summary::-webkit-details-marker {
   justify-content: space-between;
   gap: 0.5rem;
   color: var(--board-text-muted, #64748b);
-  font-size: 0.62rem;
+  font-size: var(--iot-font-min);
   font-weight: 800;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -4115,7 +4188,7 @@ details > summary::-webkit-details-marker {
 
 .device-preview-box__header strong {
   border-radius: 999px;
-  background: color-mix(in srgb, #a855f7 14%, var(--board-control-bg, #f1f5f9));
+  background: color-mix(in srgb, var(--accent) 14%, var(--board-control-bg, #f1f5f9));
   color: var(--board-text, #0f172a);
   padding: 0.1rem 0.45rem;
 }
@@ -4153,14 +4226,14 @@ details > summary::-webkit-details-marker {
 .device-preview-row small {
   min-width: 0;
   color: var(--board-text-muted, #64748b);
-  font-size: 0.62rem;
+  font-size: var(--iot-font-min);
   font-weight: 700;
   text-align: right;
 }
 
 .device-preview-row.has-error {
-  border-color: color-mix(in srgb, #ef4444 38%, var(--board-border, #e2e8f0));
-  background: color-mix(in srgb, #ef4444 9%, var(--board-card-bg, #ffffff));
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--board-border, #e2e8f0));
+  background: color-mix(in srgb, var(--danger) 9%, var(--board-card-bg, #ffffff));
 }
 
 .device-preview-row.has-error small {
@@ -4168,8 +4241,8 @@ details > summary::-webkit-details-marker {
 }
 
 .device-preview-row.has-warning {
-  border-color: color-mix(in srgb, #f59e0b 42%, var(--board-border, #e2e8f0));
-  background: color-mix(in srgb, #f59e0b 11%, var(--board-card-bg, #ffffff));
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--board-border, #e2e8f0));
+  background: color-mix(in srgb, var(--warning) 11%, var(--board-card-bg, #ffffff));
 }
 
 .device-preview-row.has-warning small {
@@ -4180,14 +4253,14 @@ details > summary::-webkit-details-marker {
 .device-preview-empty {
   margin-top: 0.45rem;
   color: var(--board-text-muted, #64748b);
-  font-size: 0.65rem;
+  font-size: var(--iot-font-min);
   font-weight: 700;
   text-align: center;
 }
 
 .device-runtime-box {
   background: color-mix(in srgb, var(--board-card-bg, #ffffff) 88%, transparent);
-  border-color: color-mix(in srgb, #a855f7 26%, var(--board-border, #e2e8f0));
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--board-border, #e2e8f0));
   color: var(--board-text, #0f172a);
 }
 
@@ -4231,7 +4304,7 @@ details > summary::-webkit-details-marker {
 }
 
 .template-group__summary:hover {
-  background: color-mix(in srgb, #f59e0b 13%, var(--board-card-bg, #ffffff));
+  background: color-mix(in srgb, var(--warning) 13%, var(--board-card-bg, #ffffff));
 }
 
 .template-group__label,
@@ -4240,7 +4313,7 @@ details > summary::-webkit-details-marker {
 }
 
 .template-group__count {
-  background: color-mix(in srgb, #f59e0b 16%, var(--board-control-bg, #f1f5f9));
+  background: color-mix(in srgb, var(--warning) 16%, var(--board-control-bg, #f1f5f9));
   color: var(--board-text, #0f172a);
 }
 
@@ -4292,7 +4365,7 @@ details > summary::-webkit-details-marker {
   color: var(--board-text, var(--text, #0f172a)) !important;
 }
 
-/* These controls declare `focus:outline-none focus:border-red-400`, i.e. the border colour is meant
+/* These controls declare `focus:outline-none focus:border-[color:var(--accent-border)]`, i.e. the border colour is meant
    to be the focus cue — but the `!important` border-colour above wins, leaving keyboard users with
    no indicator at all. An outline is a different property, so it cannot be overridden the same way. */
 .control-center-dialog-surface :is(input, select, textarea):focus-visible {
@@ -4304,12 +4377,12 @@ details > summary::-webkit-details-marker {
   background-color: var(--board-card-bg, var(--surface-elevated, #ffffff)) !important;
 }
 
-.control-center-dialog-surface .bg-red-50 {
-  background-color: color-mix(in srgb, #ef4444 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
+.control-center-dialog-surface .board-chip-danger {
+  background-color: color-mix(in srgb, var(--danger) 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
 }
 
-.control-center-dialog-surface .bg-amber-50 {
-  background-color: color-mix(in srgb, #f59e0b 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
+.control-center-dialog-surface .board-chip-warning {
+  background-color: color-mix(in srgb, var(--warning) 12%, var(--board-card-bg, var(--surface-elevated, #ffffff))) !important;
 }
 
 .control-center-dialog-surface :is(.text-black, .text-slate-700, .text-slate-800, .text-slate-900) {
@@ -4331,7 +4404,7 @@ details > summary::-webkit-details-marker {
   flex: 0 0 auto;
   place-items: center;
   border-radius: 0.9rem;
-  background: color-mix(in srgb, #f97316 16%, var(--board-panel-bg, #ffffff));
+  background: color-mix(in srgb, var(--warning) 16%, var(--board-panel-bg, #ffffff));
   color: #ea580c;
 }
 
@@ -4340,8 +4413,8 @@ details > summary::-webkit-details-marker {
 }
 
 .template-reset-dialog__notice {
-  background: color-mix(in srgb, #f97316 8%, var(--board-panel-bg, #ffffff));
-  border-color: color-mix(in srgb, #f97316 28%, var(--board-border, #e2e8f0));
+  background: color-mix(in srgb, var(--warning) 8%, var(--board-panel-bg, #ffffff));
+  border-color: color-mix(in srgb, var(--warning) 28%, var(--board-border, #e2e8f0));
   color: var(--board-text, #334155);
 }
 
@@ -4370,7 +4443,7 @@ details > summary::-webkit-details-marker {
 
 .template-reset-dialog__btn.primary {
   border: 1px solid transparent;
-  background: #f97316;
+  background: var(--warning);
   color: #ffffff;
   box-shadow: 0 10px 20px rgba(249, 115, 22, 0.22);
 }
@@ -4414,18 +4487,38 @@ details > summary::-webkit-details-marker {
 .template-card:focus-visible,
 .template-card--active {
   z-index: 30;
-  border-color: color-mix(in srgb, #f59e0b 58%, var(--board-border, #e2e8f0));
+  /* Tokens, not hex: `var(--warning)` and `#e2e8f0` are a light-theme amber and a light border, so on a dark card
+     they painted a light-theme treatment. The role tokens resolve per theme. */
+  border-color: color-mix(in srgb, var(--warning) 58%, var(--board-border, var(--border)));
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
-  outline: none;
+}
+
+/*
+ * Focus gets a real indicator, and one that is not the same as hover.
+ *
+ * The card shared hover's styling and then set `outline: none`, so tabbing through the template list produced
+ * a lift and a shadow but no ring — measured **1.07:1**, i.e. no discernible indicator at all. Two problems
+ * in one: a keyboard user could not see where they were, and could not tell "focused" from "hovered" even
+ * when they could. The list is 45 default templates long, so this is where losing the cursor costs most.
+ *
+ * The ring goes on the **inner button**, because that is what actually receives focus: the card is a `div`
+ * wrapping a transparent full-width `button`. Styling `.template-card:focus-visible` looked right and did
+ * nothing in dark theme — it passed in light only because the browser's own default outline happened to be
+ * visible there, which is the kind of accidental pass that makes a fix look complete when it is not.
+ */
+.template-card > button:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 3px;
+  border-radius: 0.35rem;
 }
 
 .template-card__icon {
-  background: color-mix(in srgb, #f59e0b 13%, var(--board-control-bg, #f1f5f9));
+  background: color-mix(in srgb, var(--warning) 13%, var(--board-control-bg, #f1f5f9));
 }
 
 .template-card:hover .template-card__icon,
 .template-card--active .template-card__icon {
-  background: color-mix(in srgb, #f59e0b 22%, var(--board-control-bg, #f1f5f9));
+  background: color-mix(in srgb, var(--warning) 22%, var(--board-control-bg, #f1f5f9));
 }
 
 .template-card__title {
@@ -4434,7 +4527,7 @@ details > summary::-webkit-details-marker {
 
 .template-card:hover .template-card__title,
 .template-card--active .template-card__title {
-  color: color-mix(in srgb, #f59e0b 78%, var(--board-text, #0f172a));
+  color: color-mix(in srgb, var(--warning) 78%, var(--board-text, #0f172a));
 }
 
 .template-card__stats {
@@ -4451,7 +4544,7 @@ details > summary::-webkit-details-marker {
 
 .template-card:hover .template-card__drag-cue,
 .template-card--active .template-card__drag-cue {
-  color: color-mix(in srgb, #f59e0b 85%, var(--board-text, #0f172a));
+  color: color-mix(in srgb, var(--warning) 85%, var(--board-text, #0f172a));
   opacity: 1;
 }
 
@@ -4481,13 +4574,13 @@ details > summary::-webkit-details-marker {
 }
 
 .template-card__action:hover {
-  color: color-mix(in srgb, #f59e0b 82%, var(--board-text, #0f172a));
-  background: color-mix(in srgb, #f59e0b 15%, var(--board-control-bg, #f1f5f9));
+  color: color-mix(in srgb, var(--warning) 82%, var(--board-text, #0f172a));
+  background: color-mix(in srgb, var(--warning) 15%, var(--board-control-bg, #f1f5f9));
 }
 
 .template-card__action--danger:hover {
-  color: #ef4444;
-  background: color-mix(in srgb, #ef4444 14%, var(--board-control-bg, #f1f5f9));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, var(--board-control-bg, #f1f5f9));
 }
 
 .template-preview {
@@ -4521,7 +4614,7 @@ details > summary::-webkit-details-marker {
 .template-preview__eyebrow {
   margin: 0;
   color: var(--template-preview-muted);
-  font-size: 0.62rem;
+  font-size: var(--iot-font-min);
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -4581,7 +4674,7 @@ details > summary::-webkit-details-marker {
 .template-preview__section-label {
   display: block;
   color: var(--template-preview-muted);
-  font-size: 0.58rem;
+  font-size: var(--iot-font-min);
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -4619,7 +4712,7 @@ details > summary::-webkit-details-marker {
   padding: 0.18rem 0.45rem;
   background: var(--template-preview-control-bg);
   color: var(--template-preview-text);
-  font-size: 0.65rem;
+  font-size: var(--iot-font-min);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

@@ -213,7 +213,6 @@ public class ApplyFixTool extends AbstractAiTool {
             response.put("operation", "applied");
             response.put("applied", result.isApplied());
             response.put("strategy", result.getStrategy());
-            response.put("verificationRechecked", result.isVerificationRechecked());
             response.put("verificationEvidenceReused", result.isVerificationEvidenceReused());
             response.put("previousRuleCount", result.getPreviousRuleCount());
             response.put("currentRuleCount", result.getCurrentRuleCount());
@@ -242,7 +241,6 @@ public class ApplyFixTool extends AbstractAiTool {
         return result != null
                 && result.isApplied()
                 && command.strategy().equals(result.getStrategy())
-                && !result.isVerificationRechecked()
                 && result.isVerificationEvidenceReused()
                 && result.getAppliedSuggestion() != null
                 && sameVisibleSuggestion(command.suggestion(), result.getAppliedSuggestion())

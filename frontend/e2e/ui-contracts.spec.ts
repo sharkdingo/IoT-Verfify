@@ -63,12 +63,19 @@ test.describe('routing and session', () => {
     await expect(page).toHaveTitle('IoT-Verify')
   })
 
-  test('routes an unknown path to a 404 page whose home link works', async ({ page }) => {
+  test('routes an unknown path to a 404 page that reports the address and offers a way back', async ({ page }) => {
     await page.goto('/#/no-such-page')
-    await expect(page).toHaveURL(/#\/404$/)
+    // The route carries the address that failed, so the page can show the user what it could not find
+    // instead of only that something went wrong. Hence no `$` anchor: `#/404?from=/no-such-page`.
+    await expect(page).toHaveURL(/#\/404\?from=%2Fno-such-page$|#\/404\?from=\/no-such-page$/)
     await expect(page).toHaveTitle('IoT-Verify · 404')
+    await expect(page.getByTestId('not-found-attempted')).toContainText('/no-such-page')
 
-    await page.click('.el-result a')
+    // Element Plus's `.el-result` is gone: the page was rebuilt on the product's own tokens so it can follow
+    // the theme and keep the shared header, which the Element Plus default could do neither of.
+    await expect(page.locator('.el-result')).toHaveCount(0)
+
+    await page.getByTestId('not-found-home').click()
     await expect(page).toHaveURL(/#\/$/)
     await expect(page.locator('#landing-title')).toBeVisible()
   })
@@ -93,8 +100,16 @@ test.describe('routing and session', () => {
     await seedSession(page, auth, { iot_verify_theme: 'light' })
 
     await page.goto('/#/404')
-    await expect(page.locator('.el-result')).toBeVisible()
-    expect(await page.locator('h1').count()).toBe(0)
+    // Was `.el-result` visible with **zero** h1s — a page whose main message was not a heading at all, which
+    // is the state the rebuild corrected rather than a contract to preserve. One h1 per route, including this
+    // one.
+    //
+    // Deliberately *not* asserting `not-found-attempted` here: this navigates to `/#/404` directly, so there
+    // is no failed address to report and `v-if="attemptedPath"` correctly renders nothing. My first version
+    // demanded that element and failed — the assertion was wrong, not the page. The 404 test above covers the
+    // populated case, where the address arrives as `?from=`.
+    await expect(page.locator('#not-found-title')).toBeVisible()
+    expect(await page.locator('h1').count()).toBe(1)
 
     await page.goto('/#/board')
     await expect(page.locator('.iot-board')).toBeVisible({ timeout: 60_000 })
@@ -107,7 +122,11 @@ test.describe('theme control', () => {
   test('cycles light, dark, and follow-system, persisting only explicit choices', async ({ page, sharedReadOnlyAccount: auth }) => {
     await openBoard(page, auth)
 
-    const toggle = page.locator('.board-nav-bar .theme-toggle')
+    // Two toggles exist in the nav bar, and only ever one is visible: the compact one on the bar, and a
+    // full-size one inside the phone-only overflow group (`.nav-overflow-only`, `display: none` above 420px)
+    // that exists because at 320px the assistant and Log Out were unreachable. `.visible` picks whichever the
+    // current viewport actually renders, rather than asserting a single-element DOM that is not the contract.
+    const toggle = page.locator('.board-nav-bar .theme-toggle:visible')
     const storedTheme = () => page.evaluate(() => window.localStorage.getItem('iot_verify_theme'))
 
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')

@@ -94,6 +94,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
         <form
           :ref="setDialogRef"
           class="account-delete-dialog"
+          data-testid="account-delete-dialog"
           role="dialog"
           aria-modal="true"
           aria-labelledby="account-delete-title"
@@ -114,6 +115,26 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
             <span>{{ t('app.deleteAccountDataWarning') }}</span>
           </div>
 
+          <!--
+            What can still be saved, stated honestly.
+
+            The product already has a scene export — `buildSceneExport` writes templates, devices, the
+            Environment Pool, rules and specifications to a portable JSON file — and this dialog never mentioned
+            it. All three reviews asked for exactly that: "there is no visible export/download or backup action
+            before irreversible deletion. I would want a way to export boards, rules, specifications, runs, and
+            counterexamples."
+
+            Two of those cannot be exported, so the note says so rather than implying a full backup. Run history
+            and counterexamples are *results* — reproducible by re-running against an exported design, but not
+            themselves portable. Offering "export everything" here would be the more comforting message and the
+            false one, and on the one screen where a user is deciding whether to destroy their work, an overstated
+            reassurance is worse than none.
+          -->
+          <p class="account-delete-export-note" data-testid="account-delete-export-note">
+            <span class="material-symbols-outlined" aria-hidden="true">download</span>
+            <span>{{ t('app.deleteAccountExportHint') }}</span>
+          </p>
+
           <label class="account-delete-field">
             <span>{{ t('app.deleteAccountConfirmationLabel') }}</span>
             <input
@@ -121,6 +142,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               type="text"
               autocomplete="off"
               name="delete-account-confirmation"
+              data-testid="account-delete-confirmation"
               data-1p-ignore
               data-lpignore="true"
               :placeholder="t('app.deleteAccountConfirmationPlaceholder')"
@@ -139,16 +161,32 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               v-model="form.password"
               type="password"
               autocomplete="current-password"
+              data-testid="account-delete-password"
               :placeholder="t('app.deleteAccountPasswordPlaceholder')"
               :disabled="loading"
             >
           </label>
 
+          <!-- Test ids on the controls of the product's one irreversible action.
+               They were absent, so nothing outside this component could address the dialog: a browser check
+               looking for the delete flow found no route to it and reported the affordance missing. A
+               destructive action is the last thing that should be unaddressable by a test. -->
           <div class="account-delete-actions">
-            <button type="button" class="account-delete-btn secondary" :disabled="loading" @click="handleCancel">
+            <button
+              type="button"
+              class="account-delete-btn secondary"
+              data-testid="account-delete-cancel"
+              :disabled="loading"
+              @click="handleCancel"
+            >
               {{ t('app.cancel') }}
             </button>
-            <button type="submit" class="account-delete-btn danger" :disabled="!canConfirm">
+            <button
+              type="submit"
+              class="account-delete-btn danger"
+              data-testid="account-delete-confirm"
+              :disabled="!canConfirm"
+            >
               <span v-if="loading" class="account-delete-spinner" aria-hidden="true"></span>
               <span v-else>{{ t('app.deleteAccountConfirm') }}</span>
             </button>
@@ -170,7 +208,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   padding: 1rem;
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: color-mix(in srgb, var(--text, #0f172a) 56%, transparent);
+  background: color-mix(in srgb, var(--text, var(--text)) 56%, transparent);
   backdrop-filter: blur(5px);
 }
 
@@ -184,10 +222,10 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  border: 1px solid color-mix(in srgb, #ef4444 28%, var(--border, #e2e8f0));
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border, var(--border)));
   border-radius: 1.25rem;
-  background: var(--surface-overlay, #ffffff);
-  color: var(--text, #0f172a);
+  background: var(--surface-overlay);
+  color: var(--text, var(--text));
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
 }
 
@@ -198,8 +236,8 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   display: grid;
   place-items: center;
   border-radius: 999px;
-  background: color-mix(in srgb, #ef4444 14%, var(--surface-muted, #f8fafc));
-  color: #dc2626;
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface-muted));
+  color: var(--danger);
 }
 
 .account-delete-icon .material-symbols-outlined {
@@ -218,7 +256,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
 .account-delete-copy p {
   margin: 0.5rem 0 0;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted, var(--text-muted));
   font-size: 0.9rem;
   line-height: 1.55;
 }
@@ -228,12 +266,33 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   gap: 0.5rem;
   margin: 1.25rem 0;
   padding: 0.75rem;
-  border: 1px solid color-mix(in srgb, #ef4444 30%, var(--border, #e2e8f0));
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border, var(--border)));
   border-radius: 0.875rem;
-  background: color-mix(in srgb, #ef4444 8%, var(--surface-muted, #f8fafc));
-  color: #b91c1c;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
+  color: var(--danger);
   font-size: 0.8rem;
   line-height: 1.45;
+}
+
+/* The export note sits below the warning and is deliberately quieter than it: it is a way out, not another
+   alarm. Two danger-coloured blocks stacked would make neither read as the more urgent. */
+.account-delete-export-note {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: -0.5rem 0 1.25rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.account-delete-export-note .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 1.05rem;
 }
 
 .account-delete-warning .material-symbols-outlined {
@@ -246,40 +305,40 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   margin-top: 0.85rem;
   font-size: 0.78rem;
   font-weight: 700;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted, var(--text-muted));
 }
 
 .account-delete-field input {
   width: 100%;
   margin-top: 0.4rem;
   padding: 0.7rem 0.8rem;
-  border: 1px solid var(--border, #cbd5e1);
+  border: 1px solid var(--border, var(--border-strong));
   border-radius: 0.75rem;
-  background: var(--surface, #ffffff);
-  color: var(--text, #0f172a);
+  background: var(--surface);
+  color: var(--text, var(--text));
   font-size: 0.9rem;
   outline: none;
 }
 
 .account-delete-field input:focus {
-  border-color: #ef4444;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #ef4444 16%, transparent);
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent);
 }
 
 .account-delete-field input[aria-invalid="true"] {
-  border-color: #ef4444;
+  border-color: var(--danger);
 }
 
 .account-delete-field small {
   display: block;
   margin-top: 0.35rem;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted, var(--text-muted));
   font-weight: 500;
   line-height: 1.4;
 }
 
 .account-delete-field small.danger {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .account-delete-actions {
@@ -304,20 +363,38 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 }
 
 .account-delete-btn.secondary {
-  background: var(--surface-muted, #f1f5f9);
-  color: var(--text-muted, #475569);
-  border: 1px solid var(--border, #cbd5e1);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  border: 1px solid var(--border, var(--border-strong));
 }
 
 .account-delete-btn.danger {
-  background: #dc2626;
+  background: var(--danger-fill);
   color: #ffffff;
   box-shadow: 0 12px 24px rgba(220, 38, 38, 0.24);
 }
 
+/* A disarmed destructive button must look disarmed.
+ *
+ * `opacity: 0.58` alone left the danger button saturated red *and* still wearing its
+ * `box-shadow: 0 12px 24px rgba(220,38,38,.24)` glow, so at 58% it read as armed. All three reviews of this
+ * dialog said so — "'Delete Permanently' appears enabled even though both confirmation fields are empty" —
+ * while measurement showed `disabled: true` in every case. The button was correct and its appearance was not,
+ * which is the worse of the two failures on the product's only irreversible action: a user who believes the
+ * control is live cannot tell whether their click was ignored or is about to destroy their work.
+ *
+ * Dropping the glow and the fill's saturation makes the state legible without relying on opacity alone. */
 .account-delete-btn:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+  box-shadow: none;
+}
+
+.account-delete-btn.danger:disabled {
+  /* Mixed toward the surface rather than merely faded, so the fill itself stops reading as a live danger
+     colour. The `opacity` above then softens what is already a muted button instead of dimming a saturated
+     one. */
+  background: color-mix(in srgb, var(--danger) 34%, var(--surface-elevated));
 }
 
 .account-delete-spinner {

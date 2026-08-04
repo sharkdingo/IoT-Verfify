@@ -191,6 +191,17 @@ describe('CanvasBoard device context actions', () => {
     expect(changedTarget.classes()).toContain('trace-changed')
     expect(changedTarget.get('.device-runtime-chip--changed').text()).toContain('100')
     expect(changedTarget.find('[data-testid="trace-change-badge"]').exists()).toBe(false)
+    // The node shows the destination value only — no `previous → current` pair.
+    //
+    // This assertion had no recorded reason, so it read as an accident: `previousValue` is computed in
+    // `getNodeRuntimeBadges` and `.device-runtime-chip__previous` is fully styled in `board.css`, yet
+    // nothing rendered either. I rendered the pair, and the numbers said this was right all along —
+    // `.device-runtime-chip--changed` is capped at `58cqmin`, i.e. **64px on a standard 150×110 node**,
+    // where "Temperature 24 → 26" truncates to a fragment. A fragment is worse than the destination value.
+    //
+    // The transition lives in the popover anchored to the node, which has room for it, and in
+    // `badge.title` for hover and assistive technology. Keeping the reason here so the next reader does
+    // not re-litigate it from the unused CSS.
     expect(changedTarget.find('.device-runtime-chip__previous').exists()).toBe(false)
     expect(wrapper.findAll('.edge-line--active').length).toBeGreaterThan(0)
     expect(wrapper.find('.particle-line').exists()).toBe(true)

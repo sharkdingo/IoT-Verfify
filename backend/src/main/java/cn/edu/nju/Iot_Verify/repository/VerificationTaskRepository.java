@@ -98,7 +98,7 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
      */
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
+    @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.progressStage = NULL, t.completedAt = :completedAt, "
          + "t.progress = 100, t.outcome = :outcome, t.violatedSpecCount = :violatedSpecCount, "
          + "t.disabledRuleCount = :disabledRuleCount, t.skippedSpecCount = :skippedSpecCount, "
          + "t.specResultsJson = :specResultsJson, t.checkLogsJson = :checkLogsJson, "
@@ -129,8 +129,9 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
      */
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.outcome = :outcome, t.errorMessage = :errorMessage, "
+    // Progress is preserved: the worker failed partway, so 100 would claim work it never finished.
+    @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.progressStage = NULL, t.completedAt = :completedAt, "
+         + "t.outcome = :outcome, t.errorMessage = :errorMessage, "
          + "t.checkLogsJson = :checkLogsJson, t.processingTimeMs = :processingTimeMs, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses) "
@@ -180,8 +181,10 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE VerificationTaskPo t SET t.status = :failed, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.outcome = :outcome, t.errorMessage = :errorMessage, "
+    // Progress is deliberately not overwritten — see FuzzTaskRepository.failExpiredActiveTasks: an
+    // expired lease means the work was abandoned, so a forced 100 asserts completed work.
+    @Query("UPDATE VerificationTaskPo t SET t.status = :failed, t.progressStage = NULL, t.completedAt = :completedAt, "
+         + "t.outcome = :outcome, t.errorMessage = :errorMessage, "
          + "t.checkLogsJson = :checkLogsJson, t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.status IN (:activeStatuses) "
          + "AND (t.leaseExpiresAt IS NULL OR t.leaseExpiresAt <= :expiredBefore)")
@@ -200,8 +203,9 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
      */
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE VerificationTaskPo t SET t.status = :cancelledStatus, "
-         + "t.completedAt = :completedAt, t.progress = 100, t.outcome = :outcome, "
+    // Progress is preserved — a user-cancelled run stopped partway, so 100 would claim work never done.
+    @Query("UPDATE VerificationTaskPo t SET t.status = :cancelledStatus, t.progressStage = NULL, "
+         + "t.completedAt = :completedAt, t.outcome = :outcome, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
     int cancelTaskIfStillActive(@Param("taskId") Long taskId,

@@ -172,11 +172,11 @@ describe('FuzzingResultDialog', () => {
       'dark:border-slate-700',
       'dark:bg-slate-900'
     ]))
-    expect(wrapper.get('[data-testid="fuzzing-result-mode"]').classes()).toEqual(expect.arrayContaining([
-      'dark:border-amber-800',
-      'dark:bg-amber-950/50',
-      'dark:text-amber-100'
-    ]))
+    // Assert the semantic role, not a hue ramp: PAPER_COMPATIBLE mode is a warning surface, and the
+    // theme-aware token owns how that looks in each theme. Pinning `dark:bg-amber-950/50` made the
+    // test a copy of the implementation and broke on a change that altered nothing user-visible.
+    expect(wrapper.get('[data-testid="fuzzing-result-mode"]').classes())
+      .toContain('board-surface-warning')
     expect(wrapper.text()).toContain('7/14/2026')
     expect(wrapper.get('[data-testid="fuzzing-result-mode"]').text()).toContain('Random state and events')
     expect(wrapper.get('[data-testid="fuzzing-result-mode"]').text()).toContain('legal random state')
@@ -233,15 +233,11 @@ describe('FuzzingResultDialog', () => {
     expect(wrapper.text()).toContain('No candidate within this budget; not a proof.')
     const formalNotice = wrapper.get('[data-testid="fuzz-formal-verification-current-board-notice"]')
     expect(formalNotice.text()).toContain('Formal verification checks the complete current Board')
-    expect(formalNotice.classes()).toEqual(expect.arrayContaining([
-      'border-indigo-200',
-      'bg-indigo-50',
-      'text-indigo-950',
-      'dark:border-indigo-800',
-      'dark:bg-indigo-950/50',
-      'dark:text-indigo-100'
-    ]))
-    expect(formalNotice.attributes('class')).not.toMatch(/emerald|green/)
+    // The notice explains what formal verification covers, so it is informational — asserted as the
+    // semantic role rather than an indigo ramp, which was a copy of the implementation.
+    expect(formalNotice.classes()).toContain('board-surface-info')
+    // Still must not read as success: this notice is not a safety result.
+    expect(formalNotice.attributes('class')).not.toMatch(/emerald|green|board-surface-success/)
     await wrapper.get('[data-testid="verify-current-board-without-finding"]').trigger('click')
     expect(wrapper.emitted('verifyCurrentBoard')).toHaveLength(1)
   })

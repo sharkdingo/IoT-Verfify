@@ -567,6 +567,7 @@ import { authApi } from '@/api/auth'
 // Types
 import type {DeviceDialogMeta, DeviceTemplate, InternalVariable} from '../types/device'
 import type { BoardLayoutDto, CanvasPan } from '../types/canvas'
+import type { BoardUndoResult } from '@/types/boardEdit'
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm, RuleSourceItemType } from '../types/rule'
@@ -1037,6 +1038,20 @@ const LAYOUT_LOGOUT_FLUSH_TIMEOUT_MS = 1_500
 const DEFAULT_CONTROL_PANEL_WIDTH = 320
 const DEFAULT_INSPECTOR_PANEL_WIDTH = 320
 
+/**
+ * One width for both collapsed rails.
+ *
+ * They were 64px and 48px, hardcoded at four separate sites. Measured, each rail contains **exactly one 44x44
+ * Expand button** — identical content and identical purpose, so a 16px difference between them has no reason and
+ * reads as accidental rather than composed. Flanking the canvas with mismatched rails is precisely the kind of
+ * detail that makes a focused view look evacuated instead of designed.
+ *
+ * 56px, not 48: a 44px target inside a 48px rail leaves 2px of air, which looks cramped and crowds the tap
+ * target against the canvas edge. 56px gives a symmetric 6px inset on both sides — enough to read as a
+ * deliberate margin at the two vertical edges of the stage.
+ */
+const COLLAPSED_PANEL_RAIL_WIDTH = 56
+
 const ASYNC_TASK_POLL_INTERVAL_MS = 1000
 const ASYNC_TASK_MAX_POLLS = 600
 const TASK_INBOX_REFRESH_INTERVAL_MS = 5000
@@ -1346,7 +1361,7 @@ const effectiveControlPanelWidth = computed(() =>
 const effectiveInspectorPanelWidth = computed(() =>
   Math.min(boardPanels.inspector.width, widePanelWidthLimit.value))
 const actionDockRightInset = computed(() => {
-  const inspectorWidth = boardPanels.inspector.collapsed ? 48 : effectiveInspectorPanelWidth.value
+  const inspectorWidth = boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveInspectorPanelWidth.value
   const gap = actionDockViewportWidth.value < 640 ? 8 : 14
   return inspectorWidth + gap
 })
@@ -1388,8 +1403,8 @@ let panelStateTouchedBeforeLayout = false
 let canvasStateTouchedBeforeLayout = false
 
 const boardShellStyle = computed(() => ({
-  '--board-control-width': `${boardPanels.control.collapsed ? 64 : effectiveControlPanelWidth.value}px`,
-  '--board-inspector-width': `${boardPanels.inspector.collapsed ? 48 : effectiveInspectorPanelWidth.value}px`,
+  '--board-control-width': `${boardPanels.control.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveControlPanelWidth.value}px`,
+  '--board-inspector-width': `${boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveInspectorPanelWidth.value}px`,
   '--board-action-rail-width': actionDockRailWidth.value
 }))
 
@@ -3331,7 +3346,7 @@ const handleDeviceRuntimeSave = async (nodeId: string, runtime: DeviceRuntimeCon
           ? t('app.instanceConfigSaved')
           : t('app.instanceConfigUnchanged'))
       } catch (error: any) {
-        console.error('保存设备实例配置失败', error)
+        console.error('Failed to save device instance configuration', error)
         if (error?.response?.data?.data?.reasonCode === 'DEVICE_RUNTIME_STALE') {
           const refreshed = await refreshDevices()
           await reloadUndoAvailability()
@@ -3514,7 +3529,7 @@ const forceDeleteNode = async (
       reportEnvironmentChanges(mutation.environmentChanges, bundledEnvironmentNamesBeforeDelete, true)
       return { responseConfirmed: true }
     } catch (error: any) {
-      console.error('删除设备失败', error)
+      console.error('Failed to delete device', error)
       const message = extractApiErrorMessage(error, t('app.deleteDeviceFailedRetry'))
       if (error?.response?.status === 409) {
         await Promise.all([refreshDevices(), refreshEnvironmentVariables(), refreshRules(), refreshSpecifications()])
@@ -3712,7 +3727,7 @@ const confirmDelete = async () => {
     }
     clearDeleteConfirmDialog()
   } catch (error) {
-    console.error('删除设备失败:', error)
+    console.error('Failed to delete device:', error)
     notifyError(t('app.deleteDeviceFailedRetry'))
   } finally {
     deleteConfirmSubmitting.value = false
@@ -3869,7 +3884,7 @@ const deleteRule = async (ruleId: string) => {
         commitSemanticScene({ rules: mutation.currentItems, availability: mutation })
         notifySuccess(t('app.deleteRuleSuccess'))
       } catch (error: any) {
-        console.error('删除规则失败', error)
+        console.error('Failed to delete rule', error)
         const refreshed = await refreshRules()
         await reloadUndoAvailability()
         if (refreshed && !rules.value.some(rule => rule.id === ruleId)) {
@@ -3907,7 +3922,7 @@ const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
         focusedRuleId.value = ruleId
         notifySuccess(t('app.ruleOrderUpdated'))
       } catch (error: any) {
-        console.error('规则执行顺序保存失败', error)
+        console.error('Failed to save rule execution order', error)
         const refreshed = await refreshRules()
         await reloadUndoAvailability()
         const currentOrder = rules.value.map(rule => String(rule.id || ''))
@@ -3969,7 +3984,7 @@ const deleteSpecification = async (specId: string) => {
         commitSemanticScene({ specs: mutation.currentItems, availability: mutation })
         notifySuccess(t('app.deleteSpecSuccess'))
       } catch (error: any) {
-        console.error('删除规约失败', error)
+        console.error('Failed to delete specification', error)
         const refreshed = await refreshSpecifications()
         await reloadUndoAvailability()
         if (refreshed && !specifications.value.some(spec => spec.id === specId)) {
@@ -4065,7 +4080,7 @@ const persistBoardLayout = async (request: QueuedBoardLayoutSave): Promise<boole
       && !boardLifecycleDisposed
       && Boolean(getToken())
     if (mayShowFeedback) {
-      console.error('保存画布布局失败', e)
+      console.error('Failed to save canvas layout', e)
       if (!layoutSaveErrorShown) {
         layoutSaveErrorShown = true
         notifyError(t('app.saveLayoutFailed'))
@@ -4281,7 +4296,7 @@ const refreshDeviceTemplates = async (): Promise<boolean> => {
     boardDataLoadState.templates = 'ready'
     return true
   } catch (e) {
-    console.error('加载设备模板失败:', e)
+    console.error('Failed to load device templates:', e)
     boardDataLoadState.templates = 'error'
     return false
   } finally {
@@ -4333,7 +4348,7 @@ const refreshDevices = async (): Promise<boolean> => {
     boardDataLoadState.nodes = 'ready'
     return true
   } catch(e) {
-    console.error('加载设备失败', e)
+    console.error('Failed to load devices', e)
     boardDataLoadState.nodes = 'error'
     return false
   }
@@ -4346,7 +4361,7 @@ const refreshEnvironmentVariables = async (): Promise<boolean> => {
     boardDataLoadState.environment = 'ready'
     return true
   } catch (e) {
-    console.error('加载环境变量池失败', e)
+    console.error('Failed to load the environment variable pool', e)
     boardDataLoadState.environment = 'error'
     return false
   }
@@ -4382,7 +4397,7 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
     return true
   } catch (error) {
     if (!isCurrentBoardAuthScope(authScopeEpoch)) return false
-    console.error('加载画布语义快照失败:', error)
+    console.error('Failed to load the canvas semantic snapshot:', error)
     allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'error' })
     return false
   } finally {
@@ -4487,7 +4502,7 @@ const saveEnvironmentVariables = async (patches: EnvironmentVariableUpdateReques
           change => !changedPatchNames.has(change.name)
         ))
       } catch (e: any) {
-        console.error('保存环境变量池失败', e)
+        console.error('Failed to save the environment variable pool', e)
         if (e?.response?.data?.data?.reasonCode === 'ENVIRONMENT_VARIABLE_STALE') {
           // A stale CAS can also mean that another tab removed a device or
           // template which sourced this variable. Reconcile the full semantic
@@ -4632,7 +4647,7 @@ const showSceneImportError = async (error: any) => {
     message: h('div', { class: 'space-y-3 text-left' }, [
         h('p', { class: 'text-sm', style: { color: 'var(--text-muted)' } },
           t('app.sceneImportValidationSummary', { count: entries.length })),
-        ...entries.map(([field, reason]) => h('div', { class: 'border-l-2 border-rose-300 pl-3' }, [
+        ...entries.map(([field, reason]) => h('div', { class: 'border-l-2 border-[color:var(--danger-border)] pl-3' }, [
           h('div', { class: 'text-sm font-semibold', style: { color: 'var(--text)' } },
             formatSceneValidationCoordinate(field, t)),
           h('div', { class: 'mt-0.5 text-sm', style: { color: 'var(--text-muted)' } },
@@ -4786,7 +4801,7 @@ const importScene = async (
           throw new Error('Scene replacement response did not match the requested semantic scene')
         }
       } catch (error: any) {
-        console.error('场景导入失败', error)
+        console.error('Failed to import scene', error)
         if (await reportBoardReplacementDrift(error)) return false
         const status = Number(error?.response?.status || 0)
         if (status >= 400 && status < 500) {
@@ -4912,7 +4927,7 @@ const clearScene = async () => {
         focusedSpecId.value = null
         notifySuccess(t('app.sceneClearSuccess'))
       } catch (error: any) {
-        console.error('清空场景失败', error)
+        console.error('Failed to clear scene', error)
         if (await reportBoardReplacementDrift(error)) return
         const status = Number(error?.response?.status || 0)
         if (status >= 400 && status < 500) {
@@ -4962,7 +4977,7 @@ const handleSceneImportFile = async (event: Event) => {
     try {
       raw = JSON.parse(text)
     } catch (error) {
-      console.error('场景 JSON 解析失败', error)
+      console.error('Failed to parse scene JSON', error)
       notifyError(t('app.invalidJsonFile'))
       return
     }
@@ -4970,7 +4985,7 @@ const handleSceneImportFile = async (event: Event) => {
     try {
       scene = normalizeSceneFile(raw)
     } catch (error) {
-      console.error('场景文件校验失败', error)
+      console.error('Scene file validation failed', error)
       notifyError(error instanceof Error && error.message.trim()
         ? error.message
         : t('app.sceneImportFailed'))
@@ -4978,7 +4993,7 @@ const handleSceneImportFile = async (event: Event) => {
     }
     await importScene(scene)
   } catch (error) {
-    console.error('读取场景文件失败', error)
+    console.error('Failed to read scene file', error)
     notifyError(getSceneErrorMessage(error))
   } finally {
     if (input) input.value = ''
@@ -4998,7 +5013,7 @@ const refreshRules = async (): Promise<boolean> => {
     boardDataLoadState.rules = 'ready'
     return true
   } catch (e) {
-    console.error('加载规则失败', e)
+    console.error('Failed to load rules', e)
     boardDataLoadState.rules = 'error'
     return false
   }
@@ -5014,7 +5029,7 @@ const refreshSpecifications = async (): Promise<boolean> => {
     boardDataLoadState.specs = 'ready'
     return true
   } catch(e) {
-    console.error('加载规约失败', e)
+    console.error('Failed to load specifications', e)
     boardDataLoadState.specs = 'error'
     return false
   }
@@ -5279,14 +5294,28 @@ const getVisibleCanvasFrame = () => {
   const canvasEl = document.querySelector('.canvas-container')
   if (!canvasEl) return null
   const rect = canvasEl.getBoundingClientRect()
-  const leftInset = boardPanels.control.collapsed ? 64 : effectiveControlPanelWidth.value
+  const leftInset = boardPanels.control.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveControlPanelWidth.value
   const actionRailInset = actionDockReservedWidth.value + (isActionDockPackedMode.value ? 8 : 16)
-  const rightInset = (boardPanels.inspector.collapsed ? 48 : effectiveInspectorPanelWidth.value) + actionRailInset
+  const rightInset = (boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveInspectorPanelWidth.value) + actionRailInset
   const canvasOffset = getCanvasInnerOffset()
   const topInset = canvasOffset.y
   const timelineVisible = simulationAnimationState.value.visible || traceAnimationState.value.visible
+  // Measure the playback overlay, as the left and right insets already measure their panels.
+  //
+  // This was `min(260, max(160, innerHeight * 0.28))` — a fraction of the window, while the overlay's
+  // height is content-driven. Measured at 1440×900: the reservation came to **252px** against an overlay
+  // rendering at **384px**, so the fit believed it had 132px more room than it did and anything placed in
+  // that band sat underneath the overlay. Every other inset in this function reads a live value
+  // (`effectiveControlPanelWidth`, `actionDockReservedWidth`); the bottom was the one that guessed.
+  //
+  // The old expression survives as the fallback for the frame before the overlay has laid out, which is
+  // the only case where there is nothing to measure.
+  const playbackOverlay = timelineVisible
+    ? document.querySelector<HTMLElement>('.board-timeline-host')
+    : null
+  const measuredOverlayHeight = playbackOverlay?.getBoundingClientRect().height ?? 0
   const bottomInset = timelineVisible
-    ? Math.min(260, Math.max(160, window.innerHeight * 0.28))
+    ? Math.max(measuredOverlayHeight, Math.min(260, Math.max(160, window.innerHeight * 0.28)))
     : 24
   const availableWidth = Math.max(240, rect.width - leftInset - rightInset)
   const availableHeight = Math.max(180, rect.height - topInset - bottomInset)
@@ -5771,7 +5800,7 @@ const handleCreateDevices = async (data: {
       notifySuccess(t('app.devicesAddedWithCount', { count: createdNodes.length }))
       savedSuccessfully = true
     } catch (error: any) {
-      console.error('批量创建设备或环境变量保存失败', error)
+      console.error('Failed to batch-create devices or save environment variables', error)
       if (!isDefinitiveMutationRejection(error)) {
         const [nodesRefreshed, environmentRefreshed] = await Promise.all([
           refreshDevices(),
@@ -10279,14 +10308,9 @@ const selectAndPlayVerificationTrace = async (
     closeHistoryPanel(false)
     activeFuzzingFinding.value = null
     savedTraces.value = [trace]
+    // Selects the violating state and writes both selection refs. A second `highlightedTrace` write here
+    // used to reset it to state 0, contradicting the timeline.
     openTraceAnimationAt(0)
-    const currentTraceData = currentTrace.value
-    if (currentTraceData) {
-      highlightedTrace.value = {
-        ...currentTraceData,
-        selectedStateIndex: 0
-      }
-    }
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load trace:', e)
@@ -10594,7 +10618,14 @@ const selectAndPlayFuzzingFinding = async (
     activeFuzzingFinding.value = finding
     savedTraces.value = [trace]
     openTraceAnimationAt(0)
-    highlightedTrace.value = { ...trace, selectedStateIndex: 0 }
+    // An exploration finding reports its own violation step, which is not necessarily the last state —
+    // its path can continue past the violation, unlike a NuSMV safety counterexample. So open on the step
+    // the finding names, and let `goToState` write both selection refs. Previously this forced state 0
+    // while `openTraceAnimationAt` had selected the final state, so the change popover and the timeline
+    // disagreed and neither pointed at the violation.
+    if (typeof finding.firstViolationStep === 'number') {
+      goToState(finding.firstViolationStep)
+    }
   } catch (e: any) {
     if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load fuzzing finding:', e)
@@ -10946,9 +10977,7 @@ const handleFixApplied = (result: FixApplyResult) => {
 
     rules.value = result.rules
     syncRuleDerivedEdges()
-    notifyBlocked(t(result.verificationRechecked
-      ? 'app.fixAppliedRefreshFallbackRechecked'
-      : 'app.fixAppliedRefreshFallbackSignedEvidence'))
+    notifyBlocked(t('app.fixAppliedRefreshFallbackSignedEvidence'))
     return false
   })
   pendingFixRefreshPromise = refreshPromise
@@ -11048,6 +11077,20 @@ const openFuzzingFromActionDock = () => {
   togglePanel('fuzzing')
 }
 
+/**
+ * Route a failed run in Task Status back to the panel that owns launching it.
+ *
+ * Reuses the action-dock openers so the panel's own guards still apply (playback lock, scene
+ * replacement, a running recommendation) and so `togglePanel` performs its usual transition,
+ * including closing the history panel. Not a re-submit: the board may have changed since the run,
+ * so the user confirms the settings against the current scene.
+ */
+const reopenTaskSettings = (kind: 'verification' | 'fuzzing' | 'simulation') => {
+  if (kind === 'fuzzing') openFuzzingFromActionDock()
+  else if (kind === 'simulation') openSimulationFromActionDock()
+  else openVerificationFromActionDock()
+}
+
 const openHistoryFromActionDock = () => {
   if (unreadFuzzNotificationCount.value > 0) {
     const layer: HistoryLayer = unreadFailedFuzzCount.value > 0 ? 'tasks' : 'results'
@@ -11102,6 +11145,10 @@ const openSimulationAnimationFromSavedStates = () => {
     states: savedSimulationStates.value,
     selectedStateIndex: 0
   }
+  // The same reasoning as counterexample replay: this is a watch-the-canvas mode, so the two authoring panels
+  // give the animation its room back. Applied here as a sibling rather than left for the next reader to notice —
+  // a focus rule that holds for one playback surface and not the other is worse than none.
+  focusCanvasForReplay()
 }
 
 // 独立保存的模拟 states 数据（用于对话框关闭后）
@@ -11124,25 +11171,103 @@ const traceAnimationState = ref({
 })
 
 /**
- * Open the counterexample playback surface on one trace, paused at its first state.
+ * Open the counterexample playback surface on one trace, paused at the step that violates the
+ * property.
  *
- * Every entry point (verification result dialog, history panel, fuzz finding) starts playback
- * the same way and differs only in which trace index it selects, so the reset is expressed once
- * -- a caller cannot forget to rewind `selectedStateIndex` or leave `isPlaying` set.
+ * Every entry point (verification result dialog, history panel, fuzz finding) starts playback the
+ * same way and differs only in which trace index it selects, so the landing step is expressed once
+ * -- a caller cannot forget to set `selectedStateIndex` or leave `isPlaying` set.
+ *
+ * It used to open at index 0. That is the initial state: by definition nothing has changed yet and
+ * there is no previous step to compare, so the surface opened on the one step that cannot explain
+ * the failure. On a real 27-state counterexample, reviewing both ends of the trace was unambiguous:
+ * the final step shows "Temperature 25 -> 26" in red with the changed value flagged, while step 1
+ * "would only show an unchanged initial state and require navigating through 26 steps".
+ *
+ * A counterexample is evidence for a specific claim -- this property can be violated -- so it opens
+ * where that claim is demonstrated. The full path stays one click away on the step timeline, which
+ * is how a user works backwards from the violation to its cause.
  */
 const openTraceAnimationAt = (selectedTraceIndex: number) => {
-  const scene = savedTraces.value[selectedTraceIndex]?.playbackScene
+  const trace = savedTraces.value[selectedTraceIndex]
+  const scene = trace?.playbackScene
   if (!scene) {
     notifyError(t('app.playbackSnapshotUnavailable'))
     return
   }
   activatePlaybackScene(scene)
+  // NuSMV emits the violating state last, so the final state is the violation. Guard the empty
+  // case: a malformed trace with no states must not produce a negative index.
+  const lastStateIndex = Math.max(0, (trace.states?.length ?? 1) - 1)
   traceAnimationState.value = {
     visible: true,
     selectedTraceIndex,
-    selectedStateIndex: 0,
+    selectedStateIndex: lastStateIndex,
     isPlaying: false
   }
+  // `highlightedTrace` must move with it: it feeds the change popover, and this entry point left it at its
+  // previous position — so the popover read "State 1 / 27" while the timeline read 27/27, and it described
+  // the changes of a step the user was not looking at. Two independent reviews caught the contradiction and
+  // could not tell which panel to believe; neither could a user.
+  //
+  // `goToState` already writes both, so it is the single owner of "which step is selected" rather than a
+  // second place that has to remember. It runs after the state above is installed, since it clamps to
+  // `totalStates`.
+  goToState(lastStateIndex)
+  focusCanvasForReplay()
+}
+
+/**
+ * Give the canvas back to the animation when a trace opens.
+ *
+ * Replay is the one moment where attention belongs on the canvas: the user is watching devices change state,
+ * step by step, to understand *why* a property failed. Measured during a real replay, five surfaces held the
+ * canvas at once — Control Center 320px on the left, System Inspector 320px on the right, the trace timeline
+ * below, the change popover above, and the floating action dock over the middle. Together they covered **67.7%
+ * of a 1440x900 viewport and 73.6% at 1440x700**, leaving an 800px-wide letterbox for the thing being watched.
+ *
+ * Each panel was reasonable alone, which is how this accumulated. But during replay the two side panels are
+ * *authoring* surfaces: the Control Center creates devices, rules and specs, and the Inspector inspects the
+ * live board — neither of which is the frozen scene on screen. The information a replay reader actually needs
+ * is already in the timeline, which carries the per-step device states, environment values and changed
+ * variables (`trace-timeline-devices`, `trace-timeline-env`, `trace-step-values`).
+ *
+ * So this collapses rather than hides: both panels keep their rail and reopen on one click, and nothing is
+ * removed from the DOM or from the accessibility tree. Collapsing is the same mechanism narrow viewports
+ * already use, so there is no second layout path to maintain.
+ *
+ * Deliberately not applied to the timeline, the popover or the dock. The timeline *is* the replay control, the
+ * popover explains the step being watched, and the dock is how the user leaves. Removing meaning to gain space
+ * would trade one honesty problem for another.
+ */
+const focusCanvasForReplay = () => {
+  boardPanels.control.collapsed = true
+  boardPanels.inspector.collapsed = true
+
+  // Then settle the model into the space it was just given, or the view looks evacuated rather than composed.
+  //
+  // Collapsing alone left the model pressed to one side — measured gaps of 181px left against 347px right, in a
+  // stage that had just grown by 528px. The eye reads that as a layout that lost its panels, not as a focused
+  // view. `getVisibleCanvasFrame` already subtracts the rails, the action dock and the timeline, so fitting
+  // *after* the collapse centres the model in the true stage rather than in the raw canvas rectangle.
+  //
+  // Deferred to the next frame because the collapse is reactive: the CSS custom properties driving the rail
+  // widths have not been applied yet in this tick, so fitting now would centre against the pre-collapse frame.
+  //
+  // Inlined rather than calling `fitToContent`, for one reason: that function reports "no devices on canvas" when
+  // the board is empty. Correct for a button the user pressed, wrong for an automatic adjustment — a replay of a
+  // scene whose devices were since deleted would open with an error toast blaming the user for nothing.
+  void nextTick(() => {
+    const viewport = fittedViewportForNodes(renderedCanvasNodes.value)
+    if (!viewport) return
+    if (activePlaybackScene.value) {
+      playbackCanvasZoom.value = viewport.zoom
+      playbackCanvasPan.value = viewport.pan
+      return
+    }
+    canvasZoom.value = viewport.zoom
+    canvasPan.value = viewport.pan
+  })
 }
 
 // 独立保存的 traces 数据（用于对话框关闭后）
@@ -11206,7 +11331,10 @@ const {
   // An undo *is* a semantic scene change, so it owes recommendation invalidation too.
   // `commitSemanticScene` owns staleness but not this — the mutation queue's own
   // `onSemanticChange` is skipped by `trackSemanticChange: false`.
-  onApplied: () => invalidateRecommendationsForSceneChange({ notify: true }),
+  onApplied: result => {
+    invalidateRecommendationsForSceneChange({ notify: true })
+    announceAppliedBoardUndo(result)
+  },
   isIgnorableError: error => isPollingAbortedError(error)
     || error instanceof BoardMutationAdmissionCancelledError,
   isBlocked: isBoardUndoBlocked,
@@ -11234,6 +11362,41 @@ const {
       : 'app.boardUndoOutcomeUnknownRefreshFailed'))
   }
 })
+
+/**
+ * Say what an applied undo or redo actually reversed.
+ *
+ * A successful undo used to report nothing. That reads as sufficient when the affected object is on the canvas —
+ * a device reappears and the board is its own feedback — but `BOARD_EDIT_ENTITY_TYPES` also covers `RULE`,
+ * `SPECIFICATION`, `RULE_ORDER`, `RULE_SET` and `ENVIRONMENT`, none of which need be visible when Ctrl+Z fires.
+ * Two reviews of a mid-edit undo said the same thing: the board changed and nothing confirmed that the last
+ * change had been reversed or which one it was.
+ *
+ * The response already carries `entityType` and `originalOperation` — the server names the edit — and nothing
+ * read them. This is the third instance this audit has found of data arriving and being discarded, after
+ * `previousValue` on the canvas node and the `.device-runtime-chip__previous` style that had no markup.
+ *
+ * `notifyInfo`, not success: a reversal is a neutral state change, and the failure and "nothing to apply" paths
+ * beside it already own the louder tones. The message is skipped when the server names neither field, because
+ * "something was undone" is not worth a toast.
+ */
+const announceAppliedBoardUndo = (result: BoardUndoResult) => {
+  const entity = result.entityType
+  const operation = result.originalOperation
+  if (!entity || !operation) return
+  // Composed from two small vocabularies rather than one message per pair: six entities times three operations
+  // times two directions would be 36 strings per locale for a toast, and the composition carries the same
+  // meaning. `REDONE` re-applies the original edit, so it reads in the original's terms; an undo reads as its
+  // inverse — a creation becomes a removal, a deletion becomes a restoration, an update becomes a revert.
+  const redone = result.reasonCode === 'REDONE'
+  const action = redone
+    ? t(`app.boardEditOperation_${operation}`)
+    : t(`app.boardEditInverse_${operation}`)
+  notifyInfo(t(redone ? 'app.boardUndoRedoApplied' : 'app.boardUndoApplied', {
+    action,
+    entity: t(`app.boardEditEntity_${entity}`)
+  }))
+}
 
 let clearUndoHistoryConfirmationPending = false
 offerClearUnusableUndoHistory = async () => {
@@ -11294,6 +11457,17 @@ watch(isCanvasInteractionLocked, locked => {
 
 const playbackChangesDismissedKey = ref<string | null>(null)
 const playbackChangePosition = ref({ x: 0, y: 0 })
+
+// The popover's position is a drag *offset* from the CSS-pinned top-right corner; nothing ties it to the
+// device that changed. Measured: a card reading "Temperature Sensor · Temperature 25->26" rendered at (596, 85)
+// while that sensor sat at (392, 257), overlapping **the other** node. Two reviews called it competing with
+// the nodes for prominence.
+//
+// Deliberately not re-anchored. The popover is draggable by design, and a card that jumps to a different node
+// on every step is worse than one that stays where the user put it. The node-to-card link is already carried
+// by `trace-changed` — a 4px accent ring, a 28px glow and a pulse, which reviews credited with identifying the
+// changed device. What was missing was not the link but the node's ability to show its own values, and that is
+// fixed above in the grid and chip measurements.
 
 const activePlaybackKind = computed<'simulation' | 'counterexample' | 'fuzzing' | null>(() => {
   if (simulationAnimationState.value.visible) return 'simulation'
@@ -11552,13 +11726,9 @@ const traceTriggeredRuleLabel = (rule: { ruleIndex?: number; ruleId?: string | n
 const traceTriggeredRuleExistsOnBoard = (rule: { ruleIndex?: number; ruleId?: string | null }) =>
   rule.ruleId != null && currentBoardRuleIds.value.includes(String(rule.ruleId))
 
-const selectedTraceStateNumber = computed({
-  get: () => traceAnimationState.value.selectedStateIndex + 1,
-  set: (value: number) => {
-    if (!Number.isFinite(value)) return
-    goToState(Math.trunc(value) - 1)
-  }
-})
+// `selectedTraceStateNumber` backed the number input beside the scrub slider. Three controls answered
+// "which step" — rail, slider, number field — and the field was the one with no unique job, so both it and
+// this 1-based adapter are gone. `vue-tsc` flagged the orphan, which is the check doing its work.
 
 const selectedTraceStateRangeIndex = computed({
   get: () => traceAnimationState.value.selectedStateIndex,
@@ -11607,17 +11777,11 @@ const selectAndPlayTrace = (traceIndex: number) => {
     // 关闭验证结果对话框
     closeResultDialog()
     
-    // 设置选中的 trace 索引
+    // `openTraceAnimationAt` selects the violating state and writes both selection refs through
+    // `goToState`. A second write to `highlightedTrace` here used to force it back to state 0 — the
+    // stale intent of an older design where a trace opened at its beginning — which is what made the
+    // change popover describe step 1 while the timeline sat on step 27.
     openTraceAnimationAt(traceIndex)
-    
-    // 高亮第一个状态
-    const trace = currentTrace.value
-    if (trace) {
-      highlightedTrace.value = {
-        ...trace,
-        selectedStateIndex: 0
-      }
-    }
   }
 }
 
@@ -11668,9 +11832,42 @@ const handleTraceStateKeydown = (event: KeyboardEvent, index: number) => {
   revealTraceStateButton(nextIndex, true)
 }
 
+/**
+ * Which step of the counterexample is the violation.
+ *
+ * A verification counterexample had no violation marker at all. The `★` on the rail marks the *selected*
+ * state — it is the cursor — and the `!` came only from `activeFuzzingFinding.firstViolationStep`, which
+ * exploration sets and NuSMV never does. Two independent reviews read the cursor as the verdict: "the
+ * final state is also marked only by a star, without a clear 'violation' label". For the one screen whose
+ * entire purpose is to show *how* a design fails, that is the central fact left unstated.
+ *
+ * It does not need a new backend field, because the trace's structure already answers it.
+ * `SmvSpecificationBuilder` checks the **negated** specification — template 3 `AG !(p)` becomes
+ * `CTLSPEC EF(p)` — and a NuSMV witness for `EF(p)` is a path *ending* at a state where `p` holds. So for
+ * templates 1, 2, 3, and 7 the last state is the violating one by construction.
+ *
+ * Template 4 (`AG(a → AX(b))` → `EF(a & EX(!b))`) is deliberately excluded: its witness ends where the
+ * trigger holds and the violation is in the unshown successor, so calling the last state "the violation"
+ * would be wrong. `docs/architecture/fuzzing-flow.md` states the same boundary for the finite engine, and
+ * `undefined` here simply means no step is claimed — which is honest, not a gap.
+ */
+const LAST_STATE_VIOLATION_TEMPLATES = new Set(['1', '2', '3', '7'])
+
+const counterexampleViolationStep = computed<number | undefined>(() => {
+  // An exploration finding reports its own step; that is authoritative and takes precedence.
+  if (activeFuzzingFinding.value?.firstViolationStep !== undefined) {
+    return activeFuzzingFinding.value.firstViolationStep
+  }
+  const trace = currentTrace.value
+  const templateId = trace?.violatedSpec?.templateId
+  if (!trace || !templateId || !LAST_STATE_VIOLATION_TEMPLATES.has(String(templateId))) return undefined
+  const count = trace.states?.length || 0
+  return count > 0 ? count - 1 : undefined
+})
+
 const getTraceStateAriaLabel = (index: number) => {
   const base = `${t('app.traceVisualization.state', { index: index + 1 })} (${index + 1}/${totalStates.value})`
-  return activeFuzzingFinding.value?.firstViolationStep === index
+  return counterexampleViolationStep.value === index
     ? `${base}, ${t('app.fuzzFirstViolation')}`
     : base
 }
@@ -11758,11 +11955,9 @@ watch(
   }
 )
 
-// 当前规约的格式化显示
-const formattedSpec = computed(() => {
-  if (!currentTrace.value?.violatedSpec) return ''
-  return formatTraceSpec(currentTrace.value.violatedSpec, t)
-})
+// `formattedSpec` lived here to feed the deleted "Violated Specification" card. The header states the
+// specification via `getTraceSpecDisplayTitle`, which reads the same trace snapshot, so this second
+// formatter had no remaining reader — `vue-tsc` said so, which is the check earning its place.
 
 // 高亮反例路径
 const handleHighlightTrace = (trace: any) => {
@@ -12918,21 +13113,21 @@ const verificationSpecResultSummary = computed(() => {
       displayTitle: getSpecResultDisplayTitle(submittedSpecSnapshot, index),
       presentation: result.outcome === 'SATISFIED'
         ? {
-            borderClass: 'border-green-200',
-            badgeClass: 'bg-green-50 border-green-200 text-green-700',
+            borderClass: 'board-border-subtle',
+            badgeClass: 'board-surface-success board-text-success',
             icon: 'check_circle',
             label: t('app.specSatisfied')
           }
         : result.outcome === 'VIOLATED'
           ? {
-              borderClass: 'border-red-200',
-              badgeClass: 'bg-red-50 border-red-200 text-red-700',
+              borderClass: 'board-border-subtle',
+              badgeClass: 'board-surface-danger board-text-danger',
               icon: 'error',
               label: t('app.specViolated')
             }
           : {
-              borderClass: 'border-amber-200',
-              badgeClass: 'bg-amber-50 border-amber-200 text-amber-700',
+              borderClass: 'board-border-subtle',
+              badgeClass: 'board-surface-warning board-text-warning',
               icon: 'help',
               label: t('app.specInconclusive')
             }
@@ -12961,12 +13156,12 @@ const verificationResultStatus = computed(() => {
   const outcome = getVerificationOutcome(verificationResult.value)
   if (outcome === 'INCONCLUSIVE') {
     return {
-      headerClass: 'bg-amber-50 border-amber-200',
-      cardClass: 'bg-amber-50 border border-amber-200',
-      iconBgClass: 'bg-amber-100',
-      iconTextClass: 'text-amber-700',
-      titleClass: 'text-amber-900',
-      detailClass: 'text-amber-800',
+      headerClass: 'board-surface-warning',
+      cardClass: 'board-surface-warning',
+      iconBgClass: 'board-chip-warning',
+      iconTextClass: 'board-text-warning',
+      titleClass: 'board-text-warning',
+      detailClass: 'board-text-warning',
       icon: 'help',
       title: t('app.verificationInconclusive'),
       detail: t('app.verificationInconclusiveDetail')
@@ -12975,12 +13170,12 @@ const verificationResultStatus = computed(() => {
 
   if (outcome === 'SATISFIED' && !isVerificationModelComplete(verificationResult.value, outcome)) {
     return {
-      headerClass: 'bg-amber-50 border-amber-200',
-      cardClass: 'bg-amber-50 border border-amber-200',
-      iconBgClass: 'bg-amber-100',
-      iconTextClass: 'text-amber-600',
-      titleClass: 'text-amber-800',
-      detailClass: 'text-amber-700',
+      headerClass: 'board-surface-warning',
+      cardClass: 'board-surface-warning',
+      iconBgClass: 'board-chip-warning',
+      iconTextClass: 'board-text-warning',
+      titleClass: 'board-text-warning',
+      detailClass: 'board-text-warning',
       icon: 'report',
       title: t('app.verificationPassedWithGenerationWarnings'),
       detail: t('app.emittedSpecsPassedWithGenerationWarnings')
@@ -12989,12 +13184,12 @@ const verificationResultStatus = computed(() => {
 
   if (outcome === 'SATISFIED') {
     return {
-      headerClass: 'bg-green-50 border-green-200',
-      cardClass: 'bg-green-50 border border-green-200',
-      iconBgClass: 'bg-green-100',
-      iconTextClass: 'text-green-600',
-      titleClass: 'text-green-800',
-      detailClass: 'text-green-600',
+      headerClass: 'board-surface-success',
+      cardClass: 'board-surface-success',
+      iconBgClass: 'board-chip-success',
+      iconTextClass: 'board-text-success',
+      titleClass: 'board-text-success',
+      detailClass: 'board-text-success',
       icon: 'verified',
       title: t('app.checkedSpecificationsSatisfied'),
       detail: t('app.allSpecsPassedVerification')
@@ -13002,12 +13197,12 @@ const verificationResultStatus = computed(() => {
   }
 
   return {
-    headerClass: 'bg-red-50 border-red-200',
-    cardClass: 'bg-red-50 border border-red-200',
-    iconBgClass: 'bg-red-100',
-    iconTextClass: 'text-red-600',
-    titleClass: 'text-red-800',
-    detailClass: 'text-red-600',
+    headerClass: 'board-surface-danger',
+    cardClass: 'board-surface-danger',
+    iconBgClass: 'board-chip-danger',
+    iconTextClass: 'board-text-danger',
+    titleClass: 'board-text-danger',
+    detailClass: 'board-text-danger',
     icon: 'warning',
     title: t('app.specificationViolationFound'),
     detail: verificationUnsafeDetail.value
@@ -13251,6 +13446,26 @@ const counterexampleTraceHelpText = computed(() => {
                 <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
                 <span>{{ t('app.sceneClear') }}</span>
               </button>
+
+              <!-- Session chrome, shown here only on a phone (CSS-gated by .nav-overflow-only).
+                   The nav needs 390px intrinsically; at 375px the last control was clipped and at
+                   320px both the assistant and Log Out were unreachable with no way to scroll to
+                   them. Theme, language, and sign-out are set-once controls, so they move into this
+                   overflow while Undo/Redo/Scene/AI — the actions used while working — stay on the
+                   bar. Every control keeps a 44px target; none is shrunk below the tap minimum. -->
+              <div class="scene-actions-menu__section nav-overflow-only" role="group" :aria-label="t('app.navPreferences')">
+                <ThemeToggle :tone="boardHeaderTone" />
+                <LanguageToggle :tone="boardHeaderTone" />
+                <button
+                  type="button"
+                  class="scene-actions-menu__danger"
+                  data-testid="nav-overflow-logout"
+                  @click="closeSceneActionsMenu(); handleLogout()"
+                >
+                  <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+                  <span>{{ t('app.logout') }}</span>
+                </button>
+              </div>
             </div>
           </details>
           <button
@@ -13302,18 +13517,18 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="!isBoardDataReady && failedBoardDataKeys.length === 0"
-      class="fixed inset-x-0 top-14 z-[var(--z-board-banner)] flex h-9 items-center justify-center gap-2 border-b border-teal-200 bg-teal-50 text-xs font-semibold text-teal-900 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-100"
+      class="board-surface-info board-text-info fixed inset-x-0 top-14 z-[var(--z-board-banner)] flex h-9 items-center justify-center gap-2 border-x-0 border-t-0 text-xs font-semibold"
       role="status"
       aria-live="polite"
       data-testid="board-data-loading"
     >
-      <span class="material-symbols-outlined animate-spin text-base" aria-hidden="true">progress_activity</span>
+      <span class="material-symbols-outlined board-text-progress animate-spin text-base" aria-hidden="true">progress_activity</span>
       {{ t('app.boardSnapshotLoading') }}
     </div>
 
     <div
       v-if="failedBoardDataKeys.length > 0"
-      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 shadow-lg dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border board-border-subtle board-chip-danger px-4 py-3 text-sm board-text-danger shadow-lg"
       role="alert"
       data-testid="board-data-load-error"
     >
@@ -13325,7 +13540,7 @@ const counterexampleTraceHelpText = computed(() => {
       </span>
       <button
         type="button"
-        class="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-red-400 px-2.5 py-1.5 font-semibold hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
+        class="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-md border board-border-subtle px-2.5 py-1.5 font-semibold hover:board-chip-danger dark:hover:bg-[color:var(--danger-surface)]"
         @click="retryBoardDataLoad"
       >
         <span class="material-symbols-outlined text-base" aria-hidden="true">refresh</span>
@@ -13337,7 +13552,7 @@ const counterexampleTraceHelpText = computed(() => {
          because a toast disappears before the user can read why the board looks empty. -->
     <div
       v-if="staleDeepLink"
-      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-lg dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md board-surface-warning px-4 py-3 text-sm board-text-warning shadow-lg"
       role="alert"
       data-testid="board-deep-link-unavailable"
     >
@@ -13345,7 +13560,7 @@ const counterexampleTraceHelpText = computed(() => {
       <span class="min-w-0 flex-1 break-words">{{ t('app.deepLinkUnavailable') }}</span>
       <button
         type="button"
-        class="pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-md border border-amber-400 p-1.5 hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900"
+        class="pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-md border border-[color:var(--warning-border)] p-1.5 hover:board-chip-warning dark:hover:bg-[color:var(--warning-surface)]"
         :aria-label="t('app.deepLinkUnavailableDismiss')"
         :title="t('app.deepLinkUnavailableDismiss')"
         data-testid="dismiss-deep-link-unavailable"
@@ -13382,7 +13597,7 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <div
         :ref="setTemplateInstanceDialogRef"
-        class="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        class="iot-scroll-region max-h-[calc(100dvh-2rem)] w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
         data-testid="template-instance-dialog"
         role="dialog"
         aria-modal="true"
@@ -13391,7 +13606,7 @@ const counterexampleTraceHelpText = computed(() => {
         @click.stop
       >
         <div class="mb-4 flex items-start gap-3">
-          <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-orange-100 text-orange-600 dark:bg-orange-500/15 dark:text-orange-300">
+          <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl board-chip-warning board-text-warning dark:bg-[color:var(--warning)]/15">
             <span class="material-symbols-outlined" aria-hidden="true">add_location_alt</span>
           </div>
           <div class="min-w-0">
@@ -13410,7 +13625,7 @@ const counterexampleTraceHelpText = computed(() => {
         <input
           v-model="templateInstanceDialogData.name"
           data-testid="template-instance-name"
-          class="mt-1 w-full rounded-xl border-2 border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-orange-400 dark:focus:ring-orange-500/20"
+          class="mt-1 w-full rounded-xl border-2 border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 outline-none transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-[color:var(--accent)] dark:focus:ring-[color:var(--accent-border)]"
           :placeholder="t('app.deviceNamePlaceholder')"
           :disabled="templateInstanceSaving"
           @keydown.enter.prevent="confirmTemplateInstanceCreate"
@@ -13419,7 +13634,7 @@ const counterexampleTraceHelpText = computed(() => {
         <div
           v-if="templateInstanceEnvironmentAdditions.length > 0"
           data-testid="template-instance-environment-preview"
-          class="mt-3 flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200"
+          class="mt-3 flex items-start gap-2 rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-xs leading-relaxed board-text-info"
         >
           <span class="material-symbols-outlined mt-0.5 text-sm" aria-hidden="true">water_drop</span>
           <span>{{ t('app.deviceCreationEnvironmentAdditionsPreview', { names: templateInstanceEnvironmentAdditions.join(', ') }) }}</span>
@@ -13428,41 +13643,41 @@ const counterexampleTraceHelpText = computed(() => {
         <details
           v-if="templateInstanceHasRuntimeFields"
           data-testid="template-instance-runtime"
-          class="mt-4 rounded-xl border border-orange-100 bg-orange-50/40 p-3 shadow-sm dark:border-orange-500/20 dark:bg-orange-500/10"
+          class="mt-4 rounded-xl border border-[color:var(--warning-border)] board-chip-warning/40 p-3 shadow-sm dark:bg-[color:var(--warning)]/10"
         >
           <summary
             data-testid="template-instance-runtime-toggle"
             class="flex cursor-pointer select-none items-center justify-between gap-2 text-[11px] font-bold text-slate-600 dark:text-slate-300"
           >
             <span class="inline-flex min-w-0 items-center gap-1.5">
-              <span class="material-symbols-outlined text-sm text-orange-500" aria-hidden="true">tune</span>
+              <span class="material-symbols-outlined text-sm board-text-warning" aria-hidden="true">tune</span>
               {{ t('app.advancedInitialValuesOverrides') }}
             </span>
             <span class="material-symbols-outlined text-sm text-slate-400" aria-hidden="true">expand_more</span>
           </summary>
 
-          <p class="mt-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
+          <p class="mt-2 text-[length:var(--iot-font-min)] leading-relaxed text-slate-500 dark:text-slate-400">
             {{ t('app.initialValuesHint') }}
           </p>
 
           <div v-if="templateInstanceHasModes" class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
             <label class="min-w-0">
-              <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ t('app.initialState') }}</span>
+              <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ t('app.initialState') }}</span>
               <select
                 v-model="templateInstanceRuntime.state"
                 data-testid="template-instance-state"
-                class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-orange-500/20"
+                class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-[color:var(--accent-border)]"
               >
                 <option v-for="state in templateInstanceWorkingStates" :key="state.Name" :value="state.Name">{{ formatTemplateModelToken(templateInstanceDialogData.template, state.Name) }}</option>
               </select>
             </label>
 
             <label class="min-w-0">
-              <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ t('app.stateTrust') }}</span>
+              <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ t('app.stateTrust') }}</span>
               <select
                 v-model="templateInstanceRuntime.currentStateTrust"
                 data-testid="template-instance-state-trust"
-                class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-orange-500/20"
+                class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-[color:var(--accent-border)]"
               >
                 <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStateTrust(templateInstanceDialogData.template, templateInstanceRuntime.state) || 'trusted'}`) }) }}</option>
                 <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
@@ -13470,11 +13685,11 @@ const counterexampleTraceHelpText = computed(() => {
             </label>
 
             <label class="min-w-0">
-              <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ t('app.statePrivacy') }}</span>
+              <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ t('app.statePrivacy') }}</span>
               <select
                 v-model="templateInstanceRuntime.currentStatePrivacy"
                 data-testid="template-instance-state-privacy"
-                class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-orange-500/20"
+                class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-[color:var(--accent-border)]"
               >
                 <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStatePrivacy(templateInstanceDialogData.template, templateInstanceRuntime.state) || 'public'}`) }) }}</option>
                 <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
@@ -13490,14 +13705,14 @@ const counterexampleTraceHelpText = computed(() => {
             >
               <div class="mb-2 flex items-center justify-between gap-2">
                 <span class="truncate text-[11px] font-bold text-slate-700 dark:text-slate-200" :title="formatTemplateModelToken(templateInstanceDialogData.template, variable.Name)">{{ formatTemplateModelToken(templateInstanceDialogData.template, variable.Name) }}</span>
-                <span v-if="templateVariableUsesNumericBounds(variable)" class="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
+                <span v-if="templateVariableUsesNumericBounds(variable)" class="text-[length:var(--iot-font-min)] font-semibold text-slate-500 dark:text-slate-500">
                   {{ templateVariableInputPlaceholder(variable) }}
                 </span>
               </div>
 
               <div class="grid grid-cols-[minmax(0,1fr)_5.8rem_5.8rem] gap-2 max-[520px]:grid-cols-1">
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.variableValue') }}</span>
+                  <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-500">{{ t('app.variableValue') }}</span>
                   <select
                     v-if="templateVariableHasEnumValues(variable)"
                     v-model="templateInstanceRuntime.variables[variable.Name]"
@@ -13518,7 +13733,7 @@ const counterexampleTraceHelpText = computed(() => {
                 </label>
 
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.variableTrust') }}</span>
+                  <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-500">{{ t('app.variableTrust') }}</span>
                   <select
                     v-model="templateInstanceRuntime.variableTrusts[variable.Name]"
                     :data-testid="`template-instance-variable-trust-${variable.Name}`"
@@ -13530,7 +13745,7 @@ const counterexampleTraceHelpText = computed(() => {
                 </label>
 
                 <label class="min-w-0">
-                  <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400 dark:text-slate-500">{{ t('app.privacy') }}</span>
+                  <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-500">{{ t('app.privacy') }}</span>
                   <select
                     v-model="templateInstanceRuntime.privacies[variable.Name]"
                     :data-testid="`template-instance-privacy-${variable.Name}`"
@@ -13557,7 +13772,7 @@ const counterexampleTraceHelpText = computed(() => {
           <button
             type="button"
             data-testid="template-instance-confirm"
-            class="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-orange-500 px-4 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
+            class="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[color:var(--warning-fill)] px-4 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:bg-[color-mix(in_srgb,var(--warning)_84%,#000)] disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="templateInstanceSaving"
             @click="confirmTemplateInstanceCreate"
           >
@@ -13611,6 +13826,7 @@ const counterexampleTraceHelpText = computed(() => {
       :collapsed="boardPanels.inspector.collapsed"
       :width="effectiveInspectorPanelWidth"
       :active-section="boardPanels.inspector.activeSection"
+      :data-unavailable="failedBoardDataKeys.length > 0"
       :read-only="isModelPlaybackActive || isSceneReplacementInProgress"
       :read-only-message="isSceneReplacementInProgress ? t('app.sceneReplacementInProgress') : t('app.playbackReadOnlyCloseFirst')"
       :rules-reordering="rulesReordering"
@@ -13634,7 +13850,7 @@ const counterexampleTraceHelpText = computed(() => {
           class="canvas-map w-full p-3 border rounded-lg shadow-sm bg-white/90 border-slate-200 dark:bg-slate-950/90 dark:border-slate-700"
         >
           <div class="canvas-map__header flex items-center justify-between mb-2">
-            <span class="canvas-map__title min-w-0 text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500">{{ t('app.canvasMap') }}</span>
+            <span class="canvas-map__title min-w-0 text-[length:var(--iot-font-min)] uppercase font-bold text-slate-500 dark:text-slate-500">{{ t('app.canvasMap') }}</span>
             <div class="canvas-map__zoom-controls flex items-center gap-1" data-testid="canvas-map-zoom-controls">
               <button
                 type="button"
@@ -13735,8 +13951,12 @@ const counterexampleTraceHelpText = computed(() => {
 
             <div class="absolute inset-0 border-2 rounded pointer-events-none" :style="{ borderColor: 'color-mix(in srgb, var(--iot-color-accent) 20%, transparent)' }"></div>
 
-            <div v-if="canvasMapDots.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-400 dark:text-slate-500 text-xs">
-              {{ t('app.noDevicesOnCanvas') }}
+            <!-- Same rule as the inspector's device list: during a failed snapshot load the map has
+                 no basis for claiming the board is empty, so it reports what it knows. -->
+            <div v-if="canvasMapDots.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-500 dark:text-slate-500 text-xs">
+              {{ failedBoardDataKeys.length > 0
+                ? t('app.boardDataUnavailableShort')
+                : t('app.noDevicesOnCanvas') }}
             </div>
           </div>
         </div>
@@ -13873,10 +14093,10 @@ const counterexampleTraceHelpText = computed(() => {
 
       <div
         v-if="draggingTplName"
-        class="pointer-events-none absolute inset-4 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-orange-400/80 bg-orange-100/15 text-sm font-extrabold text-orange-600 backdrop-blur-[1px] dark:bg-orange-500/10 dark:text-orange-200"
+        class="pointer-events-none absolute inset-4 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-[color:var(--warning-border)] board-chip-warning text-sm font-extrabold board-text-warning backdrop-blur-[1px] dark:bg-[color:var(--warning)]/10"
         data-testid="template-drop-overlay"
       >
-        <span class="rounded-full border border-orange-300/70 bg-white/90 px-4 py-2 shadow-lg dark:border-orange-500/40 dark:bg-slate-900/90">
+        <span class="rounded-full border border-[color:var(--warning-border)] bg-white/90 px-4 py-2 shadow-lg dark:bg-slate-900/90">
           {{ t('app.releaseTemplateToCreateDevice') }}
         </span>
       </div>
@@ -13940,7 +14160,7 @@ const counterexampleTraceHelpText = computed(() => {
         <div class="board-tool-wrapper group">
           <div
             v-if="simulationAnimationState.visible"
-            class="board-tool-pulse bg-blue-400"
+            class="board-tool-pulse board-tool-pulse--primary"
           ></div>
           <button
             type="button"
@@ -13949,25 +14169,21 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
             :aria-label="isSimulating ? t('app.simulationRunning') : t('app.openSimulationSettings')"
             :aria-pressed="showSimulationPanel || simulationAnimationState.visible"
-            :class="[
-              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
-              (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning())
-                ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-blue-700 hover:bg-blue-800'
-            ]"
+            class="board-tool-button board-tool-button--evidence transition-colors"
           >
             <span v-if="isSimulating" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">play_circle</span>
             <span class="board-tool-label">{{ t('app.simulationTitle') }}</span>
             <span class="board-tool-tooltip" aria-hidden="true">
               {{ isSimulating ? t('app.simulationRunning') : (simulationAnimationState.visible ? t('app.simulationRunning') : t('app.openSimulationSettings')) }}
-              <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">({{ t('app.active') }})</span>
+              <span class="board-tool-outcome">{{ t('app.outcomeSimulation') }}</span>
+              <span v-if="simulationAnimationState.visible" class="ml-1 board-text-info">({{ t('app.active') }})</span>
             </span>
           </button>
         </div>
 
         <div class="board-tool-wrapper group">
-          <div v-if="isFuzzing" class="board-tool-pulse bg-indigo-400"></div>
+          <div v-if="isFuzzing" class="board-tool-pulse board-tool-pulse--primary"></div>
           <button
             type="button"
             @click="openFuzzingFromActionDock"
@@ -13977,28 +14193,26 @@ const counterexampleTraceHelpText = computed(() => {
               ? t('app.sceneReplacementInProgress')
               : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings')"
             :aria-pressed="showFuzzingPanel"
-            :class="[
-              'board-tool-button text-white shadow-lg transition-all hover:scale-[1.03] hover:shadow-xl active:scale-95',
-              (isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning())
-                ? 'cursor-not-allowed bg-indigo-300 disabled:hover:scale-100'
-                : showFuzzingPanel ? 'bg-indigo-800' : 'bg-indigo-700 hover:bg-indigo-800'
-            ]"
+            class="board-tool-button board-tool-button--evidence transition-colors"
           >
             <span v-if="isFuzzing" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">radar</span>
             <!-- Short form: the rail truncated "Counterexample Search" to "Counterex...". The full
                  name remains in this button's aria-label and tooltip. -->
             <span class="board-tool-label">{{ t('app.fuzzSearchShort') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">{{ isSceneReplacementInProgress
-              ? t('app.sceneReplacementInProgress')
-              : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings') }}</span>
+            <span class="board-tool-tooltip" aria-hidden="true">
+              {{ isSceneReplacementInProgress
+                ? t('app.sceneReplacementInProgress')
+                : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings') }}
+              <span class="board-tool-outcome">{{ t('app.outcomeExploration') }}</span>
+            </span>
           </button>
         </div>
 
         <div class="board-tool-wrapper group">
           <div
             v-if="traceAnimationState.visible"
-            class="board-tool-pulse bg-green-400"
+            class="board-tool-pulse board-tool-pulse--primary"
           ></div>
           <button
             ref="verificationActionButtonRef"
@@ -14008,19 +14222,15 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
             :aria-label="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
             :aria-pressed="showVerificationPanel || traceAnimationState.visible"
-            :class="[
-              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
-              (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning())
-                ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100'
-                : 'bg-green-700 hover:bg-green-800'
-            ]"
+            class="board-tool-button board-tool-button--primary shadow-lg transition-colors"
           >
             <span v-if="isVerifying" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">fact_check</span>
             <span class="board-tool-label">{{ t('app.verification') }}</span>
             <span class="board-tool-tooltip" aria-hidden="true">
               {{ isVerifying ? t('app.verifying') : t('app.openVerificationSettings') }}
-              <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">({{ t('app.active') }})</span>
+              <span class="board-tool-outcome">{{ t('app.outcomeVerification') }}</span>
+              <span v-if="traceAnimationState.visible" class="ml-1 board-text-success">({{ t('app.active') }})</span>
             </span>
           </button>
         </div>
@@ -14055,19 +14265,14 @@ const counterexampleTraceHelpText = computed(() => {
                 ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
                 : t('app.openRunHistory')"
             :aria-pressed="showHistoryPanel"
-            :class="[
-              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
-              (isModelPlaybackActive || isAnyRecommendationRunning())
-                ? 'bg-cyan-300 cursor-not-allowed disabled:hover:scale-100'
-                : showHistoryPanel ? 'bg-cyan-800' : 'bg-cyan-700 hover:bg-cyan-800'
-            ]"
+            class="board-tool-button board-tool-button--view transition-colors"
             :title="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.openRunHistory')"
           >
             <span class="material-symbols-outlined" aria-hidden="true">history</span>
             <span class="board-tool-label">{{ t('app.runHistory') }}</span>
             <span
               v-if="unreadFuzzNotificationCount > 0"
-              class="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-black text-white"
+              class="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[color:var(--danger-fill)] px-1 text-[length:var(--iot-font-min)] font-black text-white"
               data-testid="fuzz-unread-badge"
               aria-hidden="true"
             >{{ unreadFuzzNotificationCount > 99 ? '99+' : unreadFuzzNotificationCount }}</span>
@@ -14088,7 +14293,7 @@ const counterexampleTraceHelpText = computed(() => {
         <div class="board-tool-wrapper group">
           <div
             v-if="isRecommendingScenario"
-            class="board-tool-pulse bg-teal-400"
+            class="board-tool-pulse bg-[color:var(--accent)]"
           ></div>
           <button
             type="button"
@@ -14112,7 +14317,7 @@ const counterexampleTraceHelpText = computed(() => {
         <div class="board-tool-wrapper group">
           <div
             v-if="isRecommendingRules"
-            class="board-tool-pulse bg-amber-400"
+            class="board-tool-pulse bg-[color:var(--warning)]"
           ></div>
           <button
             type="button"
@@ -14136,7 +14341,7 @@ const counterexampleTraceHelpText = computed(() => {
         <div class="board-tool-wrapper group">
           <div
             v-if="isRecommendingDevices"
-            class="board-tool-pulse bg-purple-400"
+            class="board-tool-pulse bg-[color:var(--accent)]"
           ></div>
           <button
             type="button"
@@ -14160,7 +14365,7 @@ const counterexampleTraceHelpText = computed(() => {
         <div class="board-tool-wrapper group">
           <div
             v-if="isRecommendingSpecs"
-            class="board-tool-pulse bg-red-400"
+            class="board-tool-pulse bg-[color:var(--danger)]"
           ></div>
           <button
             type="button"
@@ -14215,6 +14420,7 @@ const counterexampleTraceHelpText = computed(() => {
       @cancel-verification-task="cancelVerificationTaskFromInbox"
       @cancel-fuzzing-task="cancelFuzzingTaskFromInbox"
       @cancel-simulation-task="cancelSimulationTaskFromInbox"
+      @reopen-task-settings="reopenTaskSettings"
       @dismiss-verification-task="dismissVerificationTask"
       @dismiss-fuzzing-task="dismissFuzzingTask"
       @dismiss-simulation-task="dismissSimulationTask"
@@ -14237,14 +14443,14 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <div class="flex items-center justify-between border-b border-slate-100 px-3 py-2">
         <div class="flex items-center gap-2">
-          <span class="material-symbols-outlined text-cyan-600 text-lg">pending_actions</span>
+          <span class="material-symbols-outlined board-text-info text-lg">pending_actions</span>
           <span class="text-xs font-bold text-slate-700">
             {{ t('app.backgroundTasks') }}
           </span>
         </div>
         <button
           type="button"
-          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold board-text-info hover:board-chip-info"
           :disabled="isModelPlaybackActive"
           :title="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.taskInbox')"
           @click="openTaskInbox"
@@ -14270,7 +14476,7 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
             <button
               type="button"
-              class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600"
+              class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 hover:board-chip-danger hover:board-text-danger"
               :title="miniTaskCancelLabel(task.kind)"
               :aria-label="miniTaskCancelLabel(task.kind)"
               @click="cancelMiniTask(task.kind, task.id)"
@@ -14287,7 +14493,7 @@ const counterexampleTraceHelpText = computed(() => {
             :aria-valuenow="task.progress"
           >
             <div
-              class="h-full rounded-full bg-cyan-600 transition-all"
+              class="h-full rounded-full bg-[color:var(--accent)] transition-all"
               :style="{ width: `${task.progress}%` }"
             ></div>
           </div>
@@ -14295,7 +14501,7 @@ const counterexampleTraceHelpText = computed(() => {
         <button
           v-if="miniTaskItems.length > 3"
           type="button"
-          class="w-full rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50"
+          class="w-full rounded-md px-2 py-1 text-xs font-semibold board-text-info hover:board-chip-info"
           @click="openTaskInbox"
         >
           {{ t('app.viewMoreTasks', { count: miniTaskItems.length - 3 }) }}
@@ -14348,16 +14554,16 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <!-- Verification Header with gradient -->
       <div class="relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-green-500 to-emerald-600"></div>
+        <div class="board-panel-banner absolute inset-0"></div>
         <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
         <div class="relative flex items-center justify-between p-4">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-green-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
-              <span class="material-symbols-outlined text-white text-xl">verified_user</span>
+            <div class="board-section-icon board-section-icon--lg">
+              <span class="material-symbols-outlined text-xl">verified_user</span>
             </div>
             <div>
-              <h3 id="verification-panel-title" class="text-black font-bold text-base">{{ t('app.verification') }}</h3>
-              <p class="text-green-900/80 text-xs">{{ t('app.configureAndRunVerification') }}</p>
+              <h3 id="verification-panel-title" class="text-white font-bold text-base">{{ t('app.verification') }}</h3>
+              <p class="board-text-success text-xs">{{ t('app.configureAndRunVerification') }}</p>
             </div>
           </div>
           <button
@@ -14366,7 +14572,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="close-verification-panel"
             :aria-label="t('app.close')"
             :title="t('app.close')"
-            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
           >
             <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
@@ -14377,7 +14583,7 @@ const counterexampleTraceHelpText = computed(() => {
         <section
           v-if="fuzzVerificationHandoff"
           data-testid="fuzz-verification-handoff"
-          class="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-[11px] leading-4 text-indigo-950"
+          class="rounded-lg board-surface-info px-3 py-2.5 text-[11px] leading-4 board-text-info"
           aria-labelledby="fuzz-verification-handoff-title"
         >
           <h4 id="fuzz-verification-handoff-title" class="font-bold">
@@ -14389,25 +14595,25 @@ const counterexampleTraceHelpText = computed(() => {
           <p class="mt-1">{{ t('app.fuzzVerificationHandoffCurrentBoard') }}</p>
           <p
             v-if="!fuzzVerificationHandoff.targetPresent"
-            class="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 font-semibold text-amber-950"
+            class="mt-2 rounded-md board-surface-warning px-2 py-1.5 font-semibold board-text-warning"
             role="alert"
           >
             {{ t('app.fuzzVerificationHandoffTargetMissing') }}
           </p>
           <p
           v-else-if="fuzzVerificationHandoff.boardDrifted"
-            class="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 font-semibold text-amber-950"
+            class="mt-2 rounded-md board-surface-warning px-2 py-1.5 font-semibold board-text-warning"
           >
             {{ t('app.fuzzVerificationHandoffScopeChanged') }}
           </p>
         </section>
 
         <!-- Attack Mode -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-3">
-            <div class="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center">
-              <span class="material-symbols-outlined text-red-500 text-lg">warning</span>
+            <div class="w-8 h-8 board-chip-danger rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined board-text-danger text-lg">warning</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
               {{ t('app.attackMode') }}
@@ -14416,7 +14622,7 @@ const counterexampleTraceHelpText = computed(() => {
             <ToggleSwitch
               :checked="verificationForm.isAttack"
               :label="t('app.attackMode')"
-              tone="red"
+              tone="adversarial"
               test-id="verification-attack-toggle"
               :disabled="isVerifying || (!verificationForm.isAttack && !hasModeledAttackEffect)"
               :title="!hasModeledAttackEffect ? t('app.attackNoModeledEffect') : undefined"
@@ -14428,21 +14634,21 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="!hasModeledAttackEffect"
             id="verification-attack-unavailable"
             data-testid="verification-attack-unavailable"
-            class="mt-2 text-[10px] leading-4 text-amber-700"
+            class="mt-2 text-[length:var(--iot-font-min)] leading-4 board-text-warning"
           >
             {{ t('app.attackNoModeledEffect') }}
           </p>
         </div>
 
-        <div v-if="verificationForm.isAttack && hasModeledAttackEffect" class="space-y-3 border-y border-red-200/70 bg-red-50 px-3 py-3">
+        <div v-if="verificationForm.isAttack && hasModeledAttackEffect" class="space-y-3 border-y board-border-subtle board-chip-danger px-3 py-3">
           <div class="grid grid-cols-2 gap-2" role="group" :aria-label="t('app.attackSelectionMode')">
             <button
               type="button"
               data-testid="verification-attack-mode-exhaustive"
               class="min-h-9 border px-2 py-1.5 text-xs font-semibold transition"
               :class="verificationForm.attackMode === 'ANY_UP_TO_BUDGET'
-                ? 'border-red-500 bg-red-500 text-white'
-                : 'border-red-200 bg-white text-red-700 hover:bg-red-100'"
+                ? 'border-[color:var(--danger)] bg-[color:var(--danger-fill)] text-white'
+                : 'board-border-subtle bg-white board-text-danger hover:board-chip-danger'"
               :disabled="isVerifying"
               @click="setAttackMode(verificationForm, 'ANY_UP_TO_BUDGET')"
             >
@@ -14453,8 +14659,8 @@ const counterexampleTraceHelpText = computed(() => {
               data-testid="verification-attack-mode-exact"
               class="min-h-9 border px-2 py-1.5 text-xs font-semibold transition"
               :class="verificationForm.attackMode === 'EXACT_POINTS'
-                ? 'border-red-500 bg-red-500 text-white'
-                : 'border-red-200 bg-white text-red-700 hover:bg-red-100'"
+                ? 'border-[color:var(--danger)] bg-[color:var(--danger-fill)] text-white'
+                : 'board-border-subtle bg-white board-text-danger hover:board-chip-danger'"
               :disabled="isVerifying"
               @click="setAttackMode(verificationForm, 'EXACT_POINTS')"
             >
@@ -14462,7 +14668,7 @@ const counterexampleTraceHelpText = computed(() => {
             </button>
           </div>
 
-          <p class="text-[11px] leading-4 text-red-800">
+          <p class="text-[11px] leading-4 board-text-danger">
             {{ verificationForm.attackMode === 'ANY_UP_TO_BUDGET'
               ? t('app.verificationAttackExhaustiveHint')
               : t('app.verificationAttackExactHint') }}
@@ -14472,7 +14678,7 @@ const counterexampleTraceHelpText = computed(() => {
             <label
               v-for="point in boardAttackSurface.points"
               :key="point.key"
-              class="flex min-h-8 items-center gap-2 border border-red-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+              class="flex min-h-8 items-center gap-2 border board-border-subtle bg-white px-2 py-1.5 text-xs text-slate-700"
               :class="!point.selectable ? 'opacity-55' : 'cursor-pointer'"
             >
               <input
@@ -14482,11 +14688,11 @@ const counterexampleTraceHelpText = computed(() => {
                 :data-testid="`verification-attack-point-${point.key}`"
                 @change="toggleAttackPoint(verificationForm, point.key)"
               />
-              <span class="material-symbols-outlined text-base text-red-500" aria-hidden="true">
+              <span class="material-symbols-outlined text-base board-text-danger" aria-hidden="true">
                 {{ point.kind === 'DEVICE' ? 'memory' : 'conversion_path' }}
               </span>
               <span class="min-w-0 flex-1 break-words">{{ point.label }}</span>
-              <span class="shrink-0 text-[10px] font-semibold uppercase text-slate-400">
+              <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold uppercase text-slate-500">
                 {{ point.kind === 'DEVICE' ? t('app.device') : t('app.automationLink') }}
               </span>
             </label>
@@ -14495,9 +14701,9 @@ const counterexampleTraceHelpText = computed(() => {
           <!-- Attack budget (exhaustive verification only) -->
           <div v-if="verificationForm.attackMode === 'ANY_UP_TO_BUDGET'">
           <div class="mb-2 flex items-center justify-between gap-2">
-            <label for="verification-attack-budget" class="min-w-0 text-[10px] font-bold text-red-700 uppercase tracking-wide">
+            <label for="verification-attack-budget" class="min-w-0 text-[length:var(--iot-font-min)] font-bold board-text-danger uppercase tracking-wide">
               {{ t('app.attackBudgetLabel') }}:
-              <span class="text-red-500">{{ verificationForm.attackBudget }} / {{ attackBudgetMax }}</span>
+              <span class="board-text-danger">{{ verificationForm.attackBudget }} / {{ attackBudgetMax }}</span>
             </label>
             <InfoTooltip
               :text="t('app.verificationAttackBudgetHint', { limit: attackBudgetMax, surface: attackSurfacePointCount })"
@@ -14516,30 +14722,30 @@ const counterexampleTraceHelpText = computed(() => {
             min="1"
             :max="attackBudgetMax"
             :aria-invalid="Boolean(verificationAttackConfigurationError)"
-            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+            class="w-full h-2 board-chip-danger rounded-lg appearance-none cursor-pointer accent-[color:var(--danger)] disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <div class="flex justify-between text-[10px] text-red-400 mt-1">
+          <div class="flex justify-between text-[length:var(--iot-font-min)] board-text-danger mt-1">
             <span>1</span>
             <span>{{ attackBudgetMax }}</span>
           </div>
-          <p v-if="attackBudgetIsCapped" class="mt-1 text-[10px] font-semibold leading-4 text-amber-700" data-testid="verification-attack-budget-cap">
+          <p v-if="attackBudgetIsCapped" class="mt-1 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-warning" data-testid="verification-attack-budget-cap">
             {{ t('app.attackBudgetCappedHint', { surface: attackSurfacePointCount, limit: attackBudgetMax }) }}
           </p>
-          <p v-if="verificationAttackConfigurationError" class="mt-1 text-[10px] font-semibold leading-4 text-red-700" data-testid="verification-attack-budget-invalid">
+          <p v-if="verificationAttackConfigurationError" class="mt-1 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger" data-testid="verification-attack-budget-invalid">
             {{ verificationAttackConfigurationError }}
           </p>
           </div>
-          <p v-else-if="verificationAttackConfigurationError" class="text-[10px] font-semibold leading-4 text-red-700" data-testid="verification-attack-points-invalid">
+          <p v-else-if="verificationAttackConfigurationError" class="text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger" data-testid="verification-attack-points-invalid">
             {{ verificationAttackConfigurationError }}
           </p>
         </div>
 
         <!-- Privacy Analysis -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-3">
-            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
-              <span class="material-symbols-outlined text-purple-500 text-lg">security</span>
+            <div class="w-8 h-8 board-chip-info rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined board-text-info text-lg">security</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
               {{ t('app.privacyAnalysis') }}
@@ -14548,30 +14754,30 @@ const counterexampleTraceHelpText = computed(() => {
               :text="hasPrivacySpecification ? t('app.privacyModelRequiredHint') : t('app.privacyModelHint')"
               :label="t('app.showHelpFor', { topic: t('app.privacyAnalysis') })"
               placement="left"
-              tone="privacy"
+              tone="sensitivity"
               test-id="verification-privacy-help"
             />
             </div>
             <ToggleSwitch
               :checked="verificationForm.enablePrivacy"
               :label="t('app.privacyAnalysis')"
-              tone="purple"
+              tone="sensitivity"
               test-id="verification-privacy-toggle"
               :disabled="isVerifying || hasPrivacySpecification"
               :describedby-id="hasPrivacySpecification ? 'verification-privacy-required' : undefined"
               @change="value => verificationForm.enablePrivacy = value"
             />
           </div>
-          <p v-if="hasPrivacySpecification" id="verification-privacy-required" class="mt-2 text-[10px] font-semibold leading-4 text-purple-700" data-testid="verification-privacy-required">
+          <p v-if="hasPrivacySpecification" id="verification-privacy-required" class="mt-2 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-info" data-testid="verification-privacy-required">
             {{ t('app.privacyModelRequiredStatus') }}
           </p>
         </div>
 
         <!-- Run Mode -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center gap-3 mb-2">
-            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
-              <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
+            <div class="w-8 h-8 board-chip-info rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined board-text-info text-lg">schedule</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
               {{ t('app.runMode') }}
@@ -14586,7 +14792,7 @@ const counterexampleTraceHelpText = computed(() => {
               :aria-pressed="!verificationForm.isAsync"
               :title="t('app.syncVerificationModeHint')"
               class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="!verificationForm.isAsync ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              :class="!verificationForm.isAsync ? 'bg-white board-text-success shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             >
               {{ t('app.runNow') }}
             </button>
@@ -14598,7 +14804,7 @@ const counterexampleTraceHelpText = computed(() => {
               :aria-pressed="verificationForm.isAsync"
               :title="t('app.asyncVerificationModeHint')"
               class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="verificationForm.isAsync ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              :class="verificationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             >
               {{ t('app.backgroundTask') }}
             </button>
@@ -14611,12 +14817,12 @@ const counterexampleTraceHelpText = computed(() => {
         <!-- Async Progress (visible when async verification is running) -->
         <div v-if="isVerifying && asyncVerificationActive" class="space-y-1">
           <div class="flex items-center justify-between text-xs">
-            <span class="text-green-600 font-medium">{{ asyncVerificationTask.status }}</span>
+            <span class="board-text-success font-medium">{{ asyncVerificationTask.status }}</span>
             <div v-if="asyncVerificationTask.taskId" class="flex items-center gap-2">
-              <span class="text-green-600 font-bold">{{ asyncVerificationTask.progress }}%</span>
+              <span class="board-text-success font-bold">{{ asyncVerificationTask.progress }}%</span>
               <button
                 type="button"
-                class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-[color:var(--success-border)] board-text-success hover:bg-[color:var(--success-surface)] disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="cancellingVerificationTask"
                 :title="t('app.cancelVerificationTask')"
                 :aria-label="t('app.cancelVerificationTask')"
@@ -14626,9 +14832,9 @@ const counterexampleTraceHelpText = computed(() => {
               </button>
             </div>
           </div>
-          <div class="w-full h-2 bg-green-200 rounded-full overflow-hidden">
+          <div class="w-full h-2 board-chip-success rounded-full overflow-hidden">
             <div
-              class="h-full bg-green-500 transition-all duration-500 ease-out"
+              class="h-full bg-[color:var(--success)] transition-all duration-500 ease-out"
               :class="{ 'animate-pulse': !asyncVerificationTask.taskId }"
               :style="{ width: asyncVerificationTask.taskId ? `${asyncVerificationTask.progress}%` : '35%' }"
             />
@@ -14642,7 +14848,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isVerifying || Boolean(verificationRunBlockedReason)"
           :title="verificationRunBlockedReason || undefined"
           :aria-describedby="verificationRunBlockedReason ? 'verification-run-blocked-reason' : undefined"
-          class="w-full py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
+          class="board-panel-submit"
         >
           <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
             <span class="material-symbols-outlined text-sm animate-spin">sync</span>
@@ -14661,7 +14867,7 @@ const counterexampleTraceHelpText = computed(() => {
           v-if="verificationRunBlockedReason"
           id="verification-run-blocked-reason"
           data-testid="verification-run-blocked-reason"
-          class="text-xs leading-5 text-amber-700"
+          class="text-xs leading-5 board-text-warning"
           role="status"
         >
           {{ verificationRunBlockedReason }}
@@ -14681,15 +14887,15 @@ const counterexampleTraceHelpText = computed(() => {
       @keydown="handleScenarioRecommendationPanelKeydown"
     >
       <div class="relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-teal-500 to-cyan-600"></div>
+        <div class="board-panel-banner absolute inset-0"></div>
         <div class="relative flex items-center justify-between p-4">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-teal-600 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
-              <span class="material-symbols-outlined text-white text-xl">account_tree</span>
+            <div class="board-section-icon board-section-icon--lg">
+              <span class="material-symbols-outlined text-xl">account_tree</span>
             </div>
             <div>
-              <h3 id="scenario-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.scenarioRecommendations') }}</h3>
-              <p class="text-black/70 text-xs">{{ t('app.aiPoweredScenarioSuggestions') }}</p>
+              <h3 id="scenario-recommendation-panel-title" class="text-white font-bold text-base">{{ t('app.scenarioRecommendations') }}</h3>
+              <p class="text-white/70 text-xs">{{ t('app.aiPoweredScenarioSuggestions') }}</p>
             </div>
           </div>
           <button
@@ -14698,19 +14904,19 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="close-scenario-recommendations"
             :aria-label="t('app.close')"
             :title="t('app.close')"
-            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
           >
             <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
 
-      <div class="p-3 space-y-3 max-h-[560px] overflow-y-auto">
-        <div class="grid grid-cols-1 gap-2 rounded-lg border border-teal-100 bg-white p-2 sm:grid-cols-3">
+      <div class="iot-scroll-region p-3 space-y-3 max-h-[560px]">
+        <div class="board-card grid grid-cols-1 gap-2 rounded-lg border board-border-subtle p-2 sm:grid-cols-3">
           <fieldset class="min-w-0">
             <legend class="text-xs font-semibold text-slate-700">{{ t('app.devicesTool') }}</legend>
             <div class="mt-1 grid grid-cols-2 gap-1">
-              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+              <label class="min-w-0 text-[length:var(--iot-font-min)] font-medium text-slate-500">
                 {{ t('app.scenarioMinimum') }}
                 <input
                   v-model.number="scenarioRecommendationFilters.minDevices"
@@ -14719,10 +14925,10 @@ const counterexampleTraceHelpText = computed(() => {
                   type="number"
                   min="1"
                   max="10"
-                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                  class="board-card mt-0.5 min-h-11 w-full rounded-md border border-slate-200 px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
                 />
               </label>
-              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+              <label class="min-w-0 text-[length:var(--iot-font-min)] font-medium text-slate-500">
                 {{ t('app.scenarioMaximum') }}
                 <input
                   v-model.number="scenarioRecommendationFilters.maxDevices"
@@ -14731,7 +14937,7 @@ const counterexampleTraceHelpText = computed(() => {
                   type="number"
                   min="1"
                   max="10"
-                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                  class="board-card mt-0.5 min-h-11 w-full rounded-md border border-slate-200 px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
                 />
               </label>
             </div>
@@ -14739,7 +14945,7 @@ const counterexampleTraceHelpText = computed(() => {
           <fieldset class="min-w-0">
             <legend class="text-xs font-semibold text-slate-700">{{ t('app.rulesTool') }}</legend>
             <div class="mt-1 grid grid-cols-2 gap-1">
-              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+              <label class="min-w-0 text-[length:var(--iot-font-min)] font-medium text-slate-500">
                 {{ t('app.scenarioMinimum') }}
                 <input
                   v-model.number="scenarioRecommendationFilters.minRules"
@@ -14748,10 +14954,10 @@ const counterexampleTraceHelpText = computed(() => {
                   type="number"
                   min="1"
                   max="10"
-                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                  class="board-card mt-0.5 min-h-11 w-full rounded-md border border-slate-200 px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
                 />
               </label>
-              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+              <label class="min-w-0 text-[length:var(--iot-font-min)] font-medium text-slate-500">
                 {{ t('app.scenarioMaximum') }}
                 <input
                   v-model.number="scenarioRecommendationFilters.maxRules"
@@ -14760,7 +14966,7 @@ const counterexampleTraceHelpText = computed(() => {
                   type="number"
                   min="1"
                   max="10"
-                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                  class="board-card mt-0.5 min-h-11 w-full rounded-md border border-slate-200 px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
                 />
               </label>
             </div>
@@ -14768,7 +14974,7 @@ const counterexampleTraceHelpText = computed(() => {
           <fieldset class="min-w-0">
             <legend class="text-xs font-semibold text-slate-700">{{ t('app.specificationsTool') }}</legend>
             <div class="mt-1 grid grid-cols-2 gap-1">
-              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+              <label class="min-w-0 text-[length:var(--iot-font-min)] font-medium text-slate-500">
                 {{ t('app.scenarioMinimum') }}
                 <input
                   v-model.number="scenarioRecommendationFilters.minSpecs"
@@ -14777,10 +14983,10 @@ const counterexampleTraceHelpText = computed(() => {
                   type="number"
                   min="1"
                   max="10"
-                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                  class="board-card mt-0.5 min-h-11 w-full rounded-md border border-slate-200 px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
                 />
               </label>
-              <label class="min-w-0 text-[10px] font-medium text-slate-500">
+              <label class="min-w-0 text-[length:var(--iot-font-min)] font-medium text-slate-500">
                 {{ t('app.scenarioMaximum') }}
                 <input
                   v-model.number="scenarioRecommendationFilters.maxSpecs"
@@ -14789,14 +14995,14 @@ const counterexampleTraceHelpText = computed(() => {
                   type="number"
                   min="1"
                   max="10"
-                  class="mt-0.5 min-h-11 w-full rounded-md border border-slate-200 bg-white px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+                  class="board-card mt-0.5 min-h-11 w-full rounded-md border border-slate-200 px-1.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
                 />
               </label>
             </div>
           </fieldset>
         </div>
 
-        <label class="block rounded-lg border border-teal-100 bg-white p-2 text-xs font-medium text-slate-600">
+        <label class="board-card block rounded-lg border board-border-subtle p-2 text-xs font-medium text-slate-600">
           {{ t('app.recommendationScenario') }}
           <textarea
             v-model.trim="scenarioRecommendationFilters.userRequirement"
@@ -14804,9 +15010,9 @@ const counterexampleTraceHelpText = computed(() => {
             rows="3"
             :maxlength="AI_RECOMMENDATION_REQUIREMENT_MAX_LENGTH"
             :placeholder="t('app.scenarioRecommendationPlaceholder')"
-            class="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-200 disabled:bg-slate-100"
+            class="board-card mt-1 w-full resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
           ></textarea>
-          <span class="mt-1 block text-[10px] font-normal leading-snug text-slate-400">
+          <span class="mt-1 block text-[length:var(--iot-font-min)] font-normal leading-snug text-slate-500">
             {{ t('app.scenarioRecommendationBasisHint') }}
           </span>
         </label>
@@ -14818,7 +15024,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('scenario')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-                isRecommendingScenario ? 'bg-red-700 hover:bg-red-800' : 'bg-teal-700 hover:bg-teal-800'
+                isRecommendingScenario ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -14840,14 +15046,14 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="scenarioRecommendationMessage && !isRecommendingScenario"
-          class="rounded-lg border border-teal-100 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-700"
+          class="rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-xs font-medium board-text-info"
         >
           {{ scenarioRecommendationMessage }}
         </div>
         <div
           v-if="scenarioRecommendationResult && !isRecommendingScenario"
           data-testid="scenario-candidate-accounting"
-          class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"
+          class="board-card rounded-lg border border-slate-200 px-3 py-2 text-xs leading-relaxed text-slate-600"
         >
           {{ t('app.recommendationCandidateSummary', {
             raw: scenarioRecommendationResult.rawCandidateCount,
@@ -14864,7 +15070,7 @@ const counterexampleTraceHelpText = computed(() => {
           <p>{{ t('app.recommendationFilteredNotice', { count: scenarioRecommendationResult.filteredCount }) }}</p>
           <ul
             v-if="scenarioRecommendationResult.filteredItems?.length"
-            class="mt-1 max-h-32 list-disc space-y-0.5 overflow-y-auto pl-4 pr-1 font-normal leading-relaxed"
+            class="iot-scroll-region mt-1 max-h-32 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed"
           >
             <li
               v-for="(item, index) in scenarioRecommendationResult.filteredItems"
@@ -14880,10 +15086,10 @@ const counterexampleTraceHelpText = computed(() => {
         <div
           v-if="scenarioRecommendationResult?.adjustedCount && scenarioRecommendationResult.adjustedCount > 0 && !isRecommendingScenario"
           data-testid="scenario-adjusted-items"
-          class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
+          class="rounded-lg board-surface-warning px-3 py-2 text-xs font-medium board-text-warning"
         >
           <p>{{ t('app.recommendationAdjustedNotice', { count: scenarioRecommendationResult.adjustedCount }) }}</p>
-          <ul class="mt-1 max-h-36 list-disc space-y-0.5 overflow-y-auto pl-4 pr-1 font-normal leading-relaxed">
+          <ul class="iot-scroll-region mt-1 max-h-36 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed">
             <li
               v-for="(item, index) in scenarioRecommendationResult.adjustedItems || []"
               :key="`${item.type || 'item'}-${item.index || index}-${item.reasonCode || item.reason}`"
@@ -14895,27 +15101,27 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div v-if="isRecommendingScenario" class="flex flex-col items-center justify-center py-10">
           <div class="relative">
-            <span class="material-symbols-outlined text-teal-500 text-5xl animate-spin">sync</span>
-            <div class="absolute inset-0 bg-teal-400 rounded-full animate-ping opacity-20"></div>
+            <span class="material-symbols-outlined board-text-progress text-5xl animate-spin">sync</span>
+            <div class="absolute inset-0 bg-[color:var(--accent)] rounded-full animate-ping opacity-20"></div>
           </div>
           <p class="text-slate-600 text-sm mt-4 font-medium">{{ t('app.designingScenario') }}</p>
-          <p class="text-slate-400 text-xs mt-1">{{ t('app.generatingCoupledScenario') }}</p>
+          <p class="text-slate-500 text-xs mt-1">{{ t('app.generatingCoupledScenario') }}</p>
         </div>
 
         <div v-else-if="!scenarioRecommendationRequested" class="flex flex-col items-center justify-center py-10">
-          <div class="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-teal-400 text-3xl">tune</span>
+          <div class="w-16 h-16 board-chip-info rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined board-text-info text-3xl">tune</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.configureRecommendationParameters') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateScenario') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateScenario') }}</p>
         </div>
 
         <div v-else-if="!recommendedScenarioScene" class="flex flex-col items-center justify-center py-10">
           <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-slate-300 text-3xl">account_tree</span>
+            <span class="material-symbols-outlined text-slate-500 text-3xl">account_tree</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
           <ScenarioObjectiveIssues
             v-if="scenarioRecommendationResult"
             :status="scenarioRecommendationResult.objectiveStatus"
@@ -14926,7 +15132,7 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <div v-else class="space-y-3">
-          <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div class="board-card board-card--raised rounded-xl border border-slate-200 p-3">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <h4 class="truncate text-sm font-bold text-slate-800">
@@ -14936,7 +15142,7 @@ const counterexampleTraceHelpText = computed(() => {
                   {{ localizedRecommendationText(scenarioRecommendationResult.rationale, t('app.recommendedBasedOnCurrentDevices')) }}
                 </p>
               </div>
-              <div class="shrink-0 rounded-full bg-teal-100 px-2 py-1 text-xs font-semibold text-teal-700">
+              <div class="shrink-0 rounded-full board-chip-info px-2 py-1 text-xs font-semibold board-text-info">
                 {{ t('app.scenarioSummaryCount', { count: scenarioRecommendationResult?.count || 0 }) }}
               </div>
             </div>
@@ -14944,19 +15150,19 @@ const counterexampleTraceHelpText = computed(() => {
             <div class="mt-3 grid grid-cols-4 gap-2 text-center">
               <div class="rounded-lg bg-slate-50 px-2 py-2">
                 <div class="text-base font-bold text-slate-800">{{ recommendedScenarioScene.devices.length }}</div>
-                <div class="text-[10px] text-slate-500">{{ t('app.devicesTool') }}</div>
+                <div class="text-[length:var(--iot-font-min)] text-slate-500">{{ t('app.devicesTool') }}</div>
               </div>
               <div class="rounded-lg bg-slate-50 px-2 py-2">
                 <div class="text-base font-bold text-slate-800">{{ recommendedScenarioScene.environmentVariables.length }}</div>
-                <div class="text-[10px] text-slate-500">{{ t('app.environmentPool') }}</div>
+                <div class="text-[length:var(--iot-font-min)] text-slate-500">{{ t('app.environmentPool') }}</div>
               </div>
               <div class="rounded-lg bg-slate-50 px-2 py-2">
                 <div class="text-base font-bold text-slate-800">{{ recommendedScenarioScene.rules.length }}</div>
-                <div class="text-[10px] text-slate-500">{{ t('app.rulesTool') }}</div>
+                <div class="text-[length:var(--iot-font-min)] text-slate-500">{{ t('app.rulesTool') }}</div>
               </div>
               <div class="rounded-lg bg-slate-50 px-2 py-2">
                 <div class="text-base font-bold text-slate-800">{{ recommendedScenarioScene.specs.length }}</div>
-                <div class="text-[10px] text-slate-500">{{ t('app.specificationsTool') }}</div>
+                <div class="text-[length:var(--iot-font-min)] text-slate-500">{{ t('app.specificationsTool') }}</div>
               </div>
             </div>
 
@@ -14971,8 +15177,8 @@ const counterexampleTraceHelpText = computed(() => {
             <div
               class="mt-3 flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs"
               :class="scenarioRecommendationResult?.verificationReady
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                : 'border-amber-200 bg-amber-50 text-amber-900'"
+                ? 'board-border-subtle board-chip-success board-text-success'
+                : 'board-surface-warning board-text-warning'"
             >
               <span class="material-symbols-outlined text-base" aria-hidden="true">
                 {{ scenarioRecommendationResult?.verificationReady ? 'verified' : 'info' }}
@@ -14993,7 +15199,7 @@ const counterexampleTraceHelpText = computed(() => {
             <div
               v-if="scenarioRecommendationResult?.semanticWarnings.length"
               data-testid="scenario-semantic-warnings"
-              class="mt-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900"
+              class="mt-2 flex items-start gap-2 rounded-lg board-surface-warning px-2.5 py-2 text-xs board-text-warning"
             >
               <span class="material-symbols-outlined text-base" aria-hidden="true">warning</span>
               <div>
@@ -15010,8 +15216,8 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
 
-          <details class="rounded-xl border border-slate-200 bg-white p-3 text-xs">
-            <summary class="flex cursor-pointer items-center gap-1 font-semibold text-teal-700">
+          <details class="board-card rounded-xl border border-slate-200 p-3 text-xs">
+            <summary class="flex cursor-pointer items-center gap-1 font-semibold board-text-info">
               <span class="material-symbols-outlined text-sm">visibility</span>
               {{ t('app.viewScenarioDetails') }}
             </summary>
@@ -15069,14 +15275,14 @@ const counterexampleTraceHelpText = computed(() => {
               </div>
               <div v-if="recommendedScenarioScene.rules.length">
                 <div class="mb-1 font-semibold text-slate-700">{{ t('app.globalRules') }}</div>
-                <div class="mb-2 flex items-start gap-1.5 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] leading-4 text-amber-900">
+                <div class="mb-2 flex items-start gap-1.5 rounded board-surface-warning px-2 py-1.5 text-[length:var(--iot-font-min)] leading-4 board-text-warning">
                   <span class="material-symbols-outlined text-sm" aria-hidden="true">low_priority</span>
                   <span>{{ t('app.ruleExecutionOrderHint') }}</span>
                 </div>
                 <ul class="space-y-1">
                   <li v-for="(rule, index) in recommendedScenarioScene.rules" :key="index" class="rounded bg-slate-50 px-2 py-1.5">
                     <div class="flex items-center gap-1.5 font-medium text-slate-700">
-                      <span class="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-bold text-amber-800">#{{ index + 1 }}</span>
+                      <span class="rounded board-chip-warning px-1 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-warning">#{{ index + 1 }}</span>
                       <span>{{ rule.name || t('app.ruleNumber', { number: index + 1 }) }}</span>
                     </div>
                     <div class="mt-0.5 text-[11px] text-slate-500">
@@ -15106,7 +15312,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button
               type="button"
               data-testid="export-recommended-scenario"
-              class="flex items-center justify-center gap-2 rounded-lg border border-teal-200 bg-white px-3 py-2 text-sm font-bold text-teal-700 transition hover:bg-teal-50"
+              class="board-card flex items-center justify-center gap-2 rounded-lg border border-[color:var(--accent-border)] px-3 py-2 text-sm font-bold board-text-info transition hover:board-chip-info"
               @click="exportRecommendedScenario"
             >
               <span class="material-symbols-outlined text-base">download</span>
@@ -15115,7 +15321,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button
               type="button"
               data-testid="apply-recommended-scenario"
-              class="flex items-center justify-center gap-2 rounded-lg bg-teal-600 px-3 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-teal-700"
+              class="flex items-center justify-center gap-2 rounded-lg bg-[color:var(--accent-fill)] px-3 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-[color:var(--accent-fill-hover)]"
               :disabled="isSceneReplacementInProgress"
               @click="applyRecommendedScenario"
             >
@@ -15124,7 +15330,7 @@ const counterexampleTraceHelpText = computed(() => {
             </button>
           </div>
 
-          <p class="px-1 text-[10px] leading-relaxed text-slate-400">
+          <p class="px-1 text-[length:var(--iot-font-min)] leading-relaxed text-slate-500">
             {{ t('app.applyScenarioHint') }}
           </p>
         </div>
@@ -15144,16 +15350,16 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-amber-500 to-orange-600"></div>
+        <div class="board-panel-banner absolute inset-0"></div>
         <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
         <div class="relative flex items-center justify-between p-4">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-amber-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
-              <span class="material-symbols-outlined text-white text-xl">auto_awesome</span>
+            <div class="board-section-icon board-section-icon--lg">
+              <span class="material-symbols-outlined text-xl">auto_awesome</span>
             </div>
             <div>
-              <h3 id="rule-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.ruleRecommendations') }}</h3>
-              <p class="text-black/70 text-xs">{{ t('app.aiPoweredAutomationSuggestions') }}</p>
+              <h3 id="rule-recommendation-panel-title" class="text-white font-bold text-base">{{ t('app.ruleRecommendations') }}</h3>
+              <p class="text-white/70 text-xs">{{ t('app.aiPoweredAutomationSuggestions') }}</p>
             </div>
           </div>
           <button 
@@ -15162,7 +15368,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="close-rule-recommendations"
             :aria-label="t('app.close')"
             :title="t('app.close')"
-            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
           >
             <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
@@ -15170,14 +15376,14 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <!-- Recommendation Content -->
-      <div class="p-3 space-y-3 max-h-[500px] overflow-y-auto">
-        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-amber-100 bg-white p-2">
+      <div class="iot-scroll-region p-3 space-y-3 max-h-[500px]">
+        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border board-border-subtle bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.category') }}
             <select
               v-model="ruleRecommendationFilters.category"
               :disabled="isRecommendingRules"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:bg-slate-100"
+              class="board-card mt-1 min-h-11 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
             >
               <option
                 v-for="option in ruleRecommendationCategories"
@@ -15196,12 +15402,12 @@ const counterexampleTraceHelpText = computed(() => {
               type="number"
               min="1"
               max="10"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:bg-slate-100"
+              class="board-card mt-1 min-h-11 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
             />
           </label>
         </div>
 
-        <label class="block rounded-lg border border-amber-100 bg-white p-2 text-xs font-medium text-slate-600">
+        <label class="block rounded-lg border board-border-subtle bg-white p-2 text-xs font-medium text-slate-600">
           {{ t('app.recommendationScenario') }}
           <textarea
             v-model.trim="ruleRecommendationFilters.userRequirement"
@@ -15209,9 +15415,9 @@ const counterexampleTraceHelpText = computed(() => {
             rows="3"
             :maxlength="AI_RECOMMENDATION_REQUIREMENT_MAX_LENGTH"
             :placeholder="t('app.recommendationScenarioPlaceholder')"
-            class="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:bg-slate-100"
+            class="board-card mt-1 w-full resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
           ></textarea>
-          <span class="mt-1 block text-[10px] font-normal leading-snug text-slate-400">
+          <span class="mt-1 block text-[length:var(--iot-font-min)] font-normal leading-snug text-slate-500">
             {{ t('app.recommendationBasisHint') }}
           </span>
         </label>
@@ -15222,8 +15428,8 @@ const counterexampleTraceHelpText = computed(() => {
           @click="fetchRuleRecommendations"
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('rule')"
           :class="[
-            'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingRules ? 'bg-red-700 hover:bg-red-800' : 'bg-amber-700 hover:bg-amber-800'
+            'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
+            isRecommendingRules ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)]' : 'bg-[color:var(--warning-fill)] hover:bg-[color:var(--warning-fill)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -15245,14 +15451,14 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="ruleRecommendationMessage && !isRecommendingRules"
-          class="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700"
+          class="rounded-lg border board-border-subtle board-chip-warning px-3 py-2 text-xs font-medium board-text-warning"
         >
           {{ ruleRecommendationMessage }}
         </div>
         <div
           v-if="ruleRecommendationMessage && !isRecommendingRules && !ruleRecommendationIsAppliedConfirmation"
           data-testid="rule-candidate-accounting"
-          class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"
+          class="board-card rounded-lg border border-slate-200 px-3 py-2 text-xs leading-relaxed text-slate-600"
         >
           {{ t('app.recommendationCandidateSummary', {
             raw: ruleRecommendationRawCandidateCount,
@@ -15269,7 +15475,7 @@ const counterexampleTraceHelpText = computed(() => {
           <p>{{ t('app.recommendationFilteredNotice', { count: ruleRecommendationFilteredCount }) }}</p>
           <ul
             v-if="ruleRecommendationFilteredItems.length"
-            class="mt-1 max-h-32 list-disc space-y-0.5 overflow-y-auto pl-4 pr-1 font-normal leading-relaxed"
+            class="iot-scroll-region mt-1 max-h-32 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed"
           >
             <li
               v-for="(item, index) in ruleRecommendationFilteredItems"
@@ -15285,10 +15491,10 @@ const counterexampleTraceHelpText = computed(() => {
         <div
           v-if="ruleRecommendationAdjustedItems.length > 0 && !isRecommendingRules"
           data-testid="rule-adjusted-items"
-          class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
+          class="rounded-lg board-surface-warning px-3 py-2 text-xs font-medium board-text-warning"
         >
           <p>{{ t('app.recommendationAdjustedNotice', { count: ruleRecommendationAdjustedItems.length }) }}</p>
-          <ul class="mt-1 max-h-36 list-disc space-y-0.5 overflow-y-auto pl-4 pr-1 font-normal leading-relaxed">
+          <ul class="iot-scroll-region mt-1 max-h-36 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed">
             <li
               v-for="(item, index) in ruleRecommendationAdjustedItems"
               :key="`${item.type || 'item'}-${item.index || index}-${item.reasonCode || item.reason}`"
@@ -15301,29 +15507,29 @@ const counterexampleTraceHelpText = computed(() => {
         <!-- Loading State -->
         <div v-if="isRecommendingRules" class="flex flex-col items-center justify-center py-10">
           <div class="relative">
-            <span class="material-symbols-outlined text-amber-500 text-5xl animate-spin">sync</span>
-            <div class="absolute inset-0 bg-amber-400 rounded-full animate-ping opacity-20"></div>
+            <span class="material-symbols-outlined board-text-progress text-5xl animate-spin">sync</span>
+            <div class="absolute inset-0 bg-[color:var(--warning)] rounded-full animate-ping opacity-20"></div>
           </div>
           <p class="text-slate-600 text-sm mt-4 font-medium">{{ t('app.analyzingDevices') }}</p>
-          <p class="text-slate-400 text-xs mt-1">{{ t('app.generatingAutomationRules') }}</p>
+          <p class="text-slate-500 text-xs mt-1">{{ t('app.generatingAutomationRules') }}</p>
         </div>
 
         <!-- Setup State -->
         <div v-else-if="!ruleRecommendationRequested" class="flex flex-col items-center justify-center py-10">
-          <div class="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-amber-400 text-3xl">tune</span>
+          <div class="w-16 h-16 board-chip-warning rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined board-text-warning text-3xl">tune</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.configureRecommendationParameters') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateRecommendations') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateRecommendations') }}</p>
         </div>
 
         <!-- Empty State -->
         <div v-else-if="ruleRecommendations.length === 0" class="flex flex-col items-center justify-center py-10">
           <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-slate-300 text-3xl">psychology</span>
+            <span class="material-symbols-outlined text-slate-500 text-3xl">psychology</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
         </div>
 
         <!-- Recommendations List -->
@@ -15334,7 +15540,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button 
               @click="fetchRuleRecommendations"
               :disabled="isSceneReplacementInProgress"
-              class="text-xs text-amber-600 hover:text-amber-700 font-medium flex items-center gap-1"
+              class="text-xs board-text-warning hover:font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
               {{ t('app.regenerateRecommendations') }}
@@ -15344,15 +15550,15 @@ const counterexampleTraceHelpText = computed(() => {
           <div 
             v-for="(rec, index) in ruleRecommendations" 
             :key="index"
-            class="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden group"
+            class="board-card board-card--raised rounded-xl border border-slate-200 hover:transition-all overflow-hidden group"
           >
             <!-- Card Header -->
             <div class="p-3 pb-2">
               <div class="flex items-start justify-between gap-2">
                 <div class="flex min-w-0 items-center gap-2">
                   <!-- Rule Icon -->
-                  <div class="w-10 h-10 shrink-0 bg-amber-100 rounded-lg flex items-center justify-center">
-                    <span class="material-symbols-outlined text-amber-600">smart_toy</span>
+                  <div class="board-section-icon board-section-icon--lg">
+                    <span class="material-symbols-outlined">smart_toy</span>
                   </div>
                   <div class="min-w-0">
                     <h4 class="text-sm font-bold text-slate-800 break-words">{{ rec.name }}</h4>
@@ -15376,30 +15582,30 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Details -->
             <div class="px-3 pb-2">
               <details class="text-xs">
-                <summary class="flex cursor-pointer items-center gap-1 font-medium text-amber-600 hover:text-amber-700">
+                <summary class="flex cursor-pointer items-center gap-1 font-medium board-text-warning hover:">
                   <span class="material-symbols-outlined text-sm">info</span>
                   {{ t('app.viewDetails') }}
                 </summary>
                 <div class="mt-2 space-y-2 rounded-lg bg-slate-50 p-2 text-slate-700">
                   <div v-if="rec.conditions && rec.conditions.length">
-                    <div class="mb-1 font-semibold text-amber-700">{{ t('app.trigger') }}:</div>
+                    <div class="mb-1 font-semibold board-text-warning">{{ t('app.trigger') }}:</div>
                     <ul class="space-y-1">
                       <li v-for="(cond, condIndex) in rec.conditions" :key="condIndex" class="text-xs">
-                        <span class="font-mono rounded bg-white px-1 py-0.5">
+                        <span class="board-card font-mono rounded px-1 py-0.5">
                           {{ formatRecommendedRuleConditionDevice(cond) }}.{{ formatRecommendedRuleConditionAttribute(cond) }}
                         </span>
                         <template v-if="isValueBasedRuleRecommendationCondition(cond.targetType)">
                           <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
-                          <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedRuleConditionValue(cond) }}</span>
+                          <span class="board-card font-mono rounded px-1 py-0.5">{{ formatRecommendedRuleConditionValue(cond) }}</span>
                         </template>
                         <span v-else class="ml-1 text-slate-500">{{ t('app.apiSignalFires') }}</span>
                       </li>
                     </ul>
                   </div>
                   <div v-if="rec.command">
-                    <div class="mb-1 font-semibold text-amber-700">{{ t('app.action') }}:</div>
+                    <div class="mb-1 font-semibold board-text-warning">{{ t('app.action') }}:</div>
                     <div class="text-xs">
-                      <span class="font-mono rounded bg-white px-1 py-0.5">
+                      <span class="board-card font-mono rounded px-1 py-0.5">
                         {{ formatRecommendedRuleCommandDevice(rec.command) }}.{{ formatRecommendedRuleCommandAction(rec.command) }}
                       </span>
                       <span v-if="rec.command.contentDevice && rec.command.content" class="ml-2 text-slate-500">
@@ -15420,10 +15626,10 @@ const counterexampleTraceHelpText = computed(() => {
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
                   appliedRuleRecommendations.has(index)
-                    ? 'bg-green-500 cursor-default'
+                    ? 'bg-[color:var(--success)] cursor-default'
                     : applyingRuleRecommendations.has(index)
                       ? 'bg-slate-400 cursor-wait'
-                      : 'bg-amber-500 hover:bg-amber-600'
+                      : 'bg-[color:var(--warning-fill)] hover:bg-[color:var(--warning-surface)]'
                 ]"
               >
                 <span
@@ -15457,16 +15663,16 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-purple-500 to-violet-600"></div>
+        <div class="board-panel-banner absolute inset-0"></div>
         <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
         <div class="relative flex items-center justify-between p-4">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-purple-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
-              <span class="material-symbols-outlined text-white text-xl">devices</span>
+            <div class="board-section-icon board-section-icon--lg">
+              <span class="material-symbols-outlined text-xl">devices</span>
             </div>
             <div>
-              <h3 id="device-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.deviceRecommendations') }}</h3>
-              <p class="text-black/70 text-xs">{{ t('app.aiPoweredDeviceSuggestions') }}</p>
+              <h3 id="device-recommendation-panel-title" class="text-white font-bold text-base">{{ t('app.deviceRecommendations') }}</h3>
+              <p class="text-white/70 text-xs">{{ t('app.aiPoweredDeviceSuggestions') }}</p>
             </div>
           </div>
           <button 
@@ -15475,7 +15681,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="close-device-recommendations"
             :aria-label="t('app.close')"
             :title="t('app.close')"
-            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
           >
             <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
@@ -15483,8 +15689,8 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <!-- Recommendation Content -->
-      <div class="p-3 space-y-3 max-h-[500px] overflow-y-auto">
-        <div class="rounded-lg border border-purple-100 bg-white p-2">
+      <div class="iot-scroll-region p-3 space-y-3 max-h-[500px]">
+        <div class="rounded-lg border board-border-subtle bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.count') }}
             <input
@@ -15493,12 +15699,12 @@ const counterexampleTraceHelpText = computed(() => {
               type="number"
               min="1"
               max="10"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-purple-200 disabled:bg-slate-100"
+              class="board-card mt-1 min-h-11 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
             />
           </label>
         </div>
 
-        <label class="block rounded-lg border border-purple-100 bg-white p-2 text-xs font-medium text-slate-600">
+        <label class="block rounded-lg border board-border-subtle bg-white p-2 text-xs font-medium text-slate-600">
           {{ t('app.recommendationScenario') }}
           <textarea
             v-model.trim="deviceRecommendationFilters.userRequirement"
@@ -15506,9 +15712,9 @@ const counterexampleTraceHelpText = computed(() => {
             rows="3"
             :maxlength="AI_RECOMMENDATION_REQUIREMENT_MAX_LENGTH"
             :placeholder="t('app.recommendationScenarioPlaceholder')"
-            class="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-purple-200 disabled:bg-slate-100"
+            class="board-card mt-1 w-full resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
           ></textarea>
-          <span class="mt-1 block text-[10px] font-normal leading-snug text-slate-400">
+          <span class="mt-1 block text-[length:var(--iot-font-min)] font-normal leading-snug text-slate-500">
             {{ t('app.recommendationBasisHint') }}
           </span>
         </label>
@@ -15519,8 +15725,8 @@ const counterexampleTraceHelpText = computed(() => {
           @click="fetchDeviceRecommendations"
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('device')"
           :class="[
-            'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingDevices ? 'bg-red-700 hover:bg-red-800' : 'bg-purple-700 hover:bg-purple-800'
+            'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
+            isRecommendingDevices ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -15542,14 +15748,14 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="deviceRecommendationMessage && !isRecommendingDevices"
-          class="rounded-lg border border-purple-100 bg-purple-50 px-3 py-2 text-xs font-medium text-purple-700"
+          class="rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-xs font-medium board-text-info"
         >
           {{ deviceRecommendationMessage }}
         </div>
         <div
           v-if="deviceRecommendationMessage && !isRecommendingDevices && !deviceRecommendationIsAppliedConfirmation"
           data-testid="device-candidate-accounting"
-          class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"
+          class="board-card rounded-lg border border-slate-200 px-3 py-2 text-xs leading-relaxed text-slate-600"
         >
           {{ t('app.recommendationCandidateSummary', {
             raw: deviceRecommendationRawCandidateCount,
@@ -15566,7 +15772,7 @@ const counterexampleTraceHelpText = computed(() => {
           <p>{{ t('app.recommendationFilteredNotice', { count: deviceRecommendationFilteredCount }) }}</p>
           <ul
             v-if="deviceRecommendationFilteredItems.length"
-            class="mt-1 max-h-32 list-disc space-y-0.5 overflow-y-auto pl-4 pr-1 font-normal leading-relaxed"
+            class="iot-scroll-region mt-1 max-h-32 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed"
           >
             <li
               v-for="(item, index) in deviceRecommendationFilteredItems"
@@ -15581,10 +15787,10 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
         <div
           v-if="deviceRecommendationAdjustedItems.length > 0 && !isRecommendingDevices"
-          class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
+          class="rounded-lg board-surface-warning px-3 py-2 text-xs font-medium board-text-warning"
         >
           <p>{{ t('app.deviceRecommendationAdjustedNotice', { count: deviceRecommendationAdjustedItems.length }) }}</p>
-          <ul class="mt-1 max-h-36 list-disc space-y-0.5 overflow-y-auto pl-4 pr-1 font-normal leading-relaxed">
+          <ul class="iot-scroll-region mt-1 max-h-36 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed">
             <li
               v-for="(item, index) in deviceRecommendationAdjustedItems"
               :key="`${item.type || 'device'}-${item.index || index}-${item.reasonCode || item.reason}`"
@@ -15597,29 +15803,29 @@ const counterexampleTraceHelpText = computed(() => {
         <!-- Loading State -->
         <div v-if="isRecommendingDevices" class="flex flex-col items-center justify-center py-10">
           <div class="relative">
-            <span class="material-symbols-outlined text-purple-500 text-5xl animate-spin">sync</span>
-            <div class="absolute inset-0 bg-purple-400 rounded-full animate-ping opacity-20"></div>
+            <span class="material-symbols-outlined board-text-progress text-5xl animate-spin">sync</span>
+            <div class="absolute inset-0 bg-[color:var(--accent)] rounded-full animate-ping opacity-20"></div>
           </div>
           <p class="text-slate-600 text-sm mt-4 font-medium">{{ t('app.analyzingBoard') }}</p>
-          <p class="text-slate-400 text-xs mt-1">{{ t('app.findingCompatibleDevices') }}</p>
+          <p class="text-slate-500 text-xs mt-1">{{ t('app.findingCompatibleDevices') }}</p>
         </div>
 
         <!-- Setup State -->
         <div v-else-if="!deviceRecommendationRequested" class="flex flex-col items-center justify-center py-10">
-          <div class="w-16 h-16 bg-purple-50 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-purple-400 text-3xl">tune</span>
+          <div class="w-16 h-16 board-chip-info rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined board-text-info text-3xl">tune</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.configureRecommendationParameters') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateRecommendations') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateRecommendations') }}</p>
         </div>
 
         <!-- Empty State -->
         <div v-else-if="deviceRecommendations.length === 0" class="flex flex-col items-center justify-center py-10">
           <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-slate-300 text-3xl">devices</span>
+            <span class="material-symbols-outlined text-slate-500 text-3xl">devices</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
         </div>
 
         <!-- Recommendations List -->
@@ -15630,7 +15836,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button 
               @click="fetchDeviceRecommendations"
               :disabled="isSceneReplacementInProgress"
-              class="text-xs text-purple-600 hover:text-purple-700 font-medium flex items-center gap-1"
+              class="text-xs board-text-info hover:font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
               {{ t('app.regenerateRecommendations') }}
@@ -15640,21 +15846,21 @@ const counterexampleTraceHelpText = computed(() => {
           <div
             v-for="(rec, index) in deviceRecommendations"
             :key="index"
-            class="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden group"
+            class="board-card board-card--raised rounded-xl border border-slate-200 hover:transition-all overflow-hidden group"
           >
             <!-- Card Header -->
             <div class="p-3 pb-2">
               <div class="flex items-start justify-between gap-2">
                 <div class="flex min-w-0 items-center gap-2">
                   <!-- Device Icon -->
-                  <div class="w-10 h-10 shrink-0 bg-purple-100 rounded-lg flex items-center justify-center">
-                    <span class="material-symbols-outlined text-purple-600">device_hub</span>
+                  <div class="board-section-icon board-section-icon--lg">
+                    <span class="material-symbols-outlined">device_hub</span>
                   </div>
                   <div class="min-w-0">
                     <h4 class="text-sm font-bold text-slate-800 truncate" :title="rec.suggestedLabel || rec.templateName">
                       {{ rec.suggestedLabel || rec.templateName }}
                     </h4>
-                    <p class="text-[11px] font-medium text-purple-600 truncate" :title="rec.templateName">{{ rec.templateName }}</p>
+                    <p class="text-[11px] font-medium board-text-info truncate" :title="rec.templateName">{{ rec.templateName }}</p>
                     <p class="text-xs text-slate-500 break-words">{{ rec.description || t('app.noDescription') }}</p>
                   </div>
                 </div>
@@ -15664,7 +15870,7 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Reason -->
             <div class="px-3 pb-2">
               <div v-if="rec.intendedUse || rec.suggestedPlacement || rec.initialState || rec.currentStateTrust || rec.currentStatePrivacy" class="mb-2 flex flex-wrap gap-1">
-                <span v-if="rec.intendedUse" class="rounded-full bg-purple-50 px-2 py-1 text-[11px] font-medium text-purple-700">
+                <span v-if="rec.intendedUse" class="rounded-full board-chip-info px-2 py-1 text-[11px] font-medium board-text-info">
                   {{ t('app.deviceRecommendationIntendedUse', { value: localizedRecommendationText(rec.intendedUse, t('app.recommendedBasedOnCurrentDevices')) }) }}
                 </span>
                 <span v-if="rec.suggestedPlacement" class="rounded-full bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
@@ -15673,10 +15879,10 @@ const counterexampleTraceHelpText = computed(() => {
                 <span v-if="rec.initialState" class="rounded-full bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
                   {{ t('app.deviceRecommendationInitialState', { value: formatRecommendedDeviceModelToken(rec, rec.initialState) }) }}
                 </span>
-                <span v-if="rec.currentStateTrust" class="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
+                <span v-if="rec.currentStateTrust" class="rounded-full board-chip-success px-2 py-1 text-[11px] font-medium board-text-success">
                   {{ t('app.deviceRecommendationStateTrust', { value: t(`app.${rec.currentStateTrust}`) }) }}
                 </span>
-                <span v-if="rec.currentStatePrivacy" class="rounded-full bg-fuchsia-50 px-2 py-1 text-[11px] font-medium text-fuchsia-700">
+                <span v-if="rec.currentStatePrivacy" class="rounded-full board-chip-info px-2 py-1 text-[11px] font-medium board-text-info">
                   {{ t('app.deviceRecommendationStatePrivacy', { value: t(`app.${rec.currentStatePrivacy}`) }) }}
                 </span>
               </div>
@@ -15685,7 +15891,7 @@ const counterexampleTraceHelpText = computed(() => {
               </p>
               <p
                 v-if="recommendedDeviceEnvironmentAdditions(rec).length > 0"
-                class="mb-2 rounded-lg border border-sky-100 bg-sky-50 px-2 py-1.5 text-[11px] leading-relaxed text-sky-800"
+                class="mb-2 rounded-lg border border-[color:var(--accent-border)] board-chip-info px-2 py-1.5 text-[11px] leading-relaxed board-text-info"
               >
                 {{ t('app.deviceCreationEnvironmentAdditionsPreview', { names: formatRecommendedDeviceEnvironmentAdditions(rec) }) }}
               </p>
@@ -15716,10 +15922,10 @@ const counterexampleTraceHelpText = computed(() => {
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
                   appliedDeviceRecommendations.has(index)
-                    ? 'bg-green-500 cursor-default'
+                    ? 'bg-[color:var(--success)] cursor-default'
                     : applyingDeviceRecommendations.has(index)
                       ? 'bg-slate-400 cursor-wait'
-                      : 'bg-purple-500 hover:bg-purple-600'
+                      : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
                 ]"
               >
                 <span
@@ -15753,16 +15959,16 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-red-500 to-rose-600"></div>
+        <div class="board-panel-banner absolute inset-0"></div>
         <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
         <div class="relative flex items-center justify-between p-4">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-red-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
-              <span class="material-symbols-outlined text-white text-xl">policy</span>
+            <div class="board-section-icon board-section-icon--lg">
+              <span class="material-symbols-outlined text-xl">policy</span>
             </div>
             <div>
-              <h3 id="spec-recommendation-panel-title" class="text-black font-bold text-base">{{ t('app.specificationRecommendations') }}</h3>
-              <p class="text-black/70 text-xs">{{ t('app.aiPoweredSpecificationSuggestions') }}</p>
+              <h3 id="spec-recommendation-panel-title" class="text-white font-bold text-base">{{ t('app.specificationRecommendations') }}</h3>
+              <p class="text-white/70 text-xs">{{ t('app.aiPoweredSpecificationSuggestions') }}</p>
             </div>
           </div>
           <button 
@@ -15771,7 +15977,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="close-spec-recommendations"
             :aria-label="t('app.close')"
             :title="t('app.close')"
-            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
           >
             <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
@@ -15779,14 +15985,14 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <!-- Recommendation Content -->
-      <div class="p-3 space-y-3 max-h-[500px] overflow-y-auto">
-        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-red-100 bg-white p-2">
+      <div class="iot-scroll-region p-3 space-y-3 max-h-[500px]">
+        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border board-border-subtle bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.category') }}
             <select
               v-model="specRecommendationFilters.category"
               :disabled="isRecommendingSpecs"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:bg-slate-100"
+              class="board-card mt-1 min-h-11 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
             >
               <option
                 v-for="option in specRecommendationCategories"
@@ -15805,12 +16011,12 @@ const counterexampleTraceHelpText = computed(() => {
               type="number"
               min="1"
               max="10"
-              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:bg-slate-100"
+              class="board-card mt-1 min-h-11 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
             />
           </label>
         </div>
 
-        <label class="block rounded-lg border border-red-100 bg-white p-2 text-xs font-medium text-slate-600">
+        <label class="block rounded-lg border board-border-subtle bg-white p-2 text-xs font-medium text-slate-600">
           {{ t('app.recommendationScenario') }}
           <textarea
             v-model.trim="specRecommendationFilters.userRequirement"
@@ -15818,9 +16024,9 @@ const counterexampleTraceHelpText = computed(() => {
             rows="3"
             :maxlength="AI_RECOMMENDATION_REQUIREMENT_MAX_LENGTH"
             :placeholder="t('app.recommendationScenarioPlaceholder')"
-            class="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:bg-slate-100"
+            class="board-card mt-1 w-full resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs leading-relaxed text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
           ></textarea>
-          <span class="mt-1 block text-[10px] font-normal leading-snug text-slate-400">
+          <span class="mt-1 block text-[length:var(--iot-font-min)] font-normal leading-snug text-slate-500">
             {{ t('app.recommendationBasisHint') }}
           </span>
         </label>
@@ -15831,8 +16037,8 @@ const counterexampleTraceHelpText = computed(() => {
           @click="fetchSpecRecommendations"
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('spec')"
           :class="[
-            'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingSpecs ? 'bg-red-800 hover:bg-red-900' : 'bg-red-700 hover:bg-red-800'
+            'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
+            isRecommendingSpecs ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)]' : 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -15854,14 +16060,14 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="specRecommendationMessage && !isRecommendingSpecs"
-          class="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-medium text-red-700"
+          class="rounded-lg border board-border-subtle board-chip-danger px-3 py-2 text-xs font-medium board-text-danger"
         >
           {{ specRecommendationMessage }}
         </div>
         <div
           v-if="specRecommendationMessage && !isRecommendingSpecs && !specRecommendationIsAppliedConfirmation"
           data-testid="spec-candidate-accounting"
-          class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600"
+          class="board-card rounded-lg border border-slate-200 px-3 py-2 text-xs leading-relaxed text-slate-600"
         >
           {{ t('app.recommendationCandidateSummary', {
             raw: specRecommendationRawCandidateCount,
@@ -15878,7 +16084,7 @@ const counterexampleTraceHelpText = computed(() => {
           <p>{{ t('app.recommendationFilteredNotice', { count: specRecommendationFilteredCount }) }}</p>
           <ul
             v-if="specRecommendationFilteredItems.length"
-            class="mt-1 max-h-32 list-disc space-y-0.5 overflow-y-auto pl-4 pr-1 font-normal leading-relaxed"
+            class="iot-scroll-region mt-1 max-h-32 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed"
           >
             <li
               v-for="(item, index) in specRecommendationFilteredItems"
@@ -15895,29 +16101,29 @@ const counterexampleTraceHelpText = computed(() => {
         <!-- Loading State -->
         <div v-if="isRecommendingSpecs" class="flex flex-col items-center justify-center py-10">
           <div class="relative">
-            <span class="material-symbols-outlined text-red-500 text-5xl animate-spin">sync</span>
-            <div class="absolute inset-0 bg-red-400 rounded-full animate-ping opacity-20"></div>
+            <span class="material-symbols-outlined board-text-progress text-5xl animate-spin">sync</span>
+            <div class="absolute inset-0 bg-[color:var(--danger)] rounded-full animate-ping opacity-20"></div>
           </div>
           <p class="text-slate-600 text-sm mt-4 font-medium">{{ t('app.analyzingSystem') }}</p>
-          <p class="text-slate-400 text-xs mt-1">{{ t('app.generatingFormalSpecifications') }}</p>
+          <p class="text-slate-500 text-xs mt-1">{{ t('app.generatingFormalSpecifications') }}</p>
         </div>
 
         <!-- Setup State -->
         <div v-else-if="!specRecommendationRequested" class="flex flex-col items-center justify-center py-10">
-          <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-red-400 text-3xl">tune</span>
+          <div class="w-16 h-16 board-chip-danger rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined board-text-danger text-3xl">tune</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.configureRecommendationParameters') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateRecommendations') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.clickGenerateRecommendations') }}</p>
         </div>
 
         <!-- Empty State -->
         <div v-else-if="specRecommendations.length === 0" class="flex flex-col items-center justify-center py-10">
           <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-slate-300 text-3xl">policy</span>
+            <span class="material-symbols-outlined text-slate-500 text-3xl">policy</span>
           </div>
           <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
+          <p class="text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.recommendationEmptyGuidance') }}</p>
         </div>
 
         <!-- Recommendations List -->
@@ -15928,7 +16134,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button 
               @click="fetchSpecRecommendations"
               :disabled="isSceneReplacementInProgress"
-              class="text-xs text-red-600 hover:text-red-700 font-medium flex items-center gap-1"
+              class="text-xs board-text-danger hover:font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
               {{ t('app.regenerateRecommendations') }}
@@ -15938,15 +16144,15 @@ const counterexampleTraceHelpText = computed(() => {
           <div 
             v-for="(rec, index) in specRecommendations" 
             :key="index"
-            class="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden group"
+            class="board-card board-card--raised rounded-xl border border-slate-200 hover:transition-all overflow-hidden group"
           >
             <!-- Card Header -->
             <div class="p-3 pb-2">
               <div class="flex items-start justify-between gap-2">
                 <div class="flex min-w-0 items-center gap-2">
                   <!-- Specification Icon -->
-                  <div class="w-10 h-10 shrink-0 bg-red-100 rounded-lg flex items-center justify-center">
-                    <span class="material-symbols-outlined text-red-600">policy</span>
+                  <div class="board-section-icon board-section-icon--lg">
+                    <span class="material-symbols-outlined">policy</span>
                   </div>
                   <div class="min-w-0">
                     <h4 class="text-sm font-bold text-slate-800 truncate" :title="recommendedSpecTemplateLabel(rec.templateId)">
@@ -15970,44 +16176,44 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Details -->
             <div class="px-3 pb-2">
               <details class="text-xs">
-                <summary class="flex cursor-pointer items-center gap-1 font-medium text-red-600 hover:text-red-700">
+                <summary class="flex cursor-pointer items-center gap-1 font-medium board-text-danger hover:">
                   <span class="material-symbols-outlined text-sm">info</span>
                   {{ t('app.viewDetails') }}
                 </summary>
                 <div class="mt-2 space-y-2 rounded-lg bg-slate-50 p-2 text-slate-700">
                   <div v-if="rec.aConditions && rec.aConditions.length">
-                    <div class="mb-1 font-semibold text-red-700">{{ t('app.alwaysConditions') }}:</div>
+                    <div class="mb-1 font-semibold board-text-danger">{{ t('app.alwaysConditions') }}:</div>
                     <ul class="space-y-1">
                       <li v-for="(cond, condIndex) in rec.aConditions" :key="condIndex" class="text-xs">
-                        <span class="font-mono rounded bg-white px-1 py-0.5">
+                        <span class="board-card font-mono rounded px-1 py-0.5">
                           {{ formatRecommendedSpecConditionTarget(cond) }}
                         </span>
                         <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
-                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
+                        <span class="board-card font-mono rounded px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
                       </li>
                     </ul>
                   </div>
                   <div v-if="rec.ifConditions && rec.ifConditions.length">
-                    <div class="mb-1 font-semibold text-red-700">{{ t('app.ifConditions') }}:</div>
+                    <div class="mb-1 font-semibold board-text-danger">{{ t('app.ifConditions') }}:</div>
                     <ul class="space-y-1">
                       <li v-for="(cond, condIndex) in rec.ifConditions" :key="condIndex" class="text-xs">
-                        <span class="font-mono rounded bg-white px-1 py-0.5">
+                        <span class="board-card font-mono rounded px-1 py-0.5">
                           {{ formatRecommendedSpecConditionTarget(cond) }}
                         </span>
                         <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
-                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
+                        <span class="board-card font-mono rounded px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
                       </li>
                     </ul>
                   </div>
                   <div v-if="rec.thenConditions && rec.thenConditions.length">
-                    <div class="mb-1 font-semibold text-red-700">{{ t('app.thenConditions') }}:</div>
+                    <div class="mb-1 font-semibold board-text-danger">{{ t('app.thenConditions') }}:</div>
                     <ul class="space-y-1">
                       <li v-for="(cond, condIndex) in rec.thenConditions" :key="condIndex" class="text-xs">
-                        <span class="font-mono rounded bg-white px-1 py-0.5">
+                        <span class="board-card font-mono rounded px-1 py-0.5">
                           {{ formatRecommendedSpecConditionTarget(cond) }}
                         </span>
                         <span class="mx-1">{{ formatRelationForDisplay(cond.relation) }}</span>
-                        <span class="font-mono rounded bg-white px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
+                        <span class="board-card font-mono rounded px-1 py-0.5">{{ formatRecommendedSpecConditionValue(cond) }}</span>
                       </li>
                     </ul>
                   </div>
@@ -16024,10 +16230,10 @@ const counterexampleTraceHelpText = computed(() => {
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
                   appliedSpecRecommendations.has(index)
-                    ? 'bg-green-500 cursor-default'
+                    ? 'bg-[color:var(--success)] cursor-default'
                     : applyingSpecRecommendations.has(index)
                       ? 'bg-slate-400 cursor-wait'
-                      : 'bg-red-500 hover:bg-red-600'
+                      : 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]'
                 ]"
               >
                 <span
@@ -16061,16 +16267,19 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <!-- Simulation Header with gradient -->
       <div class="relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-indigo-500 to-violet-600"></div>
+        <div class="board-panel-banner absolute inset-0"></div>
         <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
         <div class="relative flex items-center justify-between p-4">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-blue-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
-              <span class="material-symbols-outlined text-white text-xl">play_circle</span>
+            <div class="board-section-icon board-section-icon--lg">
+              <span class="material-symbols-outlined text-xl">play_circle</span>
             </div>
             <div>
-              <span id="simulation-panel-title" class="text-sm font-bold text-black">{{ t('app.simulationTitle') }}</span>
-              <p class="text-indigo-900/80 text-xs">{{ t('app.configureSimulation') }}</p>
+              <span id="simulation-panel-title" class="text-sm font-bold text-white">{{ t('app.simulationTitle') }}</span>
+              <!-- The banner is an accent fill, so this needs fill ink, not `board-text-info` — the accent
+                   *text* colour on an accent ground measured **1.04:1** in light theme. Same fix as the
+                   Control Center's create-rule card; the other five panel subtitles already use white. -->
+              <p class="text-white/90 text-xs">{{ t('app.configureSimulation') }}</p>
             </div>
           </div>
           <button 
@@ -16079,7 +16288,7 @@ const counterexampleTraceHelpText = computed(() => {
             data-testid="close-simulation-panel"
             :aria-label="t('app.close')"
             :title="t('app.close')"
-            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
           >
             <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
@@ -16088,9 +16297,9 @@ const counterexampleTraceHelpText = computed(() => {
       <!-- Simulation Content -->
       <div class="p-3 space-y-3">
         <!-- Steps -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="mb-2 flex items-center justify-between gap-3">
-            <label for="simulation-steps-input" class="text-[10px] font-bold text-indigo-700 uppercase tracking-wide">
+            <label for="simulation-steps-input" class="text-[length:var(--iot-font-min)] font-bold board-text-info uppercase tracking-wide">
               {{ t('app.simulationSteps') }}
             </label>
             <input
@@ -16103,7 +16312,7 @@ const counterexampleTraceHelpText = computed(() => {
               :max="SIMULATION_STEPS_MAX"
               step="1"
               inputmode="numeric"
-              class="h-8 w-16 rounded-lg border border-indigo-200 bg-indigo-50 px-2 text-center text-sm font-bold text-indigo-700 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+              class="h-8 w-16 rounded-lg board-surface-info px-2 text-center text-sm font-bold board-text-info outline-none transition focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:cursor-not-allowed disabled:opacity-60"
               @change="commitSimulationStepsInput"
               @blur="commitSimulationStepsInput"
               @keydown.enter.prevent="commitSimulationStepsInput"
@@ -16113,7 +16322,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button
               type="button"
               data-testid="simulation-steps-decrease"
-              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-600 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40"
+              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg board-surface-info board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-40"
               :disabled="isSimulating || normalizeSimulationStepsControlValue(simulationForm.steps) <= SIMULATION_STEPS_MIN"
               :title="t('app.decreaseSimulationSteps')"
               :aria-label="t('app.decreaseSimulationSteps')"
@@ -16129,12 +16338,12 @@ const counterexampleTraceHelpText = computed(() => {
               :min="SIMULATION_STEPS_MIN"
               :max="SIMULATION_STEPS_MAX"
               step="1"
-              class="flex-1 h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+              class="flex-1 h-2 board-chip-info rounded-lg appearance-none cursor-pointer accent-[color:var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
             />
             <button
               type="button"
               data-testid="simulation-steps-increase"
-              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-600 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40"
+              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg board-surface-info board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-40"
               :disabled="isSimulating || normalizeSimulationStepsControlValue(simulationForm.steps) >= SIMULATION_STEPS_MAX"
               :title="t('app.increaseSimulationSteps')"
               :aria-label="t('app.increaseSimulationSteps')"
@@ -16146,11 +16355,11 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!-- Attack Mode -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center justify-between gap-3">
             <div class="flex items-center gap-3">
-              <div class="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center">
-                <span class="material-symbols-outlined text-red-500 text-lg">warning</span>
+              <div class="w-8 h-8 board-chip-danger rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined board-text-danger text-lg">warning</span>
               </div>
               <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
                 {{ t('app.attackMode') }}
@@ -16159,7 +16368,7 @@ const counterexampleTraceHelpText = computed(() => {
             <ToggleSwitch
               :checked="simulationForm.isAttack"
               :label="t('app.attackMode')"
-              tone="red"
+              tone="adversarial"
               test-id="simulation-attack-toggle"
               :disabled="isSimulating || (!simulationForm.isAttack && !hasModeledAttackEffect)"
               :title="!hasModeledAttackEffect ? t('app.attackNoModeledEffect') : undefined"
@@ -16171,19 +16380,19 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="!hasModeledAttackEffect"
             id="simulation-attack-unavailable"
             data-testid="simulation-attack-unavailable"
-            class="mt-2 text-[10px] leading-4 text-amber-700"
+            class="mt-2 text-[length:var(--iot-font-min)] leading-4 board-text-warning"
           >
             {{ t('app.attackNoModeledEffect') }}
           </p>
         </div>
 
-        <div v-if="simulationForm.isAttack && hasModeledAttackEffect" class="space-y-2 border-y border-red-200/70 bg-red-50 px-3 py-3">
-          <p class="text-[11px] leading-4 text-red-800">{{ t('app.simulationAttackExactHint') }}</p>
+        <div v-if="simulationForm.isAttack && hasModeledAttackEffect" class="space-y-2 border-y board-border-subtle board-chip-danger px-3 py-3">
+          <p class="text-[11px] leading-4 board-text-danger">{{ t('app.simulationAttackExactHint') }}</p>
           <div class="space-y-1.5" data-testid="simulation-attack-points">
             <label
               v-for="point in boardAttackSurface.points"
               :key="point.key"
-              class="flex min-h-8 items-center gap-2 border border-red-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+              class="flex min-h-8 items-center gap-2 border board-border-subtle bg-white px-2 py-1.5 text-xs text-slate-700"
               :class="!point.selectable ? 'opacity-55' : 'cursor-pointer'"
             >
               <input
@@ -16193,26 +16402,26 @@ const counterexampleTraceHelpText = computed(() => {
                 :data-testid="`simulation-attack-point-${point.key}`"
                 @change="toggleAttackPoint(simulationForm, point.key)"
               />
-              <span class="material-symbols-outlined text-base text-red-500" aria-hidden="true">
+              <span class="material-symbols-outlined text-base board-text-danger" aria-hidden="true">
                 {{ point.kind === 'DEVICE' ? 'memory' : 'conversion_path' }}
               </span>
               <span class="min-w-0 flex-1 break-words">{{ point.label }}</span>
-              <span class="shrink-0 text-[10px] font-semibold uppercase text-slate-400">
+              <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold uppercase text-slate-500">
                 {{ point.kind === 'DEVICE' ? t('app.device') : t('app.automationLink') }}
               </span>
             </label>
           </div>
-          <p v-if="simulationAttackConfigurationError" class="text-[10px] font-semibold leading-4 text-red-700" data-testid="simulation-attack-points-invalid">
+          <p v-if="simulationAttackConfigurationError" class="text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger" data-testid="simulation-attack-points-invalid">
             {{ simulationAttackConfigurationError }}
           </p>
         </div>
 
         <!-- Privacy Analysis -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-3">
-              <div class="w-8 h-8 shrink-0 bg-purple-100 rounded-lg flex items-center justify-center">
-                <span class="material-symbols-outlined text-purple-500 text-lg">security</span>
+              <div class="w-8 h-8 shrink-0 board-chip-info rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined board-text-info text-lg">security</span>
               </div>
               <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
                 {{ t('app.privacyAnalysis') }}
@@ -16221,14 +16430,14 @@ const counterexampleTraceHelpText = computed(() => {
                 :text="t('app.privacyModelHint')"
                 :label="t('app.showHelpFor', { topic: t('app.privacyAnalysis') })"
                 placement="left"
-                tone="privacy"
+                tone="sensitivity"
                 test-id="simulation-privacy-help"
               />
             </div>
             <ToggleSwitch
               :checked="simulationForm.enablePrivacy"
               :label="t('app.privacyAnalysis')"
-              tone="purple"
+              tone="sensitivity"
               test-id="simulation-privacy-toggle"
               :disabled="isSimulating"
               @change="value => simulationForm.enablePrivacy = value"
@@ -16237,10 +16446,10 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!-- Run Mode -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center gap-3 mb-2">
-            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
-              <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
+            <div class="w-8 h-8 board-chip-info rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined board-text-info text-lg">schedule</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
               {{ t('app.runMode') }}
@@ -16255,7 +16464,7 @@ const counterexampleTraceHelpText = computed(() => {
               :aria-pressed="!simulationForm.isAsync"
               :title="t('app.syncSimulationModeHint')"
               class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="!simulationForm.isAsync ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              :class="!simulationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             >
               {{ t('app.previewNow') }}
             </button>
@@ -16267,7 +16476,7 @@ const counterexampleTraceHelpText = computed(() => {
               :aria-pressed="simulationForm.isAsync"
               :title="t('app.asyncSimulationModeHint')"
               class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="simulationForm.isAsync ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              :class="simulationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             >
               {{ t('app.saveInBackground') }}
             </button>
@@ -16278,11 +16487,11 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!-- Save History -->
-        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
-              <div class="w-8 h-8 bg-cyan-100 rounded-lg flex items-center justify-center">
-                <span class="material-symbols-outlined text-cyan-600 text-lg">history</span>
+              <div class="w-8 h-8 board-chip-info rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined board-text-info text-lg">history</span>
               </div>
               <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
                 {{ t('app.saveToHistory') }}
@@ -16291,7 +16500,6 @@ const counterexampleTraceHelpText = computed(() => {
             <ToggleSwitch
               :checked="simulationForm.isAsync || simulationForm.saveToHistory"
               :label="t('app.saveToHistory')"
-              tone="cyan"
               test-id="simulation-save-history"
               :disabled="simulationForm.isAsync || isSimulating"
               :title="simulationForm.isAsync ? t('app.asyncSimulationsSavedAutomatically') : t('app.saveSyncSimulationToHistory')"
@@ -16307,12 +16515,12 @@ const counterexampleTraceHelpText = computed(() => {
         <!-- Async Progress (visible when async simulation is running) -->
         <div v-if="isSimulating && asyncSimulationActive" class="space-y-1">
           <div class="flex items-center justify-between text-xs">
-            <span class="text-indigo-700 font-medium">{{ t('app.progress') }}</span>
+            <span class="board-text-info font-medium">{{ t('app.progress') }}</span>
             <div v-if="asyncSimulationTask.taskId" class="flex items-center gap-2">
-              <span class="text-indigo-600">{{ asyncSimulationTask.progress }}%</span>
+              <span class="board-text-info">{{ asyncSimulationTask.progress }}%</span>
               <button
                 type="button"
-                class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="w-6 h-6 inline-flex items-center justify-center rounded-md border board-border-subtle board-text-info hover:board-chip-info disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="cancellingSimulationTask"
                 :title="t('app.cancelSimulationTask')"
                 :aria-label="t('app.cancelSimulationTask')"
@@ -16322,14 +16530,14 @@ const counterexampleTraceHelpText = computed(() => {
               </button>
             </div>
           </div>
-          <div class="w-full h-2 bg-indigo-200 rounded-full overflow-hidden">
+          <div class="w-full h-2 board-chip-info rounded-full overflow-hidden">
             <div 
-              class="h-full bg-green-500 transition-all duration-300"
+              class="h-full bg-[color:var(--success)] transition-all duration-300"
               :class="{ 'animate-pulse': !asyncSimulationTask.taskId }"
               :style="{ width: asyncSimulationTask.taskId ? `${asyncSimulationTask.progress}%` : '35%' }"
             ></div>
           </div>
-          <div class="text-xs text-indigo-500 text-center">{{ asyncSimulationTask.status }}</div>
+          <div class="text-xs board-text-info text-center">{{ asyncSimulationTask.status }}</div>
         </div>
 
         <!-- Simulate Button -->
@@ -16339,7 +16547,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSimulating || Boolean(simulationRunBlockedReason)"
           :title="simulationRunBlockedReason || undefined"
           :aria-describedby="simulationRunBlockedReason ? 'simulation-run-blocked-reason' : undefined"
-          class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
+          class="board-panel-submit"
         >
           <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
             <span class="material-symbols-outlined text-sm animate-spin">sync</span>
@@ -16358,7 +16566,7 @@ const counterexampleTraceHelpText = computed(() => {
           v-if="simulationRunBlockedReason"
           id="simulation-run-blocked-reason"
           data-testid="simulation-run-blocked-reason"
-          class="text-xs leading-5 text-amber-700"
+          class="text-xs leading-5 board-text-warning"
           role="status"
         >
           {{ simulationRunBlockedReason }}
@@ -16477,7 +16685,7 @@ const counterexampleTraceHelpText = computed(() => {
                 v-model="renameDialogData.newName"
                 @keyup.enter="confirmRename"
                 :disabled="renameDialogSubmitting"
-                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 transition-colors focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                 :placeholder="t('app.enterDeviceName')"
               />
             </div>
@@ -16494,7 +16702,7 @@ const counterexampleTraceHelpText = computed(() => {
               @click="confirmRename"
               :disabled="renameDialogSubmitting || !renameDialogData.newName.trim() || renameDialogData.newName.trim() === renameDialogData.originalLabel"
               :aria-busy="renameDialogSubmitting"
-              class="inline-flex items-center gap-2 rounded-lg border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              class="inline-flex items-center gap-2 rounded-lg border border-transparent bg-[color:var(--accent-fill)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[color:var(--accent-fill-hover)] disabled:cursor-not-allowed board-action-disarmed"
             >
               <span v-if="renameDialogSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
               {{ renameDialogSubmitting ? t('app.saving') : t('app.confirm') }}
@@ -16523,10 +16731,10 @@ const counterexampleTraceHelpText = computed(() => {
           tabindex="-1"
           @click.stop
         >
-          <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 sm:p-6">
+          <div class="iot-scroll-region min-h-0 flex-1 p-5 sm:p-6">
             <div class="flex items-center mb-4">
-              <div class="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center dark:bg-red-950/50">
-                <span class="material-symbols-outlined text-red-600 dark:text-red-300" aria-hidden="true">warning</span>
+              <div class="flex-shrink-0 w-10 h-10 board-chip-danger rounded-full flex items-center justify-center">
+                <span class="material-symbols-outlined board-text-danger" aria-hidden="true">warning</span>
               </div>
               <div class="ml-3">
                 <h3 id="delete-device-dialog-title" class="text-lg font-semibold text-slate-800 dark:text-slate-100">{{ t('app.deleteDeviceTitle') }}</h3>
@@ -16542,20 +16750,20 @@ const counterexampleTraceHelpText = computed(() => {
 
             <div
               v-if="deletePreviewLoading"
-              class="mb-4 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/70 dark:bg-blue-950/40 dark:text-blue-200"
+              class="mb-4 flex items-center gap-3 rounded-lg border board-border-subtle board-chip-info px-4 py-3 text-sm board-text-info"
               role="status"
               aria-live="polite"
             >
-              <span class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700 dark:border-blue-700 dark:border-t-blue-200" aria-hidden="true"></span>
+              <span class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 board-border-progress border-t-blue-700 dark:board-border-progress dark:border-t-blue-200" aria-hidden="true"></span>
               {{ t('app.deviceDeletionPreviewLoading') }}
             </div>
 
-            <div v-if="deleteConfirmDialogData.hasRelations" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4 dark:border-yellow-900/60 dark:bg-yellow-950/30">
+            <div v-if="deleteConfirmDialogData.hasRelations" class="board-chip-warning border board-border-subtle rounded-lg p-4 mb-4">
               <div class="flex items-start">
-                <span class="material-symbols-outlined text-yellow-600 mr-2 mt-0.5 dark:text-yellow-300" aria-hidden="true">info</span>
+                <span class="material-symbols-outlined board-text-warning mr-2 mt-0.5" aria-hidden="true">info</span>
                 <div class="min-w-0">
-                  <p class="text-sm font-medium text-yellow-800 mb-1 dark:text-yellow-100">{{ t('app.deviceDeleteConsequences') }}</p>
-                  <div class="text-xs text-yellow-700 space-y-1 dark:text-yellow-200">
+                  <p class="text-sm font-medium board-text-warning mb-1">{{ t('app.deviceDeleteConsequences') }}</p>
+                  <div class="text-xs board-text-warning space-y-1">
                     <div v-if="deleteConfirmDialogData.relationCount.rules > 0">
                       • {{ t('app.relatedRulesWillBeDeleted', { count: deleteConfirmDialogData.relationCount.rules }) }}
                       <ul class="mt-1 ml-4 list-disc break-words">
@@ -16603,7 +16811,7 @@ const counterexampleTraceHelpText = computed(() => {
               @click="confirmDelete"
               :disabled="deletePreviewLoading || deleteConfirmSubmitting || !deleteConfirmDialogData.impactToken"
               :aria-busy="deleteConfirmSubmitting"
-              class="inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-600 dark:hover:bg-red-500"
+              class="inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[color:var(--danger-fill)] border border-transparent rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-[color:var(--danger-fill)] dark:hover:bg-[color:var(--danger-fill)]"
             >
               <span v-if="deleteConfirmSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
               {{ deleteConfirmSubmitting ? t('app.deleting') : t('app.deleteDevice') }}
@@ -16639,7 +16847,7 @@ const counterexampleTraceHelpText = computed(() => {
   >
     <div
       :ref="setSimulationResultDialogRef"
-      class="board-result-dialog-surface min-h-0 flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+      class="board-card board-result-dialog-surface min-h-0 flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="simulation-result-dialog-title"
@@ -16648,7 +16856,7 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <header class="flex flex-shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4">
           <div class="flex min-w-0 items-center gap-3">
-            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700">
+            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg board-chip-info board-text-info">
               <span class="material-symbols-outlined text-2xl" aria-hidden="true">monitoring</span>
             </div>
             <div class="min-w-0">
@@ -16660,7 +16868,7 @@ const counterexampleTraceHelpText = computed(() => {
                   requested: getSimulationRequestedStepCount(simulationResult)
                 }) }}
               </p>
-              <p v-else class="mt-0.5 text-xs text-red-600">{{ t('app.simulationFailed') }}</p>
+              <p v-else class="mt-0.5 text-xs board-text-danger">{{ t('app.simulationFailed') }}</p>
             </div>
           </div>
           <button
@@ -16674,48 +16882,48 @@ const counterexampleTraceHelpText = computed(() => {
           </button>
       </header>
 
-      <div v-if="simulationError" class="min-h-0 flex-1 overflow-y-auto p-5">
-        <div class="rounded-lg border border-red-200 bg-red-50 p-4">
-          <div class="flex items-start gap-2 text-red-700">
+      <div v-if="simulationError" class="iot-scroll-region min-h-0 flex-1 p-5">
+        <div class="board-surface-danger rounded-lg p-4">
+          <div class="flex items-start gap-2 board-text-danger">
             <span class="material-symbols-outlined" aria-hidden="true">error</span>
             <span class="text-sm font-medium leading-6">{{ simulationError }}</span>
           </div>
         </div>
       </div>
 
-      <div v-else-if="simulationResult" class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+      <div v-else-if="simulationResult" class="iot-scroll-region min-h-0 flex-1 space-y-4 p-5">
         <div
           v-if="simulationResultStale"
           data-testid="simulation-result-stale-banner"
           role="status"
-          class="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-5 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+          class="flex items-start gap-2 rounded-lg board-surface-warning px-4 py-3 text-sm leading-5 board-text-warning"
         >
           <span class="material-symbols-outlined text-base" aria-hidden="true">history</span>
           <span>{{ t('app.simulationResultStaleRerun') }}</span>
         </div>
         <div
           v-if="!isSimulationModelComplete(simulationResult)"
-          class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          class="rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
         >
           <p>{{ t('app.simulationIncompleteModelDetail', { rules: getSimulationDisabledRuleCount(simulationResult) }) }}</p>
           <ul v-if="getGenerationIssues(simulationResult).length > 0" class="mt-3 space-y-2">
             <li
               v-for="(issue, index) in getGenerationIssues(simulationResult)"
               :key="`${issue.issueType}-${issue.itemLabel}-${index}`"
-              class="border-l-2 border-amber-300 pl-3"
+              class="border-l-2 board-border-subtle pl-3"
             >
-              <div class="text-xs font-bold text-amber-900">{{ issue.itemLabel }}</div>
-              <div class="mt-0.5 text-xs leading-5 text-amber-800">{{ t(generationIssueReasonKey(issue)) }}</div>
+              <div class="text-xs font-bold board-text-warning">{{ issue.itemLabel }}</div>
+              <div class="mt-0.5 text-xs leading-5 board-text-warning">{{ t(generationIssueReasonKey(issue)) }}</div>
             </li>
           </ul>
-          <p v-else class="mt-2 text-xs text-amber-700">
+          <p v-else class="mt-2 text-xs board-text-warning">
             {{ t('app.generationIssueDetailsUnavailable') }}
           </p>
         </div>
 
         <div
           v-if="isSimulationHorizonShorterThanRequested(simulationResult)"
-          class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          class="rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
           data-testid="simulation-short-horizon-warning"
         >
           {{ t('app.simulationStoppedBeforeRequestedSteps', {
@@ -16726,7 +16934,7 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="!isSimulationModelSemanticsConsistent(simulationResult)"
-          class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          class="rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
         >
           {{ t('app.modelSemanticsUnavailable') }}
         </div>
@@ -16735,13 +16943,13 @@ const counterexampleTraceHelpText = computed(() => {
           <div class="flex items-center justify-between gap-3">
             <h4 id="simulation-run-summary-title" class="text-sm font-bold text-slate-800">{{ t('app.runSummary') }}</h4>
             <div class="flex flex-wrap justify-end gap-1.5">
-              <span v-if="simulationResult.isAttack" class="rounded-full bg-orange-100 px-2 py-1 text-[11px] font-semibold text-orange-700">
+              <span v-if="simulationResult.isAttack" class="rounded-full board-chip-warning px-2 py-1 text-[11px] font-semibold board-text-warning">
                 {{ attackSelectionSummary(simulationResult.modelSemantics, simulationResult.attackBudget) }}
               </span>
               <span v-else class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
                 {{ t('app.traceVisualization.noAttackModelShort') }}
               </span>
-              <span v-if="simulationResult.enablePrivacy" class="rounded-full bg-fuchsia-100 px-2 py-1 text-[11px] font-semibold text-fuchsia-700">
+              <span v-if="simulationResult.enablePrivacy" class="rounded-full board-chip-info px-2 py-1 text-[11px] font-semibold board-text-info">
                 {{ t('app.traceVisualization.privacyPropagationEnabled') }}
               </span>
               <span v-else class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
@@ -16750,21 +16958,21 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
           <div class="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-4">
-            <div class="bg-white p-3">
-              <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.modelStates') }}</div>
+            <div class="board-card p-3">
+              <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.modelStates') }}</div>
               <div class="mt-1 text-xl font-bold text-slate-900">{{ getSimulationStateCount(simulationResult) }}</div>
             </div>
-            <div class="bg-white p-3">
-              <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.actualSimulationSteps') }}</div>
+            <div class="board-card p-3">
+              <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.actualSimulationSteps') }}</div>
               <div class="mt-1 text-xl font-bold text-slate-900">{{ getSimulationActualStepCount(simulationResult) }}</div>
             </div>
-            <div class="bg-white p-3">
-              <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.requestedSimulationSteps') }}</div>
+            <div class="board-card p-3">
+              <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.requestedSimulationSteps') }}</div>
               <div class="mt-1 text-xl font-bold text-slate-900">{{ getSimulationRequestedStepCount(simulationResult) }}</div>
             </div>
-            <div class="bg-white p-3">
-              <div class="text-[10px] font-bold uppercase text-slate-500">{{ t('app.modelCoverage') }}</div>
-              <div class="mt-1 text-sm font-bold" :class="isSimulationModelComplete(simulationResult) ? 'text-emerald-700' : 'text-amber-700'">
+            <div class="board-card p-3">
+              <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.modelCoverage') }}</div>
+              <div class="mt-1 text-sm font-bold" :class="isSimulationModelComplete(simulationResult) ? 'board-text-success' : 'board-text-warning'">
                 {{ isSimulationModelComplete(simulationResult) ? t('app.completeModel') : t('app.incompleteModel') }}
               </div>
             </div>
@@ -16780,7 +16988,7 @@ const counterexampleTraceHelpText = computed(() => {
             </span>
             <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
           </summary>
-          <div class="mt-3 max-h-64 overflow-y-auto rounded-lg border border-slate-200">
+          <div class="iot-scroll-region mt-3 max-h-64 rounded-lg border border-slate-200">
             <table class="w-full text-xs">
               <thead class="sticky top-0 bg-slate-50">
                 <tr>
@@ -16790,7 +16998,7 @@ const counterexampleTraceHelpText = computed(() => {
               </thead>
               <tbody>
                 <tr v-for="(state, idx) in simulationResult.states" :key="idx" class="border-b border-slate-100 last:border-b-0">
-                  <td class="p-2 align-top font-mono text-indigo-700">{{ state.stateIndex }}</td>
+                  <td class="p-2 align-top font-mono board-text-info">{{ state.stateIndex }}</td>
                   <td class="p-2">
                     <div class="flex flex-wrap gap-1">
                       <span
@@ -16799,8 +17007,8 @@ const counterexampleTraceHelpText = computed(() => {
                         class="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-slate-700"
                       >
                         <span class="font-medium">{{ device.deviceLabel || t('app.unknownModelItem') }}</span>
-                        <span class="text-slate-400">:</span>
-                        <span class="text-indigo-700">{{ device.state ? formatPlaybackDeviceModelToken(device, device.state) : t('app.notAvailableShort') }}</span>
+                        <span class="text-slate-500">:</span>
+                        <span class="board-text-info">{{ device.state ? formatPlaybackDeviceModelToken(device, device.state) : t('app.notAvailableShort') }}</span>
                       </span>
                     </div>
                   </td>
@@ -16819,8 +17027,8 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
           </summary>
           <p class="mt-2 text-xs leading-5 text-slate-500">{{ t('app.executionLogsDiagnosticHint') }}</p>
-          <div class="mt-2 max-h-48 overflow-y-auto rounded-lg bg-slate-950 p-3">
-            <pre class="whitespace-pre-wrap font-mono text-xs leading-5 text-emerald-300">{{ simulationResult.logs?.join('\n') || t('app.noLogsAvailableShort') }}</pre>
+          <div class="iot-scroll-region mt-2 max-h-48 rounded-lg bg-slate-950 p-3">
+            <pre class="whitespace-pre-wrap font-mono text-xs leading-5 board-text-success">{{ simulationResult.logs?.join('\n') || t('app.noLogsAvailableShort') }}</pre>
           </div>
         </details>
 
@@ -16832,13 +17040,13 @@ const counterexampleTraceHelpText = computed(() => {
             </span>
             <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
           </summary>
-          <div class="mt-2 max-h-56 overflow-y-auto rounded-lg bg-slate-950 p-3">
-            <pre class="whitespace-pre-wrap font-mono text-xs leading-5 text-slate-300">{{ simulationResult.nusmvOutput || t('app.noOutput') }}</pre>
+          <div class="iot-scroll-region mt-2 max-h-56 rounded-lg bg-slate-950 p-3">
+            <pre class="whitespace-pre-wrap font-mono text-xs leading-5 text-slate-500">{{ simulationResult.nusmvOutput || t('app.noOutput') }}</pre>
           </div>
         </details>
       </div>
 
-      <footer class="flex flex-shrink-0 justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4">
+      <footer class="board-card flex flex-shrink-0 justify-end gap-3 border-t border-slate-200 px-5 py-4">
         <button
           v-if="simulationResult && simulationResult.states && simulationResult.states.length > 0"
           type="button"
@@ -16847,7 +17055,7 @@ const counterexampleTraceHelpText = computed(() => {
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
             traceAnimationState.visible
               ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-              : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              : 'bg-[color:var(--accent-fill)] text-white hover:bg-[color:var(--accent-fill-hover)]'
           ]"
           @click="handleSimulationTimelineAction"
         >
@@ -16876,7 +17084,7 @@ const counterexampleTraceHelpText = computed(() => {
   >
     <div
       :ref="setVerificationResultDialogRef"
-      class="board-result-dialog-surface min-h-0 max-h-[85vh] w-[650px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
+      class="board-card board-result-dialog-surface min-h-0 max-h-[85vh] w-[650px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 shadow-2xl flex flex-col"
       role="dialog"
       aria-modal="true"
       aria-labelledby="verification-result-dialog-title"
@@ -16910,9 +17118,9 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
       </div>
 
-      <div data-testid="verification-result-scroll" class="min-h-0 flex-1 overflow-y-auto p-6">
-        <div v-if="verificationError" class="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl">
-          <div class="flex items-center gap-2 text-red-600">
+      <div data-testid="verification-result-scroll" class="iot-scroll-region min-h-0 flex-1 p-6">
+        <div v-if="verificationError" class="mb-4 p-4 board-chip-danger border board-border-subtle rounded-xl">
+          <div class="flex items-center gap-2 board-text-danger">
             <span class="material-symbols-outlined">error</span>
             <span class="font-medium">{{ verificationError }}</span>
           </div>
@@ -16923,7 +17131,7 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="verificationResultStale"
             data-testid="verification-result-stale-banner"
             role="status"
-            class="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm leading-5 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+            class="flex items-start gap-2 rounded-xl board-surface-warning p-4 text-sm leading-5 board-text-warning"
           >
             <span class="material-symbols-outlined text-base" aria-hidden="true">history</span>
             <span>{{ t('app.verificationResultStaleReverify') }}</span>
@@ -16947,7 +17155,7 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
 
-          <div class="p-4 rounded-xl border border-slate-200 bg-white" data-testid="verification-model-snapshot">
+          <div class="board-card p-4 rounded-xl border border-slate-200" data-testid="verification-model-snapshot">
             <div class="flex items-start gap-2">
               <span class="material-symbols-outlined text-lg text-slate-600" aria-hidden="true">inventory_2</span>
               <div class="min-w-0">
@@ -16968,9 +17176,9 @@ const counterexampleTraceHelpText = computed(() => {
             <div
               class="mt-3 rounded-md border px-3 py-2 text-xs font-semibold leading-5"
               :class="verificationBoardComparison === 'UNCHANGED'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                ? 'board-border-subtle board-chip-success board-text-success'
                 : verificationBoardComparison === 'CHANGED'
-                  ? 'border-amber-300 bg-amber-50 text-amber-900'
+                  ? 'board-surface-warning board-text-warning'
                   : 'border-slate-200 bg-slate-50 text-slate-700'"
               data-testid="verification-board-comparison"
             >
@@ -16988,25 +17196,25 @@ const counterexampleTraceHelpText = computed(() => {
             <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.modelAssumptions') }}</h4>
             <div
               v-if="!verificationModelSemanticsConsistent"
-              class="mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs font-semibold text-amber-800"
+              class="mb-2 rounded board-surface-warning px-2 py-1.5 text-xs font-semibold board-text-warning"
             >
               {{ t('app.modelSemanticsUnavailable') }}
             </div>
             <div class="space-y-2 text-xs leading-5 text-slate-600">
               <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base text-cyan-700">landscape</span>
+                <span class="material-symbols-outlined text-base board-text-info">landscape</span>
                 <span>{{ t('app.environmentEvolutionIncluded') }}</span>
               </div>
               <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base text-emerald-600">verified_user</span>
+                <span class="material-symbols-outlined text-base board-text-success">verified_user</span>
                 <span>{{ t('app.trustPropagationIncluded') }}</span>
               </div>
               <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base text-violet-600">sync_alt</span>
+                <span class="material-symbols-outlined text-base board-text-info">sync_alt</span>
                 <span>{{ t('app.labelPropagationScopeSummary') }}</span>
               </div>
               <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base" :class="verificationResult.isAttack ? 'text-red-500' : 'text-slate-400'">security</span>
+                <span class="material-symbols-outlined text-base" :class="verificationResult.isAttack ? 'board-text-danger' : 'text-slate-500'">security</span>
                 <span>
                   {{ verificationResult.isAttack
                     ? attackSelectionSummary(
@@ -17017,7 +17225,7 @@ const counterexampleTraceHelpText = computed(() => {
                 </span>
               </div>
               <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base" :class="verificationResult.enablePrivacy ? 'text-fuchsia-600' : 'text-slate-400'">shield_lock</span>
+                <span class="material-symbols-outlined text-base" :class="verificationResult.enablePrivacy ? 'board-text-info' : 'text-slate-500'">shield_lock</span>
                 <span>
                   {{ verificationResult.enablePrivacy
                     ? t('app.privacyPropagationIncluded')
@@ -17043,19 +17251,19 @@ const counterexampleTraceHelpText = computed(() => {
               <span
                 class="material-symbols-outlined text-lg"
                 :class="verificationSpecResultSummary.violated > 0
-                  ? 'text-red-500'
-                  : verificationSpecResultSummary.inconclusive > 0 ? 'text-amber-500' : 'text-green-500'"
+                  ? 'board-text-danger'
+                  : verificationSpecResultSummary.inconclusive > 0 ? 'board-text-warning' : 'board-text-success'"
               >
                 {{ verificationSpecResultSummary.violated > 0
                   ? 'rule'
                   : verificationSpecResultSummary.inconclusive > 0 ? 'help' : 'verified' }}
               </span>
             </div>
-            <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+            <div class="iot-scroll-region space-y-2 max-h-72 pr-1">
               <div
                 v-for="(result, index) in verificationSpecResultSummary.results"
                 :key="`${result.specId}-${index}`"
-                class="rounded-lg border bg-white px-3 py-2"
+                class="board-card rounded-lg border px-3 py-2"
                 :class="result.presentation.borderClass"
               >
                 <div class="flex items-start justify-between gap-3">
@@ -17063,10 +17271,13 @@ const counterexampleTraceHelpText = computed(() => {
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-xs font-semibold text-slate-500">#{{ Number(index) + 1 }}</span>
                       <span class="text-xs font-semibold text-slate-700">{{ result.displayTitle }}</span>
-                      <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{{ result.formulaKind }}</span>
+                      <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold text-slate-600">{{ result.formulaKind }}</span>
                     </div>
                     <div class="mt-2 rounded-md bg-slate-50 px-2 py-1.5">
-                      <p class="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{{ t('app.formulaPreview') }}</p>
+                      <!-- slate-500, not slate-400: this labels the formula below it, and slate-400 measured
+                           2.51:1 on the slate-50 card. slate-500 is 4.76 on white and reads as the same
+                           de-emphasised caption step. -->
+                      <p class="mb-1 text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">{{ t('app.formulaPreview') }}</p>
                       <p class="max-w-full font-mono text-xs leading-5 text-slate-600 break-all">
                         {{ result.formulaPreview }}
                       </p>
@@ -17093,9 +17304,9 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
 
-          <div v-if="verificationGenerationWarningCounts.total > 0" class="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800">
+          <div v-if="verificationGenerationWarningCounts.total > 0" class="p-4 rounded-xl board-chip-warning border board-border-subtle board-text-warning">
             <div class="flex items-start gap-3">
-              <span class="material-symbols-outlined text-amber-600">report</span>
+              <span class="material-symbols-outlined board-text-warning">report</span>
               <div>
                 <div class="text-sm font-bold">{{ t('app.generationWarnings') }}</div>
                 <p class="text-sm mt-1">
@@ -17105,13 +17316,13 @@ const counterexampleTraceHelpText = computed(() => {
                   <li
                     v-for="(issue, index) in verificationGenerationIssues"
                     :key="`${issue.issueType}-${issue.itemLabel}-${index}`"
-                    class="border-l-2 border-amber-300 pl-3"
+                    class="border-l-2 board-border-subtle pl-3"
                   >
-                    <div class="text-xs font-bold text-amber-900">{{ issue.itemLabel }}</div>
-                    <div class="mt-0.5 text-xs leading-5 text-amber-800">{{ t(generationIssueReasonKey(issue)) }}</div>
+                    <div class="text-xs font-bold board-text-warning">{{ issue.itemLabel }}</div>
+                    <div class="mt-0.5 text-xs leading-5 board-text-warning">{{ t(generationIssueReasonKey(issue)) }}</div>
                   </li>
                 </ul>
-                <p v-else class="mt-2 text-xs text-amber-700">
+                <p v-else class="mt-2 text-xs board-text-warning">
                   {{ t('app.generationIssueDetailsUnavailable') }}
                 </p>
               </div>
@@ -17120,22 +17331,36 @@ const counterexampleTraceHelpText = computed(() => {
 
           <div v-if="verificationCheckLogs.length > 0" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
             <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.checkLogs') }}</h4>
-            <div class="space-y-1 max-h-44 overflow-y-auto">
-              <div
+            <!--
+              A transcript, not seven independent facts.
+
+              Each line used to be a `board-card` with its own border, so the engine log rendered as 7 boxed
+              cards inside an already-bordered section. Measured on the result dialog: 15 bordered boxes
+              competing as units, **7 of them individual log lines** — one sequential list wearing seven frames.
+
+              Lines are ordered and cumulative; the reader follows them top to bottom, so what they need is
+              rhythm and a monospace column, not per-line containment. Borders removed and vertical padding
+              tightened; the enclosing section already scopes the group.
+            -->
+            <ol class="iot-scroll-region max-h-44 space-y-0.5">
+              <li
                 v-for="(log, index) in verificationCheckLogs"
                 :key="index"
-                class="text-xs font-mono text-slate-700 bg-white border border-slate-100 rounded px-2 py-1 break-words"
+                class="font-mono text-xs leading-5 text-slate-700 break-words"
               >
                 {{ log }}
-              </div>
-            </div>
+              </li>
+            </ol>
           </div>
 
           <details v-if="verificationResult.nusmvOutput" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
             <summary class="text-sm font-bold text-slate-700 cursor-pointer hover:text-slate-900">
               {{ t('app.showNusmvDiagnosticOutput') }}
             </summary>
-            <div class="mt-3 bg-slate-900 rounded-lg p-3 max-h-40 overflow-y-auto">
+            <div class="iot-scroll-region mt-3 bg-slate-900 rounded-lg p-3 max-h-40">
+              <!-- slate-300 on the slate-900 terminal block, not slate-500: this ground is dark in *both*
+                   themes (it is a console, deliberately), so the ink has to be light. slate-500 measured
+                   3.74 here — dark-on-dark. slate-300 is 12.0. -->
               <pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{{ verificationResult.nusmvOutput || t('app.noOutput') }}</pre>
             </div>
           </details>
@@ -17149,7 +17374,7 @@ const counterexampleTraceHelpText = computed(() => {
           </h4>
           <p
             v-if="getVerificationOutcome(verificationResult) === 'INCONCLUSIVE'"
-            class="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900"
+            class="mb-2 rounded-md board-surface-warning px-3 py-2 text-xs leading-5 board-text-warning"
           >
             {{ t('app.inconclusiveEvidenceSummary', { counterexamples: verificationResult.traces.length }) }}
           </p>
@@ -17159,20 +17384,20 @@ const counterexampleTraceHelpText = computed(() => {
                 <div
                   class="text-xs font-bold"
                   :class="getVerificationOutcome(verificationResult) === 'VIOLATED'
-                    ? 'text-red-600'
-                    : 'text-amber-700'"
+                    ? 'board-text-danger'
+                    : 'board-text-warning'"
                 >{{ t('app.violationNumber', { index: Number(i) + 1 }) }}</div>
                 <div class="flex gap-1">
                   <button
                     v-if="canFixVerificationResultTrace(trace)"
                     @click="openFixForVerificationResultTrace(trace)"
                     data-testid="verification-trace-fix"
-                    class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
+                    class="px-2 py-1 bg-[color:var(--accent-fill)] text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
                     :disabled="simulationAnimationState.visible"
                     :class="simulationAnimationState.visible ? 'bg-slate-300 cursor-not-allowed' : ''"
                   >
                     <span class="material-symbols-outlined text-xs">build</span>
-                    {{ t('app.fix') }}
+                    {{ t('app.fixRules') }}
                   </button>
                   <button
                     @click="selectAndPlayTrace(Number(i))"
@@ -17181,19 +17406,19 @@ const counterexampleTraceHelpText = computed(() => {
                       'px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1',
                       simulationAnimationState.visible 
                         ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
-                        : 'bg-red-500 hover:bg-red-600 text-white'
+                        : 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)] text-white'
                     ]"
                   >
                     <span class="material-symbols-outlined text-xs">play_arrow</span>
                     {{ t('app.viewTrace') }}
-                    <span v-if="simulationAnimationState.visible" class="text-[10px]">({{ t('app.active') }})</span>
+                    <span v-if="simulationAnimationState.visible" class="text-[length:var(--iot-font-min)]">({{ t('app.active') }})</span>
                   </button>
                 </div>
               </div>
               <p
                 v-if="!canFixVerificationResultTrace(trace)"
                 data-testid="verification-trace-fix-unavailable"
-                class="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+                class="mb-2 rounded-md board-surface-warning px-2 py-1.5 text-xs leading-5 board-text-warning"
               >
                 {{ verificationResultStale
                   ? t('app.verificationResultStaleReverify')
@@ -17233,41 +17458,39 @@ const counterexampleTraceHelpText = computed(() => {
     :aria-label="t('app.traceVisualization.stateSequence')"
   >
     <div
-      class="board-timeline board-timeline--trace"
+      class="board-timeline board-timeline--trace iot-scroll-region"
       data-testid="trace-timeline"
       :data-selected-state-index="traceAnimationState.selectedStateIndex"
     >
       
-      <!-- Keep the checked specification visible throughout playback. -->
-      <div 
-        v-if="formattedSpec"
-        class="mb-3 pb-3 border-b border-slate-200"
-      >
-        <!-- Violated Spec -->
-        <div v-if="formattedSpec" class="p-2 bg-red-50 border border-red-200 rounded-lg">
-          <div class="flex items-center justify-between mb-2">
-            <div class="text-xs font-semibold text-red-600 uppercase">
-              {{ t('app.traceVisualization.violatedSpecification') }}
-            </div>
-            <button type="button" @click="closeTraceAnimation" class="text-slate-400 hover:text-slate-600" :aria-label="t('app.close')">
-              <span class="material-symbols-outlined" aria-hidden="true">close</span>
-            </button>
-          </div>
-          <div class="text-xs text-slate-800">{{ formattedSpec }}</div>
-          <details v-if="currentTrace.checkedExpression" class="mt-2 text-[11px] text-slate-600">
-            <summary class="cursor-pointer font-semibold text-red-700">{{ t('app.technicalDetails') }}</summary>
-            <div class="mt-1 text-[10px] font-bold uppercase text-slate-500">{{ t('app.actualCheckedExpression') }}</div>
-            <code class="mt-1 block max-h-20 overflow-auto break-all rounded bg-white px-2 py-1 text-[10px] text-slate-700">
-              {{ currentTrace.checkedExpression }}
-            </code>
-          </details>
-        </div>
-      </div>
+      <!--
+        The standalone "Violated Specification" card that used to sit here is gone: **102px** of the
+        overlay, measured, restating a fact the header below now carries.
+
+        I introduced that duplication earlier in this pass — four reviews said the replay never named the
+        specification, so I added it to the timeline header, without noticing this card said the same thing
+        102px above. Two statements of one fact is the duplicated-ownership problem in its plainest form,
+        and here it also cost the most contested vertical space on the screen: the overlay holds 663px of
+        content in a 382px window, so every block it keeps pushes another behind a scroll.
+
+        Nothing unique was lost. Its raw checked expression moved into the header's `<details>`, where a
+        technical detail belongs. Its close button was already duplicated — `trace-timeline-close` sits in
+        the transport row below — so the overlay had **two** close controls, and removing the card left the
+        one that lives with the other transport actions.
+      -->
 
       <!-- Timeline -->
       <div class="mb-3">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2 flex-wrap">
+            <!--
+              Title on one line, the specification it concerns on the next.
+
+              These were siblings in a `flex items-center` row, so the spec name competed with the title
+              for the same horizontal space and truncated early. Stacked, the title reads as the label and
+              the spec as its subject — and the pair now absorbs the 102px card that used to state the same
+              thing above, including its raw-expression disclosure.
+            -->
             <div class="min-w-0">
               <div class="flex items-center gap-1">
                 <div class="text-sm font-bold text-slate-700">
@@ -17287,13 +17510,37 @@ const counterexampleTraceHelpText = computed(() => {
                   test-id="counterexample-trace-help"
                 />
               </div>
+              <!-- What this trace is evidence *of*. Four reviews of the replay surface — both themes,
+                   twice each — could see where the violation was marked but not which specification it
+                   violated: "只能知道'哪里标了违规'，不能确认'为什么违规'". Read from the trace's own
+                   snapshot, so there is no second source of truth. -->
+              <p
+                v-if="currentTrace"
+                class="mt-0.5 truncate board-text-danger"
+                :style="{ fontSize: 'var(--iot-font-min)' }"
+                :title="getTraceSpecDisplayTitle(currentTrace)"
+                data-testid="trace-timeline-violated-spec"
+              >{{ getTraceSpecDisplayTitle(currentTrace) }}</p>
+              <!-- The raw checked expression, moved here from the deleted card. A technical detail belongs
+                   behind a disclosure, not in a always-open block occupying the screen's scarcest space. -->
+              <details
+                v-if="currentTrace?.checkedExpression"
+                class="mt-1 board-text-muted"
+                :style="{ fontSize: 'var(--iot-font-min)' }"
+              >
+                <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
+                <div class="mt-1 font-bold uppercase board-text-muted">{{ t('app.actualCheckedExpression') }}</div>
+                <code class="board-card iot-scroll-region mt-1 block max-h-20 break-all rounded px-2 py-1 text-slate-700">
+                  {{ currentTrace.checkedExpression }}
+                </code>
+              </details>
             </div>
-            <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full" aria-live="polite">
+            <span class="px-2 py-0.5 board-chip-danger board-text-danger text-xs rounded-full" aria-live="polite">
               {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
             <span
               v-if="activeFuzzingFinding && traceAnimationState.selectedStateIndex === activeFuzzingFinding.firstViolationStep"
-              class="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700"
+              class="inline-flex items-center gap-1 rounded-full board-chip-danger px-2 py-0.5 text-xs font-bold board-text-danger"
               data-testid="fuzzing-timeline-first-violation"
             >
               <span class="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
@@ -17308,22 +17555,22 @@ const counterexampleTraceHelpText = computed(() => {
             <span
               v-if="!activeFuzzingFinding && !traceModelSemanticsConsistent"
               data-testid="trace-model-semantics-warning"
-              class="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-semibold rounded-full"
+              class="px-2 py-0.5 board-chip-warning board-text-warning text-xs font-semibold rounded-full"
             >
               {{ t('app.traceVisualization.modelSemanticsUnavailableShort') }}
             </span>
             <!-- Verification Info (from the viewed trace's own context, not the live form) -->
-            <span v-if="!activeFuzzingFinding && activeTraceContext.isAttack" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1">
-              <span class="material-symbols-outlined text-[10px]">warning</span>
+            <span v-if="!activeFuzzingFinding && activeTraceContext.isAttack" class="px-2 py-0.5 bg-[color:var(--danger-fill)] text-white text-xs rounded-full flex items-center gap-1">
+              <span class="material-symbols-outlined text-[length:var(--iot-font-min)]">warning</span>
               {{ t('app.traceVisualization.attack') }}
             </span>
-            <span v-if="!activeFuzzingFinding && activeTraceContext.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
+            <span v-if="!activeFuzzingFinding && activeTraceContext.isAttack" class="px-2 py-0.5 board-chip-warning board-text-warning text-xs rounded-full">
               {{ attackSelectionSummary(currentTrace?.modelSemantics, activeTraceContext.attackBudget) }}
             </span>
-            <span v-if="currentTraceCompromisedPointCount !== null" class="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">
+            <span v-if="currentTraceCompromisedPointCount !== null" class="px-2 py-0.5 board-chip-danger board-text-danger text-xs rounded-full">
               {{ t('app.traceVisualization.runtimeCompromisedPoints') }}: {{ currentTraceCompromisedPointCount }}
             </span>
-            <span v-if="!activeFuzzingFinding && activeTraceContext.enablePrivacy && traceModelSemanticsConsistent" class="px-2 py-0.5 bg-fuchsia-100 text-fuchsia-700 text-xs rounded-full">
+            <span v-if="!activeFuzzingFinding && activeTraceContext.enablePrivacy && traceModelSemanticsConsistent" class="px-2 py-0.5 board-chip-info board-text-info text-xs rounded-full">
               {{ t('app.traceVisualization.privacyPropagationEnabled') }}
             </span>
             <span v-if="!activeFuzzingFinding && !activeTraceContext.enablePrivacy && traceModelSemanticsConsistent" class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-full">
@@ -17339,9 +17586,9 @@ const counterexampleTraceHelpText = computed(() => {
               class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 disabled:cursor-not-allowed"
               :aria-label="traceAnimationState.isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play')"
               :class="traceAnimationState.isPlaying 
-                ? 'bg-red-500 text-white' 
+                ? 'bg-[color:var(--danger-fill)] text-white' 
                 : totalStates <= 1
-                  ? 'bg-slate-100 text-slate-400'
+                  ? 'bg-slate-100 text-slate-500'
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
             >
               <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ traceAnimationState.isPlaying ? 'pause' : 'play_arrow' }}</span>
@@ -17362,7 +17609,7 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="!activeFuzzingFinding && currentTrace.modelComplete === false"
-          class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-800"
+          class="mb-3 rounded-lg board-surface-warning px-3 py-2 text-[11px] font-medium leading-4 board-text-warning"
           data-testid="trace-timeline-incomplete-warning"
         >
           {{ t('app.traceVisualization.verificationModelIncompletePlayback', {
@@ -17373,7 +17620,7 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="activeFuzzingFinding"
-          class="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11px] font-medium leading-4 text-indigo-900"
+          class="mb-3 rounded-lg board-surface-info px-3 py-2 text-[11px] font-medium leading-4 board-text-info"
           data-testid="fuzzing-playback-notice"
         >
           {{ t('app.fuzzFindingReplayHint') }}
@@ -17391,7 +17638,12 @@ const counterexampleTraceHelpText = computed(() => {
 
           Still a <details>, so it can be collapsed once the user has their bearings.
         -->
-        <details open class="group mb-2" data-testid="trace-timeline-state-details">
+        <!-- `trace-step-values`, not `trace-timeline-state-details`: the old name shared its prefix with
+             the `trace-timeline-state-{i}` step buttons, so a `^=` selector matched this panel as if it
+             were a 28th step. That made a measurement report 28 steps for a 27-state trace, one 598px
+             "step", an overlapping pair, and a step missing its accessible name — four false findings from
+             one name. A testid prefix is an interface; overlapping prefixes make it ambiguous. -->
+        <details open class="group mb-2" data-testid="trace-step-values">
           <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
             <span class="inline-flex items-center gap-1.5">
               <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
@@ -17400,12 +17652,12 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
           </summary>
           <div class="mt-1.5">
-        <div class="mb-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] font-medium leading-4 text-sky-800" data-testid="trace-timeline-snapshot-notice">
+        <div class="mb-3 rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-[11px] font-medium leading-4 board-text-info" data-testid="trace-timeline-snapshot-notice">
           {{ t('app.traceVisualization.playbackSnapshotReadOnly') }}
         </div>
 
-        <div class="mb-3 rounded-lg border border-slate-200 bg-white/70 px-3 py-2" data-testid="trace-timeline-triggered-rules">
-          <div class="text-[10px] font-bold uppercase text-slate-500">
+        <div class="board-card mb-3 rounded-lg border border-slate-200 /70 px-3 py-2" data-testid="trace-timeline-triggered-rules">
+          <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
             {{ traceAnimationState.selectedStateIndex === 0
               ? t('app.traceVisualization.initialModelState')
               : t('app.traceVisualization.rulesAppliedToReachState') }}
@@ -17414,10 +17666,10 @@ const counterexampleTraceHelpText = computed(() => {
             <span
               v-for="(rule, index) in currentTraceTriggeredRules"
               :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-              class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold"
+              class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[length:var(--iot-font-min)] font-semibold"
               :class="traceTriggeredRuleExistsOnBoard(rule)
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-amber-300 bg-amber-50 text-amber-800'"
+                ? 'board-border-subtle board-chip-success board-text-success'
+                : 'board-surface-warning board-text-warning'"
               :title="traceTriggeredRuleExistsOnBoard(rule) ? undefined : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
             >
               <span class="max-w-[14rem] truncate">{{ traceTriggeredRuleLabel(rule, Number(index)) }}</span>
@@ -17431,17 +17683,17 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="currentTraceCompromisedAutomationLinks.length > 0"
-          class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2"
+          class="board-surface-danger mb-3 rounded-lg px-3 py-2"
           data-testid="trace-timeline-compromised-links"
         >
-          <div class="text-[10px] font-bold uppercase text-red-700">
+          <div class="text-[length:var(--iot-font-min)] font-bold uppercase board-text-danger">
             {{ t('app.traceVisualization.compromisedAutomationLinks') }}
           </div>
           <div class="mt-1.5 flex flex-wrap gap-1.5">
             <span
               v-for="(rule, index) in currentTraceCompromisedAutomationLinks"
               :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-              class="inline-flex max-w-full items-center gap-1 rounded-full border border-red-200 bg-white px-2 py-1 text-[10px] font-semibold text-red-700"
+              class="inline-flex max-w-full items-center gap-1 rounded-full border board-border-subtle bg-white px-2 py-1 text-[length:var(--iot-font-min)] font-semibold board-text-danger"
               :title="traceTriggeredRuleExistsOnBoard(rule) ? t('app.traceVisualization.compromisedAutomationLinkHint') : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
             >
               <span class="material-symbols-outlined text-[12px]" aria-hidden="true">link_off</span>
@@ -17451,65 +17703,69 @@ const counterexampleTraceHelpText = computed(() => {
           </div>
         </div>
 
-        <div class="mb-3 grid gap-2 rounded-lg border border-slate-200 bg-white/70 p-2 md:grid-cols-[minmax(0,1fr)_auto]">
-          <label class="flex min-w-0 items-center gap-2 text-[11px] font-bold text-slate-600">
-            <span class="whitespace-nowrap">{{ t('app.traceVisualization.jumpToState') }}</span>
-            <input
-              v-model.number="selectedTraceStateRangeIndex"
-              data-testid="trace-timeline-range"
-              type="range"
-              :min="0"
-              :max="Math.max(totalStates - 1, 0)"
-              :disabled="totalStates <= 1"
-              class="min-w-0 flex-1 accent-red-500"
-            >
-          </label>
+        <!--
+          One scrub control, not three, and no card around it.
+
+          The overlay had **three** ways to answer "which step": this slider, a number input beside it, and
+          the 27-button rail below. Each is good at something different, and only two of those things are
+          distinct — the rail shows *shape* (where you are, where the violation sits) and the slider scrubs
+          continuously through states. A number input does neither uniquely; it restates the `n / total`
+          badge as an editable field. It is gone.
+
+          The card wrapper is gone too. It spent a border, a background and 8px of padding to group a single
+          labelled input, on the surface where vertical space is scarcest — measured, the overlay holds 561px
+          of content in a 382px window, so every wrapper pushes real content behind a scroll.
+        -->
+        <label class="mb-2 flex min-w-0 items-center gap-2 text-[11px] font-bold text-slate-600">
+          <span class="whitespace-nowrap">{{ t('app.traceVisualization.jumpToState') }}</span>
           <input
-            v-model.number="selectedTraceStateNumber"
-            data-testid="trace-timeline-step-input"
-            type="number"
-            :min="1"
-            :max="Math.max(totalStates, 1)"
-            :disabled="totalStates <= 0"
-            class="h-8 w-20 rounded-lg border border-slate-200 bg-white px-2 text-center text-xs font-bold text-slate-700 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-200"
-            :aria-label="t('app.traceVisualization.jumpToState')"
+            v-model.number="selectedTraceStateRangeIndex"
+            data-testid="trace-timeline-range"
+            type="range"
+            :min="0"
+            :max="Math.max(totalStates - 1, 0)"
+            :disabled="totalStates <= 1"
+            class="min-w-0 flex-1 accent-[color:var(--danger)]"
           >
-        </div>
+        </label>
 
         <div v-if="currentTraceDevices.length > 0" class="mb-3 flex flex-wrap gap-1.5" data-testid="trace-timeline-devices">
-          <span class="mr-1 inline-flex items-center gap-1 text-[10px] font-bold uppercase text-slate-500">
+          <span class="mr-1 inline-flex items-center gap-1 text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
             <span class="material-symbols-outlined text-[13px]" aria-hidden="true">devices</span>
             {{ t('app.traceVisualization.devicesInCurrentState') }}
           </span>
           <span
             v-for="device in currentTraceDevices"
             :key="device.deviceId"
-            class="inline-flex max-w-full flex-wrap items-center gap-1 rounded border px-2 py-1 text-[10px] font-semibold"
+            class="inline-flex max-w-full flex-wrap items-center gap-1 rounded border px-2 py-1 text-[length:var(--iot-font-min)] font-semibold"
             :class="!traceDeviceExistsOnBoard(device)
-              ? 'border-amber-300 bg-amber-50 text-amber-800'
+              ? 'board-surface-warning board-text-warning'
               : traceDeviceChanged(device)
-                ? 'border-red-300 bg-red-50 text-red-800'
+                ? 'board-border-subtle board-chip-danger board-text-danger'
                 : 'border-slate-200 bg-slate-50 text-slate-700'"
             :title="traceDeviceExistsOnBoard(device) ? undefined : t('app.traceVisualization.historicalDeviceNotOnCurrentBoard')"
           >
             <span class="font-bold">{{ device.deviceLabel || device.deviceId }}</span>
             <span class="max-w-[20rem] break-words font-mono font-normal">{{ traceDeviceSummary(device) }}</span>
-            <span v-if="traceDeviceChanged(device)" class="rounded bg-red-200 px-1 text-[10px] text-red-800">
+            <span v-if="traceDeviceChanged(device)" class="rounded board-chip-danger px-1 text-[length:var(--iot-font-min)] board-text-danger">
               {{ t('app.traceVisualization.changed') }}
             </span>
-            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded bg-red-100 px-1 text-[10px] text-red-700">
+            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded board-chip-danger px-1 text-[length:var(--iot-font-min)] board-text-danger">
               {{ t('app.traceVisualization.attacked') }}
             </span>
+            <!-- Provenance, not a hazard — `info`, matching the simulation side. `nusmv-model.md`: "Trust labels
+                 describe provenance and propagation; `untrusted` does not mean the device is selected as
+                 compromised." The `attacked` chip above keeps `danger`, because that one is a real compromise. -->
             <span
               v-if="traceDeviceSecurityFacts(device).untrustedLabels.length > 0"
-              class="rounded bg-amber-100 px-1 text-[10px] text-amber-800"
+              class="rounded board-chip-info px-1 text-[length:var(--iot-font-min)] board-text-info"
               :title="t('app.traceVisualization.untrustedLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).untrustedLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesUntrustedSource') }}
             </span>
             <span
               v-if="traceDeviceSecurityFacts(device).privateLabels.length > 0"
-              class="rounded bg-fuchsia-100 px-1 text-[10px] text-fuchsia-800"
+              class="rounded board-chip-info px-1 text-[length:var(--iot-font-min)] board-text-info"
               :title="t('app.traceVisualization.privateLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).privateLabels).join(', ') })"
             >
               {{ t('app.traceVisualization.includesPrivateData') }}
@@ -17519,22 +17775,22 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <div v-if="currentTraceEnvironmentVariables.length > 0" class="mb-3 flex flex-wrap gap-1.5" data-testid="trace-timeline-env">
-          <span class="mr-1 inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+          <span class="mr-1 inline-flex items-center gap-1 text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">
             <span class="material-symbols-outlined text-[13px]" aria-hidden="true">terrain</span>
             {{ t('app.traceVisualization.environmentVariables') }}
           </span>
           <span
             v-for="envVar in currentTraceEnvironmentVariables"
             :key="envVar.name"
-            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[length:var(--iot-font-min)] font-bold"
             :class="traceEnvironmentVariableChanged(envVar.name, envVar.value)
-              ? 'border-amber-300 bg-amber-50 text-amber-700'
+              ? 'board-surface-warning board-text-warning'
               : 'border-slate-200 bg-slate-50 text-slate-600'"
             :title="traceEnvironmentVariableTitle(envVar.name, envVar.value)"
           >
             <span class="max-w-[7rem] truncate">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.name) }}</span>
             <span class="font-mono">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.value) }}</span>
-            <span v-if="traceEnvironmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[10px] text-amber-800">
+            <span v-if="traceEnvironmentVariableChanged(envVar.name, envVar.value)" class="rounded-full board-chip-warning px-1 text-[length:var(--iot-font-min)] board-text-warning">
               {{ t('app.traceVisualization.changed') }}
             </span>
           </span>
@@ -17543,7 +17799,7 @@ const counterexampleTraceHelpText = computed(() => {
         </details>
         
         <!-- Timeline bar with horizontal scroll support -->
-        <div class="overflow-x-auto scrollbar-thin py-2">
+        <div class="iot-scroll-region-x py-2">
           <div 
             class="relative h-14"
             data-testid="trace-timeline-track"
@@ -17555,7 +17811,7 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Red progress bar - from start to current node -->
             <div 
               v-if="traceAnimationState.selectedStateIndex > 0 && totalStates > 1"
-              class="absolute top-1/2 h-3 bg-red-500 rounded transition-all duration-300 -translate-y-1/2"
+              class="absolute top-1/2 h-3 bg-[color:var(--danger)] rounded transition-all duration-300 -translate-y-1/2"
               :style="{ 
                 left: '8px',
                 width: `calc((100% - 16px) * ${traceAnimationState.selectedStateIndex / (totalStates - 1)})`
@@ -17572,30 +17828,52 @@ const counterexampleTraceHelpText = computed(() => {
                 @keydown="handleTraceStateKeydown($event, Number(index))"
                 :tabindex="Number(index) === traceAnimationState.selectedStateIndex ? 0 : -1"
                 :aria-label="getTraceStateAriaLabel(Number(index))"
+                :title="getTraceStateAriaLabel(Number(index))"
                 :aria-current="Number(index) === traceAnimationState.selectedStateIndex ? 'step' : undefined"
                 :data-testid="`trace-timeline-state-${Number(index)}`"
-                class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:ring-offset-2"
                 :class="[
                   Number(index) === traceAnimationState.selectedStateIndex
-                    ? 'bg-red-500 border-red-500 scale-125 shadow-lg'
+                    ? 'bg-[color:var(--danger)] border-[color:var(--danger)] scale-125 shadow-lg'
                     : Number(index) < traceAnimationState.selectedStateIndex
-                      ? 'bg-red-200 border-red-300'
-                      : 'bg-white border-slate-300 hover:border-red-300',
-                  activeFuzzingFinding?.firstViolationStep === Number(index)
-                    ? 'ring-2 ring-amber-400 ring-offset-2'
+                      ? 'board-chip-danger board-border-subtle'
+                      : 'bg-white border-slate-300 hover:',
+                  counterexampleViolationStep === Number(index)
+                    ? 'ring-2 ring-[color:var(--danger)] ring-offset-2'
                     : ''
                 ]"
               >
+                <!-- The violation marker, now shown for a verification counterexample and not only for an
+                     exploration finding. It is labelled rather than left as a bare glyph: reviews of both
+                     themes could see that *something* marked the last state but not that it was the
+                     violation, and one read the selection cursor as the verdict. The label is the point —
+                     this is the step where the specification fails. -->
                 <span
-                  v-if="activeFuzzingFinding?.firstViolationStep === Number(index)"
-                  class="absolute -top-4 text-[10px] font-black text-red-700"
+                  v-if="counterexampleViolationStep === Number(index)"
+                  class="board-chip-danger board-text-danger absolute -top-5 whitespace-nowrap rounded px-1 py-px font-black"
+                  :style="{ fontSize: 'var(--iot-font-min)' }"
+                >{{ t('app.traceViolationHere') }}</span>
+                <!--
+                  The rail shows *shape*, not numbers.
+
+                  Every marker used to print its step number at `text-[6px]`, with `text-[8px]` for the
+                  selected one — against the product's own `--iot-font-min` floor of 11px, which commit
+                  606cf5c established precisely because a review found interface text too small to read.
+                  A 28px marker cannot hold a legible two-digit number: 27 of them were noise, and the
+                  measurement confirmed the rendered sizes as 6px and 8px.
+
+                  Nothing is lost by removing them, because the number was never the rail's job. "Which
+                  step am I on" is answered by the `n / total` badge and the scrub slider; each marker
+                  carries its own number in `aria-label` for assistive technology and in `title` for
+                  hover. What only the rail can show is the sequence's shape — how far along you are, and
+                  where the violation sits — and that reads better without 27 illegible digits competing
+                  with the fill and the violation ring.
+                -->
+                <span
+                  v-if="Number(index) === traceAnimationState.selectedStateIndex"
+                  class="h-1.5 w-1.5 rounded-full bg-white"
                   aria-hidden="true"
-                >!</span>
-                <span 
-                  v-if="Number(index) === traceAnimationState.selectedStateIndex" 
-                  class="text-white text-[8px] font-bold"
-                >★</span>
-                <span v-else class="text-slate-500 text-[6px] font-medium">{{ Number(index) + 1 }}</span>
+                ></span>
               </button>
             </div>
           </div>

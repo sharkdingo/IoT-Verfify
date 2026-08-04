@@ -290,7 +290,9 @@ describe('ControlCenter model token display', () => {
     expect(changes?.textContent).not.toContain('legacyReading: Enabled')
     expect(document.querySelector('[data-testid="default-template-reset-reverification-warning"]')?.textContent)
       .toContain('does not establish the reset board')
-    expect(document.querySelector('.template-reset-dialog')?.classList).toContain('overflow-y-auto')
+    // Scrollability now comes from the shared primitive, which also carries the scrollbar skin and
+    // scroll-padding; `overflow-y-auto` alone was only one of the four properties that matter.
+    expect(document.querySelector('.template-reset-dialog')?.classList).toContain('iot-scroll-region')
 
     await wrapper.get('.template-reset-dialog__btn.primary').trigger('click')
     await flushPromises()

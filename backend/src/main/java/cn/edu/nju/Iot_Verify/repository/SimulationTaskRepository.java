@@ -56,8 +56,21 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
      */
     @Transactional
     @Modifying(clearAutomatically = true)
+    // `progressStage` is cleared: a terminal task has no stage in progress.
+    //
+    // Every value of `TaskProgressStage` names work being done — QUEUED, GENERATING_MODEL,
+    // RUNNING_SIMULATION, PERSISTING_RESULT — and there is no terminal member, so a task that finished
+    // kept whatever stage it was in when it stopped. Observed on a real run: `status: COMPLETED,
+    // progress: 100, progressStage: PERSISTING_RESULT`, i.e. a finished task still claiming to be saving.
+    //
+    // The web client already hid this (`activeTaskProgressStage` returns null for terminal statuses), but
+    // six AI tools publish the field raw, so an agent asked about a finished simulation was told it was
+    // still persisting. Nulling it here makes the stored row agree with the contract the client already
+    // assumes, rather than leaving each consumer to remember the exception — the same fix as `progress`
+    // no longer being forced to 100 on a task that never finished its work.
     @Query("UPDATE SimulationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.steps = :steps, t.simulationTraceId = :simulationTraceId, "
+         + "t.progress = 100, t.progressStage = NULL, t.steps = :steps, "
+         + "t.simulationTraceId = :simulationTraceId, "
          + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
          + "t.generationIssuesJson = :generationIssuesJson, t.processingTimeMs = :processingTimeMs, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
@@ -81,8 +94,9 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
      */
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE SimulationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.errorMessage = :errorMessage, "
+    // Progress is preserved: the worker failed partway, so 100 would claim work it never finished.
+    @Query("UPDATE SimulationTaskPo t SET t.status = :newStatus, t.progressStage = NULL, t.completedAt = :completedAt, "
+         + "t.errorMessage = :errorMessage, "
          + "t.checkLogsJson = :checkLogsJson, t.processingTimeMs = :processingTimeMs, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses) "
@@ -131,8 +145,10 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE SimulationTaskPo t SET t.status = :failed, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
+    // Progress is deliberately not overwritten — see FuzzTaskRepository.failExpiredActiveTasks: an
+    // expired lease means the work was abandoned, so a forced 100 asserts completed work.
+    @Query("UPDATE SimulationTaskPo t SET t.status = :failed, t.progressStage = NULL, t.completedAt = :completedAt, "
+         + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.status IN (:activeStatuses) "
          + "AND (t.leaseExpiresAt IS NULL OR t.leaseExpiresAt <= :expiredBefore)")
@@ -150,8 +166,9 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
      */
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE SimulationTaskPo t SET t.status = :cancelledStatus, "
-         + "t.completedAt = :completedAt, t.progress = 100, "
+    // Progress is preserved — a user-cancelled run stopped partway, so 100 would claim work never done.
+    @Query("UPDATE SimulationTaskPo t SET t.status = :cancelledStatus, t.progressStage = NULL, "
+         + "t.completedAt = :completedAt, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
     int cancelTaskIfStillActive(@Param("taskId") Long taskId,

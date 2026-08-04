@@ -5,6 +5,19 @@ import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import { fileURLToPath } from 'node:url'
 
+/**
+ * Where `/api` is proxied, for both the dev server and `vite preview`.
+ *
+ * Hardcoding `localhost:8080` here made pointing a run at a different backend *silently half-work*:
+ * `E2E_API_BASE_URL` is honoured by the specs' direct API calls, but the browser still went through this
+ * proxy to 8080, so the two halves of one run talked to two different servers. That matters concretely —
+ * a full E2E pass needs more registrations than the default rate limit allows, and the fix is to run it
+ * against a second backend started with raised caps, which is impossible while this is a constant.
+ *
+ * Same variable the specs read, so one setting moves the whole run.
+ */
+const apiProxyTarget = process.env.E2E_API_BASE_URL || 'http://localhost:8080'
+
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
     plugins: [
@@ -25,7 +38,7 @@ export default defineConfig(({ command }) => ({
         open: false,
         proxy: {
             '/api': {
-                target: 'http://localhost:8080',
+                target: apiProxyTarget,
                 changeOrigin: true,
             }
         }
@@ -37,7 +50,7 @@ export default defineConfig(({ command }) => ({
         port: 3000,
         proxy: {
             '/api': {
-                target: 'http://localhost:8080',
+                target: apiProxyTarget,
                 changeOrigin: true,
             }
         }

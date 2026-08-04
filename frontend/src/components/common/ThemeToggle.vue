@@ -80,7 +80,7 @@ const iconName = computed(() => {
 }
 
 .theme-toggle:focus-visible {
-  outline: 3px solid rgba(53, 158, 255, 0.32);
+  outline: 3px solid var(--accent-border);
   outline-offset: 2px;
 }
 
@@ -90,7 +90,12 @@ const iconName = computed(() => {
 }
 
 .theme-toggle__label {
+  /* `min-width` keeps the button from jumping as the label changes between modes, but the label must
+     still be allowed to grow past it: "跟随系统" needs 56px and was clipped to 42px, so the control
+     that reports the current theme could not state which theme was current. `flex-shrink: 0` stops a
+     tight header from taking the width back. */
   min-width: 42px;
+  flex-shrink: 0;
   text-align: center;
   white-space: nowrap;
 }
@@ -115,14 +120,14 @@ const iconName = computed(() => {
 }
 
 .theme-toggle--light {
-  background: #ffffff;
+  background: var(--surface-elevated);
   border-color: rgba(148, 163, 184, 0.4);
-  color: #1d4ed8;
+  color: var(--accent-strong);
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
 }
 
 .theme-toggle--light:hover {
-  background: #f8fafc;
+  background: var(--surface-muted);
   border-color: rgba(53, 158, 255, 0.45);
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
 }

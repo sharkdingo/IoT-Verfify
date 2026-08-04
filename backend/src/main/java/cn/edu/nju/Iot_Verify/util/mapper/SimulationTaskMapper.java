@@ -210,8 +210,12 @@ public class SimulationTaskMapper {
             if (po.getCompletedAt() == null) {
                 fail(po, "completedAt", "terminal task completion time is missing");
             }
-            if (po.getProgress() == null || po.getProgress() != 100) {
-                fail(po, "progress", "terminal task progress must be 100");
+            // Only a COMPLETED run finished its work; a cancelled or failed one keeps the progress
+            // its last heartbeat reported. Requiring 100 of every terminal status made such a row
+            // unreadable, answering HTTP 500 for a run the user had cancelled partway.
+            if (po.getProgress() == null
+                    || (status == SimulationTaskPo.TaskStatus.COMPLETED && po.getProgress() != 100)) {
+                fail(po, "progress", "completed task progress must be 100");
             }
         } else if (po.getCompletedAt() != null) {
             fail(po, "completedAt", "active task cannot have a completion time");

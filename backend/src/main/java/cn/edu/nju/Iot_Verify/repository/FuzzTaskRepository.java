@@ -128,8 +128,13 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE FuzzTaskPo t SET t.status = :failed, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
+    // Progress is deliberately left untouched: this sweep fails a task whose lease expired, so the
+    // work did not finish. Overwriting it with 100 published a completed-work claim for an abandoned
+    // run to every consumer of the task DTO — the REST clients and the AI tools. A real exploration
+    // task was observed reporting `status: FAILED, progress: 100`. The last heartbeat's value is the
+    // honest answer, and `status` is what says it ended. Only completeTaskIfRunning writes 100.
+    @Query("UPDATE FuzzTaskPo t SET t.status = :failed, t.progressStage = NULL, t.completedAt = :completedAt, "
+         + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.status IN (:activeStatuses) "
          + "AND (t.leaseExpiresAt IS NULL OR t.leaseExpiresAt < :expiredBefore)")
@@ -142,7 +147,7 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE FuzzTaskPo t SET t.status = :completed, t.completedAt = :completedAt, "
+    @Query("UPDATE FuzzTaskPo t SET t.status = :completed, t.progressStage = NULL, t.completedAt = :completedAt, "
          + "t.processingTimeMs = :processingTimeMs, t.progress = 100, t.outcome = :outcome, "
          + "t.effectiveSeed = :effectiveSeed, t.iterations = :iterations, "
          + "t.generatedPaths = :generatedPaths, t.elapsedMs = :elapsedMs, "
@@ -171,8 +176,9 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE FuzzTaskPo t SET t.status = :failed, t.completedAt = :completedAt, "
-         + "t.processingTimeMs = :processingTimeMs, t.progress = 100, "
+    // Progress is preserved: the worker failed partway, so 100 would claim work it never finished.
+    @Query("UPDATE FuzzTaskPo t SET t.status = :failed, t.progressStage = NULL, t.completedAt = :completedAt, "
+         + "t.processingTimeMs = :processingTimeMs, "
          + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses) "
@@ -189,8 +195,11 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE FuzzTaskPo t SET t.status = :cancelled, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.workerId = NULL, t.leaseExpiresAt = NULL "
+    // Progress is preserved for the same reason as failExpiredActiveTasks above: the user stopped
+    // this run partway, so overwriting progress with 100 claims work that was never done. Observed
+    // live — a task cancelled at 30% was published as 100%.
+    @Query("UPDATE FuzzTaskPo t SET t.status = :cancelled, t.progressStage = NULL, t.completedAt = :completedAt, "
+         + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
     int cancelTaskIfStillActive(@Param("taskId") Long taskId,
                                 @Param("cancelled") FuzzTaskPo.TaskStatus cancelled,

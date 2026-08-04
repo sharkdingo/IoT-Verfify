@@ -688,18 +688,29 @@ const expectTimelineNavigationAndContext = async (
   prefix: 'simulation' | 'trace'
 ) => {
   const timeline = page.getByTestId(testId)
-  const stateDetails = page.getByTestId(`${prefix}-timeline-state-details`)
+  // Renamed from `${prefix}-timeline-state-details`: the two rails used ids that collided under a shared
+  // suffix convention, and the panel is the step *values*, not the timeline's own details.
+  const stateDetails = page.getByTestId(`${prefix}-step-values`)
   if (!await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
     await stateDetails.locator(':scope > summary').click()
   }
   await expect(page.getByTestId(`${prefix}-timeline-range`)).toBeVisible()
-  await expect(page.getByTestId(`${prefix}-timeline-step-input`)).toBeVisible()
+  // Only the simulation rail has a numeric step input. The counterexample rail's was removed: a spin box
+  // asking for an absolute state index is not how anyone reads a counterexample, and the rail itself plus
+  // the range control already move the cursor.
+  if (prefix === 'simulation') {
+    await expect(page.getByTestId(`${prefix}-timeline-step-input`)).toBeVisible()
+  }
   const environment = page.getByTestId(`${prefix}-timeline-env`)
   await expect(environment).toBeVisible()
   await expect(environment).toContainText(/temperature|motion/i)
 
   const track = page.getByTestId(`${prefix}-timeline-track`)
-  const stateCount = Number(await page.getByTestId(`${prefix}-timeline-step-input`).getAttribute('max') || '1')
+  // The range control, not the step input: both rails have a range, only the simulation rail has a spin box.
+  //
+  // The two are indexed differently and it matters — the range is **0-based** (`max = totalStates - 1`) while
+  // the spin box counted states from 1. So `max + 1` is the state count, and the fill below uses an index.
+  const stateCount = Number(await page.getByTestId(`${prefix}-timeline-range`).getAttribute('max') || '0') + 1
   if (stateCount > 1) {
     const box = await track.boundingBox()
     expect(box).toBeTruthy()
@@ -709,7 +720,9 @@ const expectTimelineNavigationAndContext = async (
     }).toBe(String(stateCount - 1))
   }
 
-  await page.getByTestId(`${prefix}-timeline-step-input`).fill('2')
+  // Move the cursor to the second state through the range, which both rails expose. The range is 0-based, so
+  // index 1 is what the assertion below already expected from `fill('2')` on the 1-based spin box.
+  await page.getByTestId(`${prefix}-timeline-range`).fill('1')
   await expect.poll(async () => timeline.getAttribute('data-selected-state-index'), {
     timeout: 5_000
   }).toBe('1')

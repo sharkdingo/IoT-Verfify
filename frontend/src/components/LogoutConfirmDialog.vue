@@ -75,9 +75,11 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
             </button>
           </div>
 
+          <!-- The only route to account deletion, so it needs to be addressable. -->
           <button
             type="button"
             class="delete-account-link"
+            data-testid="open-account-delete"
             :disabled="loading"
             @click="handleDeleteAccount"
           >
@@ -105,7 +107,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   width: 100%;
   max-width: 380px;
   padding: 2rem;
-  background: linear-gradient(145deg, #1e293b, #0f172a);
+  background: linear-gradient(145deg, #1e293b, var(--text));
   border-radius: 20px;
   border: 1px solid rgba(148, 163, 184, 0.15);
   box-shadow: 
@@ -125,7 +127,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 .logout-icon-bg {
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, #ef4444, #dc2626);
+  background: linear-gradient(135deg, var(--danger), var(--danger));
   border-radius: 50%;
   animation: pulse-bg 2s ease-in-out infinite;
 }
@@ -178,14 +180,14 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   padding: 0.25rem 0.5rem;
   border: 0;
   background: transparent;
-  color: #fca5a5;
+  color: var(--danger-border);
   font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;
 }
 
 .delete-account-link:hover:not(:disabled) {
-  color: #fecaca;
+  color: var(--danger-border);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -208,23 +210,23 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
 .logout-btn-cancel {
   background: rgba(148, 163, 184, 0.1);
-  color: #94a3b8;
+  color: var(--text-muted);
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
 .logout-btn-cancel:hover:not(:disabled) {
   background: rgba(148, 163, 184, 0.15);
-  color: #cbd5e1;
+  color: var(--border-strong);
 }
 
 .logout-btn-confirm {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
+  background: linear-gradient(135deg, var(--danger-fill), var(--danger-fill));
   color: white;
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
 }
 
 .logout-btn-confirm:hover:not(:disabled) {
-  background: linear-gradient(135deg, #f87171, #ef4444);
+  background: linear-gradient(135deg, #f87171, var(--danger-fill));
   transform: translateY(-1px);
   box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
 }

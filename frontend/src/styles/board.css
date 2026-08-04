@@ -7,6 +7,21 @@
  * - 浮动卡片中的 Element Plus 表单皮肤
  * =========================== */
 
+/* ========== 可点击性：一条规则覆盖所有启用的按钮 ==========
+ *
+ * Tailwind 的 preflight 把 `button` 重置为 `cursor: default`，所以只有显式声明 pointer 的组件才有指针光标。
+ * 实测:整块画板 182 个启用按钮中 **77 个是 default** —— 包括 Control Center 的整条标签条与面板折叠按钮。
+ * 它们都有 hover 反馈，所以并非不可发现；但光标与外观互相矛盾，而光标是指针用户判断"这个能点"的最快信号，
+ * 且在画布类工具里代价更高:读者默认大部分表面是惰性的。
+ *
+ * 逐组件补 pointer 已经漏了 77 处，所以规则放在这里 —— 一个来源，而非分散的 opt-in。
+ * `:not(:disabled)` 是关键:禁用控件应保留 default，否则会承诺一个不会发生的交互。
+ */
+.iot-board button:not(:disabled),
+.iot-board [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+}
+
 /* ========== 导航栏样式 - 与首页一致 ========== */
 
 .board-nav-bar {
@@ -73,7 +88,7 @@
 .board-nav-bar .scene-actions-menu__trigger:focus-visible,
 .board-nav-bar .ai-assistant-btn:focus-visible,
 .board-nav-bar .nav-logout-btn:focus-visible {
-  outline: 2px solid rgba(147, 197, 253, 0.95);
+  outline: 2px solid var(--accent-border);
   outline-offset: 3px;
 }
 
@@ -155,24 +170,42 @@
 }
 
 .board-nav-bar .scene-actions-menu__popover .scene-actions-menu__danger {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 /* AI 助手按钮样式 */
+/* One target size across the nav strip.
+ *
+ * Measured at 1440×900: **seven of ten** nav controls were under 44px, and they disagreed with each other —
+ * 37px, 39px, 39px, 39px and 40px sitting beside a 44px theme toggle and a 44px language switch. The height came
+ * from padding plus line-height rather than from a floor, so each label length produced a slightly different
+ * button.
+ *
+ * 44px is this product's own convention: `board.css` uses it in twenty other places and every dialog enforces it
+ * on destructive actions. It also matters most here, because this strip holds undo/redo — the affordance that
+ * makes destructive editing recoverable — and the scene commands that clear or replace a board.
+ *
+ * Two problems in one: a target smaller than the platform minimum, and a row of controls with no shared rhythm.
+ * A `min-height` fixes both without touching any label. */
 .board-nav-bar .scene-action-btn,
 .board-nav-bar .ai-assistant-btn {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 2.75rem;
   padding: 8px 16px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  /* One accent, not an indigo→violet gradient. The gradient was the single element reviews of both
+     themes named first as belonging to another visual family -- "a promotional accent rather than a
+     verification-tool action" -- and it competed with the canvas for focus. The assistant is a
+     genuine primary action, so it keeps a filled treatment; it just uses the product's accent. */
+  background: var(--accent-fill);
   border: none;
   border-radius: 20px;
-  color: white;
+  color: #fff;
   font-weight: 500;
   font-size: 0.875rem;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, box-shadow 0.2s;
 }
 
 .board-nav-bar .ai-assistant-btn {
@@ -191,15 +224,15 @@
   justify-content: center;
   border: 2px solid var(--surface-control);
   border-radius: 999px;
-  background: #dc2626;
+  background: var(--danger-fill);
   color: #fff;
-  font-size: 0.65rem;
+  font-size: var(--iot-font-min);
   font-weight: 700;
   line-height: 1;
 }
 
   .board-nav-bar .ai-assistant-status.is-running {
-    background: #2563eb;
+    background: var(--accent-fill);
   }
 
   .board-nav-bar .ai-assistant-status.is-unread {
@@ -211,7 +244,7 @@
   }
 
   .board-nav-bar .ai-assistant-status.is-sync-pending {
-    background: #b45309;
+    background: var(--warning);
   }
 
   .board-nav-bar .ai-assistant-btn.has-active-status .ai-assistant-status.is-sync-pending,
@@ -239,13 +272,13 @@
 }
 
 .board-nav-bar .scene-clear-btn {
-  color: #b91c1c;
+  color: var(--danger);
 }
 
 .board-nav-bar .scene-clear-btn:hover {
-  background: color-mix(in srgb, #fee2e2 72%, var(--surface-control));
-  border-color: color-mix(in srgb, #ef4444 42%, var(--border));
-  color: #dc2626;
+  background: color-mix(in srgb, var(--danger-surface) 72%, var(--surface-control));
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+  color: var(--danger);
 }
 
 .board-nav-bar .scene-action-btn:disabled {
@@ -255,9 +288,8 @@
 }
 
 .board-nav-bar .ai-assistant-btn:hover {
-  background: linear-gradient(135deg, #4f46e5, #7c3aed);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  background: var(--accent-fill-hover);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
 .board-nav-bar .scene-action-btn .material-symbols-outlined,
@@ -266,14 +298,20 @@
 }
 
 /* Board edit undo/redo. Icon-only and never collapsed into the overflow menu: undo has to stay
-   one press away at every width, unlike the scene commands. */
+   one press away at every width, unlike the scene commands.
+ *
+ * 44px at every width, not only on narrow screens. A media query already raised these to `2.75rem` below
+ * 1024px, so the desktop case was the exception rather than the rule — an earlier pass fixed mobile
+ * reachability and left the wide viewport at 40px. That is the least defensible place to be under the minimum:
+ * undo is what makes deleting a device recoverable, and a user reaching for it has just done something they want
+ * to take back. */
 .board-nav-bar .board-edit-history-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  height: 2.75rem;
   padding: 0;
   background: var(--surface-control);
   border: 1px solid var(--border);
@@ -291,11 +329,19 @@
 
 .board-nav-bar .board-edit-history-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  /*
+   * Muted, not faded. `opacity: 0.45` on an already-muted glyph measured **1.80:1** (light) and 2.29 (dark) —
+   * and undo/redo are disabled on *every* fresh board, so this was the first state of these controls that any
+   * user sees. Opacity multiplies down a value already chosen to sit near the floor; naming the de-emphasised
+   * colour directly says "unavailable" without going under it. Same fix as the exploration panel's
+   * "Select all". The cursor and the `disabled` attribute carry the rest of the message.
+   */
+  color: var(--text-muted);
+  background: var(--surface-control);
 }
 
 .board-nav-bar .board-edit-history-btn:focus-visible {
-  outline: 2px solid rgba(147, 197, 253, 0.95);
+  outline: 2px solid var(--accent-border);
   outline-offset: 3px;
 }
 
@@ -311,13 +357,17 @@
   }
 }
 
-/* Logout 按钮样式 */
+/* Logout 按钮样式 — 44px like the rest of the strip.
+ *
+ * This is also the only route to account deletion, so it is the last control in the nav that should be a
+ * smaller target than its neighbours. Its narrow-viewport rule already used `2.75rem`; this makes the desktop
+ * case agree instead of being 4px short. */
 .board-nav-bar .nav-logout-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 2.75rem;
+  height: 2.75rem;
   background: var(--surface-control);
   border: 1px solid var(--border);
   border-radius: 50%;
@@ -327,9 +377,9 @@
 }
 
 .board-nav-bar .nav-logout-btn:hover {
-  background: color-mix(in srgb, #ef4444 14%, var(--surface-control));
-  border-color: color-mix(in srgb, #ef4444 45%, var(--border));
-  color: #ef4444;
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface-control));
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
 }
 
 .board-nav-bar .nav-logout-btn .material-symbols-outlined {
@@ -388,6 +438,13 @@
   }
 }
 
+/* The nav overflow group lives in the scene menu and is desktop-hidden: on a wide bar every control
+   is already reachable, so duplicating theme/language/sign-out into the menu would be two owners for
+   one action. */
+.board-nav-bar .nav-overflow-only {
+  display: none;
+}
+
 @media (max-width: 420px) {
   .board-nav-bar {
     padding-inline: 0.25rem;
@@ -404,6 +461,32 @@
 
   .board-nav-bar .nav-actions {
     gap: 0.125rem;
+  }
+
+}
+
+/* The bar needs 390px intrinsically and `nav-actions > *` is `flex-shrink: 0`, so below that the tail
+   was clipped — `overflow-x: visible` with no document scroll, which makes a control unreachable
+   rather than merely off-screen. Measured with `elementFromPoint`: at 375px Log Out was clipped, and
+   at 320px both the assistant and Log Out were entirely untappable.
+   Rather than shrink controls under the 44px tap minimum, the set-once chrome (theme, language, sign
+   out) moves into the overflow menu while the actions used while working — Undo, Redo, Scene, AI —
+   keep their places. The threshold is the measured intrinsic width, not a device guess: 414px fits
+   the full bar and keeps it, so nothing is hidden from a phone that can show it. */
+@media (max-width: 389.98px) {
+  .board-nav-bar .nav-overflow-only {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+    padding-top: 0.25rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .board-nav-bar .nav-actions > .theme-toggle,
+  .board-nav-bar .nav-actions > .language-toggle,
+  .board-nav-bar .nav-logout-btn {
+    display: none;
   }
 }
 
@@ -431,12 +514,34 @@
   }
 
   .canvas-fit-mobile:focus-visible {
-    outline: 3px solid rgba(53, 158, 255, 0.36);
+    outline: 3px solid var(--accent-border);
     outline-offset: 2px;
   }
 }
 
 /* ========== 页面 & 画布 ========== */
+
+/* The board's derived tokens live at the document root, not on `.iot-board`.
+ *
+ * They were scoped to `.iot-board` while several dialogs `Teleport to="body"` — outside that scope — so
+ * a teleported surface reading `var(--board-card-bg)` resolved to the **fallback**. Measured:
+ * `--board-card-bg` is unset on both `body` and `:root`, so those ~69 fallbacks were one teleport away
+ * from painting a light surface inside a dark theme, and the fallback made the failure silent rather
+ * than obvious.
+ *
+ * Every value here is derived from a theme token, so hoisting them changes nothing about what the board
+ * renders — it only makes them reach the elements that already ask for them. `:root` is also where the
+ * theme itself is declared, which is the level a derived token belongs at. */
+:root {
+    --board-panel-bg: linear-gradient(180deg, var(--surface-panel), var(--surface-panel-muted));
+    --board-panel-bg-solid: var(--surface-panel);
+    --board-card-bg: var(--surface-elevated);
+    --board-card-muted-bg: var(--surface-muted);
+    --board-control-bg: var(--surface-control);
+    --board-border: var(--border);
+    --board-text: var(--text);
+    --board-text-muted: var(--text-muted);
+}
 
 .iot-board {
     position: relative;
@@ -455,35 +560,38 @@
     --board-action-rail-width: 3.1rem;
     --board-floating-panel-right: var(--board-floating-gap);
     --board-floating-action-right: var(--board-floating-gap);
-    --board-panel-bg: linear-gradient(180deg, var(--surface-panel), var(--surface-panel-muted));
-    --board-panel-bg-solid: var(--surface-panel);
-    --board-card-bg: var(--surface-elevated);
-    --board-card-muted-bg: var(--surface-muted);
-    --board-control-bg: var(--surface-control);
-    --board-border: var(--border);
-    --board-text: var(--text);
-    --board-text-muted: var(--text-muted);
+    /* The surface, text, and border tokens are declared once at `:root` above. Keeping a copy here
+       would be two owners for one value, and the `.iot-board` copy is precisely what put them out of
+       reach of a teleported dialog. Layout metrics stay board-scoped: they describe this board's
+       geometry, and nothing outside it has any use for them. */
 
     /*
-     * Per-category accents for the AI-suggestion dock group. These are the same hues the group used
-     * as full-bleed button fills; keeping them on the icon and the active state preserves the
-     * recognition that colour coding gives, without four saturated blocks competing with the run
-     * actions beside them. Chosen at 600-weight for contrast against a light card surface.
+     * Per-category accents for the AI-suggestion dock group. These sit on the icon and the active
+     * state, so the four categories stay tellable apart without four saturated blocks competing with
+     * the run actions beside them.
+     *
+     * They were teal / amber / purple / rose -- four unrelated hues from four corners of the wheel.
+     * Reviews of both themes named the group as the one element in a different visual family:
+     * "their multicolored neon outlines (teal, yellow, purple, pink) introduce a palette absent from
+     * neighboring panels". Category coding is worth keeping, but it does not require unrelated hues.
+     *
+     * Now one analogous family stepping around the product accent (blue -> indigo -> violet -> cyan).
+     * Adjacent enough to read as one system, separated enough to distinguish four items, and each
+     * still measured against the real painted fill for the 3:1 component minimum.
      */
-    --iot-tool-scenario: #0f766e;
-    --iot-tool-rule: #b45309;
-    /* purple-800 rather than -700: measured against the real painted fill (which the translucent
-       panel behind the dock lightens), -700 gave 2.99:1 and just missed the 3:1 component minimum. */
-    --iot-tool-device: #6b21a8;
-    --iot-tool-spec: #be123c;
+    --iot-tool-scenario: #1d4ed8;
+    --iot-tool-rule: #4338ca;
+    --iot-tool-device: #6d28d9;
+    --iot-tool-spec: #0e7490;
 }
 
-/* The same accents lightened for a dark card surface, where the 600-weight versions lose contrast. */
+/* The same family lightened for a dark card surface, where the darker versions lose contrast.
+   Same ordering (blue -> indigo -> violet -> cyan) so the categories keep their identity. */
 .dark .iot-board {
-    --iot-tool-scenario: #5eead4;
-    --iot-tool-rule: #fcd34d;
-    --iot-tool-device: #d8b4fe;
-    --iot-tool-spec: #fda4af;
+    --iot-tool-scenario: #93c5fd;
+    --iot-tool-rule: #a5b4fc;
+    --iot-tool-device: #c4b5fd;
+    --iot-tool-spec: #67e8f9;
 }
 
 @media (min-width: 1024px) and (min-height: 600px) {
@@ -568,93 +676,28 @@
     border-color: var(--border) !important;
 }
 
-.dark .board-result-dialog-surface .bg-red-50,
-.dark .board-result-dialog-surface .bg-red-100,
-.dark .board-result-dialog-surface .bg-red-200 {
-    background-color: color-mix(in srgb, #ef4444 13%, var(--surface-elevated)) !important;
-}
 
-.dark .board-result-dialog-surface .bg-amber-50,
-.dark .board-result-dialog-surface .bg-amber-100,
-.dark .board-result-dialog-surface .bg-amber-200 {
-    background-color: color-mix(in srgb, #f59e0b 13%, var(--surface-elevated)) !important;
-}
 
-.dark .board-result-dialog-surface .bg-green-50,
-.dark .board-result-dialog-surface .bg-green-100,
-.dark .board-result-dialog-surface .bg-emerald-50,
-.dark .board-result-dialog-surface .bg-emerald-100 {
-    background-color: color-mix(in srgb, #10b981 13%, var(--surface-elevated)) !important;
-}
 
-.dark .board-result-dialog-surface .bg-indigo-50,
-.dark .board-result-dialog-surface .bg-indigo-100 {
-    background-color: color-mix(in srgb, var(--iot-color-accent) 14%, var(--surface-elevated)) !important;
-}
 
-.dark .board-result-dialog-surface .bg-fuchsia-100 {
-    background-color: color-mix(in srgb, #d946ef 14%, var(--surface-elevated)) !important;
-}
 
-.dark .board-result-dialog-surface .bg-orange-100 {
-    background-color: color-mix(in srgb, #f97316 14%, var(--surface-elevated)) !important;
-}
 
-.dark .board-result-dialog-surface :is(
-    .text-red-500, .text-red-600, .text-red-700, .text-red-800, .text-red-900
-) {
-    color: #fecaca !important;
-}
+/* The seven class-keyed text remaps that used to live here are gone.
+ *
+ * They darkened raw Tailwind text hues by class name with `!important` — 28 class selectors across
+ * red/amber/green/emerald/indigo/violet/fuchsia/orange/cyan — so the light theme picked a hue per site
+ * and dark theme silently rewrote it. That is the parallel colour system this pass set out to remove:
+ * the source never said what a colour *meant*, only what it looked like in one theme.
+ *
+ * The two dialogs that wear `.board-result-dialog-surface` now use the theme-aware role classes
+ * (`board-text-danger` / `-warning` / `-success` / `-info`), which carry the meaning and resolve
+ * correctly in both themes without an override. Verified before deleting: none of the 28 remapped
+ * classes remains anywhere in `Board.vue`, and those dialogs contain only plain markup — no child
+ * component can inherit the scope. */
 
-.dark .board-result-dialog-surface :is(
-    .text-amber-500, .text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900
-) {
-    color: #fde68a !important;
-}
 
-.dark .board-result-dialog-surface :is(
-    .text-green-500, .text-green-600, .text-green-700, .text-green-800, .text-green-900,
-    .text-emerald-600, .text-emerald-700, .text-emerald-800
-) {
-    color: #a7f3d0 !important;
-}
 
-.dark .board-result-dialog-surface :is(
-    .text-indigo-700, .text-indigo-800, .text-indigo-900,
-    .text-violet-600
-) {
-    color: #c7d2fe !important;
-}
 
-.dark .board-result-dialog-surface :is(
-    .text-fuchsia-600, .text-fuchsia-700, .text-fuchsia-800
-) {
-    color: #f5d0fe !important;
-}
-
-.dark .board-result-dialog-surface :is(.text-orange-600, .text-orange-700) {
-    color: #fed7aa !important;
-}
-
-.dark .board-result-dialog-surface .text-cyan-700 {
-    color: #a5f3fc !important;
-}
-
-.dark .board-result-dialog-surface :is(.border-red-200, .border-red-300) {
-    border-color: color-mix(in srgb, #ef4444 55%, var(--border)) !important;
-}
-
-.dark .board-result-dialog-surface :is(.border-amber-200, .border-amber-300) {
-    border-color: color-mix(in srgb, #f59e0b 55%, var(--border)) !important;
-}
-
-.dark .board-result-dialog-surface .border-emerald-200 {
-    border-color: color-mix(in srgb, #10b981 55%, var(--border)) !important;
-}
-
-.dark .board-result-dialog-surface .border-indigo-200 {
-    border-color: color-mix(in srgb, var(--iot-color-accent) 55%, var(--border)) !important;
-}
 
 .iot-board .modern-panel,
 .iot-board .glass-panel,
@@ -818,10 +861,26 @@
     white-space: nowrap;
 }
 
+/* A 44px target around a 1.45rem badge.
+ *
+ * This measured **23px** — the smallest control on the board, and the one that collapses and expands the dock whose
+ * eight buttons are 44px. A strip of correctly sized controls with an undersized handle is worse than an
+ * consistently small strip, because the handle is what a user reaches for to reclaim canvas space.
+ *
+ * The visible chevron stays small: a 44px circle here would compete with the workflow buttons it sits beside. The
+ * target grows through `content-box` padding, which the surrounding flex absorbs, and negative margin keeps the
+ * layout unchanged — the same treatment as the help tooltip trigger. */
 .iot-board .board-action-dock__toggle {
     display: inline-flex;
+    box-sizing: content-box;
     width: 1.45rem;
     height: 1.45rem;
+    /* 1.45rem badge + 2 x 0.65rem padding = 2.75rem of target, exactly. My first attempt used 0.53rem and
+       measured 42px — close enough to look right and still 2px short, which is precisely the kind of near-miss
+       this whole sweep exists to catch. The arithmetic is written out so the next reader can check it. */
+    padding: 0.65rem;
+    margin: -0.65rem;
+    background-clip: content-box;
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
@@ -853,7 +912,7 @@
     display: none;
     padding: 0.1rem 0.35rem 0;
     color: var(--board-text);
-    font-size: 0.68rem;
+    font-size: var(--iot-font-min);
     font-weight: 700;
     letter-spacing: 0;
     line-height: 1.1;
@@ -922,6 +981,462 @@
     cursor: not-allowed;
 }
 
+/*
+ * Selected tab in a panel's segmented control.
+ *
+ * The four Control Center tabs each had their own active colour -- orange Templates, purple Devices,
+ * blue Rules, red Specifications. "This tab is selected" is one state, and the tab's own label and
+ * icon already say which tab it is, so four hues encoded nothing and gave the panel a shifting
+ * identity as the user moved between sections.
+ */
+.board-tab-active {
+    background-color: var(--accent-fill);
+    color: #fff;
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/*
+ * Panel submit button.
+ *
+ * The two setup panels had a green and an indigo submit button, neither matching the panel they sat
+ * in. A primary action is the one control a user is looking for, so it should look the same
+ * everywhere and match the product accent rather than the panel that happens to host it.
+ */
+.board-panel-submit {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    /* 44px floor: measured 38px, and this is a panel primary action. */
+    min-height: 2.75rem;
+    padding: 0.625rem 0;
+    border-radius: 0.5rem;
+    background-color: var(--accent-fill);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 28%, transparent);
+    transition: background-color 0.18s, box-shadow 0.18s;
+}
+
+.board-panel-submit:hover:not(:disabled) {
+    background-color: var(--accent-fill-hover);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* Inline action primitives — the same accent/success meanings as `board-panel-submit`, for actions
+ * that sit in a row rather than filling a panel footer.
+ *
+ * These exist because filled actions had no shared owner: measured across the components, 37 primary
+ * actions were spread over `bg-blue-500/600/700` and `bg-indigo-600/700` — five ramps for one meaning,
+ * chosen per call site — plus 10 success actions over green/emerald 500/600/700. `board-panel-submit`
+ * could not absorb them because it is `width: 100%`.
+ *
+ * `--action` is the primary choice; `--action-affirm` is for an action whose completion is itself the
+ * good outcome (verify, confirm). Anything destructive keeps the danger role, which is deliberately
+ * not offered here: a destructive action should be written out with its confirmation, not reached for
+ * as a colour. */
+.board-action-inline,
+.board-action-inline-affirm {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    min-height: 2.75rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    color: #fff;
+    font-weight: 700;
+    transition: background-color 0.18s, box-shadow 0.18s;
+}
+
+.board-action-inline {
+    background-color: var(--accent-fill);
+}
+
+.board-action-inline:hover:not(:disabled) {
+    background-color: var(--accent-fill-hover);
+}
+
+.board-action-inline-affirm {
+    /* White ink (declared in the shared rule above) on `--success` measured 3.77 in light and **1.52** in
+       dark: success was the one role failing in *both* themes. `--success-fill` is the fill half. */
+    background-color: var(--success-fill);
+}
+
+.board-action-inline-affirm:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--success-fill) 82%, #000);
+}
+
+/* Destructive fill, for an action that removes something. Deliberately the last of these to exist and
+ * the one to reach for least: it belongs only where the call site also gates the action behind
+ * `confirmDestructive`, which is what distinguishes "this deletes rules" from "this is emphatic". */
+.board-action-inline-danger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    min-height: 2.75rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    background-color: var(--danger-fill);
+    color: #fff;
+    font-weight: 700;
+    transition: background-color 0.18s, box-shadow 0.18s;
+}
+
+.board-action-inline-danger:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--danger) 84%, #000);
+}
+
+.board-action-inline-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.board-action-inline:disabled,
+.board-action-inline-affirm:disabled {
+    opacity: 0.5;
+    box-shadow: none;
+    cursor: not-allowed;
+}
+
+/* Tinted (low-emphasis) inline action: the accent as a surface rather than a fill, for a secondary
+ * action beside a primary one. Replaces the `bg-indigo-50 + text-indigo-800 + hover:bg-indigo-100`
+ * triplet and its three `dark:` counterparts. */
+.board-action-inline-subtle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    min-height: 2.75rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--accent-border);
+    border-radius: 0.5rem;
+    background-color: var(--accent-surface);
+    color: var(--accent);
+    font-weight: 600;
+    transition: background-color 0.18s;
+}
+
+.board-action-inline-subtle:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--accent-surface) 80%, var(--accent));
+}
+
+.board-action-inline-subtle:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.board-panel-submit:disabled {
+    background-color: var(--accent-fill-disabled);
+    box-shadow: none;
+    cursor: not-allowed;
+}
+
+/*
+ * A panel's close button: 24px glyph, 44px target.
+ *
+ * All six board panels declared the identical `w-8 h-8 flex items-center justify-center rounded-lg` string,
+ * giving a **32px** target — under SC 2.5.8, and on the control a user reaches for when a non-modal panel is
+ * covering the canvas they want back. Enlarging the visible box to 44px would make dismissal the largest
+ * thing in the header, so the target grows through transparent padding instead: the same `content-box` +
+ * `background-clip: content-box` technique `iot-info-tooltip-trigger` already uses, with a negative margin
+ * so the header's flex layout absorbs the growth and the glyph does not move.
+ */
+.board-panel-close {
+    display: inline-flex;
+    box-sizing: content-box;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0.625rem;
+    margin: -0.625rem;
+    background-clip: content-box;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    transition: color 0.18s, background-color 0.18s;
+}
+
+/*
+ * The reusable disabled treatment for a filled primary action.
+ *
+ * Seven other filled buttons disarmed themselves with `disabled:opacity-50` instead, which fades the ink
+ * along with the fill: white text on the accent measured **2.42:1** while disabled, below AA, so the label
+ * of an unavailable action was the least readable text on the surface. That is backwards — a disabled
+ * control still has to be readable to explain why it is disabled.
+ *
+ * Desaturating the fill while leaving the ink opaque says "not available" through the same channel
+ * (a weaker fill) without spending contrast, which is the treatment `board-panel-submit` already used and
+ * `AccountDeleteDialog` adopted for its destructive twin.
+ */
+.board-action-disarmed:disabled {
+    background-color: var(--accent-fill-disabled);
+    box-shadow: none;
+    cursor: not-allowed;
+}
+
+/*
+ * Panel header banner.
+ *
+ * Each of the six board panels wore its own two-hue gradient -- green→emerald for Verification,
+ * teal→cyan, amber→orange, purple→violet, red→rose, indigo→violet. That is what made reviewers
+ * describe the panels by colour ("its green header", "its purple Simulation header") as though they
+ * were different products: the banner was the largest coloured surface in each panel and it said
+ * nothing except "this is a different panel".
+ *
+ * One accent banner. What identifies a panel is its title and icon, which is what a user reads.
+ * A subtle vertical shade keeps the header distinct from the panel body without introducing a hue.
+ */
+/*
+ * The banner is a fill, so it uses `--accent-fill` and its ink is white in both themes.
+ *
+ * It used `--accent`, which flips lightness between themes: `#2563eb` light, `#60a5fa` dark. That made the
+ * correct ink flip too — black ink measures 4.06 on the light banner but 8.26 on the dark one, white the
+ * reverse — and the panels declared `text-black`, which is right in light and wrong in dark. One panel
+ * title measured **1.44:1** on the dark banner. A surface whose required ink depends on the theme cannot
+ * have a single correct markup, so the fix is to stop the ground from flipping rather than to fork the ink.
+ *
+ * `--accent-fill` is stable across themes by construction, and carries white at 5.17 (top) to 6.99 (bottom).
+ */
+.board-panel-banner {
+    background: linear-gradient(
+        160deg,
+        var(--accent-fill) 0%,
+        color-mix(in srgb, var(--accent-fill) 82%, #000) 100%
+    );
+}
+
+/*
+ * Drop zone / import affordance.
+ *
+ * The dashed border is the part that carries meaning -- "you may drop a file here" -- so it stays.
+ * The orange did not: it had no dark counterpart, so on a dark Board it read as a separate warm
+ * widget ("the dashed orange border, orange icon, and pale button are substantially warmer and more
+ * attention-grabbing than neighboring controls. It reads as a separate workflow widget").
+ */
+.board-dropzone {
+    background-color: var(--accent-surface);
+    border: 2px dashed var(--accent-border);
+    color: var(--text-muted);
+}
+
+.board-dropzone:hover {
+    border-color: var(--accent);
+}
+
+/* Role text colours, for use on the matching tinted surface. Both themes come from the role token,
+   so a warning message stays legible in dark mode instead of keeping a light-theme amber. */
+/*
+ * In-progress indicator.
+ *
+ * "Work is running" is one meaning, and it had eleven colours across six hue families -- cyan, teal,
+ * red, purple, indigo, amber, rose, blue -- because each spinner inherited whatever hue its host
+ * panel happened to use. A red spinner is actively misleading: red means failure everywhere else in
+ * the product, and a running search is not a failure.
+ */
+.board-text-progress { color: var(--accent); }
+.board-border-progress { border-color: var(--accent); }
+
+/*
+ * Neutral text and border roles.
+ *
+ * These replace the per-panel tinted text ramps. The exploration panel, for example, wrote its body
+ * copy as `text-indigo-700/800` and its headings as `text-indigo-950/900` -- a whole parallel
+ * greyscale built out of one hue, which is why that panel read as a product within the product.
+ * Heading versus body is a hierarchy distinction, not a colour-identity one, so it uses the shared
+ * text tokens and inherits the theme.
+ */
+.board-text-strong { color: var(--text); }
+.board-text-muted { color: var(--text-muted); }
+.board-border-subtle { border-color: var(--border); }
+
+/* Determinate progress fill. Shares the in-progress accent so a running bar and a running spinner
+   agree, instead of each panel tinting its own bar. */
+.board-progress-fill { background-color: var(--accent); }
+
+.board-text-warning { color: var(--warning); }
+.board-text-danger { color: var(--danger); }
+.board-text-success { color: var(--success); }
+.board-text-info { color: var(--info); }
+
+/*
+ * Section-header icon tile.
+ *
+ * The Control Center had six of these in one panel, in six hues -- orange×3, blue×2, purple, red --
+ * one per section. The hue distinguished nothing a reader needs: the icon glyph and the heading beside
+ * it already name the section. What it did do was give the panel its own signature palette, which is
+ * why reviewing the Board repeatedly named the left panel as belonging to a different visual family:
+ * "the large orange blocks are much more visually forceful than neighbouring cool-blue controls,
+ * competing with the canvas as a focal point".
+ *
+ * One tinted accent tile, so the glyph carries the meaning and the panel stops competing with the
+ * canvas. Tinted rather than filled because a section header is a label, not an action.
+ */
+.board-section-icon {
+    display: flex;
+    width: 2.25rem;
+    height: 2.25rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.625rem;
+    background-color: var(--accent-surface);
+    border: 1px solid var(--accent-border);
+    color: var(--accent);
+}
+
+.board-section-icon--lg {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.75rem;
+}
+
+/* The glyphs inside were `text-white` against a saturated fill; on a tinted tile they take the
+   accent colour instead. Scoped to the tile so no other icon is affected. */
+.board-section-icon .material-symbols-outlined {
+    color: var(--accent);
+}
+
+/*
+ * Neutral card surface — the product's default container.
+ *
+ * 82 call sites wrote this as `bg-white border border-slate-200` (47 of them adding `shadow-sm`),
+ * with no dark counterpart. That is one surface expressed 82 times, and it is why the dark theme
+ * needed a blanket repair rule: each site had decided "white" locally, so nothing could restate it
+ * per theme.
+ *
+ * `--surface-elevated` and `--border` are already theme-aware, so a call site that uses this class
+ * needs no `dark:` variant at all. The `--raised` modifier carries the shadow those 47 sites wanted.
+ *
+ * This is the class that lets the `.dark [class~='bg-white']` migration fallback be deleted: every
+ * site migrated here stops depending on it.
+ */
+.board-card {
+    background-color: var(--surface-elevated);
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+
+.board-card--raised {
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* Recessed variant for inset regions (empty states, nested wells) that used `bg-slate-50`. */
+.board-card--muted {
+    background-color: var(--surface-muted);
+}
+
+/*
+ * Tinted semantic containers.
+ *
+ * These replace hand-built pairs of raw palette utilities (`border-amber-100 bg-amber-50/60
+ * dark:border-amber-500/20 dark:bg-amber-500/10` and similar). Two problems with the hand-built
+ * form: the light and dark values were chosen independently at each call site, so several had a
+ * light tint with no dark counterpart, and the hue was picked per module -- which is how the same
+ * "informational panel" ended up amber in the Inspector and orange in the Control Center.
+ *
+ * One class per meaning, both themes resolved from the role tokens in base.css.
+ */
+.iot-board .board-surface-warning,
+.board-surface-warning {
+    background-color: var(--warning-surface);
+    border: 1px solid var(--warning-border);
+    color: var(--text);
+}
+
+/* Borderless role chips: a small tinted badge carrying a status or a value, where a border would add
+ * a second edge inside an already-bordered row. The `board-surface-*` classes are containers and
+ * include a border, so the chips were instead hand-rolled as
+ * `bg-{hue}-100 text-{hue}-700 dark:bg-{hue}-900/60 dark:text-{hue}-200` — four utilities per chip,
+ * repeated across the fix and history surfaces with the ramp chosen per site. */
+.iot-board .board-chip-danger,
+.board-chip-danger,
+.iot-board .board-chip-warning,
+.board-chip-warning,
+.iot-board .board-chip-success,
+.board-chip-success,
+.iot-board .board-chip-info,
+.board-chip-info,
+.iot-board .board-chip-accent,
+.board-chip-accent {
+    border: 0;
+}
+
+.board-chip-danger {
+    background-color: var(--danger-surface);
+    color: var(--danger);
+}
+
+.board-chip-warning {
+    background-color: var(--warning-surface);
+    color: var(--warning);
+}
+
+.board-chip-success {
+    background-color: var(--success-surface);
+    color: var(--success);
+}
+
+.board-chip-info {
+    background-color: var(--info-surface);
+    color: var(--info);
+}
+
+.board-chip-accent {
+    background-color: var(--accent-surface);
+    color: var(--accent);
+}
+
+/* A chip that carries no status at all — a count, a unit, an ordinary label.
+ *
+ * Its absence is why counts kept borrowing a status role: with only danger/warning/success/info/accent
+ * available, "put this number in a chip" forced a claim about the number. A dark-theme review read an
+ * orange `45` next to "Reset defaults" as a queue of things needing attention when it was just how many
+ * templates were listed. Neutral is the honest default; a role has to be earned. */
+.iot-board .board-chip-neutral,
+.board-chip-neutral {
+    border: 0;
+    background-color: var(--surface-control);
+    color: var(--text-muted);
+}
+
+/* Completes the role set: `--accent-surface`/`--accent-border` existed as tokens with no surface
+ * class, so anything wanting a tinted accent container reached for a raw indigo or violet ramp. Used
+ * for the product's own agency — the AI assistant marker — matching the decision that unified the nav
+ * assistant button onto `var(--accent)` rather than its own violet gradient. */
+.iot-board .board-surface-accent,
+.board-surface-accent {
+    background-color: var(--accent-surface);
+    border: 1px solid var(--accent-border);
+    color: var(--accent);
+}
+
+.iot-board .board-surface-info,
+.board-surface-info {
+    background-color: var(--info-surface);
+    border: 1px solid var(--info-border);
+    color: var(--text);
+}
+
+.iot-board .board-surface-danger,
+.board-surface-danger {
+    background-color: var(--danger-surface);
+    border: 1px solid var(--danger-border);
+    color: var(--text);
+}
+
+.iot-board .board-surface-success,
+.board-surface-success {
+    background-color: var(--success-surface);
+    border: 1px solid var(--success-border);
+    color: var(--text);
+}
+
 .iot-board .board-tool-wrapper {
     position: relative;
 }
@@ -954,7 +1469,10 @@
     z-index: 1;
     display: inline-flex;
     width: 100%;
-    min-height: 2.5rem;
+    /* 44px, not 40px. All eight dock buttons measured 124×40 — these are the entry points to simulation,
+       verification, exploration, run history and the four recommendation panels, i.e. every primary workflow on
+       the board. `2.5rem` was 4px short of the platform minimum on the one strip a user visits before every task. */
+    min-height: 2.75rem;
     align-items: center;
     justify-content: center;
     gap: 0.45rem;
@@ -962,6 +1480,138 @@
     padding: 0 0.55rem;
     overflow: hidden;
     white-space: nowrap;
+}
+
+/*
+ * Primary dock treatment for the run/review actions.
+ *
+ * These four buttons each had their own saturated hue -- blue Simulation, indigo Explore, green
+ * Verification, cyan Run History -- for four actions of equal standing. The hue carried no meaning:
+ * the filled-versus-outlined split already distinguishes run actions from AI suggestions, verified
+ * in a real browser last round. So the colour was decoration, and reviewing a rendered Board named
+ * it as the product's main visual seam: "saturated blue, purple, green, and teal filled buttons ...
+ * belong to a more vivid visual family than the restrained panels and canvas ... the rainbow rail is
+ * the substantive mismatch".
+ *
+ * One accent role for all four. What still distinguishes them is what should: the icon and the label.
+ */
+/*
+ * Three tiers in the dock, because the product has three kinds of action — not because three weights look
+ * nicer than one.
+ *
+ * Measured: `open-verification-panel`, `open-simulation-panel`, `open-fuzzing-panel` and
+ * `open-history-panel` rendered **byte-identical** — same `rgb(37, 99, 235)` fill, same 400 weight, same
+ * 124x44 box, same 10.4px radius, same shadow. Yet the repo's own semantics say they differ in kind, and
+ * `frontend-ui-conventions.md` §4 already requires that emphasis follow consequence:
+ *
+ *   - **Verification** runs NuSMV and returns a formal proof or a counterexample. It is the only control on
+ *     the board whose output is a mathematical conclusion. It stays a filled primary.
+ *   - **Simulation** and **Explore** run real work but produce a single trace and bounded *candidate*
+ *     evidence — `CLAUDE.md` is explicit that a fuzz finding is replay-only and must never be dressed as a
+ *     verdict. Painting them exactly like the verifier is that same overclaim, in the visual layer.
+ *   - **Run History** is not an action at all. It opens a view of past results and writes nothing.
+ *
+ * So: filled for proof, tinted-and-bordered for evidence, quiet for navigation. Colour still marks the
+ * family (all three are accent, none is a new hue), and weight now marks the epistemic claim.
+ */
+.iot-board .board-tool-button--primary {
+    background-color: var(--accent-fill);
+    color: #fff;
+}
+
+.iot-board .board-tool-button--primary:hover:not(:disabled) {
+    background-color: var(--accent-fill-hover);
+}
+
+/*
+ * Tier 2 — real work, candidate evidence. A tinted surface rather than a fill.
+ *
+ * The tint alone is not enough to see: accent at 14% over a card measures 1.22:1 against that card, so the
+ * border carries the boundary and the tint carries the family. The label uses the accent *text* colour on a
+ * pale ground (5.51 light / 7.16 dark), which is the ink half of the pair doing its actual job.
+ */
+.iot-board .board-tool-button--evidence {
+    background-color: color-mix(in srgb, var(--accent) 14%, var(--board-card-bg));
+    /*
+     * 80%, not 42%: the tint is 1.22:1 against the panel behind the dock, so the border is the only thing
+     * making this a control rather than a coloured patch, and it has to clear the 3:1 boundary minimum on its
+     * own. At 42% it measured 1.87 (light) / 2.27 (dark); 80% gives 3.62 / above. The same measurement caught
+     * the `--view` tier below, where it was 1.48.
+     */
+    border: 1px solid color-mix(in srgb, var(--accent) 80%, transparent);
+    color: var(--accent-strong);
+    box-shadow: none;
+}
+
+.iot-board .board-tool-button--evidence:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--accent) 22%, var(--board-card-bg));
+    border-color: var(--accent);
+}
+
+/* Pressed = this panel is open. An inset bar, so the state does not rely on colour alone. */
+.iot-board .board-tool-button--evidence[aria-pressed='true'] {
+    background-color: color-mix(in srgb, var(--accent) 22%, var(--board-card-bg));
+    box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.iot-board .board-tool-button--evidence:disabled {
+    background-color: var(--board-control-bg);
+    border-color: var(--board-border);
+    color: var(--board-text-muted);
+}
+
+/*
+ * Tier 3 — opens a view, writes nothing. The quietest tier that is still clearly a control.
+ *
+ * Deliberately not `--suggestion`: that variant means "this proposes a change you may accept", which Run
+ * History does not do. Same restraint, different meaning, so it gets its own name rather than borrowing one
+ * that would misdescribe it.
+ */
+.iot-board .board-tool-button--view {
+    background-color: var(--board-control-bg);
+    /*
+     * A deliberately quiet tier still needs a *visible* edge.
+     *
+     * Two independent reviews of the retiered dock — one per theme — both said Run History was "too quiet"
+     * and "easy to miss". That reads like taste until you measure it: the tier's surface is 1.10:1 against
+     * its panel in light and 1.22 in dark, so the whole boundary rests on the border, and `--board-border`
+     * was **1.48:1** (light) / 1.72 (dark). WCAG wants 3:1 for a control boundary, so the edge of this
+     * control was effectively invisible — not a matter of emphasis but of whether it reads as a control.
+     *
+     * #64748b clears it in both themes at once (4.76 light / 3.75 dark), so the tier needs no theme fork.
+     * Kept local rather than pushed into `--border-strong`, which is used for field edges on tinted grounds
+     * where a darker value would be heavier than those need.
+     */
+    border: 1px solid #64748b;
+    color: var(--board-text);
+    box-shadow: none;
+}
+
+.iot-board .board-tool-button--view:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--accent) 10%, var(--board-control-bg));
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--board-border));
+}
+
+.iot-board .board-tool-button--view[aria-pressed='true'] {
+    background-color: color-mix(in srgb, var(--accent) 14%, var(--board-control-bg));
+    box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+/* The running halo behind a primary tool. "This is running" is one meaning, so it is one colour --
+   it previously inherited each button's own hue, which is the same decoration problem. */
+.iot-board .board-tool-pulse--primary {
+    background-color: var(--accent-fill);
+}
+
+/* Pressed = this panel is open. A left inset bar so the state does not rely on colour alone. */
+.iot-board .board-tool-button--primary[aria-pressed='true'] {
+    background-color: var(--accent-fill-hover);
+    box-shadow: inset 3px 0 0 0 #fff;
+}
+
+.iot-board .board-tool-button--primary:disabled {
+    background-color: color-mix(in srgb, var(--accent) 42%, var(--board-card-bg));
+    cursor: not-allowed;
 }
 
 .iot-board .board-tool-button:focus-visible {
@@ -993,7 +1643,7 @@
     max-width: min(18rem, 52vw);
     padding: 0.45rem 0.65rem;
     border-radius: 0.5rem;
-    background: #1e293b;
+    background: var(--surface-elevated);
     box-shadow: var(--shadow-elevated);
     color: #fff;
     font-size: 0.72rem;
@@ -1003,6 +1653,27 @@
     transform: translateY(-50%);
     transition: opacity 0.16s ease;
     white-space: nowrap;
+}
+
+/*
+ * The second tooltip line: what this run *returns*.
+ *
+ * The visual tier answers "how important is this control". It cannot answer "what will I get", and an
+ * independent review of the retiered dock found exactly that gap -- Simulation and Explore "look like
+ * equivalent run modes, and none indicates what kind of result it produces". A block line inside the tooltip
+ * carries the answer where the label has no room for it, and only on hover, so the resting dock stays quiet.
+ *
+ * At the product floor rather than smaller: this is the sentence that stops a bounded search being read as a
+ * proof, which makes it the least skippable text in the tooltip.
+ */
+.iot-board .board-tool-outcome {
+    display: block;
+    margin-top: 0.2rem;
+    padding-top: 0.2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.22);
+    font-size: var(--iot-font-min);
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
 }
 
 .iot-board .board-tool-wrapper:hover .board-tool-tooltip,
@@ -1162,290 +1833,15 @@
     background-color: var(--board-card-bg);
 }
 
-.iot-board .board-floating-panel .bg-red-50,
-.iot-board .modern-panel .bg-red-50,
-.iot-board .glass-panel .bg-red-50,
-.iot-board .board-side-panel .bg-red-50,
-.iot-board .board-timeline .bg-red-50 {
-    background-color: color-mix(in srgb, #ef4444 13%, var(--surface-panel));
-}
-
-.iot-board .board-floating-panel .bg-blue-50,
-.iot-board .modern-panel .bg-blue-50,
-.iot-board .glass-panel .bg-blue-50,
-.iot-board .board-side-panel .bg-blue-50,
-.iot-board .board-timeline .bg-blue-50 {
-    background-color: color-mix(in srgb, #3b82f6 13%, var(--surface-panel));
-}
-
-.iot-board .board-floating-panel .bg-purple-50,
-.iot-board .modern-panel .bg-purple-50,
-.iot-board .glass-panel .bg-purple-50,
-.iot-board .board-side-panel .bg-purple-50 {
-    background-color: color-mix(in srgb, #8b5cf6 13%, var(--surface-panel));
-}
-
-.iot-board .board-floating-panel .bg-orange-50,
-.iot-board .board-floating-panel .bg-amber-50,
-.iot-board .modern-panel .bg-orange-50,
-.iot-board .glass-panel .bg-orange-50,
-.iot-board .board-side-panel .bg-orange-50,
-.iot-board .board-side-panel .bg-amber-50,
-.iot-board .board-timeline .bg-amber-50 {
-    background-color: color-mix(in srgb, #f59e0b 14%, var(--surface-panel));
-}
-
-.iot-board .board-floating-panel .bg-green-50,
-.iot-board .modern-panel .bg-green-50,
-.iot-board .glass-panel .bg-green-50,
-.iot-board .board-side-panel .bg-green-50 {
-    background-color: color-mix(in srgb, #22c55e 12%, var(--surface-panel));
-}
-
-.iot-board .board-floating-panel .bg-cyan-50,
-.iot-board .board-mini-tasks .bg-cyan-50,
-.iot-board .canvas-map .bg-cyan-50,
-.iot-board .modern-panel .bg-cyan-50,
-.iot-board .glass-panel .bg-cyan-50,
-.iot-board .board-side-panel .bg-cyan-50 {
-    background-color: color-mix(in srgb, #06b6d4 12%, var(--surface-panel));
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-red-50, .bg-red-100, .bg-red-200) {
-    background-color: color-mix(in srgb, #ef4444 13%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-blue-50, .bg-blue-100, .bg-blue-200) {
-    background-color: color-mix(in srgb, #3b82f6 13%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-purple-50, .bg-purple-100, .bg-purple-200) {
-    background-color: color-mix(in srgb, #8b5cf6 13%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(
-    .bg-amber-50,
-    .bg-amber-100,
-    .bg-amber-200,
-    .bg-orange-50,
-    .bg-orange-100,
-    .bg-orange-200
-) {
-    background-color: color-mix(in srgb, #f59e0b 14%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-green-50, .bg-green-100, .bg-green-200) {
-    background-color: color-mix(in srgb, #22c55e 12%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-cyan-50, .bg-cyan-100, .bg-cyan-200) {
-    background-color: color-mix(in srgb, #06b6d4 12%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-red-600, .text-red-700, .text-red-800, .text-red-900) {
-    color: #fecaca !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900, .text-amber-950, .text-orange-600, .text-orange-700, .text-orange-800, .text-orange-900) {
-    color: #fde68a !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-blue-600, .text-blue-700, .text-blue-800, .text-blue-900) {
-    color: #bfdbfe !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-purple-600, .text-purple-700, .text-purple-800, .text-purple-900) {
-    color: #e9d5ff !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-green-600, .text-green-700, .text-green-800, .text-green-900) {
-    color: #bbf7d0 !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-cyan-600, .text-cyan-700, .text-cyan-800, .text-cyan-900) {
-    color: #a5f3fc !important;
-}
-
-/* Indigo / sky / fuchsia / emerald / teal complete the set above.
- * `bg-white` is already remapped for these panels, so a light indigo/sky chip or a dark
- * `text-indigo-800` label (the selected exploration-mode tab) previously stayed at its light-theme
- * value on a dark card — unreadable in the worst case. Extend this file rather than adding
- * per-component `dark:` variants: it is the single owner of panel-scoped colour remapping. */
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-indigo-50, .bg-indigo-100, .bg-indigo-200) {
-    background-color: color-mix(in srgb, #6366f1 13%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-indigo-600, .text-indigo-700, .text-indigo-800, .text-indigo-900) {
-    color: #c7d2fe !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-sky-50, .bg-sky-100, .bg-sky-200) {
-    background-color: color-mix(in srgb, #0ea5e9 13%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-sky-600, .text-sky-700, .text-sky-800, .text-sky-900) {
-    color: #bae6fd !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-fuchsia-50, .bg-fuchsia-100, .bg-fuchsia-200) {
-    background-color: color-mix(in srgb, #d946ef 13%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.text-fuchsia-600, .text-fuchsia-700, .text-fuchsia-800, .text-fuchsia-900) {
-    color: #f5d0fe !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(.bg-emerald-50, .bg-emerald-100, .bg-emerald-200, .bg-teal-50, .bg-teal-100, .bg-teal-200) {
-    background-color: color-mix(in srgb, #10b981 13%, var(--surface-panel)) !important;
-}
-
-.dark .iot-board :is(
-    .board-floating-panel,
-    .board-mini-tasks,
-    .modern-panel,
-    .glass-panel,
-    .board-side-panel,
-    .board-timeline
-) :is(
-    .text-emerald-600, .text-emerald-700, .text-emerald-800, .text-emerald-900,
-    .text-teal-600, .text-teal-700, .text-teal-800, .text-teal-900
-) {
-    color: #a7f3d0 !important;
-}
-
+/*
+ * The panel-scoped semantic-hue remaps that used to live here are gone with their callers.
+ *
+ * They rewrote raw palette utilities (bg-red-50, bg-blue-50, ...) to token-derived colours by class
+ * name, which is what kept the dark theme readable while components still shipped light-theme hues.
+ * Every component has since migrated to the board-* role classes, so all 42 selectors matched nothing:
+ * measured 0 consumers across every .vue file, and no dynamic class construction anywhere in src.
+ * Structural neutrals (slate) below are a different case and remain in use.
+ */
 .iot-board .board-floating-panel .bg-slate-100,
 .iot-board .board-mini-tasks .bg-slate-100,
 .iot-board .canvas-map .bg-slate-100,
@@ -1700,15 +2096,18 @@
     justify-content: flex-end;
 }
 
+/* 44px targets. These measured 32×32px — zoom in, zoom out and fit-to-screen, which are among the most repeatedly
+   pressed controls on the board, and the ones a user reaches for while already struggling to see something. */
 .iot-board .canvas-map__tool {
-    min-width: 2rem;
-    min-height: 2rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
 }
 
 .iot-board .canvas-map__zoom-input-wrap {
     display: inline-flex;
-    min-height: 2rem;
-    height: 2rem;
+    /* 44px: this measured 17px tall in a 32px wrapper, and it is a field a user types a zoom level into. */
+    min-height: 2.75rem;
+    height: 2.75rem;
     width: 3.6rem;
     align-items: center;
     justify-content: center;
@@ -1717,7 +2116,7 @@
     border-radius: 0.45rem;
     background: var(--surface-control);
     color: var(--text);
-    font-size: 0.66rem;
+    font-size: var(--iot-font-min);
     font-weight: 800;
 }
 
@@ -1833,17 +2232,17 @@
 }
 
 .iot-board .board-context-menu__item--danger {
-    color: #dc2626;
+    color: var(--danger);
 }
 
 :root[data-theme='dark'] .iot-board .board-context-menu__item--danger,
 :root:not([data-theme]) .iot-board .board-context-menu__item--danger {
-    color: #f87171;
+    color: var(--danger);
 }
 
 .iot-board .board-context-menu__item--danger:hover,
 .iot-board .board-context-menu__item--danger:focus-visible {
-    background: color-mix(in srgb, #ef4444 14%, var(--surface-muted));
+    background: color-mix(in srgb, var(--danger) 14%, var(--surface-muted));
 }
 
 .iot-board .board-context-menu__divider {
@@ -1856,7 +2255,16 @@
     right: calc(var(--board-inspector-width) + var(--board-action-rail-width) + (var(--board-floating-gap) * 2));
     z-index: 49;
     width: min(22rem, calc(100vw - var(--board-control-width) - var(--board-inspector-width) - var(--board-action-rail-width) - (var(--board-floating-gap) * 3)));
-    max-height: min(46dvh, 20rem);
+    /* Capped so the two playback overlays cannot claim the viewport between them.
+     *
+     * This was `46dvh` against the timeline's `66dvh` — 112dvh combined, i.e. more than the whole screen
+     * before either hit its rem ceiling. Measured, this popover renders at 209px (23% of a 900px viewport),
+     * so the cap is not what sizes it today; it is the ceiling for a step that changes many devices, and
+     * that ceiling should not be able to co-occupy the screen with the timeline's.
+     *
+     * 34dvh + the timeline's 44dvh = 78dvh, leaving the canvas a visible corridor in the worst case rather
+     * than relying on both overlays happening to be short. */
+    max-height: min(34dvh, 20rem);
     overflow: hidden;
     color: var(--board-text);
     background: color-mix(in srgb, var(--surface-overlay) 94%, transparent);
@@ -1883,13 +2291,13 @@
 }
 
 .iot-board .playback-change-popover__environment {
-    border-color: color-mix(in srgb, #d97706 28%, var(--board-border));
-    background: color-mix(in srgb, #f59e0b 8%, var(--surface-muted));
+    border-color: color-mix(in srgb, var(--warning) 28%, var(--board-border));
+    background: color-mix(in srgb, var(--warning) 8%, var(--surface-muted));
 }
 
 .iot-board .playback-change-popover__automation {
-    border-color: color-mix(in srgb, #059669 24%, var(--board-border));
-    background: color-mix(in srgb, #10b981 7%, var(--surface-muted));
+    border-color: color-mix(in srgb, var(--success) 24%, var(--board-border));
+    background: color-mix(in srgb, var(--success) 7%, var(--surface-muted));
 }
 
 .iot-board .playback-change-popover__body {
@@ -1932,42 +2340,11 @@
     min-height: 2.75rem;
 }
 
-.dark .iot-board .board-playback-change-popover :is(
-    .text-indigo-900, .text-indigo-950
-) {
-    color: #e0e7ff !important;
-}
 
-.dark .iot-board .board-playback-change-popover :is(
-    .text-indigo-400, .text-indigo-500, .text-indigo-600, .text-indigo-700,
-    .text-indigo-800
-) {
-    color: #c7d2fe !important;
-}
 
-.dark .iot-board .board-playback-change-popover :is(
-    .text-amber-500, .text-amber-600, .text-amber-700
-) {
-    color: #fde68a !important;
-}
 
-.dark .iot-board .board-playback-change-popover :is(
-    .text-amber-900, .text-amber-950
-) {
-    color: #fef3c7 !important;
-}
 
-.dark .iot-board .board-playback-change-popover :is(
-    .text-red-600, .text-red-700, .text-red-800
-) {
-    color: #fca5a5 !important;
-}
 
-.dark .iot-board .board-playback-change-popover :is(
-    .text-emerald-600, .text-emerald-800
-) {
-    color: #a7f3d0 !important;
-}
 
 .dark .iot-board .board-playback-change-popover :is(
     .bg-white, .bg-slate-50
@@ -1975,17 +2352,8 @@
     background-color: var(--surface-elevated) !important;
 }
 
-.dark .iot-board .board-playback-change-popover :is(.bg-indigo-50, .bg-indigo-100) {
-    background-color: color-mix(in srgb, var(--iot-color-accent) 15%, var(--surface-elevated)) !important;
-}
 
-.dark .iot-board .board-playback-change-popover :is(.bg-red-50, .bg-red-100) {
-    background-color: color-mix(in srgb, #ef4444 15%, var(--surface-elevated)) !important;
-}
 
-.dark .iot-board .board-playback-change-popover .bg-emerald-50 {
-    background-color: color-mix(in srgb, #10b981 15%, var(--surface-elevated)) !important;
-}
 
 .dark .iot-board .board-playback-change-popover :is(
     .border-slate-200
@@ -1993,17 +2361,8 @@
     border-color: var(--board-border) !important;
 }
 
-.dark .iot-board .board-playback-change-popover :is(.border-indigo-100, .border-indigo-200) {
-    border-color: color-mix(in srgb, var(--iot-color-accent) 45%, var(--board-border)) !important;
-}
 
-.dark .iot-board .board-playback-change-popover .border-red-200 {
-    border-color: color-mix(in srgb, #ef4444 52%, var(--board-border)) !important;
-}
 
-.dark .iot-board .board-playback-change-popover .border-emerald-200 {
-    border-color: color-mix(in srgb, #10b981 46%, var(--board-border)) !important;
-}
 
 .board-timeline-host {
     position: fixed;
@@ -2020,10 +2379,28 @@
     pointer-events: auto;
 }
 
+/* The playback overlay is apparatus; the animated canvas is the subject.
+ *
+ * This was `max-height: min(66dvh, 24rem)` — 384px at 900px tall, which measured as **43% of the viewport
+ * for this overlay alone and 66% together with the change popover**. Two independent reviews at two
+ * viewports reached the same verdict in the same words: "the canvas is functioning more as a backdrop than
+ * as the subject of this screen".
+ *
+ * Both terms had to move. Lowering only the viewport fraction to 44dvh changed nothing at 1440×900,
+ * because `24rem` (384px) then became the binding constraint — measured: still exactly 384px. The rem
+ * ceiling is what caps a *tall* screen, and at 20rem/44dvh the overlay lands at ~1/3 of a 900px viewport,
+ * which is the ratio that lets the canvas read as the subject rather than the backdrop.
+ *
+ * The overlay's contents were reduced first, not squeezed into a smaller box: a duplicate "Violated
+ * Specification" card (102px, restating the header), a redundant step-number input (one of three controls
+ * answering "which step"), and its card wrapper are gone — 663px of content down to 523px. The cap does the
+ * rest, and `iot-scroll-region` keeps the remainder reachable with a scrollbar that matches the product.
+ *
+ * `getVisibleCanvasFrame` now measures this element rather than guessing a fraction of the window, so the
+ * canvas fit follows whatever height it actually takes. */
 .board-timeline {
     width: min(39rem, 100%);
-    max-height: min(66dvh, 24rem);
-    overflow-y: auto;
+    max-height: min(44dvh, 20rem);
     background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
     color: var(--text);
     border: 1px solid var(--border);
@@ -2089,9 +2466,22 @@
         min-height: 2.75rem;
     }
 
+    /* Narrow viewports get *less* of the screen, not more.
+     *
+     * This was `58dvh`, which on a 667px-tall phone is ~387px — most of the screen for the apparatus, on
+     * the device where the canvas has least room to begin with. The wide cap is now 44dvh, so a narrow one
+     * that is larger inverts the priority: the smaller the screen, the more the subject needs of it.
+     *
+     * The overlay is full-width here, so it holds more per row than at 39rem and needs less height for the
+     * same content.
+     *
+     * Both terms matter, and I got this wrong the first time: lowering only the viewport fraction to 40dvh
+     * left the ceiling at `22rem`, which is *larger* than the wide rule's `20rem`. At 834×1112 that ceiling
+     * binds, so the tablet rendered a **352px** overlay against the desktop's 320px — the smaller screen
+     * still getting the taller apparatus. The ceiling has to come down with the fraction. */
     .board-timeline {
         width: 100%;
-        max-height: min(58dvh, 24rem);
+        max-height: min(40dvh, 18rem);
     }
 
     .iot-board .board-mini-tasks {
@@ -2322,7 +2712,7 @@
     color: color-mix(in srgb, var(--iot-color-accent) 82%, var(--text));
     padding: 0.2rem 0.45rem;
     box-shadow: 0 0.35rem 0.9rem rgba(15, 23, 42, 0.18);
-    font-size: 0.62rem;
+    font-size: var(--iot-font-min);
     font-weight: 800;
     line-height: 1;
     pointer-events: none;
@@ -2433,13 +2823,31 @@
     .iot-board .device-node.trace-change-pulse .device-node-content,
     .iot-board .device-node.device-attacked::before,
     .iot-board .pulse-status,
-    .iot-board .animate-spin-slow,
-    .iot-board .animate-spin,
     .iot-board .animate-ping,
     .iot-board .animate-pulse,
     .iot-board .animate-pulse-glow,
     .iot-board .fade-in {
         animation: none !important;
+    }
+
+    /*
+     * A spinner is the exception, and it is the one animation in the product that carries information.
+     *
+     * `.animate-spin` sat in the list above, so reducing motion froze every spinner mid-rotation — and a
+     * stopped spinner does not read as "motion disabled", it reads as **stalled**. NuSMV runs take real time,
+     * so the one thing a user needs during a verification is confidence that it is still alive. Freezing that
+     * signal turns a healthy run into an apparent hang, which is the "never present an unknown as a settled
+     * outcome" rule pointing the other way.
+     *
+     * Slowed rather than stopped: a 2.4s rotation is well under the threshold that triggers vestibular
+     * symptoms (the concern is fast, large-area, or parallax motion — not a 16px glyph turning slowly), and it
+     * keeps the liveness cue. `linear` and `steps()` would both work; `steps(8)` also reduces the perceived
+     * smoothness, which is the point.
+     */
+    .iot-board .animate-spin,
+    .iot-board .animate-spin-slow {
+        animation-duration: 2.4s !important;
+        animation-timing-function: steps(8, end) !important;
     }
 }
 
@@ -2582,7 +2990,7 @@
 }
 
 .iot-board .device-node--condensed .device-label {
-    font-size: clamp(0.625rem, 8cqmin, 0.8rem);
+    font-size: clamp(var(--iot-font-min), 8cqmin, 0.8rem);
 }
 
 .iot-board .device-node--condensed .device-state,
@@ -2595,7 +3003,19 @@
     width: 92%;
     height: 92%;
     place-self: center;
-    grid-template-columns: minmax(clamp(3rem, 34cqmin, 42rem), clamp(4.5rem, 42cqmin, 52rem)) minmax(0, 1fr);
+    /* The icon column may not outgrow the text it labels.
+     *
+     * This was `minmax(clamp(3rem, 34cqmin, 42rem), clamp(4.5rem, 42cqmin, 52rem))`, whose upper bound has a
+     * **72px floor** (`4.5rem`) that wins over its own `42cqmin` term on any node up to ~171px. Measured on a
+     * default 184×135 node the icon therefore claimed **72px of a 132px content row** and the column holding
+     * the label, the state and the runtime chips resolved to **26px** — which is why the state value
+     * "No state machine" rendered in 2px, 98% lost, and every review of the replay surface concluded the
+     * canvas cannot explain itself.
+     *
+     * The floor was inverted: a `clamp()` lower bound on a *maximum* guarantees the decoration its size while
+     * the content absorbs every shortfall. Now the icon scales with the node (`34cqmin`, so it still grows on
+     * a large one) and is capped so it can never take more than about a third of the row. */
+    grid-template-columns: minmax(clamp(1.75rem, 22cqmin, 3rem), clamp(2rem, 34cqmin, 4.5rem)) minmax(0, 1fr);
     grid-template-rows: auto auto auto auto;
     grid-template-areas:
         "icon label"
@@ -2610,13 +3030,29 @@
     padding: clamp(0.5rem, 5cqmin, 1.5rem);
 }
 
+/* Runtime chips wrap, and use the node's spare vertical space rather than fighting over one row.
+ *
+ * This was a single non-wrapping row at `width: min(90%, 11rem)` with `overflow: hidden`. Measured during
+ * a counterexample replay on a 184×135 node, the result was severe: the changed value **`26` rendered in
+ * 6px of the 15px it needs (60% lost)**, the neighbouring node's `0` in 2px of 16px (88%), and the state
+ * value "No state machine" in **2px of 85px (98%)**. Meanwhile the node had **29–32px of unused vertical
+ * space**.
+ *
+ * That is the mechanism behind the complaint this whole batch is about. Five independent vision reviews of
+ * the replay surface each said the canvas cannot explain itself and the panels have to — "labels are
+ * truncated, so the causal story lives almost entirely in the panels". A value shown in 6px is not a value
+ * shown; the eye had nowhere to go but the overlay.
+ *
+ * `flex-wrap` spends the spare height instead of compressing the one fact the replay exists to convey. The
+ * strip keeps `overflow: hidden` as the last resort for a node genuinely too small for even one chip. */
 .iot-board .device-runtime-strip {
     display: flex;
-    width: min(90%, 11rem);
+    flex-wrap: wrap;
+    width: min(96%, 11rem);
     min-width: 0;
     align-items: center;
     justify-content: center;
-    gap: 0.25rem;
+    gap: 0.2rem 0.25rem;
     overflow: hidden;
 }
 
@@ -2637,7 +3073,15 @@
     background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
     color: var(--text-muted);
     padding: clamp(0.125rem, 1.2cqmin, 0.28rem) clamp(0.35rem, 2.4cqmin, 0.7rem);
-    font-size: clamp(0.58rem, 4.3cqmin, 4rem);
+    /*
+     * Static, because the clamp this replaces never once used its middle term. `4.3cqmin` is 4.3% of the
+     * node's smaller side, and these chips only render on an expanded node, whose measured height ranges
+     * 110-137px — so the preferred size evaluated to 4.7-5.9px and the 0.58rem floor won at every viewport
+     * and every node size. It would take roughly 215cqmin to reach the readable minimum. The clamp read as
+     * a responsive size while being a fixed 9.28px, which is how it passed a type-floor check whose
+     * exemption for container-relative sizes assumed the middle term could win.
+     */
+    font-size: var(--iot-font-min);
     font-weight: 700;
     line-height: 1;
 }
@@ -2649,19 +3093,34 @@
     color: color-mix(in srgb, var(--iot-color-accent) 74%, var(--text));
 }
 
-.iot-board .device-runtime-chip__label,
-.iot-board .device-runtime-chip__value {
-    min-width: 0;
+/* When the pair cannot both fit, the label yields and the value survives.
+ *
+ * Both were equally shrinkable, so a 65px chip holding "Temperature" (58px) plus "26" (15px) split the
+ * shortfall between them and printed the value in 6px. The label says which variable; the value is the fact
+ * a counterexample is about, and a variable named without its value explains nothing. `flex-shrink` ranks
+ * them: the label gives up its width first, down to a floor where its own prefix still identifies it, and
+ * the value keeps enough room for the two or three characters these actually hold.
+ *
+ * One rule per class. My first version added the `flex` ranking in a *second* pair of rules beside the shared
+ * truncation block above, so each class had two declarations — the duplicated ownership I removed from
+ * `ControlCenter` earlier in this audit, reintroduced by me within the hour. A test slicing on the first
+ * occurrence found no `flex` and failed against correct CSS, which is how it surfaced. */
+.iot-board .device-runtime-chip__label {
+    min-width: 1.5rem;
+    flex: 0 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.iot-board .device-runtime-chip__label {
     color: var(--text-muted);
 }
 
 .iot-board .device-runtime-chip__value {
+    min-width: 0;
+    max-width: 100%;
+    flex: 0 0 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--text);
 }
 
@@ -2703,7 +3162,14 @@
 
 .iot-board .device-node-trust {
     min-width: 0;
-    max-width: 46cqmin;
+    /*
+     * `46cqmin` was sized to stop a full sentence from swallowing the node. The pill now prints a one-word
+     * category, so the cap only re-truncates it: 46cqmin of a 137px node is 63px, and "Trusted" at 11px bold
+     * with its padding needs about 68px, which measured as 28% of the word cut off. A ceiling generous enough
+     * for the longest short label keeps the original intent — the pill cannot dominate the node — without
+     * clipping the word it exists to show.
+     */
+    max-width: min(100%, 7rem);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2712,20 +3178,21 @@
     background: color-mix(in srgb, var(--iot-color-accent) 12%, var(--surface-elevated));
     color: color-mix(in srgb, var(--iot-color-accent) 72%, var(--text));
     padding: clamp(0.15rem, 1.3cqmin, 0.3rem) clamp(0.45rem, 2.8cqmin, 0.8rem);
-    font-size: clamp(0.58rem, 4.3cqmin, 4rem);
+    /* Same unreachable clamp as `.device-runtime-chip`; see the note there. */
+    font-size: var(--iot-font-min);
     font-weight: 800;
     line-height: 1;
 }
 
 .iot-board .device-node-trust--privacy {
-    border-color: color-mix(in srgb, #c026d3 28%, var(--border));
-    background: color-mix(in srgb, #c026d3 12%, var(--surface-elevated));
-    color: color-mix(in srgb, #a21caf 76%, var(--text));
+    border-color: color-mix(in srgb, var(--accent-strong) 28%, var(--border));
+    background: color-mix(in srgb, var(--accent-strong) 12%, var(--surface-elevated));
+    color: color-mix(in srgb, var(--accent-strong) 76%, var(--text));
 }
 
 :root[data-theme='dark'] .iot-board .device-node-trust--privacy,
 :root:not([data-theme]) .iot-board .device-node-trust--privacy {
-    color: #f0abfc;
+    color: var(--accent-strong);
 }
 
 /* 上部分：左边图标，右边名字 */
@@ -2799,7 +3266,7 @@
     text-overflow: ellipsis;
     overflow-wrap: anywhere;
     color: var(--text);
-    font-size: 10px;
+    font-size: var(--iot-font-min);
     background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
     border-radius: 0.35rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
@@ -2888,7 +3355,6 @@
 
 /* Canvas container with sidebars */
 
-
 /* Grid background pattern */
 .grid-bg {
     background-size: 40px 40px;
@@ -2947,14 +3413,14 @@
     top: 0;
     padding: 2px 8px;
     border-radius: 4px;
-    font-size: 10px;
+    font-size: var(--iot-font-min);
     font-weight: bold;
     letter-spacing: 0.025em;
     background: white;
     border: 1px solid rgba(226, 232, 240, 0.8);
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.05);
     z-index: 10;
-    color: #475569;
+    color: var(--text-muted);
 }
 
 /* Pulse status animation */
@@ -2977,11 +3443,15 @@
 .text-secondary { color: #C026D3; }
 .bg-online { background-color: #059669; }
 .bg-offline { background-color: #dc2626; }
-.bg-green-200 { background-color: #bbf7d0; }
-.border-blue-100 { border-color: #dbeafe; }
-.border-green-200 { border-color: #bbf7d0; }
-.border-purple-100 { border-color: #faf5ff; }
-.border-purple-200 { border-color: #e9d5ff; }
+/*
+ * Five global redefinitions of Tailwind's own utilities lived here — `.bg-green-200`,
+ * `.border-blue-100`, `.border-green-200`, `.border-purple-100`, `.border-purple-200` — each pinned to a
+ * light-theme hex, unscoped, and so applying anywhere in the app rather than inside `.iot-board`. All five
+ * had 0 consumers left after the role-class migration, but any future use of those Tailwind classes would
+ * silently have got a hardcoded light colour instead of the palette value. Removed with their callers.
+ *
+ * The four named utilities above are still in use (ControlCenter, SystemInspector) and stay.
+ */
 
 .board-panel--interaction-read-only {
     opacity: 0.78;
@@ -3027,3 +3497,4 @@
 .scene-replacement-confirm .el-message-box__btns {
     flex: 0 0 auto;
 }
+

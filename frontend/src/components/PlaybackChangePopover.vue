@@ -294,28 +294,28 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
       @mousedown="onMouseDragStart"
     >
       <div class="min-w-0">
-        <div class="flex items-center gap-1.5 text-xs font-bold text-indigo-950">
-          <span class="material-symbols-outlined text-base text-indigo-600" aria-hidden="true">sync_alt</span>
+        <div class="flex items-center gap-1.5 text-xs font-bold board-text-info">
+          <span class="material-symbols-outlined text-base board-text-info" aria-hidden="true">sync_alt</span>
           <span class="truncate">{{ title }}</span>
-          <span class="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+          <span class="shrink-0 rounded-full board-chip-info px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-info">
             {{ t('app.traceVisualization.stateLabel') }} {{ stateNumber }} / {{ totalStates }}
           </span>
           <span
             v-if="isFirstViolationState"
-            class="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700"
+            class="shrink-0 rounded-full board-chip-danger px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-danger"
             data-testid="fuzzing-first-violation-badge"
           >
             {{ t('app.fuzzFirstViolation') }}
           </span>
         </div>
-        <p class="mt-0.5 text-[10px] leading-4 text-slate-500" aria-live="polite" aria-atomic="true">
+        <p class="mt-0.5 text-[length:var(--iot-font-min)] leading-4 text-slate-500" aria-live="polite" aria-atomic="true">
           {{ playbackSummary }}
         </p>
       </div>
       <button
         type="button"
         data-testid="playback-change-dismiss"
-        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-800"
+        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:board-chip-info hover:board-text-info"
         :aria-label="t('app.traceVisualization.dismissChanges')"
         :title="t('app.traceVisualization.dismissChanges')"
         @pointerdown.stop
@@ -327,41 +327,46 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
     </header>
 
     <Transition name="playback-change-step" mode="out-in">
+      <!-- The body's height derives from the popover's own cap rather than a fixed `15rem`. At 15rem
+           (240px) it exceeded the outer `max-height: min(34dvh, 20rem)` on a short viewport — 227px at
+           667px tall — and the outer `overflow: hidden` would then have clipped content the body's own
+           scrollbar could not reach. Subtracting the header keeps the two in step whichever term binds. -->
       <div
         :key="`${kind}-${stateNumber}`"
-        class="playback-change-popover__body max-h-[15rem] space-y-1.5 overflow-y-auto px-3 py-2"
+        class="iot-scroll-region playback-change-popover__body space-y-1.5 px-3 py-2"
+        :style="{ maxHeight: 'calc(min(34dvh, 20rem) - 3.25rem)' }"
       >
         <article
           v-if="kind === 'fuzzing'"
-          class="rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-2"
+          class="rounded-lg board-surface-info px-2.5 py-2"
           data-testid="playback-change-fuzz-inputs"
         >
-          <div class="flex items-center gap-1.5 text-[11px] font-bold text-indigo-900">
-            <span class="material-symbols-outlined text-sm text-indigo-700" aria-hidden="true">input</span>
+          <div class="flex items-center gap-1.5 text-[11px] font-bold board-text-info">
+            <span class="material-symbols-outlined text-sm board-text-info" aria-hidden="true">input</span>
             <span>{{ t('app.traceVisualization.fuzzInputsInThisStep') }}</span>
           </div>
           <ul v-if="inputEvents?.length" class="mt-1.5 space-y-1">
             <li
               v-for="(event, index) in inputEvents"
               :key="`${event.kind}-${event.targetId}-${event.property}-${index}`"
-              class="rounded-md border border-indigo-100 bg-white px-2 py-1.5 text-[10px] leading-4 text-indigo-950"
+              class="rounded-md border board-border-subtle bg-white px-2 py-1.5 text-[length:var(--iot-font-min)] leading-4 board-text-info"
             >
-              <span class="mr-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 font-bold text-indigo-800">{{ inputEventSourceLabel(event) }}</span>
+              <span class="mr-1 inline-flex rounded board-chip-info px-1.5 py-0.5 font-bold board-text-info">{{ inputEventSourceLabel(event) }}</span>
               <span class="font-semibold">{{ inputEventKindLabel(event) }}</span>
-              <span class="px-1 text-indigo-400" aria-hidden="true">·</span>
+              <span class="px-1 board-text-info" aria-hidden="true">·</span>
               <span>{{ event.targetLabel || event.targetId }}.{{ inputEventProperty(event) }}</span>
-              <span class="px-1 font-bold text-indigo-500" aria-hidden="true">=</span>
+              <span class="px-1 font-bold board-text-info" aria-hidden="true">=</span>
               <span class="break-all font-mono font-semibold">{{ inputEventValue(event) }}</span>
             </li>
           </ul>
-          <p v-else class="mt-1 text-[10px] leading-4 text-indigo-800">
+          <p v-else class="mt-1 text-[length:var(--iot-font-min)] leading-4 board-text-info">
             {{ t('app.traceVisualization.noFuzzInputInThisStep') }}
           </p>
         </article>
 
         <div
           v-if="isInitialState"
-          class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] leading-4 text-slate-600"
+          class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[length:var(--iot-font-min)] leading-4 text-slate-600"
           data-testid="playback-change-initial-state"
         >
           {{ t('app.traceVisualization.playbackInitialStateNoPrevious') }}
@@ -369,7 +374,7 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
 
         <div
           v-else-if="!hasObservableChanges"
-          class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] leading-4 text-slate-600"
+          class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[length:var(--iot-font-min)] leading-4 text-slate-600"
           data-testid="playback-change-empty"
         >
           {{ t('app.traceVisualization.playbackNoObservableChanges') }}
@@ -377,7 +382,7 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
 
         <div
           v-if="kind === 'fuzzing' && !isInitialState"
-          class="pt-0.5 text-[10px] font-bold uppercase text-slate-500"
+          class="pt-0.5 text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500"
         >
           {{ t('app.traceVisualization.fuzzObservedModelChanges') }}
         </div>
@@ -389,11 +394,11 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
           :data-testid="`playback-change-device-${change.deviceId}`"
         >
           <div class="flex items-center justify-between gap-2">
-            <div class="flex min-w-0 items-center gap-1.5 text-[11px] font-bold text-indigo-950">
-              <span class="material-symbols-outlined text-sm text-indigo-600" aria-hidden="true">devices</span>
+            <div class="flex min-w-0 items-center gap-1.5 text-[11px] font-bold board-text-info">
+              <span class="material-symbols-outlined text-sm board-text-info" aria-hidden="true">devices</span>
               <span class="truncate">{{ change.deviceLabel || t('app.unknown') }}</span>
             </div>
-            <span class="shrink-0 text-[10px] font-semibold text-indigo-600">
+            <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold board-text-info">
               {{ change.details.length }} {{ t('app.traceVisualization.changeCountSuffix') }}
             </span>
           </div>
@@ -401,13 +406,13 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
             <li
               v-for="(detail, index) in change.details"
               :key="`${detail.kind}-${detail.name || ''}-${index}`"
-              class="grid grid-cols-[minmax(4.5rem,auto)_minmax(0,1fr)] items-baseline gap-2 text-[10px] leading-4"
+              class="grid grid-cols-[minmax(4.5rem,auto)_minmax(0,1fr)] items-baseline gap-2 text-[length:var(--iot-font-min)] leading-4"
             >
               <span class="truncate font-semibold text-slate-600" :title="detailLabel(detail, change.deviceId)">{{ detailLabel(detail, change.deviceId) }}</span>
               <span class="min-w-0 break-words font-mono text-slate-800">
                 <span class="text-slate-500">{{ formatValue(detail.previousValue, detail.kind, change.deviceId) }}</span>
-                <span class="px-1 font-sans font-bold text-indigo-500" aria-hidden="true">-&gt;</span>
-                <span class="font-semibold text-indigo-900">{{ formatValue(detail.currentValue, detail.kind, change.deviceId) }}</span>
+                <span class="px-1 font-sans font-bold board-text-info" aria-hidden="true">-&gt;</span>
+                <span class="font-semibold board-text-info">{{ formatValue(detail.currentValue, detail.kind, change.deviceId) }}</span>
               </span>
             </li>
           </ul>
@@ -418,12 +423,22 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
           class="playback-change-popover__environment rounded-lg border px-2.5 py-2"
           data-testid="playback-change-environment"
         >
+          <!--
+            Informational, matching the device-changes section above.
+
+            This carried the **warning** role while the device section beside it carries **info** — the same
+            popover, the same kind of fact, and no reason an environment value moving is more alarming than a
+            device state moving. During a replay both are the trace's *evidence*: a temperature climbing to 26
+            is what the counterexample exists to show, not a hazard to flag. Colouring half the evidence amber
+            made the trace's own content read as a warning about itself, and left the two halves of one panel
+            disagreeing about what they were.
+          -->
           <div class="flex items-center justify-between gap-2">
-            <div class="flex min-w-0 items-center gap-1.5 text-[11px] font-bold text-amber-950">
-              <span class="material-symbols-outlined text-sm text-amber-600" aria-hidden="true">terrain</span>
+            <div class="flex min-w-0 items-center gap-1.5 text-[11px] font-bold board-text-info">
+              <span class="material-symbols-outlined text-sm board-text-info" aria-hidden="true">terrain</span>
               <span>{{ t('app.traceVisualization.environmentChanges') }}</span>
             </div>
-            <span class="shrink-0 text-[10px] font-semibold text-amber-700">
+            <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold board-text-info">
               {{ environmentChanges.length }} {{ t('app.traceVisualization.changeCountSuffix') }}
             </span>
           </div>
@@ -431,13 +446,13 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
             <li
               v-for="change in environmentChanges"
               :key="change.name"
-              class="grid grid-cols-[minmax(4.5rem,auto)_minmax(0,1fr)] items-baseline gap-2 text-[10px] leading-4"
+              class="grid grid-cols-[minmax(4.5rem,auto)_minmax(0,1fr)] items-baseline gap-2 text-[length:var(--iot-font-min)] leading-4"
             >
               <span class="truncate font-semibold text-slate-600" :title="formatEnvironmentToken(change.name, change.name)">{{ formatEnvironmentToken(change.name, change.name) }}</span>
               <span class="min-w-0 break-words font-mono text-slate-800">
                 <span class="text-slate-500">{{ formatEnvironmentToken(change.name, change.previousValue) }}</span>
-                <span class="px-1 font-sans font-bold text-amber-500" aria-hidden="true">-&gt;</span>
-                <span class="font-semibold text-amber-900">{{ formatEnvironmentToken(change.name, change.currentValue) }}</span>
+                <span class="px-1 font-sans font-bold board-text-warning" aria-hidden="true">-&gt;</span>
+                <span class="font-semibold board-text-warning">{{ formatEnvironmentToken(change.name, change.currentValue) }}</span>
               </span>
             </li>
           </ul>
@@ -449,20 +464,20 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
           data-testid="playback-change-automation"
         >
           <div class="flex items-center gap-1.5 text-[11px] font-bold text-slate-800">
-            <span class="material-symbols-outlined text-sm text-emerald-600" aria-hidden="true">account_tree</span>
+            <span class="material-symbols-outlined text-sm board-text-success" aria-hidden="true">account_tree</span>
             <span>{{ t('app.traceVisualization.automationInThisStep') }}</span>
           </div>
           <div class="mt-1.5 flex flex-wrap gap-1">
             <span
               v-for="(rule, index) in triggeredRules"
               :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-              class="max-w-full truncate rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-800"
+              class="max-w-full truncate rounded-full board-surface-success px-2 py-1 text-[length:var(--iot-font-min)] font-semibold board-text-success"
               :title="ruleLabel(rule, index)"
             >
               {{ ruleLabel(rule, index) }}
             </span>
           </div>
-          <p class="mt-1.5 text-[10px] leading-4 text-slate-600">
+          <p class="mt-1.5 text-[length:var(--iot-font-min)] leading-4 text-slate-600">
             {{ animatedEdgeCount > 0
               ? t('app.traceVisualization.playbackAnimatedEdges', { count: animatedEdgeCount })
               : t('app.traceVisualization.playbackTriggeredRuleWithoutCurrentEdge') }}
@@ -471,10 +486,10 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
 
         <article
           v-if="compromisedAutomationLinks.length > 0"
-          class="rounded-lg border border-red-200 bg-red-50 px-2.5 py-2"
+          class="board-surface-danger rounded-lg px-2.5 py-2"
           data-testid="playback-change-compromised-links"
         >
-          <div class="flex items-center gap-1.5 text-[11px] font-bold text-red-800">
+          <div class="flex items-center gap-1.5 text-[11px] font-bold board-text-danger">
             <span class="material-symbols-outlined text-sm" aria-hidden="true">link_off</span>
             <span>{{ t('app.traceVisualization.compromisedAutomationLinks') }}</span>
           </div>
@@ -482,13 +497,13 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
             <span
               v-for="(rule, index) in compromisedAutomationLinks"
               :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-              class="max-w-full truncate rounded-full border border-red-200 bg-white px-2 py-1 text-[10px] font-semibold text-red-700"
+              class="max-w-full truncate rounded-full border board-border-subtle bg-white px-2 py-1 text-[length:var(--iot-font-min)] font-semibold board-text-danger"
               :title="ruleLabel(rule, index)"
             >
               {{ ruleLabel(rule, index) }}
             </span>
           </div>
-          <p class="mt-1.5 text-[10px] leading-4 text-red-700">
+          <p class="mt-1.5 text-[length:var(--iot-font-min)] leading-4 board-text-danger">
             {{ t('app.traceVisualization.playbackCompromisedEdgesStatic', { count: compromisedEdgeCount }) }}
           </p>
         </article>

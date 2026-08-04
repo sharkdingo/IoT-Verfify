@@ -1,10 +1,14 @@
 <!doctype html>
-<html lang="en">
+<!-- `lang` matches the app's default locale and is then kept in step by `syncDocumentLanguage` in
+     src/assets/i18n.ts. It read `en` while the app defaulted to zh-CN, so the document declared English
+     while rendering Chinese and a screen reader applied English pronunciation to every string. -->
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/IoT-Verify.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>iot-verify</title>
+    <!-- Matches the product name used everywhere else; "iot-verify" appeared only here. -->
+    <title>IoT-Verify</title>
 
   </head>
   <body>

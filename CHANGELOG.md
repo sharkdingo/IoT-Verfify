@@ -15,7 +15,180 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-01 (latest)
+### 2026-08-03 (latest)
+
+#### Added
+
+- **Every semantic role now has a fill half as well as a text half** (`--accent-fill`, `--danger-fill`,
+  `--warning-fill`, `--success-fill`, `--info-fill`, plus `--accent-fill-hover` and
+  `--accent-fill-disabled`). One token cannot be both the ink and the paper: each bare role is tuned to be
+  legible **as text on the page ground**, so the dark theme lightens it — and used as a **fill under white
+  ink** that inverts. Measured in dark theme: `--accent` **2.54:1**, `--warning` **1.44**, `--danger`
+  **1.90**, `--success` **1.52**, and `--accent-strong` **1.80** — the last of which is the *hover*, so
+  contrast fell as the user interacted with the control. Light theme passed throughout, because one dark blue
+  happens to serve both jobs there, which is why this went unnoticed. The base fill tokens are identical in every theme by
+  construction — a ground that does not flip means one ink is correct everywhere — and all of them, hover and
+  disabled states included, are solved for white ink at >= 4.5:1. The hover is the one value that must differ
+  by theme, because "darker" and "brighter" swap meaning with the ground.
+
+#### Changed
+
+- **The action dock now distinguishes a formal proof from candidate evidence from a view.** Four run-group
+  controls rendered byte-identical — same fill, weight, 124x44 box, radius and shadow — while returning
+  fundamentally different things. Verification (a NuSMV proof or counterexample) keeps the filled primary
+  treatment; Simulation (one concrete trace) and Explore (bounded candidate counterexamples) move to a tinted
+  bordered tier; Run History, which writes nothing, becomes a neutral view control. Colour still marks the
+  family, so no new hue was introduced. Each tooltip gained a second line naming what the run *returns*,
+  because a visual tier can express importance but not outcome — an independent review of the retiered dock
+  ranked the four correctly and still could not tell which one produces a proof. Rationale and the measured
+  before/after in [docs/guides/frontend-ui-conventions.md](docs/guides/frontend-ui-conventions.md) §4.
+- **The two demoted dock tiers now have a visible edge.** Their surfaces sit 1.10-1.22:1 against the panel
+  behind the dock, so the border alone is the control boundary — and it measured **1.48:1** against the
+  3:1 WCAG minimum, meaning the edge of the control was effectively invisible. Two independent design reviews
+  had both called the quietest control "too quiet"; measuring turned that from taste into a value. Lowering a
+  control's emphasis must not stop it reading as a control.
+
+#### Fixed
+- **`npm run test:unit` no longer crashes on a high-core machine.** Vitest defaults to one worker per logical
+  core, and each worker builds a full jsdom environment — the dominant cost in this suite. On a 28-core / 16 GB
+  machine that meant 28 concurrent environments and a hard `heap out of memory` crash rather than a slow run.
+  Capped at 6 workers in `vitest.config.ts`. Runtime is unchanged (~50s) because the suite was never CPU-bound,
+  and the crash was V8 failing to commit pages from the OS, so raising `--max-old-space-size` made it worse.
+  Three separate sessions had each worked around this with a different ad-hoc flag, meaning the documented
+  command did not work for anyone who had not already learned the trick.
+- **`vite.config.ts` reads `E2E_API_BASE_URL` for its `/api` proxy target.** Both `server` and `preview`
+  hardcoded `localhost:8080`, while the E2E specs already honoured that variable — so pointing a run at a
+  different backend silently half-worked: the direct API calls moved and the browser did not, leaving one run
+  talking to two servers. This is what made a full E2E pass impossible, since the suite needs ~67 registrations
+  against a default 60/hour rate limit and the remedy is a second backend with raised caps.
+
+- **Canvas node text no longer renders below the readable minimum.** Three declarations sized node text
+  as `clamp(<sub-floor>, N cqmin, <large ceiling>)`, but `cqmin` is a percentage of the node's own box
+  and a node is 110–137px, so the preferred term evaluated to 4.7–6.9px and could never beat the floor.
+  The floor was therefore the rendered size — a flat 9.28px on the runtime and provenance chips and 10px
+  on the state value, identical at desktop, tablet and mobile; reaching 11px would have needed roughly
+  215cqmin. All three now use `--iot-font-min`. The two node labels whose `cqmin` terms genuinely do win
+  on a resized node are unchanged, as is the `--canvas-zoom` counter-scaling label (measured 11px at
+  1.0× and 14.4px at 0.4×). The typography-floor check had exempted container-relative sizes on the
+  strength of an unverified comment claiming these rendered at 16px; that exemption is removed.
+- **A device node's provenance pill states its conclusion instead of a fragment of one.** The pill is
+  54px wide inside a 187px node, so "Shown sources trusted" was ellipsized to a few characters at any
+  font size. The pill now prints the category ("Trusted" / "Untrusted" / "Private"), while its `title`
+  and an `sr-only` span carry the full statement — the same split the node already uses for "no state
+  machine". Its width cap changed from `46cqmin` (63px, which still cut 28% off the short label) to
+  `min(100%, 7rem)`; measured unclipped in both locales at all three viewports.
+- **Every filled action now carries readable text in both themes.** 60 fills across 14 files moved to the new
+  fill tokens: 28 Tailwind accent fills, 18 role fills, 10 declared in CSS (the logout and account-delete
+  confirmations, the template-reset dialog, the error boundary, the public header, an Element Plus danger
+  button), and the six panel banners. The banners were the clearest case: they used `--accent`, which flips
+  lightness between themes, so black ink measured 4.06 in light and 8.26 in dark while white measured the
+  reverse — no single markup could be correct, and one panel title rendered at **1.44:1**. Pinning the ground
+  so it cannot flip made one ink right in both themes, and their 16 `text-black` declarations became white.
+  Two buttons that hovered white text onto a pale tint were fixed at the same time.
+- **A disabled control is no longer the least readable text on screen.** Fading a control with opacity fades
+  its label too: a filled primary button measured **2.42:1** while disabled, the exploration panel's
+  "Select all" **2.00**, and undo/redo — disabled on every fresh board, so the first state of those controls
+  anyone sees — **1.80**. Filled buttons now desaturate to a neutral fill (`board-action-disarmed`) and keep
+  their ink opaque; muted text simply stays muted. The other 69 opacity-faded controls were **measured, not
+  changed**: every one still clears the floor across 10 surface/theme combinations, so opacity is only a
+  problem where it multiplies a value already sitting near the minimum.
+- **All 24 controls below the 44px touch target were raised** (WCAG 2.2 SC 2.5.8): the six panel close buttons
+  at 32px — now one shared `board-panel-close` class giving a 24px glyph a 44px target through transparent
+  padding, so dismissal does not become the largest thing in the header — eleven rule-builder inputs, selects
+  and footer buttons at 40–42px, five recommendation-panel fields at 30–31px, a 34px device-name input, and
+  three generate buttons at 40px. The earlier "0 violations" measurement was accurate but taken on the board
+  shell, which never opens these panels.
+
+- **A progress spinner keeps turning under `prefers-reduced-motion: reduce`.** It shared an
+  `animation: none !important` list with the decorative halos, so reducing motion froze every spinner
+  mid-rotation — and a stopped spinner reads as **stalled**, not as "motion is disabled". NuSMV runs take real
+  seconds, so during a verification the spinner is the only signal that the run is still alive. It is now
+  slowed and stepped (`1s linear` becomes `2.4s steps(8)`, still infinite) rather than stopped; a 16px glyph
+  turning slowly is not the fast, large-area motion the preference exists to suppress. Decoration still stops.
+- **Light-theme body text no longer uses a 400-step neutral.** `text-slate-400` is 2.56:1 on white, and it
+  was set on 126 text elements across 9 files; they now use the 500 step, while `dark:text-slate-400` is kept
+  where the same value measures 5.71 on a dark card. Decorative icon glyphs beside their own explanatory text
+  were marked `aria-hidden` instead of recoloured, since a faint illustration is intended to be faint.
+  This was invisible for the whole audit because of a **measurement** bug rather than a reasoning one: the
+  browser probe could not parse `oklch()`, which is what Tailwind v4 emits, so every element using a modern
+  colour was counted "unmeasurable" while its surface still reported clean.
+
+#### Removed
+
+- **The panel-scoped hue remaps and five Tailwind utility overrides are gone with their callers**
+  (`styles/board.css`, 1,298 bytes). The 42 remap selectors rewrote raw palette utilities to
+  token-derived colours by class name, which is what kept the dark theme readable while components still
+  shipped light-theme hues; every component has since moved to the `board-*` role classes, so all of them
+  matched nothing. The five utility redefinitions (`.bg-green-200`, `.border-blue-100`,
+  `.border-green-200`, `.border-purple-100`, `.border-purple-200`) were worse than unused: each pinned a
+  light-theme hex and was **unscoped**, so any future use of those Tailwind class names anywhere in the
+  app would have silently received a hardcoded colour instead of the palette value. Confirmed 0 consumers
+  across every `.vue` file with no dynamic class construction before removal; `.text-primary`,
+  `.text-secondary`, `.bg-online` and `.bg-offline` share the block, are still in use, and stayed.
+
+### 2026-08-02
+
+#### Changed
+- **The automatic-fix dialog's primary action no longer sits behind a scroll.** `Try This Strategy`
+  and `Apply This Fix` were the last elements of the dialog's scrolling body, and the strategy detail
+  is routinely taller than the fold: at a 900px-tall viewport the body showed 601px of 912px and the
+  action ended 19px past the visible edge with the body never scrolled. Two independent reviews read
+  the half-drawn control as broken and blamed the footer, but the footer is a static flex sibling that
+  overlays nothing — the action was scrolled past, not covered. Both actions now live in the
+  non-scrolling footer on the convention the rule builder already sets (dismiss left, one primary
+  right); they are mutually exclusive, so exactly one shows. A single `applyBlockedReason` owns the
+  disabled state and the inline explanation it is linked to by `aria-describedby`.
+- **One scroll-region primitive replaces five disagreeing scrollbars.** Control Center, the device
+  dialog, and the inspector each declared `.custom-scrollbar` in their own `<style scoped>` with
+  different widths and thumb colours — and `<style scoped>` does not scope a `::-webkit-scrollbar`
+  pseudo-element away from its class name, so all three matched every such element app-wide and the
+  winner depended on stylesheet order rather than on which component rendered it. The rule builder
+  keyed a scrollbar skin to the Tailwind utility `.space-y-2`, so unrelated layout markup silently
+  carried it. `.iot-scroll-region` now owns all of them from the semantic token layer, and adds the
+  standard `scrollbar-width`/`scrollbar-color` the webkit-only rules had left Firefox without.
+
+#### Removed
+- **`verificationRechecked` is gone from the fix-apply response** (`FixApplyResultDto`, the
+  `apply_fix` AI tool payload, and `types/fix.ts`). Apply never repeats the strategy search, so the
+  field was hardcoded `false` and already documented as "always false", yet the client carried a
+  whole `=== true` branch: two success messages, four translations, and a validator clause that
+  accepted a shape the backend cannot send. `verificationEvidenceReused` is now the single evidence
+  basis, and the client rejects an apply response that does not confirm it. Docs updated in
+  [docs/api/verification.md](docs/api/verification.md) and
+  [docs/architecture/auto-fix.md](docs/architecture/auto-fix.md).
+
+#### Fixed
+- **A pinned parameter range is no longer discarded in silence.** Both paths that return before any
+  strategy runs — no localized fault rule, and an incomplete source model — ignored the caller's
+  preferred ranges while reporting `unusedPreferredRangeSelections` as empty, so a user who locked a
+  threshold to an exact value got no indication it was never applied. That is precisely the
+  silent-honour failure the field exists to prevent. All three paths now share one projection.
+- **An unattempted template comparison no longer asks the user to wait for one.** A fix result whose
+  source model was incomplete keeps `templateSnapshotComparison` at its `NOT_CHECKED` default, because
+  the comparison is skipped entirely on that path. The dialog rendered it with the `UNAVAILABLE` copy
+  — "cannot confirm whether device templates still match … until comparison succeeds" — advising a
+  retry that can never succeed, alongside the message already naming the real blocker. `NOT_CHECKED`
+  is now silent; `UNAVAILABLE`, where a comparison was genuinely attempted and failed, still reports.
+- **Unsupported fix strategy names are rejected, not skipped** — corrected in
+  [docs/architecture/auto-fix.md](docs/architecture/auto-fix.md), which described a `SKIPPED_UNSUPPORTED`
+  path that three separate validation layers make unreachable.
+- **A task that did not finish no longer reports 100% progress.** Across verification, simulation, and
+  counterexample exploration, nine of twelve terminal-transition queries hardcoded `progress = 100` —
+  including every cancellation and every worker-reported failure, not just the expired-lease sweep. A
+  run cancelled at 30% was observed publishing 100%, and an abandoned exploration task was observed
+  reporting `status: FAILED, progress: 100`. Only the three `completeTaskIfRunning` paths, which do
+  finish the work, still write 100; every other terminal path preserves the last progress the run
+  actually reported, and `status` carries the outcome. The four read-path mappers were narrowed in the
+  same change: they required 100 of every terminal status, so a sub-100 cancelled row made both
+  `GET /api/{verify,fuzz,simulate}/tasks/{id}` **and the whole task list** answer HTTP 500
+  (`PERSISTED_SEMANTIC_DATA_INVALID`). Only `COMPLETED` is now held to 100 on read. Affects every
+  consumer of the task DTOs, including the `/api/*/tasks` endpoints and the AI tools. The client
+  validator was aligned in the same change: it rejected any terminal task whose progress was not 100,
+  which would have turned a truthful failure response into a dropped inbox row. It now requires 100
+  only for `COMPLETED`, matching what `docs/api/fuzzing.md` and two other passages in
+  `docs/api/verification.md` already specified.
+
+### 2026-08-01
 
 #### Added
 - **CI now validates documentation cross-references.** A documentation-only push routes as inert and

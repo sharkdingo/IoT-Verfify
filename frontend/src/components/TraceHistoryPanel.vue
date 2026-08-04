@@ -84,6 +84,14 @@ const emit = defineEmits<{
   (e: 'dismiss-verification-task', id: number): void
   (e: 'dismiss-fuzzing-task', id: number): void
   (e: 'dismiss-simulation-task', id: number): void
+  /**
+   * Open the panel that owns launching this kind of run, so a failed job is not a dead end.
+   *
+   * Deliberately not a one-click "retry": the board may have changed since the run, so the settings
+   * must be re-validated against the current scene rather than silently re-submitted. The owning
+   * panel already holds the previous configuration for the session and re-checks eligibility.
+   */
+  (e: 'reopen-task-settings', kind: TaskKind): void
   (e: 'open-verification-run', id: number): void
   (e: 'delete-verification-run', run: VerificationRunSummary): void
   (e: 'view-verification-trace', id: number): void
@@ -169,10 +177,14 @@ const resultDeleteTestId = (kind: ResultSource, id: number) => {
   return `delete-${kind === 'fuzzing' ? 'fuzzing' : 'verification'}-run-${id}`
 }
 
+/**
+ * How much of an in-flight task's work is done. Only ever rendered for PENDING/RUNNING tasks, so a
+ * missing value means "not reported yet" and 0 is the honest fallback — never 100, which would claim
+ * completed work for a task that has not finished.
+ */
 const taskProgress = (task: TaskItem) => {
-  const fallback = isActiveStatus(task.status) ? 0 : 100
-  const numeric = typeof task.progress === 'number' ? task.progress : fallback
-  return Number.isFinite(numeric) ? Math.min(100, Math.max(0, Math.round(numeric))) : fallback
+  const numeric = typeof task.progress === 'number' ? task.progress : 0
+  return Number.isFinite(numeric) ? Math.min(100, Math.max(0, Math.round(numeric))) : 0
 }
 
 const formatStatus = (status?: string) => {
@@ -186,9 +198,9 @@ const formatStatus = (status?: string) => {
 }
 
 const statusClass = (status?: string) => {
-  if (status === 'FAILED') return 'border-red-200 bg-red-50 text-red-700'
+  if (status === 'FAILED') return 'board-surface-danger board-text-danger'
   if (status === 'CANCELLED') return 'border-slate-200 bg-slate-100 text-slate-600'
-  return 'border-blue-200 bg-blue-50 text-blue-700'
+  return 'board-border-subtle board-chip-info board-text-info'
 }
 
 const taskKindLabel = (kind: TaskKind) => {
@@ -321,53 +333,53 @@ const verificationOutcomeBadge = (run: AvailableVerificationRunSummary) => {
   if (run.outcome === 'VIOLATED') {
     return {
       label: t('app.verificationFailedWithViolations', { count: run.violatedSpecCount }),
-      className: 'border-red-200 bg-red-50 text-red-700'
+      className: 'board-surface-danger board-text-danger'
     }
   }
   if (run.outcome === 'SATISFIED' && run.modelComplete) {
     return {
       label: t('app.verificationPassed'),
-      className: 'border-green-200 bg-green-50 text-green-700'
+      className: 'board-surface-success board-text-success'
     }
   }
   if (run.outcome === 'SATISFIED') {
     return {
       label: t('app.verificationPassedWithGenerationWarnings'),
-      className: 'border-amber-200 bg-amber-50 text-amber-800'
+      className: 'board-surface-warning board-text-warning'
     }
   }
   return {
     label: t('app.verificationInconclusiveSummary'),
-    className: 'border-amber-200 bg-amber-50 text-amber-800'
+    className: 'board-surface-warning board-text-warning'
   }
 }
 
 const simulationOutcomeBadge = (run: AvailableSimulationTraceSummary) => run.modelComplete
   ? {
       label: t('app.allRulesModeled'),
-      className: 'border-blue-200 bg-blue-50 text-blue-700'
+      className: 'board-border-subtle board-chip-info board-text-info'
     }
   : {
       label: t('app.incompleteModel'),
-      className: 'border-amber-200 bg-amber-50 text-amber-800'
+      className: 'board-surface-warning board-text-warning'
     }
 
 const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
   if (run.outcome === 'FOUND_VIOLATION') {
     return {
       label: t('app.fuzzViolationFound'),
-      className: 'border-red-200 bg-red-50 text-red-700'
+      className: 'board-surface-danger board-text-danger'
     }
   }
   if (run.outcome === 'BUDGET_EXHAUSTED') {
     return {
       label: t('app.fuzzBudgetExhausted'),
-      className: 'border-sky-200 bg-sky-50 text-sky-800'
+      className: 'board-border-subtle board-chip-info board-text-info'
     }
   }
   return {
     label: t('app.fuzzInconclusive'),
-    className: 'border-amber-200 bg-amber-50 text-amber-800'
+    className: 'board-surface-warning board-text-warning'
   }
 }
 </script>
@@ -383,7 +395,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
   >
     <div class="flex shrink-0 items-center justify-between bg-slate-800 p-4">
       <div class="flex min-w-0 items-center gap-3">
-        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cyan-600 shadow-lg">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[color:var(--accent-fill)] shadow-lg">
           <span class="material-symbols-outlined text-xl text-white">history</span>
         </div>
         <div class="min-w-0">
@@ -395,7 +407,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
         ref="closeButtonRef"
         type="button"
         data-testid="close-history-panel"
-        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white/75 transition-colors hover:bg-white/10 hover:text-white"
+        class="board-card flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white/75 transition-colors hover:/10 hover:text-white"
         :title="t('app.close')"
         :aria-label="t('app.close')"
         @click="emit('close')"
@@ -410,13 +422,13 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
           type="button"
           data-testid="history-layer-tasks"
           class="flex min-h-11 items-center justify-center gap-1 rounded-md px-3 py-2 text-xs font-bold transition-colors"
-          :class="activeLayer === 'tasks' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'"
+          :class="activeLayer === 'tasks' ? 'bg-white board-text-info shadow-sm' : 'text-slate-600 hover:text-slate-800'"
           :aria-pressed="activeLayer === 'tasks'"
           @click="emit('update:activeLayer', 'tasks')"
         >
           <span class="material-symbols-outlined text-sm" aria-hidden="true">pending_actions</span>
           {{ t('app.taskStatusLayer') }}
-          <span v-if="activeTasks.length" class="rounded-full bg-cyan-100 px-1.5 text-[10px] text-cyan-800">
+          <span v-if="activeTasks.length" class="rounded-full board-chip-info px-1.5 text-[length:var(--iot-font-min)] board-text-info">
             {{ activeTasks.length }}
           </span>
         </button>
@@ -424,7 +436,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
           type="button"
           data-testid="history-layer-results"
           class="flex min-h-11 items-center justify-center gap-1 rounded-md px-3 py-2 text-xs font-bold transition-colors"
-          :class="activeLayer === 'results' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'"
+          :class="activeLayer === 'results' ? 'bg-white board-text-info shadow-sm' : 'text-slate-600 hover:text-slate-800'"
           :aria-pressed="activeLayer === 'results'"
           @click="emit('update:activeLayer', 'results')"
         >
@@ -434,10 +446,10 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
       </div>
     </div>
 
-    <div class="board-panel-body min-h-0 flex-1 overflow-y-auto p-3">
+    <div class="iot-scroll-region board-panel-body min-h-0 flex-1 p-3">
       <div
         v-if="actionLocked"
-        class="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+        class="mb-3 flex items-start gap-2 rounded-lg board-surface-warning px-3 py-2 text-xs board-text-warning"
       >
         <span class="material-symbols-outlined text-sm">lock</span>
         <span>{{ t('app.historyActionsLockedHint') }}</span>
@@ -450,7 +462,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
           </span>
           <button
             type="button"
-            class="flex min-h-11 items-center gap-1 px-2 text-xs font-medium text-cyan-700 hover:text-cyan-800"
+            class="flex min-h-11 items-center gap-1 px-2 text-xs font-medium board-text-info hover:"
             :disabled="loadingTasks"
             @click="emit('refresh-tasks')"
           >
@@ -460,16 +472,16 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
         </div>
 
         <div v-if="loadingTasks" class="flex flex-col items-center justify-center py-10 text-slate-500">
-          <span class="material-symbols-outlined animate-spin text-4xl text-cyan-600">sync</span>
+          <span class="material-symbols-outlined animate-spin text-4xl board-text-progress">sync</span>
           <p class="mt-3 text-sm">{{ t('app.loadingTasks') }}</p>
         </div>
 
         <div v-else-if="taskItems.length === 0" class="flex flex-col items-center justify-center py-10 text-center">
           <div class="board-muted-surface mb-3 flex h-14 w-14 items-center justify-center rounded-full">
-            <span class="material-symbols-outlined text-3xl text-slate-300">task_alt</span>
+            <span class="material-symbols-outlined text-3xl text-slate-500">task_alt</span>
           </div>
           <p class="text-sm font-medium text-slate-600">{{ t('app.noPendingTasks') }}</p>
-          <p class="mt-1 px-4 text-xs text-slate-400">{{ t('app.noPendingTasksHint') }}</p>
+          <p class="mt-1 px-4 text-xs text-slate-500">{{ t('app.noPendingTasksHint') }}</p>
         </div>
 
         <template v-else>
@@ -483,7 +495,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-xs font-bold text-cyan-700">{{ taskKindLabel(task.kind) }}</span>
+                    <span class="text-xs font-bold board-text-info">{{ taskKindLabel(task.kind) }}</span>
                     <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
                       {{ formatStatus(task.status) }}
                     </span>
@@ -491,7 +503,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     <span
                       v-if="task.kind === 'fuzzing'"
                       :data-testid="`fuzzing-task-mode-${task.id}`"
-                      class="max-w-full rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-800"
+                      class="max-w-full rounded-full board-surface-info px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold board-text-info"
                       :title="fuzzingModeDescription(task.explorationMode)"
                     >
                       {{ fuzzingModeLabel(task.explorationMode) }}
@@ -505,7 +517,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     aria-valuemax="100"
                     :aria-valuenow="taskProgress(task)"
                   >
-                    <div class="h-full rounded-full bg-cyan-600 transition-all" :style="{ width: `${taskProgress(task)}%` }"></div>
+                    <div class="h-full rounded-full bg-[color:var(--accent)] transition-all" :style="{ width: `${taskProgress(task)}%` }"></div>
                   </div>
                   <div class="mt-1 flex justify-between text-[11px] text-slate-500">
                     <span>{{ taskProgress(task) }}%</span>
@@ -515,14 +527,14 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 <div class="flex shrink-0 flex-col gap-1">
                   <button
                     type="button"
-                    class="min-h-11 rounded bg-cyan-600 px-2 py-1 text-xs font-medium text-white hover:bg-cyan-700"
+                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white"
                     @click="emitWatchTask(task)"
                   >
                     {{ t('app.watchTask') }}
                   </button>
                   <button
                     type="button"
-                    class="inline-flex min-h-11 items-center justify-center gap-1 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-wait disabled:opacity-60"
+                    class="inline-flex min-h-11 items-center justify-center gap-1 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:board-chip-danger hover:board-text-danger disabled:cursor-wait disabled:opacity-60"
                     :disabled="taskActionPending('cancel', task)"
                     :aria-busy="taskActionPending('cancel', task)"
                     @click="emitCancelTask(task)"
@@ -549,7 +561,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-xs font-bold text-cyan-700">{{ taskKindLabel(task.kind) }}</span>
+                    <span class="text-xs font-bold board-text-info">{{ taskKindLabel(task.kind) }}</span>
                     <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
                       {{ formatStatus(task.status) }}
                     </span>
@@ -557,7 +569,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     <span
                       v-if="task.kind === 'fuzzing'"
                       :data-testid="`fuzzing-task-mode-${task.id}`"
-                      class="max-w-full rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-800"
+                      class="max-w-full rounded-full board-surface-info px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold board-text-info"
                       :title="fuzzingModeDescription(task.explorationMode)"
                     >
                       {{ fuzzingModeLabel(task.explorationMode) }}
@@ -566,26 +578,48 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <p class="mt-2 text-xs leading-5 text-slate-600">
                     {{ task.status === 'CANCELLED' ? t('app.cancelledTaskNoResult') : t('app.failedTaskNoResult') }}
                   </p>
-                  <details v-if="task.errorMessage" class="mt-2 text-[11px] text-slate-500">
-                    <summary class="flex min-h-11 cursor-pointer items-center font-semibold">{{ t('app.technicalDetails') }}</summary>
-                    <code class="mt-1 block whitespace-pre-wrap break-words rounded bg-slate-950 px-2 py-1.5 text-slate-100">{{ task.errorMessage }}</code>
-                  </details>
-                  <div class="mt-1 text-[11px] text-slate-400">{{ formatDate(task.completedAt || task.createdAt) }}</div>
+                  <!-- The reported cause is shown, not hidden behind a disclosure. A failure whose
+                       only visible text is "it produced no result" tells the user nothing they can
+                       act on, and two independent reviews of a real failed run reported exactly
+                       that: "the failure cause is missing". The raw text stays a technical
+                       diagnostic, so it is labelled as one rather than presented as guidance. -->
+                  <div
+                    v-if="task.errorMessage"
+                    :data-testid="`task-failure-reason-${task.kind}-${task.id}`"
+                    class="mt-2 rounded board-surface-danger board-text-danger px-2 py-1.5 text-[11px] leading-5"
+                  >
+                    <span class="font-semibold">{{ t('app.technicalDetails') }}:</span>
+                    <span class="ml-1 break-words">{{ task.errorMessage }}</span>
+                  </div>
+                  <div class="mt-1 text-[11px] text-slate-500">{{ formatDate(task.completedAt || task.createdAt) }}</div>
                 </div>
-                <button
-                  type="button"
-                  class="inline-flex min-h-11 shrink-0 items-center justify-center gap-1 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:cursor-wait disabled:opacity-60"
-                  :disabled="taskActionPending('dismiss', task)"
-                  :aria-busy="taskActionPending('dismiss', task)"
-                  @click="emitDismissTask(task)"
-                >
-                  <span
-                    v-if="taskActionPending('dismiss', task)"
-                    class="material-symbols-outlined animate-spin text-sm"
-                    aria-hidden="true"
-                  >sync</span>
-                  {{ t('app.dismissTask') }}
-                </button>
+                <div class="flex shrink-0 flex-col items-stretch gap-1">
+                  <!-- A failed run needs a way forward, not just a way to hide it. This opens the
+                       panel that owns launching the run so the settings can be checked against the
+                       current board first; it is not a blind re-submit of stale parameters. -->
+                  <button
+                    type="button"
+                    :data-testid="`reopen-task-settings-${task.kind}-${task.id}`"
+                    class="inline-flex min-h-11 items-center justify-center gap-1 rounded board-panel-submit px-2 py-1 text-xs font-medium"
+                    @click="emit('reopen-task-settings', task.kind)"
+                  >
+                    {{ t('app.adjustAndRunAgain') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="inline-flex min-h-11 items-center justify-center gap-1 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:cursor-wait disabled:opacity-60"
+                    :disabled="taskActionPending('dismiss', task)"
+                    :aria-busy="taskActionPending('dismiss', task)"
+                    @click="emitDismissTask(task)"
+                  >
+                    <span
+                      v-if="taskActionPending('dismiss', task)"
+                      class="material-symbols-outlined animate-spin text-sm"
+                      aria-hidden="true"
+                    >sync</span>
+                    {{ t('app.dismissTask') }}
+                  </button>
+                </div>
               </div>
             </div>
           </section>
@@ -601,7 +635,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               type="button"
               :data-testid="`history-result-filter-${filter}`"
               class="min-h-11 rounded-md px-2 py-1.5 text-[11px] font-bold transition-colors"
-              :class="resultFilter === filter ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              :class="resultFilter === filter ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
               :aria-pressed="resultFilter === filter"
               @click="emit('update:resultFilter', filter)"
             >
@@ -614,7 +648,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
           </div>
           <button
             type="button"
-            class="flex min-h-11 shrink-0 items-center gap-1 px-2 text-xs font-medium text-cyan-700 hover:text-cyan-800"
+            class="flex min-h-11 shrink-0 items-center gap-1 px-2 text-xs font-medium board-text-info hover:"
             :disabled="loadingResults"
             @click="emit('refresh-results')"
           >
@@ -624,18 +658,18 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
         </div>
 
         <div v-if="loadingResults" class="flex flex-col items-center justify-center py-10 text-slate-500">
-          <span class="material-symbols-outlined animate-spin text-4xl text-cyan-600">sync</span>
+          <span class="material-symbols-outlined animate-spin text-4xl board-text-progress">sync</span>
           <p class="mt-3 text-sm">{{ t('app.loadingRunResults') }}</p>
         </div>
 
         <div
           v-if="!loadingResults && resultErrorEntries.length > 0"
           data-testid="history-results-load-error"
-          class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-950"
+          class="rounded-lg board-surface-warning px-3 py-2.5 text-xs leading-5 board-text-warning"
           role="alert"
         >
           <div class="flex items-start gap-2">
-            <span class="material-symbols-outlined mt-0.5 text-base text-amber-700" aria-hidden="true">warning</span>
+            <span class="material-symbols-outlined mt-0.5 text-base board-text-warning" aria-hidden="true">warning</span>
             <div class="min-w-0 flex-1">
               <p class="font-bold">{{ t('app.historyResultsPartialFailure') }}</p>
               <ul class="mt-1 list-disc space-y-0.5 pl-4">
@@ -645,7 +679,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               </ul>
               <button
                 type="button"
-                class="mt-2 inline-flex min-h-11 items-center gap-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                class="mt-2 inline-flex min-h-11 items-center gap-1 rounded-md border board-border-subtle bg-white px-2 py-1 text-[11px] font-semibold board-text-warning hover:board-chip-warning disabled:opacity-50"
                 :disabled="loadingResults"
                 @click="emit('refresh-results')"
               >
@@ -658,22 +692,27 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
 
         <div v-if="!loadingResults && resultErrorEntries.length === 0 && resultItems.length === 0" class="flex flex-col items-center justify-center py-10 text-center">
           <div class="board-muted-surface mb-3 flex h-14 w-14 items-center justify-center rounded-full">
-            <span class="material-symbols-outlined text-3xl text-slate-300">fact_check</span>
+            <!-- Decoration: the two lines below carry the whole message, so this glyph adds no information a
+                 screen reader needs and SC 1.4.3 does not apply to it. It measured 1.42:1 without the
+                 attribute, which read as a contrast defect on an illustration that is meant to be faint. -->
+            <span class="material-symbols-outlined text-3xl text-slate-300" aria-hidden="true">fact_check</span>
           </div>
           <p class="text-sm font-medium text-slate-600">{{ t('app.noRunResults') }}</p>
-          <p class="mt-1 px-4 text-xs text-slate-400">{{ t('app.noRunResultsHint') }}</p>
+          <!-- slate-500, not slate-400: this hint is real text explaining an empty state, and slate-400 is
+               2.56:1 on white. slate-500 is 4.76 and reads as the same de-emphasised step. -->
+          <p class="mt-1 px-4 text-xs text-slate-500">{{ t('app.noRunResultsHint') }}</p>
         </div>
 
         <div v-if="!loadingResults && resultItems.length > 0" class="space-y-3">
           <article
             v-for="item in resultItems"
             :key="`${item.kind}-${item.run.id}`"
-            class="board-card-surface rounded-lg border p-3 shadow-sm transition-colors hover:border-cyan-200"
+            class="board-card-surface rounded-lg border p-3 shadow-sm transition-colors hover:border-[color:var(--accent)]"
           >
             <template v-if="item.run.dataAvailable === false">
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2 text-amber-800">
+                  <div class="flex items-center gap-2 board-text-warning">
                     <span class="material-symbols-outlined text-base" aria-hidden="true">warning</span>
                     <span class="text-xs font-bold">{{ t('app.historyItemUnavailable') }}</span>
                     <RunInitiatorBadge :initiator="item.run.initiator" />
@@ -681,14 +720,14 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <p class="mt-1 text-[11px] leading-4 text-slate-600">
                     {{ t('app.historyItemUnavailableDetail') }}
                   </p>
-                  <p class="mt-1 text-[11px] text-slate-400">
+                  <p class="mt-1 text-[11px] text-slate-500">
                     {{ formatDate(item.kind === 'simulation' ? item.run.createdAt : (item.run.completedAt || item.run.createdAt)) }}
                   </p>
                 </div>
                 <button
                   type="button"
                   :data-testid="resultDeleteTestId(item.kind, item.run.id)"
-                  class="min-h-11 shrink-0 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
+                  class="min-h-11 shrink-0 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:board-chip-danger hover:board-text-danger disabled:opacity-50"
                   :disabled="actionLocked || isResultDeletePending(item.kind, item.run.id)"
                   :aria-busy="isResultDeletePending(item.kind, item.run.id)"
                   @click="emitDeleteResult(item)"
@@ -702,9 +741,9 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-xs font-bold text-cyan-700">{{ t('app.verificationRunResult') }}</span>
+                    <span class="text-xs font-bold board-text-info">{{ t('app.verificationRunResult') }}</span>
                     <span
-                      class="inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                      class="inline-flex min-w-0 max-w-full items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
                       :class="verificationOutcomeBadge(item.run).className"
                       :title="verificationOutcomeBadge(item.run).label"
                     >
@@ -728,7 +767,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     <li
                       v-for="assumption in runAssumptions(item.run)"
                       :key="assumption"
-                      class="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] text-slate-600 dark:border-slate-600 dark:text-slate-300"
+                      class="rounded border border-slate-300 px-1.5 py-0.5 text-[length:var(--iot-font-min)] text-slate-600 dark:border-slate-600 dark:text-slate-300"
                     >{{ assumption }}</li>
                   </ul>
                   <!-- A run reopened from history has no client submission to compare against, so its
@@ -740,17 +779,17 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     v-if="item.run.counterexamples.length"
                     :id="`historical-fix-caveat-${item.run.id}`"
                     :data-testid="`historical-fix-caveat-${item.run.id}`"
-                    class="mt-1 text-[10px] text-amber-700"
+                    class="mt-1 text-[length:var(--iot-font-min)] board-text-warning"
                   >
                     {{ t('app.historicalFixMayFailIfBoardChanged') }}
                   </p>
-                  <p class="mt-1 text-[11px] text-slate-400">{{ formatDate(item.run.completedAt) }}</p>
+                  <p class="mt-1 text-[11px] text-slate-500">{{ formatDate(item.run.completedAt) }}</p>
                 </div>
                 <div class="flex shrink-0 flex-wrap justify-end gap-1">
                   <button
                     type="button"
                     :data-testid="`open-verification-run-${item.run.id}`"
-                    class="min-h-11 rounded bg-cyan-600 px-2 py-1 text-xs font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white disabled:cursor-not-allowed board-action-disarmed"
                     :disabled="actionLocked"
                     @click="emit('open-verification-run', item.run.id)"
                   >
@@ -759,7 +798,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <button
                     type="button"
                     :data-testid="`delete-verification-run-${item.run.id}`"
-                    class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:board-chip-danger hover:board-text-danger disabled:cursor-not-allowed disabled:opacity-50"
                     :disabled="actionLocked || isResultDeletePending('verification', item.run.id)"
                     :aria-busy="isResultDeletePending('verification', item.run.id)"
                     @click="emit('delete-verification-run', item.run)"
@@ -771,7 +810,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
 
               <p
                 v-if="runScopeHasBoardDrift(item.run, true)"
-                class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900"
+                class="mt-2 rounded-md board-surface-warning px-2 py-1.5 text-[11px] font-semibold leading-4 board-text-warning"
                 data-testid="verification-history-board-drift"
               >
                 {{ t('app.historicalRunBoardScopeChanged') }}
@@ -781,7 +820,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 <li
                   v-for="(issue, index) in generationIssuesFor(item.run)"
                   :key="`${issue.itemLabel}-${index}`"
-                  class="border-l-2 border-amber-300 pl-2 text-[11px] leading-4 text-amber-800"
+                  class="border-l-2 board-border-subtle pl-2 text-[11px] leading-4 board-text-warning"
                 >
                   <span class="font-semibold">{{ issue.itemLabel || t('app.unknownModelItem') }}</span>
                   <span>: {{ t(generationIssueReasonKey(issue)) }}</span>
@@ -792,13 +831,13 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 v-if="tracesForRun(item.run).length"
                 class="mt-3 rounded-lg border p-2.5"
                 :class="item.run.outcome === 'VIOLATED'
-                  ? 'border-red-100 bg-red-50/60'
-                  : 'border-amber-200 bg-amber-50/60'"
+                  ? 'board-surface-danger'
+                  : 'board-surface-warning'"
               >
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <span
                     class="text-xs font-semibold"
-                    :class="item.run.outcome === 'VIOLATED' ? 'text-red-800' : 'text-amber-900'"
+                    :class="item.run.outcome === 'VIOLATED' ? 'board-text-danger' : 'board-text-warning'"
                   >
                     {{ item.run.outcome === 'VIOLATED'
                       ? t('app.violationEvidenceSummary', {
@@ -813,7 +852,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 <p
                   v-if="item.run.outcome === 'VIOLATED'
                     && item.run.counterexampleCount < item.run.violatedSpecCount"
-                  class="mt-1 text-[11px] leading-4 text-amber-800"
+                  class="mt-1 text-[11px] leading-4 board-text-warning"
                 >
                   {{ t('app.someViolationsHaveNoReplayableCounterexample') }}
                 </p>
@@ -821,16 +860,16 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <div
                     v-for="trace in tracesForRun(item.run)"
                     :key="trace.id"
-                    class="flex items-center justify-between gap-2 rounded-md border border-red-100 bg-white px-2 py-1.5"
+                    class="flex items-center justify-between gap-2 rounded-md border board-border-subtle bg-white px-2 py-1.5"
                   >
                     <div class="min-w-0">
                       <p class="truncate text-[11px] font-medium text-slate-700" :title="traceSpecTitle(trace)">
                         {{ traceSpecTitle(trace) }}
                       </p>
-                      <p v-if="trace.dataAvailable" class="text-[10px] text-slate-400">
+                      <p v-if="trace.dataAvailable" class="text-[length:var(--iot-font-min)] text-slate-500">
                         {{ t('app.statesCount', { count: trace.stateCount || 0 }) }}
                       </p>
-                      <p v-else class="text-[10px] font-medium text-amber-700">
+                      <p v-else class="text-[length:var(--iot-font-min)] font-medium board-text-warning">
                         {{ t('app.historyTraceUnavailableDetail') }}
                       </p>
                     </div>
@@ -838,7 +877,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       <button
                         type="button"
                         :data-testid="`view-verification-trace-${trace.id}`"
-                        class="min-h-11 rounded bg-cyan-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-cyan-700 disabled:opacity-50"
+                        class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-[11px] font-medium text-white board-action-disarmed"
                         :disabled="actionLocked || !trace.dataAvailable"
                         @click="emit('view-verification-trace', trace.id)"
                       >
@@ -847,12 +886,12 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       <button
                         type="button"
                         :data-testid="`fix-verification-trace-${trace.id}`"
-                        class="min-h-11 rounded bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-200 disabled:opacity-50"
+                        class="min-h-11 rounded board-chip-warning px-2 py-1 text-[11px] font-medium board-text-warning hover:bg-[color:var(--warning-surface)] disabled:opacity-50"
                         :disabled="actionLocked || !trace.dataAvailable"
                         :aria-describedby="trace.dataAvailable ? `historical-fix-caveat-${item.run.id}` : undefined"
                         @click="emit('fix-verification-trace', trace)"
                       >
-                        {{ t('app.fix') }}
+                        {{ t('app.fixRules') }}
                       </button>
                     </div>
                   </div>
@@ -864,16 +903,16 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-xs font-bold text-indigo-700">{{ t('app.fuzzRunResult') }}</span>
+                    <span class="text-xs font-bold board-text-info">{{ t('app.fuzzRunResult') }}</span>
                     <span
-                      class="inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                      class="inline-flex min-w-0 max-w-full items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
                       :class="fuzzingOutcomeBadge(item.run).className"
                     >
                       <span class="truncate">{{ fuzzingOutcomeBadge(item.run).label }}</span>
                     </span>
                     <span
                       :data-testid="`fuzzing-history-mode-${item.run.id}`"
-                      class="max-w-full rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-800"
+                      class="max-w-full rounded-full board-surface-info px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold board-text-info"
                       :title="fuzzingModeDescription(item.run.explorationMode)"
                     >
                       {{ fuzzingModeLabel(item.run.explorationMode) }}
@@ -894,13 +933,13 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       specs: item.run.modelSnapshot.specificationCount
                     }) }}
                   </p>
-                  <p class="mt-1 text-[11px] text-slate-400">{{ formatDate(item.run.completedAt || item.run.createdAt) }}</p>
+                  <p class="mt-1 text-[11px] text-slate-500">{{ formatDate(item.run.completedAt || item.run.createdAt) }}</p>
                 </div>
                 <div class="flex shrink-0 flex-wrap justify-end gap-1">
                   <button
                     type="button"
                     :data-testid="`open-fuzzing-run-${item.run.id}`"
-                    class="min-h-11 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white hover:bg-[color:var(--accent-fill-hover)] disabled:cursor-not-allowed board-action-disarmed"
                     :disabled="actionLocked"
                     @click="emit('open-fuzzing-run', item.run.id)"
                   >
@@ -909,7 +948,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <button
                     type="button"
                     :data-testid="`delete-fuzzing-run-${item.run.id}`"
-                    class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:board-chip-danger hover:board-text-danger disabled:cursor-not-allowed disabled:opacity-50"
                     :disabled="actionLocked || isResultDeletePending('fuzzing', item.run.id)"
                     :aria-busy="isResultDeletePending('fuzzing', item.run.id)"
                     @click="emit('delete-fuzzing-run', item.run)"
@@ -921,7 +960,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
 
               <p
                 v-if="fuzzRunHasBoardDrift(item.run)"
-                class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900"
+                class="mt-2 rounded-md board-surface-warning px-2 py-1.5 text-[11px] font-semibold leading-4 board-text-warning"
                 data-testid="fuzzing-history-board-drift"
               >
                 {{ t('app.fuzzBoardScopeChanged') }}
@@ -929,32 +968,32 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
 
               <p
                 v-if="item.run.outcome === 'BUDGET_EXHAUSTED'"
-                class="mt-2 rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-[11px] leading-4 text-sky-900"
+                class="mt-2 rounded-md border board-border-subtle board-chip-info px-2 py-1.5 text-[11px] leading-4 board-text-info"
               >
                 {{ t('app.fuzzNoViolationWithinBudget') }}
               </p>
 
               <div
                 v-if="item.run.outcome === 'FOUND_VIOLATION' && item.run.findings?.length"
-                class="mt-3 rounded-lg border border-red-100 bg-red-50/60 p-2.5"
+                class="mt-3 rounded-lg border board-surface-danger p-2.5"
               >
-                <div class="text-xs font-semibold text-red-800">
+                <div class="text-xs font-semibold board-text-danger">
                   {{ t('app.fuzzFindingsCount', { count: item.run.findings.length }) }}
                 </div>
                 <div class="mt-2 space-y-1.5">
                   <div
                     v-for="finding in item.run.findings"
                     :key="finding.id"
-                    class="flex items-center justify-between gap-2 rounded-md border border-red-100 bg-white px-2 py-1.5"
+                    class="flex items-center justify-between gap-2 rounded-md border board-border-subtle bg-white px-2 py-1.5"
                   >
                     <div class="min-w-0">
                       <p class="truncate text-[11px] font-medium text-slate-700" :title="fuzzFindingTitle(finding)">
                         {{ fuzzFindingTitle(finding) }}
                       </p>
-                      <p v-if="finding.dataAvailable !== false" class="text-[10px] text-slate-400">
+                      <p v-if="finding.dataAvailable !== false" class="text-[length:var(--iot-font-min)] text-slate-500">
                         {{ t('app.fuzzFirstViolationStep', { step: displayStep(finding.firstViolationStep) }) }}
                       </p>
-                      <p v-else class="text-[10px] font-medium text-amber-700">
+                      <p v-else class="text-[length:var(--iot-font-min)] font-medium board-text-warning">
                         {{ t('app.historyFindingUnavailableDetail') }}
                       </p>
                     </div>
@@ -962,7 +1001,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       <button
                         type="button"
                         :data-testid="`view-fuzzing-finding-${finding.id}`"
-                        class="min-h-11 rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                        class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-[11px] font-medium text-white hover:bg-[color:var(--accent-fill-hover)] board-action-disarmed"
                         :disabled="actionLocked || finding.dataAvailable === false"
                         @click="emit('view-fuzzing-finding', finding.id, item.run.id)"
                       >
@@ -971,7 +1010,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       <button
                         type="button"
                         :data-testid="`verify-fuzzing-finding-${finding.id}`"
-                        class="min-h-11 rounded bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-200 disabled:opacity-50"
+                        class="min-h-11 rounded board-chip-success px-2 py-1 text-[11px] font-medium board-text-success hover:bg-[color:var(--success-surface)] disabled:opacity-50"
                         :disabled="actionLocked || finding.dataAvailable === false"
                         @click="emit('verify-fuzzing-finding', finding)"
                       >
@@ -987,9 +1026,9 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-xs font-bold text-cyan-700">{{ t('app.simulationRunResult') }}</span>
+                    <span class="text-xs font-bold board-text-info">{{ t('app.simulationRunResult') }}</span>
                     <span
-                      class="inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                      class="inline-flex min-w-0 max-w-full items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
                       :class="simulationOutcomeBadge(item.run).className"
                     >
                       <span class="truncate">{{ simulationOutcomeBadge(item.run).label }}</span>
@@ -1003,13 +1042,13 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       states: item.run.steps + 1
                     }) }}
                   </p>
-                  <p class="mt-1 text-[11px] text-slate-400">{{ formatDate(item.run.createdAt) }}</p>
+                  <p class="mt-1 text-[11px] text-slate-500">{{ formatDate(item.run.createdAt) }}</p>
                 </div>
                 <div class="flex shrink-0 flex-wrap justify-end gap-1">
                   <button
                     type="button"
                     :data-testid="`replay-simulation-trace-${item.run.id}`"
-                    class="min-h-11 rounded bg-cyan-600 px-2 py-1 text-xs font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white disabled:cursor-not-allowed board-action-disarmed"
                     :disabled="actionLocked"
                     @click="emit('view-simulation-run', item.run.id)"
                   >
@@ -1018,7 +1057,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <button
                     type="button"
                     :data-testid="`delete-simulation-trace-${item.run.id}`"
-                    class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="min-h-11 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:board-chip-danger hover:board-text-danger disabled:cursor-not-allowed disabled:opacity-50"
                     :disabled="actionLocked || isResultDeletePending('simulation', item.run.id)"
                     :aria-busy="isResultDeletePending('simulation', item.run.id)"
                     @click="emit('delete-simulation-run', item.run)"
@@ -1029,7 +1068,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               </div>
               <p
                 v-if="runScopeHasBoardDrift(item.run, false)"
-                class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900"
+                class="mt-2 rounded-md board-surface-warning px-2 py-1.5 text-[11px] font-semibold leading-4 board-text-warning"
                 data-testid="simulation-history-board-drift"
               >
                 {{ t('app.historicalRunBoardScopeChanged') }}
@@ -1038,7 +1077,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 <li
                   v-for="(issue, index) in generationIssuesFor(item.run)"
                   :key="`${issue.itemLabel}-${index}`"
-                  class="border-l-2 border-amber-300 pl-2 text-[11px] leading-4 text-amber-800"
+                  class="border-l-2 board-border-subtle pl-2 text-[11px] leading-4 board-text-warning"
                 >
                   <span class="font-semibold">{{ issue.itemLabel || t('app.unknownModelItem') }}</span>
                   <span>: {{ t(generationIssueReasonKey(issue)) }}</span>
@@ -1051,7 +1090,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
             v-if="resultFilter === 'fuzzing' && hasMoreFuzzingRuns"
             type="button"
             data-testid="load-more-fuzzing-runs"
-            class="flex min-h-11 w-full items-center justify-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-cyan-700 hover:border-cyan-200 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex min-h-11 w-full items-center justify-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold board-text-info hover:border-[color:var(--accent)] hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="actionLocked || loadingMoreFuzzingRuns"
             @click="emit('load-more-fuzzing-runs')"
           >

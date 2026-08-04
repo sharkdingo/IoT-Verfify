@@ -210,3 +210,110 @@ groups were painted identically, so the grouping was invisible.
 
 `views/board/actionDockHierarchy.spec.ts` pins this, including that run actions must *stay* primary:
 demoting everything is the same failure as emphasising everything.
+
+### Three tiers, because the product has three kinds of action
+
+The first pass of this rule separated *run actions* from *AI suggestions* and stopped there, which left a
+second flattening inside the run group. Measured on a loaded board, four controls rendered
+**byte-identical** — `rgb(37, 99, 235)` fill, 400 weight, 124x44 box, 10.4px radius, same shadow:
+
+| Control | What it returns | Tier |
+| :--- | :--- | :--- |
+| **Verification** | a formal NuSMV proof or a counterexample | `--primary` — filled |
+| **Simulation** | one concrete trace; proves nothing | `--evidence` — tinted + bordered |
+| **Explore** | bounded *candidate* counterexamples | `--evidence` — tinted + bordered |
+| **Run History** | a read-only view of past results; writes nothing | `--view` — neutral |
+
+This is a product-semantics rule wearing a visual form. `CLAUDE.md` already requires that a fuzz finding
+never be dressed as a verdict; painting Explore exactly like the verifier is that same overclaim in the
+visual layer. Colour still marks the family — all three are accent, no new hue — and weight now marks the
+epistemic claim. `--view` is deliberately *not* `--suggestion`, which means "this proposes a change you may
+accept"; Run History proposes nothing, so borrowing that variant would misdescribe it.
+
+**A tier is not enough on its own.** An independent review of the retiered dock ranked the four correctly and
+called the hierarchy deliberate, but found a real remaining gap: Simulation and Explore "look like equivalent
+run modes, and none indicates what kind of result it produces". A visual tier can say *how important*; it
+cannot say *what you will get*. So each tooltip carries a second line naming the outcome — "Returns one
+concrete trace — not a proof", "Bounded search for candidate counterexamples — finding none is not safety",
+"Formal NuSMV result: a proof or a counterexample" — at the type floor rather than below it, because that
+sentence is what stops a bounded search being read as a proof.
+
+**A quiet tier still needs a visible edge, and "too quiet" turned out to be measurable.** Two independent
+reviews of the retiered dock — one per theme — both called Run History "too quiet" and "easy to miss". That
+reads like taste until you measure it: both quiet tiers have a surface almost indistinguishable from the panel
+behind the dock (1.22:1 for `--evidence`, 1.10 for `--view`), so the border alone carries the boundary, and it
+was **1.48:1**. WCAG asks 3:1 for a control boundary, so the reviews were describing a real failure — the edge
+of the control was effectively invisible. Both borders were raised to clear 3:1 in both themes. Demoting a
+control lowers its emphasis; it must not stop it reading as a control.
+
+The measurement also **refuted** three claims from the same reviews, which is why it ran first: radius is not
+uniform (5 distinct values, 55 of 115 surfaces at `0px`), elevation is already restrained (103 of 115 have no
+shadow), and accent fill is not overspent (7 of 174 controls, all of them run actions or active tabs). A
+converging impression is a reason to measure, not a finding.
+
+---
+
+## 5. Ink and paper: a role has two halves
+
+Every semantic role token exists in two jobs, and one value cannot do both.
+
+`--accent`, `--danger`, `--warning`, `--success` are tuned to be legible **as text on the page
+ground**, which is why the dark theme *lightens* them. Used as a **fill with light ink on top**, that
+tuning inverts. Measured across 60 sites in dark theme:
+
+| Token | Dark value | White ink on it | Light theme | Verdict |
+| :--- | :--- | ---: | ---: | :--- |
+| `--accent` | `#60a5fa` | **2.54** | 5.17 | fails AA, dark only |
+| `--accent-strong` | `#93c5fd` | **1.80** | 6.70 | fails AA, dark only |
+| `--warning` | `#fcd34d` | **1.44** | 5.02 | fails AA, dark only |
+| `--danger` | `#fca5a5` | **1.90** | 4.83 | fails AA, dark only |
+| `--success` | `#6ee7b7` | **1.52** | 3.77 | **fails in both** |
+
+`--accent-strong` is the *hover*, so contrast fell as the user interacted with the control. Light
+theme passed almost everywhere because one dark blue happens to serve both jobs there — which is why
+this survived several review passes, and why a light-only check will not find it.
+
+### Rules
+
+- **Fill with `--<role>-fill`; write with the bare role.** The fill halves are solved against two
+  constraints at once: light ink at ≥ 4.5:1, and the fill against its panel at ≥ 3:1 so the control
+  keeps a visible edge.
+- **The base fill does not change with the theme; the hover must.** A ground that does not flip means
+  one ink is correct everywhere and no markup has to guess. "Darker" and "brighter" swap meaning with
+  the ground, so `--accent-fill-hover` is `#1d4ed8` in light and `#2f6fe4` in dark — both above AA,
+  which the `--accent-strong` hover they replace was in neither theme.
+- **A fill with no ink on it keeps the bare role.** Progress bars, playback rails, pulse rings, 1px
+  accent stripes, the selected-step dot: their obligation is 3:1 against a *neighbour*, not against
+  text. Retargeting them would darken decoration for no reason. 24 of the 84 fill sites are this case.
+- **A theme-flipping ground has no correct ink — fix the ground.** The six panel banners used
+  `--accent`, so black ink measured 4.06 light / 8.26 dark and white the reverse. No single markup
+  could be right, and one panel title rendered at **1.44:1**. Pinning the banner to `--accent-fill`
+  fixed all six at once; forking the ink per theme would have doubled the surface area of the bug.
+- **Ink on a fill is measured, not eyeballed.** `text-white/85` on `--accent-fill` is 4.19 — under AA
+  by a margin no one sees by looking. `/90` is 4.50.
+
+### Disabled: desaturate, do not fade
+
+`opacity` multiplies whatever it is applied to, including the label. A disabled control still has to
+be readable, because it is the thing explaining why the action is unavailable.
+
+Measured: a filled primary button at **2.42:1** while disabled, the exploration panel's "Select all"
+at **2.00**, undo/redo at **1.80** — the last disabled on every fresh board, so the first state of
+those controls anyone sees. The pre-existing `board-panel-submit:disabled` treatment was also wrong at
+**1.75**, because it desaturated toward a *white* card, removing the contrast its ink depended on.
+
+- Filled actions use `board-action-disarmed`, which swaps the fill for a desaturated neutral
+  (`--accent-fill-disabled`, white ink 4.76) and leaves the ink opaque.
+- Muted text simply stays muted; the cursor and the `disabled` attribute already carry the state.
+- **The other 69 opacity-faded controls were measured and left alone.** Opacity is only a defect where
+  it multiplies a value already near the floor, so an audit of the declarations would have produced 69
+  pointless edits. Measure the rendered state instead.
+
+### Structural neutrals have a floor too
+
+Slate/gray/zinc are legitimate — they are the structural greys, not semantic roles. But `slate-400` is
+**2.56:1 on white**, and it was set on 126 text elements. Body text uses the 500 step or darker in
+light theme; `dark:text-slate-400` is correct on a dark card, where the same value is 5.71.
+
+Pinned by `styles/__tests__/neutralTextContrast.spec.ts` and
+`styles/__tests__/semanticColourOwnership.spec.ts`.

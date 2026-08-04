@@ -10,13 +10,25 @@
 withDefaults(defineProps<{
   checked: boolean
   label: string
-  tone?: 'red' | 'purple' | 'cyan' | 'blue'
+  /**
+   * What being *on* means, not what colour to paint.
+   *
+   * The prop was `'red' | 'purple' | 'cyan' | 'blue'` — colour names, so the call site said "purple"
+   * when it meant "privacy", and three of the four values were not even in the declared union yet were
+   * passed anyway. `enabled` is the default because a switch's on-state carries one meaning; the two
+   * exceptions are real analysis dimensions the product treats as distinct, per the convention that
+   * colour distinguishes *kind*:
+   *  - `adversarial` — attack analysis, which changes what the model admits
+   *  - `sensitivity` — privacy/sensitivity propagation
+   * A preference such as "save this run to history" is not a kind, so it takes `enabled`.
+   */
+  tone?: 'enabled' | 'adversarial' | 'sensitivity'
   disabled?: boolean
   title?: string
   describedbyId?: string
   testId?: string
 }>(), {
-  tone: 'blue',
+  tone: 'enabled',
   disabled: false,
   title: undefined,
   describedbyId: undefined,
@@ -55,7 +67,9 @@ const emit = defineEmits<{ (e: 'change', checked: boolean): void }>()
   padding: 0;
   border: 0;
   border-radius: 999px;
-  background: #cbd5e1;
+  /* Was a private grey literal that stayed light in dark theme, so an off switch glowed against the
+     dark panel instead of receding. */
+  background: var(--border);
   cursor: pointer;
   transition: background-color 0.2s ease;
 }
@@ -65,10 +79,11 @@ const emit = defineEmits<{ (e: 'change', checked: boolean): void }>()
   opacity: 0.6;
 }
 
-.iot-toggle-switch--on.iot-toggle-switch--red { background: #ef4444; }
-.iot-toggle-switch--on.iot-toggle-switch--purple { background: #a855f7; }
-.iot-toggle-switch--on.iot-toggle-switch--cyan { background: #0891b2; }
-.iot-toggle-switch--on.iot-toggle-switch--blue { background: #3b82f6; }
+/* The on-state colours come from the shared tokens rather than four private hex values, so this
+   control follows the theme instead of carrying its own palette. */
+.iot-toggle-switch--on.iot-toggle-switch--enabled { background: var(--accent); }
+.iot-toggle-switch--on.iot-toggle-switch--adversarial { background: var(--danger); }
+.iot-toggle-switch--on.iot-toggle-switch--sensitivity { background: var(--accent-strong); }
 
 .iot-toggle-switch__thumb {
   position: absolute;

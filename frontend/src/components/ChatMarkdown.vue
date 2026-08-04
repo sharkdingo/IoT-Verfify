@@ -35,7 +35,7 @@ const remarkRehypeOptions = { allowDangerousHtml: false };
 
 <style scoped>
 :deep(.markdown-image-alt) {
-  color: var(--chat-text-muted, #64748b);
+  color: var(--chat-text-muted, var(--text-muted));
   font-style: italic;
 }
 </style>

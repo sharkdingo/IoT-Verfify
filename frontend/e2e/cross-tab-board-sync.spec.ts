@@ -20,9 +20,18 @@ const openWorkspace = async (page: Page, auth: AuthUser) => {
     }
   })
   await page.goto('/#/board')
-  // New contexts may need to resolve the development server's eager icon URL modules.
-  await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 60_000 })
-  await expect(page.getByTestId('scene-import')).toBeEnabled({ timeout: 60_000 })
+  // 30s, matching the other fifteen board-root assertions in the suite.
+  //
+  // This helper carried 60s justified by "the development server's eager icon URL modules". That reason does
+  // not apply: playwright.config.ts runs `npm run build && npm run preview`, so an E2E run never touches the
+  // dev server. Measured against the real preview build with all eight of this spec's contexts held open,
+  // mount cost is flat — 6.2–7.2s, growth 1.00x, no degradation as contexts accumulate.
+  //
+  // So the doubled allowance bought nothing, and an outlier timeout is worse than useless: it hides a genuine
+  // slowdown in the one spec most likely to expose one. A single suite-level failure here was contention for a
+  // shared machine, which 60s did not prevent and 120s would only postpone.
+  await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('scene-import')).toBeEnabled({ timeout: 30_000 })
 }
 
 const createDevice = async (page: Page, label: string) => {
@@ -371,7 +380,7 @@ test('a cross-tab board change marks an open verification verdict stale', async 
     await viewer.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
       .getByRole('button', { name: 'Replace in full' })
       .click()
-    await expect(viewer.getByTestId('scene-import')).toBeEnabled({ timeout: 60_000 })
+    await expect(viewer.getByTestId('scene-import')).toBeEnabled({ timeout: 30_000 })
 
     await viewer.getByTestId('open-verification-panel').click()
     await viewer.getByTestId('verification-mode-sync').click()
@@ -418,7 +427,7 @@ test('an undo refreshes another visible tab like any other board mutation', asyn
       .click()
     await writer.getByTestId('inspector-tab-rules').click()
     const deleteRule = writer.getByRole('button', { name: 'Delete Rule' }).first()
-    await expect(deleteRule).toBeEnabled({ timeout: 60_000 })
+    await expect(deleteRule).toBeEnabled({ timeout: 30_000 })
 
     await deleteRule.click()
     await writer.locator('.el-message-box').getByRole('button', { name: /Delete|删除/ }).click()

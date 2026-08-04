@@ -308,8 +308,14 @@ const validateTaskBase = (value: unknown, context: string): Record<string, any> 
   }
   if (TERMINAL_TASK_STATUSES.has(status)) {
     requireString(task, 'completedAt', context, false)
-    if (requireIntegerInRange(task, 'progress', context, 0, 100) !== 100) {
-      throw new RunResponseContractError(context, 'terminal task progress must be 100')
+    // `progress` reports how much of the work finished, so only a COMPLETED task may claim 100.
+    // Requiring it of every terminal status forced FAILED and CANCELLED runs to publish "100%"
+    // for work that was abandoned — and the backend's expired-lease sweep duly overwrote it,
+    // making an abandoned run indistinguishable from a finished one. A failed run keeps whatever
+    // its last heartbeat reported; `status` is what says it ended.
+    const progress = requireIntegerInRange(task, 'progress', context, 0, 100)
+    if (status === 'COMPLETED' && progress !== 100) {
+      throw new RunResponseContractError(context, 'completed task progress must be 100')
     }
   } else if (status === 'RUNNING' && task.progress === undefined) {
     throw new RunResponseContractError(context, 'running task progress is required')

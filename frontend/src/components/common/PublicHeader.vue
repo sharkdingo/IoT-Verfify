@@ -148,7 +148,7 @@ const navigateTo = (target?: string) => {
 
 .public-header--auth .public-header__brand,
 .public-header--light .public-header__brand {
-  color: #0f172a;
+  color: var(--text);
 }
 
 .public-header--auth.public-header--dark .public-header__brand,
@@ -182,12 +182,12 @@ const navigateTo = (target?: string) => {
 
 .public-header--auth .public-header__nav,
 .public-header--light .public-header__nav {
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .public-header--auth.public-header--dark .public-header__nav,
 .public-header--light.public-header--dark .public-header__nav {
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 
 .public-header__nav-item:first-child {
@@ -196,7 +196,7 @@ const navigateTo = (target?: string) => {
 
 .public-header--auth .public-header__nav-item:first-child,
 .public-header--light .public-header__nav-item:first-child {
-  color: #0f172a;
+  color: var(--text);
 }
 
 .public-header--auth.public-header--dark .public-header__nav-item:first-child,
@@ -255,8 +255,8 @@ const navigateTo = (target?: string) => {
 
 .public-header--auth .public-header__button--primary,
 .public-header--light .public-header__button--primary {
-  background: #2563eb;
-  border-color: #2563eb;
+  background: var(--accent-fill);
+  border-color: var(--accent);
   color: #ffffff;
   box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
 }
@@ -269,7 +269,7 @@ const navigateTo = (target?: string) => {
 }
 
 .public-header__button--secondary:hover {
-  background: #ffffff;
+  background: var(--surface-elevated);
 }
 
 .public-header--dark .public-header__button--secondary {

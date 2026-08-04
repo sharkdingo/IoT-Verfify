@@ -44,6 +44,32 @@ public final class RequestLimits {
     public static final int MAX_VALUE_LENGTH = 1000;
     public static final int MAX_DESCRIPTION_LENGTH = 4000;
 
+    /*
+     * Credential rules, brought into the mirrored limits.
+     *
+     * These were written out at each site instead: the character bounds appeared as literals in
+     * `RegisterRequestDto`, again in `ValidationException`'s message, and again in `Landing.vue`'s client-side
+     * check; the phone pattern appeared in the DTO annotation and again as a regex literal in `Landing.vue`.
+     * Every other cross-layer limit in this product goes through this class and its mirror in
+     * `frontend/src/constants/requestLimits.ts`, precisely so both sides reject identically — the credential
+     * rules were the exception, and the convention was documented by comment with nothing checking it.
+     *
+     * They agree today. The risk is the next edit: changing a minimum here while a hardcoded client check keeps
+     * the old one produces a form that accepts what the server refuses, and the user sees a rejection with no
+     * explanation on the field they were told was fine.
+     */
+
+    /** BCrypt hashes at most 72 UTF-8 bytes, so a longer password would have its tail silently ignored. */
+    public static final int MAX_PASSWORD_BCRYPT_BYTES = 72;
+    public static final int MIN_PASSWORD_LENGTH = 10;
+    public static final int MAX_PASSWORD_LENGTH = 64;
+    /** Mainland China mobile numbers; the only format the product accepts as a sign-in identifier. */
+    public static final String PHONE_PATTERN = "^1[3-9]\\d{9}$";
+    /** Before normalization; the display rule shown to users is the narrower 3-20. */
+    public static final int MAX_USERNAME_LENGTH = 100;
+    public static final int MIN_USERNAME_DISPLAY_LENGTH = 3;
+    public static final int MAX_USERNAME_DISPLAY_LENGTH = 20;
+
     private RequestLimits() {
     }
 }

@@ -144,7 +144,8 @@ public class FixServiceImpl implements FixService {
 
         if (!sourceModelComplete(ctx.trace)) {
             progress.accept(InteractiveOperationStage.FINALIZING);
-            return incompleteSourceModelResult(traceId, ctx, strategies, deviceSmvMap);
+            return incompleteSourceModelResult(
+                    traceId, ctx, strategies, deviceSmvMap, preferredRanges);
         }
 
         progress.accept(InteractiveOperationStage.SEARCHING_AND_VERIFYING);
@@ -260,7 +261,6 @@ public class FixServiceImpl implements FixService {
         return FixApplyResultDto.builder()
                 .applied(true)
                 .strategy(validatedStrategy)
-                .verificationRechecked(false)
                 .verificationEvidenceReused(true)
                 .appliedSuggestion(suggestionToApply)
                 .previousRuleCount(before[0])
@@ -573,7 +573,8 @@ public class FixServiceImpl implements FixService {
     private FixResultDto incompleteSourceModelResult(Long traceId,
                                                      VerificationContext ctx,
                                                      List<String> strategies,
-                                                     Map<String, DeviceSmvData> deviceSmvMap) {
+                                                     Map<String, DeviceSmvData> deviceSmvMap,
+                                                     Map<String, PreferredRange> preferredRanges) {
         int disabledRules = sourceDisabledRuleCount(ctx.trace);
         int skippedSpecs = sourceSkippedSpecCount(ctx.trace);
         String warning = incompleteSourceModelWarning(ctx.trace);
@@ -602,6 +603,10 @@ public class FixServiceImpl implements FixService {
                 .sourceGenerationIssues(sourceGenerationIssues(ctx.trace))
                 .summary(warning)
                 .warnings(List.of(warning))
+                // The search never ran, so no selection was honoured. Reporting none would drop a
+                // threshold the user explicitly pinned without saying so.
+                .unusedPreferredRangeSelections(
+                        RuleFixer.unusedPreferredRangeSelections(preferredRanges, Set.of()))
                 .build();
     }
 

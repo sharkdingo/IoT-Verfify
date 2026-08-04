@@ -66,12 +66,13 @@ class FuzzRepositoryTest {
                 SimulationTaskPo.TaskStatus.PENDING,
                 SimulationTaskPo.TaskStatus.RUNNING);
 
+        // Partway through on purpose: the sweep must preserve this, not overwrite it with 100.
         VerificationTaskPo expiredVerification = verificationTaskRepository.saveAndFlush(
                 VerificationTaskPo.builder()
                         .userId(21L)
                         .status(VerificationTaskPo.TaskStatus.PENDING)
                         .createdAt(now.minusMinutes(3))
-                        .progress(0)
+                        .progress(35)
                         .workerId("old-verification-worker")
                         .leaseExpiresAt(now.minusSeconds(1))
                         .build());
@@ -93,8 +94,12 @@ class FuzzRepositoryTest {
                 "[]",
                 verificationActive,
                 now));
-        assertEquals(VerificationTaskPo.TaskStatus.FAILED,
-                verificationTaskRepository.findById(expiredVerification.getId()).orElseThrow().getStatus());
+        VerificationTaskPo sweptVerification = verificationTaskRepository
+                .findById(expiredVerification.getId()).orElseThrow();
+        assertEquals(VerificationTaskPo.TaskStatus.FAILED, sweptVerification.getStatus());
+        // An abandoned run must not claim finished work: the sweep previously wrote progress = 100,
+        // so a caller reading the task DTO saw 100% beside FAILED. The last heartbeat is the truth.
+        assertEquals(35, sweptVerification.getProgress());
         assertEquals(VerificationTaskPo.TaskStatus.PENDING,
                 verificationTaskRepository.findById(activeVerification.getId()).orElseThrow().getStatus());
         assertEquals(0, verificationTaskRepository.startTaskIfStillPending(
@@ -308,11 +313,13 @@ class FuzzRepositoryTest {
         assertEquals(FuzzExplorationMode.BOARD_SNAPSHOT,
                 taskRepository.findById(task.getId()).orElseThrow().getExplorationMode());
 
+        // Partway through on purpose: a user-cancelled run must keep the progress it reached, not be
+        // overwritten with 100. A run cancelled at 30% was observed live publishing 100%.
         FuzzTaskPo cancelledTask = taskRepository.save(FuzzTaskPo.builder()
                 .userId(11L)
                 .status(FuzzTaskPo.TaskStatus.PENDING)
                 .createdAt(LocalDateTime.now())
-                .progress(0)
+                .progress(30)
                 .explorationMode(FuzzExplorationMode.PAPER_COMPATIBLE)
                 .targetSpecIdsJson("[]")
                 .maxIterations(100)
@@ -337,8 +344,11 @@ class FuzzRepositoryTest {
                 "{\"eligibleSpecIds\":[],\"ineligibleSpecs\":[],\"requestedSpecCount\":0,\"eligibleSpecCount\":0}",
                 "[]", 0, "[]", FuzzTaskPo.TaskStatus.RUNNING,
                 "worker-a", LocalDateTime.now()));
-        assertEquals(FuzzExplorationMode.PAPER_COMPATIBLE,
-                taskRepository.findById(cancelledTask.getId()).orElseThrow().getExplorationMode());
+        FuzzTaskPo settledCancellation = taskRepository.findById(cancelledTask.getId()).orElseThrow();
+        assertEquals(FuzzExplorationMode.PAPER_COMPATIBLE, settledCancellation.getExplorationMode());
+        assertEquals(FuzzTaskPo.TaskStatus.CANCELLED, settledCancellation.getStatus());
+        // The user stopped it at 30%; publishing 100 would claim work the run never did.
+        assertEquals(30, settledCancellation.getProgress());
 
         findingRepository.save(FuzzFindingPo.builder()
                 .userId(11L)

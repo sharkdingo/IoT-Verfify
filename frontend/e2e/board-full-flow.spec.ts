@@ -646,7 +646,7 @@ test.describe('board full-stack NuSMV user flow', () => {
         previousRuleCount: scenario.counts.rules,
         currentRuleCount: scenario.counts.rules
       })
-      expect(applied.verificationRechecked || applied.verificationEvidenceReused).toBe(true)
+      expect(applied.verificationEvidenceReused).toBe(true)
 
       await page.reload()
       await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
@@ -2024,7 +2024,6 @@ test.describe('board full-stack NuSMV user flow', () => {
     const applied = await unwrap<any>(applyResponse)
     expect(applied).toMatchObject({
       applied: true,
-      verificationRechecked: false,
       verificationEvidenceReused: true,
       previousRuleCount: 3,
       currentRuleCount: 2

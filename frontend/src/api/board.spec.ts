@@ -1737,7 +1737,7 @@ describe('board mutation response contracts', () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({
       applied: true,
       strategy: 'remove',
-      verificationRechecked: true,
+      verificationEvidenceReused: true,
       appliedSuggestion: {
         strategy: 'remove',
         description: 'Remove the conflicting rule',
@@ -1954,7 +1954,7 @@ describe('board mutation response contracts', () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({
       applied: true,
       strategy: 'condition',
-      verificationRechecked: true,
+      verificationEvidenceReused: true,
       appliedSuggestion: {
         strategy: 'condition',
         description: 'Adjust a condition',
@@ -1986,6 +1986,57 @@ describe('board mutation response contracts', () => {
       removedRuleDescriptions: []
     })).rejects.toMatchObject({
       code: FIX_RESPONSE_INCOMPLETE_CODE
+    })
+  })
+
+  // Apply reuses the run's verification evidence after drift checks and never re-solves, so this
+  // flag is the only thing in the response asserting the write was evidence-backed. Nothing pinned
+  // it: deleting the guard entirely left the whole suite green.
+  it('rejects an applied fix that does not confirm reused verification evidence', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      applied: true,
+      strategy: 'remove',
+      verificationEvidenceReused: false,
+      appliedSuggestion: {
+        strategy: 'remove',
+        description: 'Remove the conflicting rule',
+        verified: true,
+        parameterAdjustments: [],
+        conditionAdjustments: [],
+        removedRuleDescriptions: ['Old rule']
+      },
+      previousRuleCount: 2,
+      currentRuleCount: 1,
+      message: 'Applied.',
+      canUndo: true,
+      canRedo: false,
+      // A fully valid authoritative rule snapshot, so the evidence flag is the only defect and the
+      // rejection cannot come from anywhere else.
+      rules: [{
+        id: 9,
+        conditions: [{ deviceName: 'sensor_1', attribute: 'motion', targetType: 'api' }],
+        command: {
+          deviceName: 'light_1',
+          action: 'turn_on',
+          contentDevice: null,
+          content: null
+        },
+        ruleString: 'Motion turns on the light'
+      }]
+    }))
+
+    await expect(boardApi.applyFix(7, {
+      suggestionToken: 'signed-remove-suggestion',
+      strategy: 'remove',
+      description: 'Remove the conflicting rule',
+      verified: true,
+      parameterAdjustments: [],
+      conditionAdjustments: [],
+      removedRuleDescriptions: ['Old rule']
+      // The response-shape validator owns this rejection, so it carries the board contract code
+      // rather than the fix-suggestion parser's own.
+    })).rejects.toMatchObject({
+      code: 'BOARD_RESPONSE_INCOMPLETE'
     })
   })
 })

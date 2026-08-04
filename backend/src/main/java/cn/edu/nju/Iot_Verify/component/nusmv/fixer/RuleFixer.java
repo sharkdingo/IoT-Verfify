@@ -134,6 +134,10 @@ public class RuleFixer {
                     .sourceModelComplete(true)
                     .summary(emptyReason)
                     .warnings(List.of())
+                    // No search ran, so every supplied selection went unhonoured. Reporting none
+                    // here would silently drop a threshold the user explicitly pinned.
+                    .unusedPreferredRangeSelections(
+                            unusedPreferredRangeSelections(preferredRanges, Set.of()))
                     .build();
         }
 
@@ -243,24 +247,10 @@ public class RuleFixer {
 
         // A selection is used when it matches an eligible target, regardless of whether that
         // constrained search eventually produces a verified suggestion.
-        List<PreferredRangeSelection> unusedSelections = new ArrayList<>();
-        if (preferredRanges != null && !preferredRanges.isEmpty()) {
-            Set<String> matchedTargetIds = ctx.matchedPreferredRangeTargetIdsSnapshot();
-            for (Map.Entry<String, PreferredRange> entry : preferredRanges.entrySet()) {
-                String targetId = entry.getKey();
-                PreferredRange range = entry.getValue();
-                if (!matchedTargetIds.contains(targetId)
-                        && PreferredRangeSelection.isValidTargetId(targetId) && range != null) {
-                    unusedSelections.add(PreferredRangeSelection.builder()
-                            .targetId(targetId)
-                            .lower(range.getLower())
-                            .upper(range.getUpper())
-                            .build());
-                }
-            }
-            if (!unusedSelections.isEmpty()) {
-                summaryBuilder.append(" Note: some preferred range selections matched no eligible parameter target.");
-            }
+        List<PreferredRangeSelection> unusedSelections = unusedPreferredRangeSelections(
+                preferredRanges, ctx.matchedPreferredRangeTargetIdsSnapshot());
+        if (!unusedSelections.isEmpty()) {
+            summaryBuilder.append(" Note: some preferred range selections matched no eligible parameter target.");
         }
 
         List<String> warnings = ctx.diagnosticsSnapshot();
@@ -282,6 +272,34 @@ public class RuleFixer {
                 .parameterTargets(ctx.parameterTargetsSnapshot())
                 .unusedPreferredRangeSelections(unusedSelections)
                 .build();
+    }
+
+    /**
+     * Project the caller's preferred-range selections that no eligible parameter target consumed.
+     *
+     * Shared by the strategy search and by every path that returns before searching. An early return
+     * honours no selection at all, so passing an empty {@code matchedTargetIds} reports all of them —
+     * previously those paths left the field at its empty default and the user's pinned threshold was
+     * dropped with nothing said, which is exactly what this field exists to prevent.
+     */
+    public static List<PreferredRangeSelection> unusedPreferredRangeSelections(
+            Map<String, PreferredRange> preferredRanges, Set<String> matchedTargetIds) {
+        if (preferredRanges == null || preferredRanges.isEmpty()) return List.of();
+        Set<String> matched = matchedTargetIds != null ? matchedTargetIds : Set.of();
+        List<PreferredRangeSelection> unused = new ArrayList<>();
+        for (Map.Entry<String, PreferredRange> entry : preferredRanges.entrySet()) {
+            String targetId = entry.getKey();
+            PreferredRange range = entry.getValue();
+            if (!matched.contains(targetId)
+                    && PreferredRangeSelection.isValidTargetId(targetId) && range != null) {
+                unused.add(PreferredRangeSelection.builder()
+                        .targetId(targetId)
+                        .lower(range.getLower())
+                        .upper(range.getUpper())
+                        .build());
+            }
+        }
+        return unused;
     }
 
     private static FixStrategyAttemptDto attempt(String strategy, String status, String reason) {

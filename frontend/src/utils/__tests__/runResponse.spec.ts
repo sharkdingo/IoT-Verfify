@@ -661,6 +661,32 @@ describe('verification and simulation response contracts', () => {
     }))
   })
 
+  // `progress` says how much of the work finished, so only COMPLETED may claim 100. Demanding it of
+  // every terminal status made a failed run publish "100%" for work it abandoned, and the backend's
+  // expired-lease sweep overwrote progress to match — so an abandoned run looked finished.
+  it('accepts a failed task that reports the partial progress it actually reached', () => {
+    const failedPartway = {
+      ...validCompletedVerificationTask(),
+      status: 'FAILED',
+      progress: 35,
+      // A failed run reaches no verdict: the validator requires INCONCLUSIVE and modelComplete=false
+      // for exactly that reason, so the fixture has to satisfy both to isolate the progress rule.
+      outcome: 'INCONCLUSIVE',
+      modelComplete: false,
+      errorMessage: 'The verification worker stopped before the task completed'
+    }
+    expect(validateVerificationTask(failedPartway)).toEqual(failedPartway)
+  })
+
+  it('rejects a completed task that does not report finished work', () => {
+    expect(() => validateVerificationTask({
+      ...validCompletedVerificationTask(),
+      progress: 35
+    })).toThrow(expect.objectContaining({
+      code: RUN_RESPONSE_INCOMPLETE_CODE
+    }))
+  })
+
   it('validates task ids, progress, and cancellation outcomes before the UI acts on them', () => {
     expect(validateTaskSubmissionId(9, 'Task submission')).toBe(9)
     expect(validateTaskProgress(63, 'Task progress')).toBe(63)

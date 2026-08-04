@@ -347,8 +347,11 @@ public class VerificationTaskMapper {
             if (po.getCompletedAt() == null) {
                 fail(recordType, po.getId(), "completedAt", "terminal task completion time is missing");
             }
-            if (po.getProgress() != 100) {
-                fail(recordType, po.getId(), "progress", "terminal task progress must be 100");
+            // Only a COMPLETED run finished its work; a cancelled or failed one keeps the progress
+            // its last heartbeat reported. Requiring 100 of every terminal status made such a row
+            // unreadable, answering HTTP 500 for a run the user had cancelled partway.
+            if (status == VerificationTaskPo.TaskStatus.COMPLETED && po.getProgress() != 100) {
+                fail(recordType, po.getId(), "progress", "completed task progress must be 100");
             }
         } else if (po.getCompletedAt() != null) {
             fail(recordType, po.getId(), "completedAt", "active task cannot have a completion time");

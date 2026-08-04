@@ -43,7 +43,13 @@ describe('Board surface accessibility contracts', () => {
       boardSource.indexOf('<FuzzingResultDialog')
     )
     expect(deleteDialog).toContain('max-h-[calc(100dvh-1.5rem)]')
-    expect(deleteDialog).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain')
+    // The shared primitive owns overflow, overscroll containment, the scrollbar skin, and the
+    // scroll-padding that keeps a programmatically revealed control clear of the boundary. Asserting
+    // `overflow-y-auto overscroll-contain` pinned two of those four and let the other two drift —
+    // which is how 31 regions ended up with a scrollbar that did not match the product and no
+    // scroll-padding for keyboard users.
+    expect(deleteDialog).toContain('iot-scroll-region')
+    expect(deleteDialog).toContain('min-h-0 flex-1')
     expect(deleteDialog).toContain('flex shrink-0 flex-wrap justify-end')
   })
 
@@ -72,26 +78,33 @@ describe('Board surface accessibility contracts', () => {
     expect(narrowBackground).toContain(':inert="showNarrowPanelScrim ? true : undefined"')
     expect(narrowBackground).toContain(':aria-hidden="showNarrowPanelScrim ? \'true\' : undefined"')
 
-    expect(boardCss).toMatch(/\.bg-amber-100[\s\S]*background-color:\s*color-mix\(in srgb, #f59e0b 14%, var\(--surface-panel\)\)\s*!important/)
-    expect(boardCss).toMatch(/\.text-amber-950[\s\S]*color:\s*#fde68a\s*!important/)
-    expect(boardCss).toMatch(/\.text-red-700[\s\S]*color:\s*#fecaca\s*!important/)
-    expect(boardCss).toMatch(/\.text-cyan-700[\s\S]*color:\s*#a5f3fc\s*!important/)
+    // The two assertions that used to sit here pinned class-keyed `!important` remaps for
+    // `.bg-amber-100` and `.text-amber-950` inside the board panels. Those rules existed only because
+    // components declared raw hues that dark theme then had to rewrite; with every component on
+    // theme-aware roles the selectors could never match, so they were deleted along with the rest of
+    // that block. The property they were protecting — panel status colours stay legible in dark — is
+    // now owned by the roles and enforced in `styles/__tests__/semanticColourOwnership.spec.ts`.
     expect(boardCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.board-side-panel[\s\S]*\.animate-ping/)
+
+    // The result dialogs' status colours come from theme-aware role classes, so no class-keyed
+    // override is needed to make them legible in dark. This used to assert the overrides themselves —
+    // 28 `!important` selectors and their exact hex values — which made the test a copy of the CSS: it
+    // failed on a change that improved the very thing it was protecting. What matters is the property,
+    // so assert that: the roles are used, and the per-theme rewriting is gone.
     const resultDialogTheme = boardCss.slice(
       boardCss.indexOf('.dark .board-result-dialog-surface'),
       boardCss.indexOf('.iot-board .modern-panel')
     )
-    expect(resultDialogTheme).toContain('.dark .board-result-dialog-surface .bg-amber-50')
-    expect(resultDialogTheme).toContain('background-color: color-mix(in srgb, #f59e0b 13%, var(--surface-elevated)) !important')
-    expect(resultDialogTheme).toContain('.dark .board-result-dialog-surface :is(')
-    expect(resultDialogTheme).toContain('.text-red-600, .text-red-700, .text-red-800, .text-red-900')
-    expect(resultDialogTheme).toContain('color: #fecaca !important')
-    expect(resultDialogTheme).toContain('.text-violet-600')
-    expect(resultDialogTheme).toContain('color: #c7d2fe !important')
-    expect(resultDialogTheme).toContain('.text-cyan-700')
-    expect(resultDialogTheme).toContain('color: #a5f3fc !important')
-    expect(resultDialogTheme).toContain('.border-amber-200, .border-amber-300')
+    expect(resultDialogTheme).not.toMatch(/\.text-(red|amber|green|emerald|indigo|violet|fuchsia|orange|cyan)-\d{3}/)
     expect(resultDialogTheme).not.toContain('.iot-board')
+
+    // The verdict decision table maps each outcome to a role, never to a hue ramp.
+    const verdictTable = boardSource.slice(
+      boardSource.indexOf('const verificationResultStatus = computed'),
+      boardSource.indexOf('const verificationModelSemanticsConsistent = computed')
+    )
+    expect(verdictTable).toMatch(/board-surface-(danger|warning|success)/)
+    expect(verdictTable).not.toMatch(/bg-(red|amber|green|emerald)-\d{2,3}/)
 
     const verificationResultStatus = boardSource.slice(
       boardSource.indexOf('const verificationResultStatus = computed'),

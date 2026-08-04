@@ -338,7 +338,7 @@ const progressEventTitle = (progress: StreamProgress) => {
   }
   return t('app.chat.progressWritingTitle');
 };
-const progressEventDetail = (progress: StreamProgress) => {
+const progressEventDetail = (progress: StreamProgress, streaming = false) => {
   const round = progress.round || 1;
   if (progress.stage === 'CONTEXT_READY') return t('app.chat.progressContextDetail');
   if (progress.stage === 'TASK_RESUMED') {
@@ -374,7 +374,20 @@ const progressEventDetail = (progress: StreamProgress) => {
         ? t('app.chat.progressNoProgressDetail')
         : t('app.chat.progressEmergencyDetail');
   }
-  return t('app.chat.progressWritingDetail');
+  // The final stage reads in the past tense once the turn is over.
+  //
+  // Every detail here was derived from the stage alone, with no notion that the turn had since ended, so the
+  // last entry kept saying "正在根据工具的实际结果说明…" — *currently* explaining — indefinitely. A measurement
+  // of a settled panel found it claiming both states at once (`statesCompleted: true, statesStillRunning:
+  // true`), and a review reached the same conclusion from the screen: the text "can read as still in progress,
+  // so completion is somewhat ambiguous".
+  //
+  // Only this stage needs the distinction. Every earlier stage is followed by another entry, so its
+  // progressive reads naturally as a log of what was happening then; `WRITING_RESPONSE` is terminal, and a
+  // terminal step still narrating itself is the one that leaves a user unsure whether to wait.
+  return streaming
+    ? t('app.chat.progressWritingDetail')
+    : t('app.chat.progressWritingDetailDone');
 };
 const progressEventStatus = (progress: StreamProgress) => {
   if (progress.stage === 'TOOL_EXECUTION') return t('app.chat.progressStatusStarted');
@@ -1325,7 +1338,7 @@ const initSessions = async (reattachActive = true): Promise<boolean> => {
     return false;
   } catch (e) {
     if (requestEpoch === sessionListRequestEpoch) sessionListLoadFailed.value = true;
-    console.error('加载会话列表失败:', e);
+    console.error('Failed to load conversation list:', e);
     return false;
   } finally {
     if (requestEpoch === sessionListRequestEpoch) isLoadingSessions.value = false;
@@ -1347,7 +1360,7 @@ const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true)
     throw new Error('Chat session response is incomplete');
   } catch (e) {
     if (authEpoch !== chatAuthEpoch) return '';
-    console.error('创建会话失败:', e);
+    console.error('Failed to create conversation:', e);
     if (notifyOnFailure) notifyError(t('app.chat.createSessionFailed'));
     return null;
   }
@@ -2152,7 +2165,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
               historyReplacementWithoutTerminalAllowed.value = true;
             }
             renderStreamError(err);
-            console.error('[Chat] 流式错误:', err);
+            console.error('[Chat] Streaming error:', err);
           },
           onFinish: (terminal: StreamTerminal) => {
             if (requestEpoch !== streamRequestEpoch) return;
@@ -2177,7 +2190,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
       acceptedStreamFailed = true;
       historyReplacementWithoutTerminalAllowed.value = true;
     }
-    console.error('[Chat] 发送消息失败:', error);
+    console.error('[Chat] Failed to send message:', error);
     if (!requestAccepted) {
       messages.value = messages.value.filter(message => message.turnId !== turnId);
       if (!confirmation && !inputValue.value) inputValue.value = content;
@@ -2691,15 +2704,27 @@ const scrollToBottom = (force = false) => {
                         v-if="traceHasToolResults(messageExecutionTrace(msg, index))"
                         class="chat-execution-metrics"
                       >
-                        <span class="is-success">
+                        <!--
+                          The colour follows the number, not the label.
+
+                          All three spans carried their status class unconditionally, so a turn where
+                          everything worked rendered "**0** failed" in the error colour and "**0**
+                          unconfirmed" in the warning colour. A measurement of the panel picked the error
+                          styling up as a genuine failure signal — `showsError: true, errorText: "0 failed"` —
+                          which is exactly the misreading a user makes at a glance: red beside a count means
+                          something went wrong.
+                          Zero failures is the good outcome and now reads as ordinary text; the status colours
+                          appear only when there is a status to report.
+                        -->
+                        <span :class="executionTraceTotals(messageExecutionTrace(msg, index)).successful > 0 ? 'is-success' : ''">
                           <strong>{{ executionTraceTotals(messageExecutionTrace(msg, index)).successful }}</strong>
                           {{ t('app.chat.executionMetricSucceeded') }}
                         </span>
-                        <span class="is-error">
+                        <span :class="executionTraceTotals(messageExecutionTrace(msg, index)).failed > 0 ? 'is-error' : ''">
                           <strong>{{ executionTraceTotals(messageExecutionTrace(msg, index)).failed }}</strong>
                           {{ t('app.chat.executionMetricFailed') }}
                         </span>
-                        <span class="is-warning">
+                        <span :class="executionTraceTotals(messageExecutionTrace(msg, index)).unconfirmed > 0 ? 'is-warning' : ''">
                           <strong>{{ executionTraceTotals(messageExecutionTrace(msg, index)).unconfirmed }}</strong>
                           {{ t('app.chat.executionMetricUnconfirmed') }}
                         </span>
@@ -2716,7 +2741,7 @@ const scrollToBottom = (force = false) => {
                             <strong>{{ progressEventTitle(progress) }}</strong>
                             <!-- Reasoning keeps its line breaks: the backend preserves them
                                  precisely so a decomposition does not read as one run-on line. -->
-                            <p :class="{ 'is-reasoning-copy': progress.stage === 'REASONING' }">{{ progressEventDetail(progress) }}</p>
+                            <p :class="{ 'is-reasoning-copy': progress.stage === 'REASONING' }">{{ progressEventDetail(progress, isActiveAssistantMessage(index)) }}</p>
                           </div>
                           <span
                             v-if="progressEventStatus(progress)"
@@ -2887,27 +2912,35 @@ const scrollToBottom = (force = false) => {
   z-index: var(--z-chat-panel);
   pointer-events: none;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --chat-accent: #7c3aed;
-  --chat-accent-strong: #6d28d9;
-  --chat-success: #10b981;
+  --chat-accent: var(--accent-strong);
+  /* Deepen the chat accent rather than switch hue.
+   *
+   * This was `#6d28d9`, a hardcoded violet, and it is used on exactly one thing: the send button's hover
+   * and focus state. Resting is `var(--chat-accent)` — blue — so hovering the primary action changed its
+   * hue. In dark theme it also inverted the lightness, because `--accent-strong` resolves to `#93c5fd`
+   * there and the violet is dark: the button went light-blue to dark-violet on hover, which reads as a
+   * different control rather than the same one under the cursor. Mixing toward black keeps both themes
+   * moving in the direction a hover is expected to move. */
+  --chat-accent-strong: color-mix(in srgb, var(--chat-accent) 82%, #000);
+  --chat-success: var(--success);
   --chat-bg: color-mix(in srgb, var(--surface-overlay, rgba(255, 255, 255, 0.94)) 94%, transparent);
-  --chat-sidebar-bg: color-mix(in srgb, var(--surface-panel, #ffffff) 92%, var(--surface-control, #f1f5f9));
-  --chat-input-bg: var(--surface-elevated, #ffffff);
-  --chat-control-bg: var(--surface-control, #f1f5f9);
-  --chat-text: var(--text, #0f172a);
-  --chat-muted: var(--text-muted, #64748b);
-  --chat-border: var(--border, #e2e8f0);
+  --chat-sidebar-bg: color-mix(in srgb, var(--surface-panel) 92%, var(--surface-control));
+  --chat-input-bg: var(--surface-elevated);
+  --chat-control-bg: var(--surface-control);
+  --chat-text: var(--text, var(--text));
+  --chat-muted: var(--text-muted, var(--text-muted));
+  --chat-border: var(--border, var(--border));
   --chat-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
-  --chat-user-bg: color-mix(in srgb, #7c3aed 12%, var(--surface-control, #f1f5f9));
-  --chat-ai-bg: color-mix(in srgb, var(--surface-elevated, #ffffff) 86%, transparent);
+  --chat-user-bg: color-mix(in srgb, var(--accent-strong) 12%, var(--surface-control));
+  --chat-ai-bg: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
   --chat-safe-left: 1rem;
   --chat-safe-right: 1rem;
 }
 
 :global(:root[data-theme='dark'] .global-chat-wrapper) {
   --chat-shadow: 0 28px 80px rgba(2, 6, 23, 0.54);
-  --chat-user-bg: color-mix(in srgb, #8b5cf6 20%, var(--surface-control, #1e293b));
-  --chat-ai-bg: color-mix(in srgb, var(--surface-elevated, #111827) 92%, transparent);
+  --chat-user-bg: color-mix(in srgb, var(--accent-strong) 20%, var(--surface-control));
+  --chat-ai-bg: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
 }
 
 .global-chat-wrapper--board {
@@ -3144,11 +3177,11 @@ const scrollToBottom = (force = false) => {
 }
 
 .session-status.is-warning {
-  color: #d97706;
+  color: var(--warning);
 }
 
 .session-status.is-failed {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .session-status.is-unread {
@@ -3183,8 +3216,8 @@ const scrollToBottom = (force = false) => {
 }
 
 .delete-btn-wrapper:hover {
-  background: color-mix(in srgb, #ef4444 14%, transparent);
-  color: #ef4444;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
 }
 
 .sidebar-footer {
@@ -3311,7 +3344,7 @@ const scrollToBottom = (force = false) => {
 
 .control-icon-button--danger:hover,
 .control-icon-button--danger:focus-visible {
-  color: #ef4444;
+  color: var(--danger);
 }
 
 .chat-resize-handle {
@@ -3653,9 +3686,9 @@ const scrollToBottom = (force = false) => {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  border: 1px solid color-mix(in srgb, #ef4444 45%, var(--chat-border));
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--chat-border));
   border-radius: 0.65rem;
-  background: color-mix(in srgb, #ef4444 8%, var(--chat-ai-bg));
+  background: color-mix(in srgb, var(--danger) 8%, var(--chat-ai-bg));
   color: var(--chat-text);
   font-size: 0.8rem;
 }
@@ -3773,13 +3806,13 @@ const scrollToBottom = (force = false) => {
 }
 
 .chat-execution-state.is-stopped {
-  border-color: color-mix(in srgb, #d97706 48%, var(--chat-border));
-  color: #b45309;
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--chat-border));
+  color: var(--warning);
 }
 
 .chat-execution-state.is-failed {
-  border-color: color-mix(in srgb, #dc2626 48%, var(--chat-border));
-  color: #dc2626;
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--chat-border));
+  color: var(--danger);
 }
 
 .chat-terminal-status {
@@ -3820,11 +3853,11 @@ const scrollToBottom = (force = false) => {
 }
 
 .chat-execution-metrics .is-warning strong {
-  color: #d97706;
+  color: var(--warning);
 }
 
 .chat-execution-metrics .is-error strong {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .chat-execution-events {
@@ -3908,14 +3941,14 @@ const scrollToBottom = (force = false) => {
 
 .chat-execution-events li.is-warning .chat-execution-step,
 .chat-execution-events li.is-warning .chat-execution-outcome {
-  border-color: color-mix(in srgb, #d97706 48%, var(--chat-border));
-  color: #b45309;
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--chat-border));
+  color: var(--warning);
 }
 
 .chat-execution-events li.is-error .chat-execution-step,
 .chat-execution-events li.is-error .chat-execution-outcome {
-  border-color: color-mix(in srgb, #dc2626 48%, var(--chat-border));
-  color: #dc2626;
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--chat-border));
+  color: var(--danger);
 }
 
 .chat-execution-events li.is-reasoning .chat-execution-step {
@@ -3963,17 +3996,22 @@ const scrollToBottom = (force = false) => {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.75rem;
-  border: 1px solid color-mix(in srgb, #dc2626 45%, var(--chat-border));
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--chat-border));
   border-radius: 0.65rem;
-  background: color-mix(in srgb, #fff1f2 88%, var(--chat-input-bg));
-  color: color-mix(in srgb, #991b1b 84%, var(--chat-text));
+  /* The theme-aware danger tokens, not `#fff1f2` / `#991b1b` mixed with chat tokens. Those are rose-50
+     and red-800: at 88% and 84% they dominated the mix, so in dark theme this error banner stayed a
+     near-white card with dark red text — a light-theme surface inside a dark interface, which is the one
+     thing a user reads as "something is broken about the app" rather than "something is wrong with my
+     request". */
+  background: color-mix(in srgb, var(--danger-surface) 88%, var(--chat-input-bg));
+  color: var(--danger);
   padding: 0.65rem 0.75rem;
   box-shadow: 0 10px 28px rgba(127, 29, 29, 0.14);
 }
 
 .protected-confirmation.is-load-error {
-  border-color: color-mix(in srgb, #d97706 48%, var(--chat-border));
-  background: color-mix(in srgb, #fffbeb 88%, var(--chat-input-bg));
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--chat-border));
+  background: color-mix(in srgb, var(--warning-surface) 88%, var(--chat-input-bg));
   color: color-mix(in srgb, #92400e 84%, var(--chat-text));
 }
 
@@ -4010,8 +4048,8 @@ const scrollToBottom = (force = false) => {
 }
 
 .protected-confirmation__button.is-confirm {
-  border-color: #b91c1c;
-  background: #b91c1c;
+  border-color: var(--danger);
+  background: var(--danger-fill);
   color: #fff;
 }
 
@@ -4098,7 +4136,7 @@ const scrollToBottom = (force = false) => {
 }
 
 .tool-icon.active {
-  color: #ef4444;
+  color: var(--danger);
 }
 
 .action-btn.send {
@@ -4122,9 +4160,9 @@ const scrollToBottom = (force = false) => {
 }
 
 .action-btn.stop {
-  border-color: color-mix(in srgb, #ef4444 44%, var(--chat-border));
-  background: color-mix(in srgb, #ef4444 10%, transparent);
-  color: #ef4444;
+  border-color: color-mix(in srgb, var(--danger) 44%, var(--chat-border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
 }
 
 .typing-indicator span {

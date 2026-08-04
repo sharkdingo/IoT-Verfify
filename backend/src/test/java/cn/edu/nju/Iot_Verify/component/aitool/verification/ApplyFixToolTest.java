@@ -490,7 +490,6 @@ class ApplyFixToolTest {
                 .applied(true)
                 .strategy("remove")
                 .verificationEvidenceReused(true)
-                .verificationRechecked(false)
                 .appliedSuggestion(suggestion)
                 .previousRuleCount(previous)
                 .currentRuleCount(current)

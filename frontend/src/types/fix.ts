@@ -153,7 +153,7 @@ export interface FixApplyRequest {
 export interface FixApplyResult {
   applied: boolean
   strategy: FixStrategyName
-  verificationRechecked: boolean
+  /** Apply reuses the run's verification evidence after drift checks; it never re-runs the search. */
   verificationEvidenceReused: boolean
   appliedSuggestion: FixSuggestion
   previousRuleCount: number

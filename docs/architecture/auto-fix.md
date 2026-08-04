@@ -68,7 +68,9 @@ also receives the remaining deadline and uses the smaller of that budget and
 later strategies that never start are `SKIPPED_TIMEOUT`. Strategies that need spec
 negation (`parameter`, `condition`) are skipped if no valid `violatedSpecIndex` is
 available; `remove` does not require it
-(`FixStrategy.requiresViolatedSpec()`). Unsupported strategy names are skipped.
+(`FixStrategy.requiresViolatedSpec()`). Unsupported strategy names are **rejected with `400`**
+before the fixer runs (`FixRequestDto` `@Pattern`, `FixServiceImpl.SUPPORTED_FIX_STRATEGIES`), so
+`SKIPPED_UNSUPPORTED` is unreachable in practice.
 NuSMV process failures and incomplete or unparseable result sets are reported as
 `FAILED_SOLVER_EXECUTION`, rather than as a completed no-result search. A finite candidate
 limit that leaves unchecked assignments is `SEARCH_BUDGET_EXHAUSTED`; this is independent
@@ -410,8 +412,10 @@ be mapped, the transaction fails closed and no rule is written; the internal mod
 not returned as a user-facing validation error.
 
 The response (`FixApplyResultDto`) returns the signed `appliedSuggestion`,
-`verificationRechecked=false`, `verificationEvidenceReused=true`, before/after rule counts,
-and the full persisted rule list.
+`verificationEvidenceReused=true`, before/after rule counts, the full persisted rule list, and
+`canUndo`/`canRedo`. Apply never repeats the strategy search, so reused evidence is the only basis it
+can report; the client rejects the whole response unless `verificationEvidenceReused` is `true` and
+`canUndo`/`canRedo` are exactly `true`/`false`.
 The localized UI derives its success explanation from these structured fields instead
 of displaying the backend's English `message`; it states both the all-submitted-spec
 scope and the unmodelled-real-world limitation.

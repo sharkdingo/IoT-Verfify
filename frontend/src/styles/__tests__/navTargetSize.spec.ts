@@ -1,0 +1,75 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+/**
+ * Every control in the board nav is a 44px target, at every width.
+ *
+ * Measured at 1440×900 before the fix: **seven of ten** nav controls were under 44px, and they disagreed with each
+ * other — 37px, 39px, 39px, 39px and 40px beside a 44px theme toggle and a 44px language switch. The heights came
+ * from padding plus line-height rather than a floor, so each label length produced a slightly different button.
+ *
+ * This is not a generic accessibility sweep. The strip holds **undo and redo** — the affordance that makes
+ * deleting a device recoverable — and the scene commands that clear or replace an entire board, and the logout
+ * button that is the only route to account deletion. A user reaching for undo has just done something they want to
+ * take back, which is the worst moment to hand them a target smaller than the platform minimum.
+ *
+ * It had already been half-fixed: a `max-width: 1023.98px` query raised these to `2.75rem`, so **mobile was
+ * correct and the desktop case was the exception**. That is exactly the shape a regression takes when the rule
+ * lives in a media query instead of in the base declaration, which is why this asserts the base.
+ */
+
+const boardCss = () => readFileSync(join(__dirname, '../board.css'), 'utf8')
+
+/** The declaration block of a selector, up to its closing brace. */
+const ruleBody = (selector: string): string => {
+  const css = boardCss()
+  const at = css.indexOf(`${selector} {`)
+  expect(at, `${selector} should exist`).toBeGreaterThan(-1)
+  return css.slice(at, at + css.slice(at).indexOf('}'))
+}
+
+/** 2.75rem at a 16px root. Written as the rem value the codebase uses. */
+const MINIMUM = '2.75rem'
+
+describe('board nav target size', () => {
+  it('sizes undo and redo at the minimum in the base rule, not only on narrow screens', () => {
+    const rule = ruleBody('.board-nav-bar .board-edit-history-btn')
+    expect(rule).toContain(`width: ${MINIMUM}`)
+    expect(rule).toContain(`height: ${MINIMUM}`)
+    // 40px was the previous value and is the specific regression this guards.
+    expect(rule).not.toMatch(/(?:width|height):\s*40px/)
+  })
+
+  it('sizes the logout control at the minimum', () => {
+    // Also the only route to account deletion.
+    const rule = ruleBody('.board-nav-bar .nav-logout-btn')
+    expect(rule).toContain(`width: ${MINIMUM}`)
+    expect(rule).toContain(`height: ${MINIMUM}`)
+    expect(rule).not.toMatch(/(?:width|height):\s*40px/)
+  })
+
+  it('gives the label-bearing nav actions a height floor', () => {
+    // These are sized by their labels, so they need a `min-height` rather than a fixed height — that is what
+    // produced 37/39/39/39px from the same rule.
+    const rule = ruleBody('.board-nav-bar .scene-action-btn,\n.board-nav-bar .ai-assistant-btn')
+    expect(rule).toContain(`min-height: ${MINIMUM}`)
+  })
+
+  it('keeps the narrow-viewport rules no smaller than the base', () => {
+    // The inversion this audit found twice: a media query for a *smaller* screen granting a *larger* size, which
+    // leaves the wide case as the unnoticed exception. Any narrow override must now match the base minimum.
+    const css = boardCss()
+    const narrowBlocks = css.match(/@media \(max-width: 1023\.98px\)[^{]*\{[\s\S]*?\n\}/g) || []
+    const offenders: string[] = []
+    for (const block of narrowBlocks) {
+      for (const match of block.matchAll(/(\.board-nav-bar [^{]+)\{([^}]*)\}/g)) {
+        const [, selector, body] = match
+        for (const size of body.matchAll(/(?:min-)?(?:width|height):\s*(\d+)px/g)) {
+          if (Number(size[1]) < 44) offenders.push(`${selector.trim()} -> ${size[0]}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+})

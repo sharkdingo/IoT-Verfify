@@ -36,20 +36,48 @@ blocking on it, and keep reading source while it runs.
 
 E2E runs against a **production build** served by `vite preview`, not the dev server: on-demand
 module transforms made two parallel browsers exceed the board's load timeout, failing tests that had
-nothing wrong with them. Two consequences worth knowing before you debug an E2E result:
+nothing wrong with them. A failure that appears only under `--workers=2` is usually this class of
+cause — diagnose it rather than forcing `--workers=1`, which hides it and triples the runtime. Two
+further consequences worth knowing before you debug an E2E result:
 
 - `vite.config.ts` needs its `/api` proxy declared under `preview` as well as `server` — `vite
   preview` does not inherit `server.proxy`.
 - Port 3000 must be free. `reuseExistingServer` is off precisely so a leftover dev server cannot be
-  adopted silently, which would skip the build and test **stale code** while reporting green.
-- `AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR` (default 60) is read by the **backend** at startup and
-  counted in-memory per source, so exporting it in the Playwright shell does nothing — it has to be
-  set on the JVM you are testing against. A full run stays under the cap by design: `support/auth.ts`
-  hands most specs a worker-scoped `sharedReadOnlyAccount` (one registration per worker, not per
-  test), so ~58 `createAuthenticatedUser` sites produce far fewer registrations. The margin is
-  thinner than a green run suggests, though: the window is a rolling hour on a live counter, so
-  back-to-back full runs share it. For repeated runs, restart the backend with the value raised
-  rather than trusting the headroom.
+  adopted silently, which would skip the build and test **stale code** while reporting green. A
+  `PreToolUse` hook (`.claude/hooks/guard-e2e-port.sh`) blocks the command while the port is held, so this
+  is enforced rather than remembered. Free the port, or set `E2E_BASE_URL` to a server you manage — as an
+  inline prefix or an exported variable, the hook accepts either. It only matches commands that actually
+  start Playwright's web server, so a script that drives a browser or the API client against a server you
+  are already running is not blocked.
+- **A full E2E pass cannot succeed on the default auth rate limits.** `AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR`
+  defaults to **60**, and the suite makes **~67** `createAuthenticatedUser` calls, each of which registers an
+  account. This note used to claim "a full run stays under the cap by design" on the strength of
+  `sharedReadOnlyAccount` being worker-scoped; measurement says otherwise, and a false reassurance here is
+  worse than no note — it sent several sessions hunting product defects in a wall of 429s.
+  The limits are constructor-injected into `final` fields, so **exporting them next to the Playwright command
+  does nothing**; they have to be set on the JVM under test. `e2e/global-setup.ts` now checks the budget once
+  before any browser starts and prints the four variables and the reset time, so this is diagnosed rather than
+  rediscovered. When it exhausts mid-run the failures scatter across the shared fixture and read exactly like
+  regressions — check the `reasonCode` before believing any of them.
+- **To actually run a full pass, start a second backend with raised caps and point the whole run at it.** Do
+  not restart the one someone is developing against:
+
+  ```bash
+  # terminal 1 — a dedicated E2E backend, same database (the suite creates and deletes its own accounts)
+  cd backend
+  SERVER_PORT=8081 \
+    AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR=2000 AUTH_REGISTER_RATE_LIMIT_PER_HOUR=2000 \
+    AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE=2000 AUTH_LOGIN_RATE_LIMIT_PER_MINUTE=2000 \
+    mvn spring-boot:run > e2e-backend.log 2>&1
+
+  # terminal 2
+  cd frontend && E2E_API_BASE_URL=http://127.0.0.1:8081 npx playwright test
+  ```
+
+  One variable moves the whole run because `vite.config.ts` now reads it for the `/api` proxy target as well.
+  It used to hardcode `localhost:8080` in both `server` and `preview`, so pointing a run elsewhere *silently
+  half-worked*: the specs' direct API calls followed `E2E_API_BASE_URL` while the browser kept going to 8080,
+  and one run talked to two servers. Redirect the API and the proxy together or not at all.
 - **Raising only the register limit is not enough — the login ceiling is what a full run actually
   hits.** `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` (default 120) is a per-source, per-minute
   window, and `board-full-flow.spec.ts` logs in far more often than it registers. A run with only
@@ -249,6 +277,21 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   would shift — so they register depth through `registerModalSurface()` in `utils/feedback.ts`
   instead. Wiring depth to the scroll lock alone left every `confirmDestructive` window unguarded,
   and Ctrl+Z reversed the previous edit behind the prompt.
+- **A `clamp()` whose middle term can never win is a fixed size wearing responsive syntax.** `cqmin` is a
+  percentage of the *container*, so on a 110–137px canvas node `4.3cqmin` is 4.7–5.9px: the declared floor
+  was the rendered size at every viewport, and three node declarations printed 9.28px and 10px under an
+  11px minimum. Before writing a sub-floor floor, compute what the preferred term evaluates to at the
+  container's real size — and if a test exempts the pattern, the exemption needs a measurement, not a
+  comment. `typographyFloor.spec.ts` exempted these on a claim that they "render at 16px", which was
+  false, so the check certified the defect it existed to catch. `--canvas-zoom` is the one legitimate
+  exemption because it *divides*: 11px at 1.0× becomes 14.4px at 0.4×.
+- **A semantic role has an ink half and a paper half.** `--accent`/`--danger`/`--warning`/`--success` are
+  tuned as *text*, so the dark theme lightens them — and a fill under light ink inverts that (measured 1.44 to
+  2.54:1 across 60 sites, light theme passing throughout, which is why a light-only check misses it). Fill with
+  `--<role>-fill`; a fill carrying no ink keeps the bare role. Disable by desaturating, never by fading
+  opacity, which fades the label with it. Structural neutrals have a floor: `slate-400` is 2.56:1 on white.
+  Values, tables and the reasoning:
+  [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §5.
 - **Stacking order is a named scale, not a literal.** Add a layer to the `--z-*` block in
   `styles/base.css` and reference it (`z-[var(--z-modal)]` in Tailwind,
   `var(--z-modal)` in CSS). Values inside a component's own stacking context stay local

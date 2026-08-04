@@ -63,13 +63,24 @@ their own copy; the citations below are precise enough to check against any copy
   MEDIC §3.3, Def. 3.3, Fig. 4, a target becomes untrusted only when every contributing trigger source
   is untrusted, while any private source makes the target private. Implementation:
   `SmvMainModuleBuilder`'s property transitions.
-- **Attack model** — a boolean `attacked` per device; a compromised sensor reports a random in-domain
-  value with `trust := untrusted`, and a compromised actuator or link drops the command via an
-  `attacked == False` transition guard. Compromise adds no new actuator state transition. MEDIC §3.4,
+- **Attack model** — a per-point *compromised* flag; a compromised sensor reports a random in-domain
+  value with `trust := untrusted`, and a compromised actuator or automation link drops the command via a
+  not-compromised transition guard. Compromise adds no new actuator state transition. MEDIC §3.4,
   Figs. 5–6. Implementation: `AttackSurface`, `SmvDeviceModuleBuilder`, `SmvMainModuleBuilder`.
-- **Attack intensity** — `intensity = Σ d.attacked` as a counter variable, with specs extended by
-  `attack.intensity ≤ v`. MEDIC §4.2–§4.3. Implementation: the attack-budget handling in
-  `SmvMainModuleBuilder`.
+
+  MEDIC writes this as a boolean `attacked` per device. IoT-Verify names it *compromised* throughout, and the
+  generated per-rule identifier is `iot_verify_automation_link_compromised_<n>`
+  (`SmvConstants.AUTOMATION_LINK_ATTACK_PREFIX`) — because the attack surface is **points**, meaning device
+  instances *and* automation links, not devices alone.
+- **Attack intensity** — a `FROZENVAR` counter `iot_verify_compromised_point_count: 0..<surface size>`
+  (`SmvConstants.NUSMV_COMPROMISED_POINT_COUNT`), bounded by an `INVAR` against the requested budget. That is
+  MEDIC's `intensity = Σ d.attacked` with `attack.intensity ≤ v`, under this project's naming. MEDIC §4.2–§4.3.
+  Implementation: the attack-budget handling in `SmvMainModuleBuilder`; the user-facing trace field is
+  `compromisedPointCount`.
+
+  Frozen rather than a running sum, which is a deliberate deviation worth naming: the count is fixed for a run,
+  so NuSMV chooses the compromised set once instead of varying it per step. That is what makes an exhaustive
+  budget search finite.
 - **Spec templates** — the trustworthiness and privacy invariants
   `AG !(d.st.trust=untrusted AND d.st=True)` and `AG !(d.st.privacy=private AND d.st=True)`, plus the
   attack-extended forms. MEDIC §4.1, §4.3. Implementation: `SmvSpecificationBuilder`; see
@@ -108,9 +119,12 @@ These are intentional, not drift. Keep the list honest when adding more.
   `disabledRuleCount` / `skippedSpecCount` / `generationIssues` rather than silently dropped. The
   papers assume well-formed input.
 
-## Conformance checked against the papers (2026-07-31)
+## Conformance checked against the papers (2026-08-04)
 
-Spot-checked by reading each paper's algorithm alongside the implementation. Verified conforming:
+Read alongside the implementation, and now **pinned by `TheorySourceConformanceTest`** — five rules that fail if a
+claim below stops being true of the code, naming the paragraph that has become false. A dated conformance note is
+otherwise the kind of assertion that rots silently: the paper does not change, the code does, and nothing fails when
+they diverge. Verified conforming:
 
 - **Salus §5.3 parameter refinement** — candidates are ordered by distance from the original value
   (`ParameterAdjustStrategy`), so the closest working value is offered first.

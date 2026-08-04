@@ -77,7 +77,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | [docs/guides/frontend-integration.md](guides/frontend-integration.md) | ✅ ready | How the frontend calls the backend (axios/SSE, real `boardApi`/`authApi` shape, type locations) | — |
 | [docs/guides/acceptance-demo.md](guides/acceptance-demo.md) | ✅ ready | End-to-end acceptance scene: three construction paths, simulation/verification animation, attack/privacy contrast, and verified repair | — |
 | [docs/guides/default-template-scenarios.md](guides/default-template-scenarios.md) | ✅ ready | Three additional importable default-template scenes covering fire response, rule priority, RFID trust/privacy, attack contrast, and verified repair | — |
-| [docs/guides/frontend-ui-conventions.md](guides/frontend-ui-conventions.md) | ✅ ready | Decision records: what belongs in the board's URL, and which feedback mechanism each situation gets | — |
+| [docs/guides/frontend-ui-conventions.md](guides/frontend-ui-conventions.md) | ✅ ready | Decision records: what belongs in the board's URL, which feedback mechanism each situation gets, what undo does and does not cover, how action emphasis is allocated, and the ink/paper split in the colour roles with its measured contrast values | — |
 | [docs/guides/troubleshooting.md](guides/troubleshooting.md) | ✅ ready | FAQ (MySQL/Redis/CORS/NuSMV/timeout) | — |
 
 ### Module READMEs & Claude manuals

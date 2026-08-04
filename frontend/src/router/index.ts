@@ -60,7 +60,10 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/:catchAll(.*)',
-    redirect: '/404'
+    // Carry the address that was actually requested. A bare `redirect: '/404'` discarded it, so the
+    // page could only say "this does not exist" without saying what "this" was — and the most common
+    // cause is a shared link cut short, which is obvious the moment the address is visible.
+    redirect: to => ({ path: '/404', query: { from: to.fullPath } })
   }
 ];
 

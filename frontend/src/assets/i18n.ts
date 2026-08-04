@@ -86,6 +86,8 @@ const messages = {
             type: '类型',
             view: '查看',
             fix: '修复',
+            /* 反例修复动作只会修改自动化规则，标签直接说明范围。 */
+            fixRules: '修复规则',
             replay: '回放',
             refresh: '刷新',
             rename: '重命名',
@@ -94,6 +96,13 @@ const messages = {
             listSeparator: '，',
             notAvailableShort: '不可用',
             switchLanguage: '切换语言',
+            // Written in the destination language, so the label reads as an invitation in the language
+            // it leads to rather than a claim about the language you are already in.
+            switchToEnglish: 'Switch to English',
+            switchToChinese: '切换到中文',
+            // Groups the set-once controls (theme, language, sign out) that move into the nav
+            // overflow menu at phone widths, where the bar cannot hold every control at 44px.
+            navPreferences: '外观与账户',
             switchTheme: '切换主题',
             lightTheme: '浅色',
             darkTheme: '深色',
@@ -121,7 +130,10 @@ const messages = {
             deleteAccountEntry: '永久注销账号',
             deleteAccountTitle: '注销账号',
             deleteAccountMessage: '注销后将无法再使用该账号登录。',
-            deleteAccountDataWarning: '账号、画布设备、规则、规约、模板、运行历史和 AI 会话将被永久删除。',
+            // 清单与实测的级联删除范围一致：原文漏掉了反例、环境变量池与编辑历史三项。
+            // 指向已有的场景导出，并说明它保不住什么：运行历史与反例是结果，不可导出。
+            deleteAccountExportHint: '如需保留设计，请先取消并使用「导出场景」——它包含设备、环境变量池、规则、规约与模板。运行历史与反例无法导出。',
+            deleteAccountDataWarning: '账号及其拥有的全部内容将被永久删除且无法恢复：画布设备、环境变量池、自动化规则、安全规约、设备模板、编辑历史、全部验证/仿真/探索运行及其反例，以及所有 AI 会话。',
             currentAccount: '当前账号',
             deleteAccountConfirmationLabel: '输入账号标识确认',
             deleteAccountConfirmationPlaceholder: '请输入登录用的账号标识',
@@ -315,6 +327,10 @@ const messages = {
             modeName: '模式名称',
             noModes: '暂无模式',
             noStateMachine: '无状态机',
+            // 状态药丸显示的是状态"值"，因此"缺失"也要用值的形状表达；原文在默认节点上只有 42/85px，
+            // 被截断成"无状..."，两次评审都误读为传感器故障。
+            noStateMachineShort: '无状态机',
+            noStateMachineDetail: '该设备未建模状态机，因此没有可报告的状态；其变量仍然会被建模与验证。',
             selectState: '选择状态',
             initialState: '初始状态',
             startState: '起始状态',
@@ -532,7 +548,7 @@ const messages = {
             fuzzSearch: '反例探索',
             /* 工具栏专用短标签：竖排栏宽度只够约 70px，完整名称会被截断成“反例探…”。 */
             fuzzSearchShort: '探索',
-            fuzzSearchSubtitle: '在有限预算内寻找可能违反规约的候选路径',
+            fuzzSearchSubtitle: '在有限预算内寻找可能违反规约的候选路径。未找到并不代表规约成立——需要证明请使用形式化验证。',
             openFuzzSettings: '打开反例探索设置',
             startFuzzSearch: '开始后台探索',
             fuzzRunning: '正在探索',
@@ -757,6 +773,13 @@ const messages = {
             devicesTool: '设备',
             specificationsTool: '规约',
             openSimulationSettings: '打开仿真设置',
+            // What each run returns, not how to configure it. Three controls sat side by side looking like
+            // equivalent "run modes", and an independent review could not tell which one produces a proof --
+            // "none indicates what kind of result it produces". The visual tier answers "how important";
+            // this answers "what will I get", which is the question the tier cannot express.
+            outcomeSimulation: '得到一条具体执行轨迹；不构成证明',
+            outcomeExploration: '有界搜索候选反例；未找到不等于安全',
+            outcomeVerification: 'NuSMV 形式化结论：给出证明或反例',
             openVerificationSettings: '打开验证设置',
             openRunHistory: '打开运行历史',
             openScenarioRecommendations: '打开可导入场景草案推荐',
@@ -1167,6 +1190,10 @@ const messages = {
             },
             faultLocalization: '故障定位',
             rulesCount: '{count} 条规则',
+            // The visible chip is a bare number; this names what it counts for assistive technology.
+            templatesCount: '{count} 个模板',
+            // Marks the step of a counterexample where the specification actually fails.
+            traceViolationHere: '违规发生',
             noFaultRulesFound: '未发现故障规则',
             violationMayBeDeviceTransitions: '违规可能由设备状态转移导致',
             transitionNumberLabel: '状态转换',
@@ -1628,6 +1655,7 @@ const messages = {
             tasksWithoutResults: '未产生结果',
             cancelledTaskNoResult: '任务已取消，因此没有生成可查看的结果。',
             failedTaskNoResult: '任务执行失败，因此没有生成可查看的结果。',
+            adjustAndRunAgain: '调整并重新运行',
             dismissTask: '清除',
             taskDismissed: '任务记录已清除',
             failedToDismissTask: '清除任务记录失败',
@@ -1692,6 +1720,23 @@ const messages = {
             boardRedo: '重做',
             boardUndoBlocked: '请先关闭回放或等待当前场景操作完成，然后再撤销。',
             boardUndoNothingToApply: '没有可撤销的编辑。',
+            // 撤销成功原本没有任何提示：对象在画布上时尚可，但规则、规约、规则顺序或环境变量池
+            // 未必可见，此时画布变化却无从判断撤销了哪一步。服务端已在 entityType /
+            // originalOperation 中给出，这里只是组合出来。
+            boardUndoApplied: '已{action}{entity}。',
+            boardUndoRedoApplied: '已重做：{action}{entity}。',
+            boardEditInverse_CREATE: '移除',
+            boardEditInverse_DELETE: '恢复',
+            boardEditInverse_UPDATE: '还原',
+            boardEditOperation_CREATE: '添加',
+            boardEditOperation_DELETE: '删除',
+            boardEditOperation_UPDATE: '修改',
+            boardEditEntity_DEVICE: '设备',
+            boardEditEntity_ENVIRONMENT: '环境变量池数值',
+            boardEditEntity_RULE: '自动化规则',
+            boardEditEntity_SPECIFICATION: '安全规约',
+            boardEditEntity_RULE_ORDER: '规则顺序',
+            boardEditEntity_RULE_SET: '规则集',
             boardUndoRedoNothingToApply: '没有可重做的编辑。',
             boardUndoConflict: '该编辑之后画布状态已改变，撤销或重做会覆盖新的修改。请求已拒绝，并已刷新为服务器上的当前状态。',
             boardUndoConflictRefreshFailed: '撤销或重做因画布状态冲突被拒绝，且未能刷新当前画布。请在连接恢复后重新加载。',
@@ -1812,11 +1857,11 @@ const messages = {
             asyncSimulationFailed: '异步仿真失败',
             simulationTaskCancelledByServer: '仿真任务已取消',
             simulationTimeout: '仿真超时，请手动检查任务状态',
-            noDevicesToVerify: '没有可验证的设备',
+            noDevicesToVerify: '没有可验证的设备，请先在画布上添加至少一个设备',
             noSpecsToVerify: '没有可验证的规约，请先添加至少一个规约',
             verificationCancelled: '验证已取消',
             verificationFailed: '验证失败',
-            noDevicesToSimulate: '没有可仿真的设备',
+            noDevicesToSimulate: '没有可仿真的设备，请先在画布上添加至少一个设备',
             simulationCompletedWithStates: '仿真完成：已生成 {count} 个模型轨迹状态',
             simulationTaskCompletedSaved: '后台仿真完成：已生成 {count} 个模型轨迹状态并保存到历史',
             simulationCompletedNoStates: '仿真完成，但没有生成模型轨迹状态',
@@ -1944,12 +1989,11 @@ const messages = {
             aiSimilarityCheckFailedCanStillApply: 'AI 相似性检测失败；应用不会得到相似性筛查保证',
             noSimilarRulesFound: 'AI 未发现明显相似的规则；这不是无冲突或行为安全证明',
             noDevicesOnCanvas: '画布上没有设备',
+            boardDataUnavailableShort: '看板数据不可用',
             historicalFixMayFailIfBoardChanged: '如果当前规则已不同于该历史轨迹，应用修复可能会被拒绝',
-            fixAppliedWithRecheck: '已应用服务器重新求解并验证的建议。该结论不涵盖未建模的现实行为。',
             fixAppliedWithSignedEvidence: '已应用建议。该建议此前已在完整形式化模型中通过全部规约重算；本次写入在模板与画板漂移检查通过后复用了对应的已签名证据，没有现场重复求解。这不涵盖未建模的现实行为。',
             fixApplyOutcomeUnconfirmedAfterRefresh: '修复应用响应未能确认；已刷新当前规则。不要直接重试这条历史建议，请先检查规则并重新运行验证。',
             fixApplyOutcomeUnknownRefreshFailed: '修复应用响应未能确认，且当前规则刷新失败。不要重试；请在连接恢复后重新加载画布并检查规则。',
-            fixAppliedRefreshFallbackRechecked: '后端已确认重新求解通过，但最新规则列表刷新失败；当前显示修复响应中的规则快照。继续编辑前请重新加载画布。',
             fixAppliedRefreshFallbackSignedEvidence: '后端已确认签名验证证据与漂移检查通过，但最新规则列表刷新失败；当前显示修复响应中的规则快照。继续编辑前请重新加载画布。',
             failedToApplyFix: '应用修复失败',
             fixDeviceReferenceUnavailable: '修复建议引用的设备与当前画布无法对应。本次没有修改规则，请重新运行验证后再尝试。',
@@ -2040,6 +2084,8 @@ const messages = {
                 progressEmergencyDetail: '任务触发执行上限，正在基于已有结果整理答复。',
                 progressWritingTitle: '整理最终答复',
                 progressWritingDetail: '正在根据工具的实际结果说明已完成、失败和待确认的部分。',
+                // 同一步在回答结束后用完成时态：终态步骤若仍写"正在…"，用户无法判断是否还要等待。
+                progressWritingDetailDone: '已根据工具的实际结果说明完成、失败和待确认的部分。',
                 progressStatusStarted: '已启动',
                 progressStatusSucceeded: '成功',
                 progressStatusPartial: '部分结果',
@@ -2207,8 +2253,10 @@ const messages = {
                     },
                     scene: {
                         rulesDesc: '{devices} 个设备，{rules} 条规则',
+                        // Titles名词化，与提示词一致：这些提示都只是"推荐"，属于只读咨询，
+                        // 而 "补齐/补充/生成" 会让人以为助手会直接改画布。
                         addRules: {
-                            title: '补齐规则',
+                            title: '推荐规则',
                             text: '当前画布有设备（{devices}），但还没有规则。请基于这些设备推荐 3 条短小、可验证的 IFTTT 规则。'
                         },
                         reviewRules: {
@@ -2217,7 +2265,7 @@ const messages = {
                         },
                         devicesDesc: '当前设备：{devices}',
                         addDevices: {
-                            title: '补充关键设备',
+                            title: '推荐关键设备',
                             text: '当前画布设备偏少（{devices}）。请根据现有设备推荐最多 3 个补充设备，并说明为什么需要它们。'
                         },
                         refineDevices: {
@@ -2226,7 +2274,7 @@ const messages = {
                         },
                         specsDesc: '{count} 条规约',
                         generateSpecs: {
-                            title: '生成规约',
+                            title: '推荐规约',
                             text: '请基于当前设备（{devices}）和规则数量 {rules}，推荐 2 条容易验证且能暴露风险的规约。'
                         },
                         reviewSpecs: {
@@ -2297,7 +2345,18 @@ const messages = {
                 includesUntrustedSource: '含不可信来源',
                 shownSourcesTrusted: '所示来源均可信',
                 includesPrivateData: '含私密数据标签',
-                untrustedLabelDetails: '此历史状态中的不可信来源标签：{labels}',
+                // Node-sized forms of the three labels above.
+                //
+                // These pills live inside a canvas node measured at 187x137px, where the pill itself is 54px
+                // wide — a sentence there is ellipsized to a few characters regardless of font size, so the
+                // node printed a fragment while claiming to state a provenance conclusion. The node gets the
+                // category, the `title` keeps the full sentence, matching how `noStateMachineShort` already
+                // handles the same constraint on the same node.
+                includesUntrustedSourceShort: '含不可信',
+                shownSourcesTrustedShort: '来源可信',
+                includesPrivateDataShort: '含私密',
+                // 补上"不可信"的含义：原文只列出标签，导致三次评审都在问它是不是故障。
+                untrustedLabelDetails: '此历史状态中的不可信来源标签：{labels}。不可信来源指无需室内用户操作即可触发自动化的来源，模型据此追踪其取值的传播；这不表示设备已被攻破或发生故障。',
                 shownSourcesTrustedDetails: '此历史状态返回的来源标签均为可信。',
                 privateLabelDetails: '此历史状态中的私密数据标签：{labels}。该标签用于模型传播分析，不代表系统已实施访问控制或加密。',
                 configuredPrivateLabelDetails: '当前设备配置的私密数据标签：{labels}。该标签用于模型传播分析，不代表系统已实施访问控制或加密。',
@@ -2374,9 +2433,13 @@ const messages = {
             },
 
             notFound: {
-                title: '错误',
-                subtitle: '您访问的页面不存在',
-                home: '回到主页'
+                // "错误" said only that something was wrong, which is what a user already knows. The
+                // page's job is to say *what* is wrong and that nothing they did was lost.
+                title: '页面地址不存在',
+                subtitle: '这个地址在 IoT-Verify 中没有对应页面。可能是链接被截断或输入有误。你的画布、规约和运行历史都不受影响。',
+                attempted: '访问的地址：',
+                workspace: '前往画布',
+                home: '返回首页'
             },
 
             specTemplates: specTemplateMessages['zh-CN'],
@@ -2415,6 +2478,8 @@ const messages = {
             loginStatsUptime: '系统可用性',
             loginStatsDevices: '设备模板',
             welcomeBackSubtitle: '登录以继续管理你的 IoT 验证工作台',
+            // 会话过期被动登出时显示：重点是"内容没有丢"，并说明登录后会回到原处。
+            sessionExpiredNotice: '登录状态已过期，已自动登出。内容没有丢失——重新登录后会回到你之前的位置。',
             account: '手机号或用户名',
             phoneNumber: '手机号',
             password: '密码',
@@ -2493,6 +2558,14 @@ const messages = {
             type: 'Type',
             view: 'View',
             fix: 'Fix',
+            /*
+             * Scoped label for the counterexample repair action. "Fix" alone left the scope open --
+             * reviewing Run History produced "Fix is ambiguous: it does not say whether it edits the
+             * rule, scene, or device behavior". The pipeline only ever repairs automation rules
+             * (docs/architecture/auto-fix.md; undo records it as one ordered rule-set entry), so the
+             * label says so. `fix` is kept for surfaces that already carry the rule context.
+             */
+            fixRules: 'Fix rules',
             replay: 'Replay',
             refresh: 'Refresh',
             rename: 'Rename',
@@ -2501,6 +2574,13 @@ const messages = {
             listSeparator: ', ',
             notAvailableShort: 'N/A',
             switchLanguage: 'Switch language',
+            // Written in the destination language, so the label reads as an invitation in the language
+            // it leads to rather than a claim about the language you are already in.
+            switchToEnglish: 'Switch to English',
+            switchToChinese: '切换到中文',
+            // Groups the set-once controls (theme, language, sign out) that move into the nav
+            // overflow menu at phone widths, where the bar cannot hold every control at 44px.
+            navPreferences: 'Appearance and account',
             switchTheme: 'Switch theme',
             lightTheme: 'Light',
             darkTheme: 'Dark',
@@ -2528,7 +2608,20 @@ const messages = {
             deleteAccountEntry: 'Permanently delete account',
             deleteAccountTitle: 'Delete Account',
             deleteAccountMessage: 'After deletion, this account can no longer be used to sign in.',
-            deleteAccountDataWarning: 'Your account, canvas devices, rules, specifications, templates, run history, and AI conversations will be permanently deleted.',
+            // The inventory matches the measured cascade, not a summary of it.
+            //
+            // It listed account, devices, rules, specifications, templates, run history and AI conversations —
+            // and omitted three things `deleteUserOwnedData` genuinely removes: **counterexamples**
+            // (`trace`, `simulation_trace`, `fuzz_finding`), the **Environment Pool**
+            // (`board_environment_variable`), and the **undo history** (`board_edit_journal`, which stores
+            // before/after snapshots of board content). All three reviews of this dialog noticed
+            // counterexamples were missing, and for a verification tool they are the hardest-won artefact on
+            // the list: the concrete evidence of how a design fails. A consent screen that under-states what it
+            // destroys is not consent.
+            // Points at the export that already exists, and says what it cannot preserve: run history and
+            // counterexamples are results, reproducible from an exported design but not themselves portable.
+            deleteAccountExportHint: 'To keep your design, cancel and use Export Scene first — it includes devices, the Environment Pool, rules, specifications and templates. Run history and counterexamples cannot be exported.',
+            deleteAccountDataWarning: 'Your account and everything it owns will be permanently deleted and cannot be recovered: canvas devices, the Environment Pool, automation rules, safety specifications, device templates, edit history, every verification, simulation and exploration run with its counterexamples, and all AI conversations.',
             currentAccount: 'Current account',
             deleteAccountConfirmationLabel: 'Enter account identifier to confirm',
             deleteAccountConfirmationPlaceholder: 'Enter the identifier you use to sign in',
@@ -2722,6 +2815,13 @@ const messages = {
             modeName: 'Mode name',
             noModes: 'No modes yet',
             noStateMachine: 'No state machine',
+            // The pill shows a state *value* — "Auto", "Working" — so an absence needs a value-shaped label, not a
+            // three-word phrase. "No state machine" measured 42px of the 85px it needs on a default node and read
+            // as "No sta…", which two reviews took for a broken sensor.
+            noStateMachineShort: 'stateless',
+            // The full sentence, on hover and for assistive technology. It says what the model does rather than
+            // only what is missing, because "no state machine" alone sounds like a defect in the device.
+            noStateMachineDetail: 'This device has no modelled state machine, so it has no state to report. Its variables are still modelled and verified.',
             selectState: 'Select state',
             initialState: 'Initial State',
             startState: 'Start State',
@@ -2939,14 +3039,14 @@ const messages = {
             fuzzSearch: 'Counterexample Search',
             /*
              * Short form for the vertical tool rail only, which allows about 70px for a label.
-             * "Counterexample Search" rendered as "Counterex..." there, and a truncated action name
+             * "Counterexample Search" rendered as `Counterex...` there, and a truncated action name
              * is the one label a user cannot recover from context. "Explore" is the vocabulary the
              * rest of the product already uses for this component ("the explorer"), so the short
              * name is not a new concept. The full name stays on the panel heading, the tooltip, and
              * the accessible name.
              */
             fuzzSearchShort: 'Explore',
-            fuzzSearchSubtitle: 'Searches within a finite budget for candidate paths that may violate specifications',
+            fuzzSearchSubtitle: 'Searches within a finite budget for candidate paths that may violate specifications. Finding nothing does not prove the specification holds — use formal verification for that.',
             openFuzzSettings: 'Open counterexample search settings',
             startFuzzSearch: 'Start background search',
             fuzzRunning: 'Searching',
@@ -3172,6 +3272,10 @@ const messages = {
             devicesTool: 'Devices',
             specificationsTool: 'Specs',
             openSimulationSettings: 'Open simulation settings',
+            // See the zh-CN note: what each run returns, not how to configure it.
+            outcomeSimulation: 'Returns one concrete trace — not a proof',
+            outcomeExploration: 'Bounded search for candidate counterexamples — finding none is not safety',
+            outcomeVerification: 'Formal NuSMV result: a proof or a counterexample',
             openVerificationSettings: 'Open verification settings',
             openRunHistory: 'Open run history',
             openScenarioRecommendations: 'Open importable scene draft recommendations',
@@ -3582,6 +3686,12 @@ const messages = {
             },
             faultLocalization: 'Fault Localization',
             rulesCount: '{count} rule(s)',
+            // The visible chip is a bare number; this names what it counts for assistive technology.
+            templatesCount: '{count} template(s)',
+            // Marks the step of a counterexample where the specification actually fails. Short because it
+            // sits above a 28px marker on a crowded rail, but it must be words: an unlabelled glyph was
+            // read as the selection cursor rather than the verdict.
+            traceViolationHere: 'Violation',
             noFaultRulesFound: 'No fault rules found',
             violationMayBeDeviceTransitions: 'The violation may be caused by device transitions',
             transitionNumberLabel: 'Transition',
@@ -4043,6 +4153,7 @@ const messages = {
             tasksWithoutResults: 'No Result Produced',
             cancelledTaskNoResult: 'The task was cancelled, so it produced no result to inspect.',
             failedTaskNoResult: 'The task failed, so it produced no result to inspect.',
+            adjustAndRunAgain: 'Adjust and run again',
             dismissTask: 'Dismiss',
             taskDismissed: 'Task record dismissed',
             failedToDismissTask: 'Failed to dismiss task record',
@@ -4107,6 +4218,26 @@ const messages = {
             boardRedo: 'Redo',
             boardUndoBlocked: 'Close playback or wait for the current scene operation to finish before undoing.',
             boardUndoNothingToApply: 'There is no edit to undo.',
+            // A successful undo used to say nothing. That is fine when the affected object is on the canvas, and
+            // not fine for a rule, specification, rule order or Environment Pool value the user cannot see —
+            // the board changes and nothing confirms which edit was reversed. The server already names the edit
+            // in `entityType` and `originalOperation`; these compose it.
+            boardUndoApplied: '{action} the {entity}.',
+            boardUndoRedoApplied: 'Redone: {action} the {entity}.',
+            // The inverse of the original edit, which is what an undo performs.
+            boardEditInverse_CREATE: 'Removed',
+            boardEditInverse_DELETE: 'Restored',
+            boardEditInverse_UPDATE: 'Reverted',
+            // The original edit, for a redo.
+            boardEditOperation_CREATE: 'added',
+            boardEditOperation_DELETE: 'removed',
+            boardEditOperation_UPDATE: 'changed',
+            boardEditEntity_DEVICE: 'device',
+            boardEditEntity_ENVIRONMENT: 'Environment Pool value',
+            boardEditEntity_RULE: 'automation rule',
+            boardEditEntity_SPECIFICATION: 'safety specification',
+            boardEditEntity_RULE_ORDER: 'rule order',
+            boardEditEntity_RULE_SET: 'rule set',
             boardUndoRedoNothingToApply: 'There is no edit to redo.',
             boardUndoConflict: 'The Board changed after that edit, so undo or redo would discard newer work. The request was rejected and the current server state was reloaded.',
             boardUndoConflictRefreshFailed: 'Undo or redo was rejected because the Board changed, and the current Board could not be refreshed. Reload after connectivity returns.',
@@ -4227,11 +4358,11 @@ const messages = {
             asyncSimulationFailed: 'Async simulation failed',
             simulationTaskCancelledByServer: 'Simulation task was cancelled',
             simulationTimeout: 'Simulation timed out. Please check task status manually.',
-            noDevicesToVerify: 'No devices to verify',
+            noDevicesToVerify: 'No devices to verify. Add at least one device to the board first.',
             noSpecsToVerify: 'No specifications to verify. Please add at least one specification.',
             verificationCancelled: 'Verification cancelled',
             verificationFailed: 'Verification failed',
-            noDevicesToSimulate: 'No devices to simulate',
+            noDevicesToSimulate: 'No devices to simulate. Add at least one device to the board first.',
             simulationCompletedWithStates: 'Simulation completed: {count} model trace states generated',
             simulationTaskCompletedSaved: 'Background simulation completed: {count} model trace states generated and saved to history',
             simulationCompletedNoStates: 'Simulation completed but no model trace states were generated',
@@ -4359,12 +4490,13 @@ const messages = {
             aiSimilarityCheckFailedCanStillApply: 'AI similarity check failed; applying will not have a similarity-screening guarantee.',
             noSimilarRulesFound: 'AI found no clearly similar rule; this is not proof of conflict freedom or safe behavior.',
             noDevicesOnCanvas: 'No devices on canvas',
+            /* Shown instead of "no devices" when the snapshot failed: the panel cannot tell an empty
+               board from an unloaded one, and must not assert the former. */
+            boardDataUnavailableShort: 'Board data unavailable',
             historicalFixMayFailIfBoardChanged: 'If current rules differ from this historical trace, applying the fix may be rejected.',
-            fixAppliedWithRecheck: 'Applied the suggestion after the server solved and verified it again. This does not cover unmodelled real-world behavior.',
             fixAppliedWithSignedEvidence: 'Applied the suggestion after template and Board drift checks passed. The exact suggestion had already passed every specification in the complete formal model, so this write reused its signed evidence without solving again. This does not cover unmodelled real-world behavior.',
             fixApplyOutcomeUnconfirmedAfterRefresh: 'The fix-apply response could not be confirmed. Current rules were refreshed. Do not retry this historical suggestion; inspect the rules and run verification again.',
             fixApplyOutcomeUnknownRefreshFailed: 'The fix-apply response could not be confirmed, and current rules could not be refreshed. Do not retry; reload the board and inspect its rules after connectivity returns.',
-            fixAppliedRefreshFallbackRechecked: 'The backend confirmed that the fresh verification passed, but the latest rule list could not be refreshed. The Board is showing the rule snapshot from the fix response; reload before editing further.',
             fixAppliedRefreshFallbackSignedEvidence: 'The backend confirmed that signed verification evidence and drift checks passed, but the latest rule list could not be refreshed. The Board is showing the rule snapshot from the fix response; reload before editing further.',
             failedToApplyFix: 'Failed to apply fix',
             fixDeviceReferenceUnavailable: 'A device referenced by the fix no longer matches the current canvas. No rule was changed; run verification again before retrying.',
@@ -4455,6 +4587,9 @@ const messages = {
                 progressEmergencyDetail: 'The task reached the execution ceiling; the response will use the results already available.',
                 progressWritingTitle: 'Compose final response',
                 progressWritingDetail: 'Explaining completed, failed, and pending work from the actual tool results.',
+                // The same step in the past tense once the turn is over. A terminal step still narrating itself
+                // is what leaves a user unsure whether the answer is finished or still arriving.
+                progressWritingDetailDone: 'Explained completed, failed, and pending work from the actual tool results.',
                 progressStatusStarted: 'Started',
                 progressStatusSucceeded: 'Succeeded',
                 progressStatusPartial: 'Partial result',
@@ -4621,8 +4756,15 @@ const messages = {
                     },
                     scene: {
                         rulesDesc: '{devices} devices, {rules} rules',
+                        // A card's title must name what its prompt actually asks for. Every one of these
+                        // prompts says "Recommend" — they are read-only advisory requests — while five titles
+                        // used imperative verbs ("Add", "Generate") that promise a write. Three independent
+                        // reviews of the assistant panel, in both locales, flagged exactly this: the labels
+                        // "sound potentially mutating, but there is no preview, confirmation, or clear
+                        // read-only versus write distinction". For an agent that genuinely *can* edit the
+                        // board, a label that overstates its own effect is the worst kind of ambiguity.
                         addRules: {
-                            title: 'Add missing rules',
+                            title: 'Suggest rules',
                             text: 'The board has devices ({devices}) but no rules. Recommend 3 concise, verifiable IFTTT rules for them.'
                         },
                         reviewRules: {
@@ -4631,7 +4773,7 @@ const messages = {
                         },
                         devicesDesc: 'Devices: {devices}',
                         addDevices: {
-                            title: 'Add key devices',
+                            title: 'Suggest devices',
                             text: 'The board has few devices ({devices}). Recommend up to 3 additional devices and explain why they are needed.'
                         },
                         refineDevices: {
@@ -4640,7 +4782,7 @@ const messages = {
                         },
                         specsDesc: '{count} specs',
                         generateSpecs: {
-                            title: 'Generate specs',
+                            title: 'Suggest specifications',
                             text: 'Based on the current devices ({devices}) and {rules} rules, recommend 2 easy-to-verify specs that can expose risks.'
                         },
                         reviewSpecs: {
@@ -4711,7 +4853,20 @@ const messages = {
                 includesUntrustedSource: 'Includes untrusted source',
                 shownSourcesTrusted: 'Shown sources trusted',
                 includesPrivateData: 'Includes private-data label',
-                untrustedLabelDetails: 'Untrusted source labels in this saved state: {labels}',
+                // Node-sized forms; see the zh-CN note for why the node cannot carry the sentence.
+                includesUntrustedSourceShort: 'Untrusted',
+                shownSourcesTrustedShort: 'Trusted',
+                includesPrivateDataShort: 'Private',
+                // Says what "untrusted" means, not only which fields carry it.
+                //
+                // It listed the labels and stopped there, so three reviews of an ordinary simulation asked the
+                // same question — "sounds security-related, but no explanation or severity is visible", "could be
+                // mistaken for a broken sensor". `nusmv-model.md` answers it precisely: trust labels describe
+                // *provenance*, and an untrusted origin is one that can start an automation without an in-house
+                // action, which is a modelling assumption rather than a fault. Saying so here is cheaper than
+                // letting every reader guess, and it is the difference between a label that informs and one that
+                // alarms.
+                untrustedLabelDetails: 'Untrusted source labels in this saved state: {labels}. An untrusted origin can start an automation without an in-house action, so the model tracks how its values spread. It does not mean the device is compromised or faulty.',
                 shownSourcesTrustedDetails: 'Every source label returned for this saved state is trusted.',
                 privateLabelDetails: 'Private-data labels in this saved state: {labels}. Labels support model propagation analysis; they do not mean access control or encryption was enforced.',
                 configuredPrivateLabelDetails: 'Private-data labels in the current device configuration: {labels}. Labels support model propagation analysis; they do not mean access control or encryption was enforced.',
@@ -4788,9 +4943,14 @@ const messages = {
             },
 
             notFound: {
-                title: 'Error',
-                subtitle: 'The page you visited does not exist',
-                home: 'Back Home'
+                // "Error" said only that something was wrong, which the user already knows. The page's
+                // job is to say *what* is wrong and that nothing of theirs was lost — a 404 in a
+                // verification tool most often means a truncated shared link, not a broken product.
+                title: 'That address does not exist',
+                subtitle: 'No page in IoT-Verify matches this address. A shared link may have been cut short, or the address mistyped. Your Board, specifications, and run history are unaffected.',
+                attempted: 'Address requested:',
+                workspace: 'Go to the Board',
+                home: 'Back to the start'
             },
 
             specTemplates: specTemplateMessages.en,
@@ -4829,6 +4989,9 @@ const messages = {
             loginStatsUptime: 'System Uptime',
             loginStatsDevices: 'Device Templates',
             welcomeBackSubtitle: 'Sign in to continue managing your IoT verification workspace',
+            // Shown when a rejected token ejected the user from an authenticated route. The reassurance is the
+            // point: nothing was lost, and signing in returns them to exactly where they were.
+            sessionExpiredNotice: 'Your session expired, so you were signed out. Nothing was lost — sign in again and you will return to where you left off.',
             account: 'Phone or Username',
             phoneNumber: 'Phone Number',
             password: 'Password',
@@ -4893,5 +5056,37 @@ export const i18n = createI18n({
     fallbackLocale: 'en',
     messages
 })
+
+/**
+ * Keep the document's declared language in step with the active locale.
+ *
+ * `index.html` hardcodes `<html lang="en">` and nothing ever updated it, while the default locale here
+ * is `zh-CN` — so **out of the box the document declared English while rendering Chinese**. A screen
+ * reader selects its pronunciation rules from this attribute, so every Chinese string was being read
+ * with English phonetics. That is WCAG 3.1.1 (Language of Page), and it applied to the default state of
+ * the whole product rather than to one control.
+ *
+ * This lives beside the locale definition rather than in a component, because the failure mode is a call
+ * site forgetting: `LanguageToggle` is the only writer today, and a second writer added later would
+ * silently reintroduce it. `syncDocumentLanguage` is exported so a non-browser test can drive it.
+ */
+export const syncDocumentLanguage = (locale: string) => {
+    if (typeof document === 'undefined') return
+    document.documentElement.lang = locale
+}
+
+syncDocumentLanguage(String(i18n.global.locale.value))
+
+/**
+ * Set the interface language: persist it, apply it, and re-declare the document's language.
+ *
+ * The three steps belong together — persistence without the attribute is the defect above, and the
+ * attribute without persistence loses the choice on reload.
+ */
+export const setLocale = (locale: string) => {
+    i18n.global.locale.value = locale as typeof i18n.global.locale.value
+    localStorage.setItem('locale', locale)
+    syncDocumentLanguage(locale)
+}
 
 export default i18n

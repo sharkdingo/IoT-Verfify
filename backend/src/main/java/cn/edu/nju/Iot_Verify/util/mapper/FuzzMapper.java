@@ -1109,8 +1109,12 @@ public class FuzzMapper {
             if (task.getCompletedAt() == null) {
                 throw invalidTask(task, "completedAt", "terminal task completion time is missing");
             }
-            if (task.getProgress() != 100) {
-                throw invalidTask(task, "progress", "terminal task progress must be 100");
+            // Only a COMPLETED run finished its work, so only it must report 100. A cancelled or
+            // failed run keeps the progress its last heartbeat reported; requiring 100 of every
+            // terminal status made such a row unreadable — the task endpoint and the whole task list
+            // answered HTTP 500 for a run the user had simply cancelled partway.
+            if (status == FuzzTaskPo.TaskStatus.COMPLETED && task.getProgress() != 100) {
+                throw invalidTask(task, "progress", "completed task progress must be 100");
             }
         } else if (task.getCompletedAt() != null) {
             throw invalidTask(task, "completedAt", "active task cannot have a completion time");
@@ -1181,7 +1185,9 @@ public class FuzzMapper {
             throw invalidProjectedTask(task, "running or completed task start time is missing");
         }
         if (terminal) {
-            if (task.getCompletedAt() == null || task.getProgress() != 100) {
+            // Progress bound is already checked upstream; only COMPLETED must claim finished work.
+            if (task.getCompletedAt() == null
+                    || (status == FuzzTaskPo.TaskStatus.COMPLETED && task.getProgress() != 100)) {
                 throw invalidProjectedTask(task, "terminal task completion metadata is invalid");
             }
         } else if (task.getCompletedAt() != null) {
