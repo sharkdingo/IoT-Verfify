@@ -390,3 +390,36 @@ Pinned by `styles/__tests__/elevationScale.spec.ts`, which covers `base.css` and
 hand-written elevations remain outside the board** (`ChatView`, `Landing`, `PublicHeader`, the two toggles,
 `ToggleSwitch`, `AccountDeleteDialog`, and the `ControlCenter`/`CanvasBoard` scoped blocks). They are the same
 defect; each needs its depth chosen and then measured on its own surface.
+
+## 8. A scoped rule outranks a Tailwind utility on the same element
+
+Vue compiles `<style scoped>` selectors with a `[data-v-…]` attribute, so `.foo { max-width: 100% }` is
+specificity **0-2-0** while Tailwind's `.max-w-4xl` is **0-1-0**. The scoped rule wins. This is not a rare
+edge: it has produced three separate user-visible defects, and each one looked correct in review from both
+sides — the template states the intent, the stylesheet states a reasonable-sounding rule, and only the
+rendered pixels disagree.
+
+- **`DeviceDialog` filled the screen.** `max-w-4xl` (896px) in the class list, and
+  `.device-dialog-surface` in a scoped `max-width: 100%` list whose purpose was containing overflow in the
+  dialog *body*. Measured on a 2548×1465 display: **2516×1433, 98.7% × 97.8% of the viewport**, for content
+  that needs 896px. It read as the app being replaced by a settings screen rather than a panel opening over
+  the board. Removing the surface from that list restored the cap (896px, 35% of the width).
+- **An accent icon rendered grey.** `.device-runtime-box span { color: inherit }` — there to neutralise
+  Tailwind slate utilities the markup still carries — also matched the one span asking for
+  `board-text-accent`. Measured `rgb(148,163,184)` where `--accent` is `rgb(96,165,250)`.
+- **A hover state half-applied.** Role-class hover variants declared in `board.css` lost to
+  `.iot-board .board-side-panel .text-slate-500`; the fix was source *order*, not specificity, and two
+  attempts at raising specificity failed first.
+
+### Rules
+
+- Do not put a `max-width`/`max-height` in a scoped block on an element that also carries a Tailwind
+  `max-w-*`/`max-h-*`. Constrain the children that need containment, not the capped element itself.
+  `styles/__tests__/scopedWidthOverride.spec.ts` fails on the overlap, per axis.
+- A broad scoped selector (`span`, `p`, `button`) must exempt the role classes used inside it —
+  `span:not(.board-text-accent)` — or the role has no way to win in that component.
+- When a rule that looks right does not apply, read the winner from CDP matched-styles rather than
+  reasoning about specificity. At equal specificity, source order decides, and raising specificity is then
+  the wrong fix.
+- Dialog height caps: the siblings use `85vh`/`88vh`, which leaves visible margin so the surface reads as a
+  panel over the board. `calc(100vh - 2rem)` reads as a takeover.

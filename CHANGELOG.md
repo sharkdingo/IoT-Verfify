@@ -15,7 +15,27 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-05 (latest)
+### 2026-08-06 (latest)
+
+#### Fixed
+
+- **The device details dialog filled the whole screen.** It declared `max-w-4xl` (896px), but a scoped
+  `max-width: 100%` listing `.device-dialog-surface` — there to contain overflow in the dialog *body* — carries
+  Vue's `[data-v-…]` attribute and so outranked it, 0-2-0 against 0-1-0. The cap never applied. Measured on a
+  2548×1465 display: **2516×1433, 98.7% × 97.8% of the viewport**, for content that needs 896px. It read as the
+  app being replaced by a settings screen rather than a device panel opening over the board; now 896px, 35% of
+  the width, with the board visible around it. The height cap moved from `calc(100vh - 2rem)` to `88vh`, matching
+  the sibling dialogs, so the surface keeps a visible margin instead of reaching the edges. The remaining height
+  is earned rather than imposed — content measures 2684px with 1587px scrolled out of view.
+  `styles/__tests__/scopedWidthOverride.spec.ts` now fails on any scoped `max-width`/`max-height` that lands on
+  an element also carrying the matching Tailwind cap. Writing it produced two instructive false positives, both
+  fixed before it was kept: comparing any `max-*` against any `max-*` reported two `ControlCenter` dialogs that
+  cap width in the template and height in CSS (different axes, no conflict), and scanning the scoped block
+  without stripping comments reported `DeviceDialog` as still broken — matching the class name inside its own
+  fix note. This is the third defect this session from the same specificity trap, so it is now a documented
+  rule with its own section in `docs/guides/frontend-ui-conventions.md` rather than three separate comments.
+
+### 2026-08-05
 
 #### Changed
 

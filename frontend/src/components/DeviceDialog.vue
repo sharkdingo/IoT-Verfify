@@ -1021,7 +1021,7 @@ const deviceSpecs = computed(() => {
           <div
             :ref="setDialogRef"
             data-testid="device-dialog"
-            class="board-card device-dialog-surface w-full min-w-0 max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]"
+            class="board-card device-dialog-surface w-full min-w-0 max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
             role="dialog"
             aria-modal="true"
             aria-labelledby="device-dialog-title"
@@ -1610,7 +1610,15 @@ const deviceSpecs = computed(() => {
 </template>
 
 <style scoped>
-.device-dialog-surface,
+/*
+ * Overflow containment for the body and its sections — deliberately NOT the surface.
+ *
+ * `.device-dialog-surface` used to be in this list, and because a scoped rule carries `[data-v-…]` it
+ * outranked the `max-w-4xl` on the same element (0-2-0 against 0-1-0). So the 896px cap never applied and the
+ * dialog grew to the viewport: measured 2516×1433 on a 2548×1465 screen, 98.7% × 97.8%, with content that
+ * needed nowhere near that width. The surface needs no `max-width: 100%` of its own — it is a flex column
+ * already bounded by the Tailwind cap and the overlay's padding.
+ */
 .device-dialog-body,
 .device-dialog-body > section,
 .device-dialog-body > section > * {
