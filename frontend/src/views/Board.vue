@@ -14776,7 +14776,7 @@ const counterexampleTraceHelpText = computed(() => {
             min="1"
             :max="attackBudgetMax"
             :aria-invalid="Boolean(verificationAttackConfigurationError)"
-            class="w-full h-2 board-chip-danger rounded-lg appearance-none cursor-pointer accent-[color:var(--danger)] disabled:cursor-not-allowed disabled:opacity-60"
+            class="w-full h-2 bg-[color:var(--danger-border)] rounded-lg appearance-none cursor-pointer accent-[color:var(--danger)] disabled:cursor-not-allowed disabled:opacity-60"
           />
           <div class="flex justify-between text-[length:var(--iot-font-min)] board-text-danger mt-1">
             <span>1</span>
@@ -16392,7 +16392,7 @@ const counterexampleTraceHelpText = computed(() => {
               :min="SIMULATION_STEPS_MIN"
               :max="SIMULATION_STEPS_MAX"
               step="1"
-              class="flex-1 h-2 board-chip-info rounded-lg appearance-none cursor-pointer accent-[color:var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+              class="flex-1 h-2 bg-[color:var(--info-border)] rounded-lg appearance-none cursor-pointer accent-[color:var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
             />
             <button
               type="button"

@@ -2048,16 +2048,25 @@
     color: var(--board-text);
 }
 
-.iot-board .board-floating-panel input,
+/*
+ * Text fields, selects and textareas - not range sliders.
+ *
+ * `input` matched `input[type="range"]` too, and at 0-3-0 it beat the track colour the markup asked for. Both
+ * sliders therefore painted `--field-bg`, which is the panel colour: measured 1.0:1 for the simulation-steps
+ * track on a white panel, 1.01:1 in dark. The groove was not faint - it was the same colour as the surface behind
+ * it, so "the line does not show" was exact. A control boundary needs 3:1 (this repo raised two dock borders for
+ * that reason), and a field background is the wrong paint for a track in any case.
+ */
+.iot-board .board-floating-panel input:not([type='range']),
 .iot-board .board-floating-panel select,
 .iot-board .board-floating-panel textarea,
-.iot-board .modern-panel input,
+.iot-board .modern-panel input:not([type='range']),
 .iot-board .modern-panel select,
 .iot-board .modern-panel textarea,
-.iot-board .glass-panel input,
+.iot-board .glass-panel input:not([type='range']),
 .iot-board .glass-panel select,
 .iot-board .glass-panel textarea,
-.iot-board .board-side-panel input,
+.iot-board .board-side-panel input:not([type='range']),
 .iot-board .board-side-panel select,
 .iot-board .board-side-panel textarea {
     background-color: var(--field-bg);

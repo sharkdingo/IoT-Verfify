@@ -103,19 +103,34 @@ describe('interactive target size floor', () => {
   })
 
   it('gives the help trigger a full target without inflating its badge', () => {
-    // The trigger measured 24x24 — the smallest control in the inspector, and a help affordance is exactly what a
-    // confused user reaches for. The badge stays 1.5rem so it does not compete with the content it annotates;
-    // `content-box` padding grows the target instead.
+    /*
+     * The badge must paint what it occupies, and the target must live outside the box model.
+     *
+     * This test used to require the opposite: `box-sizing: content-box` with `padding: 0.625rem` and
+     * `background-clip: content-box`, on the theory that padding grows the target while the background stays
+     * small. `board.css` had already measured that this does not hold - `background-clip` clips the background but
+     * NOT the border, so a bordered box paints at the full padding size. Measured on the board: the badge rendered
+     * 46x46px beside 16px text while telling the layout it was 24px, and the negative margin that cancelled the
+     * growth spent the difference on its neighbours.
+     *
+     * So this assertion was certifying the defect it existed to prevent. The target now comes from a `::before`
+     * overlay, which enlarges the hit area without entering the box model or the paint.
+     */
     const tooltip = readFileSync(join(__dirname, '../../components/common/InfoTooltip.vue'), 'utf8')
     const at = tooltip.indexOf('.iot-info-tooltip-trigger {')
     expect(at).toBeGreaterThan(-1)
     const block = tooltip.slice(at, at + tooltip.slice(at).indexOf('}'))
 
-    expect(block).toContain('box-sizing: content-box')
-    expect(block).toMatch(/padding:\s*0\.625rem/)
-    // 1.5rem badge + 2 x 0.625rem padding = 2.75rem of target.
-    expect(block).toMatch(/width:\s*1\.5rem/)
-    expect(block).toContain('background-clip: content-box')
+    expect(block).toContain('box-sizing: border-box')
+    expect(block).not.toMatch(/margin:\s*-/)
+    expect(block).not.toContain('background-clip: content-box')
+
+    const overlayAt = tooltip.indexOf('.iot-info-tooltip-trigger::before')
+    expect(overlayAt, 'the hit target should be an overlay').toBeGreaterThan(-1)
+    const overlay = tooltip.slice(overlayAt, overlayAt + tooltip.slice(overlayAt).indexOf('}'))
+    expect(overlay).toMatch(/width:\s*44px/)
+    expect(overlay).toMatch(/height:\s*44px/)
+    expect(overlay).toContain('position: absolute')
   })
 
   it('sizes the inspector tabs and add-device control at the minimum', () => {
