@@ -753,6 +753,14 @@ const POINTER_RESIZE_TARGET_SIZE_PX = 44
 // target is useful only when each screen dimension leaves a safe gap around it.
 const POINTER_RESIZE_MIN_NODE_SIZE_PX = POINTER_RESIZE_TARGET_SIZE_PX + 8
 const POINTER_RESIZE_ALL_HANDLES_SIZE_PX = POINTER_RESIZE_TARGET_SIZE_PX * 2
+/**
+ * How many variable badges a node prints.
+ *
+ * Three, because the strip lives inside a 187px node. The number is named so the overflow count below and the
+ * slice cannot drift apart — they were the same literal in two places, which is how the cap stayed silent.
+ */
+const VISIBLE_NODE_VARIABLES = 3
+
 const canPointerResizeNode = (node: DeviceNode) =>
   node.width * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX
   && node.height * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX
@@ -772,12 +780,28 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
     }))
   const candidates = isTraceActive.value ? traceOnlyVariables : configuredVariables
 
-  return candidates
+  const shown = candidates
     .filter(variable =>
       hasValue(variable.value) ||
       (isTraceActive.value && getLatestTraceVariableValueForNode(node.id, variable.name) !== null)
     )
-    .slice(0, 3)
+
+  /*
+   * How many variables the node cannot show.
+   *
+   * The strip is capped at three because a node is 187px wide, but the cap was silent: a device with a fourth
+   * variable simply lost it, with nothing on screen saying so. That mattered once the trace timeline stopped
+   * repeating this data — the timeline's chip carried a full `traceDeviceSummary`, so it was the fallback that
+   * made the truncation survivable. Removing the duplicate without surfacing the remainder would have turned a
+   * redundancy into a hole.
+   *
+   * None of the 45 bundled templates declares more than three local variables, so this is normally 0; a custom
+   * template may declare up to `MAX_TEMPLATE_INTERNAL_VARIABLES`.
+   */
+  const hiddenVariableCount = Math.max(0, shown.length - VISIBLE_NODE_VARIABLES)
+
+  const badges = shown
+    .slice(0, VISIBLE_NODE_VARIABLES)
     .map(variable => {
       const traceVariable = isTraceActive.value
         ? getLatestTraceVariableForNode(node.id, variable.name)
@@ -822,6 +846,27 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
           : `${displayLabel}: ${displayValue}${trustLabel ? ` (${trustLabel})` : ''}`
       }
     })
+
+  return { badges, hiddenVariableCount }
+}
+
+/**
+ * The variables the node is holding back, by name.
+ *
+ * The `+N` chip states the count; this states which, so the fact is never unavailable — only unprinted at 64px.
+ * Same division as `badge.title`, which carries the full `previous → current` the chip cannot show.
+ */
+const getHiddenVariableNames = (node: DeviceNode): string => {
+  const { hiddenVariableCount } = getNodeRuntimeBadges(node)
+  if (hiddenVariableCount <= 0) return ''
+  const traceDevice = isTraceActive.value ? getLatestTraceDeviceForNode(node.id) : null
+  const source = isTraceActive.value ? (traceDevice?.variables || []) : (node.variables || [])
+  const names = source
+    .slice(VISIBLE_NODE_VARIABLES)
+    .map(variable => isTraceActive.value
+      ? formatPlaybackModelToken(undefined, variable.name)
+      : formatNodeModelToken(node, variable.name))
+  return names.join(' · ')
 }
 
 /**
@@ -1551,9 +1596,17 @@ onMounted(() => {
               <span :key="getNodeVisualStateKey(node)" class="device-state-value">{{ getNodeDisplayState(node) }}</span>
             </Transition>
           </div>
-          <div v-if="getNodeRuntimeBadges(node).length > 0" class="device-runtime-strip">
+          <!--
+            One call, destructured: `getNodeRuntimeBadges` was invoked twice per node per render — once for the
+            `v-if` and once for the `v-for` — and it walks the trace to find each variable's previous value, so
+            the duplicate was not free on a board of thirty nodes.
+          -->
+          <div
+            v-if="getNodeRuntimeBadges(node).badges.length > 0"
+            class="device-runtime-strip"
+          >
             <span
-                v-for="badge in getNodeRuntimeBadges(node)"
+                v-for="badge in getNodeRuntimeBadges(node).badges"
                 :key="badge.label"
                 class="device-runtime-chip"
                 :class="{ 'device-runtime-chip--changed': badge.changed }"
@@ -1577,6 +1630,26 @@ onMounted(() => {
               -->
               <span class="device-runtime-chip__value">{{ badge.value }}</span>
             </span>
+            <!--
+              The remainder, named rather than dropped.
+
+              The strip prints three variables because a node is 187px wide. That cap used to be silent, which
+              was survivable only while the trace timeline repeated the same data with a complete
+              `traceDeviceSummary`. Once the node is the authority for device state, a fourth variable that
+              simply vanishes is a hole rather than a redundancy — so it says how many it is holding back, and
+              the tooltip names them.
+            -->
+            <HintTooltip
+              v-if="getNodeRuntimeBadges(node).hiddenVariableCount > 0"
+              :content="getHiddenVariableNames(node)"
+            >
+              <span
+                class="device-runtime-chip device-runtime-chip--overflow"
+                :aria-label="t('app.traceVisualization.moreVariables', {
+                  count: getNodeRuntimeBadges(node).hiddenVariableCount
+                })"
+              >+{{ getNodeRuntimeBadges(node).hiddenVariableCount }}</span>
+            </HintTooltip>
           </div>
           <div v-if="getNodeSecurityBadges(node).length > 0" class="device-node-actions">
             <span

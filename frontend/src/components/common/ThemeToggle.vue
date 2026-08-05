@@ -33,20 +33,21 @@ const iconName = computed(() => {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="theme-toggle"
-    :class="[
-      `theme-toggle--${tone}`,
-      { 'theme-toggle--compact': compact }
-    ]"
-    :title="`${currentModeDescription} — ${t('app.switchTheme')}`"
-    :aria-label="`${currentModeDescription} — ${t('app.switchTheme')}`"
-    @click="cycleThemeMode"
-  >
-    <span class="material-symbols-outlined theme-toggle__icon" aria-hidden="true">{{ iconName }}</span>
-    <span class="theme-toggle__label">{{ currentModeLabel }}</span>
-  </button>
+  <HintTooltip :content="`${currentModeDescription} — ${t('app.switchTheme')}`">
+    <button
+      type="button"
+      class="theme-toggle"
+      :class="[
+        `theme-toggle--${tone}`,
+        { 'theme-toggle--compact': compact }
+      ]"
+      :aria-label="`${currentModeDescription} — ${t('app.switchTheme')}`"
+      @click="cycleThemeMode"
+    >
+      <span class="material-symbols-outlined theme-toggle__icon" aria-hidden="true">{{ iconName }}</span>
+      <span class="theme-toggle__label">{{ currentModeLabel }}</span>
+    </button>
+  </HintTooltip>
 </template>
 
 <style scoped>

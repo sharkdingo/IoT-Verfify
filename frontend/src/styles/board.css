@@ -2535,7 +2535,23 @@
  * `getVisibleCanvasFrame` now measures this element rather than guessing a fraction of the window, so the
  * canvas fit follows whatever height it actually takes. */
 .board-timeline {
-    width: min(39rem, 100%);
+    /*
+     * Width follows the corridor the host already reserves; the 39rem cap was making the height problem.
+     *
+     * The height above was lowered on the finding that the overlay read as the subject rather than the canvas.
+     * That was right, but only one term moved: at `min(39rem, 100%)` the panel used **624px of 1416px of host
+     * width — 44%** — and then paid for it vertically. Measured with a real counterexample open: content 529px
+     * against a 318px viewport, so **211px sat hidden behind a scrollbar** while 792px of horizontal room went
+     * unused. The four device chips total ~1268px and were folded into 598px of content width, taking three rows
+     * (89.5px); the header badge row folded into three rows too (87px). Squeezing a wide row into a narrow column
+     * does not remove the content, it turns width into height.
+     *
+     * So the width now spans the corridor between the two side panels, which is what `--board-control-width` and
+     * `--board-inspector-width` already describe, with 72rem as a readability ceiling so a 2556px screen does not
+     * stretch one line of chips across 1400px. The height cap stays exactly as the earlier pass set it: with the
+     * rows unfolded it is no longer the binding constraint.
+     */
+    width: min(72rem, 100%);
     max-height: min(44dvh, 20rem);
     background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
     color: var(--text);
@@ -3242,6 +3258,22 @@
     font-size: var(--iot-font-min);
     font-weight: 700;
     line-height: 1;
+}
+
+/*
+ * The `+N` chip: a count, not a value.
+ *
+ * Quieter than `--changed` on purpose. `--changed` earns accent colour because it marks what moved in this step;
+ * this one only says the node is holding variables back, so it reads as structure rather than as a finding. It
+ * needs no `max-width` — "+2" is two characters — and it must not be `flex: 1`, or it would take room from the
+ * three badges that carry actual values.
+ */
+.iot-board .device-runtime-chip--overflow {
+    flex: 0 0 auto;
+    border-color: var(--border);
+    background: var(--surface-muted);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
 }
 
 .iot-board .device-runtime-chip--changed {

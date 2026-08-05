@@ -312,18 +312,19 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
           {{ playbackSummary }}
         </p>
       </div>
-      <button
-        type="button"
-        data-testid="playback-change-dismiss"
-        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:board-chip-info hover:board-text-info"
-        :aria-label="t('app.traceVisualization.dismissChanges')"
-        :title="t('app.traceVisualization.dismissChanges')"
-        @pointerdown.stop
-        @mousedown.stop
-        @click="emit('dismiss')"
-      >
-        <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
-      </button>
+      <HintTooltip :content="t('app.traceVisualization.dismissChanges')">
+        <button
+          type="button"
+          data-testid="playback-change-dismiss"
+          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:board-chip-info hover:board-text-info"
+          :aria-label="t('app.traceVisualization.dismissChanges')"
+          @pointerdown.stop
+          @mousedown.stop
+          @click="emit('dismiss')"
+        >
+          <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
+        </button>
+      </HintTooltip>
     </header>
 
     <Transition name="playback-change-step" mode="out-in">

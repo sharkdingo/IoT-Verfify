@@ -388,16 +388,17 @@ onUnmounted(() => {
         :aria-labelledby="isRegisterMode ? 'register-title' : 'login-title'"
       >
         <div class="auth-panel__topbar">
-          <button
-            type="button"
-            class="auth-panel__back"
-            :aria-label="t('auth.backToOverview')"
-            :title="t('auth.backToOverview')"
-            :disabled="loading"
-            @click="closeAuthPanel"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">arrow_back</span>
-          </button>
+          <HintTooltip :content="t('auth.backToOverview')">
+            <button
+              type="button"
+              class="auth-panel__back"
+              :aria-label="t('auth.backToOverview')"
+              :disabled="loading"
+              @click="closeAuthPanel"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">arrow_back</span>
+            </button>
+          </HintTooltip>
           <div class="auth-tabs" role="tablist" :aria-label="t('auth.getStarted')">
             <button
               id="auth-tab-login"

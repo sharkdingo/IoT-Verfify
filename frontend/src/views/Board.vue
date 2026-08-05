@@ -664,15 +664,10 @@ import {
 import { assertRuleHasTrigger, getLinkPoints, ruleSimilarityReasonKey } from '../utils/rule'
 import {
   deriveTraceContext,
-  formatPlaybackSecurityLabel,
   formatTraceSpec,
-  isPlaybackDeviceAttacked,
   normalizePlaybackDeviceId,
-  playbackDeviceChanged,
   playbackDeviceChangeDetails,
   playbackEnvironmentChangeDetails,
-  playbackDeviceSecurityFacts,
-  playbackDeviceSummaryParts,
   type PlaybackDeviceChange,
   type PlaybackEnvironmentChange
 } from '@/utils/traceView'
@@ -11720,14 +11715,7 @@ const currentTraceState = computed(() => {
   return trace.states[traceAnimationState.value.selectedStateIndex] || null
 })
 
-const previousTraceState = computed(() => {
-  const trace = currentTrace.value
-  const previousIndex = traceAnimationState.value.selectedStateIndex - 1
-  if (!trace?.states || previousIndex < 0) return null
-  return trace.states[previousIndex] || null
-})
 
-const currentTraceEnvironmentVariables = computed(() => currentTraceState.value?.envVariables || [])
 const currentTraceTriggeredRules = computed(() => currentTraceState.value?.triggeredRules || [])
 const currentTraceCompromisedAutomationLinks = computed(() => currentTraceState.value?.compromisedAutomationLinks || [])
 const currentTraceCompromisedPointCount = computed(() => {
@@ -11736,37 +11724,17 @@ const currentTraceCompromisedPointCount = computed(() => {
   const parsed = Number.parseInt(String(raw ?? ''), 10)
   return Number.isFinite(parsed) ? parsed : null
 })
-const currentTraceDevices = computed(() => currentTraceState.value?.devices || [])
 const currentBoardRuleIds = computed(() => rules.value
   .map(rule => rule.id)
   .filter((id): id is string => !!id)
   .map(String))
 const currentBoardDeviceIds = computed(() => nodes.value.map(node => normalizePlaybackDeviceId(node.id)))
-const currentBoardDeviceIdSet = computed(() => new Set(currentBoardDeviceIds.value))
 
-const previousTraceDevice = (device: TraceDevice) => previousTraceState.value?.devices?.find((candidate: TraceDevice) =>
-  normalizePlaybackDeviceId(candidate.deviceId) === normalizePlaybackDeviceId(device.deviceId)
-)
 
-const traceDeviceChanged = (device: TraceDevice) =>
-  traceAnimationState.value.selectedStateIndex > 0
-  && playbackDeviceChanged(device, previousTraceDevice(device))
 
-const traceDeviceExistsOnBoard = (device: TraceDevice) =>
-  currentBoardDeviceIdSet.value.has(normalizePlaybackDeviceId(device.deviceId))
 
-const traceDeviceSummary = (device: TraceDevice) => {
-  const parts = playbackDeviceSummaryParts(device, value => formatPlaybackDeviceModelToken(device, value))
-  return parts.length > 0 ? parts.join(' · ') : t('app.unknown')
-}
 
-const traceDeviceSecurityFacts = (device: TraceDevice) => playbackDeviceSecurityFacts(device)
 
-const formattedTraceDeviceSecurityLabels = (device: TraceDevice, labels: string[]) =>
-  labels.map(label => formatPlaybackSecurityLabel(
-    label,
-    value => formatPlaybackDeviceModelToken(device, value)
-  ))
 
 const traceTriggeredRuleLabel = (rule: { ruleIndex?: number; ruleId?: string | null; ruleLabel?: string | null }, index: number) => {
   if (rule.ruleLabel?.trim()) return rule.ruleLabel.trim()
@@ -11791,21 +11759,8 @@ const selectedTraceStateRangeIndex = computed({
   }
 })
 
-const getPreviousTraceEnvValue = (name: string) =>
-  previousTraceState.value?.envVariables?.find((variable: any) => variable.name === name)?.value
 
-const traceEnvironmentVariableChanged = (name: string, value: string) =>
-  traceAnimationState.value.selectedStateIndex > 0 && getPreviousTraceEnvValue(name) !== value
 
-const traceEnvironmentVariableTitle = (name: string, value: string) => {
-  const previous = getPreviousTraceEnvValue(name)
-  const displayName = formatPlaybackEnvironmentModelToken(name, name)
-  const displayValue = formatPlaybackEnvironmentModelToken(name, value)
-  if (previous === undefined || previous === value) {
-    return `${displayName}: ${displayValue}`
-  }
-  return `${displayName}: ${formatPlaybackEnvironmentModelToken(name, previous)} -> ${displayValue}`
-}
 
 // 选择并播放指定索引的反例路径动画
 const selectAndPlayTrace = (traceIndex: number) => {
@@ -17591,6 +17546,20 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="px-2 py-0.5 board-chip-danger board-text-danger text-xs rounded-full" aria-live="polite">
               {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
+            <!--
+              The replay-scope notice, as a hint rather than a paragraph.
+
+              It used to be an unconditional ~50-word block inside `trace-step-values`, so it was filed under
+              "state details" while describing the whole session, and it was re-read on every step. Measured: it
+              was the largest part of that block's 137.5px body, and `trace-step-values` was 48% of the overlay's
+              remaining content. A fact the user needs once does not earn permanent height on a surface whose
+              subject is the canvas behind it.
+            -->
+            <InfoTooltip
+              :text="t('app.traceVisualization.playbackSnapshotReadOnly')"
+              :label="t('app.traceVisualization.playbackSnapshotReadOnly')"
+              test-id="trace-timeline-snapshot-notice"
+            />
             <span
               v-if="activeFuzzingFinding && traceAnimationState.selectedStateIndex === activeFuzzingFinding.firstViolationStep"
               class="inline-flex items-center gap-1 rounded-full board-chip-danger px-2 py-0.5 text-xs font-bold board-text-danger"
@@ -17705,10 +17674,6 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
           </summary>
           <div class="mt-1.5">
-        <div class="mb-3 rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-[11px] font-medium leading-4 board-text-info" data-testid="trace-timeline-snapshot-notice">
-          {{ t('app.traceVisualization.playbackSnapshotReadOnly') }}
-        </div>
-
         <div class="board-card mb-3 rounded-lg border border-slate-200 /70 px-3 py-2" data-testid="trace-timeline-triggered-rules">
           <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
             {{ traceAnimationState.selectedStateIndex === 0
@@ -17782,72 +17747,20 @@ const counterexampleTraceHelpText = computed(() => {
           >
         </label>
 
-        <div v-if="currentTraceDevices.length > 0" class="mb-3 flex flex-wrap gap-1.5" data-testid="trace-timeline-devices">
-          <span class="mr-1 inline-flex items-center gap-1 text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
-            <span class="material-symbols-outlined text-[13px]" aria-hidden="true">devices</span>
-            {{ t('app.traceVisualization.devicesInCurrentState') }}
-          </span>
-          <span
-            v-for="device in currentTraceDevices"
-            :key="device.deviceId"
-            class="inline-flex max-w-full flex-wrap items-center gap-1 rounded border px-2 py-1 text-[length:var(--iot-font-min)] font-semibold"
-            :class="!traceDeviceExistsOnBoard(device)
-              ? 'board-surface-warning board-text-warning'
-              : traceDeviceChanged(device)
-                ? 'board-border-subtle board-chip-danger board-text-danger'
-                : 'border-slate-200 bg-slate-50 text-slate-700'"
-            :title="traceDeviceExistsOnBoard(device) ? undefined : t('app.traceVisualization.historicalDeviceNotOnCurrentBoard')"
-          >
-            <span class="font-bold">{{ device.deviceLabel || device.deviceId }}</span>
-            <span class="max-w-[20rem] break-words font-mono font-normal">{{ traceDeviceSummary(device) }}</span>
-            <span v-if="traceDeviceChanged(device)" class="rounded board-chip-danger px-1 text-[length:var(--iot-font-min)] board-text-danger">
-              {{ t('app.traceVisualization.changed') }}
-            </span>
-            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded board-chip-danger px-1 text-[length:var(--iot-font-min)] board-text-danger">
-              {{ t('app.traceVisualization.attacked') }}
-            </span>
-            <!-- Provenance, not a hazard — `info`, matching the simulation side. `nusmv-model.md`: "Trust labels
-                 describe provenance and propagation; `untrusted` does not mean the device is selected as
-                 compromised." The `attacked` chip above keeps `danger`, because that one is a real compromise. -->
-            <span
-              v-if="traceDeviceSecurityFacts(device).untrustedLabels.length > 0"
-              class="rounded board-chip-info px-1 text-[length:var(--iot-font-min)] board-text-info"
-              :title="t('app.traceVisualization.untrustedLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).untrustedLabels).join(', ') })"
-            >
-              {{ t('app.traceVisualization.includesUntrustedSource') }}
-            </span>
-            <span
-              v-if="traceDeviceSecurityFacts(device).privateLabels.length > 0"
-              class="rounded board-chip-info px-1 text-[length:var(--iot-font-min)] board-text-info"
-              :title="t('app.traceVisualization.privateLabelDetails', { labels: formattedTraceDeviceSecurityLabels(device, traceDeviceSecurityFacts(device).privateLabels).join(', ') })"
-            >
-              {{ t('app.traceVisualization.includesPrivateData') }}
-            </span>
-            <span v-if="!traceDeviceExistsOnBoard(device)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
-          </span>
-        </div>
+        <!--
+          Device state and environment values are not repeated here; the canvas is their authority.
 
-        <div v-if="currentTraceEnvironmentVariables.length > 0" class="mb-3 flex flex-wrap gap-1.5" data-testid="trace-timeline-env">
-          <span class="mr-1 inline-flex items-center gap-1 text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">
-            <span class="material-symbols-outlined text-[13px]" aria-hidden="true">terrain</span>
-            {{ t('app.traceVisualization.environmentVariables') }}
-          </span>
-          <span
-            v-for="envVar in currentTraceEnvironmentVariables"
-            :key="envVar.name"
-            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[length:var(--iot-font-min)] font-bold"
-            :class="traceEnvironmentVariableChanged(envVar.name, envVar.value)
-              ? 'board-surface-warning board-text-warning'
-              : 'border-slate-200 bg-slate-50 text-slate-600'"
-            :title="traceEnvironmentVariableTitle(envVar.name, envVar.value)"
-          >
-            <span class="max-w-[7rem] truncate">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.name) }}</span>
-            <span class="font-mono">{{ formatPlaybackEnvironmentModelToken(envVar.name, envVar.value) }}</span>
-            <span v-if="traceEnvironmentVariableChanged(envVar.name, envVar.value)" class="rounded-full board-chip-warning px-1 text-[length:var(--iot-font-min)] board-text-warning">
-              {{ t('app.traceVisualization.changed') }}
-            </span>
-          </span>
-        </div>
+          Three surfaces rendered the same `currentTraceState`: the canvas nodes, this block, and
+          `PlaybackChangePopover`. The canvas is the richest of the three — each variable's value, its previous
+          value, a `changed` tint, trust, and the security pills, with `shortLabel` variants for a narrow node —
+          so the copy here was the weaker one, and it was the dominant cost: measured against a real
+          counterexample, `trace-step-values` alone was 279.5px inside a 318px viewport, with the device chips
+          folded onto three rows.
+
+          What had made the duplicate load-bearing was the canvas's silent three-variable cap. That is now a `+N`
+          chip naming the remainder (verified: a five-variable device renders three badges plus "+2"), so the
+          fallback is no longer needed and the timeline can be a timeline.
+        -->
           </div>
         </details>
         

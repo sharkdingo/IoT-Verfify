@@ -57,27 +57,28 @@ const toggleLocale = () => {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="language-toggle"
-    :class="[
-      `language-toggle--${tone}`,
-      { 'language-toggle--compact': compact }
-    ]"
-    :title="switchTargetDescription"
-    :aria-label="switchTargetDescription"
-    :lang="isChinese ? 'en' : 'zh-CN'"
-    @click="toggleLocale"
-  >
-    <span class="material-symbols-outlined language-toggle__icon" aria-hidden="true">language</span>
-    <!-- aria-hidden: `aria-label` already states the destination in a full sentence, so reading the
-         pair out again would only add noise. -->
-    <span class="language-toggle__label" aria-hidden="true">
-      <span :class="['language-toggle__side', { 'language-toggle__side--active': isChinese }]">中</span>
-      <span class="language-toggle__divider">·</span>
-      <span :class="['language-toggle__side', { 'language-toggle__side--active': !isChinese }]">EN</span>
-    </span>
-  </button>
+  <HintTooltip :content="switchTargetDescription">
+    <button
+      type="button"
+      class="language-toggle"
+      :class="[
+        `language-toggle--${tone}`,
+        { 'language-toggle--compact': compact }
+      ]"
+      :aria-label="switchTargetDescription"
+      :lang="isChinese ? 'en' : 'zh-CN'"
+      @click="toggleLocale"
+    >
+      <span class="material-symbols-outlined language-toggle__icon" aria-hidden="true">language</span>
+      <!-- aria-hidden: `aria-label` already states the destination in a full sentence, so reading the
+           pair out again would only add noise. -->
+      <span class="language-toggle__label" aria-hidden="true">
+        <span :class="['language-toggle__side', { 'language-toggle__side--active': isChinese }]">中</span>
+        <span class="language-toggle__divider">·</span>
+        <span :class="['language-toggle__side', { 'language-toggle__side--active': !isChinese }]">EN</span>
+      </span>
+    </button>
+  </HintTooltip>
 </template>
 
 <style scoped>

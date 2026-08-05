@@ -158,16 +158,17 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
             <p id="fuzzing-result-description" class="mt-0.5 text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t('app.fuzzResultHeuristicNotice') }}</p>
           </div>
         </div>
-        <button
-          type="button"
-          data-testid="close-fuzzing-result"
-          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-          :title="t('app.close')"
-          :aria-label="t('app.close')"
-          @click="closeDialog"
-        >
-          <span class="material-symbols-outlined" aria-hidden="true">close</span>
-        </button>
+        <HintTooltip :content="t('app.close')">
+          <button
+            type="button"
+            data-testid="close-fuzzing-result"
+            class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+            :aria-label="t('app.close')"
+            @click="closeDialog"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
+          </button>
+        </HintTooltip>
       </header>
 
       <div

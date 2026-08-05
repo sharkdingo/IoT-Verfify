@@ -403,17 +403,18 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
           <p class="truncate text-xs text-white/75">{{ t('app.runHistorySubtitle') }}</p>
         </div>
       </div>
-      <button
-        ref="closeButtonRef"
-        type="button"
-        data-testid="close-history-panel"
-        class="board-card flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white/75 transition-colors hover:/10 hover:text-white"
-        :title="t('app.close')"
-        :aria-label="t('app.close')"
-        @click="emit('close')"
-      >
-        <span class="material-symbols-outlined">close</span>
-      </button>
+      <HintTooltip :content="t('app.close')">
+        <button
+          ref="closeButtonRef"
+          type="button"
+          data-testid="close-history-panel"
+          class="board-card flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white/75 transition-colors hover:/10 hover:text-white"
+          :aria-label="t('app.close')"
+          @click="emit('close')"
+        >
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </HintTooltip>
     </div>
 
     <div class="board-panel-tabs shrink-0 border-b p-3">

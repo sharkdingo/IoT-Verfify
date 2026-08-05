@@ -26,6 +26,7 @@ declare module 'vue' {
     FixResultDialog: typeof import('./src/components/FixResultDialog.vue')['default']
     FuzzingPanel: typeof import('./src/components/FuzzingPanel.vue')['default']
     FuzzingResultDialog: typeof import('./src/components/FuzzingResultDialog.vue')['default']
+    HintTooltip: typeof import('./src/components/common/HintTooltip.vue')['default']
     InfoTooltip: typeof import('./src/components/common/InfoTooltip.vue')['default']
     LanguageToggle: typeof import('./src/components/common/LanguageToggle.vue')['default']
     LogoutConfirmDialog: typeof import('./src/components/LogoutConfirmDialog.vue')['default']
