@@ -50,7 +50,7 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("steps", Map.of("type", "integer", "description", "Number of simulation steps (1-100, rejected if outside range). Default 10."));
         props.put("attackMode", Map.of("type", "string", "enum", List.of("none", "exact"), "description", "Per-run attack selection. Simulation never chooses attack points randomly. Default none."));
-        props.put("attackPoints", attackPointsSchema());
+        props.put("attackPoints", attackPointsSchema(false));
         props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track public/private sensitivity labels through automation chains. This is not access control or encryption. Default false."));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
@@ -143,17 +143,4 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
         }
     }
 
-    private Map<String, Object> attackPointsSchema() {
-        return Map.of(
-                "type", "array",
-                "description", "Required for attackMode exact. Device ids use canonical board_overview ids and are normalized at the model boundary; automation links use persisted rule ids.",
-                "items", Map.of(
-                        "type", "object",
-                        "properties", Map.of(
-                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
-                                "deviceId", Map.of("type", "string"),
-                                "ruleId", Map.of("type", "integer")),
-                        "required", List.of("kind"),
-                        "additionalProperties", false));
-    }
 }

@@ -218,6 +218,34 @@ describe('device runtime authority helpers', () => {
     expect(invalidPrivacy).toContain('app.deviceImportInvalidPrivacy')
   })
 
+  it('requires both bounds before treating a variable as numeric', () => {
+    /*
+     * `device-template-schema.json` admits exactly two shapes for an InternalVariable — `Values` with neither
+     * bound, or *both* bounds with no `Values` (`oneOf`) — and `BoardStorageServiceImpl.defaultValueForVariable`
+     * agrees, requiring both before it will default. This helper accepted *either* bound, which encoded a rule
+     * the product does not have: a single-bound variable would have been shown a default the server refuses to
+     * store, and `DeviceDialog`'s range check would have validated against a half-declared domain.
+     *
+     * Unreachable through the API, which is why nothing caught it. Pinned so the client stops documenting a
+     * shape the schema forbids.
+     */
+    const base = {
+      Name: 'temperature',
+      IsInside: true,
+      FalsifiableWhenCompromised: true,
+      Trust: 'trusted',
+      Privacy: 'public'
+    } as const
+
+    expect(templateVariableUsesNumericBounds({ ...base, LowerBound: 0, UpperBound: 40 })).toBe(true)
+    expect(templateVariableUsesNumericBounds({ ...base, LowerBound: 0 } as any)).toBe(false)
+    expect(templateVariableUsesNumericBounds({ ...base, UpperBound: 40 } as any)).toBe(false)
+
+    // The default follows the same rule, rather than defaulting off a lone LowerBound.
+    expect(getTemplateVariableDefaultValue({ ...base, LowerBound: 5, UpperBound: 40 })).toBe('5')
+    expect(getTemplateVariableDefaultValue({ ...base, LowerBound: 5 } as any)).toBe('')
+  })
+
   it('does not treat API null numeric bounds as a numeric range for enum variables', () => {
     expect(templateVariableUsesNumericBounds({
       Name: 'location',

@@ -36,19 +36,6 @@ public class ValidationException extends BaseException {
                 .orElse("Validation failed");
     }
 
-    public static ValidationException invalidPhone() {
-        return new ValidationException("phone", "Phone number format is invalid");
-    }
-
-    public static ValidationException invalidPassword() {
-        return new ValidationException(
-                "password", "Password must be 10-64 characters and at most 72 UTF-8 bytes");
-    }
-
-    public static ValidationException invalidUsername() {
-        return new ValidationException("username", "Username must be 3-20 characters");
-    }
-
     public static ValidationException required(String field) {
         return new ValidationException(field, field + " is required");
     }

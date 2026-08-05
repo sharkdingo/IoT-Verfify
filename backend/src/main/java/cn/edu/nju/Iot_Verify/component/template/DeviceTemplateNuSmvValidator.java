@@ -328,14 +328,36 @@ public class DeviceTemplateNuSmvValidator {
      * name with a local InternalVariable (IsInside=true), which would make a device-private
      * state look like a board-level environment variable.
      */
+    /*
+     * Collisions are judged on the token that generation will actually emit.
+     *
+     * This compared the *raw* cleaned name, which is not what ends up in the model.
+     * `DeviceSmvDataFactory.sanitizeSmvToken` additionally replaces every non-word character with `_`, prefixes a
+     * leading digit, and — the case that mattered — prefixes a NuSMV reserved word. So modes `next` and `_next`
+     * passed here as two distinct names and both generated `_next`. Verified against NuSMV 2.7.1: the resulting
+     * model is rejected with "TYPE ERROR: duplicate constants in the enum type of variable", so the user's
+     * verification died with an engine type error instead of a message naming the template they can fix.
+     *
+     * Modes and states are the only identifier kinds that skip `validateSmvIdentifier` (which rejects reserved
+     * words outright for variables), because generation deliberately rescues them by prefixing. That rescue is
+     * fine; comparing pre-rescue names for uniqueness is not.
+     */
+    private String generatedToken(String raw) {
+        String cleaned = raw == null ? "" : raw.replace(" ", "");
+        if (cleaned.isEmpty()) return "";
+        return DeviceSmvDataFactory.sanitizeSmvToken(cleaned).toLowerCase(Locale.ROOT);
+    }
+
     private void checkVariableCollisions(String templateName, DeviceManifest manifest, List<String> modes) {
         // Track modes separately - they must not collide with each other
         Set<String> modeNames = new HashSet<>();
         for (String mode : modes) {
-            String cleaned = mode == null ? "" : mode.replace(" ", "");
-            if (!cleaned.isEmpty() && !modeNames.add(cleaned.toLowerCase())) {
+            String token = generatedToken(mode);
+            if (!token.isEmpty() && !modeNames.add(token)) {
                 throw new BadRequestException(
-                        "Template '" + templateName + "': duplicate mode name after normalization: '" + mode + "'.");
+                        "Template '" + templateName + "': mode name '" + mode
+                                + "' collides with another mode once normalized for NuSMV (both become '"
+                                + token + "'). Rename one of them.");
             }
         }
 
@@ -347,7 +369,7 @@ public class DeviceTemplateNuSmvValidator {
                 String cleaned = iv.getName() == null ? "" : iv.getName().replace(" ", "");
                 if (cleaned.isEmpty()) continue;
 
-                String normalized = cleaned.toLowerCase();
+                String normalized = generatedToken(iv.getName());
                 localInternalVars.put(normalized, Boolean.TRUE.equals(iv.getIsInside()));
                 if (modeNames.contains(normalized)) {
                     throw new BadRequestException(
@@ -370,7 +392,7 @@ public class DeviceTemplateNuSmvValidator {
                 String cleaned = impacted == null ? "" : impacted.replace(" ", "");
                 if (cleaned.isEmpty()) continue;
 
-                String normalized = cleaned.toLowerCase();
+                String normalized = generatedToken(impacted);
                 if (modeNames.contains(normalized)) {
                     throw new BadRequestException(
                             "Template '" + templateName + "': ImpactedVariable '" + impacted
@@ -526,8 +548,8 @@ public class DeviceTemplateNuSmvValidator {
         }
         // Check against NuSMV reserved words (case-insensitive)
         if (DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name)
-                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toUpperCase())
-                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toLowerCase())) {
+                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toUpperCase(Locale.ROOT))
+                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toLowerCase(Locale.ROOT))) {
             throw new BadRequestException(
                     "Template '" + templateName + "': " + fieldType + " name '" + name
                             + "' is a NuSMV reserved word and cannot be used as an identifier.");

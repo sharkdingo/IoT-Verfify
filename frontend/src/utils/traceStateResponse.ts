@@ -1,7 +1,7 @@
-const MODEL_TOKEN_SOURCES = new Set(['BUNDLED', 'CUSTOM', 'UNKNOWN'])
+import { PRIVACY_VALUE_SET, TRUST_VALUE_SET } from './deviceRuntime'
+import { MODEL_TOKEN_SOURCE_SET } from '@/types/modelToken'
+
 const PROPERTY_SCOPES = new Set(['state', 'variable', 'content'])
-const TRUST_VALUES = new Set(['trusted', 'untrusted'])
-const PRIVACY_VALUES = new Set(['private', 'public'])
 
 type ContractFailure = (detail: string) => never
 
@@ -78,7 +78,7 @@ const validateModelTokenSource = (
   fail: ContractFailure
 ): string => {
   const source = value.modelTokenSource
-  if (typeof source !== 'string' || !MODEL_TOKEN_SOURCES.has(source)) {
+  if (typeof source !== 'string' || !MODEL_TOKEN_SOURCE_SET.has(source)) {
     fail(`${path}.modelTokenSource is invalid`)
   }
   return source
@@ -92,7 +92,7 @@ const validateTraceVariable = (
   const variable = record(value, path, fail)
   requiredText(variable, 'name', path, fail)
   requiredText(variable, 'value', path, fail, true)
-  optionalText(variable, 'trust', path, fail, TRUST_VALUES)
+  optionalText(variable, 'trust', path, fail, TRUST_VALUE_SET)
   return {
     name: variable.name,
     modelTokenSource: validateModelTokenSource(variable, path, fail)
@@ -117,7 +117,7 @@ const validateTrustPrivacy = (
   if (entry.trust !== undefined && entry.trust !== null && typeof entry.trust !== 'boolean') {
     fail(`${path}.trust must be boolean or null when present`)
   }
-  optionalText(entry, 'privacy', path, fail, PRIVACY_VALUES)
+  optionalText(entry, 'privacy', path, fail, PRIVACY_VALUE_SET)
   const hasTrust = typeof entry.trust === 'boolean'
   const hasPrivacy = typeof entry.privacy === 'string'
   if (evidenceKind === 'trust' && (!hasTrust || hasPrivacy)) {

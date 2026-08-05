@@ -25,7 +25,6 @@ import java.util.Set;
 @Component
 public class DismissFuzzTaskTool extends AbstractAiTool {
 
-    private static final int ERROR_PREVIEW_LIMIT = 1_000;
 
     private final FuzzService fuzzService;
     private final AiDestructiveActionGuard destructiveActionGuard;
@@ -154,12 +153,6 @@ public class DismissFuzzTaskTool extends AbstractAiTool {
         return summary;
     }
 
-    private String errorPreview(String errorMessage) {
-        if (errorMessage == null || errorMessage.length() <= ERROR_PREVIEW_LIMIT) {
-            return errorMessage;
-        }
-        return errorMessage.substring(0, ERROR_PREVIEW_LIMIT - 3) + "...";
-    }
 
     private Map<String, Object> previewResponse(Map<String, Object> summary, String impactToken) {
         Map<String, Object> preview = new LinkedHashMap<>();

@@ -131,7 +131,7 @@ class BoardStorageServiceImplStripedLockTest {
                                                 TransactionTemplate transactionTemplate) {
         return new BoardStorageServiceImpl(
                 null, null, null, null, null, null, null,
-                transactionTemplate, null, null, null, null, null, null, null, null,
+                transactionTemplate, null, null, null, null, null, null, null,
                 userRepository, null);
     }
 

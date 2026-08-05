@@ -825,11 +825,10 @@ const verifiedCount = computed(() => {
 
 const getFaultRuleReason = (rule: FaultRule) => {
   if (rule.reasonCode === 'CONFLICTING_END_STATES'
-    && rule.conflictingRuleString
     && rule.targetEndState
     && rule.conflictingEndState) {
     return t('app.faultRuleConflictReason', {
-      rule: rule.conflictingRuleString,
+      rule: rule.conflictingRuleString?.trim() || t('app.noDescription'),
       device: rule.targetDeviceLabel,
       first: formatModelToken(rule.targetEndState, rule.modelTokenSource),
       second: formatModelToken(rule.conflictingEndState, rule.modelTokenSource)
@@ -1131,7 +1130,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 <p v-if="localizedFaultLocalizationSummary" class="mt-2 text-xs leading-relaxed board-text-danger">
                   {{ localizedFaultLocalizationSummary }}
                 </p>
-                <details v-if="fixResult?.violatedSpecId || violatedSpecId" class="mt-2 text-[11px] board-text-danger/90">
+                <details v-if="fixResult?.violatedSpecId || violatedSpecId" class="mt-2 text-[11px] board-text-danger">
                   <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
                   <div class="mt-1 grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]">
                     <span class="font-medium">{{ t('app.specificationTechnicalId') }}</span>
@@ -1162,7 +1161,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 <strong>{{ issue.itemLabel }}</strong>: {{ t(generationIssueReasonKey(issue)) }}
               </li>
             </ul>
-            <details v-if="displayedFixWarnings.length" class="mt-3 text-xs board-text-warning/90">
+            <details v-if="displayedFixWarnings.length" class="mt-3 text-xs board-text-warning">
               <summary class="cursor-pointer font-semibold">{{ t('app.fixTechnicalDiagnostics') }}</summary>
               <ul class="mt-2 list-disc space-y-1 pl-5 font-mono text-[11px]">
                 <li v-for="warning in displayedFixWarnings" :key="warning">{{ warning }}</li>
@@ -1593,12 +1592,12 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                   v-for="(rule, idx) in faultRules"
                   :key="idx"
                   class="border border-slate-200 rounded-lg p-3 hover:bg-slate-50 transition-colors dark:border-slate-700 dark:hover:bg-slate-800"
-                  :class="{ 'border-[color:var(--warning-border)] board-chip-warning/50': rule.conflicting }"
+                  :class="{ 'border-[color:var(--warning-border)] board-chip-warning': rule.conflicting }"
                 >
                   <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
                       <span class="w-6 h-6 bg-[color:var(--accent-fill-hover)] text-white rounded flex items-center justify-center text-xs font-bold">{{ idx + 1 }}</span>
-                      <code class="text-xs bg-slate-100 px-2 py-1 rounded font-mono dark:bg-slate-800 dark:text-slate-100">{{ rule.ruleString }}</code>
+                      <code class="text-xs bg-slate-100 px-2 py-1 rounded font-mono dark:bg-slate-800 dark:text-slate-100">{{ rule.ruleString?.trim() || t('app.noDescription') }}</code>
                     </div>
                     <span v-if="rule.conflicting" class="px-2 py-0.5 board-chip-warning board-text-warning text-xs rounded flex items-center gap-1">
                       <span class="material-symbols-outlined text-xs">warning</span>

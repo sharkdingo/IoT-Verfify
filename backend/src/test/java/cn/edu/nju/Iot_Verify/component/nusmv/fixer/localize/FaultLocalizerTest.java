@@ -15,6 +15,8 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -44,6 +46,83 @@ class FaultLocalizerTest {
         assertEquals("Turn on", fault.getTargetActionLabel());
         assertEquals("TRIGGERED", fault.getReasonCode());
         assertFalse(fault.isConflicting());
+    }
+
+    /*
+     * A rule with no ruleString passes its null through, rather than the backend inventing a label.
+     *
+     * RuleDto.ruleString has no @NotBlank and a nullable TEXT column, so a rule persists without one - verified
+     * against the running API, which accepts a rule with the field omitted and echoes "ruleString": null. The
+     * frontend used to reject the whole fault-localization response for that (text(row, 'ruleString') throws on
+     * null), so a fix request failed as "malformed result".
+     *
+     * The fix went in the UI, not here: it now renders the localised `Rule {number}`, matching what three other
+     * components already do for TraceRule.ruleLabel. A server-side English label would have shown a zh-CN user
+     * English text, which the bilingual rule in CLAUDE.md forbids.
+     */
+    @Test
+    void passesThroughANullRuleStringInsteadOfInventingALabel() {
+        RuleDto unlabelled = RuleDto.builder()
+                .id(7L)
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("light_1")
+                        .attribute("state")
+                        .targetType("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("light_1")
+                        .action("turn_on")
+                        .build())
+                .build();
+        DeviceSmvData light = device("light_1", "Hall light", List.of(
+                api("turn_on", "Turn on", "on")));
+
+        var faults = localizer.localize(
+                List.of(state(1), state(2, trigger(0, "7", null))),
+                List.of(unlabelled),
+                Map.of("light_1", light));
+
+        assertEquals(1, faults.size());
+        assertNull(faults.get(0).getRuleString(),
+                "the backend must not invent a label the UI would have to un-localise");
+    }
+
+    /*
+     * The conflict path sends the raw preview, or null, keeping the English prose only in `reason`.
+     *
+     * This is the case that actually exercises `rulePreview`. The single-rule test above cannot: with one rule
+     * there is no conflict, so it stayed green even with the production change reverted — a guard that named the
+     * code it could not reach. Here an unlabelled partner rule makes `conflictingRuleString` null while `reason`
+     * keeps the English "another localized rule", which is the whole point of the split.
+     */
+    @Test
+    void sendsARawConflictingPreviewAndLeavesTheEnglishFallbackToTheReason() {
+        RuleDto labelled = rule(1L, "Turn light on", "light_1", "turn_on");
+        RuleDto unlabelled = RuleDto.builder()
+                .id(2L)
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("light_1").attribute("state").targetType("state")
+                        .relation("=").value("on").build()))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_off").build())
+                .build();
+        DeviceSmvData light = device("light_1", "Hall light", List.of(
+                api("turn_on", "Turn on", "on"),
+                api("turn_off", "Turn off", "off")));
+
+        List<FaultRuleDto> faults = localizer.localize(
+                List.of(state(1), state(2, trigger(0, "1", "Turn light on"), trigger(1, "2", null))),
+                List.of(labelled, unlabelled),
+                Map.of("light_1", light));
+
+        assertEquals(2, faults.size());
+        // The labelled rule's partner has no preview, so its conflicting label is null rather than English prose.
+        assertNull(faults.get(0).getConflictingRuleString());
+        assertTrue(faults.get(0).getReason().contains("another localized rule"),
+                "the English fallback belongs in the diagnostic: " + faults.get(0).getReason());
+        // And the reverse direction still carries the partner's real preview, unquoted.
+        assertEquals("Turn light on", faults.get(1).getConflictingRuleString());
     }
 
     @Test
@@ -92,6 +171,10 @@ class FaultLocalizerTest {
         assertTrue(faults.get(0).isConflicting());
         assertTrue(faults.get(1).isConflicting());
         assertEquals("CONFLICTING_END_STATES", faults.get(0).getReasonCode());
+        // Raw preview, unquoted: the client interpolates this into an already-translated sentence, so quoting it
+        // here produced 与“'Turn light off'”冲突. The English prose in `reason` keeps its quotes.
+        assertEquals("Turn light off", faults.get(0).getConflictingRuleString());
+        assertTrue(faults.get(0).getReason().contains("'Turn light off'"));
         assertEquals(1, faults.get(0).getConflictWithRuleIndex());
         assertEquals(0, faults.get(1).getConflictWithRuleIndex());
     }

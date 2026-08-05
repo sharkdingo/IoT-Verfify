@@ -58,9 +58,18 @@ describe('interactive target size floor', () => {
   it('sizes the canvas map tools at the minimum', () => {
     // Zoom in, zoom out and fit-to-screen measured 32px — among the most repeatedly pressed controls, and the
     // ones a user reaches for while already struggling to see something.
+    //
+    // The assertion is on `min-width`/`min-height`, not on every declared size: this block legitimately sets a
+    // smaller `width`/`height` for the icon box, which `min-*` overrides, so the floor is what decides the
+    // rendered target (measured 44x44 in a browser). Requiring *every* size to clear 44px only passed while
+    // the floor lived in a second block 66 lines away — two owners for one control, invisible precisely
+    // because `min-*` happened to win. A `max-*` here would defeat the floor, so it is ruled out.
     const block = ruleBody('board.css', '.iot-board .canvas-map__tool')
-    for (const size of declaredSizes(block)) {
-      expect(size.px, `${size.raw} should be at least ${MINIMUM_REM}rem`).toBeGreaterThanOrEqual(MINIMUM_REM * 16)
+    for (const axis of ['width', 'height']) {
+      const declared = new RegExp(`min-${axis}:\\s*([\\d.]+)rem`).exec(block)
+      expect(declared, `.canvas-map__tool should declare min-${axis}`).not.toBeNull()
+      expect(Number(declared![1]) * 16).toBeGreaterThanOrEqual(MINIMUM_REM * 16)
+      expect(block, `a max-${axis} would defeat the floor`).not.toMatch(new RegExp(`max-${axis}:`))
     }
   })
 

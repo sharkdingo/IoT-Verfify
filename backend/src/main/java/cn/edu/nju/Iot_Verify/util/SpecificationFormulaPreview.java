@@ -65,11 +65,6 @@ public final class SpecificationFormulaPreview {
         }
         return new Context(labelsById, sharedVariablesByDeviceId);
     }
-
-    public static Context labelsOnly(Map<String, String> labelsById) {
-        return new Context(labelsById == null ? Map.of() : labelsById, Map.of());
-    }
-
     /** Builds a display context from the immutable model-boundary device/template snapshot. */
     public static Context modelContext(
             List<DeviceVerificationDto> devices,

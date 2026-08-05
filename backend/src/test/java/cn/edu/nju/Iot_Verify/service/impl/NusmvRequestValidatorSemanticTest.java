@@ -448,6 +448,48 @@ class NusmvRequestValidatorSemanticTest {
         assertTrue(linkErrors.isEmpty());
     }
 
+    /*
+     * The fix-generated prefixes are reserved at request time, not only at generation.
+     *
+     * Every other generated identifier is namespaced (`iot_verify_…`) so user input cannot reach it. The fix
+     * strategies' `param_`/`lambda_`/`condition_value_` are not — and `param_` cannot be renamed, because it is
+     * the wire format for `PreferredRangeSelection.targetId`, validated by a `@Pattern` on the DTO and by
+     * `^param_[A-Za-z0-9_-]{24}$` in the frontend. Verified against the running API: `/api/board/nodes` accepts
+     * a device with canonical id `condition_value_r0_c1`, so the board saved and verified fine and
+     * `SmvMainModuleBuilder` only threw when the user asked for a fix — correct, but blaming a surface they were
+     * not editing, long after the name was chosen.
+     */
+    @Test
+    void validateMainNamespace_rejectsDeviceNameReservedByTheFixGenerator() {
+        for (String reserved : List.of("param_abc", "lambda_r0_c1", "condition_value_r0_c1")) {
+            Map<String, String> errors = NusmvRequestValidator.newErrors();
+            DeviceSmvData smv = smv();
+            smv.setVarName(reserved);
+
+            NusmvRequestValidator.validateMainNamespace(
+                    List.of(device(reserved, "Sensor")), List.of(), Map.of(reserved, smv), false, errors);
+
+            assertTrue(errors.containsKey("devices[0].varName"),
+                    "expected '" + reserved + "' to be rejected");
+            assertTrue(errors.get("devices[0].varName").contains("automatic-fix"),
+                    "the message should say who reserves the name: " + errors.get("devices[0].varName"));
+        }
+    }
+
+    @Test
+    void validateMainNamespace_allowsDeviceNameMerelyContainingAReservedWord() {
+        // The boundary: only a *prefix* is reserved. `my_param_sensor` is a legitimate device name.
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+        DeviceSmvData smv = smv();
+        smv.setVarName("my_param_sensor");
+
+        NusmvRequestValidator.validateMainNamespace(
+                List.of(device("my_param_sensor", "Sensor")), List.of(),
+                Map.of("my_param_sensor", smv), false, errors);
+
+        assertTrue(errors.isEmpty(), "unexpected rejection: " + errors);
+    }
+
     @Test
     void validateMainNamespace_rejectsDeviceNameThatCollidesWithInternalAttackCounter() {
         Map<String, String> errors = NusmvRequestValidator.newErrors();

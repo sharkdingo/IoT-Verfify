@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.util;
 
 import cn.edu.nju.Iot_Verify.configure.JwtConfig;
+import cn.edu.nju.Iot_Verify.configure.ProductionSafetyCheck;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -17,14 +18,12 @@ import lombok.extern.slf4j.Slf4j;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
-import java.util.Set;
 
 @Slf4j
 @Component
 public class JwtUtil {
 
     private static final String INSECURE_DEFAULT_PREFIX = "iot-verify-secret-key";
-    private static final Set<String> PRODUCTION_PROFILES = Set.of("prod", "production");
 
     private final JwtConfig config;
     private final Environment environment;
@@ -41,20 +40,14 @@ public class JwtUtil {
         byte[] keyBytes = config.getSecret().getBytes(StandardCharsets.UTF_8);
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
 
-        if (config.getSecret().startsWith(INSECURE_DEFAULT_PREFIX) && isProductionProfile()) {
+        if (config.getSecret().startsWith(INSECURE_DEFAULT_PREFIX) && ProductionSafetyCheck.isProductionProfile(environment)) {
             log.warn("JWT secret is still using the insecure default value — "
                     + "configure jwt.secret (or JWT_SECRET env) for production!");
         }
     }
 
-    private boolean isProductionProfile() {
-        for (String profile : environment.getActiveProfiles()) {
-            if (PRODUCTION_PROFILES.contains(profile.toLowerCase())) {
-                return true;
-            }
-        }
-        return false;
-    }
+    /* The production-profile decision has one owner; see ProductionSafetyCheck.isProductionProfile. This class
+       duplicated the profile set, the case fold and the loop, and the fold was the part that had drifted. */
 
     private SecretKey getSigningKey() {
         return signingKey;
@@ -81,12 +74,6 @@ public class JwtUtil {
             throw new UnauthorizedException("Invalid token: malformed user ID");
         }
     }
-
-    public String getPhoneFromToken(String token) {
-        Claims claims = parseClaims(token);
-        return claims.get("phone", String.class);
-    }
-
     /**
      * 获取Token剩余过期时间（秒）
      * 用于黑名单设置合理的TTL
@@ -111,23 +98,7 @@ public class JwtUtil {
         }
     }
 
-    public void validateTokenOrThrow(String token) {
-        try {
-            Claims claims = parseClaims(token);
-            if (claims.getExpiration().before(new Date())) {
-                throw UnauthorizedException.expiredToken();
-            }
-        } catch (ExpiredJwtException e) {
-            throw UnauthorizedException.expiredToken();
-        } catch (JwtException e) {
-            throw UnauthorizedException.invalidToken();
-        } catch (UnauthorizedException e) {
-            throw e;
-        } catch (Exception e) {
-            throw UnauthorizedException.invalidToken();
-        }
-    }
-
+    /* No throwing `validateTokenOrThrow` variant: only the boolean `validateToken` above has callers. */
     private Claims parseClaims(String token) {
         return Jwts.parserBuilder()
                 .setSigningKey(getSigningKey())

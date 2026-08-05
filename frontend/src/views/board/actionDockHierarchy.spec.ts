@@ -237,4 +237,99 @@ describe('board action dock hierarchy', () => {
       expect(board.slice(tagStart, at), `${testId} should be open by default`).toContain(' open')
     }
   })
+
+  it('derives every dock mode decision from one list of available modes', () => {
+    // Which modes a viewport allows was written four times in four shapes: two hardcoded cycle arrays
+    // selected by `>= 1280`, a clamp restating the same threshold, a restore handler re-deriving the
+    // same answer, and a `>= 1280` ternary inline in the launcher's `aria-label`. They agreed only by
+    // coincidence, so a new width rule had to be remembered in three other places.
+    expect(board).toContain('const availableActionDockModes = computed<ActionDockMode[]>')
+
+    // The threshold appears once, in that list. The 720px fallback is a separate documented rule and
+    // lives in `actionDockMode`, which is why it is excluded rather than counted here.
+    const railWidthThresholds = board.match(/actionDockViewportWidth\.value\s*[<>]=?\s*1280/g) ?? []
+    expect(railWidthThresholds, 'the 1280px rail threshold should have one owner').toHaveLength(1)
+
+    // The launcher names the mode it restores instead of re-deriving it from a width.
+    expect(board).toContain(':aria-label="actionDockRestoreLabel"')
+    expect(board).not.toMatch(/:aria-label="actionDockViewportWidth >= 1280/)
+  })
+
+  it('names the set of workflow panels once', () => {
+    // `showCanvasEmptyState` spelled out the five members and also re-listed the four recommendation flags
+    // that `isAnyRecommendationPanelVisible()` owns, so a sixth panel meant remembering two lists. Only the
+    // E2E suite covers the empty state, so a unit-level mutation of that predicate was silent; this is not.
+    expect(board).toContain('const isWorkflowPanelOpen = computed(')
+    const listings = board.match(/showVerificationPanel\.value \|\|\s*\n\s*showSimulationPanel\.value/g) ?? []
+    expect(listings, 'the workflow-panel set should be enumerated once').toHaveLength(1)
+
+    const at = board.indexOf('const showCanvasEmptyState = computed(')
+    expect(at, 'showCanvasEmptyState should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, at + board.slice(at).indexOf('\n)'))
+    expect(body, 'it should read the shared predicate').toContain('isWorkflowPanelOpen.value')
+    expect(body, 'it should not re-list the recommendation panels').not.toContain('showDeviceRecommendationPanel')
+  })
+
+  it('keeps the canvas map and its viewport controls visible together', () => {
+    /*
+     * The map card had a `v-show` hiding it whenever any of eleven surfaces was open, which also removed the
+     * zoom field, the zoom buttons and fit-to-content — the board's only pointer viewport controls.
+     *
+     * Narrowing that to hide only the map rectangle (and renaming the card's heading while it was hidden) was
+     * treating a symptom. Measured, the collision it guarded against cannot occur: the floating panels carry a
+     * `right` inset clearing the inspector and the action rail, so at 1440x900 a panel spans x=660..948
+     * against an inspector at 1120..1440, and at 1100x800 it is 336..692 against 780..1100. The map lives
+     * inside that inspector. At narrow widths the inspector is a 56px rail and the map is not rendered.
+     */
+    /*
+     * The slice must span the WHOLE tag, not `<div` up to the testid.
+     *
+     * The first version ended the slice at the testid, so it only ever examined `'<div\n          '` — pure
+     * whitespace — and a `v-show` written after the testid (the natural place, and where the original one was)
+     * was invisible to it. Mutation-verified blind: re-adding `v-show="!isWorkflowPanelOpen"` right after either
+     * testid left the spec green. Both halves of the check were fiction.
+     */
+    const openingTag = (testId: string): string => {
+      const at = board.indexOf(`data-testid="${testId}"`)
+      expect(at, `${testId} should exist`).toBeGreaterThan(-1)
+      const start = board.lastIndexOf('<div', at)
+      const end = board.indexOf('>', at)
+      expect(end, `${testId}'s tag should be closed`).toBeGreaterThan(start)
+      return board.slice(start, end)
+    }
+
+    expect(openingTag('canvas-map'), 'the map card should not be conditionally hidden')
+      .not.toMatch(/v-(show|if)=/)
+    expect(openingTag('canvas-map-viewport'), 'the map viewport should not be conditionally hidden')
+      .not.toMatch(/v-(show|if)=/)
+
+    // One heading, and it must name the map unconditionally. Asserting the *absence* of the removed
+    // `app.canvasView` key was vacuous — that key no longer exists in `assets/`, so nothing could reintroduce
+    // the literal. What can regress is the heading becoming state-dependent again, so assert the shape instead.
+    const headingAt = board.indexOf('canvas-map__title')
+    expect(headingAt, 'the map heading should exist').toBeGreaterThan(-1)
+    const heading = board.slice(headingAt, board.indexOf('</span>', headingAt))
+    expect(heading, 'the map heading should not branch on state').not.toMatch(/\?[^:]*:/)
+    expect(heading, 'the map heading should name the map').toContain("t('app.canvasMap')")
+  })
+
+  it('keeps the dock heading a tier above the group labels it introduces', () => {
+    // The heading was `0.72rem`/800 against `--iot-font-min` (11px)/700 group labels *beneath* it —
+    // 0.52px of difference at a heavier weight, i.e. two heading levels rendering as one. It cleared
+    // `typographyFloor` (11.52px over an 11px floor), which is why nothing flagged it; a floor is a
+    // minimum for body text, not a target for a heading. Uppercase also cost apparent x-height and
+    // word shape, which is most of why four characters read as smaller than they measured.
+    const title = css.slice(css.indexOf('.iot-board .board-action-dock__title {'))
+      .slice(0, css.slice(css.indexOf('.iot-board .board-action-dock__title {')).indexOf('}'))
+    const titlePx = Number(/font-size:\s*([\d.]+)rem/.exec(title)?.[1]) * 16
+    expect(titlePx, 'the dock heading should use the panel-title tier').toBeGreaterThanOrEqual(14)
+    expect(title, 'the heading should not be uppercased').not.toMatch(/text-transform:\s*uppercase/)
+
+    const groupLabel = css.slice(css.indexOf('.iot-board .board-tool-group-label {'))
+    const groupPx = /font-size:\s*var\(--iot-font-min\)/.test(groupLabel.slice(0, groupLabel.indexOf('}')))
+      ? 11
+      : Number.NaN
+    expect(groupPx, 'group labels should stay on the minimum tier').toBe(11)
+    expect(titlePx - groupPx, 'the two tiers should be distinguishable').toBeGreaterThanOrEqual(2)
+  })
 })

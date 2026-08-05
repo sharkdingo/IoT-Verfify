@@ -102,4 +102,78 @@ class AiToolLayeringContractTest {
                 "expected most AI tools to depend on a service; only " + withService + " do, which suggests the "
                         + "layering moved somewhere this test can no longer see");
     }
+    /*
+     * One argument, one description — because the model chooses arguments from that text.
+     *
+     * `attackPoints` was built by four private `attackPointsSchema()` methods, and three said "Required for
+     * attackMode exact" while the fourth said "Required *only* for attackMode exact". `attackScenarioArg` in
+     * `AbstractAiTool` rejects a non-empty `attackPoints` for both `none` and `exhaustive`, so "only" was the
+     * accurate one and the other three understated the constraint — an LLM reading them would send an argument
+     * that gets refused. `attackBudget` had the same split across the two verification tools.
+     *
+     * A divergence in tool-facing prose is a behavioural difference, not a wording preference, and nothing else
+     * in the suite compares these strings. Both schemas now live beside the validator that enforces them.
+     */
+    @Test
+    @DisplayName("attack-scenario argument schemas have exactly one owner")
+    void attackScenarioSchemasAreNotDuplicatedPerTool() throws IOException {
+        List<String> offenders = new ArrayList<>();
+        try (Stream<Path> stream = Files.walk(Paths.get("src/main/java/cn/edu/nju/Iot_Verify/component/aitool"))) {
+            for (Path file : stream.filter(path -> path.toString().endsWith(".java")).toList()) {
+                String body = Files.readString(file, StandardCharsets.UTF_8);
+                String name = file.getFileName().toString();
+                if (name.equals("AbstractAiTool.java")) continue;
+                // `errorPreview`/`ERROR_PREVIEW_LIMIT` joined this list after the three dismiss tools (fuzz,
+                // simulate, verify) were found carrying byte-identical copies. They agreed, but the model reads
+                // these strings: one drifting would summarise the same failure at two different lengths
+                // depending on which run kind the user dismissed, and nothing else compares them.
+                for (String schema : List.of("attackPointsSchema", "attackBudgetSchema",
+                        "errorPreview", "ERROR_PREVIEW_LIMIT")) {
+                    if (body.contains("private Map<String, Object> " + schema)
+                            || body.contains("private static Map<String, Object> " + schema)
+                            || body.contains("private String " + schema + "(")
+                            || body.contains("private static final int " + schema + " =")) {
+                        offenders.add(name + " declares its own " + schema);
+                    }
+                }
+                // A tool must not inline the description either — that is how the divergence started.
+                if (body.contains("attackMode exact. Device ids")) {
+                    offenders.add(name + " inlines the attackPoints description");
+                }
+            }
+        }
+        assertTrue(offenders.isEmpty(),
+                "attack-scenario schemas belong on AbstractAiTool, next to attackScenarioArg: " + offenders);
+    }
+
+    /*
+     * A tool must not describe a mode it rejects — the mirror of the divergence above.
+     *
+     * Consolidating the schema, I first wrote one description naming `exhaustive`. Simulation passes
+     * `allowExhaustive=false` to `attackScenarioArg` and offers `enum ["none","exact"]`, so that text told the
+     * model about a mode simulation refuses: the same defect as the original divergence, introduced from the
+     * other side while fixing it. The schema now takes the capability as an argument, and this pins that each
+     * tool passes the value matching its own `attackScenarioArg` call.
+     */
+    @Test
+    @DisplayName("each tool's attackPoints description matches the modes it accepts")
+    void attackPointsSchemaCapabilityMatchesTheValidator() throws IOException {
+        List<String> offenders = new ArrayList<>();
+        try (Stream<Path> stream = Files.walk(Paths.get("src/main/java/cn/edu/nju/Iot_Verify/component/aitool"))) {
+            for (Path file : stream.filter(path -> path.toString().endsWith(".java")).toList()) {
+                String body = Files.readString(file, StandardCharsets.UTF_8);
+                if (!body.contains("attackPointsSchema(")) continue;
+                String name = file.getFileName().toString();
+                if (name.equals("AbstractAiTool.java")) continue;
+                boolean schemaAllowsExhaustive = body.contains("attackPointsSchema(true)");
+                boolean validatorAllowsExhaustive = body.contains("attackScenarioArg(args, true)");
+                if (schemaAllowsExhaustive != validatorAllowsExhaustive) {
+                    offenders.add(name + ": schema says exhaustive=" + schemaAllowsExhaustive
+                            + " but attackScenarioArg says " + validatorAllowsExhaustive);
+                }
+            }
+        }
+        assertTrue(offenders.isEmpty(),
+                "a tool described a mode it does not accept: " + offenders);
+    }
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Specification } from '@/types/spec'
 import {
@@ -163,4 +165,44 @@ describe('hasValidFuzzingBudget', () => {
       expect(hasValidFuzzingBudget(bad), JSON.stringify(bad)).toBe(false)
     }
   })
+})
+
+describe('fuzzing bounds mirror the backend', () => {
+  /*
+   * These are rendered to the user as the allowed range ("1-5000") in `FuzzingPanel.vue`, so a divergence does
+   * not merely mis-validate — it *tells the user the wrong rule*. They are declared three times: here, on
+   * `FuzzRequestDto`, and on `FuzzWorkloadPreviewRequestDto`, and both DTOs are separately `@Valid` on live
+   * endpoints. Nothing compared them.
+   *
+   * Same pattern as `credentialLimitsMirror.spec.ts`: read the Java source, since there is no way to import it.
+   */
+  const javaBounds = (file: string) => readFileSync(
+    join(__dirname, `../../../../backend/src/main/java/cn/edu/nju/Iot_Verify/dto/fuzz/${file}`), 'utf8')
+
+  const boundsOf = (source: string, field: string) => {
+    const at = source.indexOf(`private Integer ${field}`)
+    expect(at, `${field} should be declared`).toBeGreaterThan(-1)
+    const block = source.slice(Math.max(0, at - 400), at)
+    const min = /@Min\(value = ([\d_]+)/g
+    const max = /@Max\(value = ([\d_]+)/g
+    const mins = [...block.matchAll(min)].map(m => Number(m[1].replace(/_/g, '')))
+    const maxes = [...block.matchAll(max)].map(m => Number(m[1].replace(/_/g, '')))
+    return { min: mins[mins.length - 1], max: maxes[maxes.length - 1] }
+  }
+
+  it.each(['FuzzRequestDto.java', 'FuzzWorkloadPreviewRequestDto.java'])(
+    'agrees with %s on every bound the panel shows', (file) => {
+      const source = javaBounds(file)
+      const pairs: Array<[string, number, number]> = [
+        ['maxIterations', FUZZ_ITERATIONS_MIN, FUZZ_ITERATIONS_MAX],
+        ['pathLength', FUZZ_PATH_LENGTH_MIN, FUZZ_PATH_LENGTH_MAX],
+        ['populationSize', FUZZ_POPULATION_MIN, FUZZ_POPULATION_MAX]
+      ]
+      const diverged = pairs
+        .map(([field, min, max]) => ({ field, min, max, java: boundsOf(source, field) }))
+        .filter(row => row.min !== row.java.min || row.max !== row.java.max)
+        .map(row => `${row.field}: ts=${row.min}-${row.max} vs java=${row.java.min}-${row.java.max}`)
+
+      expect(diverged).toEqual([])
+    })
 })

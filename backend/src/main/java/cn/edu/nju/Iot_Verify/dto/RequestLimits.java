@@ -30,6 +30,20 @@ public final class RequestLimits {
      * and rejected at validation rather than silently narrowed to the endpoints.
      */
     public static final int MAX_NATURAL_CHANGE_RATE_SPAN = 100;
+    /*
+     * The MAX_TEMPLATE_* constants below are mirrored by `maxItems` in `backend/device-template-schema.json`,
+     * which is where they are actually enforced — the template endpoint accepts a raw `JsonNode` and runs
+     * `validateRawManifest` before converting to this DTO, so Bean Validation never sees the manifest and a
+     * `@Size` here would be decorative. That is stated in a `$comment` in the schema itself.
+     *
+     * They are therefore *not* unreferenced-by-accident: they document the Java-side value of a limit whose
+     * mechanism lives in the schema. Verified live: a 21-mode template is rejected 400 with
+     * "$.Modes: at most 20 items, found 21", naming the field and the limit.
+     *
+     * `MAX_TEMPLATE_ENVIRONMENT_DOMAINS` is kept for the same reason the others are, even though the
+     * `EnvironmentDomains` array it named has since been removed from the schema — see that file's `$comment`
+     * on read capability, which records what the array used to encode.
+     */
     public static final int MAX_TEMPLATE_ENVIRONMENT_DOMAINS = 100;
     public static final int MAX_TEMPLATE_IMPACTED_VARIABLES = 100;
     public static final int MAX_TEMPLATE_TRANSITIONS = 100;

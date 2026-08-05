@@ -1,5 +1,6 @@
 // src/api/board.ts - Board API（自动解包Result<T>）
 import api from './http';
+import { PRIVACY_VALUE_SET, TRUST_VALUE_SET } from '@/utils/deviceRuntime';
 
 // 引入类型
 import type {
@@ -32,6 +33,7 @@ import type {
     ModelEnvironmentVariable
 } from '@/types/model'
 import type { ModelTokenSource } from '@/types/modelToken'
+import { MODEL_TOKEN_SOURCE_SET } from '@/types/modelToken'
 import type { InteractiveOperationStatus, TaskCancellationResult } from '@/types/task'
 import type { PortableSceneFile } from '@/types/scene'
 import type {
@@ -407,7 +409,6 @@ const RULE_SIMILARITY_REASON_CODES = new Set<RuleSimilarityReasonCode>([
     'AI_NO_SIGNIFICANT_SIMILARITY'
 ])
 
-const MODEL_TOKEN_SOURCES = new Set<ModelTokenSource>(['BUNDLED', 'CUSTOM', 'UNKNOWN'])
 const SPEC_RELATIONS = new Set(['=', '!=', '>', '<', '>=', '<=', 'in', 'not in'])
 
 export interface EnvironmentVariableChange {
@@ -1019,8 +1020,6 @@ const validateDeviceUpdateResult = (
 }
 
 const ENVIRONMENT_FIELDS: EnvironmentVariableField[] = ['value', 'trust', 'privacy']
-const ENVIRONMENT_TRUST_VALUES = new Set(['trusted', 'untrusted'])
-const ENVIRONMENT_PRIVACY_VALUES = new Set(['public', 'private'])
 
 const requireEnvironmentFieldArray = (
     value: unknown,
@@ -1084,7 +1083,7 @@ const validateEnvironmentChangeResult = (
         throw new BoardResponseContractError(context, 'values contradict changeType')
     }
     for (const field of ['previousModelTokenSource', 'currentModelTokenSource']) {
-        if (change[field] !== undefined && !MODEL_TOKEN_SOURCES.has(change[field])) {
+        if (change[field] !== undefined && !MODEL_TOKEN_SOURCE_SET.has(change[field])) {
             throw new BoardResponseContractError(context, `${field} is invalid`)
         }
     }
@@ -1279,11 +1278,11 @@ const validateEnvironmentUpdateRequests = (
             throw new BoardResponseContractError(context, `update ${name} has an invalid expected value`)
         }
         if (typeof update.expected.trust === 'string'
-            && !ENVIRONMENT_TRUST_VALUES.has(update.expected.trust.trim().toLowerCase())) {
+            && !TRUST_VALUE_SET.has(update.expected.trust.trim().toLowerCase())) {
             throw new BoardResponseContractError(context, `update ${name} has an invalid expected trust`)
         }
         if (typeof update.expected.privacy === 'string'
-            && !ENVIRONMENT_PRIVACY_VALUES.has(update.expected.privacy.trim().toLowerCase())) {
+            && !PRIVACY_VALUE_SET.has(update.expected.privacy.trim().toLowerCase())) {
             throw new BoardResponseContractError(context, `update ${name} has an invalid expected privacy`)
         }
         if (!update.desired || typeof update.desired !== 'object') {
@@ -1305,11 +1304,11 @@ const validateEnvironmentUpdateRequests = (
             throw new BoardResponseContractError(context, `update ${name} has a blank desired value`)
         }
         if (typeof update.desired.trust === 'string'
-            && !ENVIRONMENT_TRUST_VALUES.has(update.desired.trust.trim().toLowerCase())) {
+            && !TRUST_VALUE_SET.has(update.desired.trust.trim().toLowerCase())) {
             throw new BoardResponseContractError(context, `update ${name} has an invalid desired trust`)
         }
         if (typeof update.desired.privacy === 'string'
-            && !ENVIRONMENT_PRIVACY_VALUES.has(update.desired.privacy.trim().toLowerCase())) {
+            && !PRIVACY_VALUE_SET.has(update.desired.privacy.trim().toLowerCase())) {
             throw new BoardResponseContractError(context, `update ${name} has an invalid desired privacy`)
         }
         return { ...update, name }
@@ -1870,10 +1869,10 @@ const validateEnvironmentVariable = (value: unknown, context: string): ModelEnvi
             throw new BoardResponseContractError(context, `${field} is required`)
         }
     }
-    if (!ENVIRONMENT_TRUST_VALUES.has(result.trust.trim().toLowerCase())) {
+    if (!TRUST_VALUE_SET.has(result.trust.trim().toLowerCase())) {
         throw new BoardResponseContractError(context, 'trust must be trusted or untrusted')
     }
-    if (!ENVIRONMENT_PRIVACY_VALUES.has(result.privacy.trim().toLowerCase())) {
+    if (!PRIVACY_VALUE_SET.has(result.privacy.trim().toLowerCase())) {
         throw new BoardResponseContractError(context, 'privacy must be public or private')
     }
     return result as ModelEnvironmentVariable
@@ -1903,8 +1902,8 @@ const validateBoardNodeResult = (value: unknown, context: string): DeviceNode =>
         throw new BoardResponseContractError(context, 'state must be text or null')
     }
     for (const [field, allowed] of [
-        ['currentStateTrust', ENVIRONMENT_TRUST_VALUES],
-        ['currentStatePrivacy', ENVIRONMENT_PRIVACY_VALUES]
+        ['currentStateTrust', TRUST_VALUE_SET],
+        ['currentStatePrivacy', PRIVACY_VALUE_SET]
     ] as const) {
         const candidate = node[field]
         if (candidate !== null && candidate !== undefined
@@ -1931,11 +1930,11 @@ const validateBoardNodeResult = (value: unknown, context: string): DeviceNode =>
                 }
                 if (item.trust !== null && item.trust !== undefined
                     && (typeof item.trust !== 'string'
-                        || !ENVIRONMENT_TRUST_VALUES.has(item.trust.trim().toLowerCase()))) {
+                        || !TRUST_VALUE_SET.has(item.trust.trim().toLowerCase()))) {
                     throw new BoardResponseContractError(context, `${field}[${index}].trust is invalid`)
                 }
             } else if (typeof item.privacy !== 'string'
-                || !ENVIRONMENT_PRIVACY_VALUES.has(item.privacy.trim().toLowerCase())) {
+                || !PRIVACY_VALUE_SET.has(item.privacy.trim().toLowerCase())) {
                 throw new BoardResponseContractError(context, `${field}[${index}].privacy is invalid`)
             }
         })

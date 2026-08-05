@@ -22,6 +22,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 
 /** Lets the assistant discover task IDs created in any conversation or from the Run History UI. */
@@ -78,14 +79,14 @@ public class ListAsyncTasksTool extends AbstractAiTool {
             requireOnlyFields(args, "arguments", Set.of("kind", "status", "initiator", "limit"));
             String kind = optionalEnumArg(args, "kind", "all",
                     Set.of("all", "verification", "simulation", "counterexample_search"));
-            String status = optionalTextArg(args, "status", "all", 40).toUpperCase();
+            String status = optionalTextArg(args, "status", "all", 40).toUpperCase(Locale.ROOT);
             if (!Set.of("ALL", "PENDING", "RUNNING", "FAILED", "CANCELLED")
                     .contains(status)) {
                 throw new ArgValidationException(errorJson(
                         "status must be one of: all, PENDING, RUNNING, FAILED, CANCELLED. Completed results belong to run history.",
                         "VALIDATION_ERROR", 400));
             }
-            String initiator = optionalTextArg(args, "initiator", "all", 40).toUpperCase();
+            String initiator = optionalTextArg(args, "initiator", "all", 40).toUpperCase(Locale.ROOT);
             if (!Set.of("ALL", "USER", "AI_ASSISTANT").contains(initiator)) {
                 throw new ArgValidationException(errorJson(
                         "initiator must be one of: all, USER, AI_ASSISTANT.",
@@ -114,9 +115,9 @@ public class ListAsyncTasksTool extends AbstractAiTool {
             }
 
             tasks.removeIf(task -> !"ALL".equals(status)
-                    && !status.equals(String.valueOf(task.get("status")).toUpperCase()));
+                    && !status.equals(String.valueOf(task.get("status")).toUpperCase(Locale.ROOT)));
             tasks.removeIf(task -> !"ALL".equals(initiator)
-                    && !initiator.equals(String.valueOf(task.get("initiator")).toUpperCase()));
+                    && !initiator.equals(String.valueOf(task.get("initiator")).toUpperCase(Locale.ROOT)));
             tasks.sort(Comparator.comparing(
                     task -> (LocalDateTime) task.get("createdAt"),
                     Comparator.nullsLast(Comparator.reverseOrder())));

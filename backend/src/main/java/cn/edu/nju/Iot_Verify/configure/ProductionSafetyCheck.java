@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.Locale;
 
 /**
  * Fail-fast guard for production profiles.
@@ -21,6 +22,14 @@ import java.util.Set;
 @Component
 public class ProductionSafetyCheck {
 
+    /**
+     * Which Spring profiles count as production, for every security decision in the product.
+     *
+     * <p>Private again: the shared thing is {@link #isProductionProfile(Environment)}, not this list. Exposing
+     * only the set left {@code JwtUtil} with its own copy of the case fold and the loop, and the fold was the
+     * part that had actually drifted — so sharing the vocabulary alone would have fixed the symptom and kept
+     * the mechanism duplicated.
+     */
     private static final Set<String> PRODUCTION_PROFILES = Set.of("prod", "production");
     private static final String INSECURE_JWT_SECRET_PREFIX = "iot-verify-secret-key";
     private static final String INSECURE_DB_PASSWORD = "sharkdingo123";
@@ -43,7 +52,7 @@ public class ProductionSafetyCheck {
 
     @PostConstruct
     public void check() {
-        if (!isProductionProfile()) {
+        if (!isProductionProfile(environment)) {
             return;
         }
 
@@ -70,8 +79,23 @@ public class ProductionSafetyCheck {
         log.info("Production safety check passed");
     }
 
-    private boolean isProductionProfile() {
+    /**
+     * Whether the running application is in production, for every security decision in the product.
+     *
+     * <p>This owns the whole decision — the profile vocabulary, the case fold, and the loop — because
+     * {@code JwtUtil} needs the same answer for its insecure-JWT-secret warning and previously duplicated all
+     * three. Sharing only the {@code Set} still left two copies of the fold, and the fold is exactly what had
+     * gone wrong: with the JVM's default locale a Turkish server folds {@code PRODUCTION} to {@code productıon}
+     * (dotless ı), which matches neither profile name, so this guard would not fire and the application would
+     * boot with default {@code JWT_SECRET}, {@code DB_PASSWORD} and {@code IOT_VERIFY_OPENAI_API_KEY}.
+     * {@code Locale.ROOT} is therefore load-bearing, not incidental — see the documented rule on
+     * {@code SmvSpecificationBuilder.normalizeSpecTargetType}.
+     */
+    public static boolean isProductionProfile(Environment environment) {
+        if (environment == null) {
+            return false;
+        }
         return Arrays.stream(environment.getActiveProfiles())
-                .anyMatch(p -> PRODUCTION_PROFILES.contains(p.toLowerCase()));
+                .anyMatch(p -> p != null && PRODUCTION_PROFILES.contains(p.toLowerCase(Locale.ROOT)));
     }
 }

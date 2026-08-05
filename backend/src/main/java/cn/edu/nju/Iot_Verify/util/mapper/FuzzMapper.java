@@ -372,13 +372,8 @@ public class FuzzMapper {
                 .build();
     }
 
-    public List<FuzzFindingSummaryDto> toFindingSummaryDtos(List<FuzzFindingPo> findings) {
-        return findings == null ? List.of() : findings.stream().map(this::toFindingSummaryDto).toList();
-    }
-
-    public List<FuzzFindingDto> toFindingDtos(List<FuzzFindingPo> findings) {
-        return findings == null ? List.of() : findings.stream().map(this::toFindingDto).toList();
-    }
+    /* No `toFindingSummaryDtos`/`toFindingDtos` list wrappers: they had no callers, because callers map the
+       singular overloads over their own streams (they need the per-finding validated data). */
 
     private String statusName(FuzzTaskPo task) {
         return task.getStatus().name();

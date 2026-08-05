@@ -10,11 +10,4 @@ public class ForbiddenException extends BaseException {
         super(403, message, cause);
     }
 
-    public static ForbiddenException accessDenied() {
-        return new ForbiddenException("Access denied");
-    }
-
-    public static ForbiddenException resourceNotOwned() {
-        return new ForbiddenException("You do not have permission to access this resource");
-    }
 }

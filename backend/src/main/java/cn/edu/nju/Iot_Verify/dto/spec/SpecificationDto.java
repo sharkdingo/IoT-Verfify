@@ -55,7 +55,17 @@ public class SpecificationDto {
     @Size(max = RequestLimits.MAX_SPEC_CONDITIONS, message = "At most 50 Then-conditions are allowed")
     private List<@Valid @NotNull(message = "Then-condition item cannot be null") SpecConditionDto> thenConditions = new ArrayList<>();
 
-    /** User-readable preview rebuilt from structured conditions; never parsed for verification. */
+    /**
+     * User-readable preview rebuilt from structured conditions; never parsed for verification.
+     *
+     * <p>This is why three "implementations" of each spec formula legitimately coexist and an audit reading them
+     * as a duplication defect is misreading them. {@code SmvSpecificationBuilder} builds the model from the
+     * structured conditions and never calls {@code getFormula()}; {@code SpecificationFormulaPreview} renders
+     * for the LLM (used only by {@code BoardOverviewTool}/{@code ListSpecsTool}); and the frontend's
+     * {@code buildSpecFormula} renders for the user, deliberately in a different notation
+     * ({@code CTL AG NOT (…)} rather than {@code CTLSPEC AG !(…)}) because its audience is human. Only the first
+     * decides what NuSMV checks, so the other two cannot make the model disagree with itself.
+     */
     @Size(max = 4000, message = "Formula preview must be at most 4000 characters")
     private String formula;
 

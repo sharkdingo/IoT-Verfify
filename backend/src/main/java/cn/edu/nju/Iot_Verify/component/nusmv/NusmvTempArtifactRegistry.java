@@ -56,24 +56,10 @@ public class NusmvTempArtifactRegistry {
         return new ArtifactLease(this, directory);
     }
 
-    public synchronized boolean isProtected(Path directory) {
-        Path normalized = directory.toAbsolutePath().normalize();
-        if (active.containsKey(normalized)) return true;
-        Path marker = lockPath(normalized);
-        if (!Files.exists(marker)) return false;
-
-        try (FileChannel channel = FileChannel.open(marker, StandardOpenOption.WRITE)) {
-            try (FileLock lock = channel.tryLock()) {
-                return lock == null;
-            } catch (OverlappingFileLockException e) {
-                return true;
-            }
-        } catch (IOException e) {
-            log.warn("Could not inspect NuSMV artifact activity lock {}: {}", marker, e.toString());
-            return true;
-        }
-    }
-
+    /*
+     * No `isProtected(Path)`: it had no callers. `NusmvTempArtifactCleaner` — the only plausible one — uses
+     * `deleteIfInactive(...)`, which performs the same active-map plus OS-file-lock exclusion check internally.
+     */
     /** Holds the same local/OS exclusion from the activity check through recursive deletion. */
     public synchronized boolean deleteIfInactive(Path directory, BooleanSupplier deletion) {
         Path normalized = directory.toAbsolutePath().normalize();

@@ -430,6 +430,19 @@ public class SmvMainModuleBuilder {
         return new ParamCtx(current != null ? current.config() : null, indexes);
     }
 
+    /*
+     * The generated-name half of the main namespace — a backstop, not the first line of defence.
+     *
+     * `NusmvRequestValidator.validateMainNamespace` runs on every verify and simulate request and now also
+     * reserves the fix-generated prefixes (`param_`, `lambda_`, `condition_value_`) against device names, so a
+     * user learns about the clash at their first verification rather than when they later ask for a fix. Before
+     * that reservation existed, a device named `condition_value_r0_c1` saved and verified fine — confirmed
+     * against the running API — and only this throw stopped it, from a surface the user was not editing.
+     *
+     * This check stays because the exact names still are not known until a strategy has chosen them: only here
+     * can `param_<hash>` be compared against everything else in the module. It fails closed, naming the
+     * identifier and both colliding sources, rather than emitting a model where one name means two things.
+     */
     private void registerMainIdentifier(Map<String, String> identifiers, String identifier, String source) {
         if (identifier == null || identifier.isBlank()) {
             return;

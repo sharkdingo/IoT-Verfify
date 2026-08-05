@@ -38,7 +38,15 @@
   background: color-mix(in srgb, var(--surface-overlay) 92%, transparent);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  /*
+   * The floating step, not the panel step.
+   *
+   * The nav is edge-attached and full width, with its own bottom border already marking the boundary — a
+   * panel lift (18px/42px) under a bar that has nowhere to float *to* reads as a heavy smear across the
+   * whole viewport, and it is darker than the literal it replaced (0.16 against 0.08). What the shadow has
+   * to say here is only "content scrolls under this", which is the chip/floating depth.
+   */
+  box-shadow: var(--shadow-floating);
 }
 
 .board-nav-bar .nav-content {
@@ -141,7 +149,8 @@
   border: 1px solid var(--border);
   border-radius: var(--iot-radius-action);
   background: var(--surface-overlay);
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.2);
+  /* A menu popover floats above content, one step below the nav that owns it. */
+  box-shadow: var(--shadow-floating);
 }
 
 .board-nav-bar .scene-actions-menu__popover button {
@@ -261,7 +270,8 @@
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: var(--iot-radius-panel);
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+  /* A control lifting off the surface it sits on: the smallest step. */
+  box-shadow: var(--shadow-raised);
 }
 
 .board-nav-bar .scene-action-btn:hover {
@@ -509,7 +519,8 @@
     border-radius: 50%;
     background: var(--surface-overlay);
     color: var(--text);
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+    /* A floating action button over the canvas. */
+    box-shadow: var(--shadow-floating);
     backdrop-filter: blur(10px);
   }
 
@@ -552,14 +563,35 @@
     background: var(--iot-color-bg-body);
     color: var(--iot-color-text);
     font-size: var(--iot-font-base);
+    /* `--board-inspector-width` and `--board-control-width` are injected by `boardShellStyle` and already
+       carry the collapsed rail width when a panel is collapsed, so there is no separate collapsed token:
+       one of those had drifted to 48px against the 56px the rail actually renders at, and the copy was
+       what the floating panels and the dock measured their right inset from. */
     --board-inspector-width: 20rem;
-    --board-inspector-collapsed-width: 3rem;
     --board-control-width: 20rem;
     --board-nav-height: 4.3125rem;
     --board-floating-gap: clamp(0.75rem, 2vw, 1rem);
-    --board-action-rail-width: 3.1rem;
+    /* Pre-hydration default only: the live value is injected per dock mode from `ACTION_DOCK_RAIL_PX`,
+       which is the single owner of the rail's width in both rem-flavoured CSS calc and the px fit math.
+       This used to be declared here at 3.1rem and again at 8.25rem behind a 1280px breakpoint, neither
+       matching the 3.5rem/8.75rem the dock was actually painted at. */
+    --board-action-rail-width: 3.5rem;
     --board-floating-panel-right: var(--board-floating-gap);
     --board-floating-action-right: var(--board-floating-gap);
+    /* One padding and one gap for the dock in every mode. The three modes had .45/.4, .375/.55 and
+       .3/.3 — differences with no stated reason that made one strip read as three unrelated widgets.
+       0.3125rem is not a taste choice, it is the only value that fits: the compact dock is one collapsed
+       rail wide (56px, the same as the side rails flanking the canvas) and holds a 44px button, so
+       44 + 2x5px padding + 2x1px border = 56 exactly. `0.45rem` overflowed that box by 2px per side,
+       which is what the per-mode padding was papering over. The constraint is real; it just applies to
+       every mode at once, so it belongs to the token rather than to one mode's override. */
+    --board-dock-pad: 0.3125rem;
+    /* The dock's top block: the collapse handle in expanded/compact, the launcher in packed. All three modes
+       show one control there, doing one job, so it is one size — 44px, the same floor the tool buttons carry.
+       The launcher was 56px against the handle's 46px, which is why the packed strip read as a bigger widget
+       than the other two rather than the same widget narrowed. */
+    --board-dock-handle: 2.75rem;
+    --board-dock-gap: 0.4rem;
     /* The surface, text, and border tokens are declared once at `:root` above. Keeping a copy here
        would be two owners for one value, and the `.iot-board` copy is precisely what put them out of
        reach of a teleported dialog. Layout metrics stay board-scoped: they describe this board's
@@ -598,12 +630,6 @@
     .iot-board {
         --board-floating-panel-right: calc(var(--board-inspector-width) + var(--board-action-rail-width) + (var(--board-floating-gap) * 2));
         --board-floating-action-right: calc(var(--board-inspector-width) + var(--board-floating-gap));
-    }
-}
-
-@media (min-width: 1280px) and (min-height: 600px) {
-    .iot-board {
-        --board-action-rail-width: 8.25rem;
     }
 }
 
@@ -773,26 +799,33 @@
     pointer-events: none;
 }
 
-.iot-board.is-inspector-collapsed {
-    --board-floating-panel-right: calc(var(--board-inspector-collapsed-width) + var(--board-action-rail-width) + (var(--board-floating-gap) * 2));
-    --board-floating-action-right: calc(var(--board-inspector-collapsed-width) + var(--board-floating-gap));
-}
+/* No `.is-inspector-collapsed` override: `--board-inspector-width` is injected with the collapsed rail
+   width when the inspector is collapsed, so the base rules above already reserve the right corridor. The
+   override existed only to substitute a second, stale copy of that width. */
 
 .iot-board .board-action-dock__launcher,
 .iot-board .board-action-dock__panel {
     pointer-events: auto;
 }
 
+/*
+ * The launcher is packed mode's top block, so it is the same size as the collapse handle that occupies that
+ * position in the other two modes — not the full rail width, which made the packed dock look like a larger
+ * widget rather than the same one narrowed.
+ */
 .iot-board .board-action-dock__launcher {
     position: relative;
     display: inline-flex;
-    width: 3.5rem;
-    height: 3.5rem;
+    width: var(--board-dock-handle);
+    height: var(--board-dock-handle);
     align-items: center;
     justify-content: center;
     align-self: flex-end;
     border: 1px solid var(--board-border);
-    border-radius: var(--iot-radius-panel);
+    /* `--iot-radius-action`, not `--iot-radius-panel`: at 44px this is a button, and the radius scale reads
+       as a containment level. A 17px corner on a 44px box is the radius of the panel that *holds* buttons,
+       which is what made this control look like a shrunken panel rather than the handle it replaces. */
+    border-radius: var(--iot-radius-action);
     background: color-mix(in srgb, var(--surface-overlay) 88%, transparent);
     box-shadow: var(--shadow-elevated);
     color: var(--board-text);
@@ -814,10 +847,12 @@
     font-size: 1.45rem !important;
 }
 
+/* Inset from the corner, not from a fixed 0.55rem that was chosen against the launcher's old 56px box —
+   at 44px that offset put the dot most of the way to the icon. */
 .iot-board .board-action-dock__activity-dot {
     position: absolute;
-    top: 0.55rem;
-    right: 0.55rem;
+    top: 0.3rem;
+    right: 0.3rem;
     width: 0.55rem;
     height: 0.55rem;
     border-radius: var(--iot-radius-pill);
@@ -829,8 +864,8 @@
     display: flex;
     width: 100%;
     flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.45rem;
+    gap: var(--board-dock-gap);
+    padding: var(--board-dock-pad);
     border: 1px solid var(--board-border);
     border-radius: var(--iot-radius-panel);
     background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
@@ -839,48 +874,61 @@
     backdrop-filter: blur(14px);
 }
 
+/* The header is exactly as tall as its handle, and carries no padding of its own: it used to reserve
+   1.45rem — the handle's *claimed* height rather than its painted one — plus four different sub-pixel
+   paddings, which is how a 46px control ended up in a 23px row and overlapped the button beneath it. */
 .iot-board .board-action-dock__header {
     display: flex;
-    min-height: 1.45rem;
+    min-height: var(--board-dock-handle);
     align-items: center;
     justify-content: space-between;
     gap: 0.35rem;
-    padding: 0.05rem 0.15rem 0.1rem 0.25rem;
 }
 
+/*
+ * The dock's heading, one tier above the group labels it introduces.
+ *
+ * It was `0.72rem`/800 — a hand-rolled size 0.52px larger than the `--iot-font-min` group labels *beneath*
+ * it, at a weight one step heavier. Two levels of heading rendering at effectively the same size is a
+ * hierarchy that does not exist on screen: the reader sees three rows of small uppercase text and has to
+ * work out which one names the panel. It cleared `typographyFloor` (11.52px against an 11px floor) which is
+ * why nothing flagged it, but a floor is a minimum for body text, not a target for a heading.
+ *
+ * `0.875rem` is the tier the side panels' own titles use (`text-sm`), so the board now has one heading size.
+ * Dropping `text-transform: uppercase` is part of the same fix: uppercase costs roughly 15% of apparent
+ * x-height and removes word shape, which is most of why four characters read as smaller than they measure.
+ */
 .iot-board .board-action-dock__title {
     min-width: 0;
     overflow: hidden;
     color: var(--board-text);
-    font-size: 0.72rem;
-    font-weight: 800;
+    font-size: 0.875rem;
+    font-weight: 700;
     letter-spacing: 0;
-    line-height: 1.1;
+    line-height: 1.2;
     text-overflow: ellipsis;
-    text-transform: uppercase;
     white-space: nowrap;
 }
 
-/* A 44px target around a 1.45rem badge.
+/*
+ * The collapse handle is a plain 44px button that occupies the 44px it paints.
  *
- * This measured **23px** — the smallest control on the board, and the one that collapses and expands the dock whose
- * eight buttons are 44px. A strip of correctly sized controls with an undersized handle is worse than an
- * consistently small strip, because the handle is what a user reaches for to reclaim canvas space.
+ * It used to be a `content-box` 1.45rem badge grown to a 44px target by `padding: 0.65rem` with
+ * `margin: -0.65rem` cancelling the growth, on the theory that `background-clip: content-box` would keep
+ * the *visible* chevron small while the target stayed large. Measured, that does not hold: `background-clip`
+ * clips the background but **not the border**, so the bordered box painted at 45.97px while claiming 23px of
+ * layout. The negative margin then spent that difference on its neighbours — the handle overhung the dock's
+ * right edge by 2px (`scrollWidth` 141 against a 138px content box) and pressed down onto the first tool
+ * button, which is what "the top block overlaps the simulation icon and sticks out of the dock" was.
  *
- * The visible chevron stays small: a 44px circle here would compete with the workflow buttons it sits beside. The
- * target grows through `content-box` padding, which the surrounding flex absorbs, and negative margin keeps the
- * layout unchanged — the same treatment as the help tooltip trigger. */
+ * A target that big is not made smaller by lying about it in the box model. So it is 44px, border-box,
+ * with the same `--iot-radius-action` and 44px floor as the buttons below it — one shape for the strip.
+ */
 .iot-board .board-action-dock__toggle {
     display: inline-flex;
-    box-sizing: content-box;
-    width: 1.45rem;
-    height: 1.45rem;
-    /* 1.45rem badge + 2 x 0.65rem padding = 2.75rem of target, exactly. My first attempt used 0.53rem and
-       measured 42px — close enough to look right and still 2px short, which is precisely the kind of near-miss
-       this whole sweep exists to catch. The arithmetic is written out so the next reader can check it. */
-    padding: 0.65rem;
-    margin: -0.65rem;
-    background-clip: content-box;
+    box-sizing: border-box;
+    width: var(--board-dock-handle);
+    height: var(--board-dock-handle);
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
@@ -1244,6 +1292,21 @@
 .board-text-danger { color: var(--danger); }
 .board-text-success { color: var(--success); }
 .board-text-info { color: var(--info); }
+/*
+ * The accent member of the family was missing while two `ControlCenter` elements already applied
+ * `board-text-accent` — a class Tailwind cannot generate either, so both were silent no-ops.
+ *
+ * It needs the `.iot-board` prefix, unlike its five siblings, and that is not cosmetic. Its one call site is an
+ * icon inside a `<summary class="text-slate-600">`, and the board's neutral-text normaliser
+ * (`.iot-board .board-side-panel .text-slate-600`, specificity 0-3-0) recolours that summary to
+ * `--board-text-muted`, which the icon then *inherits*. A bare `.board-text-accent` is 0-1-0 and loses: measured
+ * in dark theme it painted `rgb(148,163,184)` where `--accent` is `rgb(96,165,250)`. The first version of this
+ * fix had exactly that defect and looked correct in the source.
+ *
+ * The siblings share the weakness and simply never sit under a `text-slate-*` ancestor today, so they are left
+ * as they are rather than changed speculatively.
+ */
+.iot-board .board-text-accent { color: var(--accent); }
 
 /*
  * Section-header icon tile.
@@ -1373,6 +1436,67 @@
     color: var(--accent);
 }
 
+/*
+ * ===== State variants for the role classes =====
+ *
+ * Tailwind only generates `hover:`/`focus:`/`disabled:`/`dark:`/`group-*:` variants for utilities *it* owns.
+ * `board-*` classes are hand-written above, so `hover:board-chip-danger` in a template emits **nothing** — the
+ * class sits in the DOM and no rule ever matches it. Verified against the built bundle: grepping all 14 emitted
+ * CSS files for any `<variant>\:board-*` selector returns zero matches, while the unprefixed base classes are
+ * present.
+ *
+ * That silently disabled 90 declarations across the components. The ones that mattered:
+ *
+ *   - The device delete button (`SystemInspector.vue`) asked for `hover:board-chip-danger
+ *     hover:board-text-danger`. Measured in a browser: colour and background were **identical** on hover
+ *     (`rgb(97,113,135)`, transparent) — a destructive action with no danger cue at all.
+ *   - Cancel/delete on running verification tasks (`TraceHistoryPanel.vue`, 5 sites) — same, so cancelling a
+ *     run looked like pressing a neutral button.
+ *   - `disabled:board-chip-info` on the device runtime save button (`DeviceDialog.vue`): the only `disabled:`
+ *     utility Tailwind could emit there is `cursor-not-allowed`, so a *disabled* primary button kept its full
+ *     accent fill and white text and read as enabled.
+ *   - `group-focus-within:board-text-info` on 13 rule-builder select icons — the keyboard-focus cue was absent.
+ *
+ * Declaring the variant forms here is the fix that scales: one rule per role per state, rather than rewriting
+ * 90 call sites into arbitrary-value syntax. `styles/__tests__/roleClassVariants.spec.ts` fails if a template
+ * uses a variant this file does not define.
+ */
+.hover\:board-chip-danger:hover { background-color: var(--danger-surface); color: var(--danger); }
+.hover\:board-chip-warning:hover { background-color: var(--warning-surface); color: var(--warning); }
+.hover\:board-chip-info:hover { background-color: var(--info-surface); color: var(--info); }
+.hover\:board-chip-accent:hover { background-color: var(--accent-surface); color: var(--accent); }
+.disabled\:board-chip-info:disabled { background-color: var(--info-surface); color: var(--info); }
+
+/*
+ * The chip variants sit here; the *ink* variants had to move below the neutral-text normaliser — see the note
+ * at that block. Nothing sets a competing `background-color` at rest on the chip call sites, so these win where
+ * a same-specificity ink rule did not.
+ */
+
+.hover\:board-border-subtle:hover { border-color: var(--border); }
+.hover\:board-card--muted:hover { background-color: var(--board-card-muted-bg); }
+
+.dark .dark\:board-text-progress { color: var(--accent); }
+.dark .dark\:board-border-progress { border-color: var(--accent); }
+
+/*
+ * A file-picker trigger: a `<label>` wrapping a hidden `<input type="file">`.
+ *
+ * It carried `hover:board-chip-accent`, a Tailwind variant on a hand-written class. Tailwind only generates
+ * variants for utilities it owns, so no such rule was ever emitted and the hover did nothing — the control
+ * looked interactive and did not respond. Both states live here now, using the same accent ink/surface pair
+ * as the chip it was reaching for.
+ */
+.board-file-trigger {
+    border: 1px solid var(--accent-border);
+    color: var(--accent);
+}
+
+.board-file-trigger:hover,
+.board-file-trigger:focus-within {
+    background-color: var(--accent-surface);
+}
+
 /* A chip that carries no status at all — a count, a unit, an ordinary label.
  *
  * Its absence is why counts kept borrowing a status role: with only danger/warning/success/info/accent
@@ -1495,6 +1619,14 @@
  * So: filled for proof, tinted-and-bordered for evidence, quiet for navigation. Colour still marks the
  * family (all three are accent, none is a new hue), and weight now marks the epistemic claim.
  */
+/*
+ * Emphasis here is the fill, not a lift.
+ *
+ * This button carried Tailwind's `shadow-lg` in the markup while all seven siblings declare
+ * `box-shadow: none`, so one of eight buttons floated above a strip they all belong to — inside a panel that
+ * is itself elevated. It made the tier difference read as a depth difference, and `shadow-lg` is a raw
+ * light-theme shadow that never followed the theme. Removed from the markup; the base rule's `none` applies.
+ */
 .iot-board .board-tool-button--primary {
     background-color: var(--accent-fill);
     color: #fff;
@@ -1549,7 +1681,17 @@
  * that would misdescribe it.
  */
 .iot-board .board-tool-button--view {
-    background-color: var(--board-control-bg);
+    /*
+     * The same quiet ground as the suggestion tier.
+     *
+     * This was `--board-control-bg` (#f1f5f9) against the suggestions' `--board-card-bg` (#ffffff) — two
+     * tiers that both mean "this is not the primary action" sitting on two different neutrals, four rows
+     * apart in one strip. Reviewed on screen that reads as an unexplained grey band among white buttons
+     * ("why is some white and some not"), because a background change in a vertical list implies a
+     * *category* change, and these two are the same category. What distinguishes them is already the
+     * border hue and the label.
+     */
+    background-color: var(--board-card-bg);
     /*
      * A deliberately quiet tier still needs a *visible* edge.
      *
@@ -1568,13 +1710,16 @@
     box-shadow: none;
 }
 
+/* These mix against the tier's own resting ground. They still said `--board-control-bg` after the rest state
+   moved to `--board-card-bg`, which would have made hover *lighter* than rest in light theme — a hover that
+   changes ground rather than deepening it. */
 .iot-board .board-tool-button--view:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--accent) 10%, var(--board-control-bg));
+    background-color: color-mix(in srgb, var(--accent) 10%, var(--board-card-bg));
     border-color: color-mix(in srgb, var(--accent) 38%, var(--board-border));
 }
 
 .iot-board .board-tool-button--view[aria-pressed='true'] {
-    background-color: color-mix(in srgb, var(--accent) 14%, var(--board-control-bg));
+    background-color: color-mix(in srgb, var(--accent) 14%, var(--board-card-bg));
     box-shadow: inset 3px 0 0 0 var(--accent);
 }
 
@@ -1610,7 +1755,10 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 0.78rem;
+    /* 0.75rem is the scale's small-text step (Tailwind `text-xs`, used by twelve other board labels). This
+       was `0.78rem` — a bespoke 12.48px that no other element in the product uses, and half a pixel from a
+       step that already existed. Same reason the heading above it stopped hand-rolling its size. */
+    font-size: 0.75rem;
     font-weight: 700;
     letter-spacing: 0;
     line-height: 1.1;
@@ -1625,9 +1773,15 @@
     padding: 0.45rem 0.65rem;
     border-radius: var(--iot-radius-action);
     background: var(--surface-elevated);
-    box-shadow: var(--shadow-elevated);
+    /* A transient chip floats above content; it is not a panel floating above the page. It was using
+       `--shadow-elevated` — an 18px/42px panel lift on a hover label two lines tall — so hovering a dock
+       button dropped a panel-sized shadow across the canvas. That is the hover treatment the review called
+       out, and it is a depth error rather than a colour one. */
+    box-shadow: var(--shadow-floating);
     color: #fff;
-    font-size: 0.72rem;
+    /* The scale's small-text step, not another bespoke `0.72rem` — this was the third site using that value
+       and the last one left after the heading and the button labels moved onto the scale. */
+    font-size: 0.75rem;
     line-height: 1.2;
     opacity: 0;
     pointer-events: none;
@@ -1662,32 +1816,31 @@
     opacity: 1;
 }
 
-.iot-board .board-action-dock--compact .board-action-dock__panel {
-    gap: 0.55rem;
-    padding: 0.375rem;
-    border-radius: var(--iot-radius-pill);
-}
-
+/*
+ * Compact mode differs from expanded in exactly one thing: there is no room for the labels, so the
+ * buttons become squares and the header keeps only its handle.
+ *
+ * It used to also change the panel's radius to `--iot-radius-pill`, its padding and its gap. A dock that
+ * is a floating panel when open and a capsule when narrowed is two widgets, not one in two states, and
+ * the radius scale reserves `--iot-radius-panel` for exactly this containment level — so the base rule's
+ * radius now stands in all three modes. The toggle likewise keeps the base 44px-target treatment instead
+ * of switching to a solid 44px square with a card radius; the visible badge is the same size either way,
+ * so switching only the sizing model made the same control look like two different controls.
+ */
+/* With the title hidden, the handle is the row's only child, so centre it. The base rule no longer has
+   padding to reset. */
 .iot-board .board-action-dock--compact .board-action-dock__header {
-    min-height: 2.75rem;
     justify-content: center;
-    padding: 0;
 }
 
 .iot-board .board-action-dock--compact .board-action-dock__title {
     display: none;
 }
 
-.iot-board .board-action-dock--compact .board-action-dock__toggle {
-    width: 2.75rem;
-    height: 2.75rem;
-    border-radius: var(--iot-radius-card);
-}
-
+/* The base rule already gives the button full width and the 44px floor; without a label there is no text
+   to inset, and the panel's content box is itself 44px wide, so dropping the padding is what makes it a
+   square. It does not need to restate the size. */
 .iot-board .board-action-dock--compact .board-tool-button {
-    width: 2.75rem;
-    height: 2.75rem;
-    min-height: 2.75rem;
     padding: 0;
 }
 
@@ -1700,15 +1853,9 @@
     justify-content: flex-start;
 }
 
-.iot-board .board-action-dock--packed {
-    width: 3.5rem;
-}
-
-.iot-board .board-action-dock--packed .board-action-dock__launcher {
-    width: 3.5rem;
-    height: 3.5rem;
-    border-radius: var(--iot-radius-panel);
-}
+/* Packed mode needs no width or radius of its own: `--board-action-dock-width` already carries the rail
+   width for the mode, and the launcher's base rule sizes itself from `--board-dock-handle` with the same
+   action radius as the handle it stands in for. The three literals here were a fourth copy of "3.5rem". */
 
 @media (max-width: 860px) {
     .iot-board .board-action-dock--compact .board-tool-tooltip {
@@ -1756,13 +1903,14 @@
     border-color: var(--board-border);
 }
 
-.iot-board .board-panel-title,
-.iot-board .board-text {
+/* `.board-text` and `.board-muted` were members of these two groups and no template applied either — the
+   live classes are `.board-text-strong`/`.board-text-muted` in the utility block above, plus
+   `.board-muted-surface`, which is a surface rather than an ink. */
+.iot-board .board-panel-title {
     color: var(--board-text);
 }
 
 .iot-board .board-panel-subtitle,
-.iot-board .board-muted,
 .iot-board .board-floating-panel .text-slate-400,
 .iot-board .board-floating-panel .text-slate-500,
 .iot-board .board-floating-panel .text-slate-600,
@@ -1786,6 +1934,28 @@
 .iot-board .board-side-panel .text-slate-600 {
     color: var(--board-text-muted);
 }
+
+/*
+ * ===== Role ink on hover/focus, placed *after* the normaliser above =====
+ *
+ * These have to come last, and the reason is worth recording because I got it wrong twice.
+ *
+ * Almost every call site pairs a hover ink with a resting neutral — `text-slate-500` on the device delete button,
+ * `board-text-muted` on the task-cancel actions — and the block directly above re-colours those neutrals for the
+ * theme at specificity 0-3-0. A bare `.hover\:board-text-danger:hover` (0-2-0) lost to it, and so did a doubled
+ * `.x.x:hover`; adding `.iot-board` tied at 0-3-0 and *still* lost, because the normaliser sits later in the
+ * file. Measured each time with CDP forced-hover, which lists the matched rules in cascade order — the symptom
+ * was a danger-tinted background under a grey glyph, which is worse than no hover at all.
+ *
+ * Order is the mechanism here, not specificity. Anything added to the normaliser above must stay above this.
+ */
+.iot-board .hover\:board-text-danger:hover { color: var(--danger); }
+.iot-board .hover\:board-text-warning:hover { color: var(--warning); }
+.iot-board .hover\:board-text-info:hover { color: var(--info); }
+.iot-board .hover\:board-text-strong:hover { color: var(--text); }
+
+.iot-board .group:hover .group-hover\:board-text-info { color: var(--info); }
+.iot-board .group:focus-within .group-focus-within\:board-text-info { color: var(--info); }
 
 .iot-board .board-floating-panel .bg-white,
 .iot-board .board-floating-panel .bg-slate-50,
@@ -2006,29 +2176,19 @@
         width: min(12rem, calc(100vw - var(--board-action-dock-right, 4rem) - 0.75rem));
     }
 
+    /* Only the scroll behaviour and the two-column reflow are specific to this viewport. The radius,
+       padding, gap and handle size were restated here with a third set of values, which is how the same
+       dock ended up with three shapes; they come from the shared tokens now. */
     .iot-board .board-action-dock--compact .board-action-dock__panel {
         width: 100%;
         min-height: 0;
         max-height: 100%;
         overflow-y: auto;
-        border-radius: var(--iot-radius-card);
-        gap: 0.3rem;
-        padding: 0.3rem;
-    }
-
-    .iot-board .board-action-dock--compact .board-action-dock__header {
-        min-height: 2.75rem;
-    }
-
-    .iot-board .board-action-dock--compact .board-action-dock__toggle {
-        width: 2.75rem;
-        height: 2.75rem;
     }
 
     .iot-board .board-action-dock--compact .board-tool-group {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.3rem;
     }
 
     .iot-board .board-action-dock--compact .board-tool-group-label,
@@ -2039,29 +2199,18 @@
     .iot-board .board-action-dock--compact .board-tool-group-label {
         display: none;
     }
-
-    .iot-board .board-action-dock--compact .board-tool-button {
-        width: 100%;
-        height: 2.75rem;
-        min-height: 2.75rem;
-    }
 }
 
-.iot-board .canvas-map {
-    top: calc(var(--board-nav-height) + var(--board-floating-gap));
-    left: calc(var(--board-control-width) + var(--board-floating-gap));
-    bottom: auto;
-    max-width: calc(100vw - var(--board-control-width) - (var(--board-floating-gap) * 2));
-    transition: left 0.2s ease, top 0.2s ease, transform 0.2s ease;
-    background: color-mix(in srgb, var(--surface-overlay) 82%, transparent);
-    backdrop-filter: blur(12px);
-}
-
-@media (min-width: 1024px) {
-    .iot-board .canvas-map {
-        left: calc(var(--board-control-width) + var(--board-floating-gap));
-    }
-}
+/*
+ * No second `.canvas-map` rule.
+ *
+ * This block held the last of the overlay-era styling. `top`/`left`/`bottom`/`max-width` and
+ * `transition: left, top` went when the map's `position` did — they were inert. The translucency and blur
+ * looked live but were not doing anything either: measured, the card painted as 77%-opaque white with a 12px
+ * backdrop blur *on the inspector's opaque #f8fafc panel body*, so the blur had nothing behind it to blur and
+ * the alpha only washed the card against its own parent. It also silently overrode the `background` from the
+ * shared board-surface rule above — one property, two owners, the later one winning by position.
+ */
 
 .iot-board .canvas-map__viewport {
     background-color: var(--surface-muted);
@@ -2074,12 +2223,9 @@
     justify-content: flex-end;
 }
 
-/* 44px targets. These measured 32×32px — zoom in, zoom out and fit-to-screen, which are among the most repeatedly
-   pressed controls on the board, and the ones a user reaches for while already struggling to see something. */
-.iot-board .canvas-map__tool {
-    min-width: 2.75rem;
-    min-height: 2.75rem;
-}
+/* The 44px floor for these lives with the rest of `.canvas-map__tool` below, in one block. It was declared
+   here as well, 66 lines from the block that sets the same element's `width`/`height` — two owners for one
+   control, which is only invisible while `min-*` happens to win over `width`. */
 
 .iot-board .canvas-map__zoom-input-wrap {
     display: inline-flex;
@@ -2142,10 +2288,16 @@
     pointer-events: none;
 }
 
+/* 44px targets. These measured 32x32 — zoom in, zoom out and fit-to-screen, among the most repeatedly pressed
+   controls on the board, and the ones a user reaches for while already struggling to see something. The
+   `1.375rem` width/height is the icon box; the floor is what actually sizes them, so it is stated here rather
+   than in a second block that only won by cascade accident. */
 .iot-board .canvas-map__tool {
     display: inline-flex;
     width: 1.375rem;
     height: 1.375rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
     align-items: center;
     justify-content: center;
     border-radius: var(--iot-radius-control);
@@ -2159,11 +2311,8 @@
 }
 
 @media (pointer: coarse), (max-width: 1023.98px), (max-height: 599.98px) {
-    .iot-board .canvas-map__tool {
-        min-width: 2.75rem;
-        min-height: 2.75rem;
-    }
-
+    /* `.canvas-map__tool` needs nothing here: the 44px floor is unconditional in its base rule, so repeating
+       it behind a coarse-pointer query implied it was conditional. */
     .iot-board .canvas-map__zoom-input-wrap {
         min-height: 2.75rem;
         height: 2.75rem;
@@ -2580,7 +2729,10 @@
     display: grid;
     grid-template-rows: 1fr;
     cursor: grab;
-    box-shadow: 0 0.75rem 1.8rem rgba(15, 23, 42, 0.12), 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent) inset;
+    /* A node floats above the canvas: the floating step, plus its own hairline. The lift was a literal
+       `0 .75rem 1.8rem rgba(15,23,42,.12)` that stayed light-theme on a near-black canvas; the hairline is
+       kept because it is a node edge, not elevation, and it already derives from `--text`. */
+    box-shadow: var(--shadow-floating), 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent) inset;
     border: 1px solid;
     color: var(--iot-color-text);
     user-select: none;
@@ -2608,26 +2760,43 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--iot-color-text-muted) 24%, transparent);
 }
 
+/*
+ * Hover raises the node one step, from floating to elevated. It does not change the node's *hue*.
+ *
+ * It used to swap the resting hairline — `color-mix(var(--text) 12%)`, a dark line on a light card — for
+ * `rgba(255, 255, 255, 0.72)`, a near-opaque white ring. On a light canvas that inverted the edge from dark to
+ * white on hover, and in dark theme it drew a bright white outline on a navy node: a colour change dressed as
+ * a depth change, which is why hovering a node looked wrong rather than lifted. The hairline now stays put and
+ * only the elevation moves, which is what "hover" should mean.
+ */
 .iot-board .device-node:hover {
     transform: translateY(-1px);
-    box-shadow: 0 1rem 2.2rem rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(255, 255, 255, 0.72) inset;
+    box-shadow: var(--shadow-elevated), 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent) inset;
 }
 
 .iot-board .device-node:active {
     cursor: grabbing;
 }
 
+/*
+ * The node's four state rules keep its resting depth and add a ring on top.
+ *
+ * They used `--iot-node-shadow`, a *fourth* elevation token, while the resting rule uses the scale — so
+ * focusing or highlighting a node silently changed its base depth as well as adding the ring. That token was
+ * also wrong in dark theme: `rgba(15, 23, 42, 0.9)` is the *light* palette's navy at 90% opacity, where the
+ * dark theme's shadows are `rgba(2, 6, 23, …)`. It is now unreferenced by the board.
+ */
 .iot-board .device-node:focus-visible {
     outline: 3px solid color-mix(in srgb, var(--iot-color-accent) 78%, white);
     outline-offset: 4px;
-    box-shadow: var(--iot-node-shadow), 0 0 0 6px color-mix(in srgb, var(--iot-color-accent) 18%, transparent);
+    box-shadow: var(--shadow-floating), 0 0 0 6px color-mix(in srgb, var(--iot-color-accent) 18%, transparent);
 }
 
 .iot-board .device-node.node-focused {
     z-index: 18;
     border-width: 2px;
     box-shadow:
-        var(--iot-node-shadow),
+        var(--shadow-floating),
         0 0 0 4px color-mix(in srgb, var(--iot-color-accent) 28%, transparent),
         0 0 28px color-mix(in srgb, var(--iot-color-accent) 32%, transparent);
 }
@@ -2645,7 +2814,7 @@
 /* Playback context stays quiet; motion is reserved for the devices that changed. */
 .iot-board .device-node.trace-active {
     box-shadow:
-        var(--iot-node-shadow),
+        var(--shadow-floating),
         0 0 0 1px color-mix(in srgb, var(--trace-glow-color, var(--iot-color-accent)) 24%, transparent);
 }
 
@@ -2653,7 +2822,7 @@
     z-index: 12;
     border-width: 2px;
     box-shadow:
-        var(--iot-node-shadow),
+        var(--shadow-floating),
         0 0 0 4px color-mix(in srgb, var(--iot-color-accent) 30%, transparent),
         0 0 28px color-mix(in srgb, var(--iot-color-accent) 28%, transparent);
 }
@@ -2691,7 +2860,8 @@
     background: color-mix(in srgb, var(--surface-overlay) 92%, var(--iot-color-accent) 8%);
     color: color-mix(in srgb, var(--iot-color-accent) 82%, var(--text));
     padding: 0.2rem 0.45rem;
-    box-shadow: 0 0.35rem 0.9rem rgba(15, 23, 42, 0.18);
+    /* A transient badge above a node. */
+    box-shadow: var(--shadow-floating);
     font-size: var(--iot-font-min);
     font-weight: 800;
     line-height: 1;
@@ -3249,7 +3419,10 @@
     font-size: var(--iot-font-min);
     background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
     border-radius: var(--iot-radius-control);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    /* The raised step. The `inset 0 1px 0 rgba(255,255,255,.8)` top highlight went with it: a near-opaque
+       white line reads as a glossy bevel on a light label and as a bright seam on a dark one, and no other
+       surface in the product uses that treatment. */
+    box-shadow: var(--shadow-raised);
     border: 1px solid var(--border);
     line-height: 1.2;
     max-width: 100%;

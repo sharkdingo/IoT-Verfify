@@ -535,10 +535,15 @@ Board layout and visual shell rules:
   template cannot be resolved, keep the instance identity visible, hide capability and
   formula sections, and ask the user to refresh before editing or interpreting them.
 - The canvas map is integrated into the `SystemInspector` overview slot on the right
-  side, above the device/rule/specification tabs. It is hidden while simulation,
-  verification, history, or recommendation overlays are open so it does not compete with
-  task panels or cover important controls. Keep the map compact, theme-aware, and
-  neutral; red remains reserved for warnings, violations, and destructive actions.
+  side, above the device/rule/specification tabs. It is **always visible while the
+  inspector is expanded** — it is not hidden when a result panel opens. The floating
+  panels carry a `right` inset that clears the inspector and the action rail, so they
+  cannot overlap it (measured: a panel spans x=660..948 against an inspector at
+  1120..1440 at 1440x900), and its zoom field, zoom buttons and fit-to-content are the
+  board's only pointer viewport controls — a result panel is precisely when a user zooms
+  to inspect what it points at. At narrow widths the inspector collapses to a rail and
+  the map is not rendered. Keep the map compact, theme-aware, and neutral; red remains
+  reserved for warnings, violations, and destructive actions.
 - The Environment Pool in `SystemInspector` is another overview surface. It groups
   current board variables returned by `/board/environment`, using templates to explain
   which devices read or affect each variable, and displays the user-facing variable name,

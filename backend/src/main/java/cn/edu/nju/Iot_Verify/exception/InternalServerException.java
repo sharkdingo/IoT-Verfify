@@ -18,11 +18,4 @@ public class InternalServerException extends BaseException {
         return new InternalServerException("Failed to deserialize data", cause);
     }
 
-    public static InternalServerException databaseError(Throwable cause) {
-        return new InternalServerException("Database operation failed", cause);
-    }
-
-    public static InternalServerException aiServiceError(Throwable cause) {
-        return new InternalServerException("AI service error", cause);
-    }
 }

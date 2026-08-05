@@ -53,15 +53,13 @@ public class Result<T> {
         return error(409, msg);
     }
 
-    public static <T> Result<T> validationError(String msg) {
-        return error(422, msg);
-    }
-
     public static <T> Result<T> serviceUnavailable(String msg) {
         return error(503, msg);
     }
 
-    public static <T> Result<T> tooManyRequests(String msg) {
-        return error(429, msg);
-    }
+    /*
+     * No `validationError(422)` or `tooManyRequests(429)` factory: `GlobalExceptionHandler` builds both through
+     * its own `json(HttpStatus, …)` helper, so these two were the only members of this family with no caller.
+     * The siblings above are all live.
+     */
 }

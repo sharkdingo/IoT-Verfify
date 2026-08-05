@@ -20,6 +20,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import cn.edu.nju.Iot_Verify.util.JsonPointerPath;
 
 /** Strict request-boundary parser for the destructive board replacement command. */
 @Component
@@ -50,10 +51,10 @@ public class BoardBatchRequestParser {
                     .readValue(objectMapper.treeAsTokens(body));
         } catch (UnrecognizedPropertyException exception) {
             throw new BadRequestException("Unknown field '" + exception.getPropertyName() + "' at '"
-                    + formatPath(exception) + "'; importing it would lose data, so no board data was changed.");
+                    + JsonPointerPath.of(exception) + "'; importing it would lose data, so no board data was changed.");
         } catch (JsonProcessingException exception) {
             String path = exception instanceof JsonMappingException mappingException
-                    ? formatPath(mappingException)
+                    ? JsonPointerPath.of(mappingException)
                     : "request";
             throw new BadRequestException("Invalid board batch value at '" + path + "': "
                     + exception.getOriginalMessage() + ". No board data was changed.");
@@ -97,18 +98,4 @@ public class BoardBatchRequestParser {
         errors.merge(path, violation.getMessage(), (left, right) -> left + "; " + right);
     }
 
-    private String formatPath(JsonMappingException exception) {
-        StringBuilder path = new StringBuilder();
-        for (JsonMappingException.Reference reference : exception.getPath()) {
-            if (reference.getFieldName() != null) {
-                if (!path.isEmpty()) {
-                    path.append('.');
-                }
-                path.append(reference.getFieldName());
-            } else if (reference.getIndex() >= 0) {
-                path.append('[').append(reference.getIndex()).append(']');
-            }
-        }
-        return path.isEmpty() ? "request" : path.toString();
-    }
 }

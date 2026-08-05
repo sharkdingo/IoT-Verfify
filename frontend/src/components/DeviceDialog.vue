@@ -5,7 +5,6 @@ import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 import type {DeviceManifest, DeviceTemplate, InternalVariable} from '../types/device'
 import type {DeviceNode} from '../types/node'
-import type {DeviceEdge} from '../types/edge'
 import type {Specification} from '../types/spec'
 import { buildSpecFormula } from '@/utils/spec'
 import { resolveImpactEnvironmentDefinition } from '@/utils/device'
@@ -38,7 +37,6 @@ const props = defineProps<{
   manifest?: DeviceManifest | null
   nodes?: DeviceNode[]
   deviceTemplates?: DeviceTemplate[]
-  rules?: DeviceEdge[]
   specs?: Specification[]
   runtimeSaving?: boolean
   deleteLoading?: boolean

@@ -222,4 +222,32 @@ describe('semantic colour ownership', () => {
 
     expect(failures).toEqual([])
   })
+
+  it('keeps the device-runtime box from swallowing its own accent icon', () => {
+    /*
+     * A component's scoped CSS carries the `[data-v-…]` attribute, so a broad element selector inside it
+     * outranks any global class rule — and `color: inherit` on a bare element name is as broad as it gets.
+     *
+     * `ControlCenter` had `.device-runtime-box span { color: inherit }` to neutralise the Tailwind slate
+     * utilities its markup still carries. That also matched the one span asking for `board-text-accent`, so the
+     * accent icon painted `rgb(148,163,184)` instead of the accent (measured; now 5.17:1 light / 4.91:1 dark
+     * against the box). The defect is invisible from either side in review: the global rule looks correct and
+     * the scoped rule looks like ordinary theme normalisation. Two attempted fixes failed before CDP
+     * matched-styles named the winner — adding `.iot-board` for specificity did not help, and neither did
+     * appending an identical rule last, because equal specificity was never the problem.
+     *
+     * This pins the one real instance rather than trying to detect the pattern generally. A general check needs
+     * to prove DOM containment between a scoped ancestor and an ink-carrying element, which the two attempts
+     * before this could not do from source text: both produced false positives on selectors that cannot meet
+     * the inks they were accused of swallowing, and a guard that cries wolf is worse than none.
+     */
+    const control = readFileSync(join(COMPONENT_DIR, 'ControlCenter.vue'), 'utf8')
+    expect(control, 'the accent icon should still be there to protect').toContain('board-text-accent')
+
+    const at = control.indexOf('.device-runtime-box summary')
+    expect(at, 'the runtime-box normaliser should exist').toBeGreaterThan(-1)
+    const rule = control.slice(at, control.indexOf('}', at))
+    expect(rule, 'the blanket span rule must exempt the role ink')
+      .toMatch(/span:not\(\.board-text-accent\)/)
+  })
 })

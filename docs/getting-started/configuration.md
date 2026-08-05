@@ -283,6 +283,15 @@ When `spring.profiles.active` contains `prod` or `production` (case-insensitive)
 their unsafe default: `JWT_SECRET`, `DB_PASSWORD`, `IOT_VERIFY_OPENAI_API_KEY`. Override all
 three before deploying.
 
+The case-insensitive match pins `Locale.ROOT`, and that is load-bearing rather than incidental: with the
+JVM's default locale, a Turkish server folds `PRODUCTION` to `productıon` (dotless ı), which matches
+neither profile name — so this guard would not fire and the application would boot in production with
+every default above still in place. `PRODUCTION_PROFILES` on `ProductionSafetyCheck` is the single owner
+of "which profiles are production"; `JwtUtil`'s insecure-JWT-secret warning reads the same set, so the
+warning and the hard failure cannot disagree about what production means.
+`component/nusmv/LocaleSensitiveComparisonTest` fails if any case fold that decides a keyword drops the
+locale.
+
 ---
 
 ## Frontend (Vite)

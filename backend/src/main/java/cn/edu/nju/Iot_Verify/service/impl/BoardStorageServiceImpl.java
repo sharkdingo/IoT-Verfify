@@ -1,6 +1,5 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
-import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.util.TemplateNameRule;
 import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateNuSmvValidator;
@@ -114,7 +113,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceTemplateRepository deviceTemplateRepo;
     private final DeviceTemplateService deviceTemplateService;
     private final TransactionTemplate transactionTemplate;
-    private final SmvGenerator smvGenerator;
     private final DeviceTemplateNuSmvValidator templateNuSmvValidator;
     private final SpecificationMapper specificationMapper;
     private final RuleMapper ruleMapper;

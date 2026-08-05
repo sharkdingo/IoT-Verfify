@@ -130,7 +130,7 @@ class BoardEditUndoIntegrationTest {
                 new ObjectMapper().registerModule(new JavaTimeModule()));
         service = new BoardStorageServiceImpl(
                 nodes, environments, specs, rules, null, templates, null,
-                new TransactionTemplate(transactionManager), null, null,
+                new TransactionTemplate(transactionManager), null,
                 new SpecificationMapper(), new RuleMapper(), new DeviceNodeMapper(), null,
                 new DeviceTemplateMapper(), null, users, journal);
         userId = createUser("13800138001", "undo-owner");

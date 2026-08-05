@@ -1,6 +1,5 @@
 // src/types/device.ts
 
-import type { DeviceEdge } from "./edge"
 import type { Specification } from "./spec"
 
 // ==== 核心 Manifest 结构 ====
@@ -148,6 +147,5 @@ export interface DeviceDialogMeta {
     description: string
     label: string
     manifest: DeviceManifest | null
-    rules: DeviceEdge[]
     specs: Specification[]
 }

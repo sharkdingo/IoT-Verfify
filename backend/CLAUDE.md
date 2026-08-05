@@ -34,6 +34,37 @@ mvn clean package -DskipTests   # build jar → target/Iot-Verify-0.0.1-SNAPSHOT
 Required env vars before running: `DB_PASSWORD`, `JWT_SECRET`, `IOT_VERIFY_OPENAI_API_KEY`,
 `NUSMV_PATH`. Full list and defaults: [../docs/getting-started/configuration.md](../docs/getting-started/configuration.md).
 
+**Deleting or changing an overloaded method needs `mvn clean`, not `mvn test`.** Maven's incremental
+compile recompiles the changed file against the *previous* `target/classes`, so overload resolution can
+bind to a signature that no longer exists in the sources. Removing two unused list wrappers from
+`FuzzMapper` — the only remaining `this::toFindingSummaryDto` / `this::toFindingDto` method references —
+made javac resolve a two-arg call to the stale `FuzzFindingPo` overload instead of the
+`FuzzFindingSummaryProjection` one, producing 3 compile errors that cascaded into ~100 test errors, a
+`NoClassDefFoundError` sweep, and a bogus "Mockito cannot mock" failure. `mvn clean test-compile` on the
+identical sources succeeds. The failure looks exactly like a real overload bug, so the instinct is to
+"fix" the overloads and break working code — run `mvn clean` first and re-read the error.
+
+**Anything else writing to `target/classes` corrupts a Maven run, and the failure looks like a code bug.**
+Two symptoms, both seen here: a `BUILD FAILURE` whose error list is empty (the tell is *no*
+`[ERROR] …java:[line]` entries), and mass `NoClassDefFoundError` / `MockitoException: Could not modify all
+classes` / `NoSuchFileException: target\classes\….class` on files javac just wrote.
+
+Two distinct culprits, and the second is the one that bites unattended:
+- **A second Maven build** in the same checkout — don't start one while a delegated subagent is running the
+  suite, or the result describes neither tree.
+- **The VS Code `redhat.java` language server.** Its JDT project for this repo declares
+  `kind="output" path="target/classes"` (check the `.classpath` under
+  `~/AppData/Roaming/Code/User/workspaceStorage/*/redhat.java/jdt_ws/.metadata/.plugins/org.eclipse.core.resources/.projects/Iot-Verify/`),
+  so it auto-builds into the same directory and rewrites class files mid-compile. It is a ~1.3 GB `java.exe`
+  that looks like any other JVM in the process list. This is not hypothetical: it produced
+  `746 tests, 22 failures, 624 errors` on one attempt and a 21-error `testCompile` failure on the next, on a
+  tree whose real result was 2216/2216 green.
+
+So: re-run an unexplained compile or mass-error failure once before believing it, and if it persists, build
+in an isolated copy. A backend-only copy is **not** sufficient — several tests read repo-relative paths and
+need `../docs/`, the root `README.md`, `CLAUDE.md`, and `backend/device-template-schema.json`; omitting the
+schema alone fabricates ~90 failures.
+
 ## Codebase map
 
 Base package `cn.edu.nju.Iot_Verify` (entry point `IotVerifyApplication`):

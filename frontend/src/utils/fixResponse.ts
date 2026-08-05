@@ -7,12 +7,12 @@ import type {
   FixStrategyAttemptStatus,
   FixStrategyName,
   FixSuggestion,
-  ModelTokenSource,
   ParameterAdjustment,
   ParameterTarget,
   PreferredRangeSelection
 } from '@/types/fix'
 import type { ModelGenerationIssue } from '@/types/verify'
+import { MODEL_TOKEN_SOURCE_SET } from '@/types/modelToken'
 
 export const FIX_RESPONSE_INCOMPLETE_CODE = 'FIX_RESPONSE_INCOMPLETE'
 
@@ -48,7 +48,6 @@ const TEMPLATE_SNAPSHOT_COMPARISONS = new Set([
   'UNAVAILABLE'
 ])
 const TARGET_ID_PATTERN = /^param_[A-Za-z0-9_-]{24}$/
-const MODEL_TOKEN_SOURCES = new Set<ModelTokenSource>(['BUNDLED', 'CUSTOM', 'UNKNOWN'])
 
 const record = (value: unknown, context: string, field = 'result'): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -86,7 +85,7 @@ const integer = (value: Record<string, any>, field: string, context: string, min
 }
 
 const validateModelTokenSource = (value: Record<string, any>, context: string, field: string) => {
-  if (!MODEL_TOKEN_SOURCES.has(value.modelTokenSource)) {
+  if (!MODEL_TOKEN_SOURCE_SET.has(value.modelTokenSource)) {
     throw new FixResponseContractError(context, `${field}.modelTokenSource is invalid`)
   }
 }
@@ -126,7 +125,13 @@ const validateSourceModel = (value: Record<string, any>, context: string) => {
 
 const validateFaultRule = (value: unknown, context: string, index: number): FaultRule => {
   const row = record(value, context, `faultRules[${index}]`)
-  text(row, 'ruleString', context)
+  // `ruleString` is a preview with no `@NotBlank` on the server and a nullable column, so null is a legitimate
+  // value — not a contract violation. Requiring it here rejected the *whole* fault-localization response for one
+  // rule saved without a preview, so a fix request failed as "malformed result". The UI supplies the localised
+  // `Rule {number}` fallback, as it already does for `TraceRule.ruleLabel`.
+  if (row.ruleString !== null && row.ruleString !== undefined && typeof row.ruleString !== 'string') {
+    throw new FixResponseContractError(context, `faultRules[${index}].ruleString must be text when present`)
+  }
   integer(row, 'transitionNumber', context, 1)
   text(row, 'targetDeviceLabel', context)
   text(row, 'targetActionLabel', context)
@@ -137,7 +142,14 @@ const validateFaultRule = (value: unknown, context: string, index: number): Faul
   text(row, 'reason', context)
   validateModelTokenSource(row, context, `faultRules[${index}]`)
   if (conflicting) {
-    text(row, 'conflictingRuleString', context)
+    // Nullable for the same reason as `ruleString`: the conflicting rule may have no preview of its own. The
+    // server sends the raw value or null and the UI supplies the localised copy, so requiring it here would
+    // reject the whole response over a rule the user never named.
+    if (row.conflictingRuleString !== null && row.conflictingRuleString !== undefined
+      && typeof row.conflictingRuleString !== 'string') {
+      throw new FixResponseContractError(
+        context, `faultRules[${index}].conflictingRuleString must be text when present`)
+    }
     if (row.reasonCode !== 'CONFLICTING_END_STATES') {
       throw new FixResponseContractError(context, 'a conflicting rule needs the conflicting reason code')
     }

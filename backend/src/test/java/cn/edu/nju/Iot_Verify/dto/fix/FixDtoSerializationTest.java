@@ -15,6 +15,39 @@ class FixDtoSerializationTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /*
+     * The source-model fields keep their JSON names after being changed from boxed to primitive.
+     *
+     * `Boolean sourceModelComplete` → `boolean` makes Lombok emit `isSourceModelComplete()` instead of
+     * `getSourceModelComplete()`. Jackson derives the same property name from either, but the frontend's
+     * `validateSourceModel` *requires* `sourceModelComplete`, `sourceDisabledRuleCount` and
+     * `sourceSkippedSpecCount` and rejects the whole response if one is missing — so a rename here would surface
+     * as "the fix result is malformed" rather than as a missing field. Asserted rather than assumed.
+     */
+    @Test
+    void sourceModelFieldsKeepTheirWireNamesAsPrimitives() throws Exception {
+        FixResultDto result = FixResultDto.builder()
+                .sourceModelComplete(true)
+                .sourceDisabledRuleCount(2)
+                .sourceSkippedSpecCount(3)
+                .build();
+
+        String json = objectMapper.writeValueAsString(result);
+
+        org.assertj.core.api.Assertions.assertThat(json)
+                .contains("\"sourceModelComplete\":true")
+                .contains("\"sourceDisabledRuleCount\":2")
+                .contains("\"sourceSkippedSpecCount\":3");
+
+        // The teeth: an all-defaults builder must render false/0, not null. `doesNotContain("isSource…")` was
+        // unfalsifiable on its own - Jackson never emits a getter name as a key under either typing - so it could
+        // not detect a revert to `Boolean`/`Integer`, which is exactly what this test exists to pin.
+        org.assertj.core.api.Assertions.assertThat(objectMapper.writeValueAsString(FixResultDto.builder().build()))
+                .contains("\"sourceModelComplete\":false")
+                .contains("\"sourceDisabledRuleCount\":0")
+                .contains("\"sourceSkippedSpecCount\":0");
+    }
+
     @Test
     void externalFixDtosHideInternalRuleAndConditionLocators() throws Exception {
         ParameterAdjustment parameter = ParameterAdjustment.builder()

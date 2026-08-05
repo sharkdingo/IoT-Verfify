@@ -15,7 +15,447 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-04 (latest)
+### 2026-08-05 (latest)
+
+#### Changed
+
+- **Recorded where the device-template manifest caps are actually enforced.** A dead-code audit reported the ten
+  `RequestLimits.MAX_TEMPLATE_*` constants as declared-and-never-referenced and concluded the manifest
+  collections were unbounded on an authenticated write path. Acting on that, `@Size` annotations were added to
+  `DeviceTemplateDto` — and then reverted, because both premises were wrong. The template endpoint accepts a raw
+  `JsonNode` and calls `validateRawManifest` *before* converting to the DTO, so Bean Validation never sees a
+  manifest and a `@Size` there cannot run; and `backend/device-template-schema.json` already carried every one
+  of those bounds as `maxItems` at the same values. The schema states this in a `$comment` that was in the
+  repository the whole time. Verified against the live API: a 21-mode template is rejected `400` with
+  `$.Modes: at most 20 items, found 21`. `MAX_TEMPLATE_ENVIRONMENT_DOMAINS`, deleted on the same false premise,
+  is restored. What remains is documentation plus two guards against repeating the mistake:
+  `DeviceTemplateSchemaValidatorTest` pins the schema bounds and the rejection message, and
+  `credentialLimitsMirror.spec.ts` checks each declared constant against the schema rather than the DTO. The
+  lesson is in the guard comments — an unreferenced constant is not automatically dead when its mechanism lives
+  in another language.
+
+#### Fixed
+
+- **Five guards added in this change set could not fail, and a mutation audit caught them.** Every one read as
+  coverage while protecting nothing, which is worse than no guard because it stops the next person looking:
+  - `actionDockHierarchy`'s canvas-map check sliced `<div` up to the `data-testid`, so it only ever examined
+    `'<div\n          '` — whitespace. A `v-show` written after the testid, which is where the original one was,
+    was invisible to it. It now slices the whole opening tag; re-adding the `v-show` fails it.
+  - The same test asserted the *absence* of `t('app.canvasView')` — a key that no longer exists anywhere, so
+    nothing could reintroduce it. Replaced with a positive assertion that the heading does not branch on state.
+  - `boardDockGeometry` looped over `.board-action-dock--packed`, which has no rule in `board.css` at all
+    (packed mode is deliberately width-less), so that iteration asserted nothing. The scan now proves it found a
+    rule before looping.
+  - `FixDtoSerializationTest` asserted `doesNotContain("isSourceModelComplete")`, which is unfalsifiable: Jackson
+    never emits a getter name as a JSON key under either typing. Now serializes an all-defaults builder and
+    requires `false`/`0`, which boxed types would render as `null`.
+  - `FaultLocalizerTest`'s null-preview test used a single rule, so no conflict occurred and the `rulePreview`
+    helper it names was never invoked — the production change could be reverted entirely and it stayed green. A
+    two-rule conflict test replaces it, and reverting the split now fails two tests.
+  Two further guards passed but were weaker than advertised, and were tightened: the template-caps mirror
+  value-compared only `MAX_TEMPLATE_MODES` and merely acknowledged the other six, so one could have drifted to
+  500 unnoticed; and `LocaleSensitiveComparisonTest` silently `continue`d past a missing scan directory. One
+  tautological test was deleted outright — it asserted JDK case-folding over its own literals, so no repo change
+  could redden it; the premise it claimed is proven for real by the test that swaps the JVM default locale.
+- **A never-rendered decoration was about to become visible.** `SystemInspector`'s spec cards carried
+  `<div class="absolute inset-0 board-chip-info/30">` labelled "Subtle background pulse". There is no animation
+  anywhere in the file — the slashed class generated no rule, so the element had always been inert and invisible.
+  De-suffixing it as part of the opacity-modifier fix would have painted a flat full-strength wash over every
+  spec card for the first time. Deleted instead. The other ten de-suffixed sites are genuine completions: each
+  pairs an explicit `border-[color:var(--warning-border)]` with warning ink, so the surface was the missing third
+  of a deliberate callout (measured 4.84:1 light / 10.66:1 dark, both clear AA).
+- **`Result.java` had been rewritten with CRLF line endings**, against the repo's `eol=lf` attribute — the only
+  such file in the change set, introduced by a scripted edit. Converted back to LF.
+- **An orphaned `is-inspector-collapsed` class binding** stayed on the board root after its CSS rule was removed.
+  Nothing read it: no CSS, no test, no E2E selector. Removed.
+- **A conflicting rule's name rendered double-quoted, and in English when that rule had no preview.** One
+  `describeRule` return value fed two consumers needing different things: the English `reason` diagnostic, where
+  prose and `'quotes'` are fine, and `conflictingRuleString`, which the client interpolates into an
+  already-translated sentence. A zh-CN user therefore saw 与“'When motion, turn on light'”冲突 — quoted twice — and
+  与“another localized rule”冲突 when the other rule had no preview. Split into `rulePreview`, which returns the raw
+  value or null, leaving `describeRule` to build only the English diagnostic. The client quotes and localises,
+  the same division of labour as `ruleString`. The whole `conflicting` branch of `validateFaultRule` had no test
+  at all — the shared fixture only ever set `conflicting: false` — so three were added and mutation-checked.
+- **A rule saved without a preview string made every fix request on it fail as "malformed result".**
+  `RuleDto.ruleString` is a user-facing preview with no `@NotBlank` and a nullable TEXT column, so a rule
+  legitimately persists without one — verified against the running API, which accepts a rule with the field
+  omitted and echoes `"ruleString": null`. `FaultLocalizer` copied that null straight into `FaultRuleDto`, and the
+  frontend's `validateFaultRule` calls `text(row, 'ruleString')`, which throws on null and rejects the **entire**
+  fault-localization response. So asking for a fix on a trace involving such a rule produced a contract error
+  about a malformed result rather than the fix — fail-closed, but telling the user the wrong thing about the wrong
+  surface. The fallback belongs in the UI, not the server: `FaultRule.ruleString` is now `string | null`, the
+  validator accepts null while still rejecting a non-string, and `FixResultDialog` renders
+  `rule.ruleString?.trim() || t('app.ruleNumber', …)` — matching what `PlaybackChangePopover`,
+  `SimulationTimeline` and `Board.vue` already do for `TraceRule.ruleLabel`. My first attempt put an English
+  fallback ("Automation rule at position N") in `FaultLocalizer`; reviewing it caught that this field renders
+  directly in the UI, so a server-side English label would show a zh-CN user English text — which the bilingual
+  rule in `CLAUDE.md` forbids. The backend now passes the null through, pinned by a test that fails if it
+  fabricates a label.
+- **Two TypeScript types mirrored one backend `RuleDto` and disagreed about null.** `BackendRuleDto` in
+  `api/board.ts` serves the live-board read and `ModelRule` in `types/model.ts` serves the frozen playback scene —
+  and `ModelPlaybackSceneDto` is `record(List<DeviceNodeDto>, List<RuleDto>)`, so both really do mirror the same
+  Java DTO over two endpoints. They declared it differently: `id?: number` versus `id: number | null`, and
+  `ruleString?: string` versus `string | null`. The nullable forms are the accurate ones — `RuleDto.id` is a
+  `Long`, and `ruleString` is populated by `optionalText`, which returns null — so the playback mirror forbade a
+  value the server can send. Nothing misread it in practice (`playbackScene.ts` uses `rule.id ?? ruleIndex` and
+  `rule.id == null`, which cover null and undefined alike), but a type that contradicts the wire is a trap, and
+  the next field to diverge may not be read so defensively. `RuleDto.createdAt` is deliberately left out of both:
+  it is on the wire and nothing reads it, so declaring it would document an unused field.
+  `types/__tests__/ruleDtoMirrors.spec.ts` compares the two. Writing it produced two instructive near-misses,
+  both fixed before the guard was kept: the field-name scan keyed on an indentation width that matched only one
+  file, so it silently compared an empty set against a full one; and the optionality check accepted `?:` as
+  proof, which meant narrowing `id?: number | null` back to `id?: number` still passed — a guard blind to the
+  exact drift it was written for.
+- **Corrected a wrong diagnosis in the agent instruction files.** A `BUILD FAILURE` with an empty error list,
+  and separately a run reporting `746 tests, 22 failures, 624 errors` with mass `NoClassDefFoundError` and
+  `MockitoException: Could not modify all classes`, were both attributed to a second concurrent Maven build.
+  Measurement says otherwise: the VS Code `redhat.java` language server's JDT project for this repo declares
+  `kind="output" path="target/classes"` — verified in its `.classpath` under `workspaceStorage` — so it
+  auto-builds into Maven's own output directory and rewrites class files mid-compile. It is a ~1.3 GB `java.exe`
+  indistinguishable from any other JVM in the process list, and the tree it condemned was in fact 2216/2216
+  green. The two contenders have different symptoms and must not be conflated: the language server produces mass
+  `NoClassDefFoundError`, while the `spring-boot:run` dev JVM produces a failed `clean`
+  (`Failed to delete …/target`, zero tests, succeeds on one retry). I briefly deleted the latter claim after one
+  run cleaned successfully with that JVM alive — then the next run reproduced it, so it is intermittent and a
+  single clean run does not disprove it. `backend/CLAUDE.md` now names both, and records that an isolated build
+  copy needs `../docs/`, the root `README.md`, `CLAUDE.md` and `backend/device-template-schema.json` — omitting
+  the schema alone fabricates ~90 failures.
+- **The three dismiss tools each carried a byte-identical error-preview truncator.** `DismissFuzzTaskTool`,
+  `DismissSimulateTaskTool` and `DismissVerifyTaskTool` all declared `ERROR_PREVIEW_LIMIT = 1_000` and the same
+  `errorPreview` method. They agreed, and the consequence of drift is modest — but the model reads these strings,
+  so one diverging would have summarised the same failure at two different lengths depending on which run kind
+  the user dismissed, and nothing compared them. Both now live on `AbstractAiTool`, which all three already
+  extend, and `AiToolLayeringContractTest` fails if a tool re-declares either.
+- **The guard that refuses to boot with default secrets could be skipped by the server's locale.**
+  `ProductionSafetyCheck` decided "is this production" with a bare `toLowerCase()`, and a Turkish default locale
+  folds `PRODUCTION` to `productıon` — which matches neither `prod` nor `production`. The fail-fast check for
+  default `JWT_SECRET`, `DB_PASSWORD` and `IOT_VERIFY_OPENAI_API_KEY` would then not fire, and the application
+  would start in production with insecure defaults, silently. `spring.profiles.active=prod` was unaffected
+  (`PROD` folds to `prod` either way), so only the long form was exposed. Now pinned to `Locale.ROOT`.
+  This was the eleventh instance of the same defect and the one that mattered most — and my first guard **missed
+  it**, because I scoped the scan to the model-generation and request-validation directories. A guard whose scope
+  excludes the highest-stakes fold in the product reads as coverage while providing none, so the scan now covers
+  `configure` and `security` too, and finding it that way is the only reason it was found at all.
+  The decision also existed twice, here and in `JwtUtil` — both answering the same security question, one
+  refusing to boot and one warning about the default JWT secret. Reviewing my own first fix caught that sharing
+  the `Set` alone was not enough: it left each class with its own copy of the case fold and the loop, and the
+  fold was the part that had drifted, so that version would have fixed the symptom and kept the mechanism
+  duplicated. `ProductionSafetyCheck.isProductionProfile(Environment)` now owns the vocabulary, the fold and the
+  loop, and the set is private again. It reads a null `Environment` as "not production" rather than throwing,
+  since `JwtUtil` calls it during `@PostConstruct`. Pinned by a test that actually swaps the JVM default locale
+  to Turkish — the source-scanning guard proves the pin is written, this proves it works.
+- **Three more locale-dependent folds, found by widening that guard's own scope.** The first version scanned six
+  hand-picked directories while its own doc warned that a guard excluding a high-stakes fold "reads as coverage"
+  — which is what it was doing. Now it walks all of `src/main/java`, and found: `AuthRateLimitException` building
+  `reasonCode` as `"AUTH_" + operation.toUpperCase() + "_RATE_LIMIT_REACHED"`, so a Turkish-locale server emits
+  `AUTH_LOGİN_RATE_LIMIT_REACHED` and the frontend's exact-match on `AUTH_LOGIN_RATE_LIMIT_REACHED`
+  (`Landing.spec.ts:108`) misses it, so a rate-limited user sees a generic error instead of retry guidance;
+  `ListAsyncTasksTool` folding four LLM-supplied arguments before matching keyword sets, so a valid
+  `ai_assistant` becomes `AI_ASSİSTANT` and is rejected as invalid; and `UserOperationGuard` building its Redis
+  admission key from `kind.name().toLowerCase()` — the worst of the three, because two servers with different
+  default locales would compute different keys for the same operation kind, making the lease mutually invisible
+  and silently doubling the concurrency limit. The two remaining hits are English diagnostic prose interpolated
+  into an exception message, exempted with that reason stated.
+- **Ten case folds that decide a NuSMV keyword ignored the locale, and the codebase already documented why that
+  is wrong.** `SmvSpecificationBuilder.normalizeSpecTargetType` carries the rule — a Turkish default locale maps
+  `I` to the dotless `ı`, so `"API".toLowerCase()` becomes `"apı"` and matches no keyword — but a comment was the
+  only thing enforcing it, and ten sites had drifted. The worst were the three `NUSMV_RESERVED_WORDS`
+  comparisons in `DeviceSmvDataFactory` (and two more in `DeviceTemplateNuSmvValidator`), each checked in both
+  cases: `INIT` folds to `ınıt`, misses the reserved-word set, and is emitted verbatim, so a reserved word would
+  reach NuSMV as a variable name instead of being rescued with a `_` prefix. The rest reject valid input rather
+  than admitting invalid: spec `targetType` normalization in `NusmvRequestValidator` and `FixStrategyApplier`
+  would refuse a legitimate `API` condition, `CounterexampleInitialStateConstraints` would throw on a valid
+  `Trusted`, and `SmvRelationUtils`' relation switches and `JwtUtil`'s production-profile check would miss their
+  keywords. All ten now pin `Locale.ROOT`. Behaviourally identical under an English locale, which is why nothing
+  caught them. `LocaleSensitiveComparisonTest` scans for bare folds in the directories where case decides a
+  keyword, with a short exemption list for genuine substring searches (the JVM's `os.name`, NuSMV's English
+  stdout), and separately asserts the dotless-i premise so the rule cannot be relaxed on a false assumption.
+  I found only the lowercase half by hand; the guard is what surfaced the `toUpperCase()` siblings and four
+  other files.
+- **A device could take a name the automatic fixer needs, and only found out when a fix was requested.** The
+  fix strategies mint frozen variables as `param_*`, `lambda_*` and `condition_value_*`. Unlike every other
+  generated identifier — all namespaced `iot_verify_*` precisely so user input cannot reach them — these are bare
+  prefixes, and `param_` cannot be renamed because it is the wire format for
+  `PreferredRangeSelection.targetId`, validated by a `@Pattern` on the DTO and by `^param_[A-Za-z0-9_-]{24}$` in
+  the frontend. Verified against the running API: `/api/board/nodes` accepts a device with canonical id
+  `condition_value_r0_c1`, so the board saved and verified normally and `SmvMainModuleBuilder` only threw when the
+  user later asked for a fix — fail-closed and diagnosable, but blaming a surface they were not editing, long
+  after the name was chosen. The three prefixes are now reserved in `NusmvRequestValidator`, which runs on every
+  verify and simulate, so the clash is reported on `devices[i].varName` at the user's first verification. Only a
+  *prefix* is reserved; `my_param_sensor` remains a legal device name, and that boundary is pinned by a test.
+  The generation-time check stays as a backstop, because `param_<hash>` is not known until a strategy picks it.
+- **Two device-template mode names could collide in the generated model, and the user saw a NuSMV type error.**
+  `sanitizeSmvToken` rescues a NuSMV reserved word by prefixing `_`, so a mode named `next` becomes `_next`. The
+  collision check compared the *raw* name, so modes `next` and `_next` passed as distinct and generation then
+  declared the same enum constant twice. Verified against NuSMV 2.7.1: the model is rejected with
+  `TYPE ERROR: duplicate constants in the enum type of variable`, i.e. verification died with an engine error
+  instead of a message naming the field to rename. Modes and working states are the only identifier kinds that
+  skip the reserved-word rejection variables get — deliberately, because generation rescues them — which is
+  exactly what made comparing pre-rescue names wrong. The check now compares the token generation will emit, for
+  modes, internal variables and impacted variables alike.
+- **101 style declarations did nothing at runtime.** Tailwind only generates `hover:`/`focus:`/`disabled:`/`dark:`
+  variants for utilities *it* owns, so `hover:board-chip-danger` on a hand-written class emitted no rule at all —
+  confirmed against the built bundle, where no `<variant>\:board-*` selector exists while the base classes do.
+  Ninety sites were affected. Measured in a browser: the **device delete button's colour and background were
+  identical on hover** (a destructive action with no danger cue), the cancel/delete buttons on running
+  verification tasks likewise, and `disabled:board-chip-info` on the runtime save button meant a *disabled*
+  primary kept its accent fill and read as enabled. Eleven further sites used opacity modifiers
+  (`board-chip-warning/70`), which generate nothing at all — not even the base strength — so danger and warning
+  blocks rendered as unstyled neutral text. The variant forms are now declared once in `board.css`; the opacity
+  modifiers are gone.
+  Placing them was the hard part and is worth recording: the ink variants had to go *after* the neutral-text
+  normaliser, because at equal specificity source order decides. Raising specificity twice did not work; only CDP
+  matched-styles showed which rule won. The symptom of getting it half-right was a danger-tinted background under
+  a grey glyph.
+- **A username length problem could be reported as a character-set problem.** `utils/accountIdentifier.ts`
+  hardcoded `3`/`20` — the same defect as `UsernameNormalizer` last round, recurred on the client. `Landing.vue`
+  checks length against `CREDENTIAL_LIMITS` and reports `auth.usernameLength`, then calls
+  `isValidNormalizedUsername` and reports `auth.usernameInvalidCharacters`; on divergence the user reads "invalid
+  characters" about a name containing none. The mirror spec could not see it — its call-site scan targeted
+  `Landing.vue` and the identifier `usernameLength` — and now scans every participating module with a
+  name-agnostic pattern.
+- **Four AI tools described the same argument to the LLM in two different ways.** `attackPoints` was built by four
+  private `attackPointsSchema()` copies; three said "Required for attackMode exact" and one "Required *only* for
+  attackMode exact", while `attackScenarioArg` rejects a non-empty value for both `none` and `exhaustive` — so
+  three tools understated the constraint and invited the model to send an argument that gets refused.
+  `attackBudget` had the same split across the two verification tools. Both schemas now sit on `AbstractAiTool`
+  beside the validator that enforces them. Reviewing that fix caught the mirror-image mistake in it: my first
+  shared description named `exhaustive`, but simulation passes `allowExhaustive=false` and offers only
+  `none`/`exact`, so it would have told the model about a mode simulation rejects — the same defect, introduced
+  from the other side while removing it. The schema now takes the capability as a parameter, and two guards in
+  `AiToolLayeringContractTest` pin both directions: no tool may declare its own copy or inline the description,
+  and each tool's declared capability must match its own `attackScenarioArg` call. A divergence in tool-facing
+  prose is a behavioural difference, not a wording preference.
+- **The default value of a template variable was decided by four functions, two of them laxer than the schema.**
+  `deviceRuntime.ts` accepted *either* numeric bound and defaulted on `LowerBound` alone, and `SystemInspector`
+  carried a fourth copy of the same rule. `device-template-schema.json` requires both bounds together
+  (`oneOf`), and `BoardStorageServiceImpl.defaultValueForVariable` agrees, so a single-bound variable cannot
+  reach the client — the laxity was unreachable rather than harmless, and it documented a rule the product does
+  not have. One owner now.
+- **`FuzzController` hardcoded `@Size(max = 100)`** where `SimulationController` and `VerificationController` use
+  `RequestLimits.MAX_TASK_EXCLUSIONS` for the same parameter. Same value; now the same source.
+- **The fuzz iteration/path/population bounds were declared three times** — `utils/fuzzingConfig.ts`,
+  `FuzzRequestDto`, `FuzzWorkloadPreviewRequestDto`, with both DTOs separately `@Valid` on live endpoints and the
+  frontend rendering the ranges to the user as the allowed values. They agree today; nothing compared them, so a
+  future edit to one would have told the user the wrong rule. `fuzzingConfig.spec.ts` now mirrors both DTOs.
+- **The verification spec-result matcher's positional fallback is no longer silent.** When a NuSMV result cannot
+  be matched to a submitted specification by expression, it is back-filled by position — a guess that left the
+  run reporting a definite verdict with guessed per-spec attribution, since the result count still matched. It now
+  emits a `[spec-attribution-uncertain]` check log, which the result dialog renders. Investigated whether it can
+  fire: NuSMV echoes each specification verbatim (measured), so the expression match succeeds even though NuSMV
+  *does* reorder results (also measured — three specs came back with the third first). The normalizer strips all
+  parentheses, which means `A & (B | C)` and `(A & B) | C` share a key and NuSMV really does give them different
+  verdicts, but two specs can only collide if they are duplicates, and `validateNoIdenticalSpecifications`
+  rejects those on both write paths. Unreachable today, explicit if that ever changes.
+- **The username validator ignored the constants the rest of the product mirrors.** `UsernameNormalizer` had its
+  own copy of the phone pattern and its own `3`/`20` length literals, while `RequestLimits` owns
+  `PHONE_PATTERN`, `MIN_USERNAME_DISPLAY_LENGTH` and `MAX_USERNAME_DISPLAY_LENGTH` — and
+  `credentialLimitsMirror.spec.ts` asserts the *frontend* agrees with exactly those. Those two length constants
+  had no other backend reader at all, so the bound was mirrored into every layer except the validator that
+  enforces it: changing one would have moved the client and the mirror test while this validator kept the old
+  numbers. It reads `RequestLimits` now. Values were already identical, so no behaviour changed.
+- **Removed dead backend code, each verified as having no caller in `src/main` or `src/test`.**
+  `LevenshteinDistanceUtil` (the whole class — zero references anywhere including docs and the frontend); an
+  injected-but-never-dereferenced `SmvGenerator` field on `BoardStorageServiceImpl`, which was a real
+  constructor parameter and so also removed the corresponding positional argument at 32 call sites across 8
+  test files; seven exception factory methods (`ForbiddenException.accessDenied/resourceNotOwned`,
+  `InternalServerException.databaseError/aiServiceError`,
+  `ValidationException.invalidPhone/invalidPassword/invalidUsername` — the last two also hardcoded the password
+  and username bounds `RequestLimits` owns); `Result.validationError`/`tooManyRequests`, the only members of
+  that family with no caller, because `GlobalExceptionHandler` builds 422/429 through its own helper;
+  `NusmvTempArtifactRegistry.isProtected`; `JwtUtil.getPhoneFromToken` and the throwing
+  `validateTokenOrThrow` variant (the boolean `validateToken` is live);
+  `SpecificationFormulaPreview.labelsOnly`; and `FuzzMapper`'s two list wrappers.
+- **`findDeviceSmvData` and `findDeviceSmvDataStrict` were one behaviour behind two names.** Both delegated to
+  the same internal method with the same arguments, while the Strict javadoc claimed it "does not fall back to
+  the template name" — that fallback had already been removed, so the comment described a distinction that no
+  longer existed and callers had to choose between two names for one behaviour. Collapsed to the one the seven
+  real call sites use.
+- **Three copies of the Jackson error-path formatter became one.** `BoardBatchRequestParser.formatPath` and
+  `ModelRequestParser.formatPath` were byte-identical and `GlobalExceptionHandler.jsonPath` was the same loop
+  differing only in its empty-path fallback. All three exist to tell a user which field of their request was
+  rejected, so a format change had to be made three times or the same rejection would read differently
+  depending on which layer caught it. `util/JsonPointerPath` owns it, with the fallback as a parameter.
+- **Two byte-identical blocks in `Board.vue` became one owner each.** "Clear every workflow surface except the
+  one I am opening" was written out as the same eight lines, in the same order, in `toggleHistoryPanel` and
+  `openTaskInbox` — so a seventh surface would have had to be remembered in both. It is now
+  `closeOtherWorkflowSurfaces()`, the closing-side counterpart to the `isWorkflowPanelOpen` predicate that
+  already owned the reading side. Separately, the two formal-verification handoff openers
+  (`openFormalVerificationForFuzzFinding`, `openFormalVerificationForCurrentBoard`) differ only in the handoff
+  object they build; their identical five-line tail is now `showVerificationPanelForHandoff()`.
+- **A dock button's accent colour and a file-picker's hover were both silent no-ops.** `ControlCenter` applied
+  `board-text-accent` at two sites and `hover:board-chip-accent` at one. Neither existed: the `board-text-*`
+  family had no accent member, and `hover:` is a Tailwind variant that Tailwind only generates for utilities it
+  owns — so the advanced-overrides icon rendered in inherited text colour and the "choose file" label had no
+  hover response at all. The label is fixed by `.board-file-trigger`, which owns both states in CSS.
+  The icon needed a second fix, because simply adding `.board-text-accent` did not work: `ControlCenter`'s own
+  scoped `.device-runtime-box span { color: inherit }` — there to neutralise the Tailwind slate utilities that
+  markup still carries — matched the icon's span, and a scoped rule carries `[data-v-…]`, so it outranked the
+  global class no matter what. Adding an `.iot-board` prefix for specificity did not help, and neither did
+  appending an identical rule last; equal specificity was never the problem. The blanket rule now exempts the
+  role ink. Measured after the fix: the icon paints `--accent` in both themes, at 5.17:1 (light) and 4.91:1
+  (dark) against its box.
+- **Three domain vocabularies had four, three and two copies respectively, each with an owner already in
+  place.** Trust/privacy values were rebuilt as local `Set`s in `api/board.ts`,
+  `recommendationMaterialization.ts` and `traceStateResponse.ts` (that one reversed the privacy order) plus
+  inline literals in `device.ts`, while `deviceRuntime.ts` already owned `TRUST_OPTIONS`/`PRIVACY_OPTIONS` for
+  the dropdowns — so a new domain value would have been offered by the UI and rejected by four validators. The
+  `Set`s are now derived from those same arrays. `MODEL_TOKEN_SOURCES` was rebuilt in three boundary validators
+  while `types/modelToken.ts` owned the type; the runtime list is now derived from the same array as the type.
+  The two `validateModelTokenSource` implementations stay separate: each throws its own typed contract error,
+  which the repo's typed-error rule requires.
+- **Removed dead frontend code, each verified by reference search.** Two CSS rules (`.board-text`,
+  `.board-muted` — the live classes are `.board-text-strong`/`.board-text-muted` and `.board-muted-surface`);
+  three declared-but-never-emitted events (`SystemInspector`'s `toggle-rule`, `ControlCenter`'s
+  `verify`/`simulate` — the `@verify` in `Board.vue` belongs to `FuzzingResultDialog`); and four unread props.
+  `DeviceDialog`'s `rules` prop took the whole chain with it — the `dialogMeta.rules` field, its type member,
+  and the `edges.value.filter(...)` that computed it on every dialog open purely to feed a prop nobody read.
+  `ControlCenter`'s `edges`/`canvasPan`/`canvasZoom` had to be removed *together with* their parent bindings:
+  the component sets `inheritAttrs: false` and spreads `v-bind="attrs"`, and declared props are excluded from
+  `$attrs`, so dropping only the declarations would have started spreading three attributes onto a DOM element.
+- **Removed the last of the canvas map's overlay-era styling, including a second `.canvas-map` rule.** It set
+  `background` and `backdrop-filter` and silently overrode the `background` from the shared board-surface rule
+  200 lines above it — one property, two owners, the later winning by position. Neither declaration was doing
+  anything visible: measured, the card painted as 77%-opaque white with a 12px backdrop blur *on the
+  inspector's opaque `#f8fafc` panel body*, so the blur had nothing behind it and the alpha only washed the
+  card against its own parent.
+- **The canvas zoom and fit-to-content controls no longer disappear when a result panel opens.** The canvas
+  map card was hidden whenever any of eleven surfaces was visible — verification, simulation, exploration,
+  run history, the four recommendation panels, either playback timeline, or the fix dialog — and the zoom
+  field, zoom buttons and fit-to-content live inside that card. So opening a counterexample took away every
+  pointer zoom control on the board, with nothing to say where they had gone, at exactly the moment a user
+  wants to zoom in on what the panel points at. The condition is gone entirely, because the collision it
+  guarded against cannot happen: the floating panels carry a `right` inset that clears the inspector and the
+  action rail, so a panel spans x=660..948 against an inspector at 1120..1440 (1440x900) and 336..692 against
+  780..1100 (1100x800) — neither touches the inspector, let alone the map card inside it. At narrow widths the
+  inspector is a 56px rail and the map is not rendered at all. The second half of the old condition
+  (`inspector.collapsed`) was also dead: the slot renders inside the inspector's own `v-if`.
+- **The action dock's collapse handle overlapped the button below it and stuck out of the dock.** The handle
+  was a 1.45rem badge grown to a 44px target by `padding: 0.65rem` with `margin: -0.65rem` cancelling the
+  growth, on the theory that `background-clip: content-box` kept the visible chevron small while the target
+  stayed large. `background-clip` does not clip the border, so the bordered box painted at **45.97px** while
+  reserving **23px** of layout, and the negative margin spent the difference on its neighbours: it overhung
+  the dock's right edge by 2px (`scrollWidth` 141 in a 138px content box) and pressed onto the first tool
+  button. `targetSizeFloor.spec.ts` passed throughout because it read the padding arithmetic rather than the
+  painted result. The handle is now a plain 44px border-box button whose header row reserves 44px, and the
+  packed mode's launcher — the same position doing the same job — matches it instead of being 56px, which is
+  what made the packed strip look like a larger widget than the other two. Verified in a browser: all three
+  modes now measure a 44x44 top block with an 8px radius and zero overflow.
+- **The action dock's three modes were three different shapes.** `expanded` and `packed` were floating
+  panels (`--iot-radius-panel`), `compact` was a capsule (`--iot-radius-pill`), and each mode restated its
+  own padding and gap — a third set again under short landscape. Its collapse handle switched sizing model
+  *and* radius between modes, so one control looked like two. All three modes now share the panel radius and
+  one padding/gap pair; the mode layer declares only what genuinely differs (labels, square buttons, the
+  packed launcher). The shared padding is `0.3125rem` because that is the only value that fits: 44px button +
+  2×5px padding + 2×1px border = the 56px rail, exactly. `0.45rem` had been overflowing it by 2px per side,
+  which is what the per-mode overrides were papering over.
+- **The dock's rail width had four owners that disagreed, and fit-to-content trusted the wrong one.**
+  `8.75rem`/`3.5rem` in `Board.vue`, `150`/`64` px in the canvas fit math, and
+  `--board-action-rail-width` in `board.css` as `3.1rem` with an `8.25rem` override above 1280px. The
+  corridor the CSS reserved, the width the dock painted, and the width `getVisibleCanvasFrame` subtracted
+  were three different numbers, so fitting content could place a node underneath the rail. One table in
+  `constants/boardLayout.ts` now owns it; the CSS token is a pre-hydration default only. The gap between the
+  inspector and the dock had the same problem one level down: `getVisibleCanvasFrame` added its own `8`/`16`
+  px on top of a reserved width that already accounted for spacing, double-counting the gap by up to 12px in
+  the one function whose job is to know where the free canvas is. It now reads the same
+  `actionDockGapPx` the dock is positioned by. Verified in a browser: with four spread devices,
+  fit-to-content leaves every node clear of the dock, inspector and control panel.
+- **The collapsed side-rail width had drifted between its copies.** `COLLAPSED_PANEL_RAIL_WIDTH = 56` in
+  `Board.vue`, a `3.5rem` literal in each of the two panels, and `--board-inspector-collapsed-width: 3rem`
+  in CSS — and it was the stale 48px copy that the floating panels and the dock measured their right inset
+  from, so the reserved space was wrong whenever the inspector was collapsed. All four now read
+  `COLLAPSED_PANEL_RAIL_PX`; the CSS token is gone because the injected panel width already carries the
+  collapsed value.
+- **Removed the canvas map's dead positioning rules.** `top`, `left`, `bottom`, `max-width` and
+  `transition: left, top` described its previous life as an overlay docked to the canvas's top-left corner.
+  It has lived in the inspector's overview slot, in normal flow with no `position`, since the workflow
+  alignment change — every one of those declarations was inert. The CHANGELOG entry claiming it "docks to
+  the visible canvas top-left" was describing behaviour that no longer exists.
+- **Elevation is now a three-step scale instead of eight hand-written shadows.** `--shadow-elevated` was the
+  only depth token, so anything wanting a different depth wrote its own literal: eight distinct neutral
+  elevations across `board.css` and `base.css`, no two agreeing. Every one carried a light-theme wash
+  (`rgba(15, 23, 42, …)`) in a property whose token the dark theme overrides — so on a near-black ground those
+  shadows did nothing while their neighbours deepened, which is the "the shadow is still those same few
+  colours" complaint. Now `--shadow-raised` (a control lifting off its surface), `--shadow-floating` (a
+  transient chip or canvas node above content) and `--shadow-elevated` (a panel above the page), each declared
+  per theme with the dark steps deeper and more opaque, because a shadow darkens its ground and a near-black
+  ground has almost no headroom left.
+- **Two more elevation tokens existed, and both were wrong in dark theme the same way.** `--iot-node-shadow`
+  and `--iot-color-card-shadow` were declared `rgba(15, 23, 42, 0.9)` for dark — the *light* palette's navy at
+  90% opacity, where every dark shadow is `rgba(2, 6, 23, …)`. The node one also broke depth continuity: the
+  node's resting rule used the scale while its four state rules (focus-visible, node-focused, trace-active,
+  trace-changed) used that token, so highlighting a node silently changed its base depth as well as adding its
+  ring. Both tokens are now removed and their five call sites read the scale; the Element Plus dialog takes the
+  panel step and the toast the floating step.
+- **The board nav no longer carries a panel-sized shadow.** It is full width and flush to the top with its own
+  bottom border, so an 18px/42px lift under something with nowhere to float to reads as a smear across the
+  viewport — and it was darker than the literal it replaced (0.16 against 0.08). All it has to say is "content
+  scrolls under this", which is the floating step.
+- **Hovering a dock button dropped a panel-sized shadow across the canvas.** The tooltip used
+  `--shadow-elevated` — an 18px offset, 42px blur panel lift — on a two-line hover label. It now uses the
+  chip step. Depth says what kind of thing something is, so a chip claiming a panel's depth was making a false
+  claim, not merely looking heavy.
+- **Hovering a canvas node inverted its edge instead of lifting it.** The resting hairline is a dark line at
+  12% of `--text`; hover replaced it with `rgba(255, 255, 255, 0.72)`, a near-opaque white ring — so in light
+  theme the edge flipped dark to white, and in dark theme a bright white outline appeared on a navy node. That
+  is a colour change dressed as a depth change, which reads as a glitch rather than a hover. The hairline now
+  stays put and only the elevation moves (floating to elevated).
+- **One of eight dock buttons floated above the strip.** The verification button carried Tailwind's
+  `shadow-lg` in the markup while its seven siblings declare `box-shadow: none`, inside a panel that is itself
+  elevated — so the tier difference read as a depth difference, and `shadow-lg` is a raw light-theme shadow
+  that never followed the theme. Emphasis between tiers is the fill and border, per
+  `frontend-ui-conventions.md` §4.
+- **Two dock tiers meaning the same thing sat on two different neutrals.** Run History used
+  `--board-control-bg` (#f1f5f9) while the four AI suggestions used `--board-card-bg` (#ffffff), four rows
+  apart in one strip — a grey band among white buttons, when both tiers mean "not the primary action". A
+  background change down a vertical list implies a category change; what actually separates these is the
+  border hue and the label. Their hover and pressed states were still mixing against the old ground, which
+  would have made hover *lighter* than rest in light theme. Border contrast was re-measured on the new ground
+  in a real browser (changing the ground invalidates the old reading): 4.76 vs fill / 3.02 vs panel in light,
+  3.73 / 3.90 in dark — every dock border still clears the 3:1 component minimum in both themes.
+- `elevationScale.spec.ts` pins all of the above for `base.css` and `board.css`; each of its five assertions
+  was confirmed to fail against the value it replaced. **Twenty hand-written elevations remain outside the
+  board** and are listed in the spec and in `frontend-ui-conventions.md` §7 rather than silently skipped —
+  each needs its depth chosen and measured on its own surface.
+- **The action dock's heading was tied with the labels it introduces.** "Board tools" rendered at
+  `0.72rem`/800 while the group labels *beneath* it use `--iot-font-min` (11px)/700 — half a pixel of
+  difference at a heavier weight, so two heading levels rendered as one and a reader saw three rows of small
+  uppercase text with no indication of which named the panel. It cleared `typographyFloor` (11.52px over an
+  11px floor), which is why nothing flagged it; a floor is a minimum for body text, not a target for a
+  heading. It now uses `0.875rem`, the tier the side panels' own titles use, and drops `uppercase`, which
+  costs apparent x-height and word shape and is most of why four characters read as smaller than they
+  measured. The button labels beside it had the same bespoke-value problem (`0.78rem`, used nowhere else in
+  the product) and now use the scale's `0.75rem` step, as does the tool tooltip, which was the third site
+  carrying that same bespoke `0.72rem`. Measured in both locales: no truncation, tooltip still inside the
+  viewport.
+- **Four copies of "which dock modes does this viewport allow" became one.** Two hardcoded cycle arrays
+  selected by a `>= 1280` check, a separate clamp restating the same threshold, a restore handler
+  re-deriving the same answer, and a `>= 1280` ternary inline in the launcher's `aria-label` — agreeing only
+  by coincidence, so a new width rule had to be remembered in three other places. Everything now derives
+  from one `availableActionDockModes` list, with the 720px launcher-only fallback stated as the single
+  documented exception rather than emerging from overlapping conditions. Verified equivalent to the previous
+  logic across every width/preference combination, and in a browser at wide, mid and phone widths.
+- **The set of open workflow panels was enumerated up to three times per predicate.** The canvas-map
+  viewport and `showCanvasEmptyState` both ask "is a workflow panel open"; each listed the five members, and
+  one also re-listed the four recommendation flags `isAnyRecommendationPanelVisible()` owns and the two
+  timeline flags `isAnimationLocked` owns. A sixth panel meant remembering up to three lists. One
+  `isWorkflowPanelOpen` now names the set. The empty-state predicate turned out to be covered only by E2E —
+  a unit-level mutation of it was silent — so `actionDockHierarchy.spec.ts` now covers it.
+- **The canvas map's zoom/fit buttons had their size split across two blocks 66 lines apart**, one setting a
+  22px icon box and the other the 44px floor, plus a third copy behind a coarse-pointer query that implied
+  the floor was conditional. They render 44x44 either way — but only because `min-*` happens to beat `width`
+  in the cascade, which is not a decision anyone made. Now one block, and `targetSizeFloor.spec.ts` asserts
+  the floor specifically rather than requiring every declared size to clear it (a rule that only passed while
+  the two owners were separated, and would have read the icon box as a violation once they were merged).
+- **The canvas map has one heading and no hiding rule.** An intermediate version of the fix above hid only the
+  map rectangle and renamed the card to "Canvas View" while it was hidden. Both were treating a symptom: once
+  the panels were measured and shown never to reach the inspector, the card needs no state-dependent visibility
+  and therefore no second name. A card that renames itself is a worse answer than a card that stays put.
+- `boardDockGeometry.spec.ts` pins each of the above: one declaration of the rail token, one per-mode table
+  read by both paint and fit math, one surface shape across modes, the 44px-in-56px arithmetic, and one
+  owner for the collapsed rail. Each assertion was confirmed to fail against the value it replaced.
+
+### 2026-08-04
 
 #### Fixed
 

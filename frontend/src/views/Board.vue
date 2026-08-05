@@ -556,6 +556,7 @@ import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
 import { subscribeBoardInvalidation } from '@/utils/boardInvalidation'
+import { ACTION_DOCK_RAIL_PX, COLLAPSED_PANEL_RAIL_PX } from '@/constants/boardLayout'
 import {
   formatRecommendationCategory,
   RULE_RECOMMENDATION_CATEGORY_OPTIONS,
@@ -1038,19 +1039,8 @@ const LAYOUT_LOGOUT_FLUSH_TIMEOUT_MS = 1_500
 const DEFAULT_CONTROL_PANEL_WIDTH = 320
 const DEFAULT_INSPECTOR_PANEL_WIDTH = 320
 
-/**
- * One width for both collapsed rails.
- *
- * They were 64px and 48px, hardcoded at four separate sites. Measured, each rail contains **exactly one 44x44
- * Expand button** — identical content and identical purpose, so a 16px difference between them has no reason and
- * reads as accidental rather than composed. Flanking the canvas with mismatched rails is precisely the kind of
- * detail that makes a focused view look evacuated instead of designed.
- *
- * 56px, not 48: a 44px target inside a 48px rail leaves 2px of air, which looks cramped and crowds the tap
- * target against the canvas edge. 56px gives a symmetric 6px inset on both sides — enough to read as a
- * deliberate margin at the two vertical edges of the stage.
- */
-const COLLAPSED_PANEL_RAIL_WIDTH = 56
+/* Both collapsed-rail and dock-rail widths now live in `constants/boardLayout.ts`, because the panels
+   themselves are the other consumer and a comment in three files is not an owner. */
 
 const ASYNC_TASK_POLL_INTERVAL_MS = 1000
 const ASYNC_TASK_MAX_POLLS = 600
@@ -1296,42 +1286,56 @@ const isNarrowBoardLayout = computed(() =>
   actionDockViewportWidth.value < 1024 || boardViewportHeight.value < 600
 )
 const actionDockPreferredMode = ref<ActionDockMode>('expanded')
-const wideActionDockModeCycle: ActionDockMode[] = ['expanded', 'compact', 'packed']
-const narrowActionDockModeCycle: ActionDockMode[] = ['compact', 'packed']
 
-const actionDockModeCycle = computed<ActionDockMode[]>(() =>
-  actionDockViewportWidth.value >= 1280 ? wideActionDockModeCycle : narrowActionDockModeCycle
-)
+/**
+ * The modes this viewport can actually show, widest first.
+ *
+ * One source for a rule that was previously written four times in four shapes: two hardcoded cycle arrays
+ * picked by a `>= 1280` check, a separate clamp restating `< 1280`, a `restoreActionDockFromPacked` that
+ * re-derived the same answer, and a `>= 1280` ternary inline in the launcher's `aria-label`. They agreed by
+ * coincidence, and a width rule added to one would have had to be remembered in the other three.
+ *
+ * Everything else about the dock's mode is now derived from this list: the effective mode is the preferred one
+ * if the viewport allows it and the widest available otherwise; the toggle advances through it; and restoring
+ * from packed returns to the widest.
+ */
+const availableActionDockModes = computed<ActionDockMode[]>(() =>
+  // The labelled rail needs 1280px: below that the labels do not fit beside two side panels. The icon rail
+  // fits at every width, so it stays selectable even on a phone — a user who chose it keeps it.
+  actionDockViewportWidth.value < 1280 ? ['compact', 'packed'] : ['expanded', 'compact', 'packed'])
 
 const actionDockMode = computed<ActionDockMode>(() => {
-  const width = actionDockViewportWidth.value
-  if (width < 720 && actionDockPreferredMode.value === 'expanded') return 'packed'
-  if (width < 1280 && actionDockPreferredMode.value === 'expanded') return 'compact'
-  return actionDockPreferredMode.value
+  const available = availableActionDockModes.value
+  if (available.includes(actionDockPreferredMode.value)) return actionDockPreferredMode.value
+  // Below 720px a rail of any width leaves no usable canvas, so an unavailable preference falls back to the
+  // launcher rather than to the widest option. This is the one place the two thresholds differ, and losing
+  // that distinction would have opened the icon rail by default on a phone.
+  return actionDockViewportWidth.value < 720 ? 'packed' : available[0]
 })
 
 const isActionDockPackedMode = computed(() => actionDockMode.value === 'packed')
 const nextActionDockPreferredMode = computed<ActionDockMode>(() => {
-  const cycle = actionDockModeCycle.value
-  const currentMode = cycle.includes(actionDockMode.value) ? actionDockMode.value : cycle[0]
-  const index = cycle.indexOf(currentMode)
-  return cycle[(index + 1) % cycle.length]
+  const available = availableActionDockModes.value
+  const index = available.indexOf(actionDockMode.value)
+  return available[(index + 1) % available.length]
 })
-const actionDockToggleIcon = computed(() => {
-  if (nextActionDockPreferredMode.value === 'compact') return 'chevron_right'
-  if (nextActionDockPreferredMode.value === 'packed') return 'toolbar'
-  return 'chevron_left'
-})
-const actionDockToggleLabel = computed(() => {
-  if (nextActionDockPreferredMode.value === 'compact') return t('app.actionDockSwitchCompact')
-  if (nextActionDockPreferredMode.value === 'packed') return t('app.actionDockSwitchPacked')
-  return t('app.actionDockSwitchExpanded')
-})
+const ACTION_DOCK_MODE_AFFORDANCES = {
+  expanded: { icon: 'chevron_left', label: 'app.actionDockSwitchExpanded' },
+  compact: { icon: 'chevron_right', label: 'app.actionDockSwitchCompact' },
+  packed: { icon: 'toolbar', label: 'app.actionDockSwitchPacked' }
+} as const
+const actionDockToggleIcon = computed(() =>
+  ACTION_DOCK_MODE_AFFORDANCES[nextActionDockPreferredMode.value].icon)
+const actionDockToggleLabel = computed(() =>
+  t(ACTION_DOCK_MODE_AFFORDANCES[nextActionDockPreferredMode.value].label))
+/** Packed mode's launcher restores the widest mode, so it names that mode rather than re-deriving a width. */
+const actionDockRestoreLabel = computed(() =>
+  t(ACTION_DOCK_MODE_AFFORDANCES[availableActionDockModes.value[0]].label))
 const cycleActionDockMode = () => {
   actionDockPreferredMode.value = nextActionDockPreferredMode.value
 }
 const restoreActionDockFromPacked = () => {
-  actionDockPreferredMode.value = actionDockViewportWidth.value >= 1280 ? 'expanded' : 'compact'
+  actionDockPreferredMode.value = availableActionDockModes.value[0]
 }
 const hasActionDockActivity = computed(() =>
   isSimulating.value ||
@@ -1343,8 +1347,21 @@ const hasActionDockActivity = computed(() =>
   isAnyRecommendationRunning() ||
   unreadFuzzNotificationCount.value > 0
 )
-const actionDockRailWidth = computed(() => actionDockMode.value === 'expanded' ? '8.75rem' : '3.5rem')
-const actionDockReservedWidth = computed(() => actionDockMode.value === 'expanded' ? 150 : 64)
+/*
+ * The rail width table owns the paint width; the reserved width adds the gap the dock is inset by, which
+ * the fit math needs and the paint does not.
+ */
+/**
+ * The gap between the inspector's edge and the dock, in px.
+ *
+ * One owner, because the fit math has to subtract the same gap the dock is positioned by. It previously
+ * added `8`/`16` of its own on top of a separately guessed reserved width, so the corridor it believed in
+ * differed from the corridor the dock occupied by up to 12px.
+ */
+const actionDockGapPx = computed(() => actionDockViewportWidth.value < 640 ? 8 : 14)
+const actionDockRailPx = computed(() => ACTION_DOCK_RAIL_PX[actionDockMode.value])
+const actionDockRailWidth = computed(() => `${actionDockRailPx.value}px`)
+const actionDockReservedWidth = computed(() => actionDockRailPx.value + actionDockGapPx.value)
 const widePanelWidthLimit = computed(() => {
   if (isNarrowBoardLayout.value) return 520
   const viewportWidth = actionDockViewportWidth.value
@@ -1361,9 +1378,8 @@ const effectiveControlPanelWidth = computed(() =>
 const effectiveInspectorPanelWidth = computed(() =>
   Math.min(boardPanels.inspector.width, widePanelWidthLimit.value))
 const actionDockRightInset = computed(() => {
-  const inspectorWidth = boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveInspectorPanelWidth.value
-  const gap = actionDockViewportWidth.value < 640 ? 8 : 14
-  return inspectorWidth + gap
+  const inspectorWidth = boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_PX : effectiveInspectorPanelWidth.value
+  return inspectorWidth + actionDockGapPx.value
 })
 const actionDockStyle = computed(() => ({
   '--board-action-dock-right': `${actionDockRightInset.value}px`,
@@ -1403,8 +1419,8 @@ let panelStateTouchedBeforeLayout = false
 let canvasStateTouchedBeforeLayout = false
 
 const boardShellStyle = computed(() => ({
-  '--board-control-width': `${boardPanels.control.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveControlPanelWidth.value}px`,
-  '--board-inspector-width': `${boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveInspectorPanelWidth.value}px`,
+  '--board-control-width': `${boardPanels.control.collapsed ? COLLAPSED_PANEL_RAIL_PX : effectiveControlPanelWidth.value}px`,
+  '--board-inspector-width': `${boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_PX : effectiveInspectorPanelWidth.value}px`,
   '--board-action-rail-width': actionDockRailWidth.value
 }))
 
@@ -2165,7 +2181,6 @@ const dialogMeta = reactive<DeviceDialogMeta>({
   description: '',
   label: '',
   manifest: null,
-  rules: [],
   specs: []
 })
 const deviceRuntimeSaving = ref(false)
@@ -3091,7 +3106,6 @@ const bindDeviceDialogNode = (node: DeviceNode) => {
   dialogMeta.deviceName = manifest?.Name || tpl?.manifest?.Name || node.templateName
   dialogMeta.description = manifest?.Description || tpl?.manifest?.Description || ''
   dialogMeta.manifest = manifest
-  dialogMeta.rules = edges.value.filter(e => e.from === node.id || e.to === node.id)
   dialogMeta.specs = specifications.value.filter(spec =>
     isSpecRelatedToNode(spec, node.id)
   )
@@ -3103,7 +3117,6 @@ const clearDeviceDialogMeta = () => {
   dialogMeta.deviceName = ''
   dialogMeta.description = ''
   dialogMeta.manifest = null
-  dialogMeta.rules = []
   dialogMeta.specs = []
 }
 
@@ -5294,9 +5307,12 @@ const getVisibleCanvasFrame = () => {
   const canvasEl = document.querySelector('.canvas-container')
   if (!canvasEl) return null
   const rect = canvasEl.getBoundingClientRect()
-  const leftInset = boardPanels.control.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveControlPanelWidth.value
-  const actionRailInset = actionDockReservedWidth.value + (isActionDockPackedMode.value ? 8 : 16)
-  const rightInset = (boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_WIDTH : effectiveInspectorPanelWidth.value) + actionRailInset
+  const leftInset = boardPanels.control.collapsed ? COLLAPSED_PANEL_RAIL_PX : effectiveControlPanelWidth.value
+  // `actionDockReservedWidth` already includes the dock's gap, so nothing is added here. It used to add a
+  // further 8 or 16px on top, which double-counted the gap and put this frame out of step with the dock's
+  // real position by up to 12px — in a function whose whole job is to know where the free canvas is.
+  const rightInset = (boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_PX : effectiveInspectorPanelWidth.value)
+    + actionDockReservedWidth.value
   const canvasOffset = getCanvasInnerOffset()
   const topInset = canvasOffset.y
   const timelineVisible = simulationAnimationState.value.visible || traceAnimationState.value.visible
@@ -9685,6 +9701,26 @@ const closeHistoryPanel = (invalidatePendingDetail = true) => {
   showHistoryPanel.value = false
 }
 
+/**
+ * Clear every workflow surface except the one about to open.
+ *
+ * The board shows one workflow surface at a time, so each opener has to close the others first. That was
+ * written out as the same eight lines at two call sites (`toggleHistoryPanel` and `openTaskInbox`) — byte for
+ * byte, including the ordering — so a seventh surface would have had to be remembered in both. The set is the
+ * same one `isWorkflowPanelOpen` reports on; keeping the closing side as a copy while the reading side had an
+ * owner is how the two drift apart.
+ */
+const closeOtherWorkflowSurfaces = () => {
+  closeResultSurfaces()
+  showSimulationPanel.value = false
+  showVerificationPanel.value = false
+  showFuzzingPanel.value = false
+  closeRecommendationPanel()
+  closeDeviceRecommendationPanel()
+  closeSpecRecommendationPanel()
+  closeScenarioRecommendationPanel()
+}
+
 const toggleHistoryPanel = async (layer: HistoryLayer = activeHistoryLayer.value) => {
   if (showHistoryPanel.value && activeHistoryLayer.value === layer) {
     closeHistoryPanel()
@@ -9699,14 +9735,7 @@ const toggleHistoryPanel = async (layer: HistoryLayer = activeHistoryLayer.value
     return
   }
 
-  closeResultSurfaces()
-  showSimulationPanel.value = false
-  showVerificationPanel.value = false
-  showFuzzingPanel.value = false
-  closeRecommendationPanel()
-  closeDeviceRecommendationPanel()
-  closeSpecRecommendationPanel()
-  closeScenarioRecommendationPanel()
+  closeOtherWorkflowSurfaces()
 
   const intentEpoch = ++historyPanelIntentEpoch
   historyDetailRequests.invalidate()
@@ -10217,14 +10246,7 @@ const openTaskInbox = async () => {
   }
   const intentEpoch = ++historyPanelIntentEpoch
   historyDetailRequests.invalidate()
-  closeResultSurfaces()
-  showSimulationPanel.value = false
-  showVerificationPanel.value = false
-  showFuzzingPanel.value = false
-  closeRecommendationPanel()
-  closeDeviceRecommendationPanel()
-  closeSpecRecommendationPanel()
-  closeScenarioRecommendationPanel()
+  closeOtherWorkflowSurfaces()
   activeHistoryLayer.value = 'tasks'
   showHistoryPanel.value = true
   const loaded = await loadTaskInbox(false)
@@ -10671,6 +10693,21 @@ const availableFuzzRunForFinding = (finding: FuzzingFindingSummary | FuzzingFind
   return historyRun?.dataAvailable ? historyRun : null
 }
 
+/**
+ * Hand off from candidate evidence to the formal verifier.
+ *
+ * The two openers (from a finding, and for the current board) differ only in the handoff they build; the five
+ * lines that actually perform the handoff were identical in both. Callers set `fuzzVerificationHandoff` and
+ * then call this, so the surfaces a handoff has to leave behind are decided once.
+ */
+const showVerificationPanelForHandoff = () => {
+  closeHistoryPanel()
+  dismissFuzzingResult()
+  showSimulationPanel.value = false
+  showFuzzingPanel.value = false
+  showVerificationPanel.value = true
+}
+
 const openFormalVerificationForFuzzFinding = (finding: FuzzingFindingSummary | FuzzingFinding) => {
   const sourceRun = availableFuzzRunForFinding(finding)
   const specificationLabel = finding.violatedSpec?.templateLabel
@@ -10684,11 +10721,7 @@ const openFormalVerificationForFuzzFinding = (finding: FuzzingFindingSummary | F
     targetPresent: specifications.value.some(spec => spec.id === finding.violatedSpecId),
     boardDrifted: sourceRun ? fuzzRunHasBoardDrift(sourceRun) : true
   }
-  closeHistoryPanel()
-  dismissFuzzingResult()
-  showSimulationPanel.value = false
-  showFuzzingPanel.value = false
-  showVerificationPanel.value = true
+  showVerificationPanelForHandoff()
 }
 
 const openFormalVerificationForCurrentBoard = () => {
@@ -10698,11 +10731,7 @@ const openFormalVerificationForCurrentBoard = () => {
     targetPresent: true,
     boardDrifted: fuzzingResultBoardDrifted.value
   } : null
-  closeHistoryPanel()
-  dismissFuzzingResult()
-  showSimulationPanel.value = false
-  showFuzzingPanel.value = false
-  showVerificationPanel.value = true
+  showVerificationPanelForHandoff()
 }
 
 const closeVerificationPanel = () => {
@@ -11627,19 +11656,43 @@ const ensurePlaybackClosedForMutation = (): boolean => {
 
 let playInterval: ReturnType<typeof setInterval> | null = null
 
-const isCanvasMapHiddenByOverlay = computed(() =>
+/**
+ * Which surfaces claim the space the map viewport occupies.
+ *
+ * Scoped to the viewport rectangle, not the whole map card: the zoom and fit controls in the same card
+ * are the board's viewport controls and must survive every one of these, because a result panel is
+ * exactly when a user zooms to look at what it points at.
+ */
+/**
+ * Is one of the board's workflow panels open?
+ *
+ * The five members (verification, simulation, exploration, run history, and the recommendation group) were
+ * enumerated at two call sites, one of which also spelled out the four recommendation flags that
+ * `isAnyRecommendationPanelVisible()` already owns, and the two timeline flags that `isAnimationLocked`
+ * owns. Adding a sixth panel therefore meant remembering up to three lists. Naming the set once means a new
+ * panel joins it in one place.
+ */
+const isWorkflowPanelOpen = computed(() =>
   showVerificationPanel.value ||
   showSimulationPanel.value ||
   showFuzzingPanel.value ||
   showHistoryPanel.value ||
-  showRecommendationPanel.value ||
-  showDeviceRecommendationPanel.value ||
-  showSpecRecommendationPanel.value ||
-  showScenarioRecommendationPanel.value ||
-  traceAnimationState.value.visible ||
-  simulationAnimationState.value.visible ||
-  showFixDialog.value
+  isAnyRecommendationPanelVisible()
 )
+
+/*
+ * There is no `isCanvasMapHidden…` predicate any more, because the collision it guarded against cannot
+ * happen. The map lives in the inspector's overview slot, and the floating panels are positioned with a
+ * `right` inset that clears the inspector and the action rail — measured at 1440x900 the panel spans
+ * x=660..948 against an inspector at 1120..1440, and at 1100x800 it is 336..692 against 780..1100. Neither
+ * touches the inspector, let alone the map card inside it. At narrow widths the inspector collapses to a
+ * 56px rail and the map is not rendered at all.
+ *
+ * Hiding it anyway cost the user the zoom field, the zoom buttons and fit-to-content — the board's only
+ * pointer viewport controls — for the entire time any of eleven surfaces was open. Narrowing that to hide
+ * only the map rectangle, and renaming the card while it was hidden, were both treatments for a symptom of
+ * this rule rather than for the rule itself.
+ */
 
 // 当前选中的 trace
 const currentTrace = computed(() => {
@@ -13093,11 +13146,7 @@ const showCanvasEmptyState = computed(() =>
   && !isSceneReplacementInProgress.value
   && !isModelPlaybackActive.value
   && !isResultSurfaceVisible.value
-  && !showSimulationPanel.value
-  && !showVerificationPanel.value
-  && !showFuzzingPanel.value
-  && !showHistoryPanel.value
-  && !isAnyRecommendationPanelVisible()
+  && !isWorkflowPanelOpen.value
 )
 const verificationGenerationWarningCounts = computed(() => getGenerationWarningCounts(verificationResult.value))
 const verificationGenerationIssues = computed(() => getGenerationIssues(verificationResult.value))
@@ -13298,7 +13347,6 @@ const counterexampleTraceHelpText = computed(() => {
     :class="[
       'iot-board',
       {
-        'is-inspector-collapsed': boardPanels.inspector.collapsed,
         'is-narrow-layout': isNarrowBoardLayout,
         'has-narrow-panel-open': showNarrowPanelScrim,
         'has-control-panel-open': isNarrowBoardLayout && !boardPanels.control.collapsed,
@@ -13643,7 +13691,7 @@ const counterexampleTraceHelpText = computed(() => {
         <details
           v-if="templateInstanceHasRuntimeFields"
           data-testid="template-instance-runtime"
-          class="mt-4 rounded-xl border border-[color:var(--warning-border)] board-chip-warning/40 p-3 shadow-sm dark:bg-[color:var(--warning)]/10"
+          class="mt-4 rounded-xl border border-[color:var(--warning-border)] board-chip-warning p-3 shadow-sm dark:bg-[color:var(--warning)]/10"
         >
           <summary
             data-testid="template-instance-runtime-toggle"
@@ -13789,9 +13837,6 @@ const counterexampleTraceHelpText = computed(() => {
       :device-templates="deviceTemplates"
       :templates-loading="templatesLoading"
       :nodes="nodes"
-      :edges="edges"
-      :canvas-pan="canvasPan"
-      :canvas-zoom="canvasZoom"
       :collapsed="boardPanels.control.collapsed"
       :width="effectiveControlPanelWidth"
       :active-section="boardPanels.control.activeSection"
@@ -13844,8 +13889,17 @@ const counterexampleTraceHelpText = computed(() => {
       @update:active-section="handleInspectorActiveSectionUpdate"
     >
       <template #overview>
+        <!--
+          The map surface stays mounted whenever the inspector is expanded.
+
+          It used to be hidden whenever any result surface was open, which also took away the zoom
+          field, the zoom buttons and fit-to-content — the only pointer zoom controls on the board —
+          leaving a user mid-review with the scroll wheel and no indication of where the controls had
+          gone. Only the *map viewport* competes for space with a result panel, so only it yields;
+          the viewport controls belong to the canvas and stay put. The `inspector.collapsed` half of
+          the old condition was dead: this slot renders inside the inspector's own `v-if`.
+        -->
         <div
-          v-show="!isCanvasMapHiddenByOverlay && !boardPanels.inspector.collapsed"
           data-testid="canvas-map"
           class="canvas-map w-full p-3 border rounded-lg shadow-sm bg-white/90 border-slate-200 dark:bg-slate-950/90 dark:border-slate-700"
         >
@@ -14123,8 +14177,8 @@ const counterexampleTraceHelpText = computed(() => {
         type="button"
         class="board-action-dock__launcher"
         data-testid="restore-action-dock"
-        :aria-label="actionDockViewportWidth >= 1280 ? t('app.actionDockSwitchExpanded') : t('app.actionDockSwitchCompact')"
-        :title="actionDockViewportWidth >= 1280 ? t('app.actionDockSwitchExpanded') : t('app.actionDockSwitchCompact')"
+        :aria-label="actionDockRestoreLabel"
+        :title="actionDockRestoreLabel"
         @click="restoreActionDockFromPacked"
       >
         <span class="material-symbols-outlined" aria-hidden="true">toolbar</span>
@@ -14222,7 +14276,7 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
             :aria-label="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
             :aria-pressed="showVerificationPanel || traceAnimationState.visible"
-            class="board-tool-button board-tool-button--primary shadow-lg transition-colors"
+            class="board-tool-button board-tool-button--primary transition-colors"
           >
             <span v-if="isVerifying" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
             <span v-else class="material-symbols-outlined" aria-hidden="true">fact_check</span>
@@ -16590,7 +16644,6 @@ const counterexampleTraceHelpText = computed(() => {
         :manifest="dialogMeta.manifest"
         :nodes="nodes"
         :device-templates="deviceTemplates"
-        :rules="dialogMeta.rules"
         :specs="dialogMeta.specs"
         :runtime-saving="deviceRuntimeSaving"
         :delete-loading="deletePreviewLoading && deletePreviewNodeId === dialogMeta.nodeId"

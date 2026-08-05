@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.List;
+import cn.edu.nju.Iot_Verify.util.JsonPointerPath;
 /** Strict JSON boundary for requests whose fields define the checked model. */
 @Component
 @RequiredArgsConstructor
@@ -61,11 +62,11 @@ public class ModelRequestParser {
                     .readValue(objectMapper.treeAsTokens(body));
         } catch (UnrecognizedPropertyException exception) {
             throw new BadRequestException("Unknown field '" + exception.getPropertyName() + "' at '"
-                    + formatPath(exception) + "'. The request was rejected because ignoring it could change "
+                    + JsonPointerPath.of(exception) + "'. The request was rejected because ignoring it could change "
                     + "what the model checks.");
         } catch (JsonProcessingException exception) {
             String path = exception instanceof JsonMappingException mappingException
-                    ? formatPath(mappingException)
+                    ? JsonPointerPath.of(mappingException)
                     : "request";
             throw new BadRequestException("Invalid " + requestKind.toLowerCase() + " value at '" + path
                     + "': " + exception.getOriginalMessage() + ".");
@@ -82,18 +83,4 @@ public class ModelRequestParser {
         return request;
     }
 
-    private String formatPath(JsonMappingException exception) {
-        StringBuilder path = new StringBuilder();
-        for (JsonMappingException.Reference reference : exception.getPath()) {
-            if (reference.getFieldName() != null) {
-                if (!path.isEmpty()) {
-                    path.append('.');
-                }
-                path.append(reference.getFieldName());
-            } else if (reference.getIndex() >= 0) {
-                path.append('[').append(reference.getIndex()).append(']');
-            }
-        }
-        return path.isEmpty() ? "request" : path.toString();
-    }
 }

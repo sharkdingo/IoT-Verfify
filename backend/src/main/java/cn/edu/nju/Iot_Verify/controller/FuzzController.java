@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 
 @Validated
 @RestController
@@ -72,7 +73,7 @@ public class FuzzController {
     public Result<List<FuzzTaskSummaryDto>> getTasks(
             @CurrentUser Long userId,
             @RequestParam(name = "excludeTaskIds", required = false)
-            @Size(max = 100, message = "At most 100 task IDs can be excluded")
+            @Size(max = RequestLimits.MAX_TASK_EXCLUSIONS, message = "At most 100 task IDs can be excluded")
             List<@Positive(message = "Excluded task IDs must be positive") Long> excludeTaskIds,
             @RequestParam(name = "page", defaultValue = "0")
             @Min(value = 0, message = "Page must not be negative")

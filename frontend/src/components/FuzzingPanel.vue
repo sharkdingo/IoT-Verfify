@@ -581,7 +581,7 @@ const frozenTargetScope = computed(() => {
             :key="spec.id"
             class="flex min-h-11 items-start gap-2 rounded-md border px-2 py-1.5 text-xs"
             :class="isSpecEligible(spec)
-              ? 'cursor-pointer border-slate-100 hover:board-border-subtle hover:board-card--muted/40'
+              ? 'cursor-pointer border-slate-100 hover:board-border-subtle hover:board-card--muted'
               : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-500'"
           >
             <input

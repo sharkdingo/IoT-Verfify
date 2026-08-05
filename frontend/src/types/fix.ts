@@ -11,12 +11,29 @@ export type { ModelTokenSource } from './modelToken'
 
 // 故障规则定位结果
 export interface FaultRule {
-  ruleString: string
+  /**
+   * The rule's own preview text, or null when it has none.
+   *
+   * `RuleDto.ruleString` has no `@NotBlank` and a nullable TEXT column, so a rule legitimately persists without
+   * one — verified against the running API, which accepts a rule with the field omitted and echoes
+   * `"ruleString": null`. This was declared `string`, and `validateFaultRule` enforced that with
+   * `text(row, 'ruleString')`, which throws on null and rejected the **entire** fault-localization response: one
+   * such rule turned a fix request into "malformed result" instead of a fix.
+   *
+   * The fallback belongs on this side, not on the server. `verify.ts` already types the sibling field as
+   * `ruleLabel?: string | null`, and `PlaybackChangePopover`, `SimulationTimeline` and `Board.vue` all render
+   * `rule.ruleLabel?.trim() || t('app.ruleNumber', …)` — localised. `FixResultDialog` uses
+   * `t('app.noDescription')` instead of a rule number, because that row already renders a numbered badge beside
+   * the label; repeating the number there would read as a rendering glitch. A server-side English
+   * label would have shown a zh-CN user English text, which the bilingual rule in `CLAUDE.md` forbids.
+   */
+  ruleString?: string | null
   transitionNumber: number
   targetDeviceLabel: string
   targetActionLabel: string
   conflicting: boolean
-  conflictingRuleString?: string
+  /** The conflicting rule preview, or null when it has none; the UI supplies the localised fallback. */
+  conflictingRuleString?: string | null
   targetEndState?: string
   conflictingEndState?: string
   reasonCode: 'TRIGGERED' | 'CONFLICTING_END_STATES'

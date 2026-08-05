@@ -7,6 +7,18 @@ export const PRIVACY_OPTIONS = ['public', 'private'] as const
 export type TrustValue = typeof TRUST_OPTIONS[number]
 export type PrivacyValue = typeof PRIVACY_OPTIONS[number]
 
+/**
+ * The same vocabulary as a lookup, for boundary validators.
+ *
+ * Four modules had built their own copy of these Sets from the same two literals — `api/board.ts`,
+ * `recommendationMaterialization.ts`, `traceStateResponse.ts` (which even reversed the privacy order), plus
+ * inline array literals in `device.ts`. The options list above was already the owner for the *UI* side, so a
+ * value added to the domain would have been picked up by the dropdowns and rejected by four validators.
+ * Deriving the Sets from the same arrays means the domain has one definition end to end.
+ */
+export const TRUST_VALUE_SET: ReadonlySet<string> = new Set(TRUST_OPTIONS)
+export const PRIVACY_VALUE_SET: ReadonlySet<string> = new Set(PRIVACY_OPTIONS)
+
 export interface DeviceRuntimeConfig {
   state?: string
   currentStateTrust?: string
@@ -102,15 +114,27 @@ export const findTemplateStatePrivacy = (
 export const templateVariableHasEnumValues = (variable: InternalVariable) =>
   Array.isArray(variable.Values) && variable.Values.length > 0
 
+/**
+ * A numeric variable declares *both* bounds, or it is not numeric.
+ *
+ * These two helpers each encoded a laxer rule than the product actually has, in opposite directions: this one
+ * accepted *either* bound (`||`), and `getTemplateVariableDefaultValue` below defaulted on `LowerBound` alone.
+ * `device-template-schema.json` — the authoritative gate for manifests, since the template endpoint takes a raw
+ * `JsonNode` — has `oneOf: [{required: [Values], not: LowerBound|UpperBound}, {required: [LowerBound,
+ * UpperBound], not: Values}]`, and `BoardStorageServiceImpl.defaultValueForVariable` likewise requires both
+ * before defaulting. So a single-bound variable cannot reach us.
+ *
+ * That made the laxity unreachable rather than harmless: the client encoded a rule the schema contradicts, and
+ * anyone reading it would conclude single-bound variables are supported. If the schema ever relaxed, this would
+ * have shown a default the server refuses to store.
+ */
 export const templateVariableUsesNumericBounds = (variable: InternalVariable) =>
   variable.LowerBound !== undefined && variable.LowerBound !== null
-  || variable.UpperBound !== undefined && variable.UpperBound !== null
+  && variable.UpperBound !== undefined && variable.UpperBound !== null
 
 export const getTemplateVariableDefaultValue = (variable: InternalVariable): string => {
   if (templateVariableHasEnumValues(variable)) return String(variable.Values![0])
-  if (variable.LowerBound !== undefined && variable.LowerBound !== null) {
-    return String(variable.LowerBound)
-  }
+  if (templateVariableUsesNumericBounds(variable)) return String(variable.LowerBound)
   return ''
 }
 

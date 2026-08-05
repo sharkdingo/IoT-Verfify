@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Shared relation normalization and validation logic for SMV generation.
@@ -21,7 +22,7 @@ public final class SmvRelationUtils {
     public static String normalizeTriggerRelation(String relation) {
         if (relation == null) return null;
         String normalized = relation.trim();
-        return switch (normalized.toUpperCase()) {
+        return switch (normalized.toUpperCase(Locale.ROOT)) {
             case "EQ", "==" -> "=";
             case "NEQ", "!=" -> "!=";
             case "GT" -> ">";
@@ -51,7 +52,7 @@ public final class SmvRelationUtils {
     public static String normalizeRelation(String relation) {
         if (relation == null) return null;
         String normalized = relation.trim();
-        return switch (normalized.toUpperCase()) {
+        return switch (normalized.toUpperCase(Locale.ROOT)) {
             case "EQ", "==" -> "=";
             case "NEQ", "!=" -> "!=";
             case "GT" -> ">";

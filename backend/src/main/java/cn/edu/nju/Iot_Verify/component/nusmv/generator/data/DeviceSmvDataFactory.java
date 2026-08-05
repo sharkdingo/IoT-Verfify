@@ -367,15 +367,15 @@ public class DeviceSmvDataFactory {
         }
         // NuSMV reserved-word guard on base
         if (NUSMV_RESERVED_WORDS.contains(base)
-                || NUSMV_RESERVED_WORDS.contains(base.toUpperCase())
-                || NUSMV_RESERVED_WORDS.contains(base.toLowerCase())) {
+                || NUSMV_RESERVED_WORDS.contains(base.toUpperCase(Locale.ROOT))
+                || NUSMV_RESERVED_WORDS.contains(base.toLowerCase(Locale.ROOT))) {
             base = "_" + base;
         }
         String suffix = result;
         // NuSMV reserved-word guard on suffix (defense-in-depth, result is already checked)
         if (NUSMV_RESERVED_WORDS.contains(suffix)
-                || NUSMV_RESERVED_WORDS.contains(suffix.toUpperCase())
-                || NUSMV_RESERVED_WORDS.contains(suffix.toLowerCase())) {
+                || NUSMV_RESERVED_WORDS.contains(suffix.toUpperCase(Locale.ROOT))
+                || NUSMV_RESERVED_WORDS.contains(suffix.toLowerCase(Locale.ROOT))) {
             suffix = "_" + suffix;
         }
         // NuSMV identifiers should not start with a digit.
@@ -414,14 +414,22 @@ public class DeviceSmvDataFactory {
      * Removes spaces, replaces non-alphanumeric/underscore chars with '_',
      * prepends '_' if starting with digit.
      */
-    static String sanitizeSmvToken(String raw) {
+    /**
+     * The one function that decides what token a mode/state name becomes in the generated model.
+     *
+     * <p>Public because {@code DeviceTemplateNuSmvValidator} has to reject collisions in terms of *this* output,
+     * not the raw name. Comparing raw names let modes {@code next} and {@code _next} pass as distinct while both
+     * sanitize to {@code _next}, and NuSMV then rejects the model with "duplicate constants in the enum type of
+     * variable" — a type error surfaced to the user as an engine failure rather than a fixable template problem.
+     */
+    public static String sanitizeSmvToken(String raw) {
         if (raw == null) return null;
         String s = raw.replace(" ", "").replaceAll("[^a-zA-Z0-9_]", "_");
         if (s.isEmpty()) return "_";
         if (Character.isDigit(s.charAt(0))) s = "_" + s;
         if (NUSMV_RESERVED_WORDS.contains(s)
-                || NUSMV_RESERVED_WORDS.contains(s.toUpperCase())
-                || NUSMV_RESERVED_WORDS.contains(s.toLowerCase())) s = "_" + s;
+                || NUSMV_RESERVED_WORDS.contains(s.toUpperCase(Locale.ROOT))
+                || NUSMV_RESERVED_WORDS.contains(s.toLowerCase(Locale.ROOT))) s = "_" + s;
         return s;
     }
 
@@ -468,18 +476,18 @@ public class DeviceSmvDataFactory {
         return -1;
     }
 
-    /** 按 canonical varName 查找设备 SMV 数据 */
-    public static DeviceSmvData findDeviceSmvData(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
-        return findDeviceSmvDataInternal(deviceName, deviceSmvMap);
-    }
-
-    /** 严格模式：只接受 canonical varName，不按模板名回退。 */
-    public static DeviceSmvData findDeviceSmvDataStrict(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
-        return findDeviceSmvDataInternal(deviceName, deviceSmvMap);
-    }
-
-    private static DeviceSmvData findDeviceSmvDataInternal(String deviceName,
-                                                           Map<String, DeviceSmvData> deviceSmvMap) {
+    /*
+     * Look up device SMV data by canonical varName.
+     *
+     * There were two public methods here, `findDeviceSmvData` and `findDeviceSmvDataStrict`, both delegating to
+     * the same internal method with the same arguments — so there was no behavioural difference at all. Yet the
+     * Strict javadoc claimed it "does not fall back to the template name": that fallback branch had already been
+     * removed, so the comment described a distinction that no longer existed and callers had to choose between
+     * two names for one behaviour. The non-strict name had no callers and is gone; this is the one the seven
+     * real call sites use, with the pass-through internal layer folded in.
+     */
+    public static DeviceSmvData findDeviceSmvDataStrict(String deviceName,
+                                                       Map<String, DeviceSmvData> deviceSmvMap) {
         if (deviceName == null || deviceSmvMap == null) return null;
         return deviceSmvMap.get(deviceName);
     }

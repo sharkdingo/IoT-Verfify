@@ -155,7 +155,24 @@ Three failure modes that a passing suite hides, all of which have actually happe
   repair it. Fix: trace the mechanism, do not accept the outcome.
 - **A test that cannot fail.** Before trusting a new test, break the code it covers and confirm it
   goes red. A test that passes with the fix reverted proves nothing — and has twice revealed that
-  the "bug" being fixed did not exist.
+  the "bug" being fixed did not exist. One session shipped **five** of these at once, in four
+  recurring shapes worth recognising by sight:
+  - **The empty scan.** A loop over a selector, directory, or field list that matches nothing. Zero
+    iterations assert nothing and report success. Fix: assert the scan found something *before*
+    looping (`expect(rules.length).toBeGreaterThan(0)`).
+  - **The wrong slice.** A source-text assertion whose window excludes the place the defect lives —
+    slicing `<div` up to a `data-testid` examines only whitespace, so a `v-show` after the testid is
+    invisible. Fix: print the slice once and read it.
+  - **The unfalsifiable claim.** Asserting something the framework can never produce
+    (`doesNotContain("isSourceModelComplete")` — Jackson never emits a getter name as a key), or the
+    absence of a symbol that no longer exists anywhere. Prefer a positive assertion about the value
+    you want.
+  - **The unreached path.** A fixture that never enters the branch the test names — a single rule
+    cannot produce a rule *conflict*, so the helper under test is never called. Fix: check the
+    mutation reddens *this* test, not merely some test.
+  A guard scoped to a subset also lies: one written to catch locale-dependent case folds scanned six
+  hand-picked packages and missed the highest-stakes fold in the product, in the boot-time check that
+  refuses to start with default secrets.
 - **Verifying stale artifacts.** A rebuilt backend, a cached bundle, or a reused dev server can make
   the run describe code you are not editing.
 
@@ -215,6 +232,14 @@ Report results honestly: if a step failed, say so with the output; if you skippe
   ineffective and an already-fixed defect looks live. This cost five wrong hypotheses in one session.
   Start the dev backend with its output redirected (`> backend/run.log 2>&1`, already gitignored) so
   the next unexplained failure begins with a stack trace.
+  **A `mvn clean` while that JVM is alive makes it worse than stale.** The dev JVM keeps loading classes
+  lazily from `target/classes`, so wiping and rebuilding underneath it leaves it serving a mix of two
+  builds. After any `mvn clean` in a checkout with a live `spring-boot:run`, restart that backend before
+  believing anything it says; a live probe against it is otherwise measuring neither tree. It can also hold a
+  lock that fails the `clean` outright (`Failed to delete …/target`, zero tests run, succeeds on a single
+  retry) — intermittently, so one clean run does not disprove it. Do not confuse that with the *other*
+  contender for `target/classes`, the VS Code `redhat.java` language server, whose symptoms are mass
+  `NoClassDefFoundError` rather than a failed delete: [backend/CLAUDE.md](backend/CLAUDE.md).
   **Compare the process start time against the modified `.java` sources, not against
   `target/classes`.** A full `mvn compile` rewrites *every* class file, so class timestamps are all
   identical and always newer than the JVM — comparing against them reports a stale JVM whenever

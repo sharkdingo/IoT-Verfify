@@ -197,6 +197,72 @@ public abstract class AbstractAiTool implements AiTool {
     }
 
     /** Parses the shared per-run attack scenario used by verification and simulation tools. */
+    /**
+     * The JSON schema for the {@code attackPoints} argument, described once.
+     *
+     * <p>Four tools built this map privately and three described the contract to the LLM differently from the
+     * fourth: "Required for attackMode exact" versus "Required <b>only</b> for attackMode exact". The model
+     * chooses arguments from this text, so a divergence is a behavioural difference, not a wording preference —
+     * and {@link #attackScenarioArg} rejects a non-empty {@code attackPoints} for every mode except
+     * {@code exact}, so "only" was accurate and the other three understated it.
+     *
+     * <p>{@code allowExhaustive} must match what the caller passes to {@link #attackScenarioArg}. Simulation
+     * passes {@code false} and offers only {@code none}/{@code exact}, so naming {@code exhaustive} in its
+     * description would document a mode it rejects — which is the same class of mistake as the divergence this
+     * consolidation fixed, just introduced from the other side.
+     */
+    protected static Map<String, Object> attackPointsSchema(boolean allowExhaustive) {
+        String forbidden = allowExhaustive ? "none and exhaustive" : "none";
+        return Map.of(
+                "type", "array",
+                "description", "Required only for attackMode exact; must be omitted or empty for " + forbidden
+                        + ". Device ids use the canonical ids returned by board_overview and are normalized at "
+                        + "the model boundary; automation links use persisted rule ids.",
+                "items", Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
+                                "deviceId", Map.of("type", "string"),
+                                "ruleId", Map.of("type", "integer")),
+                        "required", List.of("kind"),
+                        "additionalProperties", false));
+    }
+
+    /** How much of a task's error message the AI tools echo back before truncating. */
+    protected static final int ERROR_PREVIEW_LIMIT = 1_000;
+
+    /**
+     * Truncate a task error message for a tool response.
+     *
+     * <p>The three dismiss tools (fuzz, simulate, verify) each carried a byte-identical copy of this method and
+     * of {@code ERROR_PREVIEW_LIMIT}. They agreed, but the model reads these strings: had one drifted, the same
+     * failure would have been summarised at two different lengths depending on which run kind the user dismissed,
+     * and nothing in the suite compares them.
+     *
+     * <p>Returns {@code null} unchanged — a task with no error message must not become the string "null".
+     */
+    protected static String errorPreview(String errorMessage) {
+        if (errorMessage == null || errorMessage.length() <= ERROR_PREVIEW_LIMIT) {
+            return errorMessage;
+        }
+        return errorMessage.substring(0, ERROR_PREVIEW_LIMIT - 3) + "...";
+    }
+
+    /**
+     * The JSON schema for the {@code attackBudget} argument, described once.
+     *
+     * <p>Only the two verification tools accept it (simulation rejects {@code exhaustive}), and they described it
+     * differently: one stated "Omit it for none or exact", the other omitted that sentence — while
+     * {@link #attackScenarioArg} rejects a non-zero budget for both of those modes on either path. The tool that
+     * left the rule out invited the model to send an argument that would be refused.
+     */
+    protected static Map<String, Object> attackBudgetSchema() {
+        return Map.of(
+                "type", "integer",
+                "description", "Upper bound from 1 to 50 for attackMode exhaustive. Omit it, or send 0, for "
+                        + "none and exact.");
+    }
+
     protected final AttackScenarioDto attackScenarioArg(JsonNode args,
                                                         boolean allowExhaustive)
             throws ArgValidationException {

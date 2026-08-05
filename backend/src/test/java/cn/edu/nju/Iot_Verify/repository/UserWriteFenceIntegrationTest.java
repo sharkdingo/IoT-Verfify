@@ -257,7 +257,7 @@ class UserWriteFenceIntegrationTest {
                 new ObjectMapper().registerModule(new JavaTimeModule()));
         return new BoardStorageServiceImpl(
                 nodes, environment, null, null, null, templates, null,
-                new TransactionTemplate(transactionManager), null, null,
+                new TransactionTemplate(transactionManager), null,
                 new SpecificationMapper(), new RuleMapper(), new DeviceNodeMapper(), null,
                 new DeviceTemplateMapper(), null, userRepository, editJournal);
     }

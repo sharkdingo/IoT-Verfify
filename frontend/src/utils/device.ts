@@ -4,6 +4,7 @@ import type {
 } from '../types/device'
 import type { DeviceNode } from '../types/node'
 import { REQUEST_LIMITS } from '../constants/requestLimits'
+import { PRIVACY_VALUE_SET, TRUST_VALUE_SET } from './deviceRuntime'
 
 // --- 图标与路径 ---
 
@@ -334,8 +335,8 @@ export const validateManifest = (obj: any): ManifestValidationResult => {
     const hasModes = Array.isArray(obj.Modes) && obj.Modes.length > 0
     const hasInitState = typeof obj.InitState === 'string' && obj.InitState.trim() !== ''
     const hasWorkingStates = Array.isArray(obj.WorkingStates) && obj.WorkingStates.length > 0
-    const validTrust = (value: unknown) => ['trusted', 'untrusted'].includes(String(value || '').trim().toLowerCase())
-    const validPrivacy = (value: unknown) => ['public', 'private'].includes(String(value || '').trim().toLowerCase())
+    const validTrust = (value: unknown) => TRUST_VALUE_SET.has(String(value || '').trim().toLowerCase())
+    const validPrivacy = (value: unknown) => PRIVACY_VALUE_SET.has(String(value || '').trim().toLowerCase())
 
     if (hasModes || hasInitState || hasWorkingStates) {
         if (!hasModes) return invalidManifest(

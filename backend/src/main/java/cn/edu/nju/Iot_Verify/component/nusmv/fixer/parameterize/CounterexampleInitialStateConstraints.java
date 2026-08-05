@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Locale;
 
 /** Builds validated candidate-only INIT constraints from a persisted counterexample snapshot. */
 public final class CounterexampleInitialStateConstraints {
@@ -325,7 +326,7 @@ public final class CounterexampleInitialStateConstraints {
     }
 
     private static String trustLiteral(String raw) {
-        String value = raw.trim().toLowerCase();
+        String value = raw.trim().toLowerCase(Locale.ROOT);
         if (!"trusted".equals(value) && !"untrusted".equals(value)) {
             throw invalid("trace trust value is invalid");
         }
@@ -333,7 +334,7 @@ public final class CounterexampleInitialStateConstraints {
     }
 
     private static String privacyLiteral(String raw) {
-        String value = raw.trim().toLowerCase();
+        String value = raw.trim().toLowerCase(Locale.ROOT);
         if (!"public".equals(value) && !"private".equals(value)) {
             throw invalid("trace privacy value is invalid");
         }

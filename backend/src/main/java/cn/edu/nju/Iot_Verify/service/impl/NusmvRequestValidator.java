@@ -124,6 +124,7 @@ final class NusmvRequestValidator {
             String varName = smv != null && hasText(smv.getVarName()) ? smv.getVarName() : device.getVarName();
             registerMainIdentifier(errors, identifiers, varName, "devices[" + i + "].varName",
                     "device instance '" + varName + "'");
+            rejectFixGeneratedPrefix(errors, varName, "devices[" + i + "].varName");
         }
 
         Map<String, DeviceManifest.InternalVariable> requiredEnvironmentVariables =
@@ -162,6 +163,34 @@ final class NusmvRequestValidator {
                 "Attack modeling would not change this model: the scene has no automation command-delivery "
                         + "links and no device reading marked FalsifiableWhenCompromised. Disable attack modeling, "
                         + "or add an applicable rule or explicitly falsifiable sensor/received-data variable.");
+    }
+
+    /*
+     * A device may not take a name the automatic fixer will mint.
+     *
+     * The other generated identifiers are namespaced (`iot_verify_…`) so user input cannot reach them. The fix
+     * strategies' `param_` / `lambda_` / `condition_value_` are not, and `param_` cannot be renamed — it is the
+     * wire format for `PreferredRangeSelection.targetId`, validated by a `@Pattern` on the DTO and by
+     * `^param_[A-Za-z0-9_-]{24}$` in the frontend's `fixResponse.ts`.
+     *
+     * So the collision was real and reachable: a device named `condition_value_r0_c1` is accepted by
+     * `/api/board/nodes` (verified against the running API), saves, and verifies — then `SmvMainModuleBuilder`
+     * throws when the user asks for a fix, which is correct but arrives long after the mistake was made and
+     * blames a surface the user was not editing. Rejecting the name here says it at the moment it is chosen.
+     */
+    private static void rejectFixGeneratedPrefix(Map<String, String> errors, String varName, String field) {
+        if (!hasText(varName)) {
+            return;
+        }
+        String normalized = varName.trim().toLowerCase(Locale.ROOT);
+        for (String prefix : SmvConstants.FIX_GENERATED_NAME_PREFIXES) {
+            if (normalized.startsWith(prefix)) {
+                putError(errors, field,
+                        "Device name '" + varName + "' starts with '" + prefix + "', which the automatic-fix "
+                                + "generator reserves for its own variables. Rename the device.");
+                return;
+            }
+        }
     }
 
     private static void registerMainIdentifier(Map<String, String> errors,
@@ -822,7 +851,10 @@ final class NusmvRequestValidator {
             putError(errors, field, "Condition targetType is required");
             return;
         }
-        String normalized = targetType.trim().toLowerCase();
+        // `Locale.ROOT`, per the rule documented on `SmvSpecificationBuilder.normalizeSpecTargetType`: a Turkish
+        // default locale maps `I` to `ı`, so `"API"` would lowercase to `"apı"` and match no keyword here — a
+        // valid condition rejected as invalid, depending on the server's locale.
+        String normalized = targetType.trim().toLowerCase(Locale.ROOT);
         if (!List.of("api", "variable", "mode", "state").contains(normalized)) {
             putError(errors, field, "Condition targetType must be one of api, variable, mode, state");
         }
@@ -856,7 +888,10 @@ final class NusmvRequestValidator {
             putError(errors, field, "Target type is required for spec condition");
             return;
         }
-        String normalized = targetType.trim().toLowerCase();
+        // `Locale.ROOT`, per the rule documented on `SmvSpecificationBuilder.normalizeSpecTargetType`: a Turkish
+        // default locale maps `I` to `ı`, so `"API"` would lowercase to `"apı"` and match no keyword here — a
+        // valid condition rejected as invalid, depending on the server's locale.
+        String normalized = targetType.trim().toLowerCase(Locale.ROOT);
         if (!List.of("state", "mode", "variable", "api", "trust", "privacy").contains(normalized)) {
             putError(errors, field, "targetType must be one of: state, mode, variable, api, trust, privacy");
         }

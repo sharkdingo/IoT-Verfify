@@ -2,6 +2,10 @@ package cn.edu.nju.Iot_Verify.configure;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+
+import java.util.Locale;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -44,6 +48,37 @@ class ProductionSafetyCheckTest {
                 "sk-live-value");
 
         assertDoesNotThrow(check::check);
+    }
+
+    /*
+     * The production decision must not depend on the server's default locale.
+     *
+     * A bare `toLowerCase()` folds `PRODUCTION` to `productıon` on a Turkish-locale JVM, matching neither profile
+     * name — so this class's fail-fast check would not fire and the app would boot with default JWT_SECRET,
+     * DB_PASSWORD and API key. `prod` was unaffected, so only the long form was exposed, which is why nothing
+     * noticed. Asserted here by actually swapping the JVM default locale, because pinning `Locale.ROOT` in the
+     * source is the fix and this is the only test that would fail if someone removed it.
+     */
+    @Test
+    void isProductionProfile_holdsUnderATurkishDefaultLocale() {
+        Locale original = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr"));
+            assertTrue(ProductionSafetyCheck.isProductionProfile(environment("PRODUCTION")),
+                    "an uppercase PRODUCTION profile must still be recognized in a Turkish locale");
+            assertTrue(ProductionSafetyCheck.isProductionProfile(environment("PROD")));
+            assertFalse(ProductionSafetyCheck.isProductionProfile(environment("dev")));
+            assertFalse(ProductionSafetyCheck.isProductionProfile(environment()));
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+
+    @Test
+    void isProductionProfile_toleratesAbsentEnvironment() {
+        // JwtUtil calls this during @PostConstruct; a null Environment must read as "not production" rather
+        // than throwing, so a missing context cannot turn into a startup failure.
+        assertFalse(ProductionSafetyCheck.isProductionProfile(null));
     }
 
     private static MockEnvironment environment(String... profiles) {

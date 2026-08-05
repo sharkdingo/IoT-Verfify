@@ -195,7 +195,7 @@ public class FixViolationTool extends AbstractAiTool {
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("traceId", result.getTraceId());
             summary.put("fixable", result.isFixable());
-            summary.put("sourceModelComplete", result.getSourceModelComplete());
+            summary.put("sourceModelComplete", result.isSourceModelComplete());
             summary.put("sourceDisabledRuleCount", result.getSourceDisabledRuleCount());
             summary.put("sourceSkippedSpecCount", result.getSourceSkippedSpecCount());
             summary.put("sourceGenerationIssues", result.getSourceGenerationIssues() != null

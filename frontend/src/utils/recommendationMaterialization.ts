@@ -6,12 +6,11 @@ import type {
 import type { RuleForm, RuleSourceItemType } from '@/types/rule'
 import type { SpecCondition } from '@/types/spec'
 import { normalizeModelRelation } from '@/utils/modelRequest'
+import { PRIVACY_VALUE_SET, TRUST_VALUE_SET } from '@/utils/deviceRuntime'
 
 const RULE_TARGET_TYPES = new Set<RuleSourceItemType>(['api', 'variable', 'mode', 'state'])
 const VALUE_RULE_TARGET_TYPES = new Set<RuleSourceItemType>(['variable', 'mode', 'state'])
 const SPEC_TARGET_TYPES = new Set(['api', 'variable', 'mode', 'state', 'trust', 'privacy'])
-const TRUST_VALUES = new Set(['trusted', 'untrusted'])
-const PRIVACY_VALUES = new Set(['public', 'private'])
 const RELATIONS = new Set(['=', '!=', '>', '>=', '<', '<=', 'in', 'not in'])
 const ENUM_RELATIONS = new Set(['=', '!=', 'in', 'not in'])
 
@@ -176,12 +175,12 @@ export const validateDeviceRecommendationCandidate = (value: unknown, index: num
   }
   if (Object.prototype.hasOwnProperty.call(candidate, 'currentStateTrust')
       && (typeof candidate.currentStateTrust !== 'string'
-        || !TRUST_VALUES.has(candidate.currentStateTrust))) {
+        || !TRUST_VALUE_SET.has(candidate.currentStateTrust))) {
     throw new RecommendationCandidateError(`${prefix}.currentStateTrust`)
   }
   if (Object.prototype.hasOwnProperty.call(candidate, 'currentStatePrivacy')
       && (typeof candidate.currentStatePrivacy !== 'string'
-        || !PRIVACY_VALUES.has(candidate.currentStatePrivacy))) {
+        || !PRIVACY_VALUE_SET.has(candidate.currentStatePrivacy))) {
     throw new RecommendationCandidateError(`${prefix}.currentStatePrivacy`)
   }
 
@@ -198,7 +197,7 @@ export const validateDeviceRecommendationCandidate = (value: unknown, index: num
       if (names.has(name)) throw new RecommendationCandidateError(`${itemPrefix}.name`)
       names.add(name)
       if (Object.prototype.hasOwnProperty.call(variable, 'trust')
-          && (typeof variable.trust !== 'string' || !TRUST_VALUES.has(variable.trust))) {
+          && (typeof variable.trust !== 'string' || !TRUST_VALUE_SET.has(variable.trust))) {
         throw new RecommendationCandidateError(`${itemPrefix}.trust`)
       }
     })
@@ -215,7 +214,7 @@ export const validateDeviceRecommendationCandidate = (value: unknown, index: num
       const name = text(privacy.name, `${itemPrefix}.name`)
       if (names.has(name)) throw new RecommendationCandidateError(`${itemPrefix}.name`)
       names.add(name)
-      if (typeof privacy.privacy !== 'string' || !PRIVACY_VALUES.has(privacy.privacy)) {
+      if (typeof privacy.privacy !== 'string' || !PRIVACY_VALUE_SET.has(privacy.privacy)) {
         throw new RecommendationCandidateError(`${itemPrefix}.privacy`)
       }
     })

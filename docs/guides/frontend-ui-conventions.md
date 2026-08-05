@@ -317,3 +317,76 @@ light theme; `dark:text-slate-400` is correct on a dark card, where the same val
 
 Pinned by `styles/__tests__/neutralTextContrast.spec.ts` and
 `styles/__tests__/semanticColourOwnership.spec.ts`.
+
+## 6. Text size: the floor is not the target, and headings need a tier
+
+`--iot-font-min` (0.6875rem = 11px) is the smallest size any interface text may be declared at, enforced by
+`styles/__tests__/typographyFloor.spec.ts`. Two things that rule does *not* say, both of which produced real
+defects:
+
+- **A heading sized just above the floor is not a heading.** The action dock's "Board tools" was `0.72rem` at
+  weight 800 against `--iot-font-min`/700 group labels *beneath* it — 0.52px of difference at a heavier
+  weight, so two levels of heading rendered as one and a reader saw three rows of small uppercase text with
+  nothing marking which named the panel. It passed `typographyFloor` (11.52px over an 11px floor) throughout.
+  A panel heading uses `0.875rem` (the tier the side-panel titles use); its subheadings use the 11px floor.
+  Leave at least 2px between two levels that appear together.
+- **Pick a step on the scale, not a nearby number.** `0.72rem` and `0.78rem` each appeared at multiple sites
+  and matched nothing else in the product, sitting a fraction of a pixel from `0.75rem`, which twelve other
+  board labels already use. A bespoke value costs a reader the ability to tell two levels apart and costs the
+  next contributor a decision that was already made.
+- **`text-transform: uppercase` makes text read smaller than it measures.** It costs roughly 15% of apparent
+  x-height and removes word shape, so it is a poor choice for anything already near the floor, and for a
+  four-character label it is most of why the label looks too small. Reserve it for the smallest
+  section labels, where the loss of word shape is the point (they are scanned, not read).
+
+Pinned by `views/board/actionDockHierarchy.spec.ts` for the dock, which is where the tier inversion was.
+
+## 7. Depth is a scale, and it means containment
+
+Elevation says *what kind of thing* something is, the same way the radius scale does. Three steps, and one
+distance means one thing:
+
+| Token | Means |
+| :--- | :--- |
+| `--shadow-raised` | a control lifting off the surface it sits on |
+| `--shadow-floating` | a transient chip, popover, or canvas node above content |
+| `--shadow-elevated` | a panel floating above the page |
+
+`--shadow-elevated` used to be the only token, so anything needing a different depth wrote its own literal —
+eight distinct neutral elevations in the board alone, no two agreeing. Three rules follow:
+
+- **Never hand-write a neutral elevation.** A literal `rgba(15, 23, 42, …)` shadow does not follow the theme,
+  and the dark theme's token is both deeper and more opaque for a real reason: a shadow works by darkening its
+  ground, and a near-black ground has almost no headroom left, so the light theme's alphas vanish on it.
+- **Pick the step that describes the thing.** The dock's hover tooltip carried `--shadow-elevated`, an
+  18px/42px panel lift, on a two-line hover chip — so hovering a dock button dropped a panel-sized shadow
+  across the canvas. That is not a matter of taste; the depth was making a false claim about the element.
+- **Hover raises one step. It does not change hue, ground, or edge.** The canvas node used to swap its resting
+  hairline (a dark line at 12% of `--text`) for `rgba(255, 255, 255, 0.72)` on hover, which inverted the edge
+  from dark to white in light theme and drew a bright outline on a navy node in dark. A colour change dressed
+  as a depth change reads as a glitch rather than a lift. Likewise, a control inside an already-elevated panel
+  should not carry its own lift: emphasis between tiers is the fill and the border (§4), not depth — the
+  verification button's stray `shadow-lg` made one of eight dock buttons float above the strip it belongs to.
+
+One more thing that is depth-adjacent and caused the same "why is some white and some not" reaction: **two
+tiers that mean the same thing sit on the same ground.** Run History and the four AI suggestions are both
+"not the primary action", yet sat on `--board-control-bg` and `--board-card-bg` respectively, four rows apart
+in one strip. A background change down a vertical list implies a *category* change. When you do move a
+control's ground, re-measure its border — the 3:1 component minimum is against the ground, so changing the
+ground invalidates the old measurement.
+
+- **Three steps means three, not "three plus whatever else exists."** Two more elevation tokens had grown
+  alongside `--shadow-elevated`, and both carried the same bug — which is what a fourth owner buys you.
+  `--iot-node-shadow` and `--iot-color-card-shadow` were declared as `rgba(15, 23, 42, 0.9)` in dark theme: the
+  *light* palette's navy at 90% opacity, where every dark shadow is `rgba(2, 6, 23, …)`. The node one was worse
+  than a wrong colour — the node's resting rule used the scale while its four state rules (focus, focused,
+  trace-active, trace-changed) used that token, so highlighting a node silently changed its base depth on top
+  of adding the ring. A state should add to a depth, not replace it.
+- **An edge-attached bar is not a floating panel.** The board nav is full width, flush to the top, and already
+  has a bottom border marking the boundary; a panel lift under something with nowhere to float *to* reads as a
+  heavy smear across the viewport. All its shadow has to say is "content scrolls under this."
+
+Pinned by `styles/__tests__/elevationScale.spec.ts`, which covers `base.css` and `board.css`. **Twenty
+hand-written elevations remain outside the board** (`ChatView`, `Landing`, `PublicHeader`, the two toggles,
+`ToggleSwitch`, `AccountDeleteDialog`, and the `ControlCenter`/`CanvasBoard` scoped blocks). They are the same
+defect; each needs its depth chosen and then measured on its own surface.

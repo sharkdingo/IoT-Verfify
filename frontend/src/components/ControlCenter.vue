@@ -50,6 +50,7 @@ import { deviceLabelKey, reserveUniqueDeviceLabel } from '@/utils/canvas/nodeCre
 import { localizedErrorMessage } from '@/utils/userMessage'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
+import { COLLAPSED_PANEL_RAIL_CSS } from '@/constants/boardLayout'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { notifyBlocked, notifyError, notifySuccess } from '@/utils/feedback'
 import { useRovingTablist } from '@/composables/useRovingTablist'
@@ -85,9 +86,6 @@ const localizedTargetTypes = computed(() =>
 interface Props {
   deviceTemplates?: any[]
   nodes?: any[]
-  edges?: any[]
-  canvasPan?: { x: number; y: number }
-  canvasZoom?: number
   collapsed?: boolean
   width?: number
   activeSection?: string
@@ -100,9 +98,6 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   deviceTemplates: () => [],
   nodes: () => [],
-  edges: () => [],
-  canvasPan: () => ({ x: 0, y: 0 }),
-  canvasZoom: 1,
   width: 320,
   templatesLoading: false,
   readOnly: false
@@ -162,13 +157,6 @@ const emit = defineEmits<{
   }]
   'edit-history-cleared': []
   'authoritative-state-unavailable': [keys: Array<'templates' | 'environment'>]
-  'verify': []
-  'simulate': [data: {
-    steps: number
-    isAttack: boolean
-    attackBudget: number
-    enablePrivacy: boolean
-  }]
   'update:collapsed': [value: boolean]
   'update:active-section': [value: ControlCenterSection]
 }>()
@@ -2322,16 +2310,14 @@ watch(() => props.readOnly, readOnly => {
 </script>
 
 <template>
-  <!-- Collapsed width is 3.5rem, matching SystemInspector and COLLAPSED_PANEL_RAIL_WIDTH in Board.vue.
-       It was 4rem while the opposite rail was 3rem — a 16px mismatch between two rails that each hold exactly one
-       44x44 Expand button, so identical content rendered at different widths on either side of the canvas. See the
-       note in SystemInspector for why that matters during replay. -->
+  <!-- Collapsed width comes from COLLAPSED_PANEL_RAIL_CSS — see the note in SystemInspector, and the
+       rationale on the constant itself. -->
   <aside
     v-bind="attrs"
     data-testid="control-center"
     class="absolute left-0 top-0 bottom-0 modern-panel board-side-panel z-40 flex flex-col overflow-hidden border-r border-white/20 shadow-xl transition-all duration-300 ease-in-out"
     :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"
-    :style="{ width: isCollapsed ? '3.5rem' : panelWidth }"
+    :style="{ width: isCollapsed ? COLLAPSED_PANEL_RAIL_CSS : panelWidth }"
   >
     <!-- 顶部标题区域 -->
     <div
@@ -2745,7 +2731,10 @@ watch(() => props.readOnly, readOnly => {
               />
             </div>
             <div class="flex items-center justify-between gap-2">
- <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-[color:var(--accent-border)] px-2.5 py-1.5 text-[length:var(--iot-font-min)] font-bold board-text-accent transition-colors hover:board-chip-accent">
+              <!-- `hover:board-chip-accent` was a Tailwind variant applied to a hand-written class, which
+                   Tailwind cannot generate — the hover had no effect at all. `board-file-trigger` owns both
+                   states in CSS instead. -->
+              <label class="board-file-trigger inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[length:var(--iot-font-min)] font-bold transition-colors">
                 <input data-testid="device-import-file" type="file" accept=".json,.csv,.txt" class="hidden" @change="handleDeviceImportFile">
                 <span class="material-symbols-outlined text-xs">upload_file</span>
                 {{ t('app.chooseFile') }}
@@ -2877,7 +2866,7 @@ watch(() => props.readOnly, readOnly => {
           </summary>
 
           <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
-            <div class="rounded-lg border border-[color:var(--warning-border)] board-chip-warning/70 px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-relaxed board-text-warning">
+            <div class="rounded-lg border border-[color:var(--warning-border)] board-chip-warning px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-relaxed board-text-warning">
               {{ t('app.dragTemplateToCanvasHint') }}
             </div>
 
@@ -2935,7 +2924,7 @@ watch(() => props.readOnly, readOnly => {
 
             <div
               v-if="props.templatesLoading"
-              class="rounded-xl border border-dashed border-[color:var(--warning-border)] board-chip-warning/60 px-3 py-6 text-center text-xs board-text-warning"
+              class="rounded-xl border border-dashed border-[color:var(--warning-border)] board-chip-warning px-3 py-6 text-center text-xs board-text-warning"
             >
               <span class="material-symbols-outlined mb-2 block animate-spin text-2xl">sync</span>
               <p class="font-semibold">{{ t('app.loadingDeviceTemplates') }}</p>
@@ -4001,9 +3990,9 @@ watch(() => props.readOnly, readOnly => {
             <div>
               <strong>{{ blocker.itemLabel }}</strong>: {{ defaultTemplateResetBlockerReason(blocker.reasonCode) }}
             </div>
-            <details class="mt-1 text-[11px] board-text-danger/80">
+            <details class="mt-1 text-[11px] board-text-danger">
               <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
-              <code class="mt-1 block whitespace-pre-wrap break-words rounded board-chip-danger/70 px-2 py-1">{{ blocker.reason }}</code>
+              <code class="mt-1 block whitespace-pre-wrap break-words rounded board-chip-danger px-2 py-1">{{ blocker.reason }}</code>
             </details>
           </div>
         </div>
@@ -4247,9 +4236,16 @@ details > summary::-webkit-details-marker {
   color: var(--board-text);
 }
 
+/*
+ * This box neutralises the Tailwind slate utilities its markup still carries, so its text follows the theme.
+ * `span` is deliberately broad — but it also matched the one span that asks for a *role* colour, and because
+ * this rule is scoped (`[data-v-…]`) it outranked the global `.iot-board .board-text-accent`, so the accent
+ * icon rendered `rgb(148,163,184)` instead of the accent. Measured with CDP matched-styles; a global rule
+ * could not have won this, and appending an identical rule last did not either.
+ */
 .device-runtime-box summary,
 .device-runtime-box p,
-.device-runtime-box span {
+.device-runtime-box span:not(.board-text-accent) {
   color: inherit;
 }
 

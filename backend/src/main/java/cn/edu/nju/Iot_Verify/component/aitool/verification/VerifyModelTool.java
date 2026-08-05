@@ -58,11 +58,8 @@ public class VerifyModelTool extends AbstractAiTool {
         props.put("attackMode", Map.of(
                 "type", "string", "enum", List.of("none", "exact", "exhaustive"),
                 "description", "Per-run attack selection: none, exact user-selected points, or exhaustive verification of every combination up to attackBudget. Default none."));
-        props.put("attackBudget", Map.of(
-                "type", "integer",
-                "description", "Upper bound from 1 to 50 for attackMode exhaustive. Omit it for none or exact."
-        ));
-        props.put("attackPoints", attackPointsSchema());
+        props.put("attackBudget", attackBudgetSchema());
+        props.put("attackPoints", attackPointsSchema(true));
         props.put("enablePrivacy", Map.of(
                 "type", "boolean",
                 "description", "Track public/private sensitivity labels through automation chains. Privacy conditions force this on even when false. This models label propagation, not access control or encryption. Default false."
@@ -187,20 +184,6 @@ public class VerifyModelTool extends AbstractAiTool {
             log.error("verify_model failed", e);
             return errorJson("Verification failed.", "INTERNAL_ERROR", 500);
         }
-    }
-
-    private Map<String, Object> attackPointsSchema() {
-        return Map.of(
-                "type", "array",
-                "description", "Required only for attackMode exact. Device ids use the canonical ids returned by board_overview and are normalized at the model boundary; automation links use persisted rule ids.",
-                "items", Map.of(
-                        "type", "object",
-                        "properties", Map.of(
-                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
-                                "deviceId", Map.of("type", "string"),
-                                "ruleId", Map.of("type", "integer")),
-                        "required", List.of("kind"),
-                        "additionalProperties", false));
     }
 
     private int countFailedSpecs(VerificationResultDto result) {

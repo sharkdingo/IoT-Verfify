@@ -1311,4 +1311,59 @@ class DeviceTemplateSchemaValidatorTest {
             validator.validateRawManifest("Explicit", manifest);
         }
     }
+
+    /*
+     * The schema is the authoritative gate for manifest collection sizes, and this test exists to record that.
+     *
+     * A dead-code audit reported the ten `RequestLimits.MAX_TEMPLATE_*` constants as "declared and never
+     * referenced", concluding the manifest collections were unbounded on an authenticated write path. I acted on
+     * it and added `@Size` to `DeviceTemplateDto` — which was wrong twice over: the endpoint takes a raw
+     * `JsonNode` and calls `validateRawManifest` *before* converting to the DTO, so Bean Validation never sees a
+     * manifest, and the schema already carried every one of those bounds as `maxItems`. The schema's own
+     * `$comment` says so. Verified live afterwards: a 21-mode template is rejected 400 with
+     * "$.Modes: at most 20 items, found 21".
+     *
+     * So an unreferenced constant is not automatically dead — this one documents the Java-side value of a limit
+     * whose mechanism lives in another language. The check below makes the *mechanism* visible to anyone who
+     * grep-audits those constants next time.
+     */
+    @Test
+    void schemaRejectsAManifestExceedingAModeCap() throws Exception {
+        StringBuilder modes = new StringBuilder();
+        for (int index = 0; index <= cn.edu.nju.Iot_Verify.dto.RequestLimits.MAX_TEMPLATE_MODES; index++) {
+            if (index > 0) modes.append(", ");
+            modes.append('"').append('m').append(index).append('"');
+        }
+        JsonNode manifest = objectMapper.readTree("""
+                {
+                  "Name": "OverCap",
+                  "Description": "probe",
+                  "Modes": [%s],
+                  "InitState": "m0",
+                  "WorkingStates": []
+                }
+                """.formatted(modes));
+
+        BadRequestException failure = assertThrows(BadRequestException.class,
+                () -> validator.validateRawManifest("OverCap", manifest));
+        // The message must name the field and the bound; a user who hits this has to know what to shorten.
+        assertTrue(failure.getMessage().contains("Modes"),
+                "the rejection should name the offending field: " + failure.getMessage());
+    }
+
+    @Test
+    void schemaBoundsEveryCollectionThatRequestLimitsDeclares() throws Exception {
+        // Guards the inverse of the audit's mistake: a `MAX_TEMPLATE_*` constant whose schema `maxItems` was
+        // dropped would leave a documented limit with no mechanism at all, which is the defect the audit
+        // *thought* it had found.
+        JsonNode schema = objectMapper.readTree(Path.of("device-template-schema.json").toFile());
+        for (String field : List.of("Modes", "WorkingStates", "InternalVariables", "ImpactedVariables",
+                "Transitions", "APIs", "Contents")) {
+            JsonNode node = schema.path("properties").path(field);
+            assertTrue(node.has("maxItems"), field + " should carry a maxItems bound in the schema");
+        }
+        assertEquals(cn.edu.nju.Iot_Verify.dto.RequestLimits.MAX_TEMPLATE_MODES,
+                schema.path("properties").path("Modes").path("maxItems").asInt(),
+                "the schema bound and RequestLimits should agree on Modes");
+    }
 }

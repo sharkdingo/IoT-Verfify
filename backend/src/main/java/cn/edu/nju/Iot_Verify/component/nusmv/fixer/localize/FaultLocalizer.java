@@ -141,7 +141,7 @@ public class FaultLocalizer {
                 String secondLabel = describeEndState(smv, secondEndState);
                 first.setConflicting(true);
                 first.setConflictWithRuleIndex(second.getRuleIndex());
-                first.setConflictingRuleString(secondDescription);
+                first.setConflictingRuleString(rulePreview(rules, second.getRuleIndex()));
                 first.setConflictingEndState(secondLabel);
                 first.setReasonCode("CONFLICTING_END_STATES");
                 first.setReason("Conflicts with " + secondDescription
@@ -151,7 +151,7 @@ public class FaultLocalizer {
 
                 second.setConflicting(true);
                 second.setConflictWithRuleIndex(first.getRuleIndex());
-                second.setConflictingRuleString(firstDescription);
+                second.setConflictingRuleString(rulePreview(rules, first.getRuleIndex()));
                 second.setConflictingEndState(firstLabel);
                 second.setReasonCode("CONFLICTING_END_STATES");
                 second.setReason("Conflicts with " + firstDescription
@@ -223,6 +223,27 @@ public class FaultLocalizer {
         return DeviceSmvDataFactory.cleanStateName(targets[modeIndex]);
     }
 
+    /**
+     * A rule's own preview text, or null when it has none.
+     *
+     * Split from {@link #describeRule} because one value cannot serve both consumers. {@code describeRule} builds
+     * English prose for {@code reason} — a diagnostic, where English is fine — and quotes the text as
+     * {@code 'like this'}. {@code conflictingRuleString} is different: the client interpolates it into an
+     * already-translated sentence, so the quotes came out doubled (与"'When motion…'"冲突) and the English
+     * "another localized rule" fallback appeared inside Chinese copy. Sending the raw value or null lets the
+     * client quote and localise it, the same division of labour as {@code ruleString}.
+     */
+    private String rulePreview(List<RuleDto> rules, int ruleIndex) {
+        if (ruleIndex >= 0 && ruleIndex < rules.size()) {
+            RuleDto rule = rules.get(ruleIndex);
+            if (rule != null && rule.getRuleString() != null && !rule.getRuleString().isBlank()) {
+                return rule.getRuleString();
+            }
+        }
+        return null;
+    }
+
+    /** English prose for the {@code reason} diagnostic; quotes the preview and names an unlabelled rule. */
     private String describeRule(List<RuleDto> rules, int ruleIndex) {
         if (ruleIndex >= 0 && ruleIndex < rules.size()) {
             RuleDto rule = rules.get(ruleIndex);
@@ -254,4 +275,5 @@ public class FaultLocalizer {
         }
         return DeviceReferenceResolver.resolve(deviceName, deviceSmvMap);
     }
+
 }

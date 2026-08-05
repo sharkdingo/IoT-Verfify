@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from 'vue'
+import { COLLAPSED_PANEL_RAIL_CSS } from '@/constants/boardLayout'
 import type { DeviceNode } from '../types/node'
 import type { DeviceTemplate, InternalVariable, WorkingState } from '../types/device'
 import type {
@@ -16,6 +17,7 @@ import {
   naturalChangeCandidateValues,
   resolveImpactEnvironmentDefinition
 } from '@/utils/device'
+import { getTemplateVariableDefaultValue } from '@/utils/deviceRuntime'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { hasModeledStateMachine, resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
@@ -117,7 +119,6 @@ const emit = defineEmits<{
   'open-rule-builder': []
   'open-control-section': [section: 'devices' | 'rules' | 'specs']
   'device-click': [deviceId: string]
-  'toggle-rule': [ruleId: string, enabled: boolean]
   'save-environment': [variables: EnvironmentVariableUpdateRequest[]]
   'update:collapsed': [value: boolean]
   'update:active-section': [value: InspectorSection]
@@ -237,15 +238,10 @@ const getVariableRange = (variable: InternalVariable) => {
 const uniqueNonEmpty = (values: Array<string | undefined>) =>
   Array.from(new Set(values.map(value => String(value || '').trim()).filter(Boolean)))
 
-const defaultEnvironmentValue = (variable: InternalVariable) => {
-  if (Array.isArray(variable.Values) && variable.Values.length > 0) {
-    return String(variable.Values[0] || '')
-  }
-  if (variable.LowerBound !== undefined && variable.LowerBound !== null) {
-    return String(variable.LowerBound)
-  }
-  return ''
-}
+/* The fourth copy of this rule lived here, and it carried the same single-bound laxity the schema forbids.
+   `getTemplateVariableDefaultValue` in `utils/deviceRuntime.ts` is the owner — see the note there. */
+const defaultEnvironmentValue = (variable: InternalVariable) =>
+  getTemplateVariableDefaultValue(variable)
 
 const normalizeTrust = (value?: string | null) =>
   value === 'trusted' ? 'trusted' : 'untrusted'
@@ -822,17 +818,16 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
 </script>
 
 <template>
-  <!-- Collapsed width is 3.5rem, matching ControlCenter and COLLAPSED_PANEL_RAIL_WIDTH in Board.vue.
-       It was 3rem while the opposite rail was 4rem — a 16px mismatch between two rails that each hold exactly one
-       44x44 Expand button, so identical content rendered at different widths on either side of the canvas. That
-       reads as accidental, and during replay it is what makes a focused view look evacuated rather than composed.
-       3.5rem also gives that 44px target a symmetric 6px inset rather than 3rem's cramped 2px. -->
+  <!-- Collapsed width comes from COLLAPSED_PANEL_RAIL_CSS, the same constant ControlCenter and Board.vue's
+       canvas-fit math read. It was a `3.5rem` literal in each of the two panels plus a `56` in Board.vue,
+       agreeing only by way of comments pointing at each other — and the CSS token that shared the job had
+       already drifted to 48px, which is what the rationale in the constant records. -->
   <aside
     data-testid="system-inspector"
     class="absolute right-0 top-0 bottom-0 glass-panel board-side-panel z-40 flex flex-col overflow-hidden border-l transition-all duration-300 ease-in-out"
     :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"
     :aria-disabled="props.readOnly ? 'true' : undefined"
-    :style="{ width: isCollapsed ? '3.5rem' : panelWidth }"
+    :style="{ width: isCollapsed ? COLLAPSED_PANEL_RAIL_CSS : panelWidth }"
     @pointerover="syncFullTextTitle"
     @focusin="syncFullTextTitle"
   >
@@ -851,7 +846,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           >
             <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
           </button>
-          <div class="p-2 board-chip-info rounded-lg border board-border-subtle/50 shadow-sm">
+          <div class="p-2 board-chip-info rounded-lg border board-border-subtle shadow-sm">
             <span class="material-symbols-outlined board-text-info">fact_check</span>
           </div>
           <div class="min-w-0">
@@ -1559,8 +1554,6 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             class="p-3 rounded-lg border board-border-subtle relative transition-all hover:shadow-md bg-white group"
             :class="spec.id === props.focusedSpecId ? 'ring-2 ring-[color:var(--accent-border)] board-border-subtle shadow-md' : ''"
           >
-            <!-- Subtle background pulse -->
-            <div class="absolute inset-0 board-chip-info/30 pointer-events-none"></div>
 
             <div class="relative flex items-start justify-between mb-2">
               <div class="flex min-w-0 items-center gap-2">

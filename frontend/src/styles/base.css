@@ -78,6 +78,23 @@
     --border-strong: #cbd5e1;
     --field-bg: #ffffff;
     --field-border: #cbd5e1;
+    /* ===== Elevation, as a scale =====
+     * Depth is a containment cue like the radius scale: how far something floats says what kind of thing it
+     * is. That only holds while one distance means one thing.
+     *
+     * `--shadow-elevated` was the only token, so anything needing a *different* depth wrote its own literal:
+     * eight distinct neutral elevations across `board.css` and `base.css` (`0 12px 28px/.08`, `0 16px 36px/.2`,
+     * `0 8px 24px/.16`, `0 2px 8px/.08`, `0 .35rem .9rem/.18`, `0 1px 3px/.1`, plus two rem-flavoured card
+     * shadows), each plausible alone and no two agreeing. Worse, every one was a light-theme literal in a
+     * property whose token the dark theme overrides — so a hand-written shadow kept its light-theme wash on a
+     * near-black ground, which is the "the shadow is still those same few colours" complaint from review.
+     *
+     * Three steps, because the product has three depths: a control lifting slightly off its own surface, a
+     * transient chip floating above content, and a panel floating above the page. `shadowRoleOwnership`
+     * exempts neutral shade from its hue rule, so nothing checked these — `elevationScale.spec.ts` does.
+     */
+    --shadow-raised: 0 1px 3px rgba(15, 23, 42, 0.10);
+    --shadow-floating: 0 8px 24px rgba(15, 23, 42, 0.14);
     --shadow-elevated: 0 18px 42px rgba(15, 23, 42, 0.16);
 
     /* ===== Semantic accents =====
@@ -249,10 +266,8 @@
     --iot-color-card-bg: rgba(15, 23, 42, 0.3);
     --iot-color-card-bg-strong: rgba(15, 23, 42, 0.7);
     --iot-color-card-border: rgba(56, 189, 248, 0.75);
-    --iot-color-card-shadow: 0 1.6rem 3.2rem rgba(15, 23, 42, 0.9);
 
     /* 节点 */
-    --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.9);
     --iot-color-accent: #60a5fa;
     --iot-node-accent-0: #60a5fa;
     --iot-node-accent-1: #2dd4bf;
@@ -280,6 +295,10 @@
     --border-strong: #475569;
     --field-bg: #0f172a;
     --field-border: #475569;
+    /* Dark elevation is deeper and more opaque at every step: a shadow works by darkening its ground, and a
+       near-black ground has far less headroom to darken, so the light theme's alphas vanish on it. */
+    --shadow-raised: 0 1px 3px rgba(2, 6, 23, 0.55);
+    --shadow-floating: 0 8px 24px rgba(2, 6, 23, 0.38);
     --shadow-elevated: 0 20px 48px rgba(2, 6, 23, 0.42);
 
     /* Semantic accents, dark. The role text lightens for contrast on a dark surface, and the
@@ -368,10 +387,8 @@
     --iot-color-card-bg: rgba(255, 255, 255, 0.3);
     --iot-color-card-bg-strong: rgba(255, 255, 255, 0.7);
     --iot-color-card-border: rgba(148, 163, 184, 0.55);
-    --iot-color-card-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
 
     /* 节点 */
-    --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.08);
     --iot-color-accent: #2563eb;
     --iot-node-accent-0: #1d4ed8;
     --iot-node-accent-1: #0f766e;
@@ -403,6 +420,10 @@
     --border-strong: #cbd5e1;
     --field-bg: #ffffff;
     --field-border: #cbd5e1;
+    /* The whole elevation scale, not just the top step: the dark block above is the default theme, so an
+       explicit light theme has to reset every step it overrides rather than inheriting the dark values. */
+    --shadow-raised: 0 1px 3px rgba(15, 23, 42, 0.10);
+    --shadow-floating: 0 8px 24px rgba(15, 23, 42, 0.14);
     --shadow-elevated: 0 18px 42px rgba(15, 23, 42, 0.16);
 
     /* Semantic accents, light. Restated here because the dark block is the default theme
@@ -548,7 +569,9 @@
     var(--iot-messagebox-padding-bottom);
     min-width: var(--iot-messagebox-min-width);
     max-width: var(--iot-messagebox-max-width);
-    box-shadow: var(--iot-color-card-shadow);
+    /* The panel step. This was `--iot-color-card-shadow`, a fourth elevation token whose dark value was
+       `rgba(15, 23, 42, 0.9)` — the *light* palette's navy at 90%, where every dark shadow is `rgba(2,6,23,…)`. */
+    box-shadow: var(--shadow-elevated);
     border: 1px solid var(--iot-color-card-border);
     backdrop-filter: blur(18px);
 }
@@ -737,7 +760,8 @@
 
     border-radius: var(--iot-radius-panel);
     border: 1px solid var(--iot-color-card-border);
-    box-shadow: var(--iot-color-card-shadow);
+    /* A toast is transient and content-sized: the floating step, not a panel's. */
+    box-shadow: var(--shadow-floating);
     backdrop-filter: blur(14px);
 }
 

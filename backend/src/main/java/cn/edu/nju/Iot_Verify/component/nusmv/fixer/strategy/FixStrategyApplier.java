@@ -15,6 +15,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
 
 /**
  * Applies a verified {@link FixSuggestionDto} onto a set of rules, producing the modified rule list.
@@ -204,7 +205,7 @@ public final class FixStrategyApplier {
     private static String describeCondition(RuleDto.Condition condition, Map<String, String> displayDeviceNames) {
         String device = displayDeviceName(condition.getDeviceName(), displayDeviceNames);
         String attribute = text(condition.getAttribute(), "unknown-attribute");
-        String targetType = condition.getTargetType() == null ? "" : condition.getTargetType().trim().toLowerCase();
+        String targetType = condition.getTargetType() == null ? "" : condition.getTargetType().trim().toLowerCase(Locale.ROOT);
         if ("api".equals(targetType)) {
             return device + " emits " + attribute;
         }

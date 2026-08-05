@@ -50,8 +50,8 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("attackMode", Map.of("type", "string", "enum", List.of("none", "exact", "exhaustive"), "description", "Per-run attack selection. Default none."));
-        props.put("attackBudget", Map.of("type", "integer", "description", "Upper bound from 1 to 50 for attackMode exhaustive."));
-        props.put("attackPoints", attackPointsSchema());
+        props.put("attackBudget", attackBudgetSchema());
+        props.put("attackPoints", attackPointsSchema(true));
         props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track public/private sensitivity labels through automation chains. Privacy conditions force this on even when false. This is not access control or encryption. Default false."));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
@@ -147,17 +147,4 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
         }
     }
 
-    private Map<String, Object> attackPointsSchema() {
-        return Map.of(
-                "type", "array",
-                "description", "Required for attackMode exact. Device ids use canonical board_overview ids and are normalized at the model boundary; automation links use persisted rule ids.",
-                "items", Map.of(
-                        "type", "object",
-                        "properties", Map.of(
-                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
-                                "deviceId", Map.of("type", "string"),
-                                "ruleId", Map.of("type", "integer")),
-                        "required", List.of("kind"),
-                        "additionalProperties", false));
-    }
 }

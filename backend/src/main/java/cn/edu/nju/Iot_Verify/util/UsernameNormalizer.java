@@ -1,10 +1,20 @@
 package cn.edu.nju.Iot_Verify.util;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
+
 import java.text.Normalizer;
 
+/*
+ * The credential rules come from RequestLimits, not from literals here.
+ *
+ * This class had its own copy of the phone pattern and its own 3/20 display bounds — exactly what the comment
+ * on RequestLimits was written to prevent. It mattered more than an ordinary duplicate:
+ * `credentialLimitsMirror.spec.ts` asserts the *frontend* agrees with MIN_USERNAME_DISPLAY_LENGTH,
+ * MAX_USERNAME_DISPLAY_LENGTH and PHONE_PATTERN, and those two length constants had no other backend reader at
+ * all — so the bound was mirrored into every layer except the validator that actually enforces it. Changing one
+ * there would have moved the client and the mirror test while this validator kept the old numbers.
+ */
 public final class UsernameNormalizer {
-
-    private static final String PHONE_PATTERN = "^1[3-9]\\d{9}$";
 
     private UsernameNormalizer() {
     }
@@ -30,7 +40,8 @@ public final class UsernameNormalizer {
     public static boolean isValid(String value) {
         if (value == null) return false;
         int length = value.codePointCount(0, value.length());
-        if (length < 3 || length > 20) return false;
+        if (length < RequestLimits.MIN_USERNAME_DISPLAY_LENGTH
+                || length > RequestLimits.MAX_USERNAME_DISPLAY_LENGTH) return false;
         return value.codePoints().noneMatch(codePoint ->
                 Character.isISOControl(codePoint)
                         || Character.getType(codePoint) == Character.FORMAT
@@ -39,7 +50,7 @@ public final class UsernameNormalizer {
     }
 
     public static boolean isPhoneNumber(String value) {
-        return value != null && value.matches(PHONE_PATTERN);
+        return value != null && value.matches(RequestLimits.PHONE_PATTERN);
     }
 
     private static boolean isEdgeWhitespace(int codePoint) {

@@ -353,3 +353,64 @@ describe('automatic-fix response contracts', () => {
     expect(result.parameterTargets).toHaveLength(1)
   })
 })
+
+describe('a fault rule without a preview string', () => {
+  /*
+   * RuleDto.ruleString has no @NotBlank and a nullable TEXT column, so a rule persists without one - verified
+   * against the running API, which accepts a rule with the field omitted and echoes "ruleString": null. This
+   * validator used text(row, 'ruleString'), which throws on null and rejected the *entire* fault-localization
+   * response, so a fix request on a trace involving such a rule failed as "malformed result" instead of
+   * returning the fix. The localised `Rule {number}` fallback belongs in the UI, which is where three other
+   * components already put it for TraceRule.ruleLabel.
+   */
+  it('is accepted, because null is legitimate rather than a contract breach', () => {
+    const withoutPreview = { ...localization(), faultRules: [{ ...faultRule, ruleString: null }] }
+
+    expect(validateFaultLocalizationResult(withoutPreview, 12)).toEqual(withoutPreview)
+  })
+
+  it('is still rejected when the field is present but not text', () => {
+    const wrongType = { ...localization(), faultRules: [{ ...faultRule, ruleString: 42 }] }
+
+    expect(() => validateFaultLocalizationResult(wrongType, 12)).toThrowError(/ruleString/)
+  })
+})
+
+describe('a conflicting fault rule', () => {
+  /*
+   * The whole `conflicting` branch of validateFaultRule was untested: the shared fixture only ever set
+   * `conflicting: false`. It matters now because `conflictingRuleString` became nullable for the same reason
+   * `ruleString` did - the conflicting rule may have no preview of its own, and `conflicting` is set
+   * independently of it, so true-with-null is reachable. The server used to send the English prose
+   * "another localized rule" here, which the UI interpolated into an already-translated sentence.
+   */
+  const conflictingRule = (overrides = {}) => ({
+    ...faultRule,
+    conflicting: true,
+    reasonCode: 'CONFLICTING_END_STATES',
+    conflictingRuleString: 'Turn light off',
+    targetEndState: 'on',
+    conflictingEndState: 'off',
+    ...overrides
+  })
+
+  const withRule = (rule: unknown) => ({ ...localization(), faultRules: [rule] })
+
+  it('is accepted with a preview, and with a null one', () => {
+    expect(validateFaultLocalizationResult(withRule(conflictingRule()), 12))
+      .toEqual(withRule(conflictingRule()))
+
+    const unnamed = withRule(conflictingRule({ conflictingRuleString: null }))
+    expect(validateFaultLocalizationResult(unnamed, 12)).toEqual(unnamed)
+  })
+
+  it('still rejects a non-string conflicting preview', () => {
+    expect(() => validateFaultLocalizationResult(
+      withRule(conflictingRule({ conflictingRuleString: 7 })), 12)).toThrowError(/conflictingRuleString/)
+  })
+
+  it('still requires the conflicting reason code', () => {
+    expect(() => validateFaultLocalizationResult(
+      withRule(conflictingRule({ reasonCode: 'TRIGGERED' })), 12)).toThrowError(/conflicting reason code/)
+  })
+})

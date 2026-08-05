@@ -1635,12 +1635,33 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 unmatchedInOriginalOrder.add(result);
             }
         }
+        /*
+         * Positional back-fill for results no expression matched — and it says so.
+         *
+         * This is a *guess*: it pairs leftover results with unfilled slots by position. Silence here was the
+         * defect. `rawSpecResults.size() == effectiveSpecs.size()` still holds afterwards, so `parseIncomplete`
+         * stays false and the run reports a definite SATISFIED/VIOLATED whose per-spec attribution was guessed —
+         * a user could then fix the rule behind the wrong specification. The aggregate verdict is unaffected
+         * (all-pass is order-independent), which is exactly why nothing else would surface it.
+         *
+         * It should not fire: NuSMV echoes each specification verbatim, so the expression match succeeds even
+         * when it reorders them. If it does fire, something changed about that echo and the attribution is no
+         * longer trustworthy, which is the user's business rather than a debugging detail.
+         */
+        int backFilled = 0;
         for (int i = 0; i < aligned.size() && !unmatchedInOriginalOrder.isEmpty(); i++) {
             if (aligned.get(i) == null) {
                 SpecCheckResult fallback = unmatchedInOriginalOrder.removeFirst();
                 aligned.set(i, fallback);
                 used.add(fallback);
+                backFilled++;
             }
+        }
+        if (backFilled > 0 && checkLogs != null) {
+            checkLogs.add("[spec-attribution-uncertain] " + backFilled
+                    + " specification result(s) could not be matched to a submitted specification by expression "
+                    + "and were assigned by position; which specification each of those verdicts describes is "
+                    + "not certain.");
         }
 
         if (reordered && checkLogs != null) {
@@ -1650,6 +1671,25 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         return aligned;
     }
 
+    /*
+     * Why stripping parentheses is safe here, and what makes it safe.
+     *
+     * This looks alarming in isolation: dropping every parenthesis makes semantically *different* formulas
+     * normalize alike — `AG (a & (b | c))` and `AG ((a & b) | c)` both become `aga&b|c`, and NuSMV really does
+     * give them different verdicts (measured on 2.7.1: `false` and `true` respectively). Colliding keys share one
+     * Deque, so attribution would then depend on arrival order — and NuSMV *does* reorder: three specs submitted
+     * `AG (a & (b|c))`, `AG ((a&b)|c)`, `AG a` came back with `AG a` first.
+     *
+     * It is nevertheless unreachable, because a collision needs two specs from the same template with identical
+     * operands — i.e. a duplicate — and `BoardStorageServiceImpl.validateNoIdenticalSpecifications` rejects that
+     * with a `ConflictException` on both spec-write paths (`saveSpecsInternal` and `saveBoardBatch`). The eight
+     * templates in `docs/architecture/spec-templates.md` differ by operator (`AG`/`AF`, `AX`/`AF`, `EX`/`EG`),
+     * which stripping does not touch, so all eight yield distinct keys.
+     *
+     * The leniency is not gratuitous either: matching by expression is what handles the reordering above. If a
+     * future change lets two distinct specs share a normalized key — a new template, or relaxing the duplicate
+     * check — the positional back-fill below becomes a silent misattribution, so re-derive this note then.
+     */
     private String normalizeSpecExpression(String expression) {
         if (expression == null) {
             return "";

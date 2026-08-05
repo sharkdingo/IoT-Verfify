@@ -122,7 +122,6 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 deviceTemplateRepo,
                 deviceTemplateService,
                 transactionTemplate,
-                smvGenerator,
                 templateNuSmvValidator,
                 specificationMapper,
                 ruleMapper,
@@ -889,6 +888,74 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
         assertEquals(400, ex.getCode());
         org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("invalid characters");
+    }
+
+    /*
+     * Modes are compared on the token generation emits, not on the name the user typed.
+     *
+     * `sanitizeSmvToken` rescues a NuSMV reserved word by prefixing `_`, so mode `next` becomes `_next`. The
+     * collision check used to compare raw names, which made `next` and `_next` look distinct — and the generated
+     * model then declared the same enum constant twice. Verified against NuSMV 2.7.1: "TYPE ERROR: duplicate
+     * constants in the enum type of variable", i.e. the user's verification failed with an engine type error
+     * instead of a message naming the template field to rename.
+     *
+     * Modes and working states are the only identifier kinds that skip the reserved-word rejection variables get,
+     * precisely because generation rescues them; that makes comparing pre-rescue names the bug.
+     */
+    @Test
+    void addDeviceTemplate_modesCollidingAfterReservedWordRescue_shouldReject() {
+        DeviceTemplateDto dto = buildTemplate("T1", true);
+        dto.getManifest().setModes(List.of("next", "_next"));
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage())
+                .contains("collides with another mode")
+                .contains("_next");
+    }
+
+    /*
+     * The same fix closes a second collision the raw comparison missed, and this one is worse.
+     *
+     * A mode named `next` is rescued to `_next`; an InternalVariable literally named `_next` is legal and needs no
+     * rescue. Raw comparison saw `next` vs `_next` and passed them. The generated model then declares `_next`
+     * both as an enum constant of the mode variable and as a variable name — and NuSMV 2.7.1 does not report a
+     * type error for that, it **terminates by a signal** with "Aborting batch mode" and no diagnosable message,
+     * where the control model differing only in the constant name verifies normally. That is the worst possible
+     * failure shape for a verification product: no verdict and nothing to act on.
+     */
+    @Test
+    void addDeviceTemplate_modeCollidingWithInternalVariableAfterRescue_shouldReject() {
+        // A complete manifest, so validation reaches the collision check rather than stopping on a missing
+        // InitState — my first version of this test used a fixture without one and asserted on the wrong message.
+        DeviceTemplateDto dto = buildTemplate("T1", true);
+        dto.getManifest().setModes(List.of("next"));
+        DeviceManifest.InternalVariable iv = new DeviceManifest.InternalVariable();
+        iv.setName("_next");
+        iv.setIsInside(true);
+        iv.setValues(List.of("a", "b"));
+        iv.setTrust("trusted");
+        iv.setPrivacy("public");
+        iv.setFalsifiableWhenCompromised(false);
+        dto.getManifest().setInternalVariables(List.of(iv));
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collides with mode name");
+    }
+
+    @Test
+    void addDeviceTemplate_modesDistinctAfterNormalization_shouldBeAccepted() {
+        // The boundary: a single reserved-word mode is legal, because generation renames it unambiguously.
+        DeviceTemplateDto dto = buildTemplate("T1", true);
+        dto.getManifest().setModes(List.of("next"));
+
+        org.assertj.core.api.Assertions.assertThatCode(() -> service.addDeviceTemplate(1L, dto))
+                .doesNotThrowAnyException();
     }
 
     @Test

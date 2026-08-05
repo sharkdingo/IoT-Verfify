@@ -11,6 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -64,7 +65,7 @@ public class UserOperationGuard {
         String token = UUID.randomUUID().toString();
         boolean redisAvailable = true;
         for (int slot = 0; slot < slots; slot++) {
-            String key = "iot-verify:operation:" + kind.name().toLowerCase() + ":" + userId + ":" + slot;
+            String key = "iot-verify:operation:" + kind.name().toLowerCase(Locale.ROOT) + ":" + userId + ":" + slot;
             if (localSlots.putIfAbsent(key, token) != null) continue;
             long confirmationStartedNanos = System.nanoTime();
             Boolean acquired;

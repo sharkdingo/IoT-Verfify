@@ -60,7 +60,7 @@ public class SimulateModelTool extends AbstractAiTool {
         props.put("attackMode", Map.of(
                 "type", "string", "enum", List.of("none", "exact"),
                 "description", "Per-run attack selection. Simulation requires explicit points and never chooses attack points randomly. Default none."));
-        props.put("attackPoints", attackPointsSchema());
+        props.put("attackPoints", attackPointsSchema(false));
         props.put("enablePrivacy", Map.of(
                 "type", "boolean",
                 "description", "Track public/private sensitivity labels through automation chains. This models label propagation, not access control or encryption. Default false."
@@ -176,17 +176,4 @@ public class SimulateModelTool extends AbstractAiTool {
         }
     }
 
-    private Map<String, Object> attackPointsSchema() {
-        return Map.of(
-                "type", "array",
-                "description", "Required for attackMode exact. Device ids use canonical board_overview ids and are normalized at the model boundary; automation links use persisted rule ids.",
-                "items", Map.of(
-                        "type", "object",
-                        "properties", Map.of(
-                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
-                                "deviceId", Map.of("type", "string"),
-                                "ruleId", Map.of("type", "integer")),
-                        "required", List.of("kind"),
-                        "additionalProperties", false));
-    }
 }

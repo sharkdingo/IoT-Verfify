@@ -141,6 +141,18 @@ state-space cost it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN`, 
 declaration is rejected at authoring and generation instead of being narrowed. No second hidden
 `[-1, 1]` term is added.
 
+The same reasoning bounds the manifest's own collections. Every mode, working state, transition,
+internal variable and enumerated value a template declares becomes part of the generated model, so an
+unbounded manifest would be an unbounded state space reachable from an authenticated write. Those
+bounds live in **`backend/device-template-schema.json` as `maxItems`**, not in Bean Validation: the
+template endpoint accepts a raw `JsonNode` and runs `validateRawManifest` before converting to
+`DeviceTemplateDto`, so a `@Size` on the DTO would never execute. The schema says this in its own
+`$comment`. `RequestLimits.MAX_TEMPLATE_*` records the Java-side value of each limit and is therefore
+mirrored-but-unreferenced by design — a grep that reads it as dead code is misreading it, which has
+happened once and is now guarded by `DeviceTemplateSchemaValidatorTest` and
+`credentialLimitsMirror.spec.ts`. Verified live: a 21-mode template is rejected `400` with
+`$.Modes: at most 20 items, found 21`, naming the field and the bound.
+
 A shared enum/boolean environment value evolves according to **who declares they write it**. If no
 submitted device lists it in `ImpactedVariables`, it is a genuinely exogenous input — weather, a
 clock, an occupant — and may choose any value in its declared domain on each step. If some device

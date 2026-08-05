@@ -33,8 +33,7 @@ class BoardStorageServiceImplLayoutTest {
     @BeforeEach
     void setUp() {
         service = new BoardStorageServiceImpl(
-                null, null, null, null, layoutRepo, null, null, null,
-                null, null, null, null, null, new BoardLayoutMapper(), null, null, userRepository, null);
+                null, null, null, null, layoutRepo, null, null, null, null, null, null, null, new BoardLayoutMapper(), null, null, userRepository, null);
     }
 
     @Test

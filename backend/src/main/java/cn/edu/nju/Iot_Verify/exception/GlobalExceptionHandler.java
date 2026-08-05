@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import cn.edu.nju.Iot_Verify.util.JsonPointerPath;
 
 @Slf4j
 @RestControllerAdvice
@@ -423,33 +424,20 @@ public class GlobalExceptionHandler {
         Throwable cause = exception.getCause();
         while (cause != null) {
             if (cause instanceof UnrecognizedPropertyException unknown) {
-                String path = jsonPath(unknown.getPath());
+                String path = JsonPointerPath.of(unknown.getPath(), "");
                 if (path.isBlank()) path = unknown.getPropertyName();
                 String message = "Unknown field '" + unknown.getPropertyName() + "'";
                 if (!path.equals(unknown.getPropertyName())) message += " at '" + path + "'";
                 return new RequestBodyError(path, "Unknown field", message);
             }
             if (cause instanceof JsonMappingException mapping && !mapping.getPath().isEmpty()) {
-                String path = jsonPath(mapping.getPath());
+                String path = JsonPointerPath.of(mapping.getPath(), "");
                 String reason = "Value does not match the declared field type";
                 return new RequestBodyError(path, reason, "Invalid JSON value at '" + path + "': " + reason);
             }
             cause = cause.getCause();
         }
         return new RequestBodyError("request", "Malformed JSON syntax", "Malformed request body");
-    }
-
-    private String jsonPath(List<JsonMappingException.Reference> references) {
-        StringBuilder path = new StringBuilder();
-        for (JsonMappingException.Reference reference : references) {
-            if (reference.getFieldName() != null) {
-                if (!path.isEmpty()) path.append('.');
-                path.append(reference.getFieldName());
-            } else if (reference.getIndex() >= 0) {
-                path.append('[').append(reference.getIndex()).append(']');
-            }
-        }
-        return path.toString();
     }
 
     private record RequestBodyError(String path, String reason, String message) {}

@@ -11,7 +11,7 @@ public class AuthRateLimitException extends BaseException {
 
     public AuthRateLimitException(String operation, String scope, long retryAfterSeconds) {
         super(429, "Too many " + operation + " attempts; retry later");
-        this.reasonCode = "AUTH_" + operation.toUpperCase() + "_RATE_LIMIT_REACHED";
+        this.reasonCode = "AUTH_" + operation.toUpperCase(java.util.Locale.ROOT) + "_RATE_LIMIT_REACHED";
         this.scope = scope;
         this.retryAfterSeconds = Math.max(1, retryAfterSeconds);
     }
