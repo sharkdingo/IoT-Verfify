@@ -2552,7 +2552,20 @@
      * rows unfolded it is no longer the binding constraint.
      */
     width: min(72rem, 100%);
-    max-height: min(44dvh, 20rem);
+    /*
+     * The cap is a ceiling for a runaway trace, not the working height.
+     *
+     * It was `min(44dvh, 20rem)`, and the `20rem` term binds on every screen taller than ~727px — so in practice
+     * the overlay was pinned at exactly 320px whatever the viewport offered. With the duplicated device and
+     * environment blocks gone the content measures 317px, which *fit*, but with **1px to spare**: the next label
+     * or badge would have re-armed the clipping and quietly undone the whole reduction.
+     *
+     * 26rem leaves the current content ~99px of headroom while still holding the overlay to roughly a third of a
+     * 900px viewport, which is the ratio the earlier pass established so the canvas reads as the subject. The
+     * `dvh` term stays and now does the job it is for: on a short viewport it clamps below the rem ceiling rather
+     * than being shadowed by it.
+     */
+    max-height: min(44dvh, 26rem);
     background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
     color: var(--text);
     border: 1px solid var(--border);

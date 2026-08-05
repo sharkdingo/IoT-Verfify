@@ -11253,8 +11253,10 @@ const openTraceAnimationAt = (selectedTraceIndex: number) => {
  * Each panel was reasonable alone, which is how this accumulated. But during replay the two side panels are
  * *authoring* surfaces: the Control Center creates devices, rules and specs, and the Inspector inspects the
  * live board — neither of which is the frozen scene on screen. The information a replay reader actually needs
- * is already in the timeline, which carries the per-step device states, environment values and changed
- * variables (`trace-timeline-devices`, `trace-timeline-env`, `trace-step-values`).
+ * is already on the surfaces that own it: the canvas nodes carry the per-step device state, its previous value
+ * and the `changed` tint; the timeline carries the step position and the rule that produced it; the change
+ * popover carries the `previous → current` transition. (This used to say the timeline carried the device and
+ * environment values — it did, as a second copy of the canvas, and those blocks are gone.)
  *
  * So this collapses rather than hides: both panels keep their rail and reopen on one click, and nothing is
  * removed from the DOM or from the accessibility tree. Collapsing is the same mechanism narrow viewports
@@ -11936,6 +11938,17 @@ const startTraceAnimation = () => {
         ...activeTrace,
         selectedStateIndex: traceAnimationState.value.selectedStateIndex
       }
+      /*
+       * Keep the advancing step in view.
+       *
+       * Above 15 states the rail stops fitting and becomes a horizontal scroll region — `max-content` at 38px
+       * per step. Every *manual* way of moving already scrolled the new step into the middle
+       * (`handleTraceStateKeydown`, `selectTraceStateFromTimelinePointer`, and `stopTraceAnimation`), but this
+       * tick did not: pressing play on a long trace advanced the selection past the right edge and left the user
+       * watching a rail that never moved. `inline: 'center'` and `block: 'nearest'` mean it pans the rail without
+       * scrolling the overlay itself.
+       */
+      revealTraceStateButton(traceAnimationState.value.selectedStateIndex)
       if (traceAnimationState.value.selectedStateIndex >= totalStates.value - 1) {
         stopTraceAnimation()
       }

@@ -701,9 +701,26 @@ const expectTimelineNavigationAndContext = async (
   if (prefix === 'simulation') {
     await expect(page.getByTestId(`${prefix}-timeline-step-input`)).toBeVisible()
   }
-  const environment = page.getByTestId(`${prefix}-timeline-env`)
-  await expect(environment).toBeVisible()
-  await expect(environment).toContainText(/temperature|motion/i)
+  /*
+   * Only the simulation rail lists environment values; the counterexample rail no longer does.
+   *
+   * Three surfaces were rendering the same per-step state — the canvas nodes, the trace timeline, and the change
+   * popover — and the canvas is the richest of them (value, previous value, `changed` tint, trust, security
+   * pills). So the trace rail's device and environment chips were the weaker copy, and they were the dominant
+   * cost: the overlay's content measured 529px inside a 318px viewport. Removing them, plus moving the
+   * session-scope notice to the header, brought it to 317px with nothing hidden.
+   *
+   * The simulation rail still has its copy, and this assertion still covers it — but that is scope, not a
+   * justification. Simulation playback also writes `highlightedTrace`, so its canvas nodes show the same
+   * per-step state, which makes its env block very likely the same redundancy. It was not measured here, so it
+   * was not removed here; asserting it keeps the existing behaviour pinned until someone measures that rail the
+   * way this one was measured.
+   */
+  if (prefix === 'simulation') {
+    const environment = page.getByTestId(`${prefix}-timeline-env`)
+    await expect(environment).toBeVisible()
+    await expect(environment).toContainText(/temperature|motion/i)
+  }
 
   const track = page.getByTestId(`${prefix}-timeline-track`)
   // The range control, not the step input: both rails have a range, only the simulation rail has a spin box.

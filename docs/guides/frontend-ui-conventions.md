@@ -423,3 +423,34 @@ rendered pixels disagree.
   the wrong fix.
 - Dialog height caps: the siblings use `85vh`/`88vh`, which leaves visible margin so the surface reads as a
   panel over the board. `calc(100vh - 2rem)` reads as a takeover.
+
+## 9. Replay has three surfaces, and each owns one question
+
+Counterexample and simulation replay render onto three surfaces at once. They looked redundant — all three read
+the same `currentTraceState` — and measurement showed two of the three overlaps were real while the third was
+not. The split that survived measurement:
+
+| Surface | Question it answers | Why it, and not the others |
+| :--- | :--- | :--- |
+| **Canvas nodes** | *What is the state now?* | Richest of the three: value, previous value, `changed` tint, trust, security pills, with `shortLabel` variants for a narrow node. It is also where the user is already looking. |
+| **Timeline** | *When, and what caused it?* | Step position, the rail, and the rule that produced this state. The canvas cannot show ordering. |
+| **Change popover** | *What moved, from what to what?* | The only surface with room for `previous → current`. A node's changed-chip is capped at `58cqmin` — 64px on a 150×110 node — where "Temperature 24 → 26" truncates to a fragment. |
+
+### Rules
+
+- **Do not repeat per-step device or environment values in the timeline.** The canvas owns them. Three surfaces
+  rendering the same state cost the counterexample overlay 529px of content inside a 318px viewport, 211px of it
+  hidden behind a scrollbar, while it used 44% of the width the host reserved.
+- **A cap must name its remainder before anything relies on it.** The node strip prints three variables; that
+  limit was silent, and the timeline's full `traceDeviceSummary` was what made it survivable. Removing the
+  duplicate without surfacing the remainder would have converted a redundancy into a hole. The `+N` chip and its
+  tooltip are that surfacing — verified against a five-variable template.
+- **Session facts belong in the header, not in step details.** The replay-scope notice was an unconditional
+  ~50-word block inside `trace-step-values`, re-read on every step, describing the whole session. It is a header
+  hint now.
+- **The popover is not the timeline's duplicate.** It is the only place a transition fits, and it already shrinks
+  itself during playback (320px to 148px). Judge it by whether it answers the transition question, not by whether
+  its inputs overlap.
+- **A cap that always binds is a fixed size.** `max-height: min(44dvh, 20rem)` reads as responsive, but `20rem`
+  wins on every viewport taller than ~727px. After the content dropped to 317px the cap sat 1px above it, so the
+  next label would have re-armed the clipping — the ceiling has to leave headroom, or it is the working height.

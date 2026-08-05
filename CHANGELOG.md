@@ -17,6 +17,37 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-06 (latest)
 
+#### Changed
+
+- **Replay now has three surfaces with one question each, instead of three copies of one answer.** The canvas
+  nodes, the trace timeline and the change popover all read the same `currentTraceState`. Measured against a real
+  violated specification, the timeline's content was 529px inside a 318px viewport — 211px hidden behind a
+  scrollbar — while it used 44% of the width the host reserved for it. The canvas turned out to be the *richest*
+  of the three, not the weakest: it already prints each variable's value, its previous value, a `changed` tint,
+  trust and the security pills, with `shortLabel` variants for a narrow node. So the timeline's device and
+  environment chips were the weaker copy of what the user was already looking at, and they were the dominant cost.
+  The timeline now answers only *when and what caused it*: step position, the rail, and the rule that produced the
+  state. Content: **529 → 471 → 361 → 317px, with nothing hidden** — the overlay no longer scrolls.
+  Three findings made this more than a deletion. The node strip caps at three variables and that cap was
+  **silent**, with the timeline's full `traceDeviceSummary` as its unmarked fallback — so removing the duplicate
+  first would have turned a redundancy into a hole. It now shows a `+N` chip naming the remainder, verified
+  against a five-variable custom template (none of the 45 bundled templates declares more than three, which is
+  why the gap had never surfaced). The replay-scope notice was an unconditional ~50-word paragraph filed under
+  "state details" while describing the whole session, re-read on every step; it is a header hint now. And the
+  height cap `min(44dvh, 20rem)` reads as responsive but `20rem` binds on every viewport taller than ~727px, so
+  after the reduction it sat **1px** above the content — the next label would have re-armed the clipping and
+  quietly undone the whole thing. It is 26rem now, which leaves ~99px of headroom while still holding the overlay
+  to roughly a third of a 900px viewport.
+  The popover was **not** removed, and that is the part worth recording: it is the only surface with room for
+  `previous → current`. A node's changed-chip is capped at `58cqmin` — 64px on a 150×110 node — where
+  "Temperature 24 → 26" truncates to a fragment, which the code already documented. Judged by inputs it looked
+  redundant; judged by the question it answers it is not. `docs/guides/frontend-ui-conventions.md` §9 records the
+  division so it is not re-litigated.
+- **Autoplay kept the advancing step in view.** Above 15 states the rail becomes a horizontal scroll region at
+  38px per step. Every manual way of moving already centred the new step — keyboard, pointer, and stopping — but
+  the autoplay tick advanced the selection without revealing it, so pressing play on a long trace left the user
+  watching a rail that never moved.
+
 #### Fixed
 
 - **The device details dialog filled the whole screen.** It declared `max-w-4xl` (896px), but a scoped

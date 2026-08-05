@@ -20,7 +20,9 @@ import { describe, expect, it } from 'vitest'
  * five features each added one. The fix is not decoration or removal: the two *authoring* panels collapse to
  * their rails, because during replay the Control Center creates devices and rules that are not in the frozen
  * scene, and the Inspector inspects the live board rather than the trace. What a replay reader needs is already
- * in the timeline (`trace-timeline-devices`, `trace-timeline-env`, `trace-step-values`).
+ * on the surfaces that own it — the canvas nodes for per-step state, the timeline for position and cause, the
+ * change popover for the transition. (This used to point at `trace-timeline-devices` / `trace-timeline-env`;
+ * those were the canvas's second copy and have been removed.)
  *
  * The timeline, popover and dock are deliberately untouched: the timeline *is* the replay control, the popover
  * explains the step being watched, and the dock is how the user leaves. Trading meaning for space would swap one
