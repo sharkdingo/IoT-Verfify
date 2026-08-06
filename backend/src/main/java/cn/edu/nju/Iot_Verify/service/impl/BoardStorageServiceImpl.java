@@ -4047,7 +4047,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 : rule.getConditions()).stream()
                 .filter(Objects::nonNull)
                 .map(condition -> {
-                    String device = labelsById.getOrDefault(condition.getDeviceName(), "device");
+                    String device = labelsById.getOrDefault(condition.getDeviceName(), condition.getDeviceName());
                     String key = hasText(condition.getAttribute()) ? condition.getAttribute().trim() : "condition";
                     if ("api".equalsIgnoreCase(condition.getTargetType())) {
                         return device + " triggers " + key;
@@ -4060,8 +4060,34 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         RuleDto.Command command = rule == null ? null : rule.getCommand();
         String target = command == null
                 ? "device.action"
-                : labelsById.getOrDefault(command.getDeviceName(), "device") + "."
+                : labelsById.getOrDefault(command.getDeviceName(), command.getDeviceName()) + "."
                     + (hasText(command.getAction()) ? command.getAction().trim() : "action");
+        /*
+         * Every label lookup here falls back to the device **id**, not to the word "device".
+         *
+         * A message naming the rule the user collided with is only useful if it identifies the devices, and the id
+         * is the one thing that always does. The old fallbacks — `"device"` here, `"Unknown device"` in
+         * `RuleToolPresenter.displayLabel` — discarded the only identifier available at exactly the moment the
+         * label was missing, which is when the reader most needs it. A label is nicer when present; the id is
+         * never worse than a placeholder.
+         */
+        /*
+         * The content clause, which this message used to drop.
+         *
+         * `RuleSemanticSignature` compares `contentDevice` and `content` (`:72-73`), so they are part of a rule's
+         * identity — but this description rendered only `device.action`. The message names the *existing* rule the
+         * new one collided with, so a board holding two rules that differ only in their content showed the user a
+         * description matching both, and no way to tell which one it meant.
+         *
+         * Same wording as `RuleToolPresenter.describeCommand`, so the rejection and the AI assistant describe the
+         * same rule the same way. Both require *both* halves before rendering the clause: a content device with no
+         * content names a source for nothing.
+         */
+        if (command != null && hasText(command.getContentDevice()) && hasText(command.getContent())) {
+            target = target + " using "
+                    + labelsById.getOrDefault(command.getContentDevice(), command.getContentDevice()) + "."
+                    + command.getContent().trim();
+        }
         return "IF " + (conditions.isBlank() ? "condition" : conditions) + " THEN " + target;
     }
 
@@ -4105,7 +4131,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             if (condition == null) {
                 continue;
             }
-            String device = labelsById.getOrDefault(condition.getDeviceId(), "device");
+            String device = labelsById.getOrDefault(condition.getDeviceId(), condition.getDeviceId());
             output.add(side + ": " + device + "."
                     + (hasText(condition.getKey()) ? condition.getKey().trim() : "condition") + " "
                     + (hasText(condition.getRelation()) ? condition.getRelation().trim() : "=") + " "

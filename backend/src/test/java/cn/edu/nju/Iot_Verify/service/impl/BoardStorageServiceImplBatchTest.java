@@ -1770,6 +1770,49 @@ class BoardStorageServiceImplBatchTest {
     }
 
     @Test
+    void addRule_whenTheDuplicateCarriesContent_namesItSoTheUserCanTellTheRulesApart() {
+        /*
+         * The rejection message must render `content`, because the signature compares it.
+         *
+         * `RuleSemanticSignature` includes `contentDevice` and `content` in a rule's identity, but this message
+         * used to describe only `device.action`. A board holding two rules that differ *only* in their content
+         * therefore got a description matching both, with no way to tell which one the new rule collided with —
+         * a correct rejection explained ambiguously.
+         */
+        RuleDto.Condition trigger = RuleDto.Condition.builder()
+                .deviceName("sensor1")
+                .attribute("motion")
+                .targetType("variable")
+                .relation("=")
+                .value("active")
+                .build();
+        RuleDto.Command sendSnapshot = RuleDto.Command.builder()
+                .deviceName("phone1")
+                .action("send")
+                .contentDevice("camera1")
+                .content("snapshot")
+                .build();
+
+        RuleDto existing = RuleDto.builder().id(9L)
+                .conditions(List.of(trigger)).command(sendSnapshot).build();
+        RuleDto duplicate = RuleDto.builder()
+                .conditions(List.of(trigger)).command(sendSnapshot).build();
+
+        RulePo existingPo = new RulePo();
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of(existingPo));
+        when(ruleMapper.toDto(existingPo)).thenReturn(existing);
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
+
+        ConflictException error = assertThrows(ConflictException.class,
+                () -> service.addRule(1L, duplicate));
+
+        assertTrue(error.getMessage().contains("identical automation rules"));
+        assertTrue(error.getMessage().contains("using camera1.snapshot"),
+                "the message should name the content that is part of the rule's identity: " + error.getMessage());
+        verify(ruleRepo, never()).save(any());
+    }
+
+    @Test
     void addSpec_whenSemanticInputsAreIdentical_rejectsBeforeReplacingCollection() {
         SpecConditionDto firstCondition = new SpecConditionDto();
         firstCondition.setId("old-1");

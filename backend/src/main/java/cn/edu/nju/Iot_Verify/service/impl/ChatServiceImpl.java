@@ -1940,8 +1940,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     /**
-     * Test-only convenience entry points. No production path calls these three — the SSE flow uses
+     * Test-only convenience entry points. No production path calls these two — the SSE flow uses
      * the full-arity overload below.
+     *
+     * <p>There were three. The middle one took eight arguments and nothing called it: the tests reach these by
+     * reflection and look up exactly two signatures, the seven- and nine-argument forms, with no
+     * {@code getDeclaredMethods()} enumeration anywhere in this package's tests. So it was reachable by nothing,
+     * while the count in this very comment vouched for it.
      *
      * <p>They bind both {@code shouldStop} and {@code forceStopCheck} to {@code isDisconnect}, which
      * the real caller does not: there, a user's Stop (a database flag readable from any instance) and
@@ -1961,18 +1966,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 false, null, null, isDisconnect::get, isDisconnect::get);
     }
 
-    private ToolLoopResult executeToolLoop(Long userId,
-                                           String sessionId,
-                                           List<LlmMessage> messages,
-                                           List<LlmToolSpec> tools,
-                                           Set<StreamResponseDto.CommandDto> commandSet,
-                                           SseEmitter emitter,
-                                           AtomicBoolean isDisconnect,
-                                           boolean preferChinese) {
-        return executeToolLoop(
-                userId, sessionId, messages, tools, commandSet, emitter, isDisconnect,
-                preferChinese, null, null, isDisconnect::get, isDisconnect::get);
-    }
 
     private ToolLoopResult executeToolLoop(Long userId,
                                            String sessionId,
