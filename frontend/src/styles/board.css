@@ -2637,16 +2637,24 @@
      * the device where the canvas has least room to begin with. The wide cap is now 44dvh, so a narrow one
      * that is larger inverts the priority: the smaller the screen, the more the subject needs of it.
      *
-     * The overlay is full-width here, so it holds more per row than at 39rem and needs less height for the
-     * same content.
-     *
      * Both terms matter, and I got this wrong the first time: lowering only the viewport fraction to 40dvh
-     * left the ceiling at `22rem`, which is *larger* than the wide rule's `20rem`. At 834×1112 that ceiling
-     * binds, so the tablet rendered a **352px** overlay against the desktop's 320px — the smaller screen
-     * still getting the taller apparatus. The ceiling has to come down with the fraction. */
+     * left the ceiling at `22rem`, which was *larger* than the wide rule's `20rem` then. At 834×1112 that
+     * ceiling bound, so the tablet rendered a 352px overlay against the desktop's 320px — the smaller screen
+     * still getting the taller apparatus. The ceiling has to come down with the fraction.
+     *
+     * The ceiling then went to `18rem` (288px) on a premise that has since **inverted**: "the overlay is
+     * full-width here, so it holds more per row than at 39rem and needs less height". That was true against a
+     * 624px wide panel. The wide cap is now 72rem, so at 1024px+ the panel is **1152px** while the narrow
+     * full-width one is 991px — the narrow case is the *narrower* of the two and needs more height, not less.
+     *
+     * Measured consequence: content is **317px** at every width from 900 to 1600 (it does not re-fold), so the
+     * 288px ceiling clipped 31px and the overlay scrolled at exactly `< 1024px` — a discontinuous step, since
+     * `scrollHeight` is identical either side of it. 22rem (352px) clears the content with 35px of headroom
+     * while `40dvh` still binds on anything under ~880px tall, so a 667px phone gets 267px and the priority
+     * the rest of this comment describes is preserved. */
     .board-timeline {
         width: 100%;
-        max-height: min(40dvh, 18rem);
+        max-height: min(40dvh, 22rem);
     }
 
     .iot-board .board-mini-tasks {

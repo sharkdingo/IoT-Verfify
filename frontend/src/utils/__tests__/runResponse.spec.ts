@@ -734,3 +734,30 @@ describe('verification and simulation response contracts', () => {
     expect(activeTaskProgressStage('STARTING', 'CANCELLED')).toBeNull()
   })
 })
+
+describe('a verification trace without a checked expression', () => {
+  /*
+   * `TraceDto.checkedExpression` has no `@NotBlank` and a nullable `TEXT` column, so a trace can legitimately
+   * carry none. Requiring it non-blank was not a per-row problem: traces are validated through a `value.map(...)`,
+   * so **one** such row threw and discarded the user's whole verification history list. The consumer already
+   * guards with `v-if="currentTrace?.checkedExpression"`, so the UI never needed the guarantee.
+   */
+  it('is accepted, and does not take the rest of the list with it', () => {
+    const result = validateVerificationResult({
+      ...unpersistedViolation(),
+      traces: [
+        { ...unpersistedViolation().traces[0], checkedExpression: null },
+        { ...unpersistedViolation().traces[0] }
+      ]
+    })
+
+    expect(result.traces).toHaveLength(2)
+  })
+
+  it('still rejects a non-string expression, which is a real contract breach', () => {
+    expect(() => validateVerificationResult({
+      ...unpersistedViolation(),
+      traces: [{ ...unpersistedViolation().traces[0], checkedExpression: 42 }]
+    })).toThrowError(/checkedExpression/)
+  })
+})

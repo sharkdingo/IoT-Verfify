@@ -461,7 +461,23 @@ const validateVerificationTraceShape = (
 ): Record<string, any> => {
   const trace = requireRecord(value, context)
   requireString(trace, 'violatedSpecId', context, false)
-  requireString(trace, 'checkedExpression', context, false)
+  /*
+   * Nullable, and the server has always been free to send it so.
+   *
+   * `TraceDto.checkedExpression` is a plain `String` with no `@NotBlank`, over a nullable `TEXT` column — so a
+   * trace can legitimately carry none. Requiring it non-blank here was not a per-row problem: the caller at
+   * `:534` is a `value.map(...)`, so **one** such row threw and discarded the user's entire verification history
+   * list. The consumer already guards with `v-if="currentTrace?.checkedExpression"` (`Board.vue:17645`), so the
+   * UI never needed the guarantee this was enforcing.
+   *
+   * Same defect and same shape as `ruleString` and `conflictingRuleString` in `fixResponse.ts`, both of which
+   * rejected a null the backend can produce and turned a fix request into "malformed result". Present-but-wrong
+   * type is still a contract breach and still rejected.
+   */
+  if (trace.checkedExpression !== null && trace.checkedExpression !== undefined
+    && typeof trace.checkedExpression !== 'string') {
+    throw new RunResponseContractError(context, 'checkedExpression must be text when present')
+  }
   validateStateList(trace.states, context)
   const disabledRuleCount = requireInteger(trace, 'disabledRuleCount', context)
   const skippedSpecCount = requireInteger(trace, 'skippedSpecCount', context)
