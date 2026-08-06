@@ -251,6 +251,22 @@ public class SmvDeviceModuleBuilder {
                                 "WorkingState Dynamics requires Modes so state '" + state.getName()
                                         + "' can guard impacted variable '" + varName + "'");
                     }
+                    /*
+                     * A null guard would be a *silent* omission — this state's physical effect on the variable
+                     * dropped, the `esac` falling through to `TRUE : 0`, and `modelComplete` still reporting true
+                     * because nothing incremented `disabledRuleCount`. In a tool that answers "is this system
+                     * safe", a device modelled as having no effect is the worst possible failure.
+                     *
+                     * It cannot happen. `stateGuardExpression` returns null only when *every* mode segment of the
+                     * state name is empty, and the template validator rejects that at the write boundary.
+                     * Measured against the running API: `";"`, `"_;_"`, `" ; "` all answer **400 "WorkingState
+                     * must define a concrete value for mode 'power'"**, and `"_"` / `";;"` are rejected on
+                     * semicolon count. So the `continue` is unreachable, and it is left as a fail-safe rather
+                     * than converted into a recorded skip that no input can produce.
+                     *
+                     * If the validator ever admits a wildcard state, this must become
+                     * `warnings.recordDisabledRule(...)` — the count is what keeps `modelComplete` honest.
+                     */
                     String guard = stateGuardExpression(smv, state.getName());
                     if (guard == null) continue;
                     expression.append(guard).append(" : ")

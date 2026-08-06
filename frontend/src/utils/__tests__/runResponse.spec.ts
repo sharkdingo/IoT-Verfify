@@ -304,6 +304,24 @@ describe('verification and simulation response contracts', () => {
     }))
   })
 
+  it('does not accept a satisfied conclusion that checked no specifications at all', () => {
+    /*
+     * The vacuous case, and the one worth pinning separately from its sibling above.
+     *
+     * The backend derives the outcome with `specResults.stream().allMatch(o == SATISFIED)`, and `allMatch` is
+     * true for an empty list — so a run whose specifications were all dropped before SMV emission would label
+     * itself SATISFIED. An early return upstream reports INCONCLUSIVE instead
+     * (`EmptySpecOutcomeContractTest` pins that), and this is the client's independent half: "safe" is the one
+     * answer a user acts on without reading further, so it should take two failures to produce it, not one.
+     */
+    expect(() => validateVerificationResult({
+      ...validVerification(),
+      specResults: []
+    })).toThrow(expect.objectContaining({
+      code: RUN_RESPONSE_INCOMPLETE_CODE
+    }))
+  })
+
   it('accepts a playable simulation whose step count matches its states', () => {
     expect(validateSimulationResult(validSimulation())).toEqual(validSimulation())
   })

@@ -17,6 +17,7 @@ import type {
 import { ASSISTANT_ACTIONS, STREAM_REFRESH_TARGETS } from '@/types/chat'
 import { useAuth } from '@/stores/auth'
 import { redirectToLogin } from '@/router/loginRedirect'
+import i18n from '@/assets/i18n'
 
 export const CHAT_ACTIVITY_TIMEOUT_MS = 2500
 
@@ -443,6 +444,10 @@ export const sendStreamChat = async (
                 sessionId,
                 content,
                 turnId: effectiveTurnId,
+                // The language the user is reading in. Without it the backend inferred one by looking for Han
+                // characters in `content`, which reports English for any message that happens to carry none — so a
+                // Chinese interface answered "hi" with English status prose.
+                locale: String(i18n.global.locale.value),
                 ...(confirmation ? { confirmation } : {})
             }),
             signal: controller?.signal

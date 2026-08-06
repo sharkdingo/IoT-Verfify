@@ -43,6 +43,7 @@ import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
 import cn.edu.nju.Iot_Verify.service.ChatService;
+import cn.edu.nju.Iot_Verify.util.ChatLanguagePreference;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -922,6 +923,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                   String executionId,
                                   String turnId,
                                   String content,
+                                  String locale,
                                   ChatConfirmationCommandDto confirmation,
                                   SseEmitter emitter) {
         if (turnId == null || turnId.isBlank()) {
@@ -957,7 +959,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         AiScenarioDraftStore.PendingApplication scenarioPending;
         AiTaskContinuationStore.ContinuationContext continuationContext;
         ConfirmationDecision confirmationDecision;
-        boolean preferChinese = prefersChinese(content);
+        boolean preferChinese = ChatLanguagePreference.prefersChinese(locale, content);
         StringBuilder finalAnswer = new StringBuilder();
         List<StreamResponseDto.ProgressDto> executionTrace = new ArrayList<>();
         long executionStartedNanos = System.nanoTime();
@@ -2856,9 +2858,17 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             return "";
         }
         if (!result.hadToolCalls()) {
-            return preferChinese
-                    ? "系统状态：本轮未执行平台工具，因此回复不代表已读取当前画布数据或已完成平台操作。\n\n"
-                    : "System status: no platform tool ran in this turn, so the response does not confirm current Board data or a completed platform operation.\n\n";
+            /*
+             * No prose for this case: the execution-trace header already carries a `No platform tools ran` badge,
+             * driven by the same `hadToolCalls` signal and rendered through the client's own i18n. A sentence here
+             * was the second owner of one fact — it restated the badge at greater length, above the answer, and in
+             * a language this method can only infer, so a Chinese interface asked "hi" showed the Chinese badge
+             * beside English prose saying the same thing.
+             *
+             * The badge is the half worth keeping: it follows the UI language, holds a fixed position, and does
+             * not push the reply down the bubble.
+             */
+            return "";
         }
         List<String> notices = new ArrayList<>();
         if (result.stopReason() == ToolLoopStopReason.PARTIAL_RESULT) {
@@ -3596,11 +3606,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return preferChinese
                 ? "系统异常，请稍后重试。"
                 : "System error, please try again later.";
-    }
-
-    private boolean prefersChinese(String content) {
-        return content != null && content.codePoints().anyMatch(codePoint ->
-                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
     }
 
     private enum ToolExecutionOutcome {

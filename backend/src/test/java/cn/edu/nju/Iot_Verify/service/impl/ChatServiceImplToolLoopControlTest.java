@@ -3063,7 +3063,9 @@ class ChatServiceImplToolLoopControlTest {
                 msg -> msg != null
                         && "assistant".equalsIgnoreCase(msg.getRole())
                         && msg.getContent() != null
-                        && msg.getContent().startsWith("System status: no platform tool ran in this turn")
+                        // The "no platform tool ran" prose was removed: the client's execution-trace badge is the
+                        // single owner of that fact. This test's subject is the guard below, which is unaffected.
+                        && !msg.getContent().contains("no platform tool ran in this turn")
                         && msg.getContent().contains("The system hid an unverified reply")
                         && !msg.getContent().contains("I deleted:")
                         && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL));

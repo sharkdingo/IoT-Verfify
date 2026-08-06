@@ -154,7 +154,12 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   `errorMessage` fields are technical diagnostics unless their contract explicitly says
   they follow the requested language. Prefer stable reason/status codes; otherwise use
   `utils/userMessage.ts` for ordinary fallback copy and keep the raw text in Technical
-  Details or logs.
+  Details or logs. Chat is the one surface whose contract *does* say so: `sendStreamChat` sends the
+  current UI locale, and the backend writes its status prose in that language. Keep sending it — the
+  fallback is a Han-character scan of the user's own message, which answered "hi" in English on a
+  Chinese interface. A backend sentence that merely restates something the client already renders
+  (a badge, a status chip) should be deleted rather than translated: the client's copy follows the
+  UI language for free.
 
 ### Frontend anti-slop checks
 
@@ -330,7 +335,9 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   surface an error instead.
 - **Verification warnings are user-visible.** `disabledRuleCount`,
   `skippedSpecCount`, and `[rule-disabled]` / `[spec-skipped]` entries in `checkLogs`
-  must be shown even when `safe === true`.
+  must be shown even when `outcome === 'SATISFIED'`. There is no boolean `safe` field — it was
+  removed because it collapsed "all specs passed" and "the model was faithful" into one bit, and
+  those are the two questions a warning exists to separate.
 - **Own a streaming row by identity, never by position.** The assistant's in-flight row is found by
   `turnId`: "load older messages" prepends a page and shifts every array index, which sent chunks
   and terminal status into an archived message. Browsing history during a stream is legitimate — do

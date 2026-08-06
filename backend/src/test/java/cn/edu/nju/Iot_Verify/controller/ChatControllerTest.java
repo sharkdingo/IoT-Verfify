@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -108,7 +109,8 @@ class ChatControllerTest {
         verify(userOperationGuard).acquire(
                 1L, UserOperationGuard.Kind.CHAT, 6, Duration.ofHours(2));
         verify(chatService).processStreamChat(
-                eq(1L), eq("s1"), eq("execution-s1"), eq("turn-s1"), eq("hello"), eq(null), same(emitter));
+                eq(1L), eq("s1"), eq("execution-s1"), eq("turn-s1"), eq("hello"), eq("zh-CN"), eq(null),
+                same(emitter));
         verify(chatService).endStreamRequest(1L, "s1", "execution-s1");
     }
 
@@ -162,7 +164,8 @@ class ChatControllerTest {
             return null;
         }).when(emitter).send(any(SseEmitter.SseEventBuilder.class));
 
-        controller.completeAdmissionOutcomeUnknown(emitter, "hello");
+        // No locale: falls back to inspecting the message, which has no Han character, so English.
+        controller.completeAdmissionOutcomeUnknown(emitter, null, "hello");
 
         assertEquals(1, frames.size());
         StreamResponseDto frame = frames.get(0);
@@ -172,6 +175,35 @@ class ChatControllerTest {
         assertNull(frame.getProgress());
         assertNull(frame.getTerminal());
         verify(emitter).complete();
+    }
+
+    @Test
+    void admissionOutcomeUnknown_usesTheDeclaredUiLanguageRatherThanTheMessageText() throws IOException {
+        /*
+         * "Rollback could not be confirmed" is among the least affordable messages to deliver in the wrong
+         * language: it tells the user not to retry and to reconcile first. The controller used to choose by
+         * scanning the message for a Han character — its own copy of a decision ChatServiceImpl also made — so a
+         * Chinese interface whose message was "hi" received this warning in English.
+         */
+        SseEmitter emitter = mock(SseEmitter.class);
+        List<StreamResponseDto> frames = new ArrayList<>();
+        doAnswer(invocation -> {
+            SseEmitter.SseEventBuilder event =
+                    invocation.getArgument(0, SseEmitter.SseEventBuilder.class);
+            for (ResponseBodyEmitter.DataWithMediaType item : event.build()) {
+                if (item.getData() instanceof StreamResponseDto frame) frames.add(frame);
+            }
+            return null;
+        }).when(emitter).send(any(SseEmitter.SseEventBuilder.class));
+
+        controller.completeAdmissionOutcomeUnknown(emitter, "zh-CN", "hi");
+
+        assertEquals(1, frames.size());
+        String error = frames.get(0).getError();
+        assertTrue(error.contains("回滚结果无法确认"),
+                "a Chinese UI must get the Chinese warning even when the message carries no Han character, got: "
+                        + error);
+        assertFalse(error.contains("could not be confirmed"));
     }
 
     @Test
@@ -211,7 +243,7 @@ class ChatControllerTest {
 
         verify(chatService).abortUndispatched(1L, "s1", "execution-s1", "turn-s1");
         verify(chatService, org.mockito.Mockito.never()).processStreamChat(
-                any(), any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), any(), any());
         verify(chatService, org.mockito.Mockito.never())
                 .endStreamRequest(1L, "s1", "execution-s1");
         verify(userLease).close();
@@ -241,6 +273,10 @@ class ChatControllerTest {
         request.setSessionId(sessionId);
         request.setContent(content);
         request.setTurnId("turn-" + sessionId);
+        // The UI language the turn is read in. Set here rather than left null so the forwarding assertion below
+        // fails if the controller drops it: a dropped locale sends the service back to guessing from the message
+        // text, which is the defect the field exists to remove, and it would be silent.
+        request.setLocale("zh-CN");
         return request;
     }
 }

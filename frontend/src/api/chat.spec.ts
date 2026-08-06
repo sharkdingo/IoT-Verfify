@@ -445,7 +445,11 @@ describe('chat stream lifecycle semantics', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       sessionId: 'session-1',
       content: 'hello',
-      turnId: 'turn-1'
+      turnId: 'turn-1',
+      // The UI language must be declared, not inferred: the backend used to look for Han characters in `content`,
+      // so a Chinese interface asking "hi" got English status prose. `toEqual` is exact here on purpose, so
+      // dropping the field reddens this.
+      locale: 'zh-CN'
     })
   })
 
@@ -466,6 +470,7 @@ describe('chat stream lifecycle semantics', () => {
       sessionId: 'session-1',
       content: 'I confirmed with the button',
       turnId: 'turn-2',
+      locale: 'zh-CN',
       confirmation: { action: 'CONFIRM', kind: 'DESTRUCTIVE' }
     })
   })

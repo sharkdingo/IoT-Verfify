@@ -17,6 +17,23 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-06 (latest)
 
+#### Fixed
+
+- **The assistant's status prose now follows the interface language instead of guessing from the message.** The
+  backend chose between Chinese and English by looking for a Han character in the user's own message, so a
+  Chinese interface asked "hi" replied in English — as did any turn whose message was a device id, an English
+  product name, or a greeting. The chat request now carries an optional `locale`, and that decides; message
+  inspection remains only as the fallback for a client that sends none. This affected every backend-authored
+  notice sharing the decision, not just the one visible in the report: error messages, interruption audits, and
+  persistence-failure text. The decision had two independent copies — `ChatController` carried its own scan for
+  the admission-outcome-unknown warning, which is among the least affordable to mislocalise because it tells the
+  user not to retry until they reconcile. Both now read one owner (`ChatLanguagePreference`).
+- **Removed the "no platform tool ran" sentence that duplicated its own badge.** The execution-trace header
+  already carries a `No platform tools ran` badge from the same signal, rendered through the client's i18n. The
+  sentence restated it at greater length, above the answer, in a language the backend could only infer — so one
+  turn showed the Chinese badge beside English prose saying the same thing. The badge is the surviving owner: it
+  follows the UI language and does not push the reply down the bubble.
+
 #### Changed
 
 - **Replay now has three surfaces with one question each, instead of three copies of one answer.** The canvas

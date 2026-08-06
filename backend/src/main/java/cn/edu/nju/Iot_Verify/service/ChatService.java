@@ -25,9 +25,15 @@ public interface ChatService {
     ChatPendingConfirmationDto getPendingConfirmation(Long userId, String sessionId);
     default void processStreamChat(Long userId, String sessionId, String executionId,
                                    String turnId, String content, SseEmitter emitter) {
-        processStreamChat(userId, sessionId, executionId, turnId, content, null, emitter);
+        processStreamChat(userId, sessionId, executionId, turnId, content, null, null, emitter);
     }
+
+    /**
+     * @param locale the UI language this turn is read in ({@code zh-CN} / {@code en}); null falls back to
+     *               inspecting {@code content} for Han characters, which is only a guess
+     */
     void processStreamChat(Long userId, String sessionId, String executionId,
-                           String turnId, String content, ChatConfirmationCommandDto confirmation,
+                           String turnId, String content, String locale,
+                           ChatConfirmationCommandDto confirmation,
                            SseEmitter emitter);
 }

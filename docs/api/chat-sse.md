@@ -388,6 +388,7 @@ from being presented as completely successful.
 | `sessionId` | `String` | Required; ≤64 characters |
 | `content` | `String` | Required; ≤10000 characters and must contain at least one non-Unicode-whitespace code point |
 | `turnId` | `String` | Required non-blank value, ≤64 characters. The client generates a unique value used to associate the user message and terminal assistant record; omission is rejected with HTTP `400`. |
+| `locale` | `String` | Optional BCP 47 tag (`zh-CN` / `en`), ≤35 characters, naming the UI language the turn is read in. It selects the language of backend-authored status prose (execution notices, error and interruption messages). When absent, the backend falls back to inspecting `content` for Han characters — a guess that reports English for any message carrying none, so a client with a language setting should always send it. |
 | `confirmation` | `ChatConfirmationCommandDto` | Optional explicit protected-action decision: `{ action: "CONFIRM" | "CANCEL", kind: "DESTRUCTIVE" | "DEFAULT_TEMPLATE_RESET" | "SCENE_REPLACEMENT" }`. It is accepted only when that kind is currently pending for the session. |
 
 An unknown session, a reused `turnId`, and other admission failures remain synchronous JSON

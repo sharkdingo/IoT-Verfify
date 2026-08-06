@@ -16,6 +16,7 @@ import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.ChatService;
 import cn.edu.nju.Iot_Verify.service.UserOperationGuard;
+import cn.edu.nju.Iot_Verify.util.ChatLanguagePreference;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
@@ -106,7 +107,7 @@ public class ChatController {
             userLease.close();
             log.error("Chat admission rollback outcome is unknown: userId={}, sessionId={}",
                     userId, request.getSessionId(), e);
-            completeAdmissionOutcomeUnknown(emitter, request.getContent());
+            completeAdmissionOutcomeUnknown(emitter, request.getLocale(), request.getContent());
             return emitter;
         } catch (RuntimeException e) {
             userLease.close();
@@ -120,13 +121,13 @@ public class ChatController {
                     userLeaseAttached = true;
                     chatService.processStreamChat(
                             userId, request.getSessionId(), executionId, turnId, request.getContent(),
-                            request.getConfirmation(), emitter);
+                            request.getLocale(), request.getConfirmation(), emitter);
                     userLease.requireActive();
                 } catch (Exception e) {
                     if (!userLeaseAttached) {
                         if (!abortUndispatchedRequest(
                                 userId, request.getSessionId(), executionId, turnId, userLease)) {
-                            completeAdmissionOutcomeUnknown(emitter, request.getContent());
+                            completeAdmissionOutcomeUnknown(emitter, request.getLocale(), request.getContent());
                         } else {
                             emitter.completeWithError(e);
                         }
@@ -143,7 +144,7 @@ public class ChatController {
         } catch (RejectedExecutionException e) {
             if (!abortUndispatchedRequest(
                     userId, request.getSessionId(), executionId, turnId, userLease)) {
-                completeAdmissionOutcomeUnknown(emitter, request.getContent());
+                completeAdmissionOutcomeUnknown(emitter, request.getLocale(), request.getContent());
                 return emitter;
             }
             log.warn("Chat request rejected: executor is saturated, userId={}, sessionId={}", userId, request.getSessionId());
@@ -151,7 +152,7 @@ public class ChatController {
         } catch (RuntimeException e) {
             if (!abortUndispatchedRequest(
                     userId, request.getSessionId(), executionId, turnId, userLease)) {
-                completeAdmissionOutcomeUnknown(emitter, request.getContent());
+                completeAdmissionOutcomeUnknown(emitter, request.getLocale(), request.getContent());
                 return emitter;
             }
             throw e;
@@ -177,9 +178,12 @@ public class ChatController {
         }
     }
 
-    void completeAdmissionOutcomeUnknown(SseEmitter emitter, String content) {
-        String message = content != null && content.codePoints().anyMatch(codePoint ->
-                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)
+    /**
+     * @param locale the UI language, as sent by the client; when absent the message text is inspected for Han
+     *               characters, which reports English for any message carrying none
+     */
+    void completeAdmissionOutcomeUnknown(SseEmitter emitter, String locale, String content) {
+        String message = ChatLanguagePreference.prefersChinese(locale, content)
                 ? "请求未能确认开始执行，且已保存请求的回滚结果无法确认。"
                     + "请等待会话空闲后刷新历史和画布，不要立即重试。"
                 : "The request was not confirmed as started, and rollback of its saved "
