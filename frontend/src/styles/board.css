@@ -1764,57 +1764,32 @@
     line-height: 1.1;
 }
 
-.iot-board .board-tool-tooltip {
-    position: absolute;
-    right: calc(100% + 0.75rem);
-    top: 50%;
-    z-index: 20;
-    max-width: min(18rem, 52vw);
-    padding: 0.45rem 0.65rem;
-    border-radius: var(--iot-radius-action);
-    background: var(--surface-elevated);
-    /* A transient chip floats above content; it is not a panel floating above the page. It was using
-       `--shadow-elevated` — an 18px/42px panel lift on a hover label two lines tall — so hovering a dock
-       button dropped a panel-sized shadow across the canvas. That is the hover treatment the review called
-       out, and it is a depth error rather than a colour one. */
-    box-shadow: var(--shadow-floating);
-    color: #fff;
-    /* The scale's small-text step, not another bespoke `0.72rem` — this was the third site using that value
-       and the last one left after the heading and the button labels moved onto the scale. */
-    font-size: 0.75rem;
-    line-height: 1.2;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(-50%);
-    transition: opacity 0.16s ease;
-    white-space: nowrap;
-}
+/*
+ * The dock's hover hints are `HintTooltip` (Element Plus popper), not a CSS pseudo-tooltip.
+ *
+ * The hand-rolled version was a `<span>` inside each button, positioned with
+ * `right: calc(100% + 0.75rem)` and revealed by `.board-tool-wrapper:hover`. It was invisible for
+ * eight of the nine dock buttons, and the cause was containment rather than the hover rule: the
+ * dock panel establishes its own clipping/stacking context, so a child positioned to the *left* of
+ * the button is outside it and gets clipped away. Run History looked like the exception only
+ * because it was the one button already wrapped in `HintTooltip`, which teleports to `<body>` and
+ * therefore escapes the clip. Two media queries then set `display: none` on the same spans, so at
+ * <=860px and in the narrow layout every hint was gone by declaration as well.
+ *
+ * A teleported popper fixes all three at once (clipping, viewport flipping, touch/keyboard), so the
+ * hint is now one mechanism for the whole dock. The chip-vs-panel depth the old rule was carefully
+ * tuned for lives in `.iot-info-tooltip-popper` (`components/common/InfoTooltip.vue`), which sets
+ * `--shadow-floating`; `elevationScale.spec.ts` pins it there.
+ */
 
 /*
- * The second tooltip line: what this run *returns*.
+ * The "what does this run return" line survived the migration as the tooltip's second line.
  *
- * The visual tier answers "how important is this control". It cannot answer "what will I get", and an
- * independent review of the retiered dock found exactly that gap -- Simulation and Explore "look like
- * equivalent run modes, and none indicates what kind of result it produces". A block line inside the tooltip
- * carries the answer where the label has no room for it, and only on hover, so the resting dock stays quiet.
- *
- * At the product floor rather than smaller: this is the sentence that stops a bounded search being read as a
- * proof, which makes it the least skippable text in the tooltip.
+ * It answers what the visual tier cannot -- Simulation and Explore look like equivalent run modes,
+ * and neither says what kind of result it produces. It is the sentence that stops a bounded search
+ * being read as a proof, so it is the least skippable text in the hint. It is now a `\n` in the
+ * tooltip string rather than a nested `<span>`, rendered by the popper's `white-space: pre-line`.
  */
-.iot-board .board-tool-outcome {
-    display: block;
-    margin-top: 0.2rem;
-    padding-top: 0.2rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.22);
-    font-size: var(--iot-font-min);
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.88);
-}
-
-.iot-board .board-tool-wrapper:hover .board-tool-tooltip,
-.iot-board .board-tool-wrapper:focus-within .board-tool-tooltip {
-    opacity: 1;
-}
 
 /*
  * Compact mode differs from expanded in exactly one thing: there is no room for the labels, so the
@@ -1857,11 +1832,6 @@
    width for the mode, and the launcher's base rule sizes itself from `--board-dock-handle` with the same
    action radius as the handle it stands in for. The three literals here were a fourth copy of "3.5rem". */
 
-@media (max-width: 860px) {
-    .iot-board .board-action-dock--compact .board-tool-tooltip {
-        display: none;
-    }
-}
 
 .iot-board .board-surface-panel,
 .iot-board .board-floating-panel,
@@ -2155,9 +2125,6 @@
         scrollbar-width: thin;
     }
 
-    .iot-board .board-tool-tooltip {
-        display: none;
-    }
 
     .iot-board .board-floating-panel {
         width: min(var(--board-floating-panel-max-width), calc(100vw - 1.5rem));
@@ -2557,13 +2524,20 @@
      *
      * It was `min(44dvh, 20rem)`, and the `20rem` term binds on every screen taller than ~727px — so in practice
      * the overlay was pinned at exactly 320px whatever the viewport offered. With the duplicated device and
-     * environment blocks gone the content measures 317px, which *fit*, but with **1px to spare**: the next label
+     * environment blocks gone the content measured 317px, which *fit*, but with **1px to spare**: the next label
      * or badge would have re-armed the clipping and quietly undone the whole reduction.
      *
-     * 26rem leaves the current content ~99px of headroom while still holding the overlay to roughly a third of a
-     * 900px viewport, which is the ratio the earlier pass established so the canvas reads as the subject. The
-     * `dvh` term stays and now does the job it is for: on a short viewport it clamps below the rem ceiling rather
+     * 26rem is the ceiling that leaves headroom while still holding the overlay to roughly a third of a 900px
+     * viewport, which is the ratio the earlier pass established so the canvas reads as the subject. The `dvh`
+     * term stays and now does the job it is for: on a short viewport it clamps below the rem ceiling rather
      * than being shadowed by it.
+     *
+     * Content has since shrunk further, to a measured **236px** at both 1280x871 and 1440x900 (E2E, real
+     * counterexample): the redundant "jump to state" range slider and the disclosure wrapper around the
+     * step's cause are gone, and `scrollHeight` now equals `clientHeight` — the overlay no longer scrolls at
+     * all. `playbackOverlayCaps.spec.ts` still pins its floor against the older 317px figure on purpose: that
+     * constant guards the *ceiling* from dropping below content, so a conservative floor stays correct, and
+     * lowering it would weaken the guard rather than tighten it.
      */
     max-height: min(44dvh, 26rem);
     background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
@@ -2583,6 +2557,32 @@
     padding: 0.75rem 0.75rem 0.5rem;
     background: color-mix(in srgb, var(--surface-overlay) 94%, transparent);
     backdrop-filter: blur(14px);
+}
+
+/*
+ * The rail is the one scrub control, so its track has to look grabbable.
+ *
+ * It replaced a range slider, and a slider's thumb telegraphs "drag me" for free. The rail's step markers are
+ * an obvious affordance on their own, but the *track between them* is equally interactive — press or drag
+ * anywhere and it seeks to the nearest state — and nothing said so. A cursor is the cheapest way to say it:
+ * it costs no height, which is the constraint this whole overlay is under.
+ *
+ * The `:active` pair matters as much as the rest state: during a scrub the pointer is captured, so the cursor
+ * is the only continuous confirmation that the gesture is still live once it leaves the track's box.
+ *
+ * Scoped by testid because the rail is Tailwind-classed inline in two different SFCs and has no shared class
+ * of its own; the testid is the one selector both already carry. Touch devices have no hover or cursor, which
+ * is why `touch-none` on the element is the mechanism there — it stops the browser reading a scrub as a
+ * scroll — and this rule is a pointer-only enhancement layered over that.
+ */
+.board-timeline [data-testid='trace-timeline-track'],
+.board-timeline [data-testid='simulation-timeline-track'] {
+    cursor: grab;
+}
+
+.board-timeline [data-testid='trace-timeline-track']:active,
+.board-timeline [data-testid='simulation-timeline-track']:active {
+    cursor: grabbing;
 }
 
 .board-timeline .text-slate-400,

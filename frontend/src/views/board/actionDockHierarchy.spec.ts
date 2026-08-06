@@ -224,18 +224,35 @@ describe('board action dock hierarchy', () => {
     expect(board, 'the rail needs a dedicated short label').toContain("t('app.fuzzSearchShort')")
   })
 
-  it('shows the values for the selected counterexample step without an extra click', () => {
-    // The device states, triggered rules and environment values answer "what changed and why".
-    // Collapsed, a 14-state trace showed a step number and a violated property but no values -- for
-    // a counterexample whose whole point is a value climbing to the forbidden number.
-    // Renamed from `trace-timeline-state-details`, which shared a prefix with the per-step buttons
-    // (`trace-timeline-state-{i}`) and so was matched by selectors meant to find steps.
-    for (const testId of ['trace-step-values']) {
-      const at = board.indexOf(`data-testid="${testId}"`)
-      expect(at, `${testId} should exist`).toBeGreaterThan(-1)
-      const tagStart = board.lastIndexOf('<details', at)
-      expect(board.slice(tagStart, at), `${testId} should be open by default`).toContain(' open')
-    }
+  it('shows what caused the selected counterexample step without an extra click', () => {
+    // Which automation produced this state answers "why is the trace here", so it must not sit behind an
+    // interaction. It used to be a `<details open>` and the guard asserted the `open` attribute; the block
+    // is now an unconditional row, which satisfies the same requirement more directly -- a disclosure that
+    // is open by default and holds one line is chrome, not a control. The requirement is visibility, so
+    // assert that, and assert it is not inside a `<details>` at all.
+    const at = board.indexOf('data-testid="trace-step-values"')
+    expect(at, 'trace-step-values should exist').toBeGreaterThan(-1)
+
+    // The nearest enclosing element must not be a disclosure. Comments and attribute strings can contain
+    // the literal `<details`, so strip comments first and match only opening tags (not bare text).
+    const markup = board.replace(/<!--[\s\S]*?-->/g, '')
+    const markupAt = markup.indexOf('data-testid="trace-step-values"')
+    expect(markupAt, 'trace-step-values should survive comment stripping').toBeGreaterThan(-1)
+
+    // Scan for `<details` as an opening tag (followed by whitespace or `>`), not as text in an attribute.
+    const beforeTarget = markup.slice(0, markupAt)
+    const detailsMatches = [...beforeTarget.matchAll(/<details(?:\s|>)/g)]
+    const openAt = detailsMatches.length > 0 ? detailsMatches[detailsMatches.length - 1].index! : -1
+    const closeAt = beforeTarget.lastIndexOf('</details>')
+
+    expect(
+      openAt > closeAt,
+      'the cause of the selected step must not be behind a disclosure'
+    ).toBe(false)
+
+    // The triggered-rule chips are the payload, and they render in the same always-visible row.
+    expect(markup.slice(markupAt, markupAt + 1600), 'the triggered rules should render in that row')
+      .toContain('data-testid="trace-timeline-triggered-rules"')
   })
 
   it('derives every dock mode decision from one list of available modes', () => {

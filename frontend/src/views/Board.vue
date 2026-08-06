@@ -805,6 +805,7 @@ import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { openModalDepth } from '@/composables/useBodyScrollLock'
 import { useTheme } from '@/composables/useTheme'
 import { useBoardUndo } from '@/composables/useBoardUndo'
+import { useTimelineRail } from '@/composables/useTimelineRail'
 
 const LogoutConfirmDialog = defineAsyncComponent(() => import('@/components/LogoutConfirmDialog.vue'))
 const AccountDeleteDialog = defineAsyncComponent(() => import('@/components/AccountDeleteDialog.vue'))
@@ -1342,6 +1343,32 @@ const hasActionDockActivity = computed(() =>
   isAnyRecommendationRunning() ||
   unreadFuzzNotificationCount.value > 0
 )
+
+// Dock button tooltip content - one source of truth for each button's hover hint
+const simulationTooltipContent = computed(() => {
+  const status = isSimulating.value || simulationAnimationState.value.visible
+    ? t('app.simulationRunning')
+    : t('app.openSimulationSettings')
+  return `${status}\n${t('app.outcomeSimulation')}`
+})
+const fuzzingTooltipContent = computed(() => {
+  const status = isSceneReplacementInProgress.value
+    ? t('app.sceneReplacementInProgress')
+    : isFuzzing.value
+      ? t('app.fuzzRunning')
+      : t('app.openFuzzSettings')
+  return `${status}\n${t('app.outcomeExploration')}`
+})
+const verificationTooltipContent = computed(() => {
+  const status = isVerifying.value
+    ? t('app.verifying')
+    : t('app.openVerificationSettings')
+  return `${status}\n${t('app.outcomeVerification')}`
+})
+const scenarioTooltipContent = computed(() => t('app.openScenarioRecommendations'))
+const ruleTooltipContent = computed(() => t('app.openRuleRecommendations'))
+const deviceTooltipContent = computed(() => t('app.openDeviceRecommendations'))
+const specTooltipContent = computed(() => t('app.openSpecificationRecommendations'))
 /*
  * The rail width table owns the paint width; the reserved width adds the gap the dock is inset by, which
  * the fit math needs and the paint does not.
@@ -10775,6 +10802,31 @@ const closeVerificationPanel = () => {
   fuzzVerificationHandoff.value = null
 }
 
+/**
+ * Reset the workspace to a clean state.
+ *
+ * The logo button lives in the board header regardless of what's open or which deep-link the URL holds,
+ * and it's visually interactive (cursor, hover fade). Users who click it expect *something*, not a
+ * no-op. Pushing to `/board` when already there does nothing — Vue Router skips same-route navigation,
+ * the component doesn't remount, overlays stay open, and the URL's deep-link state persists.
+ *
+ * This gives the click a purpose: close every floating overlay and clear the deep-link target, leaving
+ * a clean board. It's an escape hatch — "get me back to just the canvas" — which is exactly what "click
+ * the logo to go home" means in a single-page workspace app where the board *is* home.
+ */
+const resetWorkspace = () => {
+  // Close playback overlays (they block other interactions)
+  if (traceAnimationState.value.visible) closeTraceAnimation()
+  if (simulationAnimationState.value.visible) closeSimulationTimeline()
+  // Close floating tool panels
+  if (showVerificationPanel.value) closeVerificationPanel()
+  if (showSimulationPanel.value) closeSimulationPanel()
+  // Clear deep-link target (so reopening a panel starts fresh rather than resuming the linked run)
+  if (route.query.run || route.query.trace || route.query.finding) {
+    void router.replace({ query: applyBoardRunTarget(route.query, null) })
+  }
+}
+
 const reuseFuzzingSettings = () => {
   const run = fuzzingResult.value
   if (!run) return
@@ -11794,17 +11846,6 @@ const traceTriggeredRuleExistsOnBoard = (rule: { ruleIndex?: number; ruleId?: st
 // "which step" — rail, slider, number field — and the field was the one with no unique job, so both it and
 // this 1-based adapter are gone. `vue-tsc` flagged the orphan, which is the check doing its work.
 
-const selectedTraceStateRangeIndex = computed({
-  get: () => traceAnimationState.value.selectedStateIndex,
-  set: (value: number) => {
-    if (!Number.isFinite(value)) return
-    goToState(Math.trunc(value))
-  }
-})
-
-
-
-
 // 选择并播放指定索引的反例路径动画
 const selectAndPlayTrace = (traceIndex: number) => {
   // 互斥检查：如果模拟动画正在显示，则不允许打开反例路径动画
@@ -11866,22 +11907,13 @@ const goToState = (index: number) => {
   }
 }
 
-const handleTraceStateKeydown = (event: KeyboardEvent, index: number) => {
-  const keyToIndex: Record<string, number> = {
-    ArrowLeft: index - 1,
-    ArrowDown: index - 1,
-    ArrowRight: index + 1,
-    ArrowUp: index + 1,
-    Home: 0,
-    End: totalStates.value - 1
-  }
-  if (!(event.key in keyToIndex)) return
-  event.preventDefault()
-  const lastIndex = Math.max(totalStates.value - 1, 0)
-  const nextIndex = Math.min(Math.max(keyToIndex[event.key], 0), lastIndex)
-  goToState(nextIndex)
-  revealTraceStateButton(nextIndex, true)
-}
+// Timeline rail interaction logic (pointer scrubbing, keyboard navigation, button scrolling)
+const traceRail = useTimelineRail({
+  totalStates,
+  selectedStateIndex: computed(() => traceAnimationState.value.selectedStateIndex),
+  onSelectState: (index: number) => goToState(index),
+  testIdPrefix: 'trace-timeline'
+})
 
 /**
  * Which step of the counterexample is the violation.
@@ -11923,27 +11955,11 @@ const getTraceStateAriaLabel = (index: number) => {
     : base
 }
 
-const revealTraceStateButton = (index: number, focus = false) => {
-  void nextTick(() => {
-    const button = document.querySelector<HTMLButtonElement>(`[data-testid="trace-timeline-state-${index}"]`)
-    button?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
-    if (focus) {
-      button?.focus()
-    }
-  })
-}
-
-const selectTraceStateFromTimelinePointer = (event: PointerEvent) => {
-  if (totalStates.value <= 1) return
-  if (event.target instanceof Element && event.target.closest('button')) return
-  const target = event.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-  const trackLeft = rect.left + 8
-  const trackWidth = Math.max(1, rect.width - 16)
-  const ratio = Math.min(1, Math.max(0, (event.clientX - trackLeft) / trackWidth))
-  const nextIndex = Math.round(ratio * (totalStates.value - 1))
-  goToState(nextIndex)
-  revealTraceStateButton(nextIndex, true)
+// Wrapper to stop playback when scrubbing starts
+const scrubTraceStateFromPointer = (event: PointerEvent) => {
+  // Scrubbing is a deliberate seek, so it stops playback rather than fighting the timer for the index.
+  stopTraceAnimation()
+  traceRail.scrubStateFromPointer(event)
 }
 
 // 播放/停止动画
@@ -11989,7 +12005,7 @@ const startTraceAnimation = () => {
        * watching a rail that never moved. `inline: 'center'` and `block: 'nearest'` mean it pans the rail without
        * scrolling the overlay itself.
        */
-      revealTraceStateButton(traceAnimationState.value.selectedStateIndex)
+      traceRail.revealStateButton(traceAnimationState.value.selectedStateIndex, false)
       if (traceAnimationState.value.selectedStateIndex >= totalStates.value - 1) {
         stopTraceAnimation()
       }
@@ -12012,7 +12028,7 @@ watch(
   () => traceAnimationState.value.selectedStateIndex,
   index => {
     if (traceAnimationState.value.visible) {
-      revealTraceStateButton(index)
+      traceRail.revealStateButton(index, false)
     }
   }
 )
@@ -13375,8 +13391,8 @@ const counterexampleTraceHelpText = computed(() => {
           <button
             type="button"
             class="logo-left"
-            :aria-label="t('app.title')"
-            @click="router.push('/board')"
+            :aria-label="t('app.resetWorkspace')"
+            @click="resetWorkspace"
           >
             <span class="logo-wordmark">IoT-Verify</span>
             <span class="logo-short" aria-hidden="true">IoT</span>
@@ -14238,51 +14254,44 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="simulationAnimationState.visible"
             class="board-tool-pulse board-tool-pulse--primary"
           ></div>
-          <button
-            type="button"
-            @click="openSimulationFromActionDock"
-            data-testid="open-simulation-panel"
-            :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
-            :aria-label="isSimulating ? t('app.simulationRunning') : t('app.openSimulationSettings')"
-            :aria-pressed="showSimulationPanel || simulationAnimationState.visible"
-            class="board-tool-button board-tool-button--evidence transition-colors"
-          >
-            <span v-if="isSimulating" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
-            <span v-else class="material-symbols-outlined" aria-hidden="true">play_circle</span>
-            <span class="board-tool-label">{{ t('app.simulationTitle') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ isSimulating ? t('app.simulationRunning') : (simulationAnimationState.visible ? t('app.simulationRunning') : t('app.openSimulationSettings')) }}
-              <span class="board-tool-outcome">{{ t('app.outcomeSimulation') }}</span>
-              <span v-if="simulationAnimationState.visible" class="ml-1 board-text-info">({{ t('app.active') }})</span>
-            </span>
-          </button>
+          <HintTooltip :content="simulationTooltipContent">
+            <button
+              type="button"
+              @click="openSimulationFromActionDock"
+              data-testid="open-simulation-panel"
+              :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
+              :aria-label="isSimulating ? t('app.simulationRunning') : t('app.openSimulationSettings')"
+              :aria-pressed="showSimulationPanel || simulationAnimationState.visible"
+              class="board-tool-button board-tool-button--evidence transition-colors"
+            >
+              <span v-if="isSimulating" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+              <span v-else class="material-symbols-outlined" aria-hidden="true">play_circle</span>
+              <span class="board-tool-label">{{ t('app.simulationTitle') }}</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div class="board-tool-wrapper group">
           <div v-if="isFuzzing" class="board-tool-pulse board-tool-pulse--primary"></div>
-          <button
-            type="button"
-            @click="openFuzzingFromActionDock"
-            data-testid="open-fuzzing-panel"
-            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
-            :aria-label="isSceneReplacementInProgress
-              ? t('app.sceneReplacementInProgress')
-              : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings')"
-            :aria-pressed="showFuzzingPanel"
-            class="board-tool-button board-tool-button--evidence transition-colors"
-          >
-            <span v-if="isFuzzing" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
-            <span v-else class="material-symbols-outlined" aria-hidden="true">radar</span>
-            <!-- Short form: the rail truncated "Counterexample Search" to "Counterex...". The full
-                 name remains in this button's aria-label and tooltip. -->
-            <span class="board-tool-label">{{ t('app.fuzzSearchShort') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ isSceneReplacementInProgress
+          <HintTooltip :content="fuzzingTooltipContent">
+            <button
+              type="button"
+              @click="openFuzzingFromActionDock"
+              data-testid="open-fuzzing-panel"
+              :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
+              :aria-label="isSceneReplacementInProgress
                 ? t('app.sceneReplacementInProgress')
-                : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings') }}
-              <span class="board-tool-outcome">{{ t('app.outcomeExploration') }}</span>
-            </span>
-          </button>
+                : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings')"
+              :aria-pressed="showFuzzingPanel"
+              class="board-tool-button board-tool-button--evidence transition-colors"
+            >
+              <span v-if="isFuzzing" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+              <span v-else class="material-symbols-outlined" aria-hidden="true">radar</span>
+              <!-- Short form: the rail truncated "Counterexample Search" to "Counterex...". The full
+                   name remains in this button's aria-label and tooltip. -->
+              <span class="board-tool-label">{{ t('app.fuzzSearchShort') }}</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div class="board-tool-wrapper group">
@@ -14290,25 +14299,22 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="traceAnimationState.visible"
             class="board-tool-pulse board-tool-pulse--primary"
           ></div>
-          <button
-            ref="verificationActionButtonRef"
-            type="button"
-            @click="openVerificationFromActionDock"
-            data-testid="open-verification-panel"
-            :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
-            :aria-label="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
-            :aria-pressed="showVerificationPanel || traceAnimationState.visible"
-            class="board-tool-button board-tool-button--primary transition-colors"
-          >
-            <span v-if="isVerifying" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
-            <span v-else class="material-symbols-outlined" aria-hidden="true">fact_check</span>
-            <span class="board-tool-label">{{ t('app.verification') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ isVerifying ? t('app.verifying') : t('app.openVerificationSettings') }}
-              <span class="board-tool-outcome">{{ t('app.outcomeVerification') }}</span>
-              <span v-if="traceAnimationState.visible" class="ml-1 board-text-success">({{ t('app.active') }})</span>
-            </span>
-          </button>
+          <HintTooltip :content="verificationTooltipContent">
+            <button
+              ref="verificationActionButtonRef"
+              type="button"
+              @click="openVerificationFromActionDock"
+              data-testid="open-verification-panel"
+              :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
+              :aria-label="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
+              :aria-pressed="showVerificationPanel || traceAnimationState.visible"
+              class="board-tool-button board-tool-button--primary transition-colors"
+            >
+              <span v-if="isVerifying" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+              <span v-else class="material-symbols-outlined" aria-hidden="true">fact_check</span>
+              <span class="board-tool-label">{{ t('app.verification') }}</span>
+            </button>
+          </HintTooltip>
         </div>
 
       </div>
@@ -14352,11 +14358,6 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="fuzz-unread-badge"
                 aria-hidden="true"
               >{{ unreadFuzzNotificationCount > 99 ? '99+' : unreadFuzzNotificationCount }}</span>
-              <span class="board-tool-tooltip" aria-hidden="true">
-                {{ unreadFuzzNotificationCount > 0
-                  ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
-                  : t('app.openRunHistory') }}
-              </span>
             </button>
           </HintTooltip>
         </div>
@@ -14372,23 +14373,22 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="isRecommendingScenario"
             class="board-tool-pulse bg-[color:var(--accent)]"
           ></div>
-          <button
-            type="button"
-            @click="openScenarioRecommendationsFromActionDock"
-            data-testid="open-scenario-recommendations"
-            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('scenario')"
-            :aria-label="t('app.openScenarioRecommendations')"
-            :aria-pressed="showScenarioRecommendationPanel || isRecommendingScenario"
-            class="board-tool-button board-tool-button--suggestion transition-colors"
-            style="--board-tool-accent: var(--iot-tool-scenario)"
-          >
-            <span v-if="isRecommendingScenario" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
-            <span v-else class="material-symbols-outlined" aria-hidden="true">account_tree</span>
-            <span class="board-tool-label">{{ t('app.scenarioTool') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ t('app.openScenarioRecommendations') }}
-            </span>
-          </button>
+          <HintTooltip :content="scenarioTooltipContent">
+            <button
+              type="button"
+              @click="openScenarioRecommendationsFromActionDock"
+              data-testid="open-scenario-recommendations"
+              :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('scenario')"
+              :aria-label="t('app.openScenarioRecommendations')"
+              :aria-pressed="showScenarioRecommendationPanel || isRecommendingScenario"
+              class="board-tool-button board-tool-button--suggestion transition-colors"
+              style="--board-tool-accent: var(--iot-tool-scenario)"
+            >
+              <span v-if="isRecommendingScenario" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+              <span v-else class="material-symbols-outlined" aria-hidden="true">account_tree</span>
+              <span class="board-tool-label">{{ t('app.scenarioTool') }}</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div class="board-tool-wrapper group">
@@ -14396,23 +14396,22 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="isRecommendingRules"
             class="board-tool-pulse bg-[color:var(--warning)]"
           ></div>
-          <button
-            type="button"
-            @click="openRuleRecommendationsFromActionDock"
-            data-testid="open-rule-recommendations"
-            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('rule')"
-            :aria-label="t('app.openRuleRecommendations')"
-            :aria-pressed="showRecommendationPanel || isRecommendingRules"
-            class="board-tool-button board-tool-button--suggestion transition-colors"
-            style="--board-tool-accent: var(--iot-tool-rule)"
-          >
-            <span v-if="isRecommendingRules" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
-            <span v-else class="material-symbols-outlined" aria-hidden="true">rule_settings</span>
-            <span class="board-tool-label">{{ t('app.rulesTool') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ t('app.openRuleRecommendations') }}
-            </span>
-          </button>
+          <HintTooltip :content="ruleTooltipContent">
+            <button
+              type="button"
+              @click="openRuleRecommendationsFromActionDock"
+              data-testid="open-rule-recommendations"
+              :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('rule')"
+              :aria-label="t('app.openRuleRecommendations')"
+              :aria-pressed="showRecommendationPanel || isRecommendingRules"
+              class="board-tool-button board-tool-button--suggestion transition-colors"
+              style="--board-tool-accent: var(--iot-tool-rule)"
+            >
+              <span v-if="isRecommendingRules" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+              <span v-else class="material-symbols-outlined" aria-hidden="true">rule_settings</span>
+              <span class="board-tool-label">{{ t('app.rulesTool') }}</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div class="board-tool-wrapper group">
@@ -14420,23 +14419,22 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="isRecommendingDevices"
             class="board-tool-pulse bg-[color:var(--accent)]"
           ></div>
-          <button
-            type="button"
-            @click="openDeviceRecommendationsFromActionDock"
-            data-testid="open-device-recommendations"
-            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('device')"
-            :aria-label="t('app.openDeviceRecommendations')"
-            :aria-pressed="showDeviceRecommendationPanel || isRecommendingDevices"
-            class="board-tool-button board-tool-button--suggestion transition-colors"
-            style="--board-tool-accent: var(--iot-tool-device)"
-          >
-            <span v-if="isRecommendingDevices" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
-            <span v-else class="material-symbols-outlined" aria-hidden="true">devices_other</span>
-            <span class="board-tool-label">{{ t('app.devicesTool') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ t('app.openDeviceRecommendations') }}
-            </span>
-          </button>
+          <HintTooltip :content="deviceTooltipContent">
+            <button
+              type="button"
+              @click="openDeviceRecommendationsFromActionDock"
+              data-testid="open-device-recommendations"
+              :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('device')"
+              :aria-label="t('app.openDeviceRecommendations')"
+              :aria-pressed="showDeviceRecommendationPanel || isRecommendingDevices"
+              class="board-tool-button board-tool-button--suggestion transition-colors"
+              style="--board-tool-accent: var(--iot-tool-device)"
+            >
+              <span v-if="isRecommendingDevices" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+              <span v-else class="material-symbols-outlined" aria-hidden="true">devices_other</span>
+              <span class="board-tool-label">{{ t('app.devicesTool') }}</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div class="board-tool-wrapper group">
@@ -14444,23 +14442,22 @@ const counterexampleTraceHelpText = computed(() => {
             v-if="isRecommendingSpecs"
             class="board-tool-pulse bg-[color:var(--danger)]"
           ></div>
-          <button
-            type="button"
-            @click="openSpecRecommendationsFromActionDock"
-            data-testid="open-spec-recommendations"
-            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('spec')"
-            :aria-label="t('app.openSpecificationRecommendations')"
-            :aria-pressed="showSpecRecommendationPanel || isRecommendingSpecs"
-            class="board-tool-button board-tool-button--suggestion transition-colors"
-            style="--board-tool-accent: var(--iot-tool-spec)"
-          >
-            <span v-if="isRecommendingSpecs" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
-            <span v-else class="material-symbols-outlined" aria-hidden="true">playlist_add_check</span>
-            <span class="board-tool-label">{{ t('app.specificationsTool') }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ t('app.openSpecificationRecommendations') }}
-            </span>
-          </button>
+          <HintTooltip :content="specTooltipContent">
+            <button
+              type="button"
+              @click="openSpecRecommendationsFromActionDock"
+              data-testid="open-spec-recommendations"
+              :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isRecommendationRunningForAnother('spec')"
+              :aria-label="t('app.openSpecificationRecommendations')"
+              :aria-pressed="showSpecRecommendationPanel || isRecommendingSpecs"
+              class="board-tool-button board-tool-button--suggestion transition-colors"
+              style="--board-tool-accent: var(--iot-tool-spec)"
+            >
+              <span v-if="isRecommendingSpecs" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+              <span v-else class="material-symbols-outlined" aria-hidden="true">playlist_add_check</span>
+              <span class="board-tool-label">{{ t('app.specificationsTool') }}</span>
+            </button>
+          </HintTooltip>
         </div>
         </div>
       </div>
@@ -17760,42 +17757,37 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!--
-          Open by default, for the same reason as the simulation timeline's equivalent block.
+          The cause of the selected state, as one row rather than a disclosure around a card.
+          `trace-step-values` keeps its name: it shares no prefix with the `trace-timeline-state-{i}`
+          step buttons, which is why it was renamed here in the first place.
 
-          This holds the device states, triggered rules and environment values for the selected step:
-          the answer to "what changed, and why". Collapsed, a 14-state counterexample showed a step
-          number and the violated property but no values, so reviewing it produced "No numeric
-          temperature or humidity value is shown... this screen does not show the temperature rising,
-          the state-by-state values, or a change caused by heating" -- for a trace whose entire point
-          is a value climbing to the forbidden number.
+          It was a `<details open>` wrapping a bordered card. Both wrappers were chrome around a single
+          line of chips -- a summary row, a border, a background and two paddings -- on the surface where
+          vertical space is scarcest, and a disclosure that is open by default and holds one line is a
+          click that changes nothing. What earns the height is the content: which automation produced this
+          state. That stays unconditionally visible, so nothing moved behind an interaction.
 
-          Still a <details>, so it can be collapsed once the user has their bearings.
+          Device and environment values are deliberately absent; the canvas nodes are their authority and
+          render them more richly (previous value, changed tint, trust and privacy pills).
         -->
-        <!-- `trace-step-values`, not `trace-timeline-state-details`: the old name shared its prefix with
-             the `trace-timeline-state-{i}` step buttons, so a `^=` selector matched this panel as if it
-             were a 28th step. That made a measurement report 28 steps for a 27-state trace, one 598px
-             "step", an overlapping pair, and a step missing its accessible name — four false findings from
-             one name. A testid prefix is an interface; overlapping prefixes make it ambiguous. -->
-        <details open class="group mb-2" data-testid="trace-step-values">
-          <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
-            <span class="inline-flex items-center gap-1.5">
-              <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
-              {{ t('app.traceVisualization.stateDetails') }}
-            </span>
-            <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
-          </summary>
-          <div class="mt-1.5">
-        <div class="board-card mb-3 rounded-lg border border-slate-200 /70 px-3 py-2" data-testid="trace-timeline-triggered-rules">
-          <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
+        <div
+          class="mb-2 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1"
+          data-testid="trace-step-values"
+        >
+          <span class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
             {{ traceAnimationState.selectedStateIndex === 0
               ? t('app.traceVisualization.initialModelState')
               : t('app.traceVisualization.rulesAppliedToReachState') }}
-          </div>
-          <div v-if="traceAnimationState.selectedStateIndex > 0 && currentTraceTriggeredRules.length > 0" class="mt-1.5 flex flex-wrap gap-1.5">
+          </span>
+          <span
+            v-if="traceAnimationState.selectedStateIndex > 0 && currentTraceTriggeredRules.length > 0"
+            class="flex min-w-0 flex-wrap items-center gap-1.5"
+            data-testid="trace-timeline-triggered-rules"
+          >
             <span
               v-for="(rule, index) in currentTraceTriggeredRules"
               :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-              class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[length:var(--iot-font-min)] font-semibold"
+              class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
               :class="traceTriggeredRuleExistsOnBoard(rule)
                 ? 'board-border-subtle board-chip-success board-text-success'
                 : 'board-surface-warning board-text-warning'"
@@ -17804,10 +17796,12 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="max-w-[14rem] truncate">{{ traceTriggeredRuleLabel(rule, Number(index)) }}</span>
               <span v-if="!traceTriggeredRuleExistsOnBoard(rule)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
             </span>
-          </div>
-          <div v-else-if="traceAnimationState.selectedStateIndex > 0" class="mt-1 text-[11px] text-slate-500">
-            {{ t('app.traceVisualization.noRulesApplied') }}
-          </div>
+          </span>
+          <span
+            v-else-if="traceAnimationState.selectedStateIndex > 0"
+            class="text-[11px] text-slate-500"
+            data-testid="trace-timeline-triggered-rules"
+          >{{ t('app.traceVisualization.noRulesApplied') }}</span>
         </div>
 
         <div
@@ -17833,55 +17827,26 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!--
-          One scrub control, not three, and no card around it.
+          One scrub control: the rail.
 
-          The overlay had **three** ways to answer "which step": this slider, a number input beside it, and
-          the 27-button rail below. Each is good at something different, and only two of those things are
-          distinct — the rail shows *shape* (where you are, where the violation sits) and the slider scrubs
-          continuously through states. A number input does neither uniquely; it restates the `n / total`
-          badge as an editable field. It is gone.
+          There were two, stacked two rows apart, both full-width, both horizontal, both mapping x to the
+          same state index, both drawn in the danger hue — an `<input type="range">` labelled "jump to
+          state" and this rail. That is what read as a double timeline for a single sequence. They were
+          kept apart on the argument that the rail shows *shape* while the slider *scrubs*, but that only
+          held while the rail seeked on press alone: `scrubTraceStateFromPointer` now captures the pointer
+          and follows a drag, so the rail does both, and the slider had nothing left that was its own.
 
-          The card wrapper is gone too. It spent a border, a background and 8px of padding to group a single
-          labelled input, on the surface where vertical space is scarcest — measured, the overlay holds 561px
-          of content in a 382px window, so every wrapper pushes real content behind a scroll.
+          The rail is the one that cannot be replaced, because only it can show where the violation sits
+          relative to where you are.
         -->
-        <label class="mb-2 flex min-w-0 items-center gap-2 text-[11px] font-bold text-slate-600">
-          <span class="whitespace-nowrap">{{ t('app.traceVisualization.jumpToState') }}</span>
-          <input
-            v-model.number="selectedTraceStateRangeIndex"
-            data-testid="trace-timeline-range"
-            type="range"
-            :min="0"
-            :max="Math.max(totalStates - 1, 0)"
-            :disabled="totalStates <= 1"
-            class="min-w-0 flex-1 accent-[color:var(--danger)]"
-          >
-        </label>
-
-        <!--
-          Device state and environment values are not repeated here; the canvas is their authority.
-
-          Three surfaces rendered the same `currentTraceState`: the canvas nodes, this block, and
-          `PlaybackChangePopover`. The canvas is the richest of the three — each variable's value, its previous
-          value, a `changed` tint, trust, and the security pills, with `shortLabel` variants for a narrow node —
-          so the copy here was the weaker one, and it was the dominant cost: measured against a real
-          counterexample, `trace-step-values` alone was 279.5px inside a 318px viewport, with the device chips
-          folded onto three rows.
-
-          What had made the duplicate load-bearing was the canvas's silent three-variable cap. That is now a `+N`
-          chip naming the remainder (verified: a five-variable device renders three badges plus "+2"), so the
-          fallback is no longer needed and the timeline can be a timeline.
-        -->
-          </div>
-        </details>
-        
-        <!-- Timeline bar with horizontal scroll support -->
         <div class="iot-scroll-region-x py-2">
-          <div 
-            class="relative h-14"
+          <div
+            class="relative h-14 touch-none"
             data-testid="trace-timeline-track"
+            role="group"
+            :aria-label="t('app.traceVisualization.jumpToState')"
             :style="{ width: (currentTrace?.states?.length || 0) > 15 ? 'max-content' : '100%', minWidth: (currentTrace?.states?.length || 0) > 15 ? `${Math.max((currentTrace?.states?.length || 0) * 38, 500)}px` : '100%' }"
-            @pointerdown="selectTraceStateFromTimelinePointer"
+            @pointerdown="scrubTraceStateFromPointer"
           >
             <!-- Progress line background -->
             <div class="absolute top-1/2 left-2 right-2 h-3 bg-slate-200 rounded -translate-y-1/2"></div>
@@ -17907,7 +17872,7 @@ const counterexampleTraceHelpText = computed(() => {
                 <button
                   type="button"
                   @click="goToState(Number(index))"
-                  @keydown="handleTraceStateKeydown($event, Number(index))"
+                  @keydown="traceRail.handleStateKeydown($event, Number(index))"
                   :tabindex="Number(index) === traceAnimationState.selectedStateIndex ? 0 : -1"
                   :aria-label="getTraceStateAriaLabel(Number(index))"
                   :aria-current="Number(index) === traceAnimationState.selectedStateIndex ? 'step' : undefined"

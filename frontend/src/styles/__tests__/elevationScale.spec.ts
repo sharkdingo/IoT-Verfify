@@ -119,14 +119,37 @@ describe('elevation scale', () => {
     expect(offenders, `use a --shadow-* step:\n${offenders.join('\n')}`).toEqual([])
   })
 
-  it('gives the dock tooltip a chip depth, not a panel depth', () => {
-    // The specific defect: an 18px/42px panel lift on a hover label, which is what made hovering a dock
-    // button drop a panel-sized shadow across the canvas.
-    const css = readFileSync(join(SRC, 'styles/board.css'), 'utf8')
-    const at = css.indexOf('.iot-board .board-tool-tooltip {')
-    expect(at, 'the tooltip rule should exist').toBeGreaterThan(-1)
-    const body = css.slice(at, at + css.slice(at).indexOf('}'))
+  it('gives the dock hint a chip depth, not a panel depth', () => {
+    // The original defect: an 18px/42px panel lift on a hover label, which made hovering a dock button
+    // drop a panel-sized shadow across the canvas. The dock's hint is now the shared `HintTooltip`
+    // popper rather than a hand-rolled span, so the depth constraint has to hold where that popper is
+    // styled. Asserting it here keeps the rule that outlived the element it was written for.
+    const popperCss = readFileSync(join(SRC, 'components/common/InfoTooltip.vue'), 'utf8')
+    const at = popperCss.indexOf('.iot-info-tooltip-popper)')
+    expect(at, 'the shared tooltip popper rule should exist').toBeGreaterThan(-1)
+    const body = popperCss.slice(at, at + popperCss.slice(at).indexOf('}'))
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-floating\)/)
+    expect(body).not.toMatch(/box-shadow:\s*var\(--shadow-elevated\)/)
+  })
+
+  it('routes every dock button hint through the shared popper, not a clipped span', () => {
+    // Eight of the nine dock buttons showed no hint at all: their hand-rolled `<span>` sat inside the
+    // dock's own clipping context and was positioned outside it, so it was clipped away. Run History
+    // looked like the exception only because it was already wrapped in `HintTooltip`, which teleports
+    // to <body>. Locking the mechanism in place is what stops one button drifting back.
+    const board = readFileSync(join(SRC, 'views/Board.vue'), 'utf8')
+    const dockAt = board.indexOf('board-floating-actions board-action-dock')
+    expect(dockAt, 'the action dock should be found').toBeGreaterThan(-1)
+    const dock = board.slice(dockAt, board.indexOf('<TraceHistoryPanel', dockAt))
+
+    expect(dock, 'the clipped span must not come back').not.toContain('board-tool-tooltip')
+
+    const buttons = dock.match(/class="board-tool-button[^"]*"/g) ?? []
+    expect(buttons.length, 'the dock buttons should be found').toBeGreaterThanOrEqual(8)
+    // Every dock button must sit inside a HintTooltip: count openers against buttons plus the two
+    // chrome controls (packed-mode launcher and the mode toggle) that were already wrapped.
+    const wrappers = dock.match(/<HintTooltip/g) ?? []
+    expect(wrappers.length).toBeGreaterThanOrEqual(buttons.length)
   })
 
   it('keeps every dock button flat, so the tiers differ by fill rather than by depth', () => {

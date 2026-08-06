@@ -69,4 +69,55 @@ describe('test-id namespaces', () => {
     expect(timeline).toContain('data-testid="simulation-step-values"')
     expect(timeline).not.toContain('data-testid="simulation-timeline-state-details"')
   })
+
+  it('gives each playback timeline one x-axis control rather than two', () => {
+    // The counterexample viewer and the simulation timeline both had a `<input type="range">` slider
+    // labelled "jump to state" stacked directly above a clickable state rail, both full-width, both
+    // horizontal, both mapping x-position to the same state index, both drawn in the same accent hue.
+    // Two controls over one axis read as two timelines for a single sequence. The rail is the one that
+    // cannot be replaced, because only it can show where the violation sits relative to where you are,
+    // so the slider was deleted and the rail took over its drag capability via pointer capture.
+    //
+    // This guard locks the decision in place: if a range input reappears in either overlay, something
+    // drifted back to the old shape.
+    const board = readFileSync(join(__dirname, '../Board.vue'), 'utf8')
+    const timeline = readFileSync(join(__dirname, '../../components/SimulationTimeline.vue'), 'utf8')
+
+    // Scope by region, not by attribute order: the deleted slider carried its testid *before*
+    // `type="range"`, so a pattern requiring that order could never match it back and the guard would
+    // pass by construction. Comments are stripped for the same reason -- both files now describe the
+    // slider they no longer render.
+    const strip = (source: string) => source.replace(/<!--[\s\S]*?-->/g, '')
+
+    // The counterexample overlay, from its host element to the panel that follows it.
+    const boardMarkup = strip(board)
+    const overlayStart = boardMarkup.indexOf('board-timeline-host--trace')
+    expect(overlayStart, 'the trace overlay should be found').toBeGreaterThan(-1)
+    const overlay = boardMarkup.slice(overlayStart, boardMarkup.indexOf('<SimulationTimeline', overlayStart))
+    // The slice must actually contain the rail, or an empty window would assert nothing.
+    const railAt = overlay.indexOf('data-testid="trace-timeline-track"')
+    expect(railAt, 'the slice should contain the rail').toBeGreaterThan(-1)
+    expect(overlay, 'the counterexample rail must be the only x-axis control')
+      .not.toContain('type="range"')
+    // Positive assertion: the rail itself must NOT be a range input, and must carry the expected
+    // role. This catches a rename-and-reintroduce: if the rail were renamed to `trace-rail` and a
+    // new `<input type="range" data-testid="trace-timeline-track">` appeared, the testid check would
+    // pass but the element would be wrong.
+    const railTag = overlay.slice(Math.max(0, railAt - 220), railAt + 280)
+    expect(railTag, 'the rail must not be an input element').not.toContain('<input')
+    expect(railTag, 'the rail must be a group with pointer interaction').toContain('role="group"')
+
+    // The simulation timeline keeps its number input and +/-1 buttons: exact entry and discrete
+    // stepping are a different modality, not a second x-axis. Scoped to the template, because the
+    // script's own JSDoc names the deleted slider and `strip` only removes HTML comments -- matching
+    // that prose is how this assertion first failed against correct markup.
+    const timelineTemplate = strip(timeline.slice(timeline.indexOf('<template>')))
+    const simRailAt = timelineTemplate.indexOf('data-testid="simulation-timeline-track"')
+    expect(simRailAt, 'the simulation rail should be found').toBeGreaterThan(-1)
+    expect(timelineTemplate, 'the simulation rail must be the only x-axis control')
+      .not.toContain('type="range"')
+    const simRailTag = timelineTemplate.slice(Math.max(0, simRailAt - 220), simRailAt + 280)
+    expect(simRailTag, 'the simulation rail must not be an input element').not.toContain('<input')
+    expect(simRailTag, 'the simulation rail must be a group with pointer interaction').toContain('role="group"')
+  })
 })

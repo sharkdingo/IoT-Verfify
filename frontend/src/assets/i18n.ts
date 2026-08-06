@@ -68,6 +68,7 @@ const messages = {
     'zh-CN': {
         app: {
             title: 'IoT-Verify',
+            resetWorkspace: '重置工作区',
             loading: '加载中...',
             saving: '保存中...',
             warning: '警告',
@@ -1613,6 +1614,20 @@ const messages = {
             boardUndoApplied: '已{action}{entity}。',
             boardUndoRedoApplied: '已重做：{action}{entity}。',
             boardUndoRedoNothingToApply: '没有可重做的编辑。',
+            // 撤销/重做通知的动词词汇：正向操作（重做时）和反向操作（撤销时）
+            boardEditOperation_CREATE: '创建',
+            boardEditOperation_UPDATE: '更新',
+            boardEditOperation_DELETE: '删除',
+            boardEditInverse_CREATE: '移除',
+            boardEditInverse_UPDATE: '还原',
+            boardEditInverse_DELETE: '恢复',
+            // 撤销/重做通知的实体词汇
+            boardEditEntity_DEVICE: '设备',
+            boardEditEntity_ENVIRONMENT: '环境变量',
+            boardEditEntity_RULE: '自动化规则',
+            boardEditEntity_SPECIFICATION: '安全规约',
+            boardEditEntity_RULE_ORDER: '规则顺序',
+            boardEditEntity_RULE_SET: '规则集',
             boardUndoConflict: '该编辑之后画布状态已改变，撤销或重做会覆盖新的修改。请求已拒绝，并已刷新为服务器上的当前状态。',
             boardUndoConflictRefreshFailed: '撤销或重做因画布状态冲突被拒绝，且未能刷新当前画布。请在连接恢复后重新加载。',
             boardUndoClearHistoryTitle: '清除不可用的撤销历史？',
@@ -2318,6 +2333,7 @@ const messages = {
     en: {
         app: {
             title: 'IoT-Verify',
+            resetWorkspace: 'Reset workspace',
             loading: 'Loading...',
             saving: 'Saving...',
             warning: 'Warning',
@@ -3889,9 +3905,21 @@ const messages = {
             // in `entityType` and `originalOperation`; these compose it.
             boardUndoApplied: '{action} the {entity}.',
             boardUndoRedoApplied: 'Redone: {action} the {entity}.',
-            // The inverse of the original edit, which is what an undo performs.
-            // The original edit, for a redo.
             boardUndoRedoNothingToApply: 'There is no edit to redo.',
+            // Undo/redo notification vocabulary: forward operations (for redo) and inverse operations (for undo)
+            boardEditOperation_CREATE: 'Created',
+            boardEditOperation_UPDATE: 'Updated',
+            boardEditOperation_DELETE: 'Deleted',
+            boardEditInverse_CREATE: 'Removed',
+            boardEditInverse_UPDATE: 'Reverted',
+            boardEditInverse_DELETE: 'Restored',
+            // Undo/redo notification entity vocabulary
+            boardEditEntity_DEVICE: 'device',
+            boardEditEntity_ENVIRONMENT: 'environment variable',
+            boardEditEntity_RULE: 'automation rule',
+            boardEditEntity_SPECIFICATION: 'safety specification',
+            boardEditEntity_RULE_ORDER: 'rule order',
+            boardEditEntity_RULE_SET: 'rule set',
             boardUndoConflict: 'The Board changed after that edit, so undo or redo would discard newer work. The request was rejected and the current server state was reloaded.',
             boardUndoConflictRefreshFailed: 'Undo or redo was rejected because the Board changed, and the current Board could not be refreshed. Reload after connectivity returns.',
             boardUndoClearHistoryTitle: 'Clear unavailable undo history?',

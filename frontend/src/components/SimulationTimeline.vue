@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { formatRunTimestamp as sharedRunTimestamp } from '@/utils/runTimestamp'
 import HintTooltip from '@/components/common/HintTooltip.vue'
-import { ref, computed, nextTick, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useTimelineRail } from '@/composables/useTimelineRail'
 import type { SimulationState } from '../types/simulation'
 import type { ModelRunSnapshot, ModelSemantics, RunBoardComparison } from '../types/modelSemantics'
 import type { EnvironmentValueProvenance } from '../types/model'
@@ -71,14 +72,6 @@ const selectedStateNumber = computed({
   set: (value: number) => {
     if (!Number.isFinite(value)) return
     selectState(Math.trunc(value) - 1)
-  }
-})
-
-const selectedStateRangeIndex = computed({
-  get: () => selectedStateIndex.value,
-  set: (value: number) => {
-    if (!Number.isFinite(value)) return
-    selectState(Math.trunc(value))
   }
 })
 
@@ -284,44 +277,19 @@ const selectState = (index: number) => {
 const selectPreviousState = () => selectState(selectedStateIndex.value - 1)
 const selectNextState = () => selectState(selectedStateIndex.value + 1)
 
-const revealStateButton = (index: number, focus = false) => {
-  void nextTick(() => {
-    const button = document.querySelector<HTMLButtonElement>(`[data-testid="simulation-timeline-state-${index}"]`)
-    button?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
-    if (focus) {
-      button?.focus()
-    }
-  })
-}
+// Timeline rail interaction logic (pointer scrubbing, keyboard navigation, button scrolling)
+const simulationRail = useTimelineRail({
+  totalStates,
+  selectedStateIndex,
+  onSelectState: (index: number) => selectState(index),
+  testIdPrefix: 'simulation-timeline'
+})
 
-const selectStateFromTimelinePointer = (event: PointerEvent) => {
-  if (totalStates.value <= 1) return
-  if (event.target instanceof Element && event.target.closest('button')) return
-  const target = event.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-  const trackLeft = rect.left + 8
-  const trackWidth = Math.max(1, rect.width - 16)
-  const ratio = Math.min(1, Math.max(0, (event.clientX - trackLeft) / trackWidth))
-  const nextIndex = Math.round(ratio * (totalStates.value - 1))
-  selectState(nextIndex)
-  revealStateButton(nextIndex, true)
-}
-
-const handleStateKeydown = (event: KeyboardEvent, index: number) => {
-  const keyToIndex: Record<string, number> = {
-    ArrowLeft: index - 1,
-    ArrowDown: index - 1,
-    ArrowRight: index + 1,
-    ArrowUp: index + 1,
-    Home: 0,
-    End: totalStates.value - 1
-  }
-  if (!(event.key in keyToIndex)) return
-  event.preventDefault()
-  const lastIndex = Math.max(totalStates.value - 1, 0)
-  const nextIndex = Math.min(Math.max(keyToIndex[event.key], 0), lastIndex)
-  selectState(nextIndex)
-  revealStateButton(nextIndex, true)
+// Wrapper to stop playback when scrubbing starts
+const scrubStateFromPointer = (event: PointerEvent) => {
+  // A deliberate seek supersedes playback rather than competing with its timer for the index.
+  stop()
+  simulationRail.scrubStateFromPointer(event)
 }
 
 const getStateAriaLabel = (index: number) => {
@@ -421,7 +389,7 @@ onBeforeUnmount(() => {
 watch(selectedStateIndex, () => {
   if (props.visible) {
     highlightState()
-    revealStateButton(selectedStateIndex.value)
+    simulationRail.revealStateButton(selectedStateIndex.value, false)
   }
 })
 </script>
@@ -537,7 +505,14 @@ watch(selectedStateIndex, () => {
       </div>
 
       <section class="border-b border-slate-200 pb-2" :aria-label="t('app.traceVisualization.stateSequence')">
-        <div class="grid items-center gap-2 sm:grid-cols-[auto_minmax(8rem,1fr)_auto]">
+        <!--
+          Step controls and the rail are different modalities, so they coexist: buttons move +/-1, the
+          number input jumps exactly, the rail below shows position and scrubs. The range slider that used
+          to sit between them was a second full-width x-axis over the same index as the rail -- that pair
+          is what read as two timelines for one sequence, so the slider is gone and the rail took over the
+          drag it uniquely provided (`scrubStateFromPointer`).
+        -->
+        <div class="flex flex-wrap items-center gap-2">
           <div class="flex items-center gap-1">
             <button
               type="button"
@@ -572,17 +547,7 @@ watch(selectedStateIndex, () => {
               <span class="material-symbols-outlined text-lg" aria-hidden="true">chevron_right</span>
             </button>
           </div>
-          <input
-            v-model.number="selectedStateRangeIndex"
-            data-testid="simulation-timeline-range"
-            type="range"
-            :min="0"
-            :max="Math.max(totalStates - 1, 0)"
-            :disabled="totalStates <= 1"
-            class="min-w-0 flex-1 accent-[color:var(--accent)]"
-            :aria-label="t('app.traceVisualization.jumpToState')"
-          >
-          <span class="text-right text-[length:var(--iot-font-min)] font-semibold text-slate-500">
+          <span class="text-[length:var(--iot-font-min)] font-semibold text-slate-500">
             {{ selectedStateIndex === 0
               ? t('app.traceVisualization.initialModelState')
               : t('app.traceVisualization.transitionNumber', { index: selectedStateIndex }) }}
@@ -591,10 +556,12 @@ watch(selectedStateIndex, () => {
 
         <div data-testid="simulation-timeline-scroll" class="iot-scroll-region-x mt-1 py-1">
           <div
-            class="relative h-12"
+            class="relative h-12 touch-none"
             data-testid="simulation-timeline-track"
+            role="group"
+            :aria-label="t('app.traceVisualization.jumpToState')"
             :style="{ width: states.length > 15 ? 'max-content' : '100%', minWidth: states.length > 15 ? `${Math.max(states.length * 32, 500)}px` : '100%' }"
-            @pointerdown="selectStateFromTimelinePointer"
+            @pointerdown="scrubStateFromPointer"
           >
             <div class="absolute left-2 right-2 top-1/2 h-2 -translate-y-1/2 rounded bg-slate-200"></div>
             <div
@@ -626,7 +593,7 @@ watch(selectedStateIndex, () => {
                       ? 'board-border-subtle board-chip-info'
                       : 'border-slate-300 bg-white hover:border-[color:var(--accent)]'"
                   @click="selectState(index)"
-                  @keydown="handleStateKeydown($event, index)"
+                  @keydown="simulationRail.handleStateKeydown($event, index)"
                 >
                   <!--
                     The rail shows shape, not numbers — the same decision as the counterexample rail in
