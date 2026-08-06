@@ -256,10 +256,13 @@ export const isEdgeConditionSatisfied = (
   return compareTraceValue(actual, edge.relation || '=', edge.value)
 }
 
-export const getTraceEdgeEvaluationIndex = (trace: TracePlaybackLike) => {
-  const selectedIndex = trace?.selectedStateIndex ?? 0
-  return selectedIndex > 0 ? selectedIndex - 1 : selectedIndex
-}
+/*
+ * `getTraceEdgeEvaluationIndex` used to sit here, exported and never called.
+ *
+ * It is not a missing extraction: `CanvasBoard`'s two "previous state" sites return **null** at index 0, while
+ * this returned 0 — a different rule, so folding them together would have changed behaviour rather than removed
+ * duplication. Deleted as dead code.
+ */
 
 type FrozenRuleIdentity = {
   ruleIndex: number
