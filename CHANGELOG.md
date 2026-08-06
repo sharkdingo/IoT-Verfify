@@ -43,6 +43,22 @@ history into a technical spec. The spec content itself now lives under
   "Temperature 24 → 26" truncates to a fragment, which the code already documented. Judged by inputs it looked
   redundant; judged by the question it answers it is not. `docs/guides/frontend-ui-conventions.md` §9 records the
   division so it is not re-litigated.
+- **The trace overlay sat flush against the left edge, and on a long trace its controls left the screen.** Its
+  host is `position: fixed` and a **sibling** of `.iot-board` — deliberately, so it floats above every panel — but
+  it is positioned by `--board-control-width`, `--board-inspector-width` and `--board-floating-gap`, all declared
+  *on* `.iot-board`. Inside the host those variables never resolved, `calc()` became invalid at computed-value
+  time, and `left`/`right` fell back to `auto`. A fixed box with both set to `auto` shrink-wraps its content at its
+  static position, which is x=0. Measured: `left` computed to `0px` against a declared `calc(56px + 16px)`, and the
+  host was **the same width at 2556px and 1440px** (859.859px) — the tell, since a corridor-positioned element has
+  to change with the viewport. On a 101-state trace the shrink-wrap reached **3258px**, putting the play button at
+  x=2086 and off-screen at 1440x900: Playwright refused to click it, so playback was genuinely unreachable.
+  This was a regression from `e91a109`, which removed the `var(…, 1rem)` fallbacks as dead text on the recorded
+  premise that the gap is declared at `:root`. It is declared on `.iot-board`, and the fallback had been
+  load-bearing for exactly the two elements outside that scope. Restoring it would only hide the defect again, so
+  `boardShellStyle` now injects the variables onto the hosts — they are positioned by values they can see. The gap
+  moves to `BOARD_FLOATING_GAP_CSS` in `constants/boardLayout.ts`, and `boardDockGeometry.spec.ts` fails if the two
+  readers drift. The wrong premise is corrected where it was recorded, in
+  `BoardSurfaceAccessibility.spec.ts`, rather than left to mislead the next reader.
 - **Autoplay kept the advancing step in view.** Above 15 states the rail becomes a horizontal scroll region at
   38px per step. Every manual way of moving already centred the new step — keyboard, pointer, and stopping — but
   the autoplay tick advanced the selection without revealing it, so pressing play on a long trace left the user

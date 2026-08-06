@@ -556,7 +556,7 @@ import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
 import { subscribeBoardInvalidation } from '@/utils/boardInvalidation'
-import { ACTION_DOCK_RAIL_PX, COLLAPSED_PANEL_RAIL_PX } from '@/constants/boardLayout'
+import { ACTION_DOCK_RAIL_PX, BOARD_FLOATING_GAP_CSS, COLLAPSED_PANEL_RAIL_PX } from '@/constants/boardLayout'
 import {
   formatRecommendationCategory,
   RULE_RECOMMENDATION_CATEGORY_OPTIONS,
@@ -1413,10 +1413,29 @@ let layoutSaveErrorShown = false
 let panelStateTouchedBeforeLayout = false
 let canvasStateTouchedBeforeLayout = false
 
+/*
+ * The variables the fixed overlays are positioned by, injected where they can actually be seen.
+ *
+ * `--board-floating-gap` is declared on `.iot-board`, but the two timeline hosts are **siblings** of it, not
+ * descendants — they are `position: fixed` on purpose, above every panel. So inside them `var(--board-floating-gap)`
+ * was unresolved, `calc()` became invalid at computed-value time, and both `left` and `right` fell back to `auto`.
+ * A fixed box with `left: auto; right: auto` shrink-wraps its content at its static position, which is x=0: the
+ * trace overlay sat flush against the left edge of the screen with the whole right side empty.
+ *
+ * Measured: `left` computed to `0px` against a declared `calc(56px + 16px)`, and the host's width was **identical
+ * at 2556px and 1440px** (859.859px) — the tell that it was sizing to content rather than to the corridor. On a
+ * 101-state trace the shrink-wrap grew the host to 3258px, putting the play button at x=2086 and off-screen at a
+ * laptop viewport: the playback controls became unreachable.
+ *
+ * `e91a109` removed the `var(…, 1rem)` fallbacks that had been hiding this, on the premise that the gap is
+ * declared at `:root`. It is not. Restoring the fallback would only hide it again — a fixed element positioned by
+ * variables it cannot see is the actual defect, so the variables are injected onto it instead.
+ */
 const boardShellStyle = computed(() => ({
   '--board-control-width': `${boardPanels.control.collapsed ? COLLAPSED_PANEL_RAIL_PX : effectiveControlPanelWidth.value}px`,
   '--board-inspector-width': `${boardPanels.inspector.collapsed ? COLLAPSED_PANEL_RAIL_PX : effectiveInspectorPanelWidth.value}px`,
-  '--board-action-rail-width': actionDockRailWidth.value
+  '--board-action-rail-width': actionDockRailWidth.value,
+  '--board-floating-gap': BOARD_FLOATING_GAP_CSS
 }))
 
 const boardHeaderTone = computed(() => theme.value === 'dark' ? 'dark' : 'light')

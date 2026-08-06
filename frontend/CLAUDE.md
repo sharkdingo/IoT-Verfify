@@ -292,6 +292,19 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   opacity, which fades the label with it. Structural neutrals have a floor: `slate-400` is 2.56:1 on white.
   Values, tables and the reasoning:
   [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §5.
+- **A `position: fixed` overlay cannot read a variable scoped to the board.** `--board-floating-gap`,
+  `--board-control-width` and `--board-inspector-width` are declared on `.iot-board`, but the two timeline hosts
+  are **siblings** of it — deliberately, so they float above every panel. Inside them those variables do not
+  resolve, `calc()` becomes invalid at computed-value time, and `left`/`right` fall back to `auto`. A fixed box
+  with both set to `auto` shrink-wraps its content at its static position, i.e. flush against x=0. Measured: the
+  trace overlay sat hard against the left edge with the right half of a 2556px screen empty, and its width was
+  *identical* at 2556 and 1440 (859.859px) — that identity is the tell, because a corridor-positioned element
+  must change with the viewport. On a 101-state trace the shrink-wrap reached **3258px** and put the play button
+  at x=2086, off-screen at a laptop viewport, so playback became unreachable.
+  `var(…, 1rem)` fallbacks had been hiding this, and removing them as "dead text" is what exposed it — the
+  premise that the gap lives at `:root` was wrong, and a test comment had recorded that wrong premise. Restoring
+  a fallback only hides it again: inject the variables onto the fixed element (`boardShellStyle` does this) so it
+  is positioned by values it can see. `boardDockGeometry.spec.ts` pins the injected value against the stylesheet's.
 - **Stacking order is a named scale, not a literal.** Add a layer to the `--z-*` block in
   `styles/base.css` and reference it (`z-[var(--z-modal)]` in Tailwind,
   `var(--z-modal)` in CSS). Values inside a component's own stacking context stay local

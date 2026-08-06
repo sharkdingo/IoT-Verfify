@@ -10,7 +10,13 @@ const messageMocks = vi.hoisted(() => ({
   error: vi.fn()
 }))
 
-vi.mock('element-plus', () => ({ ElMessage: messageMocks }))
+// A render-slot `ElTooltip` stub: `HintTooltip` imports it, and a whole-module mock otherwise
+// hides it, failing every case at import time with a message that names the mock rather than
+// the component needing it.
+vi.mock('element-plus', () => ({
+  ElMessage: messageMocks,
+  ElTooltip: { name: 'ElTooltip', template: '<slot />' }
+}))
 
 const i18n = createI18n({
   legacy: false,

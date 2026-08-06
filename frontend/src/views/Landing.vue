@@ -9,6 +9,7 @@ import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMess
 import { isValidNormalizedUsername, normalizeAccountIdentifier } from '@/utils/accountIdentifier'
 import { notifySuccess } from '@/utils/feedback'
 import { CREDENTIAL_LIMITS } from '@/constants/requestLimits'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 type AuthMode = 'login' | 'register'
 

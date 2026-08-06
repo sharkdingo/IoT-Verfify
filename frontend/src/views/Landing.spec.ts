@@ -15,7 +15,14 @@ vi.mock('element-plus', () => ({
   ElMessage: {
     success: vi.fn(),
     error: vi.fn()
-  }
+  },
+  /*
+   * `HintTooltip` imports `ElTooltip`, and this mock replaces the whole module — so omitting it made every case
+   * in this file fail at import time with "No 'ElTooltip' export is defined", which names the mock rather than
+   * the component that needs it. A render-slot stub is enough: nothing here asserts tooltip behaviour, only that
+   * the panel below it still works.
+   */
+  ElTooltip: { name: 'ElTooltip', template: '<slot />' }
 }))
 
 const deferred = <T>() => {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HintTooltip from '@/components/common/HintTooltip.vue'
 import { ref, reactive, computed, watch } from 'vue'
 import { COLLAPSED_PANEL_RAIL_CSS } from '@/constants/boardLayout'
 import type { DeviceNode } from '../types/node'
@@ -837,15 +838,16 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
     >
       <div v-if="!isCollapsed" class="flex items-center justify-between w-full">
         <div class="flex min-w-0 items-center gap-3">
-          <button
-            type="button"
-            @click="togglePanel"
-            class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
-            :title="t('app.collapse')"
-            :aria-label="t('app.collapse')"
-          >
-            <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
-          </button>
+          <HintTooltip :content="t('app.collapse')">
+            <button
+              type="button"
+              @click="togglePanel"
+              class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
+              :aria-label="t('app.collapse')"
+            >
+              <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
+            </button>
+          </HintTooltip>
           <div class="p-2 board-chip-info rounded-lg border board-border-subtle shadow-sm">
             <span class="material-symbols-outlined board-text-info">fact_check</span>
           </div>
@@ -856,15 +858,16 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
         </div>
       </div>
       <div v-else class="flex items-center justify-center">
-        <button
-          type="button"
-          @click="togglePanel"
-          class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
-          :title="t('app.expand')"
-          :aria-label="t('app.expand')"
-        >
-          <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
-        </button>
+        <HintTooltip :content="t('app.expand')">
+          <button
+            type="button"
+            @click="togglePanel"
+            class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
+            :aria-label="t('app.expand')"
+          >
+            <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
+          </button>
+        </HintTooltip>
       </div>
     </div>
 
@@ -1142,16 +1145,21 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               </div>
 
               <div class="flex flex-wrap gap-1">
-                <button
+                <!-- The `v-for` sits on the wrapper: `source` comes from the loop, so a tooltip hoisted above it
+                     would reference a variable that is out of scope there. -->
+                <HintTooltip
                   v-for="source in variable.sources"
                   :key="`${source.deviceId}:${source.role}`"
-                  type="button"
-                  class="board-chip-info max-w-full truncate rounded-full px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold transition-colors"
-                  :title="getEnvironmentSourceTitle(source)"
-                  @click="handleDeviceClick(source.deviceId)"
+                  :content="getEnvironmentSourceTitle(source)"
                 >
-                  {{ source.label }}
-                </button>
+                  <button
+                    type="button"
+                    class="board-chip-info max-w-full truncate rounded-full px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold transition-colors"
+                    @click="handleDeviceClick(source.deviceId)"
+                  >
+                    {{ source.label }}
+                  </button>
+                </HintTooltip>
               </div>
             </div>
           </article>
@@ -1192,17 +1200,18 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           <!-- A 44px target. Measured at **26×36px**, the smallest control in this panel and the primary way to
                add a device to the board — `p-1.5` around a `text-sm` glyph gives whatever size the glyph happens
                to be, which is not a target size. -->
-          <button
-            type="button"
-            data-testid="inspector-add-device"
-            @click="handleAddDevice"
-            :disabled="props.readOnly"
-            class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-all hover:board-text-info hover:board-chip-info"
-            :title="mutationTitle(t('app.openDeviceCreator'))"
-            :aria-label="t('app.openDeviceCreator')"
-          >
-            <span class="material-symbols-outlined text-sm">add</span>
-          </button>
+          <HintTooltip :content="mutationTitle(t('app.openDeviceCreator'))">
+            <button
+              type="button"
+              data-testid="inspector-add-device"
+              @click="handleAddDevice"
+              :disabled="props.readOnly"
+              class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-all hover:board-text-info hover:board-chip-info"
+              :aria-label="t('app.openDeviceCreator')"
+            >
+              <span class="material-symbols-outlined text-sm">add</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div v-if="sectionExpanded.devices" class="space-y-2.5">
@@ -1257,45 +1266,47 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 tooltip is not identification: it answers one device at a time, on hover, and never
                 helps a keyboard or touch user scanning a list for the one they want.
               -->
-              <button
-                type="button"
-                class="flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-md py-1 text-left focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--accent)]"
-                :title="device.name"
-                :aria-label="device.name"
-                @click="handleDeviceClick(device.id)"
-              >
-                <span class="flex min-w-0 max-w-full items-center gap-2">
-                  <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border board-border-subtle board-chip-info board-text-info">
-                    <span class="material-symbols-outlined text-base" aria-hidden="true">devices_other</span>
+              <HintTooltip :content="device.name">
+                <button
+                  type="button"
+                  class="flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-md py-1 text-left focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--accent)]"
+                  :aria-label="device.name"
+                  @click="handleDeviceClick(device.id)"
+                >
+                  <span class="flex min-w-0 max-w-full items-center gap-2">
+                    <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border board-border-subtle board-chip-info board-text-info">
+                      <span class="material-symbols-outlined text-base" aria-hidden="true">devices_other</span>
+                    </span>
+                    <span class="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:board-text-info transition-colors" :data-full-text="device.name">
+                      {{ device.name }}
+                    </span>
                   </span>
-                  <span class="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:board-text-info transition-colors" :data-full-text="device.name">
-                    {{ device.name }}
+                  <!--
+                    Secondary line, indented to the name's text edge. The chips keep `data-full-text` for
+                    the inspector's on-demand tooltip, but now they truncate against the full panel width
+                    instead of against whatever the name did not take.
+                  -->
+                  <span v-if="device.type || device.state" class="flex min-w-0 max-w-full items-center gap-1 pl-9">
+                    <span v-if="device.type" class="min-w-0 shrink truncate px-2 py-0.5 rounded-full text-[length:var(--iot-font-min)] font-medium bg-slate-100 text-slate-500 border border-slate-200" :data-full-text="device.type">
+                      {{ device.type }}
+                    </span>
+                    <span v-if="device.state" class="min-w-0 shrink truncate px-2 py-0.5 rounded text-[length:var(--iot-font-min)] font-medium board-chip-info board-text-info border board-border-subtle" :data-full-text="device.state">
+                      {{ device.state }}
+                    </span>
                   </span>
-                </span>
-                <!--
-                  Secondary line, indented to the name's text edge. The chips keep `data-full-text` for
-                  the inspector's on-demand tooltip, but now they truncate against the full panel width
-                  instead of against whatever the name did not take.
-                -->
-                <span v-if="device.type || device.state" class="flex min-w-0 max-w-full items-center gap-1 pl-9">
-                  <span v-if="device.type" class="min-w-0 shrink truncate px-2 py-0.5 rounded-full text-[length:var(--iot-font-min)] font-medium bg-slate-100 text-slate-500 border border-slate-200" :data-full-text="device.type">
-                    {{ device.type }}
-                  </span>
-                  <span v-if="device.state" class="min-w-0 shrink truncate px-2 py-0.5 rounded text-[length:var(--iot-font-min)] font-medium board-chip-info board-text-info border board-border-subtle" :data-full-text="device.state">
-                    {{ device.state }}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                @click.stop="handleDeleteDevice(device.id)"
-                :disabled="props.readOnly"
-                class="relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 opacity-0 transition-all hover:board-chip-danger hover:board-text-danger focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-                :title="mutationTitle(t('app.removeDevice'))"
-                :aria-label="t('app.removeDevice')"
-              >
-                <span class="material-symbols-outlined text-sm">close</span>
-              </button>
+                </button>
+              </HintTooltip>
+              <HintTooltip :content="mutationTitle(t('app.removeDevice'))">
+                <button
+                  type="button"
+                  @click.stop="handleDeleteDevice(device.id)"
+                  :disabled="props.readOnly"
+                  class="relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 opacity-0 transition-all hover:board-chip-danger hover:board-text-danger focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+                  :aria-label="t('app.removeDevice')"
+                >
+                  <span class="material-symbols-outlined text-sm">close</span>
+                </button>
+              </HintTooltip>
             </div>
           </div>
 
@@ -1350,17 +1361,18 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               {{ sectionCounts.rules.filtered }}/{{ sectionCounts.rules.total }}
             </span>
           </button>
-          <button
-            type="button"
-            data-testid="inspector-add-rule"
-            @click="handleAddRule"
-            :disabled="props.readOnly"
-            class="text-slate-500 hover:board-text-info hover:board-chip-info p-1.5 rounded-lg transition-all"
-            :title="mutationTitle(t('app.createRule'))"
-            :aria-label="t('app.createRule')"
-          >
-            <span class="material-symbols-outlined text-sm">add</span>
-          </button>
+          <HintTooltip :content="mutationTitle(t('app.createRule'))">
+            <button
+              type="button"
+              data-testid="inspector-add-rule"
+              @click="handleAddRule"
+              :disabled="props.readOnly"
+              class="text-slate-500 hover:board-text-info hover:board-chip-info p-1.5 rounded-lg transition-all"
+              :aria-label="t('app.createRule')"
+            >
+              <span class="material-symbols-outlined text-sm">add</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div v-if="sectionExpanded.rules" class="space-y-3">
@@ -1423,36 +1435,39 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               </div>
 
               <div class="flex shrink-0 items-center gap-0.5">
-                <button
-                  type="button"
-                  :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isFirst"
-                  class="rounded p-1 board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-30"
-                  :title="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleEarlier'))"
-                  :aria-label="t('app.moveRuleEarlier')"
-                  @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'up')"
-                >
-                  <span class="material-symbols-outlined text-sm" aria-hidden="true">arrow_upward</span>
-                </button>
-                <button
-                  type="button"
-                  :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isLast"
-                  class="rounded p-1 board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-30"
-                  :title="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleLater'))"
-                  :aria-label="t('app.moveRuleLater')"
-                  @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'down')"
-                >
-                  <span class="material-symbols-outlined text-sm" aria-hidden="true">arrow_downward</span>
-                </button>
-                <button
-                  type="button"
-                  @click.stop="rule.originalId && handleDeleteRule(rule.originalId)"
-                  :disabled="props.readOnly"
-                  class="rounded p-1 board-text-muted transition hover:board-chip-danger hover:board-text-danger"
-                  :title="mutationTitle(t('app.deleteRule'))"
-                  :aria-label="t('app.deleteRule')"
-                >
-                  <span class="material-symbols-outlined text-sm" aria-hidden="true">delete</span>
-                </button>
+                <HintTooltip :content="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleEarlier'))">
+                  <button
+                    type="button"
+                    :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isFirst"
+                    class="rounded p-1 board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-30"
+                    :aria-label="t('app.moveRuleEarlier')"
+                    @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'up')"
+                  >
+                    <span class="material-symbols-outlined text-sm" aria-hidden="true">arrow_upward</span>
+                  </button>
+                </HintTooltip>
+                <HintTooltip :content="mutationTitle(sectionSearch.rules ? t('app.ruleOrderSearchDisabled') : t('app.moveRuleLater'))">
+                  <button
+                    type="button"
+                    :disabled="props.readOnly || props.rulesReordering || !!sectionSearch.rules || rule.isLast"
+                    class="rounded p-1 board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-30"
+                    :aria-label="t('app.moveRuleLater')"
+                    @click.stop="rule.originalId && handleMoveRule(rule.originalId, 'down')"
+                  >
+                    <span class="material-symbols-outlined text-sm" aria-hidden="true">arrow_downward</span>
+                  </button>
+                </HintTooltip>
+                <HintTooltip :content="mutationTitle(t('app.deleteRule'))">
+                  <button
+                    type="button"
+                    @click.stop="rule.originalId && handleDeleteRule(rule.originalId)"
+                    :disabled="props.readOnly"
+                    class="rounded p-1 board-text-muted transition hover:board-chip-danger hover:board-text-danger"
+                    :aria-label="t('app.deleteRule')"
+                  >
+                    <span class="material-symbols-outlined text-sm" aria-hidden="true">delete</span>
+                  </button>
+                </HintTooltip>
               </div>
             </div>
 
@@ -1510,17 +1525,18 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               {{ sectionCounts.specs.filtered }}/{{ sectionCounts.specs.total }}
             </span>
           </button>
-          <button
-            type="button"
-            data-testid="inspector-add-spec"
-            @click="handleAddSpec"
-            :disabled="props.readOnly"
-            class="text-slate-500 hover:board-text-info hover:board-chip-info p-1.5 rounded-lg transition-all"
-            :title="mutationTitle(t('app.openSpecificationCreator'))"
-            :aria-label="t('app.openSpecificationCreator')"
-          >
-            <span class="material-symbols-outlined text-sm">add</span>
-          </button>
+          <HintTooltip :content="mutationTitle(t('app.openSpecificationCreator'))">
+            <button
+              type="button"
+              data-testid="inspector-add-spec"
+              @click="handleAddSpec"
+              :disabled="props.readOnly"
+              class="text-slate-500 hover:board-text-info hover:board-chip-info p-1.5 rounded-lg transition-all"
+              :aria-label="t('app.openSpecificationCreator')"
+            >
+              <span class="material-symbols-outlined text-sm">add</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div v-if="sectionExpanded.specs" class="space-y-3">
@@ -1562,16 +1578,17 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                   {{ spec.name }}
                 </h4>
               </div>
-              <button
-                type="button"
-                @click="handleDeleteSpec(spec.id)"
-                :disabled="props.readOnly"
-                class="text-slate-500 hover:board-text-danger p-1 rounded hover:board-chip-danger opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-all"
-                :title="mutationTitle(t('app.deleteSpecification'))"
-                :aria-label="t('app.deleteSpecification')"
-              >
-                <span class="material-symbols-outlined text-xs">delete</span>
-              </button>
+              <HintTooltip :content="mutationTitle(t('app.deleteSpecification'))">
+                <button
+                  type="button"
+                  @click="handleDeleteSpec(spec.id)"
+                  :disabled="props.readOnly"
+                  class="text-slate-500 hover:board-text-danger p-1 rounded hover:board-chip-danger opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-all"
+                  :aria-label="t('app.deleteSpecification')"
+                >
+                  <span class="material-symbols-outlined text-xs">delete</span>
+                </button>
+              </HintTooltip>
             </div>
 
             <div class="ml-7 mb-1 text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">

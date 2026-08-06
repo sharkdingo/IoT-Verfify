@@ -25,6 +25,7 @@ import type {
 } from '@/types/fix'
 import type { InteractiveOperationStage } from '@/types/task'
 import { confirmDestructive, notifyBlocked, notifyError, notifySuccess } from '@/utils/feedback'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -1293,15 +1294,16 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                           class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-[color:var(--accent-border)] focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
                         />
                       </label>
-                      <button
-                        type="button"
-                        :title="t('app.removePreference')"
-                        :aria-label="t('app.removePreference')"
-                        @click="removePreferenceRow(row.id)"
-                        class="w-9 h-9 rounded-md bg-slate-100 hover:board-chip-danger text-slate-500 hover:board-text-danger flex items-center justify-center transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-[color:var(--danger-surface)]/60 dark:hover:board-text-danger"
-                      >
-                        <span class="material-symbols-outlined text-lg" aria-hidden="true">delete</span>
-                      </button>
+                      <HintTooltip :content="t('app.removePreference')">
+                        <button
+                          type="button"
+                          :aria-label="t('app.removePreference')"
+                          @click="removePreferenceRow(row.id)"
+                          class="w-9 h-9 rounded-md bg-slate-100 hover:board-chip-danger text-slate-500 hover:board-text-danger flex items-center justify-center transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-[color:var(--danger-surface)]/60 dark:hover:board-text-danger"
+                        >
+                          <span class="material-symbols-outlined text-lg" aria-hidden="true">delete</span>
+                        </button>
+                      </HintTooltip>
                     </div>
                   </div>
                   <div
@@ -1424,16 +1426,17 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                           >
                             {{ t('app.prefer') }}
                           </button>
-                          <button
-                            type="button"
-                            data-testid="fix-lock-original"
-                            :title="t('app.lockOriginalValue')"
-                            :aria-label="t('app.lockOriginalValue')"
-                            @click="lockAdjustmentAtOriginal(adj)"
-                            class="flex h-7 w-7 items-center justify-center rounded border board-border-subtle bg-white board-text-info transition-colors hover:board-chip-info dark:bg-slate-900 dark:hover:bg-[color:var(--accent-strong)]/60"
-                          >
-                            <span class="material-symbols-outlined text-base" aria-hidden="true">lock</span>
-                          </button>
+                          <HintTooltip :content="t('app.lockOriginalValue')">
+                            <button
+                              type="button"
+                              data-testid="fix-lock-original"
+                              :aria-label="t('app.lockOriginalValue')"
+                              @click="lockAdjustmentAtOriginal(adj)"
+                              class="flex h-7 w-7 items-center justify-center rounded border board-border-subtle bg-white board-text-info transition-colors hover:board-chip-info dark:bg-slate-900 dark:hover:bg-[color:var(--accent-strong)]/60"
+                            >
+                              <span class="material-symbols-outlined text-base" aria-hidden="true">lock</span>
+                            </button>
+                          </HintTooltip>
                         </div>
                       </div>
                       <div class="flex items-center gap-2 mt-2">

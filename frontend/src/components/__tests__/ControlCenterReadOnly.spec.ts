@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { i18n } from '@/assets/i18n'
 import ControlCenter from '../ControlCenter.vue'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 const boardApiMocks = vi.hoisted(() => ({
   previewDeviceTemplateDeletion: vi.fn(),
@@ -28,7 +29,13 @@ vi.mock('@/api/board', async () => {
   }
 })
 
-vi.mock('element-plus', () => ({ ElMessage: messageMocks }))
+// A render-slot `ElTooltip` stub: `HintTooltip` imports it, and a whole-module mock otherwise
+// hides it, failing every case at import time with a message that names the mock rather than
+// the component needing it.
+vi.mock('element-plus', () => ({
+  ElMessage: messageMocks,
+  ElTooltip: { name: 'ElTooltip', template: '<slot />' }
+}))
 
 const manifest = {
   Name: 'Switch',
@@ -102,7 +109,15 @@ describe('ControlCenter read-only mode', () => {
     expect(previewButton.attributes('disabled')).toBeUndefined()
     expect(exportButton.attributes('disabled')).toBeUndefined()
     expect(deleteButton.attributes('disabled')).toBeDefined()
-    expect(deleteButton.attributes('title')).toBe('Close playback first.')
+    /*
+     * The blocked reason moved from a native `title` to the wrapping `HintTooltip`.
+     *
+     * A native `title` renders as a grey OS tooltip — about a second of delay, no theme awareness, nothing at all
+     * on touch. What matters here is unchanged: a disabled destructive control still states why, and this reads
+     * that reason from the surface the user now actually sees it on.
+     */
+    expect(wrapper.findAllComponents(HintTooltip).map(tip => tip.props('content')))
+      .toContain('Close playback first.')
 
     await previewButton.trigger('click')
     expect(document.querySelector('[data-testid="template-preview-1"]')).not.toBeNull()

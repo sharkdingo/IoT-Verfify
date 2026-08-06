@@ -127,10 +127,21 @@ describe('Board surface accessibility contracts', () => {
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-playback-change-popover')
     expect(shortLandscapePlayback).toContain('width: min(22rem, 42vw)')
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-timeline-host')
-    // The contract is the geometry — the timeline yields the inspector's width plus a gap on each side.
-    // Asserted without the fallback that used to sit inside the `var()`: `--board-floating-gap` is declared
-    // at `:root`, so `, 1rem` could never be reached, and pinning the assertion to that dead text made a
-    // stylesheet cleanup look like a layout regression.
+    /*
+     * The contract is the geometry — the timeline yields the inspector's width plus a gap on each side.
+     *
+     * Asserted without the fallback that used to sit inside the `var()`. The reason recorded here was **wrong**:
+     * it claimed `--board-floating-gap` is declared at `:root`, so `, 1rem` could never be reached. It is
+     * declared on `.iot-board` (`board.css:557`), and the two timeline hosts are *siblings* of that element, not
+     * descendants — so inside them the variable did not resolve, `calc()` became invalid, and `left`/`right` fell
+     * back to `auto`. A fixed box with both set to `auto` shrink-wraps at its static position: the trace overlay
+     * sat flush against x=0 with the whole right side of the screen empty, and on a 101-state trace the
+     * shrink-wrap reached 3258px and pushed the play button off-screen at 1440x900.
+     *
+     * The fallback was load-bearing for exactly these two elements, and removing it is what exposed that. The fix
+     * was not to restore it — `boardShellStyle` now injects the variable onto the hosts, so they are positioned by
+     * values they can actually see, and `boardDockGeometry.spec.ts` pins the two readers together.
+     */
     expect(shortLandscapePlayback).toContain('right: calc(min(22rem, 42vw) + (var(--board-floating-gap) * 2))')
   })
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HintTooltip from '@/components/common/HintTooltip.vue'
 /**
  * Accessible on/off control for board run settings.
  *

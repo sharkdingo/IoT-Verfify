@@ -141,4 +141,24 @@ describe('board action dock geometry', () => {
         .toMatch(/isCollapsed \? COLLAPSED_PANEL_RAIL_CSS : panelWidth/)
     }
   })
+
+  it('keeps the floating gap agreeing between the stylesheet and the injected style', () => {
+    /*
+     * The fixed timeline hosts are siblings of `.iot-board`, not descendants, so they cannot see
+     * `--board-floating-gap` scoped to it. `boardShellStyle` injects the value onto them, which means the number
+     * has two readers and can drift.
+     *
+     * It drifted once already, in the other direction: `e91a109` removed the `var(…, 1rem)` fallbacks on the
+     * premise that the gap is declared at `:root`. It is not, so `calc()` became invalid, `left`/`right` fell back
+     * to `auto`, and the overlay shrink-wrapped at x=0 — flush left with the whole right side empty. On a
+     * 101-state trace the shrink-wrap reached 3258px and put the play button off-screen at a laptop viewport.
+     */
+    const declared = /--board-floating-gap:\s*([^;]+);/.exec(board())
+    expect(declared, 'board.css should declare the gap').not.toBeNull()
+
+    const constant = /BOARD_FLOATING_GAP_CSS = '([^']+)'/.exec(layoutConstants())
+    expect(constant, 'boardLayout.ts should own the injected value').not.toBeNull()
+
+    expect(constant![1].trim(), 'the two readers must agree').toBe(declared![1].trim())
+  })
 })

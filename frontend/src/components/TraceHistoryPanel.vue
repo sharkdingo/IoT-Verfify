@@ -23,6 +23,7 @@ import type {
 import { formatTraceSpec } from '@/utils/traceView'
 import { generationIssueReasonKey } from '@/utils/generationIssue'
 import RunInitiatorBadge from '@/components/RunInitiatorBadge.vue'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 type HistoryLayer = 'tasks' | 'results'
 type ResultFilter = 'all' | 'verification' | 'fuzzing' | 'simulation'

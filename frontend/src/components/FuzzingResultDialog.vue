@@ -5,6 +5,7 @@ import type { AvailableFuzzingRunSummary, FuzzingFinding, FuzzingFindingSummary,
 import { formatTraceSpec } from '@/utils/traceView'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { fuzzingLimitationKey } from '@/utils/fuzzingPresentation'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 const props = defineProps<{
   visible: boolean

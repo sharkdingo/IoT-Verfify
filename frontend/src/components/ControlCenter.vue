@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HintTooltip from '@/components/common/HintTooltip.vue'
 import { ref, reactive, computed, onBeforeUnmount, onMounted, useAttrs, watch } from 'vue'
 import { 
   specTemplateDetails, 
@@ -2334,26 +2335,28 @@ watch(() => props.readOnly, readOnly => {
             <p class="board-panel-subtitle text-xs">{{ t('app.deviceManagement') }}</p>
           </div>
         </div>
-        <button
-          type="button"
-          @click="togglePanel"
-          class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center justify-center transition-all hover:scale-105"
-          :title="t('app.collapse')"
-          :aria-label="t('app.collapse')"
-        >
-          <span class="material-symbols-outlined text-slate-600 text-base transition-transform duration-200" aria-hidden="true">dock_to_left</span>
-        </button>
+        <HintTooltip :content="t('app.collapse')">
+          <button
+            type="button"
+            @click="togglePanel"
+            class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center justify-center transition-all hover:scale-105"
+            :aria-label="t('app.collapse')"
+          >
+            <span class="material-symbols-outlined text-slate-600 text-base transition-transform duration-200" aria-hidden="true">dock_to_left</span>
+          </button>
+        </HintTooltip>
       </div>
       <div v-else class="flex items-center justify-center">
-        <button
-          type="button"
-          @click="togglePanel"
-          class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-all hover:scale-105"
-          :title="t('app.expand')"
-          :aria-label="t('app.expand')"
-        >
-          <span class="material-symbols-outlined text-slate-600 text-base" aria-hidden="true">dock_to_right</span>
-        </button>
+        <HintTooltip :content="t('app.expand')">
+          <button
+            type="button"
+            @click="togglePanel"
+            class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-all hover:scale-105"
+            :aria-label="t('app.expand')"
+          >
+            <span class="material-symbols-outlined text-slate-600 text-base" aria-hidden="true">dock_to_right</span>
+          </button>
+        </HintTooltip>
       </div>
     </div>
 
@@ -2364,29 +2367,30 @@ watch(() => props.readOnly, readOnly => {
         role="tablist"
         :aria-label="t('app.boardTools')"
       >
+        <!-- No tooltip: the tab prints `tab.label` itself, so a hint repeating it is the duplicate-feedback
+             case the project's own rule forbids. -->
         <button
-          v-for="tab in controlTabs"
-          :key="tab.id"
-          :id="`control-tab-${tab.id}`"
-          type="button"
-          role="tab"
-          :data-testid="`control-tab-${tab.id}`"
-          :aria-selected="activeSection === tab.id"
-          :aria-controls="activeSection === tab.id ? `control-section-${tab.id}` : undefined"
-          :tabindex="activeSection === tab.id ? 0 : -1"
-          @click="activeSection = tab.id"
-          @keydown="handleControlTabKeydown($event, tab.id)"
-          :class="[
- 'min-w-0 min-h-11 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
- activeSection === tab.id
- ? CONTROL_TAB_ACTIVE_CLASS
- : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
- ]"
-          :title="tab.label"
-        >
-          <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
-          <span class="w-full truncate px-0.5 text-center text-[length:var(--iot-font-min)]">{{ tab.label }}</span>
-        </button>
+            v-for="tab in controlTabs"
+            :key="tab.id"
+            :id="`control-tab-${tab.id}`"
+            type="button"
+            role="tab"
+            :data-testid="`control-tab-${tab.id}`"
+            :aria-selected="activeSection === tab.id"
+            :aria-controls="activeSection === tab.id ? `control-section-${tab.id}` : undefined"
+            :tabindex="activeSection === tab.id ? 0 : -1"
+            @click="activeSection = tab.id"
+            @keydown="handleControlTabKeydown($event, tab.id)"
+            :class="[
+   'min-w-0 min-h-11 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
+   activeSection === tab.id
+   ? CONTROL_TAB_ACTIVE_CLASS
+   : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
+   ]"
+          >
+            <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
+            <span class="w-full truncate px-0.5 text-center text-[length:var(--iot-font-min)]">{{ tab.label }}</span>
+          </button>
       </div>
     </div>
 
@@ -2838,15 +2842,16 @@ watch(() => props.readOnly, readOnly => {
                   </div>
                 </div>
               </label>
-              <button
-                type="button"
- class="mx-3 mb-3 min-h-11 inline-flex items-center gap-1.5 rounded-md border border-[color:var(--warning-border)] px-2 py-1 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning"
-                :title="t('app.downloadTemplateSchema')"
-                @click="downloadTemplateSchema"
-              >
-                <span class="material-symbols-outlined text-xs">download</span>
-                {{ t('app.downloadTemplateSchema') }}
-              </button>
+              <HintTooltip :content="t('app.downloadTemplateSchema')">
+                <button
+                  type="button"
+   class="mx-3 mb-3 min-h-11 inline-flex items-center gap-1.5 rounded-md border border-[color:var(--warning-border)] px-2 py-1 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning"
+                  @click="downloadTemplateSchema"
+                >
+                  <span class="material-symbols-outlined text-xs">download</span>
+                  {{ t('app.downloadTemplateSchema') }}
+                </button>
+              </HintTooltip>
             </div>
           </div>
         </details>
@@ -2897,22 +2902,23 @@ watch(() => props.readOnly, readOnly => {
                 <span class="text-[length:var(--iot-font-min)] font-bold text-slate-500 uppercase tracking-wide">{{ t('app.templates') }}</span>
               </div>
               <div class="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  data-testid="reset-default-templates"
- class="inline-flex min-h-11 items-center gap-1 rounded-full border border-[color:var(--warning-border)] px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning disabled:cursor-not-allowed disabled:opacity-60"
-                  :disabled="props.readOnly || props.templatesLoading || isLoadingDefaultTemplateResetPreview"
-                  :title="mutationTitle(t('app.resetDefaultTemplates'))"
-                  @click="openResetDefaultsConfirm"
-                >
-                  <span
-                    v-if="isLoadingDefaultTemplateResetPreview"
-                    class="template-reset-dialog__spinner"
-                    aria-hidden="true"
-                  ></span>
-                  <span v-else class="material-symbols-outlined text-xs" aria-hidden="true">restart_alt</span>
-                  <span class="truncate">{{ t('app.resetDefaultTemplatesShort') }}</span>
-                </button>
+                <HintTooltip :content="mutationTitle(t('app.resetDefaultTemplates'))">
+                  <button
+                    type="button"
+                    data-testid="reset-default-templates"
+   class="inline-flex min-h-11 items-center gap-1 rounded-full border border-[color:var(--warning-border)] px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning disabled:cursor-not-allowed disabled:opacity-60"
+                    :disabled="props.readOnly || props.templatesLoading || isLoadingDefaultTemplateResetPreview"
+                    @click="openResetDefaultsConfirm"
+                  >
+                    <span
+                      v-if="isLoadingDefaultTemplateResetPreview"
+                      class="template-reset-dialog__spinner"
+                      aria-hidden="true"
+                    ></span>
+                    <span v-else class="material-symbols-outlined text-xs" aria-hidden="true">restart_alt</span>
+                    <span class="truncate">{{ t('app.resetDefaultTemplatesShort') }}</span>
+                  </button>
+                </HintTooltip>
                 <!-- A count is not a status. `board-chip-warning` here was read by a review as a queue of
                      things needing attention when it is only how many templates are listed;
                      `board-chip-neutral` exists so a number does not have to borrow a role's meaning. -->
@@ -3016,27 +3022,29 @@ watch(() => props.readOnly, readOnly => {
                     </button>
 
                     <div class="template-card__actions mt-0.5 pt-0.5 border-t flex justify-end gap-1">
-                      <button
-                        type="button"
-                        @click.stop="exportTemplate(template)"
-                        @dragstart.stop.prevent
-                        class="template-card__action cursor-pointer p-1 rounded transition-colors"
-                        :aria-label="t('app.export')"
-                        :title="t('app.export')"
-                      >
-                        <span class="material-symbols-outlined text-xs" aria-hidden="true">download</span>
-                      </button>
-                      <button
-                        type="button"
-                        @click.stop="openDeleteConfirm(template)"
-                        @dragstart.stop.prevent
-                        :disabled="props.readOnly || isLoadingTemplateDeletePreview || isDeletingTemplate"
-                        class="template-card__action template-card__action--danger cursor-pointer p-1 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                        :aria-label="t('app.delete')"
-                        :title="mutationTitle(t('app.delete'))"
-                      >
-                        <span class="material-symbols-outlined text-xs" aria-hidden="true">delete</span>
-                      </button>
+                      <HintTooltip :content="t('app.export')">
+                        <button
+                          type="button"
+                          @click.stop="exportTemplate(template)"
+                          @dragstart.stop.prevent
+                          class="template-card__action cursor-pointer p-1 rounded transition-colors"
+                          :aria-label="t('app.export')"
+                        >
+                          <span class="material-symbols-outlined text-xs" aria-hidden="true">download</span>
+                        </button>
+                      </HintTooltip>
+                      <HintTooltip :content="mutationTitle(t('app.delete'))">
+                        <button
+                          type="button"
+                          @click.stop="openDeleteConfirm(template)"
+                          @dragstart.stop.prevent
+                          :disabled="props.readOnly || isLoadingTemplateDeletePreview || isDeletingTemplate"
+                          class="template-card__action template-card__action--danger cursor-pointer p-1 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          :aria-label="t('app.delete')"
+                        >
+                          <span class="material-symbols-outlined text-xs" aria-hidden="true">delete</span>
+                        </button>
+                      </HintTooltip>
                     </div>
                   </div>
                 </div>
@@ -3096,36 +3104,37 @@ watch(() => props.readOnly, readOnly => {
 
         <div class="px-3 pb-4 bg-slate-50/50 pt-2 grid grid-cols-1 gap-3">
           <!-- Rule Creation Block -->
-          <button
-            type="button"
-            data-testid="open-rule-builder"
-            :disabled="props.readOnly"
-            class="relative w-full overflow-hidden border-0 text-left group cursor-pointer rounded-xl bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)] transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--accent-border)]"
-            :title="mutationTitle(t('app.createRule'))"
-            @click="openRuleBuilder"
-          >
-            <div class="relative p-3 flex items-center gap-3">
-              <div class="w-10 h-10 bg-[color:var(--accent-fill)] rounded-lg flex items-center justify-center">
-                <span aria-hidden="true" class="material-symbols-outlined text-black text-lg">add_circle</span>
-              </div>
-              <div class="flex-1">
-                <span class="text-sm font-bold text-white block">{{ t('app.createRule') }}</span>
-                <!--
-                  This card's ground is an accent *fill*, so its subtitle needs the ink that belongs on a
-                  fill. `board-text-info` is the accent-family *text* colour, meant for a neutral page
-                  ground: accent-on-accent measured **1.04:1** in light theme, making the subtitle of the
-                  most prominent action on the panel very nearly invisible.
+          <HintTooltip :content="mutationTitle(t('app.createRule'))">
+            <button
+              type="button"
+              data-testid="open-rule-builder"
+              :disabled="props.readOnly"
+              class="relative w-full overflow-hidden border-0 text-left group cursor-pointer rounded-xl bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)] transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--accent-border)]"
+              @click="openRuleBuilder"
+            >
+              <div class="relative p-3 flex items-center gap-3">
+                <div class="w-10 h-10 bg-[color:var(--accent-fill)] rounded-lg flex items-center justify-center">
+                  <span aria-hidden="true" class="material-symbols-outlined text-black text-lg">add_circle</span>
+                </div>
+                <div class="flex-1">
+                  <span class="text-sm font-bold text-white block">{{ t('app.createRule') }}</span>
+                  <!--
+                    This card's ground is an accent *fill*, so its subtitle needs the ink that belongs on a
+                    fill. `board-text-info` is the accent-family *text* colour, meant for a neutral page
+                    ground: accent-on-accent measured **1.04:1** in light theme, making the subtitle of the
+                    most prominent action on the panel very nearly invisible.
 
-                  `/90` rather than `/85`: /85 measures 4.19, under AA. Chosen by measurement after picking
-                  the wrong one by eye first.
-                -->
-                <span class="text-xs text-white/90">{{ t('app.ifThenLogic') }}</span>
+                    `/90` rather than `/85`: /85 measures 4.19, under AA. Chosen by measurement after picking
+                    the wrong one by eye first.
+                  -->
+                  <span class="text-xs text-white/90">{{ t('app.ifThenLogic') }}</span>
+                </div>
+                <div class="w-7 h-7 bg-[color:var(--accent-fill)] rounded-lg flex items-center justify-center">
+                  <span class="material-symbols-outlined text-white text-sm">arrow_forward</span>
+                </div>
               </div>
-              <div class="w-7 h-7 bg-[color:var(--accent-fill)] rounded-lg flex items-center justify-center">
-                <span class="material-symbols-outlined text-white text-sm">arrow_forward</span>
-              </div>
-            </div>
-          </button>
+            </button>
+          </HintTooltip>
         </div>
       </details>
       </div>
@@ -3245,28 +3254,30 @@ watch(() => props.readOnly, readOnly => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button
-                        type="button"
-                        @click="openConditionDialog('a', index)"
-                        class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
-                        :title="t('app.edit')"
-                        :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        @click="removeCondition('a', index)"
-                        class="p-1 text-slate-500 hover:board-text-danger hover:board-chip-danger rounded transition-colors"
-                        :title="t('app.delete')"
-                        :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                        </svg>
-                      </button>
+                      <HintTooltip :content="t('app.edit')">
+                        <button
+                          type="button"
+                          @click="openConditionDialog('a', index)"
+                          class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                          :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                          </svg>
+                        </button>
+                      </HintTooltip>
+                      <HintTooltip :content="t('app.delete')">
+                        <button
+                          type="button"
+                          @click="removeCondition('a', index)"
+                          class="p-1 text-slate-500 hover:board-text-danger hover:board-chip-danger rounded transition-colors"
+                          :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                          </svg>
+                        </button>
+                      </HintTooltip>
                     </div>
                   </div>
                   <div v-if="specForm.aConditions.length === 0" class="text-center py-2 text-[length:var(--iot-font-min)] text-slate-500 italic bg-white/50 rounded border border-dashed border-[color:var(--danger-border)]">
@@ -3330,28 +3341,30 @@ watch(() => props.readOnly, readOnly => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button
-                        type="button"
-                        @click="openConditionDialog('if', index)"
-                        class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
-                        :title="t('app.edit')"
-                        :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        @click="removeCondition('if', index)"
-                        class="p-1 text-slate-500 hover:board-text-danger hover:board-chip-danger rounded transition-colors"
-                        :title="t('app.delete')"
-                        :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                        </svg>
-                      </button>
+                      <HintTooltip :content="t('app.edit')">
+                        <button
+                          type="button"
+                          @click="openConditionDialog('if', index)"
+                          class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                          :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                          </svg>
+                        </button>
+                      </HintTooltip>
+                      <HintTooltip :content="t('app.delete')">
+                        <button
+                          type="button"
+                          @click="removeCondition('if', index)"
+                          class="p-1 text-slate-500 hover:board-text-danger hover:board-chip-danger rounded transition-colors"
+                          :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                          </svg>
+                        </button>
+                      </HintTooltip>
                     </div>
                   </div>
                   <div v-if="specForm.ifConditions.length === 0" class="text-center py-2 text-[length:var(--iot-font-min)] text-slate-500 italic bg-white/50 rounded border border-dashed border-[color:var(--danger-border)]">
@@ -3415,28 +3428,30 @@ watch(() => props.readOnly, readOnly => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button
-                        type="button"
-                        @click="openConditionDialog('then', index)"
-                        class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
-                        :title="t('app.edit')"
-                        :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        @click="removeCondition('then', index)"
-                        class="p-1 text-slate-500 hover:board-text-warning hover:board-chip-warning rounded transition-colors"
-                        :title="t('app.delete')"
-                        :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                        </svg>
-                      </button>
+                      <HintTooltip :content="t('app.edit')">
+                        <button
+                          type="button"
+                          @click="openConditionDialog('then', index)"
+                          class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                          :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                          </svg>
+                        </button>
+                      </HintTooltip>
+                      <HintTooltip :content="t('app.delete')">
+                        <button
+                          type="button"
+                          @click="removeCondition('then', index)"
+                          class="p-1 text-slate-500 hover:board-text-warning hover:board-chip-warning rounded transition-colors"
+                          :aria-label="t('app.removeConditionNumbered', { number: index + 1 })"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                          </svg>
+                        </button>
+                      </HintTooltip>
                     </div>
                   </div>
                   <div v-if="specForm.thenConditions.length === 0" class="text-center py-2 text-[length:var(--iot-font-min)] text-slate-500 italic bg-white/50 rounded border border-dashed border-[color:var(--warning-border)]">
@@ -3759,15 +3774,16 @@ watch(() => props.readOnly, readOnly => {
           <p class="template-preview__eyebrow">{{ t('app.templateDetails') }}</p>
           <h5 class="template-preview__title truncate" :title="getTemplateName(activeTemplatePreview)">{{ getTemplateName(activeTemplatePreview) }}</h5>
         </div>
-        <button
-          type="button"
-          class="template-preview__close"
-          :aria-label="t('app.close')"
-          :title="t('app.close')"
-          @click.stop="closeTemplatePreview"
-        >
-          <span class="material-symbols-outlined text-sm">close</span>
-        </button>
+        <HintTooltip :content="t('app.close')">
+          <button
+            type="button"
+            class="template-preview__close"
+            :aria-label="t('app.close')"
+            @click.stop="closeTemplatePreview"
+          >
+            <span class="material-symbols-outlined text-sm">close</span>
+          </button>
+        </HintTooltip>
       </div>
 
       <p class="template-preview__description" :title="getTemplateDescription(activeTemplatePreview)">

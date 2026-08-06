@@ -5,6 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import ControlCenter from '../ControlCenter.vue'
 
 vi.mock('element-plus', () => ({
+  /*
+   * `HintTooltip` imports `ElTooltip`, and a whole-module mock hides it — every case in the file then fails at
+   * import time with "No 'ElTooltip' export is defined", a message that names the mock rather than the component
+   * needing it. A render-slot stub suffices: nothing here asserts tooltip behaviour, only the control it wraps.
+   */
+  ElTooltip: { name: 'ElTooltip', template: '<slot />' },
   ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() }
 }))
 

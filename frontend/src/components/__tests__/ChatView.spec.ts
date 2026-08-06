@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { flushPromises, mount } from '@vue/test-utils'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { i18n } from '@/assets/i18n'
@@ -451,8 +452,15 @@ describe('ChatView', () => {
         .toContain('另一个标签页的场景生成')
       expect(chatStore.state.activeCount).toBe(1)
       expect(wrapper.get('.delete-btn-wrapper').attributes('disabled')).toBeDefined()
-      expect(wrapper.get('.delete-btn-wrapper').attributes('title'))
-        .toBe(i18n.global.t('app.chat.sessionStillRunning'))
+      /*
+       * The hint moved from a native `title` to the wrapping `HintTooltip`, so read it from the wrapper's prop.
+       *
+       * A native `title` renders as a grey OS tooltip: about a second of delay, no theme awareness, and nothing
+       * at all on touch. What is asserted here is the same string reaching the same user, through the tooltip
+       * the rest of the product uses.
+       */
+      expect(wrapper.findAllComponents(HintTooltip).map(tip => tip.props('content')))
+        .toContain(i18n.global.t('app.chat.sessionStillRunning'))
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
@@ -1123,7 +1131,9 @@ describe('ChatView', () => {
     expect(chatApi.getSessionHistory).toHaveBeenCalledWith('session-1', expect.any(AbortSignal))
     expect(wrapper.get('[data-testid="chat-session-active"]').attributes('title')).toBe('后台任务执行中')
     expect(wrapper.get('[data-testid="chat-remote-execution"]').text()).toContain('已重新连接到后台执行')
-    expect(wrapper.get('[data-testid="chat-stop"]').attributes('title')).toBe('停止仍在后台运行的助手任务')
+    // Same move as the delete button above: the hint is the wrapping tooltip's content now, not a `title`.
+    expect(wrapper.findAllComponents(HintTooltip).map(tip => tip.props('content')))
+      .toContain('停止仍在后台运行的助手任务')
     expect(chatStore.state.streaming).toBe(true)
 
     wrapper.unmount()

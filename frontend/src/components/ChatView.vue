@@ -44,6 +44,7 @@ import { useAuth } from '@/stores/auth';
 import { localizedTextOrFallback } from '@/utils/userMessage';
 import { REQUEST_LIMITS } from '@/constants/requestLimits';
 import { confirmDestructive, notifyBlocked, notifyError, notifyInfo, notifySuccess } from '@/utils/feedback'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 type BoardChatContext = {
   deviceCount?: number;
@@ -2449,16 +2450,17 @@ const scrollToBottom = (force = false) => {
                   </span>
                 </span>
               </button>
-              <button
-                type="button"
-                class="delete-btn-wrapper"
-                :aria-label="t('app.delete')"
-                :title="session.active ? t('app.chat.sessionStillRunning') : t('app.delete')"
-                :disabled="isSettlingStream || isPreparingStreamSession || session.active"
-                @click.stop="handleDelete(session.id)"
-              >
-                <DeleteOutlined class="delete-icon"/>
-              </button>
+              <HintTooltip :content="session.active ? t('app.chat.sessionStillRunning') : t('app.delete')">
+                <button
+                  type="button"
+                  class="delete-btn-wrapper"
+                  :aria-label="t('app.delete')"
+                  :disabled="isSettlingStream || isPreparingStreamSession || session.active"
+                  @click.stop="handleDelete(session.id)"
+                >
+                  <DeleteOutlined class="delete-icon"/>
+                </button>
+              </HintTooltip>
             </div>
           </div>
 
@@ -2484,32 +2486,34 @@ const scrollToBottom = (force = false) => {
             @pointerdown="startPanelDrag"
           >
             <div class="header-left-group">
-              <button
-                type="button"
-                class="control-icon-button sidebar-toggle"
-                data-testid="chat-sidebar-toggle"
-                :aria-label="isSidebarOpen ? t('app.collapse') : t('app.expand')"
-                :title="isSidebarOpen ? t('app.collapse') : t('app.expand')"
-                @click="isSidebarOpen = !isSidebarOpen"
-              >
-                <component :is="isSidebarOpen ? MenuFoldOutlined : MenuUnfoldOutlined" />
-              </button>
+              <HintTooltip :content="isSidebarOpen ? t('app.collapse') : t('app.expand')">
+                <button
+                  type="button"
+                  class="control-icon-button sidebar-toggle"
+                  data-testid="chat-sidebar-toggle"
+                  :aria-label="isSidebarOpen ? t('app.collapse') : t('app.expand')"
+                  @click="isSidebarOpen = !isSidebarOpen"
+                >
+                  <component :is="isSidebarOpen ? MenuFoldOutlined : MenuUnfoldOutlined" />
+                </button>
+              </HintTooltip>
               <div class="header-title">
                 <RobotOutlined class="header-title-icon" />
                 <span>{{ t('app.aiAssistant') }}</span>
               </div>
             </div>
             <div class="header-controls">
-              <button
-                type="button"
-                class="control-icon-button control-icon-button--danger"
-                data-testid="chat-close"
-                :aria-label="t('app.close')"
-                :title="t('app.close')"
-                @click="chatStore.closeChat()"
-              >
-                <CloseOutlined />
-              </button>
+              <HintTooltip :content="t('app.close')">
+                <button
+                  type="button"
+                  class="control-icon-button control-icon-button--danger"
+                  data-testid="chat-close"
+                  :aria-label="t('app.close')"
+                  @click="chatStore.closeChat()"
+                >
+                  <CloseOutlined />
+                </button>
+              </HintTooltip>
             </div>
           </div>
 
@@ -2774,15 +2778,16 @@ const scrollToBottom = (force = false) => {
                   </article>
 
                   <div v-if="msg.role === 'assistant' && msg.content && !isStreaming" class="msg-actions">
-                    <button
-                      type="button"
-                      class="action-btn-small"
-                      :aria-label="t('app.chat.copyAll')"
-                      :title="t('app.chat.copyAll')"
-                      @click="copyFullMessage(msg.content)"
-                    >
-                      <CopyOutlined />
-                    </button>
+                    <HintTooltip :content="t('app.chat.copyAll')">
+                      <button
+                        type="button"
+                        class="action-btn-small"
+                        :aria-label="t('app.chat.copyAll')"
+                        @click="copyFullMessage(msg.content)"
+                      >
+                        <CopyOutlined />
+                      </button>
+                    </HintTooltip>
                   </div>
 
                 </div>
@@ -2859,42 +2864,56 @@ const scrollToBottom = (force = false) => {
               ></textarea>
               <div class="input-actions">
                 <div class="left-tools">
-                  <button
-                    type="button"
-                    :class="['tool-icon', { active: isRecording }]"
-                    :aria-pressed="isRecording"
-                    :aria-label="isRecording ? t('app.chat.stopVoiceInput') : t('app.chat.startVoiceInput')"
-                    :title="isRecording ? t('app.chat.stopVoiceInput') : t('app.chat.startVoiceInput')"
-                    @click="isRecording ? stopListening() : startListening()"
-                    :disabled="interactionLocked || isLoading || historyLoadFailed"
-                  >
-                    <AudioOutlined/>
-                  </button>
+                  <HintTooltip :content="isRecording ? t('app.chat.stopVoiceInput') : t('app.chat.startVoiceInput')">
+                    <button
+                      type="button"
+                      :class="['tool-icon', { active: isRecording }]"
+                      :aria-pressed="isRecording"
+                      :aria-label="isRecording ? t('app.chat.stopVoiceInput') : t('app.chat.startVoiceInput')"
+                      @click="isRecording ? stopListening() : startListening()"
+                      :disabled="interactionLocked || isLoading || historyLoadFailed"
+                    >
+                      <AudioOutlined/>
+                    </button>
+                  </HintTooltip>
                 </div>
                 <div class="right-tools">
-                  <button
+                  <!--
+                    The conditional lives on the wrappers, not the buttons.
+
+                    `v-if` and `v-else` must remain adjacent siblings; giving each button its own tooltip *inside*
+                    a shared wrapper would separate them and Vue rejects it ("v-else has no adjacent v-if"). So
+                    the branch moves up one level and each wrapper carries the hint its own button needs.
+                  -->
+                  <HintTooltip
                     v-if="isStreaming || isMonitoringRemoteExecution"
-                    type="button"
-                    class="action-btn stop"
-                    data-testid="chat-stop"
-                    :aria-label="t(isMonitoringRemoteExecution
+                    :content="t(isMonitoringRemoteExecution
                       ? 'app.chat.stopRemoteExecution'
                       : 'app.chat.stopResponse')"
-                    :title="t(isMonitoringRemoteExecution
-                      ? 'app.chat.stopRemoteExecution'
-                      : 'app.chat.stopResponse')"
-                    @click="handleStop"
-                  ><StopOutlined/></button>
-                  <button
+                  >
+                    <button
+                      type="button"
+                      class="action-btn stop"
+                      data-testid="chat-stop"
+                      :aria-label="t(isMonitoringRemoteExecution
+                        ? 'app.chat.stopRemoteExecution'
+                        : 'app.chat.stopResponse')"
+                      @click="handleStop"
+                    ><StopOutlined/></button>
+                  </HintTooltip>
+                  <HintTooltip
                     v-else
-                    type="button"
-                    class="action-btn send"
-                    data-testid="chat-send"
-                    :aria-label="t('app.chat.sendMessage')"
-                    @click="handleSend"
-                    :disabled="interactionLocked || !inputValue.trim() || isLoading || historyLoadFailed"
-                    :title="interactionLocked ? t('app.chat.boardInteractionLocked') : undefined"
-                  ><SendOutlined/></button>
+                    :content="interactionLocked ? t('app.chat.boardInteractionLocked') : ''"
+                  >
+                    <button
+                      type="button"
+                      class="action-btn send"
+                      data-testid="chat-send"
+                      :aria-label="t('app.chat.sendMessage')"
+                      @click="handleSend"
+                      :disabled="interactionLocked || !inputValue.trim() || isLoading || historyLoadFailed"
+                    ><SendOutlined/></button>
+                  </HintTooltip>
                 </div>
               </div>
             </div>

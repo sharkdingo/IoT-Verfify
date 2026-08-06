@@ -10,6 +10,7 @@ import type {
   PlaybackEnvironmentChange
 } from '@/utils/traceView'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 const props = withDefaults(defineProps<{
   changes: PlaybackDeviceChange[]

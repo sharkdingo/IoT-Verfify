@@ -23,6 +23,7 @@ import {
 import { fuzzingLimitationKey } from '@/utils/fuzzingPresentation'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { normalizeNuSmvDeviceName } from '@/utils/modelRequest'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 export type FuzzingPanelForm = {
   explorationMode: FuzzingExplorationMode
@@ -285,17 +286,18 @@ const frozenTargetScope = computed(() => {
           <p class="mt-0.5 text-xs leading-5 board-text-muted">{{ t('app.fuzzSearchSubtitle') }}</p>
         </div>
       </div>
-      <button
-        ref="closeButtonRef"
-        type="button"
-        data-testid="close-fuzzing-panel"
-        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md board-text-muted hover:board-card--muted"
-        :title="t('app.close')"
-        :aria-label="t('app.close')"
-        @click="closePanel"
-      >
-        <span class="material-symbols-outlined" aria-hidden="true">close</span>
-      </button>
+      <HintTooltip :content="t('app.close')">
+        <button
+          ref="closeButtonRef"
+          type="button"
+          data-testid="close-fuzzing-panel"
+          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md board-text-muted hover:board-card--muted"
+          :aria-label="t('app.close')"
+          @click="closePanel"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">close</span>
+        </button>
+      </HintTooltip>
     </header>
 
     <div class="iot-scroll-region min-h-0 flex-1 space-y-3 p-4">
@@ -415,16 +417,17 @@ const frozenTargetScope = computed(() => {
             <h4 id="paper-domain-preview-title" class="text-xs font-bold board-text-warning">{{ t('app.fuzzPaperDomainTitle') }}</h4>
             <p class="mt-1 text-[length:var(--iot-font-min)] leading-4 board-text-warning">{{ t('app.fuzzPaperDomainDescription') }}</p>
           </div>
-          <button
-            type="button"
-            class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md board-text-warning hover:board-chip-warning disabled:opacity-50"
-            :disabled="running || paperDomainLoading"
-            :title="t('app.refresh')"
-            :aria-label="t('app.refresh')"
-            @click="emit('refreshPaperDomain')"
-          >
-            <span class="material-symbols-outlined text-base" :class="paperDomainLoading ? 'animate-spin' : ''" aria-hidden="true">refresh</span>
-          </button>
+          <HintTooltip :content="t('app.refresh')">
+            <button
+              type="button"
+              class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md board-text-warning hover:board-chip-warning disabled:opacity-50"
+              :disabled="running || paperDomainLoading"
+              :aria-label="t('app.refresh')"
+              @click="emit('refreshPaperDomain')"
+            >
+              <span class="material-symbols-outlined text-base" :class="paperDomainLoading ? 'animate-spin' : ''" aria-hidden="true">refresh</span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div v-if="paperDomainLoading" class="mt-2 flex items-center gap-2 text-[11px] board-text-warning" role="status">

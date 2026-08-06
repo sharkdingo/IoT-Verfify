@@ -60,6 +60,7 @@ import {
   getNodeSurfaceColor
 } from '../utils/canvas/nodePalette'
 import { estimateCanvasTextWidth, truncateCanvasTextToWidth } from '../utils/canvas/canvasText'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 // Particle animation utilities
 const getParticleOpacity = (index: number): string => {

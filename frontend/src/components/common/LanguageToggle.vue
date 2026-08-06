@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setLocale } from '@/assets/i18n'
+import HintTooltip from '@/components/common/HintTooltip.vue'
 
 type Tone = 'light' | 'dark' | 'glass'
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HintTooltip from '@/components/common/HintTooltip.vue'
 import { ref, computed, nextTick, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SimulationState } from '../types/simulation'
@@ -466,17 +467,18 @@ watch(selectedStateIndex, () => {
         </div>
 
         <div class="flex flex-shrink-0 items-center gap-1.5">
-          <button
-            type="button"
-            data-testid="simulation-timeline-run-details"
-            class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
-            :title="t('app.viewSimulationRunDetails')"
-            :aria-label="t('app.viewSimulationRunDetails')"
-            @click="emit('open-run-details')"
-          >
-            <span class="material-symbols-outlined text-base" aria-hidden="true">description</span>
-            <span class="hidden sm:inline">{{ t('app.runDetails') }}</span>
-          </button>
+          <HintTooltip :content="t('app.viewSimulationRunDetails')">
+            <button
+              type="button"
+              data-testid="simulation-timeline-run-details"
+              class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              :aria-label="t('app.viewSimulationRunDetails')"
+              @click="emit('open-run-details')"
+            >
+              <span class="material-symbols-outlined text-base" aria-hidden="true">description</span>
+              <span class="hidden sm:inline">{{ t('app.runDetails') }}</span>
+            </button>
+          </HintTooltip>
           <button
             type="button"
             data-testid="simulation-timeline-play"
@@ -606,39 +608,44 @@ watch(selectedStateIndex, () => {
               }"
             ></div>
             <div class="absolute left-2 right-2 top-1/2 flex -translate-y-1/2 items-center justify-between">
-              <button
+              <!-- The `v-for` belongs on the wrapper: `index` comes from the loop, so a tooltip hoisted above it
+                   would reference a variable that is not in scope there. -->
+              <HintTooltip
                 v-for="(_, index) in states"
                 :key="index"
-                type="button"
-                :tabindex="index === selectedStateIndex ? 0 : -1"
-                :aria-label="getStateAriaLabel(index)"
-                :title="getStateAriaLabel(index)"
-                :aria-current="index === selectedStateIndex ? 'step' : undefined"
-                :data-testid="`simulation-timeline-state-${index}`"
-                class="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] focus:ring-offset-2"
-                :class="index === selectedStateIndex
-                  ? 'scale-125 border-[color:var(--accent-border)] bg-[color:var(--accent)] shadow-md'
-                  : index < selectedStateIndex
-                    ? 'board-border-subtle board-chip-info'
-                    : 'border-slate-300 bg-white hover:border-[color:var(--accent)]'"
-                @click="selectState(index)"
-                @keydown="handleStateKeydown($event, index)"
+                :content="getStateAriaLabel(index)"
               >
-                <!--
-                  The rail shows shape, not numbers — the same decision as the counterexample rail in
-                  `Board.vue`, applied here so the two playback surfaces do not diverge.
+                <button
+                  type="button"
+                  :tabindex="index === selectedStateIndex ? 0 : -1"
+                  :aria-label="getStateAriaLabel(index)"
+                  :aria-current="index === selectedStateIndex ? 'step' : undefined"
+                  :data-testid="`simulation-timeline-state-${index}`"
+                  class="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] focus:ring-offset-2"
+                  :class="index === selectedStateIndex
+                    ? 'scale-125 border-[color:var(--accent-border)] bg-[color:var(--accent)] shadow-md'
+                    : index < selectedStateIndex
+                      ? 'board-border-subtle board-chip-info'
+                      : 'border-slate-300 bg-white hover:border-[color:var(--accent)]'"
+                  @click="selectState(index)"
+                  @keydown="handleStateKeydown($event, index)"
+                >
+                  <!--
+                    The rail shows shape, not numbers — the same decision as the counterexample rail in
+                    `Board.vue`, applied here so the two playback surfaces do not diverge.
 
-                  These printed the step number at `text-[7px]`, and `text-[8px]` when selected, against
-                  the product's 11px `--iot-font-min` floor. A 28px marker cannot hold a legible two-digit
-                  number, and the number is already available three other ways: the `n / total` badge, the
-                  scrub control, and this button's own `aria-label` and `title`.
-                -->
-                <span
-                  v-if="index === selectedStateIndex"
-                  class="h-1.5 w-1.5 rounded-full bg-white"
-                  aria-hidden="true"
-                ></span>
-              </button>
+                    These printed the step number at `text-[7px]`, and `text-[8px]` when selected, against
+                    the product's 11px `--iot-font-min` floor. A 28px marker cannot hold a legible two-digit
+                    number, and the number is already available three other ways: the `n / total` badge, the
+                    scrub control, and this button's own `aria-label` and `title`.
+                  -->
+                  <span
+                    v-if="index === selectedStateIndex"
+                    class="h-1.5 w-1.5 rounded-full bg-white"
+                    aria-hidden="true"
+                  ></span>
+                </button>
+              </HintTooltip>
             </div>
           </div>
         </div>
