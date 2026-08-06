@@ -15470,7 +15470,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('rule')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingRules ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)]' : 'bg-[color:var(--warning-fill)] hover:bg-[color:var(--warning-fill)]'
+            isRecommendingRules ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -15623,7 +15623,7 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Details -->
             <div class="px-3 pb-2">
               <details class="text-xs">
-                <summary class="flex cursor-pointer items-center gap-1 font-medium board-text-warning hover:">
+                <summary class="flex cursor-pointer items-center gap-1 font-medium board-text-warning hover:board-text-strong">
                   <span class="material-symbols-outlined text-sm">info</span>
                   {{ t('app.viewDetails') }}
                 </summary>
@@ -16079,7 +16079,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('spec')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingSpecs ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)]' : 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)]'
+            isRecommendingSpecs ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -16217,7 +16217,7 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Details -->
             <div class="px-3 pb-2">
               <details class="text-xs">
-                <summary class="flex cursor-pointer items-center gap-1 font-medium board-text-danger hover:">
+                <summary class="flex cursor-pointer items-center gap-1 font-medium board-text-danger hover:board-text-strong">
                   <span class="material-symbols-outlined text-sm">info</span>
                   {{ t('app.viewDetails') }}
                 </summary>

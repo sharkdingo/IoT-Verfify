@@ -464,7 +464,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
           </span>
           <button
             type="button"
-            class="flex min-h-11 items-center gap-1 px-2 text-xs font-medium board-text-info hover:"
+            class="flex min-h-11 items-center gap-1 px-2 text-xs font-medium board-text-info hover:board-text-strong"
             :disabled="loadingTasks"
             @click="emit('refresh-tasks')"
           >
@@ -650,7 +650,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
           </div>
           <button
             type="button"
-            class="flex min-h-11 shrink-0 items-center gap-1 px-2 text-xs font-medium board-text-info hover:"
+            class="flex min-h-11 shrink-0 items-center gap-1 px-2 text-xs font-medium board-text-info hover:board-text-strong"
             :disabled="loadingResults"
             @click="emit('refresh-results')"
           >
