@@ -23,8 +23,8 @@ import { isRunInitiator, type ModelPlaybackScene } from '@/types/model'
 import { validateModelPlaybackScene } from './playbackSceneResponse'
 
 export const FUZZ_RESPONSE_INCOMPLETE_CODE = 'FUZZ_RESPONSE_INCOMPLETE'
-export const FUZZ_ACTIVE_TASK_LIMIT_REACHED_CODE = 'FUZZ_ACTIVE_TASK_LIMIT_REACHED'
-export const FUZZ_STORED_TASK_LIMIT_REACHED_CODE = 'FUZZ_STORED_TASK_LIMIT_REACHED'
+const FUZZ_ACTIVE_TASK_LIMIT_REACHED_CODE = 'FUZZ_ACTIVE_TASK_LIMIT_REACHED'
+const FUZZ_STORED_TASK_LIMIT_REACHED_CODE = 'FUZZ_STORED_TASK_LIMIT_REACHED'
 
 export interface FuzzActiveTaskLimit {
   activeTaskCount?: number

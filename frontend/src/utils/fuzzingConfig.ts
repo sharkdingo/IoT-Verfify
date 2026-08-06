@@ -7,8 +7,8 @@ export const FUZZ_PATH_LENGTH_MAX = 50
 export const FUZZ_POPULATION_MIN = 1
 export const FUZZ_POPULATION_MAX = 50
 export const FUZZ_TARGET_SPEC_MAX = 100
-export const FUZZ_SEED_MAX = Number.MAX_SAFE_INTEGER
-export const FUZZ_SUPPORTED_TEMPLATE_IDS = new Set(['1', '3', '4'])
+const FUZZ_SEED_MAX = Number.MAX_SAFE_INTEGER
+const FUZZ_SUPPORTED_TEMPLATE_IDS = new Set(['1', '3', '4'])
 
 export const isKnownFuzzingTemplateSupported = (templateId: unknown): boolean =>
   FUZZ_SUPPORTED_TEMPLATE_IDS.has(String(templateId ?? '').trim())

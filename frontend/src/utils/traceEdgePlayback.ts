@@ -80,7 +80,7 @@ export const traceVariableMatchesName = (variable: TraceVariableLike, name: stri
   return candidates.has(variableLower) || candidates.has(normalizedVariableLower)
 }
 
-export const traceEnvironmentVariableMatchesName = (variable: TraceVariableLike, name: string) => {
+const traceEnvironmentVariableMatchesName = (variable: TraceVariableLike, name: string) => {
   const variableLower = variable.name.toLowerCase()
   const normalizedVariableLower = normalizeTraceVariableName(variable.name)
   const candidates = traceEnvironmentNameCandidates(name)
@@ -93,7 +93,18 @@ const splitTraceComparableParts = (value: string) =>
     .map(item => item.trim())
     .filter(Boolean)
 
-export const traceValueEquals = (actualText: string, expectedText: string): boolean => {
+/*
+ * Several helpers below are module-private rather than exported, and that is a demotion, not a deletion.
+ *
+ * A sweep for "exports with no importer" flagged them, but each is used *inside* this file — `traceValueEquals`
+ * five times, `compareTraceValue` twice. So they were never dead code; only the `export` keyword was surplus, and
+ * an export with no reader invites the next person to build a second caller on a helper that was never meant to be
+ * part of the surface. The distinction matters: deleting them would have removed live logic.
+ *
+ * `getTraceEdgeEvaluationIndex` in this same file *was* genuinely dead and is gone — the note at its old position
+ * records why it was not a missing extraction.
+ */
+const traceValueEquals = (actualText: string, expectedText: string): boolean => {
   const actualLower = actualText.toLowerCase()
   const expectedLower = expectedText.toLowerCase()
   if (actualLower === expectedLower) return true
@@ -101,7 +112,7 @@ export const traceValueEquals = (actualText: string, expectedText: string): bool
     .some(part => part.toLowerCase() === expectedLower)
 }
 
-export const compareTraceValue = (actual: unknown, relation: string | undefined, expected: unknown): boolean => {
+const compareTraceValue = (actual: unknown, relation: string | undefined, expected: unknown): boolean => {
   const actualText = normalizeTraceComparable(actual)
   const expectedText = normalizeTraceComparable(expected)
   const normalizedRelation = relation || '='
@@ -162,7 +173,7 @@ export const findTraceVariableAtOrBefore = (
   return null
 }
 
-export const findTraceEnvironmentVariableAtOrBefore = (
+const findTraceEnvironmentVariableAtOrBefore = (
   trace: TracePlaybackLike,
   variableName: string,
   endIndex: number

@@ -53,7 +53,7 @@ export interface ValidateDeviceRuntimeConfigOptions {
 
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
-export const normalizeRuntimeValue = (value: unknown) => String(value ?? '').trim()
+const normalizeRuntimeValue = (value: unknown) => String(value ?? '').trim()
 
 export const createDeviceRuntimeDraft = (): DeviceRuntimeDraft => ({
   state: '',
@@ -69,15 +69,15 @@ export const getTemplateWorkingStates = (template?: DeviceTemplate | null): Work
     ? template.manifest.WorkingStates.filter(state => normalizeRuntimeValue(state?.Name))
     : []
 
-export const getTemplateInternalVariables = (template?: DeviceTemplate | null): InternalVariable[] =>
+const getTemplateInternalVariables = (template?: DeviceTemplate | null): InternalVariable[] =>
   Array.isArray(template?.manifest?.InternalVariables)
     ? template.manifest.InternalVariables.filter(variable => normalizeRuntimeValue(variable?.Name))
     : []
 
-export const isTemplateLocalVariable = (variable: InternalVariable) =>
+const isTemplateLocalVariable = (variable: InternalVariable) =>
   variable.IsInside === true
 
-export const isTemplateEnvironmentVariable = (variable: InternalVariable) =>
+const isTemplateEnvironmentVariable = (variable: InternalVariable) =>
   variable.IsInside !== true
 
 export const getTemplateLocalVariables = (template?: DeviceTemplate | null): InternalVariable[] =>

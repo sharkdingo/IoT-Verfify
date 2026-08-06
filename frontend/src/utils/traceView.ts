@@ -409,7 +409,7 @@ const translateTraceText = (
   fallback: string
 ): string => translate ? translate(key, params) : fallback
 
-export const formatTraceRelation = (relation?: string, translate?: TraceTranslator): string => {
+const formatTraceRelation = (relation?: string, translate?: TraceTranslator): string => {
   const normalized = normalizeModelRelation(relation) || '='
   const relations: Record<string, string> = {
     '=': '=',
