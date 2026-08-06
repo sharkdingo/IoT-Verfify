@@ -1113,6 +1113,19 @@ public final class FixStrategyUtils {
         if (modes == null || modes.isEmpty()) return false;
 
         // Multi-mode tuple resolution: "cool;high" → split by ; → check per-mode
+        /*
+         * The `modes.size() > 1` term differs from the three sibling implementations, which gate on `contains(";")`
+         * alone — and that difference is unreachable, which is why it can stay.
+         *
+         * An audit flagged it as a live divergence: for a single-mode device given `"off;"` this takes the
+         * single-value path while `NusmvRequestValidator:1306` takes the tuple path and rejects on segment count.
+         * Measured against the running API, `"off;"` never gets that far — `/api/board/nodes` answers **422
+         * "Illegal state value for device template: off;"** at the write boundary, so no persisted device can carry
+         * it. Verified alongside `"off"` (200) to rule out the template itself being at fault.
+         *
+         * Left as-is deliberately: aligning four implementations to remove a difference no input can reach would
+         * be change without a defect behind it.
+         */
         if (trimmed.contains(";") && modes.size() > 1) {
             String[] segments = trimmed.split(";", -1);
             if (segments.length != modes.size()) return false;

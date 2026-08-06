@@ -268,6 +268,17 @@ const formatModelToken = (value: unknown, source: ModelTokenSource) => {
   return formatModelTokenBySource(source, value, t)
 }
 
+/**
+ * Words here, glyphs on the canvas and in the inspector — and that is not a divergence.
+ *
+ * An audit read three renderings of one operator as a defect. Two of them were: `SystemInspector` and
+ * `CanvasBoard` keyed their maps on `EQ`/`GTE`, which nothing persists, so both fell through to the raw `>=`
+ * while disagreeing on `in`. Those now share one glyph set.
+ *
+ * This one is different, because the output goes into a **sentence**: `parameterTargetFallback` reads
+ * "temperature greater or equal 30", and `≥` mid-sentence reads worse than the words. The rule is the audience,
+ * not the string — a canvas edge label has no room for a word, and prose has no use for a glyph.
+ */
 const formatRelation = (value: unknown) => {
   const raw = String(value ?? '').trim()
   const normalized = raw.toLowerCase().replace(/_/g, ' ')

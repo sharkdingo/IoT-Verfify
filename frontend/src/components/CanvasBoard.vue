@@ -61,6 +61,7 @@ import {
 } from '../utils/canvas/nodePalette'
 import { estimateCanvasTextWidth, truncateCanvasTextToWidth } from '../utils/canvas/canvasText'
 import HintTooltip from '@/components/common/HintTooltip.vue'
+import { normalizeModelRelation } from '@/utils/modelRequest'
 
 // Particle animation utilities
 const getParticleOpacity = (index: number): string => {
@@ -711,20 +712,28 @@ const getAdjustedLinkPoints = (fromNode: DeviceNode | undefined, toNode: DeviceN
 
 type NodeVisualTier = 'compact' | 'condensed' | 'expanded'
 
-const relationSymbols: Record<string, string> = {
-  EQ: '=',
-  NEQ: '!=',
-  GT: '>',
-  GTE: '>=',
-  LT: '<',
-  LTE: '<='
-}
-
+/**
+ * An edge label's relation, keyed on the canonical form and using the same glyphs as the inspector.
+ *
+ * The map was keyed on `EQ`/`GTE`/`LTE`, which nothing persists — `RuleBuilderDialog` authors symbol form and the
+ * backend canonicalises to symbols — so every key was dead and only the fallthrough ran. Meanwhile `in` rendered
+ * as a translated word here and as `∈` in the inspector, for the same condition on the same rule. One operator
+ * should not have two readings on two surfaces a user compares side by side.
+ */
 const getRelationSymbol = (relation?: string) => {
   if (!relation) return ''
-  if (relation === 'in') return t('app.relationIn')
-  if (relation === 'not_in' || relation === 'not in') return t('app.relationNotIn')
-  return relationSymbols[relation] || relation
+  const canonical = normalizeModelRelation(relation) ?? relation
+  const glyphs: Record<string, string> = {
+    '=': '=',
+    '!=': '≠',
+    '>': '>',
+    '>=': '≥',
+    '<': '<',
+    '<=': '≤',
+    'in': '∈',
+    'not in': '∉'
+  }
+  return glyphs[canonical] || canonical
 }
 
 const hasValue = (value: unknown) =>

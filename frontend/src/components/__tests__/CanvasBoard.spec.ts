@@ -111,7 +111,16 @@ describe('CanvasBoard device context actions', () => {
 
     await hitarea.trigger('focus')
     expect(wrapper.find('.edge-label').exists()).toBe(true)
-    expect(wrapper.get('.edge-label').text()).toContain('Hall motion.状态 属于 活动')
+    /*
+     * `∈`, not the translated word. The edge label is an SVG `<text>` on a canvas connector — the tightest space
+     * in the product — and the inspector already printed `∈` for the same condition, so the word form meant one
+     * operator read two ways on two surfaces a user compares side by side. Set-membership notation is also the
+     * more precise reading in a formal-verification product, where `in` is exactly set membership.
+     *
+     * This assertion is incidental to the test, whose subject is hover/focus visibility; it is updated rather
+     * than protected.
+     */
+    expect(wrapper.get('.edge-label').text()).toContain('Hall motion.状态 ∈ 活动')
     expect(wrapper.get('.edge-label').text()).toContain('Hall camera.拍照')
     expect(edge).toMatchObject({ fromApi: 'state', relation: 'in', value: 'active', toApi: 'take photo' })
 

@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.util;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 
 import java.util.ArrayList;
@@ -120,19 +121,24 @@ public final class RuleSemanticSignature {
                 .orElse("");
     }
 
+    /**
+     * One owner for relation aliases: {@link SmvRelationUtils#normalizeRelation}.
+     *
+     * This was a private copy of that switch, and it had already drifted — its `NEQ` case omitted the `"!="`
+     * alias the canonical version carries. The two agreed only by accident, through the passthrough default, so
+     * adding an alias to the generator alone would have made a signature disagree with the model without any test
+     * noticing.
+     *
+     * That matters more here than in most places. This signature gates duplicate detection, delete-if-unchanged
+     * (`BoardStorageServiceImpl:1160`, `:4027`) and fix conflict detection (`FixStrategyUtils:152`) — so a
+     * mismatch lands a delete or an undo on a record the user never reviewed.
+     *
+     * The empty-string contract is kept: a signature is a string key, and a `null` inside one would compare
+     * unequal to an absent relation rather than equal to it.
+     */
     private static String normalizeRelation(String relation) {
-        String value = normalize(relation);
-        return switch (value.toUpperCase(Locale.ROOT)) {
-            case "EQ", "==" -> "=";
-            case "NEQ" -> "!=";
-            case "GT" -> ">";
-            case "GTE" -> ">=";
-            case "LT" -> "<";
-            case "LTE" -> "<=";
-            case "IN" -> "in";
-            case "NOT_IN", "NOT IN" -> "not in";
-            default -> value;
-        };
+        String canonical = SmvRelationUtils.normalizeRelation(relation);
+        return canonical == null ? "" : canonical;
     }
 
     private static String normalize(String value) {

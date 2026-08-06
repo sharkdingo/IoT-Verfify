@@ -24,6 +24,7 @@ import { hasModeledStateMachine, resolveEffectiveNodeState } from '@/utils/canva
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
 import { useRovingTablist } from '@/composables/useRovingTablist'
 import { notifyBlocked } from '@/utils/feedback'
+import { normalizeModelRelation } from '@/utils/modelRequest'
 
 const { t, te } = useI18n()
 
@@ -548,20 +549,31 @@ const eventValue = (event: Event) =>
 const formatEnvironmentValue = (variable: EnvironmentGroup, value: string) =>
   variable.bundled ? formatModelToken(value) : value
 
-// 关系代码转可读标签
+/**
+ * A relation as a reading glyph, keyed on the canonical form rather than on an enum that never arrives.
+ *
+ * The map used to be keyed on `EQ`/`GTE`/`LTE`. Nothing persists those: `RuleBuilderDialog` authors symbol form
+ * (`'>='`, `'in'`) and `BoardStorageServiceImpl` canonicalises to symbols on save, so every enum key was dead and
+ * only the `|| relation` fallthrough ran — which is why this panel printed a raw `>=` while `FixResultDialog`
+ * printed "Greater or equal" for the same condition. In a product where the condition text *is* the claim being
+ * verified, three renderings of one operator is three chances to misread it.
+ *
+ * `normalizeModelRelation` already accepts both spellings and returns the symbol, so it goes in front and this
+ * map only has to turn a symbol into its glyph.
+ */
 const getRelationLabel = (relation: string): string => {
-  const relationMap: Record<string, string> = {
-    'EQ': '=',
-    'NEQ': '≠',
-    'GT': '>',
-    'GTE': '≥',
-    'LT': '<',
-    'LTE': '≤',
+  const canonical = normalizeModelRelation(relation) ?? relation
+  const glyphs: Record<string, string> = {
+    '=': '=',
+    '!=': '≠',
+    '>': '>',
+    '>=': '≥',
+    '<': '<',
+    '<=': '≤',
     'in': '∈',
-    'not_in': '∉',
     'not in': '∉'
   }
-  return relationMap[relation] || relation
+  return glyphs[canonical] || canonical
 }
 
 const hasConditionValue = (value: unknown) =>
