@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatRunTimestamp } from '@/utils/runTimestamp'
 import { computed, toRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AvailableFuzzingRunSummary, FuzzingFinding, FuzzingFindingSummary, FuzzingRun } from '@/types/fuzzing'
@@ -85,12 +86,9 @@ const explorationModeDescription = computed(() => t(
     : 'app.fuzzModeBoardDescription'
 ))
 const displayStep = (zeroBasedStep: number) => zeroBasedStep + 1
-const formatDate = (value: string) => {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString(locale.value.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
-}
+/* One owner in `utils/runTimestamp.ts`. This copy returned the raw value for an empty timestamp, which renders
+   as a blank cell — indistinguishable from a rendering failure. */
+const formatDate = (value: string) => formatRunTimestamp(value, locale.value, t)
 
 const eligibilityReasonKeys: Record<string, string> = {
   UNSUPPORTED_TEMPLATE: 'app.fuzzEligibilityUnsupportedTemplate',

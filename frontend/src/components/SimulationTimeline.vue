@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatRunTimestamp as sharedRunTimestamp } from '@/utils/runTimestamp'
 import HintTooltip from '@/components/common/HintTooltip.vue'
 import { ref, computed, nextTick, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -43,12 +44,9 @@ const emit = defineEmits<{
 
 const { t, locale } = useI18n()
 
-const formatRunTimestamp = (value?: string): string => {
-  if (!value) return t('app.unknown')
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString(locale.value.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
-}
+/* One owner in `utils/runTimestamp.ts`. This copy's "unknown" for a missing timestamp is the behaviour the
+   other two lacked, so it is the one the shared version keeps. */
+const formatRunTimestamp = (value?: string): string => sharedRunTimestamp(value, locale.value, t)
 
 // 当前选中的状态索引
 const selectedStateIndex = ref(0)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatRunTimestamp } from '@/utils/runTimestamp'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type {
@@ -131,13 +132,9 @@ const timestamp = (value?: string) => {
   return Number.isNaN(parsed) ? 0 : parsed
 }
 
-const formatDate = (value?: string) => {
-  if (!value) return ''
-  const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString(locale.value.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
-}
+/* One owner in `utils/runTimestamp.ts`. This copy returned a blank for a missing timestamp, which cannot be told
+   apart from a rendering failure — the shared version says "unknown" instead. */
+const formatDate = (value?: string) => formatRunTimestamp(value, locale.value, t)
 
 const taskItems = computed<TaskItem[]>(() => [
   ...props.verificationTasks
