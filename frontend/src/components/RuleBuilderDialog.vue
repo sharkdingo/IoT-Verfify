@@ -9,6 +9,7 @@ import boardApi from '../api/board'
 import { duplicateRuleReasonKey, ruleSimilarityReasonKey } from '@/utils/rule'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
+import { deviceIconFor } from '@/utils/deviceIcon'
 import {
   acknowledge,
   confirmDestructive,
@@ -752,82 +753,9 @@ const isDialogOpen = computed(() => props.modelValue)
 const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, handleClose)
 
 // Helper functions for UI
-const getDeviceIcon = (node?: DeviceNode | null) => {
-  if (!node) return 'sensors'
-  const deviceType = (node.templateName || '').toLowerCase()
-  
-  // 传感器类
-  if (deviceType.includes('sensor') || deviceType.includes('temperature') || deviceType.includes('humidity') || deviceType.includes('gas') || deviceType.includes('smoke') || deviceType.includes('motion') || deviceType.includes('soil') || deviceType.includes('illuminance') || deviceType.includes('door')) return 'sensors'
-  
-  // 温度/恒温器
-  if (deviceType.includes('thermostat') || deviceType.includes('weather')) return 'thermostat'
-  
-  // 灯/照明
-  if (deviceType.includes('light')) return 'lightbulb'
-  
-  // 开关
-  if (deviceType.includes('switch')) return 'toggle_on'
-  
-  // 空调
-  if (deviceType.includes('air conditioner') || deviceType.includes('ac')) return 'ac_unit'
-  
-  // 空气净化器/通风
-  if (deviceType.includes('air purifier') || deviceType.includes('ventilator') || deviceType.includes('humidifier')) return 'air'
-  
-  // 窗帘/窗户
-  if (deviceType.includes('window shade') || deviceType.includes('shade')) return 'blinds'
-  if (deviceType.includes('window')) return 'window'
-  
-  // 门/车库门
-  if (deviceType.includes('garage door')) return 'garage'
-  if (deviceType.includes('door')) return 'door_front_door'
-  
-  // 摄像头
-  if (deviceType.includes('camera')) return 'videocam'
-  
-  // 电视
-  if (deviceType.includes('tv') || deviceType.includes('television')) return 'tv'
-  
-  // 手机
-  if (deviceType.includes('phone') || deviceType.includes('mobile')) return 'smartphone'
-  
-  // 洗衣机/烘干机
-  if (deviceType.includes('washer') || deviceType.includes('dryer')) return 'local_laundry_service'
-  
-  // 冰箱
-  if (deviceType.includes('refrigerator') || deviceType.includes('fridge')) return 'kitchen'
-  
-  // 热水器
-  if (deviceType.includes('water heater') || deviceType.includes('water')) return 'hot_tub'
-  
-  // 炊具/烤箱/咖啡机
-  if (deviceType.includes('oven') || deviceType.includes('cooker') || deviceType.includes('cooktop')) return 'microwave'
-  if (deviceType.includes('coffee')) return 'coffee'
-  
-  // 警报器
-  if (deviceType.includes('alarm') || deviceType.includes('security')) return 'security'
-  
-  // 汽车
-  if (deviceType.includes('car') || deviceType.includes('vehicle')) return 'directions_car'
-  
-  // 日历/时钟
-  if (deviceType.includes('calendar')) return 'calendar_month'
-  if (deviceType.includes('clock')) return 'schedule'
-  
-  // 社交媒体
-  if (deviceType.includes('weibo') || deviceType.includes('twitter') || deviceType.includes('facebook') || deviceType.includes('email')) return 'alternate_email'
-  
-  // 泳池相关
-  if (deviceType.includes('pool') || deviceType.includes('sprinkler')) return 'pool'
-  
-  // 油烟机
-  if (deviceType.includes('range hood') || deviceType.includes('hood')) return 'kitchen'
-  
-  // 家庭模式
-  if (deviceType.includes('home mode') || deviceType.includes('home')) return 'home'
-  
-  return 'devices_other'
-}
+/* One owner in `utils/deviceIcon.ts`. This copy classified `door` as a sensor and lacked `sprinkler` and
+   `home mode`, so the same device drew different icons here and in DeviceDialog. */
+const getDeviceIcon = (node?: DeviceNode | null) => node ? deviceIconFor(node.templateName) : 'sensors'
 
 function buildReadableRuleName(): string {
   const sources = ruleData.sources.map(source => {
