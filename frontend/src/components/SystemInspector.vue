@@ -1237,16 +1237,17 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               :placeholder="t('app.searchDevice')"
               :aria-label="t('app.searchDevice')"
             />
-            <button
-              v-if="sectionSearch.devices"
-              type="button"
-              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-              :title="t('app.clearSearch')"
-              :aria-label="t('app.clearSearch')"
-              @click="clearSectionSearch('devices')"
-            >
-              <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
-            </button>
+            <HintTooltip :content="t('app.clearSearch')">
+              <button
+                v-if="sectionSearch.devices"
+                type="button"
+                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                :aria-label="t('app.clearSearch')"
+                @click="clearSectionSearch('devices')"
+              >
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
+              </button>
+            </HintTooltip>
           </label>
 
           <div
@@ -1398,16 +1399,17 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               :placeholder="t('app.searchRules')"
               :aria-label="t('app.searchRules')"
             />
-            <button
-              v-if="sectionSearch.rules"
-              type="button"
-              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-              :title="t('app.clearSearch')"
-              :aria-label="t('app.clearSearch')"
-              @click="clearSectionSearch('rules')"
-            >
-              <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
-            </button>
+            <HintTooltip :content="t('app.clearSearch')">
+              <button
+                v-if="sectionSearch.rules"
+                type="button"
+                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                :aria-label="t('app.clearSearch')"
+                @click="clearSectionSearch('rules')"
+              >
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
+              </button>
+            </HintTooltip>
           </label>
 
           <div
@@ -1562,16 +1564,17 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               :placeholder="t('app.searchSpecifications')"
               :aria-label="t('app.searchSpecifications')"
             />
-            <button
-              v-if="sectionSearch.specs"
-              type="button"
-              class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-              :title="t('app.clearSearch')"
-              :aria-label="t('app.clearSearch')"
-              @click="clearSectionSearch('specs')"
-            >
-              <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
-            </button>
+            <HintTooltip :content="t('app.clearSearch')">
+              <button
+                v-if="sectionSearch.specs"
+                type="button"
+                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                :aria-label="t('app.clearSearch')"
+                @click="clearSectionSearch('specs')"
+              >
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
+              </button>
+            </HintTooltip>
           </label>
 
           <div

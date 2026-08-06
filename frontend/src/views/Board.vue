@@ -13387,28 +13387,30 @@ const counterexampleTraceHelpText = computed(() => {
         <div class="nav-actions">
           <!-- Board edit undo/redo. Availability comes from the server journal, so these are
                disabled until it reports reversible history rather than after any local action. -->
-          <button
-            type="button"
-            class="nav-action-btn board-edit-history-btn"
-            data-testid="board-undo"
-            :aria-label="t('app.boardUndo')"
-            :title="t('app.boardUndo')"
-            :disabled="!canUndoBoardEdit || isApplyingBoardEditUndo"
-            @click="undoBoardEdit"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">undo</span>
-          </button>
-          <button
-            type="button"
-            class="nav-action-btn board-edit-history-btn"
-            data-testid="board-redo"
-            :aria-label="t('app.boardRedo')"
-            :title="t('app.boardRedo')"
-            :disabled="!canRedoBoardEdit || isApplyingBoardEditUndo"
-            @click="redoBoardEdit"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">redo</span>
-          </button>
+          <HintTooltip :content="t('app.boardUndo')">
+            <button
+              type="button"
+              class="nav-action-btn board-edit-history-btn"
+              data-testid="board-undo"
+              :aria-label="t('app.boardUndo')"
+              :disabled="!canUndoBoardEdit || isApplyingBoardEditUndo"
+              @click="undoBoardEdit"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">undo</span>
+            </button>
+          </HintTooltip>
+          <HintTooltip :content="t('app.boardRedo')">
+            <button
+              type="button"
+              class="nav-action-btn board-edit-history-btn"
+              data-testid="board-redo"
+              :aria-label="t('app.boardRedo')"
+              :disabled="!canRedoBoardEdit || isApplyingBoardEditUndo"
+              @click="redoBoardEdit"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">redo</span>
+            </button>
+          </HintTooltip>
           <ThemeToggle :tone="boardHeaderTone" compact />
           <LanguageToggle :tone="boardHeaderTone" compact />
           <input
@@ -13420,42 +13422,45 @@ const counterexampleTraceHelpText = computed(() => {
             :disabled="isSceneReplacementInProgress || !isBoardDataReady"
             @change="handleSceneImportFile"
           />
-          <button
-            type="button"
-            class="nav-action-btn scene-action-btn"
-            data-testid="scene-import"
-            :aria-label="t('app.sceneImport')"
-            :title="t('app.sceneImport')"
-             :disabled="isSceneReplacementInProgress || !isBoardDataReady"
-            @click="triggerSceneImport"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">upload_file</span>
-            <span>{{ t('app.sceneImport') }}</span>
-          </button>
-          <button
-            type="button"
-            class="nav-action-btn scene-action-btn"
-            data-testid="scene-export"
-            :aria-label="t('app.sceneExport')"
-            :title="t('app.sceneExport')"
-             :disabled="isSceneReplacementInProgress || !isBoardDataReady"
-            @click="exportScene"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">download</span>
-            <span>{{ t('app.sceneExport') }}</span>
-          </button>
-          <button
-            type="button"
-            class="nav-action-btn scene-action-btn scene-clear-btn"
-            data-testid="scene-clear"
-            :aria-label="t('app.sceneClear')"
-            :title="t('app.sceneClear')"
-             :disabled="isSceneReplacementInProgress || !isBoardDataReady"
-            @click="clearScene"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
-            <span>{{ t('app.sceneClear') }}</span>
-          </button>
+          <HintTooltip :content="t('app.sceneImport')">
+            <button
+              type="button"
+              class="nav-action-btn scene-action-btn"
+              data-testid="scene-import"
+              :aria-label="t('app.sceneImport')"
+               :disabled="isSceneReplacementInProgress || !isBoardDataReady"
+              @click="triggerSceneImport"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">upload_file</span>
+              <span>{{ t('app.sceneImport') }}</span>
+            </button>
+          </HintTooltip>
+          <HintTooltip :content="t('app.sceneExport')">
+            <button
+              type="button"
+              class="nav-action-btn scene-action-btn"
+              data-testid="scene-export"
+              :aria-label="t('app.sceneExport')"
+               :disabled="isSceneReplacementInProgress || !isBoardDataReady"
+              @click="exportScene"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">download</span>
+              <span>{{ t('app.sceneExport') }}</span>
+            </button>
+          </HintTooltip>
+          <HintTooltip :content="t('app.sceneClear')">
+            <button
+              type="button"
+              class="nav-action-btn scene-action-btn scene-clear-btn"
+              data-testid="scene-clear"
+              :aria-label="t('app.sceneClear')"
+               :disabled="isSceneReplacementInProgress || !isBoardDataReady"
+              @click="clearScene"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
+              <span>{{ t('app.sceneClear') }}</span>
+            </button>
+          </HintTooltip>
           <details
             ref="sceneActionsMenuRef"
             class="scene-actions-menu"
@@ -13559,15 +13564,16 @@ const counterexampleTraceHelpText = computed(() => {
               aria-hidden="true"
             >{{ chatStore.state.unreadCount > 9 ? '9+' : chatStore.state.unreadCount }}</span>
           </button>
-          <button
-            type="button"
-            class="nav-logout-btn"
-            :aria-label="t('app.logout')"
-            :title="t('app.logout')"
-            @click="handleLogout"
-          >
-            <span class="material-symbols-outlined">logout</span>
-          </button>
+          <HintTooltip :content="t('app.logout')">
+            <button
+              type="button"
+              class="nav-logout-btn"
+              :aria-label="t('app.logout')"
+              @click="handleLogout"
+            >
+              <span class="material-symbols-outlined">logout</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
     </nav>
@@ -13615,16 +13621,17 @@ const counterexampleTraceHelpText = computed(() => {
     >
       <span class="material-symbols-outlined shrink-0" aria-hidden="true">link_off</span>
       <span class="min-w-0 flex-1 break-words">{{ t('app.deepLinkUnavailable') }}</span>
-      <button
-        type="button"
-        class="pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-md border border-[color:var(--warning-border)] p-1.5 hover:board-chip-warning dark:hover:bg-[color:var(--warning-surface)]"
-        :aria-label="t('app.deepLinkUnavailableDismiss')"
-        :title="t('app.deepLinkUnavailableDismiss')"
-        data-testid="dismiss-deep-link-unavailable"
-        @click="dismissStaleDeepLink"
-      >
-        <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
-      </button>
+      <HintTooltip :content="t('app.deepLinkUnavailableDismiss')">
+        <button
+          type="button"
+          class="pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-md border border-[color:var(--warning-border)] p-1.5 hover:board-chip-warning dark:hover:bg-[color:var(--warning-surface)]"
+          :aria-label="t('app.deepLinkUnavailableDismiss')"
+          data-testid="dismiss-deep-link-unavailable"
+          @click="dismissStaleDeepLink"
+        >
+          <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
+        </button>
+      </HintTooltip>
     </div>
 
     <!-- Logout Confirmation Dialog -->
@@ -13915,17 +13922,18 @@ const counterexampleTraceHelpText = computed(() => {
           <div class="canvas-map__header flex items-center justify-between mb-2">
             <span class="canvas-map__title min-w-0 text-[length:var(--iot-font-min)] uppercase font-bold text-slate-500 dark:text-slate-500">{{ t('app.canvasMap') }}</span>
             <div class="canvas-map__zoom-controls flex items-center gap-1" data-testid="canvas-map-zoom-controls">
-              <button
-                type="button"
-                class="canvas-map__tool inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                data-testid="canvas-map-zoom-out"
-                :title="t('app.zoomOut')"
-                :aria-label="t('app.zoomOut')"
-                :disabled="isCanvasNavigationLocked"
-                @click="adjustCanvasZoom(-ZOOM_STEP)"
-              >
-                <span class="material-symbols-outlined text-sm" aria-hidden="true">remove</span>
-              </button>
+              <HintTooltip :content="t('app.zoomOut')">
+                <button
+                  type="button"
+                  class="canvas-map__tool inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                  data-testid="canvas-map-zoom-out"
+                  :aria-label="t('app.zoomOut')"
+                  :disabled="isCanvasNavigationLocked"
+                  @click="adjustCanvasZoom(-ZOOM_STEP)"
+                >
+                  <span class="material-symbols-outlined text-sm" aria-hidden="true">remove</span>
+                </button>
+              </HintTooltip>
               <label class="canvas-map__zoom-input-wrap" :title="t('app.zoomLevel')">
                 <input
                   class="canvas-map__zoom-input"
@@ -13943,28 +13951,30 @@ const counterexampleTraceHelpText = computed(() => {
                 />
                 <span aria-hidden="true">%</span>
               </label>
-              <button
-                type="button"
-                class="canvas-map__tool inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                data-testid="canvas-map-zoom-in"
-                :title="t('app.zoomIn')"
-                :aria-label="t('app.zoomIn')"
-                :disabled="isCanvasNavigationLocked"
-                @click="adjustCanvasZoom(ZOOM_STEP)"
-              >
-                <span class="material-symbols-outlined text-sm" aria-hidden="true">add</span>
-              </button>
-              <button
-                type="button"
-                class="canvas-map__tool inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                data-testid="canvas-map-fit"
-                :title="t('app.fitToContent')"
-                :aria-label="t('app.fitToContent')"
-                :disabled="isCanvasNavigationLocked"
-                @click="fitToContent"
-              >
-                <span class="material-symbols-outlined text-sm" aria-hidden="true">fit_screen</span>
-              </button>
+              <HintTooltip :content="t('app.zoomIn')">
+                <button
+                  type="button"
+                  class="canvas-map__tool inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                  data-testid="canvas-map-zoom-in"
+                  :aria-label="t('app.zoomIn')"
+                  :disabled="isCanvasNavigationLocked"
+                  @click="adjustCanvasZoom(ZOOM_STEP)"
+                >
+                  <span class="material-symbols-outlined text-sm" aria-hidden="true">add</span>
+                </button>
+              </HintTooltip>
+              <HintTooltip :content="t('app.fitToContent')">
+                <button
+                  type="button"
+                  class="canvas-map__tool inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                  data-testid="canvas-map-fit"
+                  :aria-label="t('app.fitToContent')"
+                  :disabled="isCanvasNavigationLocked"
+                  @click="fitToContent"
+                >
+                  <span class="material-symbols-outlined text-sm" aria-hidden="true">fit_screen</span>
+                </button>
+              </HintTooltip>
             </div>
           </div>
 
@@ -14042,17 +14052,18 @@ const counterexampleTraceHelpText = computed(() => {
       :inert="showNarrowPanelScrim ? true : undefined"
       :aria-hidden="showNarrowPanelScrim ? 'true' : undefined"
     >
-    <button
-      type="button"
-      class="canvas-fit-mobile"
-      data-testid="canvas-fit-mobile"
-      :title="t('app.fitToContent')"
-      :aria-label="t('app.fitToContent')"
-      :disabled="isCanvasNavigationLocked"
-      @click="fitToContent"
-    >
-      <span class="material-symbols-outlined" aria-hidden="true">fit_screen</span>
-    </button>
+    <HintTooltip :content="t('app.fitToContent')">
+      <button
+        type="button"
+        class="canvas-fit-mobile"
+        data-testid="canvas-fit-mobile"
+        :aria-label="t('app.fitToContent')"
+        :disabled="isCanvasNavigationLocked"
+        @click="fitToContent"
+      >
+        <span class="material-symbols-outlined" aria-hidden="true">fit_screen</span>
+      </button>
+    </HintTooltip>
 
     <!-- Canvas Area -->
     <div class="canvas-container" @wheel.ctrl.prevent="onBoardWheel">
@@ -14181,18 +14192,19 @@ const counterexampleTraceHelpText = computed(() => {
       :aria-hidden="isResultSurfaceVisible"
       :aria-label="t('app.boardTools')"
     >
-      <button
-        v-if="isActionDockPackedMode"
-        type="button"
-        class="board-action-dock__launcher"
-        data-testid="restore-action-dock"
-        :aria-label="actionDockRestoreLabel"
-        :title="actionDockRestoreLabel"
-        @click="restoreActionDockFromPacked"
-      >
-        <span class="material-symbols-outlined" aria-hidden="true">toolbar</span>
-        <span v-if="hasActionDockActivity" class="board-action-dock__activity-dot" aria-hidden="true"></span>
-      </button>
+      <HintTooltip :content="actionDockRestoreLabel">
+        <button
+          v-if="isActionDockPackedMode"
+          type="button"
+          class="board-action-dock__launcher"
+          data-testid="restore-action-dock"
+          :aria-label="actionDockRestoreLabel"
+          @click="restoreActionDockFromPacked"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">toolbar</span>
+          <span v-if="hasActionDockActivity" class="board-action-dock__activity-dot" aria-hidden="true"></span>
+        </button>
+      </HintTooltip>
 
       <div
         v-if="!isActionDockPackedMode"
@@ -14202,19 +14214,20 @@ const counterexampleTraceHelpText = computed(() => {
           class="board-action-dock__header"
         >
           <span class="board-action-dock__title">{{ t('app.boardTools') }}</span>
-          <button
-            type="button"
-            class="board-action-dock__toggle"
-            data-testid="toggle-action-dock"
-            :aria-label="actionDockToggleLabel"
-            :aria-expanded="actionDockMode === 'expanded'"
-            :title="actionDockToggleLabel"
-            @click="cycleActionDockMode"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">
-              {{ actionDockToggleIcon }}
-            </span>
-          </button>
+          <HintTooltip :content="actionDockToggleLabel">
+            <button
+              type="button"
+              class="board-action-dock__toggle"
+              data-testid="toggle-action-dock"
+              :aria-label="actionDockToggleLabel"
+              :aria-expanded="actionDockMode === 'expanded'"
+              @click="cycleActionDockMode"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">
+                {{ actionDockToggleIcon }}
+              </span>
+            </button>
+          </HintTooltip>
         </div>
 
         <div class="board-tool-group" data-testid="run-tool-group" role="group" :aria-label="t('app.runTools')">
@@ -14317,34 +14330,35 @@ const counterexampleTraceHelpText = computed(() => {
         <span class="board-tool-group-label">{{ t('app.reviewTools') }}</span>
 
         <div class="board-tool-wrapper group">
-          <button
-            type="button"
-            @click="openHistoryFromActionDock"
-            data-testid="open-history-panel"
-            :disabled="isModelPlaybackActive || isAnyRecommendationRunning()"
-            :aria-label="isModelPlaybackActive
-              ? t('app.playbackReadOnlyCloseFirst')
-              : unreadFuzzNotificationCount > 0
-                ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
-                : t('app.openRunHistory')"
-            :aria-pressed="showHistoryPanel"
-            class="board-tool-button board-tool-button--view transition-colors"
-            :title="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.openRunHistory')"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">history</span>
-            <span class="board-tool-label">{{ t('app.runHistory') }}</span>
-            <span
-              v-if="unreadFuzzNotificationCount > 0"
-              class="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[color:var(--danger-fill)] px-1 text-[length:var(--iot-font-min)] font-black text-white"
-              data-testid="fuzz-unread-badge"
-              aria-hidden="true"
-            >{{ unreadFuzzNotificationCount > 99 ? '99+' : unreadFuzzNotificationCount }}</span>
-            <span class="board-tool-tooltip" aria-hidden="true">
-              {{ unreadFuzzNotificationCount > 0
-                ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
-                : t('app.openRunHistory') }}
-            </span>
-          </button>
+          <HintTooltip :content="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.openRunHistory')">
+            <button
+              type="button"
+              @click="openHistoryFromActionDock"
+              data-testid="open-history-panel"
+              :disabled="isModelPlaybackActive || isAnyRecommendationRunning()"
+              :aria-label="isModelPlaybackActive
+                ? t('app.playbackReadOnlyCloseFirst')
+                : unreadFuzzNotificationCount > 0
+                  ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
+                  : t('app.openRunHistory')"
+              :aria-pressed="showHistoryPanel"
+              class="board-tool-button board-tool-button--view transition-colors"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">history</span>
+              <span class="board-tool-label">{{ t('app.runHistory') }}</span>
+              <span
+                v-if="unreadFuzzNotificationCount > 0"
+                class="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[color:var(--danger-fill)] px-1 text-[length:var(--iot-font-min)] font-black text-white"
+                data-testid="fuzz-unread-badge"
+                aria-hidden="true"
+              >{{ unreadFuzzNotificationCount > 99 ? '99+' : unreadFuzzNotificationCount }}</span>
+              <span class="board-tool-tooltip" aria-hidden="true">
+                {{ unreadFuzzNotificationCount > 0
+                  ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
+                  : t('app.openRunHistory') }}
+              </span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
 
@@ -14511,16 +14525,17 @@ const counterexampleTraceHelpText = computed(() => {
             {{ t('app.backgroundTasks') }}
           </span>
         </div>
-        <button
-          type="button"
-          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold board-text-info hover:board-chip-info"
-          :disabled="isModelPlaybackActive"
-          :title="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.taskInbox')"
-          @click="openTaskInbox"
-        >
-          <span class="material-symbols-outlined text-sm">inbox</span>
-          {{ t('app.taskInbox') }}
-        </button>
+        <HintTooltip :content="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.taskInbox')">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold board-text-info hover:board-chip-info"
+            :disabled="isModelPlaybackActive"
+            @click="openTaskInbox"
+          >
+            <span class="material-symbols-outlined text-sm">inbox</span>
+            {{ t('app.taskInbox') }}
+          </button>
+        </HintTooltip>
       </div>
       <div class="space-y-2 p-3">
         <div
@@ -14537,15 +14552,16 @@ const counterexampleTraceHelpText = computed(() => {
                 {{ task.status }}
               </div>
             </div>
-            <button
-              type="button"
-              class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 hover:board-chip-danger hover:board-text-danger"
-              :title="miniTaskCancelLabel(task.kind)"
-              :aria-label="miniTaskCancelLabel(task.kind)"
-              @click="cancelMiniTask(task.kind, task.id)"
-            >
-              <span class="material-symbols-outlined text-sm" aria-hidden="true">cancel</span>
-            </button>
+            <HintTooltip :content="miniTaskCancelLabel(task.kind)">
+              <button
+                type="button"
+                class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 hover:board-chip-danger hover:board-text-danger"
+                :aria-label="miniTaskCancelLabel(task.kind)"
+                @click="cancelMiniTask(task.kind, task.id)"
+              >
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">cancel</span>
+              </button>
+            </HintTooltip>
           </div>
           <div
             class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"
@@ -14629,16 +14645,17 @@ const counterexampleTraceHelpText = computed(() => {
               <p class="board-text-success text-xs">{{ t('app.configureAndRunVerification') }}</p>
             </div>
           </div>
-          <button
-            type="button"
-            @click="closeVerificationPanel"
-            data-testid="close-verification-panel"
-            :aria-label="t('app.close')"
-            :title="t('app.close')"
-            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button
+              type="button"
+              @click="closeVerificationPanel"
+              data-testid="close-verification-panel"
+              :aria-label="t('app.close')"
+              class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
       <!-- Verification Options -->
@@ -14847,30 +14864,32 @@ const counterexampleTraceHelpText = computed(() => {
             </label>
           </div>
           <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
-            <button
-              type="button"
-              :disabled="isVerifying"
-              @click="verificationForm.isAsync = false"
-              data-testid="verification-mode-sync"
-              :aria-pressed="!verificationForm.isAsync"
-              :title="t('app.syncVerificationModeHint')"
-              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="!verificationForm.isAsync ? 'bg-white board-text-success shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-            >
-              {{ t('app.runNow') }}
-            </button>
-            <button
-              type="button"
-              :disabled="isVerifying"
-              @click="verificationForm.isAsync = true"
-              data-testid="verification-mode-async"
-              :aria-pressed="verificationForm.isAsync"
-              :title="t('app.asyncVerificationModeHint')"
-              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="verificationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-            >
-              {{ t('app.backgroundTask') }}
-            </button>
+            <HintTooltip :content="t('app.syncVerificationModeHint')">
+              <button
+                type="button"
+                :disabled="isVerifying"
+                @click="verificationForm.isAsync = false"
+                data-testid="verification-mode-sync"
+                :aria-pressed="!verificationForm.isAsync"
+                class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                :class="!verificationForm.isAsync ? 'bg-white board-text-success shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              >
+                {{ t('app.runNow') }}
+              </button>
+            </HintTooltip>
+            <HintTooltip :content="t('app.asyncVerificationModeHint')">
+              <button
+                type="button"
+                :disabled="isVerifying"
+                @click="verificationForm.isAsync = true"
+                data-testid="verification-mode-async"
+                :aria-pressed="verificationForm.isAsync"
+                class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                :class="verificationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              >
+                {{ t('app.backgroundTask') }}
+              </button>
+            </HintTooltip>
           </div>
           <p class="mt-2 text-[11px] leading-snug text-slate-500">
             {{ verificationForm.isAsync ? t('app.asyncVerificationModeHint') : t('app.syncVerificationModeHint') }}
@@ -14883,16 +14902,17 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="board-text-success font-medium">{{ asyncVerificationTask.status }}</span>
             <div v-if="asyncVerificationTask.taskId" class="flex items-center gap-2">
               <span class="board-text-success font-bold">{{ asyncVerificationTask.progress }}%</span>
-              <button
-                type="button"
-                class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-[color:var(--success-border)] board-text-success hover:bg-[color:var(--success-surface)] disabled:opacity-50 disabled:cursor-not-allowed"
-                :disabled="cancellingVerificationTask"
-                :title="t('app.cancelVerificationTask')"
-                :aria-label="t('app.cancelVerificationTask')"
-                @click="cancelAsyncVerification"
-              >
-                <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ cancellingVerificationTask ? 'hourglass_empty' : 'cancel' }}</span>
-              </button>
+              <HintTooltip :content="t('app.cancelVerificationTask')">
+                <button
+                  type="button"
+                  class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-[color:var(--success-border)] board-text-success hover:bg-[color:var(--success-surface)] disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="cancellingVerificationTask"
+                  :aria-label="t('app.cancelVerificationTask')"
+                  @click="cancelAsyncVerification"
+                >
+                  <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ cancellingVerificationTask ? 'hourglass_empty' : 'cancel' }}</span>
+                </button>
+              </HintTooltip>
             </div>
           </div>
           <div class="w-full h-2 board-chip-success rounded-full overflow-hidden">
@@ -14905,27 +14925,28 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!-- Run Verification Button -->
-        <button
-          @click="runVerification"
-          data-testid="run-verification"
-          :disabled="isVerifying || Boolean(verificationRunBlockedReason)"
-          :title="verificationRunBlockedReason || undefined"
-          :aria-describedby="verificationRunBlockedReason ? 'verification-run-blocked-reason' : undefined"
-          class="board-panel-submit"
-        >
-          <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
-            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
-            {{ t('app.loading') }}
-          </template>
-          <template v-else-if="isVerifying">
-            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
-            {{ t('app.verifying') }}
-          </template>
-          <template v-else>
-            <span class="material-symbols-outlined text-sm">play_arrow</span>
-            {{ verificationForm.isAsync ? t('app.createVerificationTask') : t('app.runVerificationNow') }}
-          </template>
-        </button>
+        <HintTooltip :content="verificationRunBlockedReason || undefined">
+          <button
+            @click="runVerification"
+            data-testid="run-verification"
+            :disabled="isVerifying || Boolean(verificationRunBlockedReason)"
+            :aria-describedby="verificationRunBlockedReason ? 'verification-run-blocked-reason' : undefined"
+            class="board-panel-submit"
+          >
+            <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
+              <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+              {{ t('app.loading') }}
+            </template>
+            <template v-else-if="isVerifying">
+              <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+              {{ t('app.verifying') }}
+            </template>
+            <template v-else>
+              <span class="material-symbols-outlined text-sm">play_arrow</span>
+              {{ verificationForm.isAsync ? t('app.createVerificationTask') : t('app.runVerificationNow') }}
+            </template>
+          </button>
+        </HintTooltip>
         <p
           v-if="verificationRunBlockedReason"
           id="verification-run-blocked-reason"
@@ -14961,16 +14982,17 @@ const counterexampleTraceHelpText = computed(() => {
               <p class="text-white/70 text-xs">{{ t('app.aiPoweredScenarioSuggestions') }}</p>
             </div>
           </div>
-          <button
-            type="button"
-            @click="closeScenarioRecommendationPanel"
-            data-testid="close-scenario-recommendations"
-            :aria-label="t('app.close')"
-            :title="t('app.close')"
-            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button
+              type="button"
+              @click="closeScenarioRecommendationPanel"
+              data-testid="close-scenario-recommendations"
+              :aria-label="t('app.close')"
+              class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
 
@@ -15425,16 +15447,17 @@ const counterexampleTraceHelpText = computed(() => {
               <p class="text-white/70 text-xs">{{ t('app.aiPoweredAutomationSuggestions') }}</p>
             </div>
           </div>
-          <button 
-            type="button"
-            @click="closeRecommendationPanel"
-            data-testid="close-rule-recommendations"
-            :aria-label="t('app.close')"
-            :title="t('app.close')"
-            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button 
+              type="button"
+              @click="closeRecommendationPanel"
+              data-testid="close-rule-recommendations"
+              :aria-label="t('app.close')"
+              class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
 
@@ -15738,16 +15761,17 @@ const counterexampleTraceHelpText = computed(() => {
               <p class="text-white/70 text-xs">{{ t('app.aiPoweredDeviceSuggestions') }}</p>
             </div>
           </div>
-          <button 
-            type="button"
-            @click="closeDeviceRecommendationPanel"
-            data-testid="close-device-recommendations"
-            :aria-label="t('app.close')"
-            :title="t('app.close')"
-            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button 
+              type="button"
+              @click="closeDeviceRecommendationPanel"
+              data-testid="close-device-recommendations"
+              :aria-label="t('app.close')"
+              class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
 
@@ -16035,16 +16059,17 @@ const counterexampleTraceHelpText = computed(() => {
               <p class="text-white/70 text-xs">{{ t('app.aiPoweredSpecificationSuggestions') }}</p>
             </div>
           </div>
-          <button 
-            type="button"
-            @click="closeSpecRecommendationPanel"
-            data-testid="close-spec-recommendations"
-            :aria-label="t('app.close')"
-            :title="t('app.close')"
-            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button 
+              type="button"
+              @click="closeSpecRecommendationPanel"
+              data-testid="close-spec-recommendations"
+              :aria-label="t('app.close')"
+              class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
 
@@ -16368,16 +16393,17 @@ const counterexampleTraceHelpText = computed(() => {
               <p class="text-white/90 text-xs">{{ t('app.configureSimulation') }}</p>
             </div>
           </div>
-          <button 
-            type="button"
-            @click="closeSimulationPanel"
-            data-testid="close-simulation-panel"
-            :aria-label="t('app.close')"
-            :title="t('app.close')"
-            class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button 
+              type="button"
+              @click="closeSimulationPanel"
+              data-testid="close-simulation-panel"
+              :aria-label="t('app.close')"
+              class="board-panel-close text-white/70 hover:text-white hover:bg-white/15"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
       <!-- Simulation Content -->
@@ -16405,17 +16431,18 @@ const counterexampleTraceHelpText = computed(() => {
             />
           </div>
           <div class="flex items-center gap-3">
-            <button
-              type="button"
-              data-testid="simulation-steps-decrease"
-              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg board-surface-info board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-40"
-              :disabled="isSimulating || normalizeSimulationStepsControlValue(simulationForm.steps) <= SIMULATION_STEPS_MIN"
-              :title="t('app.decreaseSimulationSteps')"
-              :aria-label="t('app.decreaseSimulationSteps')"
-              @click="adjustSimulationSteps(-1)"
-            >
-              <span class="material-symbols-outlined text-lg" aria-hidden="true">remove</span>
-            </button>
+            <HintTooltip :content="t('app.decreaseSimulationSteps')">
+              <button
+                type="button"
+                data-testid="simulation-steps-decrease"
+                class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg board-surface-info board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="isSimulating || normalizeSimulationStepsControlValue(simulationForm.steps) <= SIMULATION_STEPS_MIN"
+                :aria-label="t('app.decreaseSimulationSteps')"
+                @click="adjustSimulationSteps(-1)"
+              >
+                <span class="material-symbols-outlined text-lg" aria-hidden="true">remove</span>
+              </button>
+            </HintTooltip>
             <input
               v-model.number="simulationForm.steps"
               data-testid="simulation-steps-range"
@@ -16426,17 +16453,18 @@ const counterexampleTraceHelpText = computed(() => {
               step="1"
               class="flex-1 h-2 bg-[color:var(--info-border)] rounded-lg appearance-none cursor-pointer accent-[color:var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
             />
-            <button
-              type="button"
-              data-testid="simulation-steps-increase"
-              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg board-surface-info board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-40"
-              :disabled="isSimulating || normalizeSimulationStepsControlValue(simulationForm.steps) >= SIMULATION_STEPS_MAX"
-              :title="t('app.increaseSimulationSteps')"
-              :aria-label="t('app.increaseSimulationSteps')"
-              @click="adjustSimulationSteps(1)"
-            >
-              <span class="material-symbols-outlined text-lg" aria-hidden="true">add</span>
-            </button>
+            <HintTooltip :content="t('app.increaseSimulationSteps')">
+              <button
+                type="button"
+                data-testid="simulation-steps-increase"
+                class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg board-surface-info board-text-info transition hover:board-chip-info disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="isSimulating || normalizeSimulationStepsControlValue(simulationForm.steps) >= SIMULATION_STEPS_MAX"
+                :aria-label="t('app.increaseSimulationSteps')"
+                @click="adjustSimulationSteps(1)"
+              >
+                <span class="material-symbols-outlined text-lg" aria-hidden="true">add</span>
+              </button>
+            </HintTooltip>
           </div>
         </div>
 
@@ -16542,30 +16570,32 @@ const counterexampleTraceHelpText = computed(() => {
             </label>
           </div>
           <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
-            <button
-              type="button"
-              :disabled="isSimulating"
-              @click="simulationForm.isAsync = false"
-              data-testid="simulation-mode-sync"
-              :aria-pressed="!simulationForm.isAsync"
-              :title="t('app.syncSimulationModeHint')"
-              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="!simulationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-            >
-              {{ t('app.previewNow') }}
-            </button>
-            <button
-              type="button"
-              :disabled="isSimulating"
-              @click="simulationForm.isAsync = true"
-              data-testid="simulation-mode-async"
-              :aria-pressed="simulationForm.isAsync"
-              :title="t('app.asyncSimulationModeHint')"
-              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-              :class="simulationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-            >
-              {{ t('app.saveInBackground') }}
-            </button>
+            <HintTooltip :content="t('app.syncSimulationModeHint')">
+              <button
+                type="button"
+                :disabled="isSimulating"
+                @click="simulationForm.isAsync = false"
+                data-testid="simulation-mode-sync"
+                :aria-pressed="!simulationForm.isAsync"
+                class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                :class="!simulationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              >
+                {{ t('app.previewNow') }}
+              </button>
+            </HintTooltip>
+            <HintTooltip :content="t('app.asyncSimulationModeHint')">
+              <button
+                type="button"
+                :disabled="isSimulating"
+                @click="simulationForm.isAsync = true"
+                data-testid="simulation-mode-async"
+                :aria-pressed="simulationForm.isAsync"
+                class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                :class="simulationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              >
+                {{ t('app.saveInBackground') }}
+              </button>
+            </HintTooltip>
           </div>
           <p class="mt-2 text-[11px] leading-snug text-slate-500">
             {{ simulationForm.isAsync ? t('app.asyncSimulationModeHint') : t('app.syncSimulationModeHint') }}
@@ -16604,16 +16634,17 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="board-text-info font-medium">{{ t('app.progress') }}</span>
             <div v-if="asyncSimulationTask.taskId" class="flex items-center gap-2">
               <span class="board-text-info">{{ asyncSimulationTask.progress }}%</span>
-              <button
-                type="button"
-                class="w-6 h-6 inline-flex items-center justify-center rounded-md border board-border-subtle board-text-info hover:board-chip-info disabled:opacity-50 disabled:cursor-not-allowed"
-                :disabled="cancellingSimulationTask"
-                :title="t('app.cancelSimulationTask')"
-                :aria-label="t('app.cancelSimulationTask')"
-                @click="cancelAsyncSimulation"
-              >
-                <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ cancellingSimulationTask ? 'hourglass_empty' : 'cancel' }}</span>
-              </button>
+              <HintTooltip :content="t('app.cancelSimulationTask')">
+                <button
+                  type="button"
+                  class="w-6 h-6 inline-flex items-center justify-center rounded-md border board-border-subtle board-text-info hover:board-chip-info disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="cancellingSimulationTask"
+                  :aria-label="t('app.cancelSimulationTask')"
+                  @click="cancelAsyncSimulation"
+                >
+                  <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ cancellingSimulationTask ? 'hourglass_empty' : 'cancel' }}</span>
+                </button>
+              </HintTooltip>
             </div>
           </div>
           <div class="w-full h-2 board-chip-info rounded-full overflow-hidden">
@@ -16627,27 +16658,28 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!-- Simulate Button -->
-        <button
-          @click="runSimulation"
-          data-testid="run-simulation"
-          :disabled="isSimulating || Boolean(simulationRunBlockedReason)"
-          :title="simulationRunBlockedReason || undefined"
-          :aria-describedby="simulationRunBlockedReason ? 'simulation-run-blocked-reason' : undefined"
-          class="board-panel-submit"
-        >
-          <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
-            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
-            {{ t('app.loading') }}
-          </template>
-          <template v-else-if="isSimulating">
-            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
-            {{ simulationForm.isAsync ? t('app.runningAsync') : t('app.running') }}
-          </template>
-          <template v-else>
-            <span class="material-symbols-outlined text-sm">play_arrow</span>
-            {{ simulationForm.isAsync ? t('app.createSimulationTask') : t('app.runSimulationNow') }}
-          </template>
-        </button>
+        <HintTooltip :content="simulationRunBlockedReason || undefined">
+          <button
+            @click="runSimulation"
+            data-testid="run-simulation"
+            :disabled="isSimulating || Boolean(simulationRunBlockedReason)"
+            :aria-describedby="simulationRunBlockedReason ? 'simulation-run-blocked-reason' : undefined"
+            class="board-panel-submit"
+          >
+            <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
+              <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+              {{ t('app.loading') }}
+            </template>
+            <template v-else-if="isSimulating">
+              <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+              {{ simulationForm.isAsync ? t('app.runningAsync') : t('app.running') }}
+            </template>
+            <template v-else>
+              <span class="material-symbols-outlined text-sm">play_arrow</span>
+              {{ simulationForm.isAsync ? t('app.createSimulationTask') : t('app.runSimulationNow') }}
+            </template>
+          </button>
+        </HintTooltip>
         <p
           v-if="simulationRunBlockedReason"
           id="simulation-run-blocked-reason"
@@ -17190,16 +17222,17 @@ const counterexampleTraceHelpText = computed(() => {
               <p class="text-sm text-slate-600">{{ verificationResultStatus.detail }}</p>
             </div>
           </div>
-          <button
-            type="button"
-            data-testid="close-verification-result"
-            @click="dismissResultDialog"
-            :aria-label="t('app.close')"
-            :title="t('app.close')"
-            class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all"
-          >
-            <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button
+              type="button"
+              data-testid="close-verification-result"
+              @click="dismissResultDialog"
+              :aria-label="t('app.close')"
+              class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all"
+            >
+              <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
+            </button>
+          </HintTooltip>
         </div>
       </div>
 
@@ -17693,16 +17726,17 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ traceAnimationState.isPlaying ? 'pause' : 'play_arrow' }}</span>
               {{ traceAnimationState.isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play') }}
             </button>
-            <button
-              type="button"
-              @click="closeTraceAnimation"
-              data-testid="trace-timeline-close"
-              class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
-              :title="t('app.close')"
-              :aria-label="t('app.close')"
-            >
-              <span class="material-symbols-outlined text-slate-500" aria-hidden="true">close</span>
-            </button>
+            <HintTooltip :content="t('app.close')">
+              <button
+                type="button"
+                @click="closeTraceAnimation"
+                data-testid="trace-timeline-close"
+                class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+                :aria-label="t('app.close')"
+              >
+                <span class="material-symbols-outlined text-slate-500" aria-hidden="true">close</span>
+              </button>
+            </HintTooltip>
           </div>
         </div>
 
@@ -17863,61 +17897,66 @@ const counterexampleTraceHelpText = computed(() => {
             
             <!-- State nodes -->
             <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
-              <button
+              <!-- The `v-for` belongs on the wrapper: `index` comes from the loop, so a tooltip hoisted above it
+                   would reference a variable that is not in scope there. -->
+              <HintTooltip
                 v-for="(_, index) in currentTrace.states || []"
                 :key="index"
-                type="button"
-                @click="goToState(Number(index))"
-                @keydown="handleTraceStateKeydown($event, Number(index))"
-                :tabindex="Number(index) === traceAnimationState.selectedStateIndex ? 0 : -1"
-                :aria-label="getTraceStateAriaLabel(Number(index))"
-                :title="getTraceStateAriaLabel(Number(index))"
-                :aria-current="Number(index) === traceAnimationState.selectedStateIndex ? 'step' : undefined"
-                :data-testid="`trace-timeline-state-${Number(index)}`"
-                class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:ring-offset-2"
-                :class="[
-                  Number(index) === traceAnimationState.selectedStateIndex
-                    ? 'bg-[color:var(--danger)] border-[color:var(--danger)] scale-125 shadow-lg'
-                    : Number(index) < traceAnimationState.selectedStateIndex
-                      ? 'board-chip-danger board-border-subtle'
-                      : 'bg-white border-slate-300 hover:',
-                  counterexampleViolationStep === Number(index)
-                    ? 'ring-2 ring-[color:var(--danger)] ring-offset-2'
-                    : ''
-                ]"
+                :content="getTraceStateAriaLabel(Number(index))"
               >
-                <!-- The violation marker, now shown for a verification counterexample and not only for an
-                     exploration finding. It is labelled rather than left as a bare glyph: reviews of both
-                     themes could see that *something* marked the last state but not that it was the
-                     violation, and one read the selection cursor as the verdict. The label is the point —
-                     this is the step where the specification fails. -->
-                <span
-                  v-if="counterexampleViolationStep === Number(index)"
-                  class="board-chip-danger board-text-danger absolute -top-5 whitespace-nowrap rounded px-1 py-px font-black"
-                  :style="{ fontSize: 'var(--iot-font-min)' }"
-                >{{ t('app.traceViolationHere') }}</span>
-                <!--
-                  The rail shows *shape*, not numbers.
+                <button
+                  type="button"
+                  @click="goToState(Number(index))"
+                  @keydown="handleTraceStateKeydown($event, Number(index))"
+                  :tabindex="Number(index) === traceAnimationState.selectedStateIndex ? 0 : -1"
+                  :aria-label="getTraceStateAriaLabel(Number(index))"
+                  :aria-current="Number(index) === traceAnimationState.selectedStateIndex ? 'step' : undefined"
+                  :data-testid="`trace-timeline-state-${Number(index)}`"
+                  class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:ring-offset-2"
+                  :class="[
+                    Number(index) === traceAnimationState.selectedStateIndex
+                      ? 'bg-[color:var(--danger)] border-[color:var(--danger)] scale-125 shadow-lg'
+                      : Number(index) < traceAnimationState.selectedStateIndex
+                        ? 'board-chip-danger board-border-subtle'
+                        : 'bg-white border-slate-300 hover:',
+                    counterexampleViolationStep === Number(index)
+                      ? 'ring-2 ring-[color:var(--danger)] ring-offset-2'
+                      : ''
+                  ]"
+                >
+                  <!-- The violation marker, now shown for a verification counterexample and not only for an
+                       exploration finding. It is labelled rather than left as a bare glyph: reviews of both
+                       themes could see that *something* marked the last state but not that it was the
+                       violation, and one read the selection cursor as the verdict. The label is the point —
+                       this is the step where the specification fails. -->
+                  <span
+                    v-if="counterexampleViolationStep === Number(index)"
+                    class="board-chip-danger board-text-danger absolute -top-5 whitespace-nowrap rounded px-1 py-px font-black"
+                    :style="{ fontSize: 'var(--iot-font-min)' }"
+                  >{{ t('app.traceViolationHere') }}</span>
+                  <!--
+                    The rail shows *shape*, not numbers.
 
-                  Every marker used to print its step number at `text-[6px]`, with `text-[8px]` for the
-                  selected one — against the product's own `--iot-font-min` floor of 11px, which commit
-                  606cf5c established precisely because a review found interface text too small to read.
-                  A 28px marker cannot hold a legible two-digit number: 27 of them were noise, and the
-                  measurement confirmed the rendered sizes as 6px and 8px.
+                    Every marker used to print its step number at `text-[6px]`, with `text-[8px]` for the
+                    selected one — against the product's own `--iot-font-min` floor of 11px, which commit
+                    606cf5c established precisely because a review found interface text too small to read.
+                    A 28px marker cannot hold a legible two-digit number: 27 of them were noise, and the
+                    measurement confirmed the rendered sizes as 6px and 8px.
 
-                  Nothing is lost by removing them, because the number was never the rail's job. "Which
-                  step am I on" is answered by the `n / total` badge and the scrub slider; each marker
-                  carries its own number in `aria-label` for assistive technology and in `title` for
-                  hover. What only the rail can show is the sequence's shape — how far along you are, and
-                  where the violation sits — and that reads better without 27 illegible digits competing
-                  with the fill and the violation ring.
-                -->
-                <span
-                  v-if="Number(index) === traceAnimationState.selectedStateIndex"
-                  class="h-1.5 w-1.5 rounded-full bg-white"
-                  aria-hidden="true"
-                ></span>
-              </button>
+                    Nothing is lost by removing them, because the number was never the rail's job. "Which
+                    step am I on" is answered by the `n / total` badge and the scrub slider; each marker
+                    carries its own number in `aria-label` for assistive technology and in `title` for
+                    hover. What only the rail can show is the sequence's shape — how far along you are, and
+                    where the violation sits — and that reads better without 27 illegible digits competing
+                    with the fill and the violation ring.
+                  -->
+                  <span
+                    v-if="Number(index) === traceAnimationState.selectedStateIndex"
+                    class="h-1.5 w-1.5 rounded-full bg-white"
+                    aria-hidden="true"
+                  ></span>
+                </button>
+              </HintTooltip>
             </div>
           </div>
         </div>

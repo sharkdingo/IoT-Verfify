@@ -2469,15 +2469,16 @@ const scrollToBottom = (force = false) => {
           </div>
         </div>
 
-        <button
-          v-if="isChatPanelCompact && isSidebarOpen"
-          type="button"
-          class="sidebar-scrim"
-          data-testid="chat-sidebar-scrim"
-          :aria-label="t('app.collapse')"
-          :title="t('app.collapse')"
-          @click="isSidebarOpen = false"
-        ></button>
+        <HintTooltip :content="t('app.collapse')">
+          <button
+            v-if="isChatPanelCompact && isSidebarOpen"
+            type="button"
+            class="sidebar-scrim"
+            data-testid="chat-sidebar-scrim"
+            :aria-label="t('app.collapse')"
+            @click="isSidebarOpen = false"
+          ></button>
+        </HintTooltip>
 
         <div class="main-content">
           <div
@@ -2517,12 +2518,13 @@ const scrollToBottom = (force = false) => {
             </div>
           </div>
 
+          <!-- No tooltip on a drag handle: a hint would appear under the cursor at the moment the user starts
+               dragging, which is the one moment it is in the way. `aria-label` still names it. -->
           <button
             type="button"
             class="chat-resize-handle"
             data-testid="chat-resize-handle"
             :aria-label="t('app.resize')"
-            :title="t('app.resize')"
             @pointerdown="startPanelResize"
           />
 

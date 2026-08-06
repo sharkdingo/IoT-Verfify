@@ -2884,16 +2884,17 @@ watch(() => props.readOnly, readOnly => {
                 :aria-label="t('app.searchTemplates')"
                 type="text"
               />
-              <button
-                v-if="templateSearchQuery"
-                type="button"
-                :aria-label="t('app.clearSearch')"
-                :title="t('app.clearSearch')"
-                @click="templateSearchQuery = ''"
-                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600 transition-colors"
-              >
-                <span aria-hidden="true" class="material-symbols-outlined text-xs">close</span>
-              </button>
+              <HintTooltip :content="t('app.clearSearch')">
+                <button
+                  v-if="templateSearchQuery"
+                  type="button"
+                  :aria-label="t('app.clearSearch')"
+                  @click="templateSearchQuery = ''"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600 transition-colors"
+                >
+                  <span aria-hidden="true" class="material-symbols-outlined text-xs">close</span>
+                </button>
+              </HintTooltip>
             </div>
 
             <div class="flex items-center justify-between px-1">
