@@ -91,4 +91,20 @@ describe('recommendation panels agree on their run affordance', () => {
 
     expect(new Set(schemes).size, `panels disagree: ${schemes.join(' | ')}`).toBe(1)
   })
+
+  it('lets every panel surface the values the server completed for the user', () => {
+    /*
+     * All four panels must show their adjusted items, and the specification panel did not.
+     *
+     * It never read `adjustedItems`, so a server-completed value arrived, passed both validators, and vanished.
+     * That is the panel where it matters most: `BoardStorageController:535` passes `requireAdjustments=false` for
+     * specifications alone — rule and device pass `true` — so this is precisely the case where the recommender may
+     * adjust a candidate silently. The user would then apply a value the system filled in, without the "review
+     * before applying" notice the other three panels show.
+     */
+    for (const panel of ['scenario', 'rule', 'device', 'spec']) {
+      const at = BOARD.indexOf(`data-testid="${panel}-adjusted-items"`)
+      expect(at, `the ${panel} panel should surface its adjusted items`).toBeGreaterThan(-1)
+    }
+  })
 })

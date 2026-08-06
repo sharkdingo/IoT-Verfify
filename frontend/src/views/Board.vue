@@ -6308,7 +6308,15 @@ const formatRecommendationFilteredType = (type: unknown): string =>
 const formatRecommendationFilteredItem = (item: RecommendationFilteredItem): string =>
   formatFilteredItem(item, recommendationTextContext.value)
 
-type RecommendationAdjustmentContext = 'rule' | 'device' | 'scenario'
+/*
+ * `'spec'` joined this union when the specification panel started rendering its adjusted items.
+ *
+ * The union used to enumerate exactly the three panels that displayed them, which made it a type-level record of
+ * the gap rather than of a design: spec never read the field, so a server-completed value was discarded silently.
+ * `'spec'` behaves like `'rule'` here — only `'device'` and `'scenario'` branch, to resolve a label back to its
+ * template for model-token formatting.
+ */
+type RecommendationAdjustmentContext = 'rule' | 'device' | 'scenario' | 'spec'
 
 const recommendationAdjustmentTemplate = (
   item: RecommendationAdjustmentItem,
@@ -6837,6 +6845,7 @@ const resetSpecRecommendationResults = () => {
   specRecommendationRawCandidateCount.value = 0
   specRecommendationInspectedCount.value = 0
   specRecommendationTruncatedCount.value = 0
+  specRecommendationAdjustedItems.value = []
   specRecommendationIsAppliedConfirmation.value = false
   appliedSpecRecommendations.value.clear()
   applyingSpecRecommendations.value.clear()
@@ -7062,6 +7071,16 @@ const specRecommendations = ref<SpecificationRecommendation[]>([])
 const specRecommendationMessage = ref('')
 const specRecommendationFilteredCount = ref(0)
 const specRecommendationFilteredItems = ref<RecommendationFilteredItem[]>([])
+/*
+ * The specification recommender's adjusted items, which used to be discarded.
+ *
+ * Rule and device both track and render these; scenario does too. Spec did not — it never read the field, so a
+ * server-completed value arrived, validated, and vanished. That matters because `BoardStorageController:535`
+ * passes `requireAdjustments=false` for specs alone (rule and device pass `true`), which is precisely the case
+ * where the recommender *may* adjust silently. The user would then apply values the system completed for them,
+ * without the "review before applying" notice the other three panels show.
+ */
+const specRecommendationAdjustedItems = ref<RecommendationAdjustmentItem[]>([])
 const specRecommendationRawCandidateCount = ref(0)
 const specRecommendationInspectedCount = ref(0)
 const specRecommendationTruncatedCount = ref(0)
@@ -7313,6 +7332,7 @@ const fetchSpecRecommendations = async () => {
   specRecommendationRawCandidateCount.value = 0
   specRecommendationInspectedCount.value = 0
   specRecommendationTruncatedCount.value = 0
+  specRecommendationAdjustedItems.value = []
   specRecommendationIsAppliedConfirmation.value = false
   appliedSpecRecommendations.value.clear()
   applyingSpecRecommendations.value.clear()
@@ -7354,6 +7374,7 @@ const fetchSpecRecommendations = async () => {
     specRecommendationRawCandidateCount.value = response.rawCandidateCount
     specRecommendationInspectedCount.value = response.inspectedCount
     specRecommendationTruncatedCount.value = response.truncatedCount
+    specRecommendationAdjustedItems.value = response.adjustedItems || []
   } catch (error: any) {
     if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
       return
@@ -7594,6 +7615,7 @@ const preserveAppliedRecommendationAfterSceneChange = (
   specRecommendationRawCandidateCount.value = 0
   specRecommendationInspectedCount.value = 0
   specRecommendationTruncatedCount.value = 0
+  specRecommendationAdjustedItems.value = []
   specRecommendationIsAppliedConfirmation.value = true
   appliedSpecRecommendations.value = new Set([0])
   applyingSpecRecommendations.value = new Set()
@@ -15828,6 +15850,7 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
         <div
           v-if="deviceRecommendationAdjustedItems.length > 0 && !isRecommendingDevices"
+          data-testid="device-adjusted-items"
           class="rounded-lg board-surface-warning px-3 py-2 text-xs font-medium board-text-warning"
         >
           <p>{{ t('app.deviceRecommendationAdjustedNotice', { count: deviceRecommendationAdjustedItems.length }) }}</p>
@@ -16117,6 +16140,28 @@ const counterexampleTraceHelpText = computed(() => {
             filtered: specRecommendationFilteredCount,
             truncated: specRecommendationTruncatedCount
           }) }}
+        </div>
+        <!--
+          The server-completed values, which this panel used to discard.
+          Rule, device and scenario all show this notice; spec did not read the field at all. It is the panel that
+          most needs it: `BoardStorageController:535` passes `requireAdjustments=false` for specifications alone, so
+          this is exactly the case where the recommender may adjust a candidate silently. Applying a value the
+          system completed for you, without being told it did, is the outcome the other three panels prevent.
+        -->
+        <div
+          v-if="specRecommendationAdjustedItems.length > 0 && !isRecommendingSpecs"
+          data-testid="spec-adjusted-items"
+          class="rounded-lg board-surface-warning px-3 py-2 text-xs font-medium board-text-warning"
+        >
+          <p>{{ t('app.recommendationAdjustedNotice', { count: specRecommendationAdjustedItems.length }) }}</p>
+          <ul class="iot-scroll-region mt-1 max-h-36 list-disc space-y-0.5 pl-4 pr-1 font-normal leading-relaxed">
+            <li
+              v-for="(item, index) in specRecommendationAdjustedItems"
+              :key="`${item.type || 'item'}-${item.index || index}-${item.reasonCode || item.reason}`"
+            >
+              {{ formatRecommendationAdjustmentItem(item, 'spec') }}
+            </li>
+          </ul>
         </div>
         <div
           v-if="specRecommendationFilteredCount > 0 && !isRecommendingSpecs"
