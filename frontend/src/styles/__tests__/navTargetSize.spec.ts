@@ -61,15 +61,27 @@ describe('board nav target size', () => {
     // leaves the wide case as the unnoticed exception. Any narrow override must now match the base minimum.
     const css = boardCss()
     const narrowBlocks = css.match(/@media \(max-width: 1023\.98px\)[^{]*\{[\s\S]*?\n\}/g) || []
+    /*
+     * Both units, and the scan has to find something.
+     *
+     * The first version matched `(\d+)px` only. Measured: the six narrow blocks contain **0 px sizes and 7 rem
+     * sizes**, so the filter excluded every value present and the check asserted nothing — an empty scan wearing
+     * the shape of coverage. `targetSizeFloor.spec.ts:90` in this same repo uses `([\d.]+)(rem|px)` and finds all
+     * seven, which is what showed the omission.
+     */
     const offenders: string[] = []
+    let inspected = 0
     for (const block of narrowBlocks) {
       for (const match of block.matchAll(/(\.board-nav-bar [^{]+)\{([^}]*)\}/g)) {
         const [, selector, body] = match
-        for (const size of body.matchAll(/(?:min-)?(?:width|height):\s*(\d+)px/g)) {
-          if (Number(size[1]) < 44) offenders.push(`${selector.trim()} -> ${size[0]}`)
+        for (const size of body.matchAll(/(?:min-)?(?:width|height):\s*([\d.]+)(rem|px)/g)) {
+          inspected += 1
+          const px = size[2] === 'rem' ? Number(size[1]) * 16 : Number(size[1])
+          if (px < 44) offenders.push(`${selector.trim()} -> ${size[0]}`)
         }
       }
     }
+    expect(inspected, 'the size scan should not come back empty').toBeGreaterThan(0)
     expect(offenders).toEqual([])
   })
 })

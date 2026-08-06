@@ -32,9 +32,26 @@ describe('reduced motion', () => {
     expect(marker, 'the reduced-motion animation list should exist').toBeGreaterThan(-1)
     const start = css.lastIndexOf('@media (prefers-reduced-motion: reduce)', marker)
     expect(start, 'the animate-* list should sit inside a reduced-motion block').toBeGreaterThan(-1)
-    // Run to the next top-level @media or the end; enough to cover this block's rules.
-    const next = css.indexOf('@media', start + 10)
-    return css.slice(start, next > -1 ? next : css.length)
+    /*
+     * The block's own extent, by balancing braces — not "everything up to the next `@media`".
+     *
+     * That earlier heuristic ran **17,904 characters past** the block it meant to read (20,026 against a real
+     * 2,122), so every assertion below was free to match a rule outside reduced-motion entirely. It passed only
+     * because one `animation-duration` happened to fall inside the window; a rule deleted from the block and a
+     * rule added anywhere in those 17.9k characters would look identical to it.
+     */
+    let depth = 0
+    let cursor = css.indexOf('{', start)
+    while (cursor < css.length) {
+      if (css[cursor] === '{') depth += 1
+      else if (css[cursor] === '}') {
+        depth -= 1
+        if (depth === 0) break
+      }
+      cursor += 1
+    }
+    expect(depth, 'the reduced-motion block should be closed').toBe(0)
+    return css.slice(start, cursor + 1)
   }
 
   it('keeps a progress spinner turning, because a frozen one reports a stall that is not happening', () => {

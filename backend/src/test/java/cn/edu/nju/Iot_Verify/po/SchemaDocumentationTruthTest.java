@@ -9,8 +9,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -148,20 +150,61 @@ class SchemaDocumentationTruthTest {
     @Test
     @DisplayName("the composite primary keys the doc claims for user isolation are implemented")
     void compositePrimaryKeysExist() throws IOException {
+        /*
+         * Each claim is checked against the table it names, not against a count.
+         *
+         * This used to count doc claims (3) and count entities carrying `@IdClass`/`@EmbeddedId` (3), then assert
+         * `implemented >= claimed`. Nothing tied a claim to its table, so dropping the composite key from
+         * `board_environment_variable` while adding one anywhere else stayed green — and the doc would keep
+         * describing a per-user isolation guarantee that no longer held, which is the one thing this class exists
+         * to prevent.
+         */
         String doc = Files.readString(DOC, StandardCharsets.UTF_8);
-        Matcher m = Pattern.compile("composite PK `\\(([^)]+)\\)`").matcher(doc);
-        int claimed = 0;
-        while (m.find()) claimed++;
-        assertTrue(claimed >= 3, "the doc should claim at least 3 composite PKs, found " + claimed);
+        // `\\s*` spans the line wrap: the doc breaks between "has a" and "composite PK".
+        Matcher m = Pattern.compile("`([a-z_]+)` has a\\s*composite PK `\\(([^)]+)\\)`").matcher(doc);
+
+        Map<String, String> claims = new LinkedHashMap<>();
+        while (m.find()) {
+            claims.put(m.group(1), m.group(2).replace(" ", ""));
+        }
+        assertTrue(claims.size() >= 3,
+                "the doc should claim at least 3 composite PKs by table name, found " + claims);
 
         // These composite keys *are* the per-user isolation mechanism, so a doc naming one the code dropped would
         // describe a guarantee that no longer holds.
-        int implemented = 0;
-        for (String text : poSources()) {
-            if (text.contains("@IdClass") || text.contains("@EmbeddedId")) implemented++;
+        List<String> unmet = new ArrayList<>();
+        for (Map.Entry<String, String> claim : claims.entrySet()) {
+            String table = claim.getKey();
+            String source = poSources().stream()
+                    .filter(text -> text.contains("\"" + table + "\""))
+                    .findFirst()
+                    .orElse(null);
+            if (source == null) {
+                unmet.add(table + ": no entity maps this table");
+                continue;
+            }
+            if (!source.contains("@IdClass") && !source.contains("@EmbeddedId")) {
+                unmet.add(table + ": entity declares no composite key, but the doc claims ("
+                        + claim.getValue() + ")");
+                continue;
+            }
+            for (String column : claim.getValue().split(",")) {
+                if (!source.contains("\"" + column + "\"") && !source.contains(toCamel(column))) {
+                    unmet.add(table + ": composite key is missing the claimed column " + column);
+                }
+            }
         }
-        assertTrue(implemented >= claimed,
-                "CLAUDE.md claims " + claimed + " composite primary keys but only " + implemented
-                        + " entities declare @IdClass or @EmbeddedId");
+
+        assertTrue(unmet.isEmpty(), "CLAUDE.md describes composite keys the code does not implement: " + unmet);
+    }
+
+    /** `user_id` as the field name an entity would use for it. */
+    private static String toCamel(String column) {
+        String[] parts = column.trim().split("_");
+        StringBuilder out = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            out.append(Character.toUpperCase(parts[i].charAt(0))).append(parts[i].substring(1));
+        }
+        return out.toString();
     }
 }

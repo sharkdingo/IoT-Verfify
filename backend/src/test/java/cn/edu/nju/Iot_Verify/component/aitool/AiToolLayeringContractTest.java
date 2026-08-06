@@ -159,12 +159,14 @@ class AiToolLayeringContractTest {
     @DisplayName("each tool's attackPoints description matches the modes it accepts")
     void attackPointsSchemaCapabilityMatchesTheValidator() throws IOException {
         List<String> offenders = new ArrayList<>();
+        int inspected = 0;
         try (Stream<Path> stream = Files.walk(Paths.get("src/main/java/cn/edu/nju/Iot_Verify/component/aitool"))) {
             for (Path file : stream.filter(path -> path.toString().endsWith(".java")).toList()) {
                 String body = Files.readString(file, StandardCharsets.UTF_8);
                 if (!body.contains("attackPointsSchema(")) continue;
                 String name = file.getFileName().toString();
                 if (name.equals("AbstractAiTool.java")) continue;
+                inspected += 1;
                 boolean schemaAllowsExhaustive = body.contains("attackPointsSchema(true)");
                 boolean validatorAllowsExhaustive = body.contains("attackScenarioArg(args, true)");
                 if (schemaAllowsExhaustive != validatorAllowsExhaustive) {
@@ -173,6 +175,11 @@ class AiToolLayeringContractTest {
                 }
             }
         }
+        // A coverage floor, matching the sibling checks in this file. Without it an empty walk — a moved package, a
+        // renamed suffix — reports success, which is the failure mode this suite has already produced elsewhere.
+        assertTrue(inspected >= 4,
+                "expected at least 4 tools calling attackScenarioArg, inspected " + inspected
+                        + " — the scan is probably broken, so an empty offender list proves nothing");
         assertTrue(offenders.isEmpty(),
                 "a tool described a mode it does not accept: " + offenders);
     }

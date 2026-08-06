@@ -53,13 +53,27 @@ describe('button cursor affordance', () => {
     // This rule keeps a blanket `* { cursor: pointer }`-style shortcut from ever being introduced.
     const css = boardCss()
     const offenders: string[] = []
-    css.split('\n').forEach((line, index) => {
-      // A pointer cursor applied through a universal or bare-element selector, rather than to a control.
-      if (/^\s*(\*|span|p|div|h[1-6])\s*\{/.test(line)) {
-        const block = css.slice(css.indexOf(line), css.indexOf(line) + 200)
-        if (/cursor:\s*pointer/.test(block)) offenders.push(`board.css:${index + 1}`)
-      }
-    })
+    /*
+     * The element selector may be scoped, and here it always is.
+     *
+     * The first version anchored on a bare element at the start of a line. `board.css` is board-scoped, so every
+     * selector begins `.iot-board …` and that pattern could not match by construction — the check was
+     * structurally incapable of failing, and the comment above recording "0 such elements" was measuring its own
+     * blind spot. Verified by injecting `.iot-board p { cursor: pointer }`: the old form passed it, this one
+     * reports it.
+     *
+     * Matching the selector's *last* simple component catches both `p {` and `.iot-board p {` while still
+     * ignoring `.iot-board .some-button {`, which is a control and may legitimately have the cursor.
+     */
+    for (const rule of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const [, selector, body] = rule
+      if (!/cursor:\s*pointer/.test(body)) continue
+      const hitsBareElement = selector
+        .split(',')
+        .map(part => part.trim().split(/[\s>+~]+/).pop() ?? '')
+        .some(last => /^(\*|span|p|div|h[1-6]|li|td)$/.test(last))
+      if (hitsBareElement) offenders.push(`board.css: ${selector.trim().slice(0, 70)}`)
+    }
     expect(offenders, 'a pointer cursor on a bare text element promises an interaction that does not exist')
       .toEqual([])
   })

@@ -38,16 +38,32 @@ describe('empty group disclosure', () => {
       .toMatch(/:open="group\.templates\.length > 0"/)
   })
 
-  it('never leaves a collapsible unconditionally open', () => {
-    // A bare `open` on any `<details>` is the shape of the defect, wherever it appears. Scanning the whole file
-    // rather than the one element keeps a second instance from being added elsewhere and going unnoticed — there
-    // are currently none, which is the state worth holding.
+  it('never leaves a content-driven collapsible unconditionally open', () => {
+    /*
+     * Two things were wrong here, and they cancelled into a pass.
+     *
+     * The scan matched `open` only when the attribute sat **alone on a line**. Every real one in
+     * `ControlCenter.vue` is at the end of its tag — `… overflow-hidden" open>` — so it found zero against five
+     * present, and the comment recorded that emptiness as "the state worth holding".
+     *
+     * And the asserted rule was too broad. Those five are the panel's top-level sections (Devices, Rules, Specs,
+     * template create, template repository); a section the user navigated to *should* start expanded. The defect
+     * this file exists for is narrower: a disclosure whose content may be **empty** must not open onto nothing,
+     * which is why the template group binds `:open` to its length. So the scan now looks for a bare `open` on a
+     * `v-for`-driven `<details>` — the ones whose content count is unknown when the markup is written.
+     */
     const source = withoutComments(controlCenter())
     const offenders: string[] = []
-    source.split('\n').forEach((line, index) => {
-      if (/^\s*open\s*$/.test(line)) offenders.push(`ControlCenter.vue:${index + 1}`)
-    })
-    expect(offenders, 'a bare `open` attribute forces a section expanded regardless of content').toEqual([])
+    let inspected = 0
+    for (const match of source.matchAll(/<details\b([^>]*)>/g)) {
+      const attrs = match[1]
+      inspected += 1
+      if (/\bv-for=/.test(attrs) && /(?:^|\s)open(?:\s|$)/.test(attrs)) {
+        offenders.push(`line ${source.slice(0, match.index).split('\n').length}: ${attrs.trim().slice(0, 60)}`)
+      }
+    }
+    expect(inspected, 'the <details> scan should not come back empty').toBeGreaterThan(0)
+    expect(offenders, 'a repeated disclosure must bind :open to its content, not force it').toEqual([])
   })
 
   it('still renders the empty group, so its count remains visible', () => {

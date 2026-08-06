@@ -91,13 +91,21 @@ class TerminalTaskProgressStageContractTest {
 
         Matcher members = Pattern.compile("^\\s{4}([A-Z_]+)[,;]?\\s*$", Pattern.MULTILINE).matcher(stages);
         List<String> terminalSounding = new ArrayList<>();
+        List<String> seen = new ArrayList<>();
         while (members.find()) {
             String member = members.group(1);
+            seen.add(member);
             if (member.matches(".*(COMPLETED|FINISHED|DONE|FAILED|CANCELLED|TERMINAL).*")) {
                 terminalSounding.add(member);
             }
         }
 
+        // A coverage floor: the member pattern keys on a four-space indent, so a reformat would silently match
+        // nothing and this check would pass by finding no members rather than by finding no terminal ones. Its
+        // sibling above already asserts `checked >= 12` for exactly this reason.
+        assertTrue(seen.size() >= 3,
+                "expected to read at least 3 progress stages, found " + seen
+                        + " — the member scan is probably broken, so an empty result proves nothing");
         assertTrue(terminalSounding.isEmpty(),
                 "TaskProgressStage should only name work in progress; terminal state belongs to `status`. Found: "
                         + terminalSounding);
