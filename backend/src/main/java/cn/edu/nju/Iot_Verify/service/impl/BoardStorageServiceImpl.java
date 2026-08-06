@@ -235,8 +235,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<DeviceNodeDto> savedNodes = saveNodesInternal(userId, canonicalNodes);
                 List<BoardEnvironmentVariableDto> savedEnvironment = environmentVariablePatches != null
                         && !environmentVariablePatches.isEmpty()
-                        ? patchEnvironmentVariablesInternal(
-                                userId, savedNodes, environmentVariablePatches).getEnvironmentVariables()
+                        ? patchEnvironmentVariablesInternal(userId, savedNodes, environmentVariablePatches)
                         : getEnvironmentVariablesInternal(userId);
                 requireTotalCapacity("environment variables", savedEnvironment.size(),
                         RequestLimits.MAX_ENVIRONMENT_VARIABLES);
@@ -1878,7 +1877,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
      * Applies only non-null fields from each submitted item. Omitted fields retain the materialized
      * current value, so a UI edit of one label cannot reset the value or the other label.
      */
-    private EnvironmentMutationResultDto patchEnvironmentVariablesInternal(
+    /** The environment pool after the patches. Its one caller, {@code addNodes}, needs nothing else. */
+    private List<BoardEnvironmentVariableDto> patchEnvironmentVariablesInternal(
             Long userId,
             List<DeviceNodeDto> nodes,
             List<BoardEnvironmentVariableDto> patches) {
@@ -1892,13 +1892,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         validateSubmittedEnvironmentNames(patches, required);
         validateEnvironmentPatchFields(patches);
 
-        List<BoardEnvironmentVariableDto> persistedBefore = getEnvironmentVariablesInternal(userId);
         List<BoardEnvironmentVariableDto> materializedBefore = mergeEnvironmentVariables(
-                List.of(), persistedBefore, required);
+                List.of(), getEnvironmentVariablesInternal(userId), required);
         validateEnvironmentVariables(materializedBefore, required);
 
-        return persistEnvironmentVariablePatches(
-                userId, patches, persistedBefore, materializedBefore, required);
+        return persistEnvironmentVariablePatches(userId, patches, materializedBefore, required);
     }
 
     private EnvironmentMutationResultDto compareAndSetEnvironmentVariablesInternal(
@@ -2012,26 +2010,28 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
     }
 
-    private EnvironmentMutationResultDto persistEnvironmentVariablePatches(
+    /**
+     * The environment pool after applying the patches — which is all its one caller reads.
+     *
+     * This used to build a whole {@code EnvironmentMutationResultDto}: an operation label, a change diff, a count,
+     * and a per-patch {@code patchResults} list. `addNodes` (`:238`) takes `.getEnvironmentVariables()` and drops
+     * the rest, so every device-creation request carrying environment patches paid for a
+     * {@code describeEnvironmentVariablePatches} walk whose only destination was the garbage collector.
+     *
+     * Deliberately still does **not** call {@code recordEnvironmentUpdate}, unlike its CAS twin: `addNodes`
+     * records the environment inside its own DEVICE journal entry, because one request is one user action. Adding
+     * a second journal write here would give the user two undo steps for one edit.
+     */
+    private List<BoardEnvironmentVariableDto> persistEnvironmentVariablePatches(
             Long userId,
             List<BoardEnvironmentVariableDto> patches,
-            List<BoardEnvironmentVariableDto> persistedBefore,
             List<BoardEnvironmentVariableDto> materializedBefore,
             Map<String, DeviceManifest.InternalVariable> required) {
 
         List<BoardEnvironmentVariableDto> merged = mergeEnvironmentVariablePatches(
                 patches, materializedBefore, required);
         validateEnvironmentVariables(merged, required);
-        List<BoardEnvironmentVariableDto> saved = replaceEnvironmentVariablesInternal(userId, merged);
-        List<EnvironmentVariableChangeDto> changes = diffEnvironmentVariables(materializedBefore, saved);
-
-        return EnvironmentMutationResultDto.builder()
-                .operation(changes.isEmpty() ? "unchanged" : "updated")
-                .patchResults(describeEnvironmentVariablePatches(patches, materializedBefore, saved))
-                .environmentVariables(saved)
-                .environmentChanges(changes)
-                .currentCount(saved.size())
-                .build();
+        return replaceEnvironmentVariablesInternal(userId, merged);
     }
 
     private EnvironmentMutationResultDto persistEnvironmentVariableCasPatches(
@@ -2185,9 +2185,21 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             BoardEnvironmentVariableDto patch = patchByName.get(name);
             merged.add(new BoardEnvironmentVariableDto(
                     name,
-                    patch != null && patch.getValue() != null ? patch.getValue() : current.getValue(),
-                    patch != null && patch.getTrust() != null ? patch.getTrust() : current.getTrust(),
-                    patch != null && patch.getPrivacy() != null ? patch.getPrivacy() : current.getPrivacy()));
+                    /*
+                     * Normalised the same way as the CAS twin, which applied `trimToNull` and
+                     * `normalizeSecurityLabel` while this path took the raw value. Nothing broke, because two
+                     * later stages independently repaired it — `validateLiteralValues` compares trimmed and
+                     * case-insensitively, and `environmentToEntity` normalises again before persisting — but
+                     * `backend/CLAUDE.md` is explicit that admission and generation must normalise the same
+                     * string the same way. Relying on a downstream repair means the next case-sensitive
+                     * comparison added between the two paths reproduces only through `POST /api/board/nodes`.
+                     */
+                    patch != null && patch.getValue() != null
+                            ? trimToNull(patch.getValue()) : current.getValue(),
+                    patch != null && patch.getTrust() != null
+                            ? normalizeSecurityLabel(patch.getTrust()) : current.getTrust(),
+                    patch != null && patch.getPrivacy() != null
+                            ? normalizeSecurityLabel(patch.getPrivacy()) : current.getPrivacy()));
         }
         return merged;
     }
@@ -2227,37 +2239,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return merged;
     }
 
-    private List<EnvironmentVariablePatchResultDto> describeEnvironmentVariablePatches(
-            List<BoardEnvironmentVariableDto> patches,
-            List<BoardEnvironmentVariableDto> previous,
-            List<BoardEnvironmentVariableDto> current) {
-        Map<String, BoardEnvironmentVariableDto> previousByName = environmentDtoMap(previous);
-        Map<String, BoardEnvironmentVariableDto> currentByName = environmentDtoMap(current);
-        List<EnvironmentVariablePatchResultDto> results = new ArrayList<>();
-        for (BoardEnvironmentVariableDto rawPatch : patches == null
-                ? List.<BoardEnvironmentVariableDto>of() : patches) {
-            String name = rawPatch.getName().trim();
-            BoardEnvironmentVariableDto before = previousByName.get(name);
-            BoardEnvironmentVariableDto after = currentByName.get(name);
-            List<String> suppliedFields = environmentPatchFields(rawPatch);
-            List<String> changedFields = suppliedFields.stream()
-                    .filter(field -> !Objects.equals(
-                            environmentFieldValue(before, field), environmentFieldValue(after, field)))
-                    .toList();
-            List<String> preservedFields = List.of("value", "trust", "privacy").stream()
-                    .filter(field -> !suppliedFields.contains(field))
-                    .toList();
-            results.add(EnvironmentVariablePatchResultDto.builder()
-                    .name(name)
-                    .suppliedFields(suppliedFields)
-                    .changedFields(changedFields)
-                    .preservedFields(preservedFields)
-                    .previousValue(before)
-                    .currentValue(after)
-                    .build());
-        }
-        return List.copyOf(results);
-    }
 
     private List<EnvironmentVariablePatchResultDto> describeEnvironmentVariableCasPatches(
             List<EnvironmentVariableUpdateRequestDto> updates,
@@ -2294,13 +2275,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return List.copyOf(results);
     }
 
-    private List<String> environmentPatchFields(BoardEnvironmentVariableDto patch) {
-        List<String> fields = new ArrayList<>();
-        if (patch.getValue() != null) fields.add("value");
-        if (patch.getTrust() != null) fields.add("trust");
-        if (patch.getPrivacy() != null) fields.add("privacy");
-        return List.copyOf(fields);
-    }
 
     private String environmentFieldValue(BoardEnvironmentVariableDto variable, String field) {
         if (variable == null) return null;
