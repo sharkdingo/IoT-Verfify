@@ -107,7 +107,9 @@ test('opening canvas node details preserves the viewport while inspector focus r
       resizeHandleCount: element.querySelectorAll('.resize-handle').length
     }
   })
-  expect(lowZoomHitTarget).toEqual({ nodeId: minimumNode.id, resizeHandleCount: 0 })
+  // Minimum-sized node keeps 1 handle (br) at low zoom so it can be resized. Before the fix, the 52px
+  // screen threshold locked it with 0 handles, forcing keyboard-only resize (Ctrl+arrows, undiscoverable).
+  expect(lowZoomHitTarget).toEqual({ nodeId: minimumNode.id, resizeHandleCount: 1 })
 
   await node.click({ button: 'right' })
   await expect(page.getByTestId('device-dialog')).toHaveCount(0)
