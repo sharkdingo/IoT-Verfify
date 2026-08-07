@@ -725,11 +725,9 @@ const expectTimelineNavigationAndContext = async (
   }
 
   const track = page.getByTestId(`${prefix}-timeline-track`)
-  // The range control, not the step input: both rails have a range, only the simulation rail has a spin box.
-  //
-  // The two are indexed differently and it matters — the range is **0-based** (`max = totalStates - 1`) while
-  // the spin box counted states from 1. So `max + 1` is the state count, and the fill below uses an index.
-  const stateCount = Number(await page.getByTestId(`${prefix}-timeline-range`).getAttribute('max') || '0') + 1
+  // The range slider was removed in 32b22e2. State count is now derived from the number of state buttons in
+  // the track (one button per state, created by v-for over states array).
+  const stateCount = await track.locator('button[type="button"]').count()
   if (stateCount > 1) {
     const box = await track.boundingBox()
     expect(box).toBeTruthy()
@@ -739,9 +737,10 @@ const expectTimelineNavigationAndContext = async (
     }).toBe(String(stateCount - 1))
   }
 
-  // Move the cursor to the second state through the range, which both rails expose. The range is 0-based, so
-  // index 1 is what the assertion below already expected from `fill('2')` on the 1-based spin box.
-  await page.getByTestId(`${prefix}-timeline-range`).fill('1')
+  // Move the cursor to the second state (index 1). The range slider is gone; click the second state button.
+  if (stateCount > 1) {
+    await track.locator('button[type="button"]').nth(1).click()
+  }
   await expect.poll(async () => timeline.getAttribute('data-selected-state-index'), {
     timeout: 5_000
   }).toBe('1')
