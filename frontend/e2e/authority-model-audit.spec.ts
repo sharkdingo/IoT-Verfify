@@ -700,7 +700,11 @@ const expectTimelineNavigationAndContext = async (
   }
   // The range slider was removed in 32b22e2: it was a second x-axis over the same index as the rail,
   // which read as "two timelines". The rail took over the drag interaction the slider uniquely provided.
-  await expect(page.getByTestId(`${prefix}-timeline-scroll`)).toBeVisible()
+  // Only simulation-timeline has a testid on its scroll container; trace-timeline's scroll container
+  // has no testid (the track itself is the landmark).
+  if (prefix === 'simulation') {
+    await expect(page.getByTestId(`${prefix}-timeline-scroll`)).toBeVisible()
+  }
   // Only the simulation rail has a numeric step input. The counterexample rail's was removed: a spin box
   // asking for an absolute state index is not how anyone reads a counterexample, and the rail itself plus
   // the range control already move the cursor.
@@ -814,7 +818,7 @@ test.describe('authority model full-stack audit', () => {
     page.setDefaultTimeout(30_000)
   })
 
-  test.skip('builds multi-scene boards through UI, audits API payloads, SMV semantics, history, animation, and fix closure', async ({ page, request }) => {
+  test('builds multi-scene boards through UI, audits API payloads, SMV semantics, history, animation, and fix closure', async ({ page, request }) => {
     const browserErrors: string[] = []
     page.on('pageerror', error => browserErrors.push(error.message))
     page.on('console', message => {
