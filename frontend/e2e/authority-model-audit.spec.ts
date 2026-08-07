@@ -694,7 +694,7 @@ const expectTimelineNavigationAndContext = async (
   const stateDetails = page.getByTestId(`${prefix}-step-values`)
   await expect(stateDetails).toBeVisible({ timeout: 30_000 })
   if (!await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
-    await stateDetails.locator(':scope > summary').click()
+    await stateDetails.locator(':scope > summary').click({ force: true })
   }
   // The range slider was removed in 32b22e2: it was a second x-axis over the same index as the rail,
   // which read as "two timelines". The rail took over the drag interaction the slider uniquely provided.
