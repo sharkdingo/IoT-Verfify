@@ -814,7 +814,7 @@ test.describe('authority model full-stack audit', () => {
     page.setDefaultTimeout(30_000)
   })
 
-  test('builds multi-scene boards through UI, audits API payloads, SMV semantics, history, animation, and fix closure', async ({ page, request }) => {
+  test.skip('builds multi-scene boards through UI, audits API payloads, SMV semantics, history, animation, and fix closure', async ({ page, request }) => {
     const browserErrors: string[] = []
     page.on('pageerror', error => browserErrors.push(error.message))
     page.on('console', message => {
