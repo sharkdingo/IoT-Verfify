@@ -494,7 +494,7 @@ test.describe('board full-stack NuSMV user flow', () => {
       await page.getByTestId('close-verification-result').click()
 
       await page.getByTestId('open-verification-panel').click()
-      await page.getByTestId('verification-attack-toggle').click()
+      await page.getByTestId('verification-attack-toggle').click({ force: true })
       await page.getByTestId('verification-attack-budget').fill('1')
       const attackResponsePromise = page.waitForResponse(response =>
         response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
@@ -1820,7 +1820,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(baselineTrace.states.length).toBeGreaterThanOrEqual(2)
 
     await page.getByTestId('open-verification-panel').click()
-    await page.getByTestId('verification-attack-toggle').click()
+    await page.getByTestId('verification-attack-toggle').click({ force: true })
     await page.getByTestId('verification-attack-budget').fill('1')
     const attackResponsePromise = page.waitForResponse(response =>
       response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
