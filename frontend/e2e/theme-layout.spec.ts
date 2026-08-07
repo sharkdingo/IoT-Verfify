@@ -271,7 +271,7 @@ test.describe('public theme and layout', () => {
     // either theme, which is the thing this test is actually about.
     await expectDarkSurface(panel.locator(':scope > .p-3 .board-card').first())
 
-    await page.locator('[data-testid="close-simulation-panel"]').click()
+    await page.locator('[data-testid="close-simulation-panel"]').click({ force: true })
     await page.locator('[data-testid="open-history-panel"]').click()
     const historyPanel = page.locator('[data-testid="trace-history-panel"]')
     await expectDarkSurface(historyPanel)

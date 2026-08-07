@@ -688,9 +688,11 @@ const expectTimelineNavigationAndContext = async (
   prefix: 'simulation' | 'trace'
 ) => {
   const timeline = page.getByTestId(testId)
+  await expect(timeline).toBeVisible({ timeout: 30_000 })
   // Renamed from `${prefix}-timeline-state-details`: the two rails used ids that collided under a shared
   // suffix convention, and the panel is the step *values*, not the timeline's own details.
   const stateDetails = page.getByTestId(`${prefix}-step-values`)
+  await expect(stateDetails).toBeVisible({ timeout: 30_000 })
   if (!await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
     await stateDetails.locator(':scope > summary').click()
   }
