@@ -61,6 +61,7 @@ user must act**.
 | Field-level validation | **inline, next to the field** + `aria-describedby` | Never a toast: the user needs it while fixing the field. |
 | Page/section failed to load; critical state unknown | **persistent banner** with retry | Must survive until resolved; a toast disappears before the user can act. |
 | Destructive action needing agreement | `confirmDestructive` | Uniform title/body/danger button; resolves `false` on cancel. |
+| Non-destructive decision (proceed past a warning, apply a suggestion) | `confirmChoice` | Same shape, accent button. Using `confirmDestructive` here is what made the red button meaningless. |
 | Diagnostic the user cannot act on | `acknowledge` | Alert with an optional `tone`; may carry a VNode for per-field detail. |
 | Permanent account deletion | `AccountDeleteDialog` | Needs password + typed confirmation, so it is a bespoke form, not a message box. |
 | Background async task | task indicator / run history | Not a toast per state change. |
@@ -93,6 +94,31 @@ user must act**.
 - `confirmDestructive` resolves `false` on cancel and dismissal — cancelling is an ordinary
   outcome, never an exception a call site has to catch. Use `dismissOpenConfirmation()` when
   the surface that raised a confirmation goes away underneath it.
+
+### A cue is not a selection
+
+"Show me where that is" and "this is the item you are working on" are different states, and the board
+paints them differently: a cue is a bloom plus motion on the canvas, a selection is a static ring on the
+inspector row. Keep them apart.
+
+- **A cue owns its own lifetime.** `views/board/focusHighlight.ts` retires it on a timer. The three focus
+  ids used to be independent refs cleared only by whoever remembered, and five exits did not — clicking
+  empty canvas, Escape, closing the device dialog, focusing another device by a different path, and simply
+  moving on. One device kept a 28px bloom and an *infinitely* pulsing ring while its neighbours had none,
+  which users read as a property of that device ("why do some device instances glow?"). Adding a clear per
+  exit makes correctness depend on enumerating future exits; this round proved that enumeration fails.
+- **Cue motion is finite and ends before the cue does.** Two pulses, not `infinite`. Perpetual motion on a
+  canvas the user works in stops reading as "look here" and starts reading as a status.
+- **A cue differs from a semantic mark in *form*, not intensity.** A dashed accent outline means "the board
+  is pointing at this"; a solid ring or a bloom means something about the thing itself. The focus cue was a
+  4px accent ring plus a 28px bloom — within 2% of `.trace-changed`, which means "this device's state changed
+  at this step" — same hue, same shape, both animating a scaling ring, and they co-occur when you focus a
+  device during playback. §5's "state never depends on colour alone" is doubly violated when the shape does
+  not differ either.
+- **One writer.** The controller is the only thing that assigns those refs, and the three targets are
+  mutually exclusive by construction rather than by three hand-written clears in each of three setters.
+- Deleting the focused item is the one case that must not wait for the timer — the cue would address an id
+  that no longer exists. That check reuses `reconcileBoardFocus`, so "does this still exist" has one owner.
 
 ## 3. Undo, and what it is not
 
@@ -131,8 +157,15 @@ ends up destroying work.
   contradicts these invariants instead of rendering impossible button state.
 - **Confirmed scene replacement/clear is a history boundary.** It can also replace template
   snapshots, so an inverse over only the four visible collections would leave hidden catalog
-  effects behind. Automatic-fix apply is different: it owns one ordered rule-set transition and is
+  effects behind. Template deletion and bundled-template reset are boundaries for the mirror reason:
+  a journal device entry needs its type manifest to interpret its own attributes and values.
+  Automatic-fix apply is different: it owns one ordered rule-set transition and is
   reversible as one user action.
+- **A boundary confirmation must say why the history goes, not only that it does.** Discarding
+  undo/redo reads as an unexplained side effect of "clear the scene" otherwise, which is how the
+  mechanism gets reported as a bug. Each notice names the count *and* the reason the remaining
+  entries could not be replayed — nothing left to return to for the scene boundaries, no manifest to
+  interpret the snapshots for the template ones.
 - **Async runs are not undoable.** Cancel, stop, and delete-result are separate, and none of them
   is spelled "undo".
 - **Never intercept a keystroke in a text field, a `contenteditable` region, or during an IME
@@ -181,7 +214,72 @@ ends up destroying work.
   mutation response invalidates every read already in flight, and only the latest-started concurrent
   read may update the affordance.
 
-## 4. Action emphasis
+## 4. Dialogs are one surface with three sizes and four tones
+
+Every modal is composed from [`src/styles/dialog.css`](../../frontend/src/styles/dialog.css). Nothing
+builds a dialog shell locally.
+
+The layer exists because they did. Measured across the 13 hand-rolled modals it replaced: the overlay
+tint split four ways (`bg-black/60`, `bg-slate-950/20`, `bg-slate-900/60`, plus three CSS literals), the
+card radius three ways against an `--iot-radius-surface` scale that already existed, the width eight ways
+(380px, `w-96`, 650, 760, 800, `max-w-lg`, `max-w-6xl`, 92vw), the footer four ways (trailing, centred,
+space-between, absent), and the confirm button five heights. Logout painted itself with a hardcoded navy
+gradient and a pulsing red circle; the scene-clear confirmation was a stock MessageBox. A user comparing
+those two reported that the product did not look like one project — which is the only symptom this class
+of drift ever produces, and it is invisible one dialog at a time.
+
+### The vocabulary
+
+`.iot-dialog-overlay` (`--nested`, `--session`) · `.iot-dialog` + one size (`--sm` decisions, `--md`
+forms, `--lg` results, `--xl` the rule builder) + optional tone (`--danger`/`--warning`/`--success`/`--info`)
+· `__header` / `__icon` / `__heading` / `__title` / `__subtitle` / `__close` · `__body` · `__consequence`
+· `__footer` / `__footer-aside` · `.iot-dialog-btn` (`--primary`/`--danger`/`--ghost`/`--quiet`) and
+`__spinner`. Shared `<Transition name="iot-dialog">`.
+
+### Rules
+
+- **Tone belongs to the situation; the confirm button belongs to the action.** Set one tone modifier on
+  the card and the header tile follows it. Do *not* also paint the confirm button in that tone — that gave
+  the product a warning-gradient confirm, a red confirm and a blue confirm for the same "do the thing I
+  came for" role. `--danger` is the sole exception, because a destructive answer must look unlike an
+  ordinary one at the instant of clicking.
+- **A tone is not a volume knob.** Template deletion wore a full-bleed red banner with a 64px icon for a
+  reversible catalog edit, shouting louder than permanent account deletion. Reserve intensity for
+  consequence, and express it through the tile, not the whole surface.
+- **`__body` is the only part that scrolls.** The card is a bounded flex column and `__footer` is
+  `flex: none`, so actions cannot be pushed below a short viewport. Putting the scroll on the card is how
+  a footer ends up unreachable.
+- **Primary action last, always.** A confirm button that changes position between surfaces is the single
+  most legible symptom of unrelated dialogs.
+- **Sizes are a scale, not a per-dialog guess.** If a dialog needs a width between two steps, it almost
+  certainly needs different content.
+- **No motion on a blocking prompt.** The logout dialog animated a pulsing red halo, which reads as
+  urgency that logging out does not have. The entrance is a 0.18s rise and it is disabled under
+  `prefers-reduced-motion`.
+- **A dialog is centred at every width.** Under 640px it releases its width cap, tightens padding and
+  raises actions to 44px touch targets — it does not dock to the bottom. A bottom sheet was tried and
+  reverted: Element Plus MessageBox is centred by its own overlay and cannot dock, so docking the
+  hand-rolled ones put the logout prompt on the bottom edge while the scene-clear confirmation floated
+  mid-screen in the same app at the same width. Breakpoints split at one value (639.98/640) per §9.
+- **A dialog surface is opaque.** Use `--surface-elevated`, never `--iot-color-card-bg`: that token is
+  `rgba(…, 0.3)` for a card sitting *on a panel* that supplies the opacity. A dialog has only the blurred
+  board behind it, and at 30% the board's own cards showed through the account-deletion form's password
+  field. Blur belongs to the overlay; the card is a surface.
+- **Address a dialog's controls by `data-testid`, never by an appearance class.** Several specs pinned
+  `button.danger` and `.template-reset-dialog__btn.secondary`; they broke on a pure restyle while
+  asserting nothing about behaviour.
+- **Migrating a dialog means deleting its local rules *and* the classes that named them.** Three orphan
+  classes survived this migration — a rule removed, the `class="…"` entry left behind, implying to the next
+  reader that some stylesheet still cares. A class with no rule is fine only when a test or E2E spec
+  addresses it as a handle.
+- Element Plus MessageBox cannot carry these classes, so `base.css` sizes its buttons from the same
+  `--dialog-action-height` token rather than repeating the literal — two plausible literals with no link
+  between them is how five button heights coexisted here before.
+  `dialogSurfaceConsistency.spec.ts` fails if a modal skips the layer (counted per dialog, not per file), if
+  a surface goes translucent, if the narrow block re-docks, if the token is bypassed, or if an orphan class
+  is left on markup.
+
+## 5. Action emphasis
 
 A user needs to know which control is *the* next step. If several controls claim that role, none of
 them holds it.
@@ -253,7 +351,7 @@ converging impression is a reason to measure, not a finding.
 
 ---
 
-## 5. Ink and paper: a role has two halves
+## 6. Ink and paper: a role has two halves
 
 Every semantic role token exists in two jobs, and one value cannot do both.
 
@@ -318,7 +416,7 @@ light theme; `dark:text-slate-400` is correct on a dark card, where the same val
 Pinned by `styles/__tests__/neutralTextContrast.spec.ts` and
 `styles/__tests__/semanticColourOwnership.spec.ts`.
 
-## 6. Text size: the floor is not the target, and headings need a tier
+## 7. Text size: the floor is not the target, and headings need a tier
 
 `--iot-font-min` (0.6875rem = 11px) is the smallest size any interface text may be declared at, enforced by
 `styles/__tests__/typographyFloor.spec.ts`. Two things that rule does *not* say, both of which produced real
@@ -341,7 +439,7 @@ defects:
 
 Pinned by `views/board/actionDockHierarchy.spec.ts` for the dock, which is where the tier inversion was.
 
-## 7. Depth is a scale, and it means containment
+## 8. Depth is a scale, and it means containment
 
 Elevation says *what kind of thing* something is, the same way the radius scale does. Three steps, and one
 distance means one thing:
@@ -391,7 +489,7 @@ hand-written elevations remain outside the board** (`ChatView`, `Landing`, `Publ
 `ToggleSwitch`, `AccountDeleteDialog`, and the `ControlCenter`/`CanvasBoard` scoped blocks). They are the same
 defect; each needs its depth chosen and then measured on its own surface.
 
-## 8. A scoped rule outranks a Tailwind utility on the same element
+## 9. A scoped rule outranks a Tailwind utility on the same element
 
 Vue compiles `<style scoped>` selectors with a `[data-v-…]` attribute, so `.foo { max-width: 100% }` is
 specificity **0-2-0** while Tailwind's `.max-w-4xl` is **0-1-0**. The scoped rule wins. This is not a rare
@@ -424,7 +522,7 @@ rendered pixels disagree.
 - Dialog height caps: the siblings use `85vh`/`88vh`, which leaves visible margin so the surface reads as a
   panel over the board. `calc(100vh - 2rem)` reads as a takeover.
 
-## 9. Replay has three surfaces, and each owns one question
+## 10. Replay has three surfaces, and each owns one question
 
 Counterexample and simulation replay render onto three surfaces at once. They looked redundant — all three read
 the same `currentTraceState` — and measurement showed two of the three overlaps were real while the third was

@@ -124,4 +124,38 @@ describe('locale parity', () => {
     }
     expect(offenders, 'an undecided outcome must not read as a proof').toEqual([])
   })
+
+  it('makes every history-boundary notice say why the undo history goes, in both locales', () => {
+    /*
+     * The four confirmations that clear the undo journal must name the *cause*, not only the count.
+     *
+     * Stating "this discards {historyEntries} entries" and stopping is what made losing undo read as an
+     * unrelated side effect of clearing the scene — it was reported as a bug when it is the design. The reason
+     * differs by boundary: a scene boundary leaves each entry with nothing to return to, a template boundary
+     * removes the manifest an entry's device snapshot needs. Both are expressed as an em-dash aside, which is
+     * what this checks for; without it a future edit can drop the explanation in one locale silently.
+     */
+    const { en, zh } = locales()
+    // `flatten` returns dotted paths, so these carry their `app.` namespace.
+    const boundaryKeys = [
+      'app.sceneClearConfirmMessage',
+      'app.sceneImportConfirmMessage',
+      'app.resetDefaultTemplatesNotice',
+      'app.templateDeleteNoReferences'
+    ]
+    const offenders: string[] = []
+    for (const [label, table] of [['en', en], ['zh', zh]] as const) {
+      for (const key of boundaryKeys) {
+        const value = table.get(key)
+        if (!value) {
+          offenders.push(`${label}.${key} is missing`)
+          continue
+        }
+        if (!value.includes('{historyEntries}')) offenders.push(`${label}.${key} omits the entry count`)
+        // `—` (en) and `——` (zh) both contain U+2014.
+        if (!value.includes('—')) offenders.push(`${label}.${key} states the count but not the reason`)
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
+  })
 })

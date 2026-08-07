@@ -15,7 +15,93 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-06 (latest)
+### 2026-08-07 (latest)
+
+#### Fixed
+
+- **A focused device no longer glows forever.** Clicking a device in the inspector list, or having the
+  assistant create one, panned the canvas and painted that node with a 28px accent bloom and an *infinitely*
+  pulsing ring. The highlight cleared on only five of its exits — replacing or clearing the scene, focusing a
+  rule, focusing a specification, and post-deletion reconciliation — so clicking empty canvas, pressing
+  Escape, closing the device dialog, focusing another device by any other path, or simply moving on all left
+  it up. One device then glowed indefinitely while identical neighbours did not, and nothing on screen
+  explained why: it read as a property of that device rather than as the board answering "where is it?". The
+  focused *rule* highlight had the same defect on its canvas edges.
+  The three focus ids are now owned by `views/board/focusHighlight.ts`, a cue that expires on a timer, so a
+  missed exit costs a second of highlight instead of a permanent one, and the three targets are mutually
+  exclusive by construction rather than by three hand-written clears per setter. Both pulse animations are
+  bounded to two iterations, which ends the motion before the cue retires. Deleting the focused item still
+  drops the cue immediately, reusing `reconcileBoardFocus` so existence has one owner.
+- **The focus cue no longer looks identical to "this device changed during playback".** Its 4px accent ring
+  plus 28px bloom was within 2% of `.trace-changed`, in the same hue, with both animating a scaling accent
+  ring — two unrelated meanings wearing one mark, and they co-occur when a device is focused during playback.
+  The cue is now a dashed outline with a lift and no bloom, matching the focused-edge cue; a bloom stays
+  exclusive to playback semantics.
+- **Minimum-sized device nodes can now be resized at any zoom level.** A node at the model-space minimum
+  (80×60) lost all resize handles below zoom 0.867, because the visibility check used a 52 **screen-pixel**
+  threshold that did not account for the minimum height of 60. At zoom 0.85, the node rendered as 68×51
+  screen pixels, falling one pixel short, and became permanently locked at its smallest size with no
+  discoverable way to grow it except the keyboard shortcut (Ctrl+arrows). The bottom-right handle is now
+  guaranteed for nodes at their minimum dimensions regardless of zoom. To prevent the handle from smothering
+  the node body at extreme zoom-out (where a 44px touch target can exceed the node's own screen footprint), the
+  handle's **inward reach** is capped at 35% of the node's smaller dimension, with the remainder extending
+  outward to preserve the full 44px target — so at zoom 0.3 an 80×60 node (24×18 screen) gets a handle that
+  sits 6px in / 38px out, staying accessible without blocking the node. The other three handles still require
+  88 screen pixels in both axes to avoid crowding.
+- **Mouse clicks on a device node no longer leave resize handles visible after the pointer moves away.** The
+  handles appeared on `:focus`, which includes mouse clicks, so clicking a node once left four handles stuck
+  on it until something else took focus. Changed to `:focus-visible`, the standard pattern where handles
+  appear only for keyboard navigation.
+- **Removed `.animate-pulse-glow`**, an unused CSS class (no literal references, no dynamic construction) that
+  had a motion exemption and a test guarding it — noise defending something that painted nothing.
+
+#### Changed
+
+- **Every dialog in the product is now built from one shared surface layer**
+  (`frontend/src/styles/dialog.css`). Thirteen hand-rolled modals plus the Element Plus MessageBox had each
+  invented their own: four overlay tints, three card radii, eight widths, four footer alignments and five
+  confirm-button heights. Logout painted itself with a hardcoded navy gradient and a pulsing red halo;
+  template deletion wore a full-bleed red banner with a 64px icon for a reversible catalog edit, shouting
+  louder than permanent account deletion. Two dialogs from the same product did not look related.
+  The layer supplies one scrim, one card, three sizes and four tones — tone is set once on the card and the
+  header's icon tile reads it, so a destructive dialog is the same dialog with one token changed rather than a
+  differently built one. The confirm button stays accent in every tone except danger, because the primary
+  action moving colour between surfaces is what made them feel unrelated. Footers are always
+  trailing-aligned with the primary action last.
+- **A dialog surface is opaque again.** The shared card and the dark-theme MessageBox were painted with
+  `--iot-color-card-bg` (`rgba(…, 0.3)`) — a token for a card resting on an opaque panel. A dialog is
+  `position: fixed` with only the scrim behind it, so at 30% the board showed through the title, the message,
+  and the account-deletion form's password field, with a `blur(18px)` masking the cause. Both now use
+  `--surface-elevated`. The MessageBox's two disagreeing per-theme gradients are merged into one rule.
+- **Dialogs stay centred at every viewport.** A narrow-viewport bottom sheet was tried and reverted: Element
+  Plus centres MessageBox from its own overlay and cannot dock, so docking the hand-rolled ones put the
+  logout prompt on the bottom edge while the scene-clear confirmation floated mid-screen at the same width.
+  Under 640px a dialog releases its width cap, tightens padding and raises actions to 44px touch targets —
+  its position does not change.
+- **`confirmChoice` joins `confirmDestructive` in `utils/feedback.ts`.** All seventeen confirmations shared a
+  danger button, including "apply this AI suggestion anyway", "save a duplicate rule" and logging out with an
+  unknown chat outcome. None destroys anything, and a red button on all of them is how a real deletion stops
+  standing out. Six call sites moved to the new helper, which is covered for the danger-button absence and for
+  the modal-depth registration that keeps the board's Ctrl+Z blocked behind an open confirmation.
+- Specs that addressed dialog controls by appearance class (`button.danger`,
+  `.template-reset-dialog__btn.secondary`, `.control-center-delete-dialog`) now use `data-testid`; they broke
+  on a pure restyle while asserting nothing about behaviour. `dialogSurfaceConsistency.spec.ts` fails if a
+  modal skips the layer (counted per dialog, so a second stale overlay in a file with seven of them cannot
+  hide), if a dialog surface goes translucent, if the narrow block re-docks, if the MessageBox button bypasses
+  the shared `--dialog-action-height` token, or if a migration leaves a class on markup that nothing styles
+  and no test addresses. `localeParity.spec.ts` additionally fails if a history-boundary notice states its
+  entry count without its reason, in either locale.
+
+- **Every history-boundary confirmation now explains why undo/redo history is discarded.** Clearing
+  the scene, replacing it with an imported one, deleting a device type, and resetting bundled types
+  each stated the entry count they would drop but never the reason, so losing undo read as an
+  unrelated side effect of the action the user actually asked for. The four notices now name the
+  cause: a scene boundary leaves each entry with no device, rule, or specification to return to,
+  while a template boundary removes the manifest an entry's device snapshot needs to interpret its
+  own attributes and values. Behaviour is unchanged — these boundaries always cleared the journal
+  (`BoardEditJournal.clear`).
+
+### 2026-08-06
 
 #### Fixed
 

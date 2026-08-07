@@ -1061,13 +1061,14 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   <div
     v-if="visible"
     data-testid="fix-result-dialog"
-    class="fixed inset-0 z-[var(--z-modal-nested)] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+    class="iot-dialog-overlay iot-dialog-overlay--nested"
     @click="closeDialog"
     @keydown="handleModalKeydown"
   >
     <div
       :ref="setDialogRef"
-      class="min-h-0 max-h-[85vh] w-[800px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col dark:border-slate-700 dark:bg-slate-900"
+      class="iot-dialog iot-dialog--lg"
+      :class="verifiedCount > 0 ? 'iot-dialog--warning' : hasAttemptResults ? 'iot-dialog--danger' : 'iot-dialog--info'"
       role="dialog"
       aria-modal="true"
       aria-labelledby="fix-result-dialog-title"
@@ -1078,48 +1079,32 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
       <!-- Header -->
       <div
         data-testid="fix-result-header"
-        class="relative flex-shrink-0 overflow-hidden rounded-t-2xl border-b"
-        :class="verifiedCount > 0
-          ? 'board-chip-warning board-border-subtle'
-          : hasAttemptResults
-            ? 'board-chip-danger'
-            : 'board-chip-info'"
+        class="iot-dialog__header"
       >
-        <div class="relative flex items-center justify-between p-5">
-          <div class="flex items-center gap-4">
-            <div
-              class="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm"
-              :class="verifiedCount > 0 ? 'board-chip-warning' : hasAttemptResults ? 'board-chip-danger' : 'board-chip-info'"
-            >
-              <span
-                class="material-symbols-outlined text-2xl"
-                :class="verifiedCount > 0 ? 'board-text-warning' : hasAttemptResults ? 'board-text-danger' : 'board-text-info'"
-                aria-hidden="true"
-              >
-                {{ strategyLoading ? 'progress_activity' : verifiedCount > 0 ? 'build' : hasAttemptResults ? 'search_off' : 'build' }}
-              </span>
-            </div>
-            <div>
-              <h3 id="fix-result-dialog-title" class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ t('app.fixSuggestions') }}</h3>
-              <p class="text-sm text-slate-600 dark:text-slate-300">{{ headerStatus }}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            :disabled="applyingFix"
-            @click="closeDialog"
-            class="board-panel-close text-slate-500 hover:text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-            :aria-label="t('app.close')"
-          >
-            <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
-          </button>
+        <div class="iot-dialog__icon">
+          <span class="material-symbols-outlined" aria-hidden="true">
+            {{ strategyLoading ? 'progress_activity' : verifiedCount > 0 ? 'build' : hasAttemptResults ? 'search_off' : 'build' }}
+          </span>
         </div>
+        <div class="iot-dialog__heading">
+          <h3 id="fix-result-dialog-title" class="iot-dialog__title">{{ t('app.fixSuggestions') }}</h3>
+          <p class="iot-dialog__subtitle">{{ headerStatus }}</p>
+        </div>
+        <button
+          type="button"
+          :disabled="applyingFix"
+          @click="closeDialog"
+          class="iot-dialog__close"
+          :aria-label="t('app.close')"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">close</span>
+        </button>
       </div>
 
       <!-- Content -->
       <div
         data-testid="fix-result-scroll"
-        class="iot-scroll-region iot-scroll-region--inset-end min-h-0 flex-1 p-6"
+        class="iot-dialog__body iot-scroll-region iot-scroll-region--inset-end"
       >
         
         <div class="space-y-4">
@@ -1668,12 +1653,12 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
            the visible edge and read as a broken, half-drawn control in both themes. An action the
            user must reach to make progress does not belong behind a scroll. Matches the
            dismiss-left / primary-right footer RuleBuilderDialog already establishes. -->
-      <div class="flex flex-wrap items-center gap-3 border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl dark:border-slate-700 dark:bg-slate-950">
+      <div class="iot-dialog__footer">
         <button
           type="button"
           :disabled="applyingFix"
           @click="closeDialog"
-          class="min-h-11 px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          class="iot-dialog-btn iot-dialog-btn--ghost"
         >
           <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
           {{ t('app.close') }}
@@ -1694,18 +1679,16 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
             v-if="currentSuggestion?.verified"
             type="button"
             data-testid="fix-apply-current"
-            class="px-8 text-sm"
-            :class="applyDisabled
-              ? 'flex items-center justify-center gap-2 rounded-lg py-2.5 font-bold bg-slate-300 text-slate-500 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400'
-              : currentSuggestion.strategy === 'remove'
-                ? 'board-action-inline-danger'
-                : 'board-action-inline-affirm'"
+            class="iot-dialog-btn"
+            :class="currentSuggestion.strategy === 'remove'
+              ? 'iot-dialog-btn--danger'
+              : 'iot-dialog-btn--primary'"
             :disabled="applyDisabled"
             :aria-describedby="applyBlockedReason ? 'fix-apply-readiness' : undefined"
             @click="applyFix(currentSuggestion)"
           >
-            <span v-if="!applyingFix" class="material-symbols-outlined text-lg" aria-hidden="true">check_circle</span>
-            <span v-else class="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+            <span v-if="!applyingFix" class="material-symbols-outlined" aria-hidden="true">check_circle</span>
+            <span v-else class="iot-dialog-btn__spinner"></span>
             {{ applyingFix
               ? t('app.applying')
               : currentSuggestion.strategy === 'remove'
@@ -1719,9 +1702,9 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
             data-testid="fix-try-current"
             :disabled="strategyLoading !== null"
             @click="trySelectedStrategy"
-            class="flex items-center justify-center gap-2 min-h-11 rounded-lg bg-[color:var(--accent-fill)] px-8 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[color:var(--accent-fill-hover)] disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
+            class="iot-dialog-btn iot-dialog-btn--primary"
           >
-            <span class="material-symbols-outlined text-lg" aria-hidden="true">science</span>
+            <span class="material-symbols-outlined" aria-hidden="true">science</span>
             {{ currentStrategyAttempt || strategyErrors[selectedStrategy]
               ? t('app.retryFixStrategy')
               : t('app.tryFixStrategy') }}

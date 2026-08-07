@@ -297,10 +297,14 @@ describe('ControlCenter model token display', () => {
     expect(document.querySelector('[data-testid="default-template-reset-reverification-warning"]')?.textContent)
       .toContain('does not establish the reset board')
     // Scrollability now comes from the shared primitive, which also carries the scrollbar skin and
-    // scroll-padding; `overflow-y-auto` alone was only one of the four properties that matter.
-    expect(document.querySelector('.template-reset-dialog')?.classList).toContain('iot-scroll-region')
+    // scroll-padding; `overflow-y-auto` alone was only one of the four properties that matter. It lives on
+    // the dialog's body region, so the header and the footer's actions stay put while a long impact
+    // preview scrolls under them.
+    const body = document.querySelector('.template-reset-dialog .iot-dialog__body')
+    expect(body, 'the reset dialog should have a body region').not.toBeNull()
+    expect(body?.classList).toContain('iot-scroll-region')
 
-    await wrapper.get('.template-reset-dialog__btn.primary').trigger('click')
+    await wrapper.get('[data-testid="default-template-reset-confirm"]').trigger('click')
     await flushPromises()
 
     expect(boardApiMocks.resetDefaultTemplates).toHaveBeenCalledWith('reset-impact-token')

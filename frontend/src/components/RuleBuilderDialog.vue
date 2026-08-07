@@ -12,7 +12,7 @@ import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { deviceIconFor } from '@/utils/deviceIcon'
 import {
   acknowledge,
-  confirmDestructive,
+  confirmChoice,
   dismissOpenConfirmation,
   notifyBlocked,
   notifySuccess
@@ -591,7 +591,7 @@ const confirmSaveAnyway = async (
   message: string,
   actionEpoch: number
 ): Promise<'save-anyway' | 'cancel'> => {
-  const saveAnyway = await confirmDestructive({
+  const saveAnyway = await confirmChoice({
     title,
     message,
     confirmText: t('app.saveAnyway')
@@ -805,13 +805,13 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
 <template>
   <div
     v-show="modelValue"
-    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+    class="iot-dialog-overlay"
     @keydown="handleModalKeydown"
   >
     <div
       :ref="setDialogRef"
       data-testid="rule-builder-dialog"
-      class="rule-builder-dialog w-[92vw] max-w-6xl max-h-[88vh] bg-white dark:bg-slate-800 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col"
+      class="iot-dialog iot-dialog--xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="rule-builder-title"
@@ -823,22 +823,25 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
         class="contents"
       >
       <!-- Header -->
-      <div class="px-[clamp(1rem,3vw,2rem)] py-[clamp(1rem,2vw,1.5rem)] border-b border-slate-100 dark:border-slate-700">
-        <div class="flex items-center justify-between mb-4">
-          <h2 id="rule-builder-title" class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
-            <span class="material-icons-round board-text-info" aria-hidden="true">auto_fix_high</span>
-            {{ t('app.createNewRule') }}
-          </h2>
-          <button
-            type="button"
-            @click="handleClose"
-            class="flex min-h-11 min-w-11 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 transition-colors"
-            :aria-label="t('app.close')"
-          >
-            <span class="material-icons-round" aria-hidden="true">close</span>
-          </button>
+      <div class="iot-dialog__header">
+        <span class="iot-dialog__icon" aria-hidden="true">
+          <span class="material-symbols-outlined">auto_fix_high</span>
+        </span>
+        <div class="iot-dialog__heading">
+          <h2 id="rule-builder-title" class="iot-dialog__title">{{ t('app.createNewRule') }}</h2>
         </div>
+        <button
+          type="button"
+          @click="handleClose"
+          class="iot-dialog__close"
+          :aria-label="t('app.close')"
+        >
+          <span class="material-icons-round" aria-hidden="true">close</span>
+        </button>
+      </div>
 
+      <!-- Content -->
+      <div class="iot-dialog__body iot-scroll-region space-y-8">
         <!-- Rule Name Input -->
         <div class="space-y-2">
           <label for="rule-builder-name" class="text-sm font-semibold text-slate-600 dark:text-slate-400">{{ t('app.ruleName') }}</label>
@@ -850,10 +853,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
             class="w-full min-h-11 px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-[color:var(--accent-border)] focus:border-[color:var(--accent)] transition-all text-slate-700 dark:text-slate-200 placeholder:text-slate-600 dark:placeholder:text-slate-400"
           />
         </div>
-      </div>
 
-      <!-- Content -->
-      <div class="rule-builder-content iot-scroll-region p-[clamp(1rem,3vw,2rem)] space-y-8">
         <!-- IF (Trigger) Section -->
         <section class="space-y-4">
           <div class="flex items-center gap-2 mb-2">
@@ -1309,12 +1309,12 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
       </fieldset>
 
       <!-- Footer -->
-      <div class="px-[clamp(1rem,3vw,2rem)] py-4 bg-slate-50/50 dark:bg-slate-900/20 border-t border-slate-100 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
+      <div class="iot-dialog__footer flex-wrap">
         <button
           type="button"
           @click="handleClose"
           :disabled="savingRule"
-          class="min-h-11 px-6 py-2.5 text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
+          class="iot-dialog-btn iot-dialog-btn--ghost iot-dialog__footer-aside"
         >
           {{ t('app.cancel') }}
         </button>
@@ -1339,9 +1339,9 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
               data-testid="rule-check-duplicate"
               :disabled="!isRuleDraftComplete || ruleActionBusy"
               :aria-describedby="ruleDraftIncompleteReason ? 'rule-draft-readiness' : undefined"
-              class="min-h-11 px-6 py-2.5 text-sm font-semibold board-text-warning hover:board-chip-warning dark:hover:bg-[color:var(--warning-surface)]/20 rounded-xl transition-all flex items-center gap-2 disabled:cursor-not-allowed"
+              class="iot-dialog-btn iot-dialog-btn--quiet"
             >
-              <span v-if="checkingSimilarity" class="inline-block w-4 h-4 border-2 board-border-progress border-t-transparent rounded-full animate-spin"></span>
+              <span v-if="checkingSimilarity" class="iot-dialog-btn__spinner"></span>
               <span>{{ checkingSimilarity ? t('app.checkingAiSimilarity') : t('app.aiSimilarityCheck') }}</span>
             </button>
             <button
@@ -1350,7 +1350,7 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
               data-testid="rule-save"
               :disabled="!isRuleDraftComplete || ruleActionBusy"
               :aria-describedby="ruleDraftIncompleteReason ? 'rule-draft-readiness' : undefined"
-              class="min-h-11 px-8 py-2.5 text-sm font-semibold text-white bg-[color:var(--accent-fill)] active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 board-action-disarmed disabled:cursor-not-allowed disabled:active:scale-100"
+              class="iot-dialog-btn iot-dialog-btn--primary"
             >
               {{ savingRule ? t('app.saving') : t('app.createRule') }}
             </button>
@@ -1362,29 +1362,6 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
 </template>
 
 <style scoped>
-/* Custom overlay styles */
-.fixed.inset-0 {
-  animation: fadeIn 0.2s ease-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* Container animation */
-.rule-builder-dialog {
-  animation: slideIn 0.3s ease-out;
-}
-
-.rule-builder-content {
-  min-height: 0;
-}
-
 .rule-builder-grid,
 .rule-builder-target-grid {
   display: grid;
@@ -1398,24 +1375,6 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
 
 .rule-builder-target-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95) translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .fixed.inset-0,
-  .rule-builder-dialog {
-    animation: none;
-  }
 }
 
 /* Focus styles for selects */

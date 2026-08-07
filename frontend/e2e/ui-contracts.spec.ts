@@ -297,19 +297,21 @@ test.describe('responsive boundaries', () => {
     })
   }
 
-  test('keeps the device dialog padding and sm: utilities mutually exclusive at 640px', async ({ page, sharedReadOnlyAccount: auth }) => {
+  test('keeps the shared dialog overlay and sm: utilities mutually exclusive at 640px', async ({ page, sharedReadOnlyAccount: auth }) => {
     await page.setViewportSize({ width: 640, height: 900 })
     await openBoard(page, auth)
 
-    // At exactly 640px Tailwind's `sm:` is active, so the compact overlay padding must not be.
+    // Every dialog is now built on `.iot-dialog-overlay`, whose compact-padding rule ends at 639.98px while
+    // Tailwind's `sm:` begins at 640px. At exactly 640 the roomier desktop padding must be the one that
+    // applies; a `639px`/`640px` split would leave a fractional viewport matching neither.
     const padding = await page.evaluate(() => {
       const probe = document.createElement('div')
-      probe.className = 'device-dialog-overlay'
+      probe.className = 'iot-dialog-overlay'
       document.body.append(probe)
       const value = getComputedStyle(probe).padding
       probe.remove()
       return value
     })
-    expect(padding).not.toBe('12px')
+    expect(padding).toBe('16px')
   })
 })

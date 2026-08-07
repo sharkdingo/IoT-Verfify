@@ -670,6 +670,12 @@
     outline-offset: -3px;
 }
 
+/* Worn by the verification and simulation result dialogs *in addition to* `.iot-dialog`, because their bodies
+   still contain ~150 raw `text-slate-*` / `bg-white` / `border-slate-*` utilities that only resolve in the
+   light theme; these selectors remap them. Dropping the class during the dialog restyle silently un-themed
+   both dialog bodies in dark mode — the shell was correct and the content was not. `--surface-panel` is opaque
+   in both themes, so overriding the shared card's background here does not reintroduce translucency. The real
+   fix is migrating those utilities to role classes, after which this whole block goes. */
 .dark .board-result-dialog-surface {
     border-color: var(--border) !important;
     background: var(--surface-panel) !important;
@@ -2757,7 +2763,9 @@
     filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent-fill) 70%, transparent))
             drop-shadow(0 0 18px color-mix(in srgb, var(--accent-fill) 50%, transparent));
     stroke-dasharray: 6, 5;
-    animation: focusedEdgePulse 1.2s ease-in-out infinite;
+    /* Two pulses, then still — same reasoning as `.node-focused::after`: this cue expires, so its motion
+       must end before the cue does instead of running for as long as the highlight happens to last. */
+    animation: focusedEdgePulse 1.2s ease-in-out 2;
 }
 
 .iot-board .edge-layer .edge-base-line.edge-line--dimmed,
@@ -2838,23 +2846,47 @@
     box-shadow: var(--shadow-floating), 0 0 0 6px color-mix(in srgb, var(--iot-color-accent) 18%, transparent);
 }
 
+/*
+ * The cue is distinguished by *form*, not by intensity.
+ *
+ * This used to be a 4px accent ring plus a 28px accent bloom — which is, to within 2%, exactly
+ * `.trace-changed` below (30% ring, 28px bloom, same hue, and both then animated a scaling accent ring).
+ * Two states that mean entirely different things ("here is the device you asked for" vs "this device's
+ * state changed at this step of the counterexample") were visually the same mark, and they co-occur: focus a
+ * device during playback and it wears both. §5's "state never depends on colour alone" applies twice over
+ * when the shape does not differ either.
+ *
+ * So the cue keeps the lift and drops the bloom, and its ring is a *dashed* travelling outline (below) —
+ * the same visual language as the focused edge, which is also a cue and is also dashed. A bloom stays
+ * exclusive to playback semantics, where it means "look at what changed".
+ */
 .iot-board .device-node.node-focused {
     z-index: 18;
     border-width: 2px;
     box-shadow:
-        var(--shadow-floating),
-        0 0 0 4px color-mix(in srgb, var(--iot-color-accent) 28%, transparent),
-        0 0 28px color-mix(in srgb, var(--iot-color-accent) 32%, transparent);
+        var(--shadow-elevated),
+        0 0 0 3px color-mix(in srgb, var(--iot-color-accent) 22%, transparent);
 }
 
+/*
+ * Two pulses, then still — the cue is a pointer, not a status.
+ *
+ * This was `infinite`. Paired with a highlight that only cleared on five of ten exits, one device pulsed
+ * forever while its neighbours sat still, and the halo read as a property of that device rather than as the
+ * board answering "where is it?". `board/focusHighlight.ts` now retires the cue after
+ * FOCUS_HIGHLIGHT_DURATION_MS; the count here is deliberately shorter than that window so the motion has
+ * already stopped when the highlight goes, rather than being cut mid-pulse.
+ */
 .iot-board .device-node.node-focused::after {
     content: '';
     position: absolute;
     inset: -9px;
-    border: 2px solid color-mix(in srgb, var(--iot-color-accent) 64%, white);
+    /* Dashed, matching `.edge-line--focused`: in this product a dashed accent outline means "the board is
+       pointing at this", and a solid ring or a bloom means something about the thing itself. */
+    border: 2px dashed color-mix(in srgb, var(--iot-color-accent) 72%, white);
     border-radius: inherit;
     pointer-events: none;
-    animation: focusedNodePulse 1.2s ease-in-out infinite;
+    animation: focusedNodePulse 1.2s ease-in-out 2;
 }
 
 /* Playback context stays quiet; motion is reserved for the devices that changed. */
@@ -3025,7 +3057,6 @@
     .iot-board .device-node.device-attacked::before,
     .iot-board .animate-ping,
     .iot-board .animate-pulse,
-    .iot-board .animate-pulse-glow,
     .iot-board .fade-in {
         animation: none !important;
     }
@@ -3510,6 +3541,10 @@
 
 .iot-board .resize-handle {
     position: absolute;
+    /* Geometry is set per-node via --resize-hit-size and --resize-hit-offset (see getNodeResizeHandleGeometry
+       in CanvasBoard.vue). The fallback values (2.75rem = 44px, -1.375rem = -22px at 16px base font) are
+       correct for zoom 1.0 only and do not adapt to minimum-dimension nodes. They exist to prevent layout
+       collapse if the JS computation fails, not as a design choice. */
     width: var(--resize-hit-size, 2.75rem);
     height: var(--resize-hit-size, 2.75rem);
     border: 0;
@@ -3536,7 +3571,7 @@
 }
 
 .iot-board .device-node:hover .resize-handle,
-.iot-board .device-node:focus .resize-handle {
+.iot-board .device-node:focus-visible .resize-handle {
     opacity: 1;
     pointer-events: auto;
 }

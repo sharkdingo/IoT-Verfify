@@ -112,11 +112,11 @@ describe('ControlCenter template authority recovery', () => {
     await wrapper.get('[data-testid="reset-default-templates"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('.template-reset-dialog').text()).toContain('3 undo/redo history')
-    await wrapper.get('.template-reset-dialog__btn.secondary').trigger('click')
+    await wrapper.get('[data-testid="default-template-reset-cancel"]').trigger('click')
 
     await wrapper.get('.template-card__action--danger').trigger('click')
     await flushPromises()
-    expect(wrapper.get('.control-center-delete-dialog').text()).toContain('2 undo/redo history')
+    expect(wrapper.get('[data-testid="template-delete-dialog"]').text()).toContain('2 undo/redo history')
     wrapper.unmount()
   })
 
@@ -133,7 +133,7 @@ describe('ControlCenter template authority recovery', () => {
     await wrapper.get('.template-card__action--danger').trigger('click')
     await flushPromises()
     expect(wrapper.emitted('edit-history-cleared')).toBeUndefined()
-    await wrapper.get('.control-center-delete-dialog button:last-child').trigger('click')
+    await wrapper.get('[data-testid="template-delete-confirm"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.emitted('edit-history-cleared')).toEqual([[]])
@@ -166,7 +166,7 @@ describe('ControlCenter template authority recovery', () => {
 
     await wrapper.get('[data-testid="reset-default-templates"]').trigger('click')
     await flushPromises()
-    await wrapper.get('.template-reset-dialog__btn.primary').trigger('click')
+    await wrapper.get('[data-testid="default-template-reset-confirm"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.emitted('authoritative-state-unavailable'))
@@ -182,7 +182,7 @@ describe('ControlCenter template authority recovery', () => {
 
     await wrapper.get('.template-card__action--danger').trigger('click')
     await flushPromises()
-    await wrapper.get('.control-center-delete-dialog button:last-child').trigger('click')
+    await wrapper.get('[data-testid="template-delete-confirm"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.emitted('authoritative-state-unavailable')).toEqual([[['templates']]])
@@ -210,11 +210,11 @@ describe('ControlCenter template authority recovery', () => {
 
     await wrapper.get('.template-card__action--danger').trigger('click')
     await flushPromises()
-    await wrapper.get('.control-center-delete-dialog button:last-child').trigger('click')
+    await wrapper.get('[data-testid="template-delete-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('.control-center-delete-dialog').text()).toContain('Hall switch')
-    expect(wrapper.get('.control-center-delete-dialog button:last-child').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="template-delete-dialog"]').text()).toContain('Hall switch')
+    expect(wrapper.get('[data-testid="template-delete-confirm"]').attributes('disabled')).toBeDefined()
     expect(boardApiMocks.getDeviceTemplates).not.toHaveBeenCalled()
     expect(messageMocks.warning)
       .toHaveBeenCalledWith(i18n.global.t('app.templateDeletePreviewChanged'))
@@ -232,12 +232,12 @@ describe('ControlCenter template authority recovery', () => {
 
     await wrapper.get('.template-card__action--danger').trigger('click')
     await flushPromises()
-    await wrapper.get('.control-center-delete-dialog button:last-child').trigger('click')
+    await wrapper.get('[data-testid="template-delete-confirm"]').trigger('click')
     await flushPromises()
 
     expect(boardApiMocks.getDeviceTemplates).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('replace-template-catalog')).toEqual([[[template]]])
-    expect(wrapper.find('.control-center-delete-dialog').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="template-delete-dialog"]').exists()).toBe(false)
     expect(messageMocks.warning)
       .not.toHaveBeenCalledWith(i18n.global.t('app.templateDeletePreviewChanged'))
     expect(messageMocks.error).toHaveBeenCalledWith(
@@ -259,11 +259,11 @@ describe('ControlCenter template authority recovery', () => {
 
     await wrapper.get('.template-card__action--danger').trigger('click')
     await flushPromises()
-    await wrapper.get('.control-center-delete-dialog button:last-child').trigger('click')
+    await wrapper.get('[data-testid="template-delete-confirm"]').trigger('click')
     await flushPromises()
 
     expect(boardApiMocks.getDeviceTemplates).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('.control-center-delete-dialog').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="template-delete-dialog"]').exists()).toBe(false)
     expect(messageMocks.warning)
       .not.toHaveBeenCalledWith(i18n.global.t('app.templateDeletePreviewChanged'))
     wrapper.unmount()
@@ -279,11 +279,11 @@ describe('ControlCenter template authority recovery', () => {
 
     await wrapper.get('.template-card__action--danger').trigger('click')
     await flushPromises()
-    await wrapper.get('.control-center-delete-dialog button:last-child').trigger('click')
+    await wrapper.get('[data-testid="template-delete-confirm"]').trigger('click')
     await flushPromises()
 
     expect(boardApiMocks.getDeviceTemplates).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('.control-center-delete-dialog').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="template-delete-dialog"]').exists()).toBe(false)
     // Assert *which* error, so a wrong or generic message cannot pass.
     expect(messageMocks.error).toHaveBeenCalledWith(
       i18n.global.t('app.deleteFailedWithReason', {

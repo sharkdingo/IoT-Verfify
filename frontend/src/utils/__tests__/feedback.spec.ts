@@ -21,6 +21,7 @@ vi.mock('element-plus', () => ({
 
 import {
   acknowledge,
+  confirmChoice,
   confirmDestructive,
   dismissAllNotifications,
   dismissOpenConfirmation,
@@ -119,6 +120,54 @@ describe('confirmDestructive', () => {
     const options = elementPlus.box.confirm.mock.calls[0][2] as Record<string, unknown>
     expect(options.lockScroll).toBe(false)
     expect(options.appendTo).toBe('body')
+  })
+})
+
+describe('confirmChoice', () => {
+  /*
+   * The non-destructive half. It exists because every confirmation used to be `confirmDestructive`, so a red
+   * button appeared on "apply this AI suggestion anyway" and on "delete this device" alike — which left the
+   * danger colour meaning nothing at the one moment it has to mean something.
+   */
+  it('asks the same question without a danger button', async () => {
+    elementPlus.box.confirm.mockResolvedValueOnce('confirm')
+    await expect(confirmChoice({
+      title: 'Similar rule exists',
+      message: 'Save anyway?',
+      confirmText: 'Save anyway'
+    })).resolves.toBe(true)
+
+    const [message, title, options] = elementPlus.box.confirm.mock.calls[0] as [
+      string, string, Record<string, unknown>
+    ]
+    expect(message).toBe('Save anyway?')
+    expect(title).toBe('Similar rule exists')
+    expect(options.confirmButtonText).toBe('Save anyway')
+    expect(options.cancelButtonText).toBeTruthy()
+    expect(options.confirmButtonClass).toBeUndefined()
+    // Same surface contract as the destructive variant: teleported, and no scroll lock.
+    expect(options.lockScroll).toBe(false)
+    expect(options.appendTo).toBe('body')
+  })
+
+  it('treats cancelling as an ordinary outcome', async () => {
+    elementPlus.box.confirm.mockRejectedValueOnce('cancel')
+    await expect(confirmChoice({ title: 'Proceed', message: 'Sure?' })).resolves.toBe(false)
+  })
+
+  it('counts as a modal surface, so the board accelerators stay blocked behind it', async () => {
+    // Same leak as the destructive path: without this, the board's window-level Ctrl+Z reached the surface
+    // behind an open confirmation and undid an edit the user could not see.
+    expect(openModalDepth.value).toBe(0)
+    let settle!: () => void
+    elementPlus.box.confirm.mockImplementationOnce(() => new Promise<void>(resolve => {
+      settle = resolve
+    }))
+    const pending = confirmChoice({ title: 'Proceed', message: 'Sure?' })
+    expect(openModalDepth.value).toBe(1)
+    settle()
+    await pending
+    expect(openModalDepth.value).toBe(0)
   })
 })
 

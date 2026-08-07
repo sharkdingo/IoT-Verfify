@@ -392,23 +392,31 @@ describe('FixResultDialog strategy workflow', () => {
 
     expect(boardApi.getFaultRules).toHaveBeenCalledWith(7)
     expect(boardApi.fixTrace).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toContain('flex-shrink-0')
-    // On open there is no attempt and no verified suggestion, so the header states "nothing has been
-    // tried yet" — informational, not a warning or a failure. Asserted as the role rather than as a
-    // blue ramp with its `dark:` counterpart, which pinned the implementation and broke when the
-    // theme-aware token replaced it.
-    expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toContain('board-chip-info')
-    expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('min-h-0')
+    expect(wrapper.get('[data-testid="fix-result-header"]').classes()).toContain('iot-dialog__header')
+    // On open there is no attempt and no verified suggestion, so the surface states "nothing has been
+    // tried yet" — informational, not a warning or a failure. The tone is now declared once on the card
+    // and read by the header's icon tile, so it is asserted where it is set. Asserted as the role rather
+    // than as a blue ramp with its `dark:` counterpart, which pinned the implementation and broke when
+    // the theme-aware token replaced it.
+    expect(wrapper.get('[role="dialog"]').classes()).toContain('iot-dialog--info')
+    // `min-h-0` + `flex: 1` are `.iot-dialog__body`'s now — the constraint that makes the body the only
+    // scrolling part and keeps the footer on screen.
+    expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('iot-dialog__body')
     // The shared scroll primitive owns overflow and the scrollbar skin; a private per-dialog
     // scrollbar is what let three components disagree on the same class name.
     expect(wrapper.get('[data-testid="fix-result-scroll"]').classes()).toContain('iot-scroll-region')
+    // The surface and its border come from the shared dialog layer's theme tokens; pinning
+    // `dark:bg-slate-900` here made the test a copy of one theme's implementation.
     expect(wrapper.get('[role="dialog"]').classes()).toEqual(expect.arrayContaining([
-      'dark:border-slate-700',
-      'dark:bg-slate-900'
+      'iot-dialog',
+      'iot-dialog--lg'
     ]))
     expect(wrapper.text()).toContain('faultLocalizationNoRuleCaveat')
     expect(wrapper.text()).not.toContain('No user-defined automation rule was localized.')
-    expect(wrapper.get('[data-testid="fix-result-dialog"]').classes()).toContain('z-[var(--z-modal-nested)]')
+    // This dialog is raised *from* the verification result, so it must outrank an ordinary modal. That is now
+    // the overlay's `--nested` modifier rather than an inline z-index utility.
+    expect(wrapper.get('[data-testid="fix-result-dialog"]').classes())
+      .toContain('iot-dialog-overlay--nested')
     expect(wrapper.find('[data-testid="fix-strategy-remove"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-try-current"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-apply-current"]').exists()).toBe(false)

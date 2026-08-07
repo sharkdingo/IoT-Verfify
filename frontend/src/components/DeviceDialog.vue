@@ -892,18 +892,17 @@ const deviceSpecs = computed(() => {
 <template>
   <!-- 自定义模态框 -->
   <teleport to="body">
-    <transition name="modal-fade" appear>
+    <transition name="iot-dialog" appear>
       <div
         v-if="isDialogOpen"
-        class="device-dialog-overlay"
+        class="iot-dialog-overlay"
         @keydown="handleModalKeydown"
         @click.self="requestClose"
       >
-        <transition name="modal-scale" appear>
           <div
             :ref="setDialogRef"
             data-testid="device-dialog"
-            class="board-card device-dialog-surface w-full min-w-0 max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
+            class="iot-dialog iot-dialog--md device-dialog-surface"
             role="dialog"
             aria-modal="true"
             aria-labelledby="device-dialog-title"
@@ -911,25 +910,21 @@ const deviceSpecs = computed(() => {
           >
 
             <!-- Header -->
-            <div class="device-dialog-header sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-200 bg-gradient-to-r from-white to-slate-50/50 px-4 py-4 shadow-sm sm:px-8 sm:py-6">
-              <div class="flex min-w-0 items-center gap-3 sm:gap-4">
-                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 board-border-subtle bg-[color:var(--accent-surface)] shadow-lg sm:h-14 sm:w-14">
-                  <span class="material-icons-round text-3xl board-text-info">{{ getDeviceIcon(deviceName) }}</span>
-                </div>
-                <div class="min-w-0">
-                  <h2 id="device-dialog-title" class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') }}</h2>
-                  <div class="mt-1 flex min-w-0 items-center gap-2">
-                    <p class="truncate text-sm font-medium text-slate-500" :title="label">{{ label }}</p>
-                  </div>
-                </div>
+            <div class="iot-dialog__header">
+              <span class="iot-dialog__icon" aria-hidden="true">
+                <span class="material-icons-round">{{ getDeviceIcon(deviceName) }}</span>
+              </span>
+              <div class="iot-dialog__heading">
+                <h2 id="device-dialog-title" class="iot-dialog__title">{{ t('app.deviceInfo') }}</h2>
+                <p class="iot-dialog__subtitle truncate" :title="label">{{ label }}</p>
               </div>
-              <button type="button" data-testid="device-dialog-close" @click="requestClose" :disabled="runtimeSaving" class="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg p-2 text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-600 disabled:cursor-wait disabled:opacity-60" :aria-label="t('app.close')">
+              <button type="button" data-testid="device-dialog-close" @click="requestClose" :disabled="runtimeSaving" class="iot-dialog__close" :aria-label="t('app.close')">
                 <span class="material-icons-round text-xl" aria-hidden="true">close</span>
               </button>
             </div>
 
             <!-- Body -->
-            <div class="device-dialog-body iot-scroll-region flex-1 min-w-0 space-y-6 overflow-x-hidden px-4 py-5 sm:space-y-8 sm:px-8 sm:py-6">
+            <div class="device-dialog-body iot-dialog__body iot-scroll-region min-w-0 space-y-6 overflow-x-hidden sm:space-y-8">
               <div
                 v-if="!manifest"
                 data-testid="device-template-details-unavailable"
@@ -1456,19 +1451,19 @@ const deviceSpecs = computed(() => {
             </div>
 
             <!-- Footer -->
-            <div class="device-dialog-footer flex flex-col items-stretch justify-end gap-2 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-white px-4 py-4 sm:flex-row sm:items-center sm:gap-3 sm:px-8 sm:py-5">
+            <div class="device-dialog-footer iot-dialog__footer flex-wrap">
               <button
                 v-if="nodeId"
                 type="button"
                 data-testid="device-rename"
                 @click="onRename"
                 :disabled="runtimeSaving"
-                class="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg board-surface-info px-5 py-2.5 text-sm font-semibold board-text-info transition-all hover:board-chip-info disabled:cursor-wait disabled:opacity-60 sm:w-auto"
+                class="iot-dialog-btn iot-dialog-btn--quiet iot-dialog__footer-aside"
               >
-                <span class="material-icons-round text-lg board-text-info" aria-hidden="true">edit</span>
+                <span class="material-icons-round text-lg" aria-hidden="true">edit</span>
                 {{ t('app.rename') }}
               </button>
-                <button type="button" data-testid="device-dialog-footer-close" @click="requestClose" :disabled="runtimeSaving" class="board-card board-card--raised min-h-11 w-full rounded-lg border border-slate-200 px-6 py-2.5 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-200 hover:text-slate-900 disabled:cursor-wait disabled:opacity-60 sm:w-auto">
+                <button type="button" data-testid="device-dialog-footer-close" @click="requestClose" :disabled="runtimeSaving" class="iot-dialog-btn iot-dialog-btn--ghost">
                   {{ t('app.close') }}
                 </button>
               <button
@@ -1477,15 +1472,14 @@ const deviceSpecs = computed(() => {
                 @click="onDelete"
                 :disabled="deleteLoading || runtimeSaving"
                 :aria-busy="deleteLoading"
-                class="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[color:var(--danger-border)] board-chip-danger px-5 py-2.5 text-sm font-semibold board-text-danger transition-all hover:bg-[color:var(--danger)] disabled:cursor-wait disabled:opacity-60 sm:w-auto"
+                class="iot-dialog-btn iot-dialog-btn--danger"
               >
-                <span v-if="deleteLoading" class="h-4 w-4 animate-spin rounded-full border-2 board-border-progress border-t-rose-700" aria-hidden="true"></span>
-                <span v-else class="material-icons-round text-lg board-text-danger" aria-hidden="true">delete_outline</span>
+                <span v-if="deleteLoading" class="iot-dialog-btn__spinner" aria-hidden="true"></span>
+                <span v-else class="material-icons-round text-lg" aria-hidden="true">delete_outline</span>
                 {{ deleteLoading ? t('app.loading') : t('app.deleteDevice') }}
               </button>
             </div>
           </div>
-        </transition>
       </div>
     </transition>
   </teleport>
@@ -1514,29 +1508,6 @@ const deviceSpecs = computed(() => {
 
 .device-basic-value {
   overflow-wrap: anywhere;
-}
-
-.device-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  /* A modal, so it must win over the board's banners and alerts. The previous raw 2200 was
-     numerically the banner layer, letting an alert paint over an open device dialog. */
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow-y: auto;
-  padding: 1rem;
-  background: rgba(15, 23, 42, 0.36);
-  backdrop-filter: blur(6px);
-}
-
-/* Ends just below Tailwind's `sm` (min-width: 640px) so the compact padding here and the
-   `sm:` utilities on the surface can never both apply at exactly 640px. */
-@media (max-width: 639.98px) {
-  .device-dialog-overlay {
-    padding: 0.75rem;
-  }
 }
 
 :global(:root[data-theme='dark'] .device-dialog-surface) {
@@ -1638,37 +1609,6 @@ const deviceSpecs = computed(() => {
 :global(:root[data-theme='dark'] .device-dialog-surface .device-runtime-conflict .device-runtime-adopt-latest:focus-visible) {
   outline: 2px solid var(--warning);
   outline-offset: 2px;
-}
-
-/* Modal Transitions */
-.modal-fade-enter-active,
-.modal-fade-leave-active {
-  transition: opacity 0.3s ease;
-}
-
-.modal-fade-enter-from,
-.modal-fade-leave-to {
-  opacity: 0;
-}
-
-.modal-scale-enter-active,
-.modal-scale-leave-active {
-  transition: transform 0.3s ease, opacity 0.3s ease;
-}
-
-.modal-scale-enter-from,
-.modal-scale-leave-to {
-  opacity: 0;
-  transform: scale(0.95);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .modal-fade-enter-active,
-  .modal-fade-leave-active,
-  .modal-scale-enter-active,
-  .modal-scale-leave-active {
-    transition: none;
-  }
 }
 
 </style>

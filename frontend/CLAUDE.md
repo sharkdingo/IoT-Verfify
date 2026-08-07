@@ -49,6 +49,12 @@ further consequences worth knowing before you debug an E2E result:
   inline prefix or an exported variable, the hook accepts either. It only matches commands that actually
   start Playwright's web server, so a script that drives a browser or the API client against a server you
   are already running is not blocked.
+- **If you serve the build yourself, the port must be one the backend's CORS allowlist knows: 3000, 3001,
+  or 5173–5176** (`CORS_ORIGINS`, `backend/src/main/resources/application.yaml`). This is the trap in the
+  escape hatch above: on any other port the register POST returns **403 `Invalid CORS request`**, the UI shows
+  `注册失败` / `登录失败`, and every auth-dependent test fails in a way that reads exactly like a product
+  regression. One session lost a full run to port 3100 before reading the response body. It is also *not* the
+  rate limiter, so check for 403-vs-429 before reaching for the limit variables below.
 - **A full E2E pass cannot succeed on the default auth rate limits.** `AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR`
   defaults to **60**, and the suite makes **~67** `createAuthenticatedUser` calls, each of which registers an
   account. This note used to claim "a full run stays under the cap by design" on the strength of
@@ -92,6 +98,15 @@ further consequences worth knowing before you debug an E2E result:
   settling, the edge had moved, and no label appeared. Re-derive the coordinate *inside* the poll and
   re-hover each attempt rather than widening the timeout around a single stale move — the assertion
   keeps its original strength and stops depending on when the animation happened to land.
+- **A lingering Element Plus tooltip popper eats the next click, and Playwright's click retries do not save
+  you.** `theme-layout.spec.ts`'s "keeps floating panel surfaces coherent" clicks
+  `[data-testid="close-simulation-panel"]` right after hovering the adjacent open-settings control, whose
+  `iot-info-tooltip-popper` is still fading over the button; the click retries for 120s against an element that
+  "intercepts pointer events" and then times out. **Known-flaky, not a regression** — measured across builds:
+  HEAD failed 1 in 19 runs, an unrelated feature branch 2 in 9. Two consequences: dismiss or wait out the
+  popper before clicking a control next to a tooltip trigger, rather than trusting retries; and when
+  attributing this failure, **sample it more than once per build** — single runs of each read as a clean
+  "fails here, passes at HEAD" regression that ten runs contradict.
 - **A route mock must satisfy the same validators as the real response.** `api/chat.ts` validates
   every field it depends on, so a fixture returning a convenient subset is rejected at the boundary —
   and the failure surfaces far from the cause. A session mock missing `active`/`userId`/`updatedAt`
@@ -245,6 +260,16 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   delete in one turn — destructive tool actions need a confirmation token, so do not write features
   assuming otherwise. Availability reads run outside the mutation queue: every mutation response
   carrying availability must invalidate older reads, and only the latest concurrent read may land.
+- **Every modal is composed from `styles/dialog.css`; nothing builds a dialog shell locally.** One overlay,
+  one card, three sizes, four tones. Tone goes on the card and the header's icon tile reads it — do not also
+  paint the confirm button in the tone (`--danger` excepted), or the primary action changes colour between
+  surfaces. `__body` is the only scrolling part, the primary action is last in `__footer`, the card is
+  **opaque** (`--surface-elevated`, never the 30%-alpha `--iot-color-card-bg`), and a dialog stays centred at
+  every width — a narrow-viewport bottom sheet was reverted because Element Plus MessageBox cannot dock, so
+  it gave one class of surface two positions. Address dialog controls by `data-testid`, never by an
+  appearance class. `styles/__tests__/dialogSurfaceConsistency.spec.ts` enforces all of this; the reasoning
+  and the measured before-state are in
+  [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §4.
 - **All user feedback goes through `utils/feedback.ts`.** Call sites state the intent
   (`notifySuccess`/`notifyInfo`/`notifyBlocked`/`notifyError`, `confirmDestructive`,
   `acknowledge`), never `ElMessage`/`ElMessageBox` directly — that is what kept 421 toast
@@ -296,7 +321,7 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   `--<role>-fill`; a fill carrying no ink keeps the bare role. Disable by desaturating, never by fading
   opacity, which fades the label with it. Structural neutrals have a floor: `slate-400` is 2.56:1 on white.
   Values, tables and the reasoning:
-  [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §5.
+  [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §6.
 - **A `position: fixed` overlay cannot read a variable scoped to the board.** `--board-floating-gap`,
   `--board-control-width` and `--board-inspector-width` are declared on `.iot-board`, but the two timeline hosts
   are **siblings** of it — deliberately, so they float above every panel. Inside them those variables do not

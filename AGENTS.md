@@ -206,6 +206,11 @@ Rules that follow from this:
   frontend tests plus a live-backend probe, and still broke three E2E specs — they audited scene
   semantics by reading the request body, which is a contract only a browser-driven run observes.
   Reasoning about blast radius works for logic; it does not substitute for E2E on a wire format.
+- **Renaming a class or a test id is the same kind of trigger, even in a pure restyle.** E2E specs address the
+  product by selector, so they are the one consumer that a "no behaviour changed" argument does not cover. A
+  dialog restyle updated every unit spec, passed 1231 unit tests and `vue-tsc`, and still broke an E2E test
+  that clicked a class the migration had deleted. Grep `e2e/` for every selector you rename, and prefer
+  `data-testid` over an appearance class so the next restyle cannot reach it.
 - Re-running a suite that just passed, with nothing changed in between, is never verification.
 
 ### Delegate long runs to background subagents

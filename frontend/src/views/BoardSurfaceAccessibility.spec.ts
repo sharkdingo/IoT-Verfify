@@ -36,21 +36,27 @@ describe('Board surface accessibility contracts', () => {
     expect(templateDialog).toContain('@keydown="handleTemplateInstanceDialogKeydown"')
     expect(templateDialog).toContain(':ref="setTemplateInstanceDialogRef"')
     expect(templateDialog).toContain('tabindex="-1"')
-    expect(templateDialog).toContain('max-h-[calc(100dvh-2rem)]')
+    // Height bounding is now `.iot-dialog`'s (`max-height: calc(100dvh - 2rem)` on a flex column whose
+    // `__footer` is `flex: none`), so what this asserts is that the dialog is composed from that layer rather
+    // than re-deriving the cap. Same guarantee, one owner.
+    expect(templateDialog).toContain('iot-dialog--md')
+    expect(templateDialog).toContain('iot-dialog__footer')
 
     const deleteDialog = boardSource.slice(
       boardSource.indexOf('<!-- Custom Delete Confirmation Dialog -->'),
       boardSource.indexOf('<FuzzingResultDialog')
     )
-    expect(deleteDialog).toContain('max-h-[calc(100dvh-1.5rem)]')
+    expect(deleteDialog).toContain('iot-dialog--md')
     // The shared primitive owns overflow, overscroll containment, the scrollbar skin, and the
     // scroll-padding that keeps a programmatically revealed control clear of the boundary. Asserting
     // `overflow-y-auto overscroll-contain` pinned two of those four and let the other two drift —
     // which is how 31 regions ended up with a scrollbar that did not match the product and no
     // scroll-padding for keyboard users.
     expect(deleteDialog).toContain('iot-scroll-region')
-    expect(deleteDialog).toContain('min-h-0 flex-1')
-    expect(deleteDialog).toContain('flex shrink-0 flex-wrap justify-end')
+    // `min-h-0 flex-1` on the body and `shrink-0` on the footer are now `.iot-dialog__body` / `__footer`
+    // in the shared sheet: the same two properties, declared once for every dialog instead of per surface.
+    expect(deleteDialog).toContain('iot-dialog__body')
+    expect(deleteDialog).toContain('iot-dialog__footer')
   })
 
   it('names the concrete template value behind blank initial-value choices', () => {
@@ -98,12 +104,15 @@ describe('Board surface accessibility contracts', () => {
     expect(resultDialogTheme).not.toMatch(/\.text-(red|amber|green|emerald|indigo|violet|fuchsia|orange|cyan)-\d{3}/)
     expect(resultDialogTheme).not.toContain('.iot-board')
 
-    // The verdict decision table maps each outcome to a role, never to a hue ramp.
+    // The verdict decision table maps each outcome to a role, never to a hue ramp. The window starts at the
+    // tone helper because the role class names are now built there from one tone name per outcome, rather than
+    // spelled out six times per branch.
     const verdictTable = boardSource.slice(
-      boardSource.indexOf('const verificationResultStatus = computed'),
+      boardSource.indexOf('const verificationVerdictTone ='),
       boardSource.indexOf('const verificationModelSemanticsConsistent = computed')
     )
-    expect(verdictTable).toMatch(/board-surface-(danger|warning|success)/)
+    expect(verdictTable).toMatch(/board-surface-\$\{tone\}/)
+    expect(verdictTable).toMatch(/verificationVerdictTone\('(danger|warning|success)'\)/)
     expect(verdictTable).not.toMatch(/bg-(red|amber|green|emerald)-\d{2,3}/)
 
     const verificationResultStatus = boardSource.slice(

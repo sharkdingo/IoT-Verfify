@@ -1,0 +1,479 @@
+/* ===================== Dialogs: one surface, three sizes, four tones =====================
+ *
+ * Every modal in the product is built from this file. It exists because they were not: measured
+ * across 13 hand-rolled modals plus the Element Plus MessageBox, the overlay tint split four ways
+ * (`bg-black/60`, `bg-slate-950/20`, `bg-slate-900/60`, and three CSS literals), the card radius
+ * three ways (`rounded-lg`/`xl`/`2xl` against a `--iot-radius-surface` scale that already existed),
+ * and the footer was variously right-aligned, centred, space-between, or absent. Logout painted
+ * itself with a hardcoded navy gradient and a pulsing red circle; the scene-clear confirmation was
+ * a stock MessageBox. Two dialogs from the same product did not look related, which is what the
+ * user reported.
+ *
+ * The vocabulary below is deliberately small, because the inconsistency came from every surface
+ * having somewhere new to put a decision:
+ *
+ *   .iot-dialog-overlay          the scrim; identical everywhere, so depth reads as one system
+ *   .iot-dialog                  the card. Add ONE size: --sm (decisions) / --md (forms) / --lg (results)
+ *   .iot-dialog__header          icon tile + title + optional subtitle, optional close button
+ *   .iot-dialog__body            scrollable content region
+ *   .iot-dialog__footer          actions, always trailing-aligned
+ *   .iot-dialog-btn              --primary / --danger / --ghost / --quiet
+ *
+ * Tone is set once on the card (`.iot-dialog--danger` and friends) and the header tile reads it via
+ * `--dialog-tone`. That is the whole colour decision: a destructive dialog is not a differently
+ * built dialog, it is the same dialog with one token changed. Nothing here hardcodes a hue, so both
+ * themes follow the `--danger`/`--warning`/`--success`/`--accent` roles in styles/base.css — the
+ * logout button's literal navy gradient was a light-theme value that never followed the theme.
+ *
+ * Sizes are a scale, not a per-dialog guess. Widths were 380px, w-96, 650, 760, 800, max-w-lg,
+ * max-w-6xl and 92vw; heights 85vh, 88vh, 90vh, and calc(100dvh-2rem).
+ */
+
+/*
+ * Action metrics, as tokens rather than literals.
+ *
+ * Element Plus owns the MessageBox button elements, so they cannot carry `.iot-dialog-btn` and base.css has to
+ * declare their height itself. Writing `2.375rem` in both files is how the five pre-existing button heights got
+ * there in the first place — two plausible literals, no link between them. These live at `:root` so both
+ * sheets reference one value and `dialogSurfaceConsistency.spec.ts` can check that they do.
+ */
+:root {
+    --dialog-action-height: 2.375rem;
+    /* The pointer-target floor on a viewport narrow enough to imply touch. */
+    --dialog-action-height-touch: 2.75rem;
+}
+
+.iot-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    overflow-y: auto;
+    /* One scrim. Derived from the page ink so it deepens with the dark theme instead of needing a
+       second rule, and blurred enough to push the board back without turning it into mush. */
+    background: color-mix(in srgb, var(--text) 46%, transparent);
+    backdrop-filter: blur(6px);
+}
+
+/* A nested surface (a fix dialog raised from a verification result) sits above its parent but keeps
+   the same scrim: re-tinting would double the darkening and read as a bug. */
+.iot-dialog-overlay--nested {
+    z-index: var(--z-modal-nested);
+}
+
+/* Session-level surfaces (logout, account deletion) outrank board modals. */
+.iot-dialog-overlay--session {
+    z-index: var(--z-session-modal);
+}
+
+.iot-dialog {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+    max-height: calc(100dvh - 2rem);
+    overflow: hidden;
+    /*
+     * Opaque, deliberately.
+     *
+     * This was `--iot-color-card-bg`, which is `rgba(…, 0.3)` — a token for a *card floating on a panel*,
+     * where the panel behind it supplies the opacity. A dialog has only the blurred board behind it, so at
+     * 30% the board's own cards and text showed straight through: measured on the account-deletion dialog,
+     * the password field and the confirm button sat on top of legible background UI, and the two red notice
+     * blocks read as pink washes. A blocking surface that asks for a password must be a surface, not a tint —
+     * translucency is not the same thing as design.
+     */
+    background: var(--surface-elevated);
+    border: 1px solid var(--iot-color-card-border);
+    border-radius: var(--iot-radius-surface);
+    box-shadow: var(--shadow-elevated);
+    /* Default tone. Overridden by one modifier below rather than by per-dialog colour. */
+    --dialog-tone: var(--accent);
+    --dialog-tone-surface: var(--accent-surface);
+    --dialog-tone-border: var(--accent-border);
+}
+
+.iot-dialog--sm { max-width: 26rem; }   /* a decision: one question, two buttons */
+.iot-dialog--md { max-width: 40rem; }   /* a form, or a decision with an impact list */
+.iot-dialog--lg { max-width: 52rem; }   /* a result to read: traces, findings, suggestions */
+.iot-dialog--xl { max-width: 72rem; }   /* the rule builder: multi-column authoring */
+
+.iot-dialog--danger {
+    --dialog-tone: var(--danger);
+    --dialog-tone-surface: var(--danger-surface);
+    --dialog-tone-border: var(--danger-border);
+}
+
+.iot-dialog--warning {
+    --dialog-tone: var(--warning);
+    --dialog-tone-surface: var(--warning-surface);
+    --dialog-tone-border: var(--warning-border);
+}
+
+.iot-dialog--success {
+    --dialog-tone: var(--success);
+    --dialog-tone-surface: var(--success-surface);
+    --dialog-tone-border: var(--success-border);
+}
+
+.iot-dialog--info {
+    --dialog-tone: var(--info);
+    --dialog-tone-surface: var(--info-surface);
+    --dialog-tone-border: var(--info-border);
+}
+
+/* ---------- Header ----------
+ * Icon tile, then title, then optional subtitle under it. The tile is what makes the tone legible
+ * without colouring the whole card: a destructive dialog needs to *look* destructive before the user
+ * reads the button. It replaces both the 72px pulsing circle logout drew for itself (motion on a
+ * blocking prompt reads as urgency the situation does not have) and the bare bold text every other
+ * dialog used, which gave a delete and a form the same weight.
+ */
+
+.iot-dialog__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.875rem;
+    padding: 1.25rem 1.375rem 1rem;
+    border-bottom: 1px solid var(--iot-color-card-border);
+}
+
+/* Header of a dialog whose body is one short sentence: no rule, tighter to the text below it. */
+.iot-dialog--sm > .iot-dialog__header {
+    border-bottom: 0;
+    padding-bottom: 0.5rem;
+}
+
+.iot-dialog__icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--iot-radius-well);
+    background: var(--dialog-tone-surface);
+    border: 1px solid var(--dialog-tone-border);
+    color: var(--dialog-tone);
+}
+
+.iot-dialog__icon .material-symbols-outlined {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.iot-dialog__heading {
+    flex: 1;
+    min-width: 0;
+}
+
+.iot-dialog__title {
+    margin: 0;
+    font-size: 1.0625rem;
+    font-weight: 650;
+    line-height: 1.35;
+    letter-spacing: -0.01em;
+    color: var(--iot-color-title);
+}
+
+/* The one-line "what this affects" under a title. Optional; never a place for the full explanation,
+   which belongs in the body where it can wrap and scroll. */
+.iot-dialog__subtitle {
+    margin: 0.1875rem 0 0;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: var(--iot-color-text-muted);
+}
+
+.iot-dialog__close {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    margin: -0.25rem -0.375rem 0 0;
+    border: 0;
+    border-radius: var(--iot-radius-action);
+    background: transparent;
+    color: var(--iot-color-text-muted);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.iot-dialog__close:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    color: var(--iot-color-title);
+}
+
+.iot-dialog__close:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* ---------- Body ---------- */
+
+.iot-dialog__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 1rem 1.375rem 1.25rem;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--iot-color-text-muted);
+}
+
+/* A decision body aligns under the title, not under the icon tile: the sentence belongs to the
+   heading, and a full-width paragraph under a 2.5rem tile looks like two unrelated blocks. */
+.iot-dialog--sm > .iot-dialog__body {
+    padding: 0 1.375rem 1.25rem;
+    margin-left: 3.375rem;
+}
+
+/* Consequence text: the sentence the user must read before confirming. Slightly stronger ink than
+   the surrounding body, with a tone rule so it is scannable inside a long impact preview. */
+.iot-dialog__consequence {
+    margin: 0.75rem 0 0;
+    padding: 0.625rem 0.75rem;
+    border-left: 2px solid var(--dialog-tone-border);
+    border-radius: 0 var(--iot-radius-control) var(--iot-radius-control) 0;
+    background: var(--dialog-tone-surface);
+    color: var(--iot-color-text);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+}
+
+/* ---------- Footer ----------
+ * Always trailing-aligned, primary last. Centred and space-between footers were the two variants
+ * that made dialogs feel unrelated, because the confirm button moved between surfaces.
+ */
+
+.iot-dialog__footer {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.875rem 1.375rem 1.125rem;
+    border-top: 1px solid var(--iot-color-card-border);
+}
+
+.iot-dialog--sm > .iot-dialog__footer {
+    border-top: 0;
+    padding-top: 0.25rem;
+}
+
+/* A secondary route that is not one of the two answers — "delete my account" under a logout prompt.
+   Leading-aligned so it cannot be mistaken for the cancel button. */
+.iot-dialog__footer-aside {
+    margin-right: auto;
+}
+
+/* ---------- Buttons ----------
+ * One height and one radius for every dialog action. Measured before: py-2, py-2.5, min-h-11,
+ * 2.35rem and 2.75rem coexisted, with rounded-lg / rounded-xl / --iot-radius-well / --iot-radius-card
+ * on the confirm button alone.
+ *
+ * Fills use the `-fill` half of each role, never the bare role: the bare tokens are tuned as ink on
+ * the page ground, and white text on the dark theme's lightened value measures 1.44–2.54:1. See the
+ * `--accent-fill` comment in base.css.
+ */
+
+.iot-dialog-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    min-height: var(--dialog-action-height);
+    padding: 0 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--iot-radius-action);
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.iot-dialog-btn:focus-visible {
+    outline: 2px solid var(--accent-border);
+    outline-offset: 2px;
+}
+
+.iot-dialog-btn .material-symbols-outlined {
+    font-size: 18px;
+    line-height: 1;
+}
+
+/*
+ * The confirm button is accent even when the dialog's tone is not.
+ *
+ * Tone belongs to the *situation* (the header tile says "this is a warning"); the button says "this is
+ * the action you came for". Painting it in the tone as well gave the product three differently-coloured
+ * confirm buttons — a warning-gradient one on template reset, a red one on template delete, blue
+ * elsewhere — so the primary action moved colour between surfaces for no reason the user could infer.
+ * `--danger` is the one exception below, because a destructive answer genuinely needs to look different
+ * from an ordinary one at the moment of clicking.
+ *
+ * Both fills are the `-fill` half of their role, never the bare token: the bare ones are tuned as ink,
+ * and the dark theme lightens them until white labels collapse (measured 1.44:1 on the warning gradient
+ * this replaces — the worst reading in the interface).
+ */
+.iot-dialog-btn--primary {
+    background: var(--accent-fill);
+    color: #fff;
+}
+
+.iot-dialog-btn--primary:hover:not(:disabled) {
+    background: var(--accent-fill-hover);
+}
+
+.iot-dialog-btn--danger {
+    background: var(--danger-fill);
+    color: #fff;
+}
+
+.iot-dialog-btn--danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger-fill) 88%, #000);
+}
+
+/* The cancel half of a pair: a real button with an edge, not a link. It has to be findable without
+   competing with the answer next to it. */
+.iot-dialog-btn--ghost {
+    background: transparent;
+    border-color: var(--iot-color-card-border);
+    color: var(--iot-color-text);
+}
+
+.iot-dialog-btn--ghost:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+    border-color: var(--border-strong);
+}
+
+/* A tertiary action inside a body or a footer aside. */
+.iot-dialog-btn--quiet {
+    background: transparent;
+    color: var(--iot-color-text-muted);
+    padding: 0 0.5rem;
+}
+
+.iot-dialog-btn--quiet:hover:not(:disabled) {
+    color: var(--iot-color-title);
+}
+
+/* Disabling desaturates rather than fading: opacity takes the label down with the fill, and a
+   disabled control still has to be readable enough to explain why it is disabled. */
+.iot-dialog-btn--primary:disabled,
+.iot-dialog-btn--danger:disabled {
+    background: var(--accent-fill-disabled);
+    color: #fff;
+    cursor: not-allowed;
+}
+
+.iot-dialog-btn--ghost:disabled,
+.iot-dialog-btn--quiet:disabled {
+    color: var(--text-muted);
+    cursor: not-allowed;
+}
+
+/* In-button progress for a confirm that awaits the server. Sized to the label so the button does not
+   resize when it starts. */
+.iot-dialog-btn__spinner {
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid color-mix(in srgb, #fff 35%, transparent);
+    border-top-color: #fff;
+    border-radius: var(--iot-radius-pill);
+    animation: iot-dialog-spin 0.8s linear infinite;
+}
+
+@keyframes iot-dialog-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ---------- Entrance ----------
+ * A short rise, and none of it under `prefers-reduced-motion`. Transition classes are named for the
+ * shared `<Transition name="iot-dialog">`.
+ */
+
+.iot-dialog-enter-active,
+.iot-dialog-leave-active {
+    transition: opacity 0.18s ease;
+}
+
+.iot-dialog-enter-active .iot-dialog,
+.iot-dialog-leave-active .iot-dialog {
+    transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.iot-dialog-enter-from,
+.iot-dialog-leave-to {
+    opacity: 0;
+}
+
+.iot-dialog-enter-from .iot-dialog,
+.iot-dialog-leave-to .iot-dialog {
+    transform: translateY(6px) scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .iot-dialog-enter-active,
+    .iot-dialog-leave-active,
+    .iot-dialog-enter-active .iot-dialog,
+    .iot-dialog-leave-active .iot-dialog {
+        transition: none;
+    }
+
+    .iot-dialog-enter-from .iot-dialog,
+    .iot-dialog-leave-to .iot-dialog {
+        transform: none;
+    }
+
+    .iot-dialog-btn__spinner {
+        animation-duration: 2s;
+    }
+}
+
+/*
+ * Narrow viewport: a wider, tighter card — still centred.
+ *
+ * A bottom sheet was the wrong call here and produced exactly the inconsistency this layer exists to
+ * remove. Element Plus MessageBox is centred by its own overlay and cannot be made to dock, so
+ * "sheet under 640px" meant the logout prompt sat on the bottom edge while the scene-clear confirmation
+ * floated in the middle of the same app at the same width — two dialogs, two positions, no rule the user
+ * could infer. Docking is also a phone idiom borrowed onto a desktop tool whose narrow layout is a resized
+ * window, not a handset.
+ *
+ * So the only things that change are the ones that must: the width cap is released (a 26rem card in a
+ * 380px viewport would overflow) and the padding tightens. Split at one value (639.98/640) so a fractional
+ * width matches exactly one rule.
+ */
+@media (max-width: 639.98px) {
+    .iot-dialog-overlay {
+        padding: 0.75rem;
+    }
+
+    .iot-dialog {
+        max-width: none;
+    }
+
+    /* Two stacked full-width answers beat two half-width ones at this size. */
+    .iot-dialog__footer .iot-dialog-btn:not(.iot-dialog-btn--quiet) {
+        flex: 1;
+    }
+
+    /* 44px: the pointer-target floor for touch, which is what a viewport this narrow implies. The desktop
+       2.375rem is a mouse target and was measured as a regression against the per-dialog `min-h-11` this
+       layer replaced. */
+    .iot-dialog__footer .iot-dialog-btn,
+    .iot-dialog__close {
+        min-height: var(--dialog-action-height-touch);
+    }
+
+    .iot-dialog__close {
+        min-width: var(--dialog-action-height-touch);
+    }
+}

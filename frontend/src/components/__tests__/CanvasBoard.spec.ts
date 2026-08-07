@@ -714,7 +714,13 @@ describe('CanvasBoard device context actions', () => {
     wrapper.unmount()
   })
 
-  it('reduces overlapping pointer resize targets to one, then hides it while keeping keyboard resize', async () => {
+  it('keeps one pointer resize handle on minimum-sized nodes at low zoom, so they can be grown', async () => {
+    /*
+     * At zoom 0.4, an 80×60 node occupies 32×24 screen pixels. Before the fix, the 52px threshold hid all
+     * handles — users could not resize at all except via keyboard, which is not discoverable. The new logic
+     * guarantees the br handle for nodes at their minimum size regardless of zoom, so pointer resize stays
+     * available. The other three handles remain hidden since 32×24 < 88, which avoids crowding.
+     */
     const node = {
       id: 'small-light-1',
       templateName: 'Light',
@@ -738,11 +744,17 @@ describe('CanvasBoard device context actions', () => {
     })
     const rendered = wrapper.get('[data-node-id="small-light-1"]')
 
-    expect(rendered.findAll('.resize-handle')).toHaveLength(0)
+    // One handle (br) to grow the node, not four (which would crowd a 32×24 screen footprint).
+    expect(rendered.findAll('.resize-handle')).toHaveLength(1)
+    expect(rendered.find('.resize-handle.br').exists()).toBe(true)
+    expect(rendered.find('.resize-handle.tl').exists()).toBe(false)
+
+    // Keyboard resize still works (unchanged).
     await rendered.trigger('keydown', { key: 'ArrowRight', ctrlKey: true })
     expect(node.width).toBe(90)
     expect(wrapper.emitted('node-moved-or-resized')).toEqual([['small-light-1']])
 
+    // At zoom 1.0, the node is now 90×60 on screen, still showing only br (90 < 88 for all four).
     await wrapper.setProps({ zoom: 1 })
     expect(rendered.findAll('.resize-handle')).toHaveLength(1)
     wrapper.unmount()

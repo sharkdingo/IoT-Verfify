@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 import { i18n } from '@/assets/i18n'
 import AccountDeleteDialog from '../AccountDeleteDialog.vue'
 
+/* Addressed by its test id, not by a styling class: the confirm button's appearance classes come from the
+   shared dialog layer and change with it, while this contract is about the gate, not the paint. */
+const CONFIRM = '[data-testid="account-delete-confirm"]'
+
 const mountDialog = () => mount(AccountDeleteDialog, {
   props: {
     visible: true,
@@ -38,7 +42,7 @@ describe('AccountDeleteDialog confirmation gate', () => {
     await wrapper.get(confirmationField).setValue('alice')
     await wrapper.get('input[type="password"]').setValue('Password123')
 
-    expect(wrapper.get('button.danger').attributes('disabled')).toBe('')
+    expect(wrapper.get(CONFIRM).attributes('disabled')).toBe('')
     wrapper.unmount()
   })
 
@@ -49,7 +53,7 @@ describe('AccountDeleteDialog confirmation gate', () => {
     await typeInto(wrapper.get(confirmationField).element, 'alice')
     await wrapper.get('input[type="password"]').setValue('Password123')
 
-    expect(wrapper.get('button.danger').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get(CONFIRM).attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 

@@ -108,7 +108,10 @@ describe('scoped size rules do not defeat Tailwind caps', () => {
     const surfaceTag = dialog.slice(
       dialog.lastIndexOf('<div', dialog.indexOf('device-dialog-surface')),
       dialog.indexOf('>', dialog.indexOf('device-dialog-surface')))
-    expect(surfaceTag, 'the dialog should cap its width').toMatch(/max-w-4xl/)
+    // The cap is now a size on the shared dialog layer (`--md` is 40rem) rather than a per-dialog Tailwind
+    // utility. Asserting the size class keeps the original guarantee — a readable column, not the viewport —
+    // while leaving the actual value in one place for every dialog.
+    expect(surfaceTag, 'the dialog should cap its width').toMatch(/iot-dialog--md/)
 
     const scoped = dialog.slice(dialog.indexOf('<style scoped>'))
     const containment = scoped.slice(scoped.indexOf('.device-dialog-body'))

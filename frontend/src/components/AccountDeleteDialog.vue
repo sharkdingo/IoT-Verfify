@@ -84,16 +84,16 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
 <template>
   <Teleport to="body">
-    <Transition name="account-delete-dialog">
+    <Transition name="iot-dialog">
       <div
         v-if="visible"
-        class="account-delete-overlay"
+        class="iot-dialog-overlay iot-dialog-overlay--session"
         @click.self="handleCancel"
         @keydown="handleModalKeydown"
       >
         <form
           :ref="setDialogRef"
-          class="account-delete-dialog"
+          class="iot-dialog iot-dialog--md iot-dialog--danger account-delete-dialog"
           data-testid="account-delete-dialog"
           role="dialog"
           aria-modal="true"
@@ -101,15 +101,17 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
           tabindex="-1"
           @submit.prevent="handleConfirm"
         >
-          <div class="account-delete-icon">
-            <span class="material-symbols-outlined" aria-hidden="true">person_remove</span>
+          <div class="iot-dialog__header">
+            <div class="iot-dialog__icon">
+              <span class="material-symbols-outlined" aria-hidden="true">person_remove</span>
+            </div>
+            <div class="iot-dialog__heading">
+              <h2 id="account-delete-title" class="iot-dialog__title">{{ t('app.deleteAccountTitle') }}</h2>
+              <p class="iot-dialog__subtitle">{{ t('app.deleteAccountMessage') }}</p>
+            </div>
           </div>
 
-          <div class="account-delete-copy">
-            <h2 id="account-delete-title">{{ t('app.deleteAccountTitle') }}</h2>
-            <p>{{ t('app.deleteAccountMessage') }}</p>
-          </div>
-
+          <div class="iot-dialog__body">
           <div class="account-delete-warning">
             <span class="material-symbols-outlined" aria-hidden="true">warning</span>
             <span>{{ t('app.deleteAccountDataWarning') }}</span>
@@ -167,14 +169,16 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
             >
           </label>
 
+          </div>
+
           <!-- Test ids on the controls of the product's one irreversible action.
                They were absent, so nothing outside this component could address the dialog: a browser check
                looking for the delete flow found no route to it and reported the affordance missing. A
                destructive action is the last thing that should be unaddressable by a test. -->
-          <div class="account-delete-actions">
+          <div class="iot-dialog__footer">
             <button
               type="button"
-              class="account-delete-btn secondary"
+              class="iot-dialog-btn iot-dialog-btn--ghost"
               data-testid="account-delete-cancel"
               :disabled="loading"
               @click="handleCancel"
@@ -183,11 +187,11 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
             </button>
             <button
               type="submit"
-              class="account-delete-btn danger"
+              class="iot-dialog-btn iot-dialog-btn--danger account-delete-confirm"
               data-testid="account-delete-confirm"
               :disabled="!canConfirm"
             >
-              <span v-if="loading" class="account-delete-spinner" aria-hidden="true"></span>
+              <span v-if="loading" class="iot-dialog-btn__spinner" aria-hidden="true"></span>
               <span v-else>{{ t('app.deleteAccountConfirm') }}</span>
             </button>
           </div>
@@ -198,80 +202,28 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 </template>
 
 <style scoped>
-.account-delete-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-session-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  background: color-mix(in srgb, var(--text) 56%, transparent);
-  backdrop-filter: blur(5px);
-}
+/* Shell, header, footer and buttons come from styles/dialog.css. What stays here is specific to the
+   product's one irreversible action: the warning/export pair, the typed-confirmation fields, and a
+   disabled treatment that has to read as disarmed. */
 
-.account-delete-dialog {
-  box-sizing: border-box;
-  width: min(100%, 28rem);
-  max-height: calc(100vh - 2rem);
-  max-height: calc(100dvh - 2rem);
-  margin: auto;
-  padding: 1.5rem;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
-  border-radius: var(--iot-radius-surface);
-  background: var(--surface-overlay);
-  color: var(--text);
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
-}
-
-.account-delete-icon {
-  width: 3.5rem;
-  height: 3.5rem;
-  margin: 0 auto 1rem;
-  display: grid;
-  place-items: center;
-  border-radius: var(--iot-radius-pill);
-  background: color-mix(in srgb, var(--danger) 14%, var(--surface-muted));
-  color: var(--danger);
-}
-
-.account-delete-icon .material-symbols-outlined {
-  font-size: 1.85rem;
-}
-
-.account-delete-copy {
-  text-align: center;
-}
-
-.account-delete-copy h2 {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 800;
-}
-
-.account-delete-copy p {
-  margin: 0.5rem 0 0;
-  color: var(--text-muted);
-  font-size: 0.9rem;
-  line-height: 1.55;
-}
-
+/* A left rule rather than a full box, matching `.iot-dialog__consequence`: two bordered cards stacked on a
+   third bordered surface (the dialog) gave three nested frames in 200px of height, which is what made this
+   read as cramped rather than serious. The rule carries the same tone with one less frame. */
 .account-delete-warning {
   display: flex;
   gap: 0.5rem;
-  margin: 1.25rem 0;
-  padding: 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
-  border-radius: var(--iot-radius-card);
-  background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
+  padding: 0.625rem 0.75rem;
+  border-left: 2px solid var(--danger-border);
+  border-radius: 0 var(--iot-radius-control) var(--iot-radius-control) 0;
+  background: var(--danger-surface);
   color: var(--danger);
-  font-size: 0.8rem;
-  line-height: 1.45;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.account-delete-warning .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 1.1rem;
 }
 
 /* The export note sits below the warning and is deliberately quieter than it: it is a way out, not another
@@ -280,14 +232,14 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   display: flex;
   gap: 0.5rem;
   align-items: flex-start;
-  margin: -0.5rem 0 1.25rem;
+  margin: 0.5rem 0 0;
   padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--iot-radius-card);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--iot-radius-control) var(--iot-radius-control) 0;
   background: var(--surface-muted);
   color: var(--text-muted);
   font-size: 0.8125rem;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .account-delete-export-note .material-symbols-outlined {
@@ -295,38 +247,45 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   font-size: 1.05rem;
 }
 
-.account-delete-warning .material-symbols-outlined {
-  flex: 0 0 auto;
-  font-size: 1.1rem;
-}
-
+/* Label weight is 600, not 700, and the radius is the action step rather than the well step: these fields sit
+   inside a dialog body, so they are controls, not containers. The heavier label competed with the dialog title
+   two rows above it. */
 .account-delete-field {
   display: block;
-  margin-top: 0.85rem;
-  font-size: 0.78rem;
-  font-weight: 700;
+  margin-top: 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
   color: var(--text-muted);
 }
 
 .account-delete-field input {
   width: 100%;
-  margin-top: 0.4rem;
-  padding: 0.7rem 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: var(--iot-radius-well);
-  background: var(--surface);
+  margin-top: 0.375rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--field-border);
+  border-radius: var(--iot-radius-action);
+  background: var(--field-bg);
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 0.875rem;
+  font-weight: 400;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
+/* The accent, not danger: an empty field the user has not filled in yet is not an error, and ringing every
+   focus in red on this form made the whole dialog read as one continuous alarm. Invalid input below still
+   goes red — that distinction is the point. */
 .account-delete-field input:focus {
-  border-color: var(--danger);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .account-delete-field input[aria-invalid="true"] {
   border-color: var(--danger);
+}
+
+.account-delete-field input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent);
 }
 
 .account-delete-field small {
@@ -341,84 +300,24 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   color: var(--danger);
 }
 
-.account-delete-actions {
-  display: flex;
-  gap: 0.75rem;
-  margin-top: 1.25rem;
-}
-
-.account-delete-btn {
-  flex: 1;
-  min-height: 2.75rem;
-  border: 0;
-  border-radius: var(--iot-radius-card);
-  font-size: 0.9rem;
-  font-weight: 800;
-  cursor: pointer;
-  transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
-}
-
-.account-delete-btn:not(:disabled):active {
-  transform: scale(0.98);
-}
-
-.account-delete-btn.secondary {
-  background: var(--surface-muted);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-}
-
-.account-delete-btn.danger {
-  background: var(--danger-fill);
-  color: #ffffff;
-  /* Derived from the fill it belongs to, so the halo follows the theme the button already follows. */
-  box-shadow: 0 12px 24px color-mix(in srgb, var(--danger-fill) 24%, transparent);
-}
-
 /* A disarmed destructive button must look disarmed.
  *
- * `opacity: 0.58` alone left the danger button saturated red *and* still wearing its
- * `box-shadow: 0 12px 24px rgba(220,38,38,.24)` glow, so at 58% it read as armed. All three reviews of this
- * dialog said so — "'Delete Permanently' appears enabled even though both confirmation fields are empty" —
- * while measurement showed `disabled: true` in every case. The button was correct and its appearance was not,
- * which is the worse of the two failures on the product's only irreversible action: a user who believes the
- * control is live cannot tell whether their click was ignored or is about to destroy their work.
+ * `opacity: 0.58` alone left the danger button saturated red *and* still wearing its glow, so at 58% it
+ * read as armed. All three reviews of this dialog said so — "'Delete Permanently' appears enabled even
+ * though both confirmation fields are empty" — while measurement showed `disabled: true` in every case.
+ * The button was correct and its appearance was not, which is the worse of the two failures on the
+ * product's only irreversible action: a user who believes the control is live cannot tell whether their
+ * click was ignored or is about to destroy their work.
  *
- * Dropping the glow and the fill's saturation makes the state legible without relying on opacity alone. */
-.account-delete-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.58;
+ * The shared `--danger:disabled` rule swaps in the neutral disabled fill, which already reads as
+ * disarmed. This override keeps that decision *specific* to this dialog rather than relying on it: the
+ * fill is mixed toward the surface so it stops reading as a live danger colour at all. */
+/* Mixing danger 34% into a white surface produced a pink wash carrying white ink — measured illegible, and
+ * it read as a decorative button rather than a disabled one. The shared neutral disabled fill says
+ * "unavailable" through desaturation and keeps its label readable, which is the whole point of the rule
+ * above; the only thing worth keeping local is dropping the elevation, since a disabled control should not
+ * appear to sit above the footer. */
+.account-delete-confirm:disabled {
   box-shadow: none;
-}
-
-.account-delete-btn.danger:disabled {
-  /* Mixed toward the surface rather than merely faded, so the fill itself stops reading as a live danger
-     colour. The `opacity` above then softens what is already a muted button instead of dimming a saturated
-     one. */
-  background: color-mix(in srgb, var(--danger) 34%, var(--surface-elevated));
-}
-
-.account-delete-spinner {
-  display: inline-block;
-  width: 1rem;
-  height: 1rem;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #ffffff;
-  border-radius: var(--iot-radius-pill);
-  animation: account-delete-spin 0.8s linear infinite;
-}
-
-@keyframes account-delete-spin {
-  to { transform: rotate(360deg); }
-}
-
-.account-delete-dialog-enter-active,
-.account-delete-dialog-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.account-delete-dialog-enter-from,
-.account-delete-dialog-leave-to {
-  opacity: 0;
 }
 </style>

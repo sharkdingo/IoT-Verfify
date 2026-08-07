@@ -3525,13 +3525,13 @@ watch(() => props.readOnly, readOnly => {
   <div
     v-if="showSpecDialog"
     data-testid="spec-condition-dialog"
-    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4"
+    class="iot-dialog-overlay"
     @click="closeSpecDialog"
     @keydown="handleSpecDialogKeydown"
   >
     <div
       :ref="setSpecDialogRef"
-      class="control-center-dialog-surface control-center-spec-dialog flex w-full max-w-md flex-col overflow-hidden rounded-2xl border shadow-2xl"
+      class="iot-dialog iot-dialog--md control-center-dialog-surface"
       role="dialog"
       aria-modal="true"
       aria-labelledby="spec-condition-dialog-title"
@@ -3539,36 +3539,32 @@ watch(() => props.readOnly, readOnly => {
       @click.stop
     >
       <!-- Header -->
-      <div class="control-center-dialog-header relative shrink-0 border-b p-6">
-        <div class="relative flex items-center justify-between">
-          <div class="flex items-center gap-4">
-            <div class="w-12 h-12 bg-white shadow-sm rounded-xl flex items-center justify-center">
-              <svg class="w-6 h-6 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-              </svg>
-            </div>
-            <div>
-              <h3 id="spec-condition-dialog-title" class="text-xl font-bold text-black">
-                {{ editingConditionIndex >= 0 ? t('app.editCondition') : t('app.addConditionTitle') }}
-              </h3>
-              <p class="text-sm text-slate-600">{{ t('app.configureSpecification') }}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            :aria-label="t('app.close')"
-            @click="closeSpecDialog"
-            class="w-10 h-10 bg-white hover:bg-slate-50 rounded-lg flex items-center justify-center transition-all hover:rotate-90 shadow-sm"
-          >
-            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
+      <div class="iot-dialog__header">
+        <span class="iot-dialog__icon" aria-hidden="true">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+          </svg>
+        </span>
+        <div class="iot-dialog__heading">
+          <h3 id="spec-condition-dialog-title" class="iot-dialog__title">
+            {{ editingConditionIndex >= 0 ? t('app.editCondition') : t('app.addConditionTitle') }}
+          </h3>
+          <p class="iot-dialog__subtitle">{{ t('app.configureSpecification') }}</p>
         </div>
+        <button
+          type="button"
+          :aria-label="t('app.close')"
+          @click="closeSpecDialog"
+          class="iot-dialog__close"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
       </div>
 
       <!-- Content Body -->
-      <div class="control-center-dialog-body min-h-0 flex-1 space-y-6 iot-scroll-region overscroll-contain p-6">
+      <div class="iot-dialog__body iot-scroll-region space-y-6">
         <!-- Device Selection -->
         <div class="space-y-2">
           <div class="flex items-center gap-2">
@@ -3730,7 +3726,7 @@ watch(() => props.readOnly, readOnly => {
       </div>
 
       <!-- Footer Actions -->
-      <div class="control-center-dialog-footer flex shrink-0 flex-wrap items-center justify-end gap-3 border-t px-6 py-4">
+      <div class="iot-dialog__footer flex-wrap">
         <p
           v-if="specConditionBlockedReason"
           id="spec-condition-blocked-reason"
@@ -3742,14 +3738,14 @@ watch(() => props.readOnly, readOnly => {
         </p>
         <button
           @click="closeSpecDialog"
-          class="px-5 py-2.5 text-sm font-bold text-black bg-white border-2 border-slate-300 rounded-lg hover:bg-slate-50 hover:border-slate-400 transition-all"
+          class="iot-dialog-btn iot-dialog-btn--ghost"
         >
           {{ t('app.cancel') }}
         </button>
         <button
           @click="saveCondition"
           data-testid="spec-condition-save"
-          class="px-5 py-2.5 text-sm font-bold text-black bg-gradient-to-r from-[color:var(--danger)] to-[color:var(--danger)] rounded-lg hover:from-[color:var(--danger)] hover:to-[color:var(--danger)] transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="iot-dialog-btn iot-dialog-btn--primary"
           :disabled="props.readOnly || Boolean(specConditionBlockedReason)"
           :aria-describedby="specConditionBlockedReason ? 'spec-condition-blocked-reason' : undefined"
         >
@@ -3833,40 +3829,38 @@ watch(() => props.readOnly, readOnly => {
   <!-- Delete Confirmation Dialog -->
   <div
     v-if="showDeleteConfirmDialog"
-    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
+    class="iot-dialog-overlay"
     @click="closeTemplateDeleteConfirm()"
     @keydown="handleTemplateDeleteDialogKeydown"
   >
     <div
       :ref="setTemplateDeleteDialogRef"
-      class="control-center-dialog-surface control-center-delete-dialog w-full max-w-md iot-scroll-region rounded-lg border p-6 shadow-2xl"
+      class="iot-dialog iot-dialog--sm iot-dialog--danger"
+      data-testid="template-delete-dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-template-dialog-title"
       tabindex="-1"
       @click.stop
     >
-      <!-- 警告头部 -->
-      <div class="relative -mx-6 -top-6 mb-6 bg-[color:var(--danger-fill)] rounded-t-2xl p-6 text-center">
-        <div class="relative">
-          <div class="w-16 h-16 mx-auto bg-white/20 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-white text-3xl">warning</span>
-          </div>
-          <h3 id="delete-template-dialog-title" class="text-base text-white/90">{{ t('app.youAreAboutToDelete') }}</h3>
+      <!-- The tone tile carries the warning. This used to be a full-bleed red banner with a 64px circle
+           inside it, which shouted louder than the account-deletion dialog for a reversible catalog edit. -->
+      <div class="iot-dialog__header">
+        <div class="iot-dialog__icon">
+          <span class="material-symbols-outlined" aria-hidden="true">delete</span>
+        </div>
+        <div class="iot-dialog__heading">
+          <h3 id="delete-template-dialog-title" class="iot-dialog__title">
+            {{ templateToDelete ? templateToDelete.manifest.Name : t('app.youAreAboutToDelete') }}
+          </h3>
+          <p class="iot-dialog__subtitle">{{ t('app.actionCannotBeUndone') }}</p>
         </div>
       </div>
 
-      <div v-if="templateToDelete" class="text-center mb-6">
-        <div class="inline-flex items-center gap-3 px-6 py-3 board-chip-danger rounded-xl border-2 border-[color:var(--danger-border)]">
-          <span class="material-symbols-outlined board-text-danger text-xl">inventory_2</span>
-          <p class="text-lg font-bold board-text-danger">{{ templateToDelete.manifest.Name }}</p>
-        </div>
-        <p class="text-xs text-slate-500 mt-3">{{ t('app.actionCannotBeUndone') }}</p>
-      </div>
-
+      <div class="iot-dialog__body iot-scroll-region">
       <div
         v-if="templateDeletePreview && !templateDeletePreview.canDelete"
-        class="mb-5 rounded-lg border border-[color:var(--warning-border)] board-chip-warning p-3 text-left"
+        class="rounded-lg border border-[color:var(--warning-border)] board-chip-warning p-3 text-left"
       >
         <p class="text-sm font-bold board-text-warning">{{ t('app.templateDeleteBlocked') }}</p>
         <p class="mt-1 text-xs leading-5 board-text-warning">{{ t('app.templateDeleteBlockedDetail') }}</p>
@@ -3882,26 +3876,28 @@ watch(() => props.readOnly, readOnly => {
         </ul>
       </div>
 
-      <p v-else-if="templateDeletePreview" class="mb-5 text-center text-xs leading-5 text-slate-600">
+      <p v-else-if="templateDeletePreview" class="iot-dialog__consequence">
         {{ t('app.templateDeleteNoReferences', {
           historyEntries: templateDeletePreview.editHistoryEntryCount
         }) }}
       </p>
+      </div>
 
-      <div class="flex justify-center gap-3">
+      <div class="iot-dialog__footer">
         <button
           :disabled="isDeletingTemplate"
           @click="closeTemplateDeleteConfirm()"
-          class="px-6 py-2.5 text-sm font-semibold text-slate-600 bg-white border-2 border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all"
+          class="iot-dialog-btn iot-dialog-btn--ghost"
         >
           {{ t('app.cancel') }}
         </button>
         <button
           @click="confirmDeleteTemplate"
           :disabled="props.readOnly || isDeletingTemplate || !templateDeletePreview?.canDelete"
-          class="px-6 py-2.5 text-sm font-semibold text-white bg-[color:var(--danger-fill)] rounded-lg hover:bg-[color:var(--danger-fill)] transition-all shadow-md flex items-center gap-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+          data-testid="template-delete-confirm"
+          class="iot-dialog-btn iot-dialog-btn--danger"
         >
-          <span class="material-symbols-outlined text-sm">delete</span>
+          <span class="material-symbols-outlined" aria-hidden="true">delete</span>
           {{ isDeletingTemplate ? t('app.deleting') : t('app.deleteTemplate') }}
         </button>
       </div>
@@ -3911,33 +3907,34 @@ watch(() => props.readOnly, readOnly => {
   <!-- Reset Default Templates Confirmation Dialog -->
   <div
     v-if="showResetDefaultsConfirmDialog"
-    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+    class="iot-dialog-overlay"
     @click="closeResetDefaultsConfirm()"
     @keydown="handleResetDefaultsDialogKeydown"
   >
     <div
       :ref="setResetDefaultsDialogRef"
-      class="template-reset-dialog max-h-[calc(100vh-2rem)] w-full max-w-md iot-scroll-region rounded-2xl border p-5 shadow-2xl"
+      class="iot-dialog iot-dialog--md iot-dialog--warning template-reset-dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="reset-default-templates-title"
       tabindex="-1"
       @click.stop
     >
-      <div class="mb-4 flex items-start gap-3">
-        <div class="template-reset-dialog__icon">
+      <div class="iot-dialog__header">
+        <div class="iot-dialog__icon">
           <span class="material-symbols-outlined" aria-hidden="true">restart_alt</span>
         </div>
-        <div class="min-w-0">
-          <h3 id="reset-default-templates-title" class="text-base font-extrabold">
+        <div class="iot-dialog__heading">
+          <h3 id="reset-default-templates-title" class="iot-dialog__title">
             {{ t('app.resetDefaultTemplatesTitle') }}
           </h3>
-          <p class="mt-1 text-xs leading-relaxed">
+          <p class="iot-dialog__subtitle">
             {{ t('app.resetDefaultTemplatesMessage') }}
           </p>
         </div>
       </div>
 
+      <div class="iot-dialog__body iot-scroll-region">
       <template v-if="defaultTemplateResetPreview">
         <div class="template-reset-dialog__notice rounded-lg border px-3 py-2 text-xs leading-relaxed">
           {{ t('app.resetDefaultTemplatesImpactSummary', {
@@ -4014,7 +4011,7 @@ watch(() => props.readOnly, readOnly => {
           </div>
         </div>
 
-        <p class="mt-3 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+        <p class="iot-dialog__consequence">
           {{ t('app.resetDefaultTemplatesNotice', {
             historyEntries: defaultTemplateResetPreview.editHistoryEntryCount
           }) }}
@@ -4029,10 +4026,13 @@ watch(() => props.readOnly, readOnly => {
         </p>
       </template>
 
-      <div class="mt-5 flex justify-end gap-3">
+      </div>
+
+      <div class="iot-dialog__footer">
         <button
           type="button"
-          class="template-reset-dialog__btn secondary"
+          class="iot-dialog-btn iot-dialog-btn--ghost"
+          data-testid="default-template-reset-cancel"
           :disabled="isResettingDefaultTemplates"
           @click="closeResetDefaultsConfirm()"
         >
@@ -4040,12 +4040,13 @@ watch(() => props.readOnly, readOnly => {
         </button>
         <button
           type="button"
-          class="template-reset-dialog__btn primary"
+          class="iot-dialog-btn iot-dialog-btn--primary"
+          data-testid="default-template-reset-confirm"
           :disabled="props.readOnly || isResettingDefaultTemplates || !defaultTemplateResetPreview?.canApply"
           @click="confirmResetDefaultTemplates"
         >
-          <span v-if="isResettingDefaultTemplates" class="template-reset-dialog__spinner" aria-hidden="true"></span>
-          <span v-else class="material-symbols-outlined text-sm" aria-hidden="true">restart_alt</span>
+          <span v-if="isResettingDefaultTemplates" class="iot-dialog-btn__spinner" aria-hidden="true"></span>
+          <span v-else class="material-symbols-outlined" aria-hidden="true">restart_alt</span>
           {{ isResettingDefaultTemplates ? t('app.resetting') : t('app.resetDefaultTemplates') }}
         </button>
       </div>
@@ -4340,30 +4341,10 @@ details > summary::-webkit-details-marker {
  * card. That is the "silent fallback" the root CLAUDE.md rules out: robustness for a case that cannot occur,
  * paid for in comprehension.
  */
+/* The card shell (background, border, radius, max-height) comes from `.iot-dialog`; what stays here is the
+   board ink context the body content below is written against. */
 .control-center-dialog-surface {
-  background: var(--board-panel-bg);
-  border-color: var(--board-border);
   color: var(--board-text);
-}
-
-.control-center-spec-dialog {
-  max-height: calc(100vh - 1.5rem);
-  max-height: calc(100dvh - 1.5rem);
-}
-
-.control-center-delete-dialog {
-  max-height: calc(100vh - 2rem);
-  max-height: calc(100dvh - 2rem);
-}
-
-.control-center-dialog-header,
-.control-center-dialog-footer {
-  background: var(--board-control-bg);
-  border-color: var(--board-border);
-}
-
-.control-center-dialog-body {
-  background: var(--board-panel-bg);
 }
 
 .control-center-dialog-surface :is(input, select, textarea) {
@@ -4404,81 +4385,10 @@ details > summary::-webkit-details-marker {
   border-color: var(--board-border) !important;
 }
 
-.template-reset-dialog__icon {
-  display: grid;
-  width: 2.75rem;
-  height: 2.75rem;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: var(--iot-radius-card);
-  background: color-mix(in srgb, var(--warning) 16%, var(--board-panel-bg));
-  color: #ea580c;
-}
-
-.template-reset-dialog p {
-  color: var(--board-text-muted);
-}
-
 .template-reset-dialog__notice {
   background: color-mix(in srgb, var(--warning) 8%, var(--board-panel-bg));
   border-color: color-mix(in srgb, var(--warning) 28%, var(--board-border));
   color: var(--board-text);
-}
-
-.template-reset-dialog__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  min-height: 2.35rem;
-  padding: 0 0.95rem;
-  border-radius: var(--iot-radius-well);
-  font-size: 0.8rem;
-  font-weight: 800;
-  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
-}
-
-.template-reset-dialog__btn:not(:disabled):active {
-  transform: scale(0.98);
-}
-
-.template-reset-dialog__btn.secondary {
-  border: 1px solid var(--board-border);
-  background: var(--board-control-bg);
-  color: var(--board-text-muted);
-}
-
-.template-reset-dialog__btn.primary {
-  border: 1px solid transparent;
-  /* `var(--warning)` is the ink half: the dark theme lightens it to #fcd34d, which left this white label at
-     1.44:1 — the worst reading in the interface. The fill half is 5.02:1 in both themes, deepening to
-     5.45:1 at the shaded stop. Same 160deg deepening as the attacked-device badge, so the two filled
-     warnings read as one treatment. */
-  background: linear-gradient(160deg,
-      var(--warning-fill) 0%,
-      color-mix(in srgb, var(--warning-fill) 85%, #78350f) 100%);
-  color: #ffffff;
-  box-shadow: 0 10px 20px color-mix(in srgb, var(--warning-fill) 22%, transparent);
-}
-
-.template-reset-dialog__btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-/*
- * The filled variant desaturates instead of fading, because fading took its label with it.
- *
- * `opacity: 0.6` over the dialog surface moved the fill to #d2986b and the white label to a wash of the
- * same: **2.49:1**, down from 5.02:1 — a disabled control is exempt from AA, but a user still has to be
- * able to read which button they cannot press. Mixing the fill toward a neutral says "inactive" through
- * saturation and keeps the ink at 5.14:1. Same treatment as `AccountDeleteDialog`'s danger button, where
- * the identical fade had made a destructive control read as armed.
- */
-.template-reset-dialog__btn.primary:disabled {
-  background: color-mix(in srgb, var(--warning-fill) 34%, #64748b);
-  box-shadow: none;
-  opacity: 1;
 }
 
 .template-reset-dialog__spinner {
@@ -4747,20 +4657,6 @@ details > summary::-webkit-details-marker {
 
 .template-preview__empty {
   color: var(--template-preview-muted);
-}
-
-/* Animation utilities */
-@keyframes pulse-glow {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(100, 116, 139, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(100, 116, 139, 0);
-  }
-}
-
-.animate-pulse-glow {
-  animation: pulse-glow 2s infinite;
 }
 
 /* Input focus animation */

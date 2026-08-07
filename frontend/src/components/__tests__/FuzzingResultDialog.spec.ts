@@ -168,9 +168,12 @@ describe('FuzzingResultDialog', () => {
     expect(wrapper.text()).toContain('Candidate violation found')
     expect(wrapper.text()).toContain('1 second')
     expect(wrapper.text()).not.toContain('1s')
+    // The surface and its border come from the shared dialog layer's theme tokens. This used to pin
+    // `dark:border-slate-700` and `dark:bg-slate-900` — two hue ramps — immediately above a comment
+    // explaining why hue ramps must not be pinned.
     expect(wrapper.get('[role="dialog"]').classes()).toEqual(expect.arrayContaining([
-      'dark:border-slate-700',
-      'dark:bg-slate-900'
+      'iot-dialog',
+      'iot-dialog--lg'
     ]))
     // Assert the semantic role, not a hue ramp: PAPER_COMPATIBLE mode is a warning surface, and the
     // theme-aware token owns how that looks in each theme. Pinning `dark:bg-amber-950/50` made the

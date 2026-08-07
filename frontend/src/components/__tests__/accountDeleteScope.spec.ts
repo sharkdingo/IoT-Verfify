@@ -68,9 +68,15 @@ describe('account deletion scope', () => {
     // And visibly so. `opacity: 0.58` alone left the button saturated red with its glow intact, and all three
     // reviews read it as enabled while measurement showed `disabled: true` — the control was right and its
     // appearance was not, which on an irreversible action is the worse failure.
-    const disabledRule = dialog.slice(dialog.indexOf('.account-delete-btn:disabled'))
+    const disabledRule = dialog.slice(dialog.indexOf('.account-delete-confirm:disabled'))
     expect(disabledRule.slice(0, disabledRule.indexOf('}'))).toContain('box-shadow: none')
-    expect(dialog).toMatch(/\.account-delete-btn\.danger:disabled\s*\{[^}]*color-mix/)
+
+    // Desaturated to a neutral, not tinted toward the danger hue and not faded. Both of the treatments this
+    // replaced were measured illegible: `opacity: 0.58` over a saturated red still read as armed, and mixing
+    // danger 34% into the white surface produced a pink wash under white ink.
+    const sheet = readFileSync(join(__dirname, '../../styles/dialog.css'), 'utf8')
+    const shared = sheet.slice(sheet.indexOf('.iot-dialog-btn--danger:disabled'))
+    expect(shared.slice(0, shared.indexOf('}'))).toContain('var(--accent-fill-disabled)')
   })
 
   it('keeps the flow addressable, since it is the one irreversible action', () => {

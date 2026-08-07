@@ -341,30 +341,43 @@ test.describe('public theme and layout', () => {
     expect(logoutBox!.x + logoutBox!.width).toBeLessThanOrEqual(720)
 
     await logoutButton.click()
-    await page.locator('.delete-account-link').click()
+    // Addressed by test id: the entry's appearance classes come from the shared dialog layer and change with
+    // it, while this route — logout being the only way to reach account deletion — is a product contract.
+    await page.getByTestId('open-account-delete').click()
     const accountDialog = page.locator('.account-delete-dialog')
     await expect(accountDialog).toBeVisible()
 
     await page.setViewportSize({ width: 720, height: 360 })
     const dialogMetrics = await accountDialog.evaluate(element => {
       const rect = element.getBoundingClientRect()
-      const style = getComputedStyle(element)
       return {
         top: rect.top,
         bottom: rect.bottom,
-        viewportHeight: window.innerHeight,
-        overflowY: style.overflowY,
-        scrollHeight: element.scrollHeight,
-        clientHeight: element.clientHeight
+        viewportHeight: window.innerHeight
       }
     })
     expect(dialogMetrics.top).toBeGreaterThanOrEqual(0)
     expect(dialogMetrics.bottom).toBeLessThanOrEqual(dialogMetrics.viewportHeight)
-    expect(dialogMetrics.overflowY).toBe('auto')
-    expect(dialogMetrics.scrollHeight).toBeGreaterThan(dialogMetrics.clientHeight)
+
+    /*
+     * The card itself is `overflow: hidden` and its `__body` is the only scrolling part — so the header and the
+     * footer's actions stay on screen while a long form scrolls under them. This used to assert `overflow-y:
+     * auto` on the card, which scrolled the *whole* dialog including its buttons; measuring the card now reads
+     * `hidden` and would look like a regression while the reachability guarantee is strictly better.
+     *
+     * What matters is the guarantee, so assert that: the body is the scroller, and the confirm button is
+     * on screen at 360px tall without being scrolled to.
+     */
+    const bodyMetrics = await accountDialog.locator('.iot-dialog__body').evaluate(element => ({
+      overflowY: getComputedStyle(element).overflowY,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight
+    }))
+    expect(bodyMetrics.overflowY).toBe('auto')
+    expect(bodyMetrics.scrollHeight).toBeGreaterThan(bodyMetrics.clientHeight)
 
     const confirmButton = accountDialog.locator('button[type="submit"]')
-    await confirmButton.scrollIntoViewIfNeeded()
+    await expect(confirmButton).toBeInViewport()
     await expect(confirmButton).toBeVisible()
   })
 })

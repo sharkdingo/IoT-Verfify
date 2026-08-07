@@ -64,18 +64,21 @@ describe('DeviceDialog template authority', () => {
 
     const renameButton = document.querySelector<HTMLButtonElement>('[data-testid="device-rename"]')
     expect(renameButton).not.toBeNull()
-    expect(document.querySelector('.device-dialog-header')?.classList).toContain('px-4')
-    expect(document.querySelector('.device-dialog-body')?.classList).toContain('px-4')
-    expect(document.querySelector('.device-dialog-footer')?.classList).toContain('flex-col')
-    expect(renameButton?.classList).toContain('w-full')
-    expect(renameButton?.classList).toContain('min-h-11')
-    expect(document.querySelector('[data-testid="device-delete"]')?.classList).toContain('min-h-11')
-    expect(document.querySelector('[data-testid="device-dialog-footer-close"]')?.classList)
-      .toContain('min-h-11')
+    // Narrow-viewport layout and the 44px touch floor now come from styles/dialog.css (the sheet turns the
+    // footer into stacked full-width buttons under 640px and raises every action to 2.75rem there), so what
+    // this asserts is that the dialog is built from that layer rather than re-deriving the padding and the
+    // target sizes per surface. Utility-class assertions here previously passed while the same dialog
+    // disagreed with every other one about button height.
+    expect(document.querySelector('.iot-dialog')?.classList).toContain('iot-dialog--md')
+    expect(document.querySelector('.iot-dialog__header')).not.toBeNull()
+    expect(document.querySelector('.iot-dialog__body')).not.toBeNull()
+    expect(document.querySelector('.iot-dialog__footer')).not.toBeNull()
+    for (const testid of ['device-rename', 'device-delete', 'device-dialog-footer-close']) {
+      expect(document.querySelector(`[data-testid="${testid}"]`)?.classList, testid)
+        .toContain('iot-dialog-btn')
+    }
     expect(document.querySelector('[data-testid="device-dialog-close"]')?.classList)
-      .toContain('min-h-11')
-    expect(document.querySelector('[data-testid="device-dialog-close"]')?.classList)
-      .toContain('min-w-11')
+      .toContain('iot-dialog__close')
     renameButton?.click()
     expect(wrapper.emitted('rename')).toHaveLength(1)
 
@@ -144,7 +147,7 @@ describe('DeviceDialog template authority', () => {
     })
 
     const headerIcon = () => document.querySelector(
-      '.device-dialog-header .material-icons-round'
+      '.iot-dialog__icon .material-icons-round'
     )?.textContent?.trim()
     expect(headerIcon()).toBe('garage')
 
@@ -1219,7 +1222,7 @@ describe('DeviceDialog template authority', () => {
     await edit('25')
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
 
-    trigger(document.querySelector<HTMLElement>('.device-dialog-overlay')!)
+    trigger(document.querySelector<HTMLElement>('.iot-dialog-overlay')!)
     await flushPromises()
 
     expect(confirm).toHaveBeenCalledOnce()

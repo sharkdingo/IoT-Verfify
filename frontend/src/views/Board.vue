@@ -622,6 +622,7 @@ import type { PortableSceneFile } from '@/types/scene'
 import { getNodeIcon as resolveNodeIcon } from '../utils/device'
 import {
   acknowledge,
+  confirmChoice,
   confirmDestructive,
   dismissAllNotifications,
   notifyBlocked,
@@ -642,6 +643,7 @@ import {
   reconcileBoardFocus,
   type BoardSemanticScene
 } from './board/semanticCommit'
+import { createFocusHighlight } from './board/focusHighlight'
 import { buildPlaybackEdges } from './board/playbackScene'
 import {
   formatRecommendationFilteredItem as formatFilteredItem,
@@ -913,7 +915,7 @@ const handleLogoutConfirm = async () => {
       return
     }
     if (chatPreparation === 'outcome-unknown') {
-      const proceed = await confirmDestructive({
+      const proceed = await confirmChoice({
         title: t('app.chat.logoutOutcomeUnknownTitle'),
         message: t('app.chat.logoutOutcomeUnknownMessage'),
         confirmText: t('app.chat.logoutOutcomeUnknownConfirm')
@@ -935,7 +937,7 @@ const handleLogoutConfirm = async () => {
       interactivePreparation = 'outcome-unknown'
     }
     if (interactivePreparation === 'outcome-unknown') {
-      const proceed = await confirmDestructive({
+      const proceed = await confirmChoice({
         title: t('app.logoutInteractiveOutcomeUnknownTitle'),
         message: t('app.logoutInteractiveOutcomeUnknownMessage'),
         confirmText: t('app.logoutInteractiveOutcomeUnknownConfirm')
@@ -1553,20 +1555,41 @@ const environmentMutationPending = ref(false)
 const edges = ref<DeviceEdge[]>([])
 const rules = ref<RuleForm[]>([])  // 独立存储规则列表
 const rulesReordering = ref(false)
+/*
+ * "Show me where that is" — a one-shot cue owned by `board/focusHighlight.ts`, not a selection.
+ *
+ * These three used to be independently written refs, mutually exclusive only because each setter remembered
+ * to null the other two, and cleared only by whoever happened to think of it. Five exits did not, so a
+ * device kept an infinitely pulsing halo indefinitely. The controller expires the cue on a timer, which
+ * makes a missed exit cost a second of highlight instead of a permanent one. The refs below are now
+ * *derived* — nothing assigns them except the controller's `onChange`.
+ */
 const focusedNodeId = ref<string | null>(null)
 const focusedRuleId = ref<string | null>(null)
 const focusedSpecId = ref<string | null>(null)
+const focusHighlight = createFocusHighlight({
+  onChange: target => {
+    focusedNodeId.value = target?.kind === 'node' ? target.id : null
+    focusedRuleId.value = target?.kind === 'rule' ? target.id : null
+    focusedSpecId.value = target?.kind === 'spec' ? target.id : null
+  },
+  setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
+  clearTimer: handle => window.clearTimeout(handle)
+})
+onBeforeUnmount(() => focusHighlight.dispose())
 const reconcileDanglingBoardFocus = (
   scene: Pick<BoardSemanticScene, 'nodes' | 'rules' | 'specs'>
 ) => {
-  const reconciled = reconcileBoardFocus({
-    nodeId: focusedNodeId.value,
-    ruleId: focusedRuleId.value,
-    specId: focusedSpecId.value
-  }, scene)
-  focusedNodeId.value = reconciled.nodeId
-  focusedRuleId.value = reconciled.ruleId
-  focusedSpecId.value = reconciled.specId
+  // Deleting the focused item is the one case that must not wait for the timer: the cue would keep painting
+  // an id that no longer exists. `reconcileBoardFocus` stays the owner of "does this still exist".
+  focusHighlight.reconcile(target => {
+    const survivor = reconcileBoardFocus({
+      nodeId: target.kind === 'node' ? target.id : null,
+      ruleId: target.kind === 'rule' ? target.id : null,
+      specId: target.kind === 'spec' ? target.id : null
+    }, scene)
+    return Boolean(survivor.nodeId ?? survivor.ruleId ?? survivor.specId)
+  })
 }
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const sceneActionsMenuRef = ref<HTMLDetailsElement | null>(null)
@@ -2990,14 +3013,14 @@ const confirmRecommendedRuleSimilarity = async (candidate: RuleForm): Promise<bo
         })
       : t('app.aiSimilarRuleMayExist', { reason })
 
-    return await confirmDestructive({
+    return await confirmChoice({
       title: t('app.aiRuleSimilarityDetected'),
       message,
       confirmText: t('app.applyAnyway')
     })
   } catch (error) {
     console.error('AI similarity check failed before applying recommendation:', error)
-    return await confirmDestructive({
+    return await confirmChoice({
       title: t('app.aiRuleSimilarityDetected'),
       message: t('app.aiSimilarityCheckFailedCanStillApply'),
       confirmText: t('app.applyAnyway')
@@ -3972,8 +3995,8 @@ const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
       try {
         const mutation = await boardApi.reorderRules(expectedOrder, requestedOrder)
         commitSemanticScene({ rules: mutation.rules, availability: mutation })
-        // Keep the moved rule selected so the user can press the button again immediately.
-        focusedRuleId.value = ruleId
+        // Re-cue the moved rule so a repeated press stays oriented; each press restarts its lifetime.
+        focusHighlight.show('rule', ruleId)
         notifySuccess(t('app.ruleOrderUpdated'))
       } catch (error: any) {
         console.error('Failed to save rule execution order', error)
@@ -3983,7 +4006,7 @@ const moveRule = async (ruleId: string, direction: 'up' | 'down') => {
         if (!isDefinitiveMutationRejection(error)
           && refreshed && currentOrder.length === requestedOrder.length
           && currentOrder.every((id, index) => id === requestedOrder[index])) {
-          focusedRuleId.value = ruleId
+          focusHighlight.show('rule', ruleId)
           notifyBlocked(t('app.ruleOrderOutcomeRefreshed'))
         } else {
           notifyError(extractApiErrorMessage(error, t('app.ruleOrderUpdateFailed')))
@@ -4788,9 +4811,7 @@ const savedBatchMatchesScene = (
 
 const resetSceneSelectionAfterReplacement = async () => {
   dialogVisible.value = false
-  focusedNodeId.value = null
-  focusedRuleId.value = null
-  focusedSpecId.value = null
+  focusHighlight.clear()
   await nextTick()
   if (getVisibleDeviceNodes().length > 0) {
     fitNodesToCanvas(getVisibleDeviceNodes())
@@ -4976,9 +4997,7 @@ const clearScene = async () => {
         specifications.value = saved.specs
         syncRuleDerivedEdges()
         dialogVisible.value = false
-        focusedNodeId.value = null
-        focusedRuleId.value = null
-        focusedSpecId.value = null
+        focusHighlight.clear()
         notifySuccess(t('app.sceneClearSuccess'))
       } catch (error: any) {
         console.error('Failed to clear scene', error)
@@ -5460,9 +5479,7 @@ const focusDeviceNodeOnCanvas = (
     node.position.x + width / 2,
     node.position.y + height / 2
   )
-  focusedNodeId.value = node.id
-  focusedRuleId.value = null
-  focusedSpecId.value = null
+  focusHighlight.show('node', node.id)
   void nextTick(() => {
     const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
       ? CSS.escape(node.id)
@@ -5481,9 +5498,7 @@ const focusCreatedDeviceNode = async (node?: DeviceNode | null) => {
 const focusRuleOnCanvas = async (ruleId?: string | null) => {
   if (!ruleId) return
   if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
-  focusedRuleId.value = ruleId
-  focusedNodeId.value = null
-  focusedSpecId.value = null
+  focusHighlight.show('rule', ruleId)
   if (!layoutHydrated.value) panelStateTouchedBeforeLayout = true
   boardPanels.inspector.collapsed = false
   if (isNarrowViewport()) boardPanels.control.collapsed = true
@@ -5515,9 +5530,7 @@ const focusRuleOnCanvas = async (ruleId?: string | null) => {
 
 const focusSpecInInspector = async (specId?: string | null) => {
   if (!specId) return
-  focusedSpecId.value = specId
-  focusedNodeId.value = null
-  focusedRuleId.value = null
+  focusHighlight.show('spec', specId)
   if (!layoutHydrated.value) panelStateTouchedBeforeLayout = true
   boardPanels.inspector.collapsed = false
   if (isNarrowViewport()) boardPanels.control.collapsed = true
@@ -8087,7 +8100,7 @@ const applyDeviceRecommendation = async (recommendation: DeviceRecommendation, i
   const availableLabel = getUniqueLabel(label, getVisibleDeviceNodes())
   let confirmedLabel = label
   if (availableLabel !== label) {
-    if (!await confirmDestructive({
+    if (!await confirmChoice({
       title: t('app.deviceRecommendationNameConflictTitle'),
       message: t('app.deviceRecommendationNameConflictConfirm', { from: label, to: availableLabel })
     })) return
@@ -13226,16 +13239,28 @@ const verificationUnsafeDetail = computed(() =>
     ? t('app.foundViolations', { count: verificationViolationCount.value })
     : t('app.verificationResultUnreliable')
 )
+/*
+ * The verdict decision table: one outcome, one tone, one wording.
+ *
+ * The five class fields this used to return (`dialogToneClass`, `iconBgClass`, `iconTextClass`, `cardClass`,
+ * `titleClass`, `detailClass`) were the same tone spelled six ways, repeated per branch — 20 strings encoding
+ * four decisions, where a future edit could plausibly change five of six and leave a dialog whose header
+ * disagreed with its verdict card. Deriving them from the tone name makes that state unrepresentable.
+ */
+const verificationVerdictTone = (tone: 'warning' | 'success' | 'danger') => ({
+  dialogToneClass: `iot-dialog--${tone}`,
+  iconBgClass: `board-chip-${tone}`,
+  iconTextClass: `board-text-${tone}`,
+  cardClass: `board-surface-${tone}`,
+  titleClass: `board-text-${tone}`,
+  detailClass: `board-text-${tone}`
+})
+
 const verificationResultStatus = computed(() => {
   const outcome = getVerificationOutcome(verificationResult.value)
   if (outcome === 'INCONCLUSIVE') {
     return {
-      headerClass: 'board-surface-warning',
-      cardClass: 'board-surface-warning',
-      iconBgClass: 'board-chip-warning',
-      iconTextClass: 'board-text-warning',
-      titleClass: 'board-text-warning',
-      detailClass: 'board-text-warning',
+      ...verificationVerdictTone('warning'),
       icon: 'help',
       title: t('app.verificationInconclusive'),
       detail: t('app.verificationInconclusiveDetail')
@@ -13244,12 +13269,7 @@ const verificationResultStatus = computed(() => {
 
   if (outcome === 'SATISFIED' && !isVerificationModelComplete(verificationResult.value, outcome)) {
     return {
-      headerClass: 'board-surface-warning',
-      cardClass: 'board-surface-warning',
-      iconBgClass: 'board-chip-warning',
-      iconTextClass: 'board-text-warning',
-      titleClass: 'board-text-warning',
-      detailClass: 'board-text-warning',
+      ...verificationVerdictTone('warning'),
       icon: 'report',
       title: t('app.verificationPassedWithGenerationWarnings'),
       detail: t('app.emittedSpecsPassedWithGenerationWarnings')
@@ -13258,12 +13278,7 @@ const verificationResultStatus = computed(() => {
 
   if (outcome === 'SATISFIED') {
     return {
-      headerClass: 'board-surface-success',
-      cardClass: 'board-surface-success',
-      iconBgClass: 'board-chip-success',
-      iconTextClass: 'board-text-success',
-      titleClass: 'board-text-success',
-      detailClass: 'board-text-success',
+      ...verificationVerdictTone('success'),
       icon: 'verified',
       title: t('app.checkedSpecificationsSatisfied'),
       detail: t('app.allSpecsPassedVerification')
@@ -13271,12 +13286,7 @@ const verificationResultStatus = computed(() => {
   }
 
   return {
-    headerClass: 'board-surface-danger',
-    cardClass: 'board-surface-danger',
-    iconBgClass: 'board-chip-danger',
-    iconTextClass: 'board-text-danger',
-    titleClass: 'board-text-danger',
-    detailClass: 'board-text-danger',
+    ...verificationVerdictTone('danger'),
     icon: 'warning',
     title: t('app.specificationViolationFound'),
     detail: verificationUnsafeDetail.value
@@ -13671,13 +13681,13 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="templateInstanceDialogVisible"
-      class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
+      class="iot-dialog-overlay"
       @click="cancelTemplateInstanceCreate"
       @keydown="handleTemplateInstanceDialogKeydown"
     >
       <div
         :ref="setTemplateInstanceDialogRef"
-        class="iot-scroll-region max-h-[calc(100dvh-2rem)] w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        class="iot-dialog iot-dialog--md"
         data-testid="template-instance-dialog"
         role="dialog"
         aria-modal="true"
@@ -13685,20 +13695,21 @@ const counterexampleTraceHelpText = computed(() => {
         tabindex="-1"
         @click.stop
       >
-        <div class="mb-4 flex items-start gap-3">
-          <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl board-chip-warning board-text-warning dark:bg-[color:var(--warning)]/15">
+        <div class="iot-dialog__header">
+          <div class="iot-dialog__icon">
             <span class="material-symbols-outlined" aria-hidden="true">add_location_alt</span>
           </div>
-          <div class="min-w-0">
-            <h3 id="template-instance-title" class="text-base font-extrabold text-slate-900 dark:text-white">
+          <div class="iot-dialog__heading">
+            <h3 id="template-instance-title" class="iot-dialog__title">
               {{ t('app.createDeviceFromTemplate') }}
             </h3>
-            <p class="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+            <p class="iot-dialog__subtitle">
               {{ t('app.createDeviceFromTemplateHint', { template: templateInstanceDialogData.template?.manifest.Name || t('app.unknown') }) }}
             </p>
           </div>
         </div>
 
+        <div class="iot-dialog__body iot-scroll-region">
         <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           {{ t('app.deviceName') }}
         </label>
@@ -13840,10 +13851,12 @@ const counterexampleTraceHelpText = computed(() => {
           </div>
         </details>
 
-        <div class="mt-5 flex justify-end gap-3">
+        </div>
+
+        <div class="iot-dialog__footer">
           <button
             type="button"
-            class="inline-flex min-h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800"
+            class="iot-dialog-btn iot-dialog-btn--ghost"
             :disabled="templateInstanceSaving"
             @click="cancelTemplateInstanceCreate"
           >
@@ -13852,12 +13865,12 @@ const counterexampleTraceHelpText = computed(() => {
           <button
             type="button"
             data-testid="template-instance-confirm"
-            class="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[color:var(--warning-fill)] px-4 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:bg-[color-mix(in_srgb,var(--warning)_84%,#000)] disabled:cursor-not-allowed disabled:opacity-60"
+            class="iot-dialog-btn iot-dialog-btn--primary"
             :disabled="templateInstanceSaving"
             @click="confirmTemplateInstanceCreate"
           >
-            <span v-if="templateInstanceSaving" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
-            <span v-else class="material-symbols-outlined text-base" aria-hidden="true">add</span>
+            <span v-if="templateInstanceSaving" class="iot-dialog-btn__spinner" aria-hidden="true"></span>
+            <span v-else class="material-symbols-outlined" aria-hidden="true">add</span>
             {{ t('app.createDevice') }}
           </button>
         </div>
@@ -16779,36 +16792,41 @@ const counterexampleTraceHelpText = computed(() => {
     <Teleport to="body">
       <div
         v-if="renameDialogVisible"
-        class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
+        class="iot-dialog-overlay"
         @click.self="cancelRename"
         @keydown="handleRenameDialogKeydown"
       >
         <div
           :ref="setRenameDialogRef"
-          class="w-96 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+          class="iot-dialog iot-dialog--sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="rename-device-dialog-title"
           tabindex="-1"
           @click.stop
         >
-          <div class="mb-6">
-            <h3 id="rename-device-dialog-title" class="mb-4 text-lg font-semibold text-slate-800 dark:text-slate-100">{{ t('app.renameDevice') }}</h3>
-            <div class="space-y-2">
-              <input
-                v-model="renameDialogData.newName"
-                @keyup.enter="confirmRename"
-                :disabled="renameDialogSubmitting"
-                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 transition-colors focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                :placeholder="t('app.enterDeviceName')"
-              />
+          <div class="iot-dialog__header">
+            <div class="iot-dialog__icon">
+              <span class="material-symbols-outlined" aria-hidden="true">edit</span>
+            </div>
+            <div class="iot-dialog__heading">
+              <h3 id="rename-device-dialog-title" class="iot-dialog__title">{{ t('app.renameDevice') }}</h3>
             </div>
           </div>
-          <div class="flex justify-end space-x-3">
+          <div class="iot-dialog__body">
+            <input
+              v-model="renameDialogData.newName"
+              @keyup.enter="confirmRename"
+              :disabled="renameDialogSubmitting"
+              class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 transition-colors focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-border)] dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              :placeholder="t('app.enterDeviceName')"
+            />
+          </div>
+          <div class="iot-dialog__footer">
             <button
               @click="cancelRename"
               :disabled="renameDialogSubmitting"
-              class="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              class="iot-dialog-btn iot-dialog-btn--ghost"
             >
               {{ t('app.cancel') }}
             </button>
@@ -16816,9 +16834,9 @@ const counterexampleTraceHelpText = computed(() => {
               @click="confirmRename"
               :disabled="renameDialogSubmitting || !renameDialogData.newName.trim() || renameDialogData.newName.trim() === renameDialogData.originalLabel"
               :aria-busy="renameDialogSubmitting"
-              class="inline-flex items-center gap-2 rounded-lg border border-transparent bg-[color:var(--accent-fill)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[color:var(--accent-fill-hover)] disabled:cursor-not-allowed board-action-disarmed"
+              class="iot-dialog-btn iot-dialog-btn--primary"
             >
-              <span v-if="renameDialogSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
+              <span v-if="renameDialogSubmitting" class="iot-dialog-btn__spinner" aria-hidden="true"></span>
               {{ renameDialogSubmitting ? t('app.saving') : t('app.confirm') }}
             </button>
           </div>
@@ -16830,13 +16848,13 @@ const counterexampleTraceHelpText = computed(() => {
     <Teleport to="body">
       <div
         v-if="deleteConfirmDialogVisible"
-        class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center overflow-y-auto bg-slate-950/20 p-3 backdrop-blur-[2px] dark:bg-slate-950/35 sm:p-4"
+        class="iot-dialog-overlay"
         @click.self="cancelDelete"
         @keydown="handleDeleteConfirmDialogKeydown"
       >
         <div
           :ref="setDeleteConfirmDialogRef"
-          class="flex max-h-[calc(100dvh-1.5rem)] w-96 max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:max-h-[calc(100dvh-2rem)] sm:max-w-[calc(100vw-2rem)]"
+          class="iot-dialog iot-dialog--md iot-dialog--danger"
           role="dialog"
           aria-modal="true"
           aria-labelledby="delete-device-dialog-title"
@@ -16845,26 +16863,26 @@ const counterexampleTraceHelpText = computed(() => {
           tabindex="-1"
           @click.stop
         >
-          <div class="iot-scroll-region min-h-0 flex-1 p-5 sm:p-6">
-            <div class="flex items-center mb-4">
-              <div class="flex-shrink-0 w-10 h-10 board-chip-danger rounded-full flex items-center justify-center">
-                <span class="material-symbols-outlined board-text-danger" aria-hidden="true">warning</span>
-              </div>
-              <div class="ml-3">
-                <h3 id="delete-device-dialog-title" class="text-lg font-semibold text-slate-800 dark:text-slate-100">{{ t('app.deleteDeviceTitle') }}</h3>
-                <p
-                  id="delete-device-dialog-description"
-                  class="break-words text-sm text-slate-600 dark:text-slate-400"
-                  :title="deleteConfirmDialogData.node?.label || ''"
-                >
-                  {{ t('app.deleteDeviceConfirmMessage', { name: deleteConfirmDialogData.node?.label || '' }) }}
-                </p>
-              </div>
+          <div class="iot-dialog__header">
+            <div class="iot-dialog__icon">
+              <span class="material-symbols-outlined" aria-hidden="true">delete</span>
             </div>
+            <div class="iot-dialog__heading">
+              <h3 id="delete-device-dialog-title" class="iot-dialog__title">{{ t('app.deleteDeviceTitle') }}</h3>
+              <p
+                id="delete-device-dialog-description"
+                class="iot-dialog__subtitle break-words"
+                :title="deleteConfirmDialogData.node?.label || ''"
+              >
+                {{ t('app.deleteDeviceConfirmMessage', { name: deleteConfirmDialogData.node?.label || '' }) }}
+              </p>
+            </div>
+          </div>
 
+          <div class="iot-dialog__body iot-scroll-region">
             <div
               v-if="deletePreviewLoading"
-              class="mb-4 flex items-center gap-3 rounded-lg border board-border-subtle board-chip-info px-4 py-3 text-sm board-text-info"
+              class="mb-3 flex items-center gap-3 rounded-lg border board-border-subtle board-chip-info px-4 py-3 text-sm board-text-info"
               role="status"
               aria-live="polite"
             >
@@ -16872,7 +16890,7 @@ const counterexampleTraceHelpText = computed(() => {
               {{ t('app.deviceDeletionPreviewLoading') }}
             </div>
 
-            <div v-if="deleteConfirmDialogData.hasRelations" class="board-chip-warning border board-border-subtle rounded-lg p-4 mb-4">
+            <div v-if="deleteConfirmDialogData.hasRelations" class="board-chip-warning border board-border-subtle rounded-lg p-4">
               <div class="flex items-start">
                 <span class="material-symbols-outlined board-text-warning mr-2 mt-0.5" aria-hidden="true">info</span>
                 <div class="min-w-0">
@@ -16911,12 +16929,12 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
 
-          <div class="flex shrink-0 flex-wrap justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-700 dark:bg-slate-950/60 sm:px-6">
+          <div class="iot-dialog__footer">
             <button
               type="button"
               @click="cancelDelete"
               :disabled="deleteConfirmSubmitting"
-              class="min-h-11 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              class="iot-dialog-btn iot-dialog-btn--ghost"
             >
               {{ t('app.cancel') }}
             </button>
@@ -16925,9 +16943,9 @@ const counterexampleTraceHelpText = computed(() => {
               @click="confirmDelete"
               :disabled="deletePreviewLoading || deleteConfirmSubmitting || !deleteConfirmDialogData.impactToken"
               :aria-busy="deleteConfirmSubmitting"
-              class="inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[color:var(--danger-fill)] border border-transparent rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-[color:var(--danger-fill)] dark:hover:bg-[color:var(--danger-fill)]"
+              class="iot-dialog-btn iot-dialog-btn--danger"
             >
-              <span v-if="deleteConfirmSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
+              <span v-if="deleteConfirmSubmitting" class="iot-dialog-btn__spinner" aria-hidden="true"></span>
               {{ deleteConfirmSubmitting ? t('app.deleting') : t('app.deleteDevice') }}
             </button>
           </div>
@@ -16955,40 +16973,39 @@ const counterexampleTraceHelpText = computed(() => {
   <div
     v-if="simulationResult || simulationError"
     data-testid="simulation-result-dialog"
-    class="fixed inset-0 z-[var(--z-modal)] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+    class="iot-dialog-overlay"
     @click="dismissSimulationResultDialog"
     @keydown="handleSimulationResultDialogKeydown"
   >
     <div
       :ref="setSimulationResultDialogRef"
-      class="board-card board-result-dialog-surface min-h-0 flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 shadow-2xl"
+      class="iot-dialog iot-dialog--lg board-result-dialog-surface"
+      :class="simulationResult ? 'iot-dialog--info' : 'iot-dialog--danger'"
       role="dialog"
       aria-modal="true"
       aria-labelledby="simulation-result-dialog-title"
       tabindex="-1"
       @click.stop
     >
-      <header class="flex flex-shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4">
-          <div class="flex min-w-0 items-center gap-3">
-            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg board-chip-info board-text-info">
-              <span class="material-symbols-outlined text-2xl" aria-hidden="true">monitoring</span>
-            </div>
-            <div class="min-w-0">
-              <h3 id="simulation-result-dialog-title" class="text-base font-bold text-slate-900">{{ t('app.simulationRunDetails') }}</h3>
-              <p v-if="simulationResult" class="mt-0.5 text-xs leading-5 text-slate-600">
+      <header class="iot-dialog__header">
+          <div class="iot-dialog__icon">
+              <span class="material-symbols-outlined" aria-hidden="true">monitoring</span>
+          </div>
+            <div class="iot-dialog__heading">
+              <h3 id="simulation-result-dialog-title" class="iot-dialog__title">{{ t('app.simulationRunDetails') }}</h3>
+              <p v-if="simulationResult" class="iot-dialog__subtitle">
                 {{ t('app.simulationStateStepSummary', {
                   states: getSimulationStateCount(simulationResult),
                   steps: getSimulationActualStepCount(simulationResult),
                   requested: getSimulationRequestedStepCount(simulationResult)
                 }) }}
               </p>
-              <p v-else class="mt-0.5 text-xs board-text-danger">{{ t('app.simulationFailed') }}</p>
+              <p v-else class="iot-dialog__subtitle board-text-danger">{{ t('app.simulationFailed') }}</p>
             </div>
-          </div>
           <button
             type="button"
             data-testid="close-simulation-result"
-            class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800"
+            class="iot-dialog__close"
             :aria-label="t('app.close')"
             @click="dismissSimulationResultDialog"
           >
@@ -16996,7 +17013,7 @@ const counterexampleTraceHelpText = computed(() => {
           </button>
       </header>
 
-      <div v-if="simulationError" class="iot-scroll-region min-h-0 flex-1 p-5">
+      <div v-if="simulationError" class="iot-dialog__body iot-scroll-region">
         <div class="board-surface-danger rounded-lg p-4">
           <div class="flex items-start gap-2 board-text-danger">
             <span class="material-symbols-outlined" aria-hidden="true">error</span>
@@ -17005,7 +17022,7 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
       </div>
 
-      <div v-else-if="simulationResult" class="iot-scroll-region min-h-0 flex-1 space-y-4 p-5">
+      <div v-else-if="simulationResult" class="iot-dialog__body iot-scroll-region space-y-4">
         <div
           v-if="simulationResultStale"
           data-testid="simulation-result-stale-banner"
@@ -17160,29 +17177,24 @@ const counterexampleTraceHelpText = computed(() => {
         </details>
       </div>
 
-      <footer class="board-card flex flex-shrink-0 justify-end gap-3 border-t border-slate-200 px-5 py-4">
+      <footer class="iot-dialog__footer">
+        <button
+          type="button"
+          class="iot-dialog-btn iot-dialog-btn--ghost"
+          @click="dismissSimulationResultDialog"
+        >
+          {{ t('app.close') }}
+        </button>
         <button
           v-if="simulationResult && simulationResult.states && simulationResult.states.length > 0"
           type="button"
           :disabled="traceAnimationState.visible"
-          :class="[
-            'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
-            traceAnimationState.visible
-              ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-              : 'bg-[color:var(--accent-fill)] text-white hover:bg-[color:var(--accent-fill-hover)]'
-          ]"
+          class="iot-dialog-btn iot-dialog-btn--primary"
           @click="handleSimulationTimelineAction"
         >
-          <span class="material-symbols-outlined text-lg" aria-hidden="true">play_circle</span>
+          <span class="material-symbols-outlined" aria-hidden="true">play_circle</span>
           {{ simulationAnimationState.visible ? t('app.returnToTimeline') : t('app.viewTimeline') }}
-          <span v-if="traceAnimationState.visible" class="text-xs ml-1">({{ t('app.active') }})</span>
-        </button>
-        <button
-          type="button"
-          class="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-300"
-          @click="dismissSimulationResultDialog"
-        >
-          {{ t('app.close') }}
+          <span v-if="traceAnimationState.visible" class="text-xs">({{ t('app.active') }})</span>
         </button>
       </footer>
     </div>
@@ -17192,48 +17204,47 @@ const counterexampleTraceHelpText = computed(() => {
   <div
     v-if="showResultDialog"
     data-testid="verification-result-dialog"
-    class="fixed inset-0 z-[var(--z-modal)] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+    class="iot-dialog-overlay"
     @click="dismissResultDialog"
     @keydown="handleVerificationResultDialogKeydown"
   >
     <div
       :ref="setVerificationResultDialogRef"
-      class="board-card board-result-dialog-surface min-h-0 max-h-[85vh] w-[650px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 shadow-2xl flex flex-col"
+      class="iot-dialog iot-dialog--md board-result-dialog-surface"
+      :class="verificationResultStatus.dialogToneClass"
       role="dialog"
       aria-modal="true"
       aria-labelledby="verification-result-dialog-title"
       tabindex="-1"
       @click.stop
     >
-      <!-- Header -->
-      <div data-testid="verification-result-header" class="relative flex-shrink-0 overflow-hidden rounded-t-2xl border-b" :class="verificationResultStatus.headerClass">
-        <div class="relative flex items-center justify-between p-5">
-          <div class="flex items-center gap-4">
-            <div class="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm" :class="verificationResultStatus.iconBgClass">
-              <span class="material-symbols-outlined text-2xl" :class="verificationResultStatus.iconTextClass">
-                {{ verificationResultStatus.icon }}
-              </span>
-            </div>
-            <div>
-              <h3 id="verification-result-dialog-title" class="text-xl font-bold text-slate-800">{{ t('app.verificationResult') }}</h3>
-              <p class="text-sm text-slate-600">{{ verificationResultStatus.detail }}</p>
-            </div>
-          </div>
-          <HintTooltip :content="t('app.close')">
-            <button
-              type="button"
-              data-testid="close-verification-result"
-              @click="dismissResultDialog"
-              :aria-label="t('app.close')"
-              class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all"
-            >
-              <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
-            </button>
-          </HintTooltip>
+      <!-- Header. The verdict is carried by the dialog's tone (the icon tile and the consequence rules read
+           it), not by tinting the whole header band: a full-bleed coloured header made a satisfied result and
+           a violated one look like two different products. -->
+      <div data-testid="verification-result-header" class="iot-dialog__header">
+        <div class="iot-dialog__icon">
+          <span class="material-symbols-outlined" aria-hidden="true">
+            {{ verificationResultStatus.icon }}
+          </span>
         </div>
+        <div class="iot-dialog__heading">
+          <h3 id="verification-result-dialog-title" class="iot-dialog__title">{{ t('app.verificationResult') }}</h3>
+          <p class="iot-dialog__subtitle">{{ verificationResultStatus.detail }}</p>
+        </div>
+        <HintTooltip :content="t('app.close')">
+          <button
+            type="button"
+            data-testid="close-verification-result"
+            @click="dismissResultDialog"
+            :aria-label="t('app.close')"
+            class="iot-dialog__close"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
+          </button>
+        </HintTooltip>
       </div>
 
-      <div data-testid="verification-result-scroll" class="iot-scroll-region min-h-0 flex-1 p-6">
+      <div data-testid="verification-result-scroll" class="iot-dialog__body iot-scroll-region">
         <div v-if="verificationError" class="mb-4 p-4 board-chip-danger border board-border-subtle rounded-xl">
           <div class="flex items-center gap-2 board-text-danger">
             <span class="material-symbols-outlined">error</span>

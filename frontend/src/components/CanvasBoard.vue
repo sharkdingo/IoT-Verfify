@@ -771,9 +771,67 @@ const POINTER_RESIZE_ALL_HANDLES_SIZE_PX = POINTER_RESIZE_TARGET_SIZE_PX * 2
  */
 const VISIBLE_NODE_VARIABLES = 3
 
+/**
+ * How far a handle may reach *into* the node, as a fraction of the node's smaller screen dimension.
+ *
+ * A 44px handle centred on a corner puts 22px inside the node. On a node that is only 24px tall on screen,
+ * those 22px cover the whole thing: every pointer-down lands on the handle, so the node can be resized but no
+ * longer dragged, and the handle's own reveal-on-hover makes that state arrive exactly when the user reaches
+ * for it. Capping the inward reach keeps a majority of the node body free for dragging at any zoom.
+ */
+const POINTER_RESIZE_MAX_INWARD_FRACTION = 0.35
+
+/**
+ * Per-node handle geometry, in model units (the canvas transform scales them to screen).
+ *
+ * The touch target stays 44 screen pixels at every zoom — that is a WCAG floor, not a preference. What adapts
+ * is *where* those 44px sit relative to the corner: normally half in / half out, but on a node too small to
+ * spare 22px the handle slides outward so it keeps its size without smothering the node. At zoom 1 on an 80×60
+ * node the cap does not bind (35% of 60 = 21px vs a 22px natural reach, so the shift is 1px); at zoom 0.3 the
+ * same node is 24×18 on screen and the handle sits 6px in / 38px out.
+ *
+ * Declared per node rather than once on the canvas because the cap depends on the node's own dimensions.
+ */
+const getNodeResizeHandleGeometry = (node: DeviceNode) => {
+  const zoom = Math.max(props.zoom, 0.01)
+  const nodeScreenMin = Math.min(node.width, node.height) * zoom
+  const inwardPx = Math.min(
+    POINTER_RESIZE_TARGET_SIZE_PX / 2,
+    nodeScreenMin * POINTER_RESIZE_MAX_INWARD_FRACTION
+  )
+  return {
+    '--resize-hit-size': `${POINTER_RESIZE_TARGET_SIZE_PX / zoom}px`,
+    // Negative because each handle is positioned by its outer edge: the more negative, the farther out it sits.
+    '--resize-hit-offset': `${-(POINTER_RESIZE_TARGET_SIZE_PX - inwardPx) / zoom}px`
+  }
+}
+
+/**
+ * Whether the bottom-right handle renders — the one grip that makes a node growable by pointer.
+ *
+ * This used to require 52 screen pixels in *both* axes, which silently locked the product's smallest node.
+ * `NODE_HEIGHT_RANGE.min` is 60, so a minimum-sized node fell below the threshold at any zoom under 52/60 =
+ * 0.867: at zoom 0.85 it measured 68×51 and lost every handle, one pixel short. The only remaining way to
+ * grow it was Ctrl+arrow, which nothing on screen advertises — so the node was, to the user, permanently
+ * stuck at its smallest size.
+ *
+ * A node at its minimum **in both dimensions** is exactly when a grip matters most, so those get an
+ * unconditional guarantee. Nodes with one dimension at minimum but the other larger (e.g. 80×120) still use
+ * the screen-space test, because a tall skinny node has room at any reasonable zoom. The collision that the
+ * 52px threshold was really protecting against is now handled by `getNodeResizeHandleGeometry` capping the
+ * handle's inward reach.
+ */
 const canPointerResizeNode = (node: DeviceNode) =>
-  node.width * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX
-  && node.height * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX
+  (node.width <= NODE_WIDTH_RANGE.min && node.height <= NODE_HEIGHT_RANGE.min)
+  || (node.width * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX
+    && node.height * props.zoom >= POINTER_RESIZE_MIN_NODE_SIZE_PX)
+
+/**
+ * Whether all four corners get a handle.
+ *
+ * Four handles need room not to crowd each other — 88 screen pixels, two touch targets, in both axes. Below
+ * that the node keeps the single bottom-right grip, which is enough to resize and leaves the body clickable.
+ */
 const canShowAllPointerResizeHandles = (node: DeviceNode) =>
   node.width * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
   && node.height * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
@@ -1243,8 +1301,6 @@ onMounted(() => {
         transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
         transformOrigin: '0 0',
         '--canvas-zoom': zoom,
-        '--resize-hit-size': `${44 / Math.max(zoom, 0.01)}px`,
-        '--resize-hit-offset': `${-22 / Math.max(zoom, 0.01)}px`,
         '--resize-visual-size': `${11.2 / Math.max(zoom, 0.01)}px`
       }"
     >
@@ -1564,7 +1620,8 @@ onMounted(() => {
           '--node-accent-color': getNodeAccentColor(node.id),
           backgroundColor: getNodeSurfaceColor(node.id),
           borderColor: isDeviceAttacked(node.id) ? 'var(--danger)' : getNodeBorderColor(node.id),
-          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? 'var(--danger)' : getNodeBorderColor(node.id) } : {})
+          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? 'var(--danger)' : getNodeBorderColor(node.id) } : {}),
+          ...getNodeResizeHandleGeometry(node)
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
           @contextmenu.stop.prevent="onNodeContextInternal(node, $event)"

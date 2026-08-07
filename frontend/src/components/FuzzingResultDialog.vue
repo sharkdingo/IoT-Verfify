@@ -134,34 +134,32 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 <template>
   <div
     v-if="visible"
-    class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+    class="iot-dialog-overlay"
     data-testid="fuzzing-result-dialog"
     @keydown="handleModalKeydown"
   >
     <section
       :ref="setDialogRef"
-      class="flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+      class="iot-dialog iot-dialog--lg"
       role="dialog"
       aria-modal="true"
       aria-labelledby="fuzzing-result-title"
       aria-describedby="fuzzing-result-description"
       tabindex="-1"
     >
-      <header class="flex items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-700 dark:bg-slate-950">
-        <div class="flex min-w-0 items-center gap-3">
-          <div class="board-section-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">
-            <span class="material-symbols-outlined" aria-hidden="true">radar</span>
-          </div>
-          <div class="min-w-0">
-            <h3 id="fuzzing-result-title" class="text-base font-bold text-slate-900 dark:text-slate-100">{{ t('app.fuzzRunResult') }}</h3>
-            <p id="fuzzing-result-description" class="mt-0.5 text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t('app.fuzzResultHeuristicNotice') }}</p>
-          </div>
+      <header class="iot-dialog__header">
+        <div class="iot-dialog__icon">
+          <span class="material-symbols-outlined" aria-hidden="true">radar</span>
+        </div>
+        <div class="iot-dialog__heading">
+          <h3 id="fuzzing-result-title" class="iot-dialog__title">{{ t('app.fuzzRunResult') }}</h3>
+          <p id="fuzzing-result-description" class="iot-dialog__subtitle">{{ t('app.fuzzResultHeuristicNotice') }}</p>
         </div>
         <HintTooltip :content="t('app.close')">
           <button
             type="button"
             data-testid="close-fuzzing-result"
-            class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+            class="iot-dialog__close"
             :aria-label="t('app.close')"
             @click="closeDialog"
           >
@@ -172,7 +170,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
 
       <div
         data-testid="fuzzing-result-scroll"
-        class="iot-scroll-region iot-scroll-region--inset-end min-h-0 flex-1 space-y-4 p-5"
+        class="iot-dialog__body iot-scroll-region iot-scroll-region--inset-end space-y-4"
       >
         <div v-if="loading" class="flex flex-col items-center justify-center py-16 text-slate-500 dark:text-slate-300">
           <span class="material-symbols-outlined animate-spin text-4xl board-text-progress dark:board-text-progress" aria-hidden="true">sync</span>
@@ -409,12 +407,12 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
            in the list, where they belong to their row; this one applies to the whole result. -->
       <div
         v-if="run && run.findings.length === 0"
-        class="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950"
+        class="iot-dialog__footer"
       >
         <button
           type="button"
           data-testid="verify-current-board-without-finding"
-          class="board-action-inline-affirm px-6 text-sm"
+          class="iot-dialog-btn iot-dialog-btn--primary"
           :disabled="actionLocked"
           @click="emit('verifyCurrentBoard')"
         >

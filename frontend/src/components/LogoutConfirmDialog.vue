@@ -42,235 +42,54 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 
 <template>
   <Teleport to="body">
-    <Transition name="logout-dialog">
-      <div v-if="visible" class="logout-overlay" @click.self="handleCancel" @keydown="handleModalKeydown">
+    <Transition name="iot-dialog">
+      <div
+        v-if="visible"
+        class="iot-dialog-overlay iot-dialog-overlay--session"
+        @click.self="handleCancel"
+        @keydown="handleModalKeydown"
+      >
         <div
           :ref="setDialogRef"
-          class="logout-dialog"
+          class="iot-dialog iot-dialog--sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="logout-dialog-title"
           tabindex="-1"
         >
-          <!-- Icon -->
-          <div class="logout-icon-wrapper">
-            <div class="logout-icon-bg"></div>
-            <span class="material-symbols-outlined logout-icon" aria-hidden="true">logout</span>
+          <div class="iot-dialog__header">
+            <div class="iot-dialog__icon">
+              <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+            </div>
+            <div class="iot-dialog__heading">
+              <h2 id="logout-dialog-title" class="iot-dialog__title">{{ t('app.logoutTitle') }}</h2>
+            </div>
           </div>
 
-          <!-- Content -->
-          <div class="logout-content">
-            <h2 id="logout-dialog-title" class="logout-title">{{ t('app.logoutTitle') }}</h2>
-            <p class="logout-message">{{ t('app.logoutMessage') }}</p>
-          </div>
+          <div class="iot-dialog__body">{{ t('app.logoutMessage') }}</div>
 
-          <!-- Actions -->
-          <div class="logout-actions">
-            <button type="button" class="logout-btn logout-btn-cancel" @click="handleCancel" :disabled="loading">
+          <div class="iot-dialog__footer">
+            <!-- The only route to account deletion, so it needs to be addressable — but it is not one of
+                 the two answers to this question, so it sits apart from the pair. -->
+            <button
+              type="button"
+              class="iot-dialog-btn iot-dialog-btn--quiet iot-dialog__footer-aside"
+              data-testid="open-account-delete"
+              :disabled="loading"
+              @click="handleDeleteAccount"
+            >
+              {{ t('app.deleteAccountEntry') }}
+            </button>
+            <button type="button" class="iot-dialog-btn iot-dialog-btn--ghost" @click="handleCancel" :disabled="loading">
               {{ t('app.cancel') }}
             </button>
-            <button type="button" class="logout-btn logout-btn-confirm" @click="handleConfirm" :disabled="loading">
-              <span v-if="loading" class="loading-spinner"></span>
+            <button type="button" class="iot-dialog-btn iot-dialog-btn--primary" @click="handleConfirm" :disabled="loading">
+              <span v-if="loading" class="iot-dialog-btn__spinner" aria-hidden="true"></span>
               <span v-else>{{ t('app.logout') }}</span>
             </button>
           </div>
-
-          <!-- The only route to account deletion, so it needs to be addressable. -->
-          <button
-            type="button"
-            class="delete-account-link"
-            data-testid="open-account-delete"
-            :disabled="loading"
-            @click="handleDeleteAccount"
-          >
-            {{ t('app.deleteAccountEntry') }}
-          </button>
         </div>
       </div>
     </Transition>
   </Teleport>
 </template>
-
-<style scoped>
-.logout-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-session-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-}
-
-.logout-dialog {
-  width: 100%;
-  max-width: 380px;
-  padding: 2rem;
-  background: linear-gradient(145deg, #1e293b, var(--text));
-  border-radius: var(--iot-radius-surface);
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  box-shadow: 
-    0 25px 50px -12px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(255, 255, 255, 0.05);
-  text-align: center;
-  transform: scale(1);
-}
-
-.logout-icon-wrapper {
-  position: relative;
-  width: 72px;
-  height: 72px;
-  margin: 0 auto 1.5rem;
-}
-
-.logout-icon-bg {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, var(--danger), var(--danger));
-  border-radius: 50%;
-  animation: pulse-bg 2s ease-in-out infinite;
-}
-
-@keyframes pulse-bg {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.05);
-    opacity: 0.8;
-  }
-}
-
-.logout-icon {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 32px;
-  color: white;
-}
-
-.logout-content {
-  margin-bottom: 2rem;
-}
-
-.logout-title {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: #f8fafc;
-  margin-bottom: 0.75rem;
-  letter-spacing: -0.025em;
-}
-
-.logout-message {
-  font-size: 0.9375rem;
-  color: rgba(148, 163, 184, 0.85);
-  line-height: 1.6;
-}
-
-.logout-actions {
-  display: flex;
-  gap: 1rem;
-}
-
-.delete-account-link {
-  margin-top: 1.25rem;
-  padding: 0.25rem 0.5rem;
-  border: 0;
-  background: transparent;
-  color: var(--danger-border);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.delete-account-link:hover:not(:disabled) {
-  color: var(--danger-border);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.delete-account-link:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.logout-btn {
-  flex: 1;
-  padding: 0.875rem 1.5rem;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  border-radius: var(--iot-radius-well);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: none;
-}
-
-.logout-btn-cancel {
-  background: rgba(148, 163, 184, 0.1);
-  color: var(--text-muted);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.logout-btn-cancel:hover:not(:disabled) {
-  background: rgba(148, 163, 184, 0.15);
-  color: var(--border-strong);
-}
-
-.logout-btn-confirm {
-  background: linear-gradient(135deg, var(--danger-fill), var(--danger-fill));
-  color: white;
-  /* The glow is the fill's own shadow: `rgba(239, 68, 68, …)` here was a light-theme red that stayed
-     put while the fill beside it followed the theme. A destructive action has to read as destructive
-     in both themes, so the halo derives from the same token the button is painted with. */
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--danger-fill) 30%, transparent);
-}
-
-.logout-btn-confirm:hover:not(:disabled) {
-  /* `#f87171` stays a literal: this is a *fill* under white text, and the theme-aware `--danger` is
-     tuned as ink (dark theme lightens it to #fca5a5), so substituting it here would drop the label
-     below AA. Only the halo below is tokenised. */
-  background: linear-gradient(135deg, #f87171, var(--danger-fill));
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--danger-fill) 40%, transparent);
-}
-
-.logout-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.loading-spinner {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Transition */
-.logout-dialog-enter-active,
-.logout-dialog-leave-active {
-  transition: all 0.3s ease;
-}
-
-.logout-dialog-enter-from,
-.logout-dialog-leave-to {
-  opacity: 0;
-}
-
-.logout-dialog-enter-from .logout-dialog,
-.logout-dialog-leave-to .logout-dialog {
-  transform: scale(0.9);
-}
-</style>

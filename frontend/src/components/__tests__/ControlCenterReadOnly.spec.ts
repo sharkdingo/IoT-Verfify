@@ -175,7 +175,7 @@ describe('ControlCenter read-only mode', () => {
     await flushPromises()
 
     expect(boardApiMocks.previewDeviceTemplateDeletion).toHaveBeenCalledWith(1)
-    expect(document.querySelector('.control-center-delete-dialog')).toBeNull()
+    expect(document.querySelector('[data-testid="template-delete-dialog"]')).toBeNull()
 
     wrapper.unmount()
   })

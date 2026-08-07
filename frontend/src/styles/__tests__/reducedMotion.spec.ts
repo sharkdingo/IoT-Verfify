@@ -71,10 +71,68 @@ describe('reduced motion', () => {
       .toBeGreaterThanOrEqual(2)
   })
 
+  it('bounds the focus cue, because a pointer that never stops reads as a property of the thing', () => {
+    /*
+     * `.node-focused::after` and `.edge-line--focused` answer "where is that device/rule?" after the canvas
+     * pans. Both ran `infinite`, and the highlight that switched them on cleared on only five of its ten
+     * exits — so one device pulsed indefinitely while its neighbours sat still, and the halo read as
+     * something *about that device* rather than as the board pointing at it. Reported exactly that way:
+     * "why do some device instances glow and others don't?"
+     *
+     * The lifetime fix lives in `board/focusHighlight.ts` (the cue expires on a timer). This is the other
+     * half: the motion must be finite even while the cue is up, and must end before the cue does. Without
+     * this assertion, reverting either `2` to `infinite` is invisible — measured: no test in the suite
+     * noticed.
+     */
+    const css = boardCss()
+    for (const selector of ['.iot-board .device-node.node-focused::after', '.edge-line--focused']) {
+      const at = css.indexOf(selector)
+      expect(at, `${selector} should exist`).toBeGreaterThan(-1)
+      const rule = css.slice(at, css.indexOf('}', at))
+      const animation = /animation:\s*([^;]+)/.exec(rule)?.[1]
+      expect(animation, `${selector} should animate`).toBeTruthy()
+      expect(animation, `${selector} is a cue, not a status — it must not run forever`)
+        .not.toContain('infinite')
+      // An explicit iteration count, so "finite" is stated rather than inferred from the absence of a word.
+      expect(animation, `${selector} should declare an iteration count`).toMatch(/\s\d+$/)
+    }
+  })
+
+  it('keeps the focus cue visually distinct from the playback-changed mark', () => {
+    /*
+     * These mean unrelated things — "here is the device you asked for" versus "this device's state changed at
+     * this step of the counterexample" — and they co-occur, because focusing a device during playback applies
+     * both. They were nonetheless the same mark: a 4px accent ring plus a 28px accent bloom against 30% and
+     * 28px, same hue, both animating a scaling accent ring. §5's "state never depends on colour alone" is
+     * doubly violated when the shape does not differ either.
+     *
+     * The distinction is form: the cue is a *dashed* outline with no bloom (matching `.edge-line--focused`,
+     * the other cue), and a bloom stays exclusive to playback semantics. Asserting the two properties that
+     * carry that difference, rather than exact values, so retuning either mark stays free.
+     */
+    const css = boardCss()
+    const rule = (selector: string) => {
+      const at = css.indexOf(selector + ' {')
+      expect(at, `${selector} should exist`).toBeGreaterThan(-1)
+      return css.slice(at, css.indexOf('}', at))
+    }
+
+    // A bloom (a blur-radius shadow) belongs to the playback mark and not to the cue.
+    const bloom = /0 0 \d\d+px/
+    expect(rule('.iot-board .device-node.trace-changed'), 'the changed mark should keep its bloom')
+      .toMatch(bloom)
+    expect(rule('.iot-board .device-node.node-focused'), 'the cue must not reuse the changed mark\'s bloom')
+      .not.toMatch(bloom)
+
+    // And the cue's ring is dashed where the playback ring is solid.
+    expect(rule('.iot-board .device-node.node-focused::after')).toMatch(/border:[^;]*dashed/)
+    expect(rule('.iot-board .device-node.trace-change-pulse::after')).toMatch(/border:[^;]*solid/)
+  })
+
   it('still stops the animations that carry no information', () => {
     const block = motionBlock()
     // These exist to draw the eye and nothing else, so reduced motion removes them outright.
-    for (const decorative of ['.animate-ping', '.animate-pulse', '.animate-pulse-glow', '.fade-in']) {
+    for (const decorative of ['.animate-ping', '.animate-pulse', '.fade-in']) {
       expect(block, `${decorative} should be stopped under reduced motion`).toContain(decorative)
     }
     expect(block, 'the decorative list should be silenced').toMatch(/animation:\s*none\s*!important/)

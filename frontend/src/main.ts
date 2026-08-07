@@ -10,6 +10,8 @@ import './styles/base.css'
 import './style.css'
 import './styles/tailwind.css'
 import './styles/board.css'
+// After tailwind, so a utility in dialog markup can still override a shared dialog rule locally.
+import './styles/dialog.css'
 import App from './App.vue'
 import {router} from './router';
 import { i18n } from './assets/i18n.ts'

@@ -18,7 +18,9 @@ describe('board modal surfaces', () => {
       global: { plugins: [i18n] }
     })
 
-    expect(wrapper.classes()).toContain('z-[var(--z-modal)]')
+    // `--z-modal` now lives on `.iot-dialog-overlay`, so the builder sits above the fixed board nav by
+    // being built from that layer rather than by naming the layer itself.
+    expect(wrapper.classes()).toContain('iot-dialog-overlay')
     expect(wrapper.get('[role="dialog"]').attributes('aria-modal')).toBe('true')
     wrapper.unmount()
   })
@@ -38,13 +40,17 @@ describe('board modal surfaces', () => {
 
     const overlay = wrapper.get('[data-testid="spec-condition-dialog"]')
     const dialog = overlay.get('[role="dialog"]')
-    expect(overlay.classes()).toContain('z-[var(--z-modal)]')
-    expect(dialog.classes()).toContain('control-center-dialog-surface')
-    expect(dialog.classes()).toContain('control-center-spec-dialog')
+    // Reachability is a property of the shared dialog layer now: `.iot-dialog` is a bounded flex column,
+    // `__body` is the only part that scrolls, and `__footer` is `flex: none`, so the actions cannot be pushed
+    // past the bottom of a short viewport. Asserting the composition rather than the individual utilities is
+    // what keeps that guarantee from being re-derived (and mis-derived) per dialog.
+    expect(overlay.classes()).toContain('iot-dialog-overlay')
+    expect(dialog.classes()).toContain('iot-dialog')
     // Asserted as the shared primitive rather than the bare utility: it owns overflow together with
     // overscroll containment, the token scrollbar, and scroll-padding for revealed controls.
-    expect(dialog.get('.control-center-dialog-body').classes()).toContain('iot-scroll-region')
-    expect(dialog.get('.control-center-dialog-footer').classes()).toContain('shrink-0')
+    const body = dialog.get('.iot-dialog__body')
+    expect(body.classes()).toContain('iot-scroll-region')
+    expect(dialog.find('.iot-dialog__footer').exists()).toBe(true)
     wrapper.unmount()
   })
 })
