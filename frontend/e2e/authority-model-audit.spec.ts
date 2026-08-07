@@ -693,7 +693,9 @@ const expectTimelineNavigationAndContext = async (
   // suffix convention, and the panel is the step *values*, not the timeline's own details.
   const stateDetails = page.getByTestId(`${prefix}-step-values`)
   await expect(stateDetails).toBeVisible({ timeout: 30_000 })
-  if (!await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
+  // Only simulation-step-values is a <details> element with a clickable <summary>.
+  // trace-step-values is a plain <div> (always visible, no toggle).
+  if (prefix === 'simulation' && !await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
     await stateDetails.locator(':scope > summary').click({ force: true })
   }
   // The range slider was removed in 32b22e2: it was a second x-axis over the same index as the rail,
