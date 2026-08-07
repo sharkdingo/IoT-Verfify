@@ -694,7 +694,9 @@ const expectTimelineNavigationAndContext = async (
   if (!await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
     await stateDetails.locator(':scope > summary').click()
   }
-  await expect(page.getByTestId(`${prefix}-timeline-range`)).toBeVisible()
+  // The range slider was removed in 32b22e2: it was a second x-axis over the same index as the rail,
+  // which read as "two timelines". The rail took over the drag interaction the slider uniquely provided.
+  await expect(page.getByTestId(`${prefix}-timeline-scroll`)).toBeVisible()
   // Only the simulation rail has a numeric step input. The counterexample rail's was removed: a spin box
   // asking for an absolute state index is not how anyone reads a counterexample, and the rail itself plus
   // the range control already move the cursor.
