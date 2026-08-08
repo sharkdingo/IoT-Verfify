@@ -136,8 +136,13 @@ violated.
 | State | Readings | Devices | Fired in the step that produced this state |
 | :--- | :--- | :--- | :--- |
 | 1 | nobody home, no porch motion | door locked, alarm off, light off | — (initial state) |
-| 2 | **somebody home, porch motion** | **alarm armed** | rule 1 (nobody home ⇒ arm) |
-| 3 | **nobody home again, motion gone** | **front door unlocked**, light on | rules 2 and 3 (porch motion ⇒ unlock, ⇒ light) |
+| 2 | **somebody home, porch motion** | **alarm armed** | the arm-the-alarm rule |
+| 3 | **nobody home again, motion gone** | **front door unlocked**, light on | the convenience-unlock and porch-light rules |
+
+Name the rules rather than numbering them when you narrate this, and be careful if you do number
+them: the UI lists rules from 1, while the model's own firing flags (`iot_verify_rule_fired_0…2`)
+and the fix suggestion's `removedRuleIndices` are **0-based** — the verified removal targets index
+`1`, which is the *second* rule in the list.
 
 Read the last column carefully, because this is the one place the demo's temporal convention shows
 through and it is easy to narrate backwards. A rule reads the **current** state and writes the
@@ -276,7 +281,7 @@ offer one.
 
 ## If you have extra time
 
-**Bounded exploration** (`/api/fuzz`) as a fast pre-check before the formal run. Fix the
+**Bounded exploration** (the `/api/fuzz` family — submission is `POST /api/fuzz/async`) as a fast pre-check before the formal run. Fix the
 `seed` so the same candidate path reproduces on stage. Be precise about what it claims: a
 finite path violating a supported property under the explorer's semantics — a *candidate*
 counterexample, not a verdict, and not accepted by the fix pipeline. Three of this scene's six
@@ -301,22 +306,23 @@ model trajectory, not a prediction of a physical house.
 
 | Symptom | Cause | Fix |
 | :--- | :--- | :--- |
-| Apply is rejected after a long tangent | Fix suggestions are HMAC-signed with a **15-minute** TTL (`FixSuggestionTokenService.java:33`) | Re-run `/fix`, then apply promptly |
+| Apply is rejected after a long tangent | Fix suggestions are HMAC-signed with a **15-minute** TTL (`FixSuggestionTokenService.java:33`). Two shorter clocks exist but bound different things: the fix *search* has a 5-minute budget (`FIX_TIMEOUT_MS`), and a completed `/fix` request's live status is readable for only 15 seconds | Re-run `/fix`, then apply promptly |
 | Apply is rejected right away | The board changed after `/fix`; the proposal is checked against the current snapshot | Re-run verification and `/fix` |
 | Result dialog shows a stale banner | The board was edited after that run | Re-verify; do not narrate a stale result |
-| `429`, `USER_FORMAL_OPERATION_BUSY` | One synchronous verification/simulation/fix per user | Wait for the running one, or cancel it |
+| `429`, `USER_FORMAL_OPERATION_BUSY` | One formal operation per user at a time across verification, simulation **and** fix, sync or async, assistant-initiated included. Redis-backed across instances; with Redis down it degrades to a per-instance guard | Wait for the running one — a synchronous run cannot be cancelled |
 | Import preview counts are wrong | A bundled device template was edited on this machine | Reset templates to project defaults |
 | Numbers differ from this document | The scene, generator, or model semantics drifted | Run `AwayModeUnlockSceneNusmvTest`; trust it over this file |
-| Recreating spec 5 by hand is confusing | Template 1's `propertyScope` has no explicit control; it is folded into the merged key list, where "Current State" means `propertyScope: "state"` | Import the scene instead, or say the label out loud when authoring live |
+| Recreating spec 5 by hand is confusing | `propertyScope` has no separate control; it is folded into the merged property list, where **"Current state"** (or `Current <mode> state` on a multi-mode device) encodes `propertyScope: "state"`. This applies to every trust/privacy condition, not just template 1 | Import the scene instead, or say the label out loud when authoring live |
 | A rule targeting its own device is accepted | No self-loop guard exists in the rule builder | Not reachable in this scene; avoid improvising such a rule on stage |
-| Scripting the demo by hand: `/fix` returns `400 Missing required parameter 'requestId'` | The fix endpoint takes a caller-supplied `requestId` query parameter (8–80 chars) so a live search can be tracked and cancelled | Pass one; the UI does this for you |
+| Scripting the demo by hand: `/fix` returns `400` about `requestId` | The fix endpoint takes a caller-supplied `requestId` query parameter — 8–80 characters matching `^[A-Za-z0-9][A-Za-z0-9._:-]*$` — so a live search can be tracked and cancelled. A UUID is fine; a leading `-` or an embedded `/` is a 400 | Pass one; the UI does this for you |
 | Scripting the demo by hand: `POST /api/fuzz` returns `404` | Exploration has no synchronous endpoint — it is `POST /api/fuzz/async` plus task polling | Submit async and poll the task |
 
 ## Claims to make, and claims to avoid
 
-Say: these properties hold on **this finite model** of the authored automations; the
-counterexample is a real path in that model; the repair was re-verified against every
-submitted property before being offered.
+Say: these properties hold on **this finite model** of the authored automations; the counterexample
+is a real path in that model; the repair was re-verified against every submitted property before
+being offered — **and one of those properties is now vacuous**, which is a fact about the repair, not
+a caveat to bury. If you say the first three and not the fourth, you have overstated the result.
 
 Do not say: the house is secure; the door cannot be opened; this covers firmware, network,
 authentication, encryption, physical installation, or real-world timing. None of those are

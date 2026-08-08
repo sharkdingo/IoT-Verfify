@@ -231,6 +231,81 @@ class AwayModeUnlockSceneNusmvTest {
     }
 
     /**
+     * Pins the walkthrough's closing note: the repair no strategy can propose.
+     *
+     * <p>All three strategies edit or delete existing rules; none adds one. So the runbook shows what a
+     * competent engineer would do instead — keep the convenience unlock and add "when nobody is home,
+     * lock the front door" ahead of it — and claims three measured outcomes: the Response property
+     * becomes *substantively* satisfied (its antecedent stays reachable), the Never property stays
+     * violated, and the convenience feature survives.
+     *
+     * <p>That table was measured ad hoc while writing the guide, which is exactly the kind of number
+     * that rots: the document's own opening promises every figure is pinned here. This test is that
+     * pin. Without it the strongest slide in the presentation would be the one nothing checks.
+     */
+    @Test
+    void awayModeUnlockScene_addingAnAutoLockRuleEarnsTheResponsePropertyInsteadOfEmptyingIt() throws Exception {
+        String nusmvPath = resolveNusmvPath();
+        Assumptions.assumeTrue(nusmvPath != null && Files.exists(Path.of(nusmvPath)),
+                "NuSMV executable is required for this demo-scene regression test");
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode scene = objectMapper.readTree(Files.readString(SCENE_PATH));
+        SmvGenerator generator = buildGenerator(objectMapper, scene);
+        NusmvExecutor executor = buildExecutor(nusmvPath);
+        List<DeviceVerificationDto> devices = readDevices(scene);
+        List<BoardEnvironmentVariableDto> environment = readEnvironment(scene);
+        List<SpecificationDto> specs = readSpecs(scene, devices, "autoLock");
+
+        // "When nobody is home, lock the front door", placed first so rule order gives it priority
+        // over the convenience unlock for the same target mode.
+        RuleDto autoLock = RuleDto.builder()
+                .id(99L)
+                .ruleString("When nobody is home, lock the front door")
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("occupancy_1")
+                        .attribute("occupancy")
+                        .targetType("variable")
+                        .relation("=")
+                        .value("absent")
+                        .build()))
+                .command(RuleDto.Command.builder().deviceName("door_1").action("lock").build())
+                .build();
+        List<RuleDto> withAutoLock = new ArrayList<>();
+        withAutoLock.add(autoLock);
+        withAutoLock.addAll(readRules(scene));
+
+        SmvGenerator.GenerateResult model = generator.generateWithEnvironment(
+                USER_ID, devices, environment, withAutoLock, specs,
+                AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
+        assertEquals(0, model.disabledRuleCount(), "the added rule must be modelled, not disabled");
+        assertEquals(0, model.skippedSpecCount());
+
+        NusmvExecutor.NusmvResult result = executor.execute(model.smvFile());
+        assertTrue(result.isSuccess(), result::getErrorMessage);
+        assertEquals(specs.size(), result.getSpecResults().size());
+
+        // The Response property (index 3) is earned, and the Never property (index 2) still fails —
+        // rules act in one step, so one intermediate state always shows the door open with nobody home.
+        assertTrue(result.getSpecResults().get(3).isPassed(),
+                "adding the auto-lock rule must satisfy the Response property");
+        assertFalse(result.getSpecResults().get(2).isPassed(),
+                "the Never property cannot hold while the convenience unlock exists, because a lock "
+                        + "command needs the step after the resident leaves");
+
+        // …and it is earned rather than emptied: the antecedent stays reachable, unlike after the
+        // removal, and the convenience feature still works.
+        Map<String, Boolean> reachable = probeReachability(executor, model, List.of(
+                "a_occupancy = absent & door_1.LockState = unlocked",
+                "door_1.LockState = unlocked"));
+        assertTrue(reachable.get("a_occupancy = absent & door_1.LockState = unlocked"),
+                "the Response property would be vacuous if its antecedent were unreachable, which is "
+                        + "the whole distinction this scenario exists to draw");
+        assertTrue(reachable.get("door_1.LockState = unlocked"),
+                "this repair must keep the convenience feature the removal deletes");
+    }
+
+    /**
      * The trap this scene was rebuilt to avoid, and the reason it declares its own
      * `Occupancy Sensor` template instead of reusing the bundled `Car`.
      *
