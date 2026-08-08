@@ -461,12 +461,23 @@ public class SmvDeviceModuleBuilder {
                         "Initial state '" + userState + "' for mode '" + mode
                                 + "' is not in " + modeStateList);
             }
-            if (userState == null && smv.getCurrentState() != null) {
-                // M5 修复：currentState 需要清洗后再匹配
+            if (userState == null && smv.getCurrentState() != null && smv.getModes().size() == 1) {
+                // Single-mode only. `cleanStateName` deletes `;`, which is right for a lone state name and
+                // wrong for a tuple: on a multi-mode device this compared the *whole* tuple, semicolons
+                // stripped, against each mode's own domain, so a partial tuple leaked into the mode it had
+                // deliberately left blank. Measured on a two-mode probe whose modes share the value
+                // `shared` and whose InitState is `shared;distinct`: instance state `"shared;"` produced
+                // `init(Beta) := shared` instead of falling through to the template's `distinct`, silently
+                // overriding InitState. `"other;"` fell through correctly only because `other` happens not
+                // to be in Beta's domain — the bug was invisible whenever the accident went the other way.
+                //
+                // A multi-mode device needs no such fallback: `currentModeStates` is already the
+                // positional parse of the tuple, so a blank segment means "not specified for this mode"
+                // and must reach the InitState branch below.
                 String cleanCurrentState = DeviceSmvDataFactory.cleanStateName(smv.getCurrentState());
                 if (modeStateList.contains(cleanCurrentState)) {
                     userState = cleanCurrentState;
-                } else if (smv.getModes().size() == 1) {
+                } else {
                     throw SmvGenerationException.templateInvalid(smv.getVarName(),
                             "Initial state '" + smv.getCurrentState() + "' for mode '" + mode
                                     + "' is not in " + modeStateList);

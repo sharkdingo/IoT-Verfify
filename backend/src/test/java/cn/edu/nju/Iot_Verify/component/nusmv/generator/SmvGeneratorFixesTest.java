@@ -847,6 +847,66 @@ class SmvGeneratorFixesTest {
         assertTrue(result.contains("init(privacy_Mode_off) := public;"), result);
     }
 
+    /**
+     * A blank segment of a partial instance-state tuple must fall through to the template's InitState.
+     *
+     * <p>`appendInitialValues` used to fall back to `cleanStateName(currentState)` for any mode with no
+     * entry in `currentModeStates`. `cleanStateName` **deletes** `;`, which is right for a lone state name
+     * and wrong for a tuple: on a multi-mode device it compared the whole tuple, semicolons stripped,
+     * against each mode's own domain — so a partial tuple leaked into the mode it had deliberately left
+     * blank, silently overriding InitState.
+     *
+     * <p>The two modes below share the value `shared`, which is what makes the bug visible: with instance
+     * state `"shared;"`, Beta was initialised to `shared` rather than to the template's `distinct`. It went
+     * unnoticed because the leak only lands when the stripped tuple happens to be a legal value of the
+     * other mode — `"other;"` fell through correctly by accident, since `other` is not in Beta's domain.
+     * Both cases are asserted so neither accident can pass for correctness.
+     */
+    @Test
+    @DisplayName("P5: a blank tuple segment uses InitState, not the whole tuple")
+    void partialInstanceStateTuple_doesNotLeakIntoTheModeItLeftBlank() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Alpha", "Beta"))
+                .internalVariables(List.of())
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("shared;distinct").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("shared;shared").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("other;distinct").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("goOther").startState("").endState("other;").signal(true).build()))
+                .build();
+
+        // Instance names only Alpha; Beta is deliberately blank and must come from InitState.
+        DeviceSmvData leaky = buildSmvData("probe_1", "TupleProbe",
+                List.of("Alpha", "Beta"),
+                Map.of("Alpha", List.of("shared", "other"), "Beta", List.of("distinct", "shared")),
+                List.of(), manifest);
+        leaky.setCurrentState("shared;");
+        leaky.getCurrentModeStates().put("Alpha", "shared");
+        leaky.getTemplateInitModeStates().put("Alpha", "shared");
+        leaky.getTemplateInitModeStates().put("Beta", "distinct");
+
+        String result = deviceBuilder.build(leaky, false, false);
+        assertTrue(result.contains("init(Alpha) := shared;"), result);
+        assertTrue(result.contains("init(Beta) := distinct;"),
+                () -> "a blank segment must use the template InitState, not the stripped tuple: " + result);
+
+        // The accidental-pass case: `other` is not in Beta's domain, so this fell through even before the
+        // fix. Asserted so a regression cannot hide behind it.
+        DeviceSmvData benign = buildSmvData("probe_2", "TupleProbe",
+                List.of("Alpha", "Beta"),
+                Map.of("Alpha", List.of("shared", "other"), "Beta", List.of("distinct", "shared")),
+                List.of(), manifest);
+        benign.setCurrentState("other;");
+        benign.getCurrentModeStates().put("Alpha", "other");
+        benign.getTemplateInitModeStates().put("Alpha", "shared");
+        benign.getTemplateInitModeStates().put("Beta", "distinct");
+
+        String benignResult = deviceBuilder.build(benign, false, false);
+        assertTrue(benignResult.contains("init(Alpha) := other;"), benignResult);
+        assertTrue(benignResult.contains("init(Beta) := distinct;"), benignResult);
+    }
+
     @Test
     @DisplayName("P5: trust conflict in WorkingStates throws")
     void trustConflict_throws() {
