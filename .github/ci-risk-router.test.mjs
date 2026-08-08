@@ -102,6 +102,40 @@ test('an unrecognised path escalates rather than being silently skipped', () => 
   assert.ok(decision.reasons.some((r) => r.startsWith('unclassified path')), decision.reasons.join('; '));
 });
 
+test('the template admission gate is high risk, like the contract it enforces', () => {
+  // `device-template-schema.json` was already high-risk as "the authoring contract" while the code
+  // enforcing it routed as an ordinary source change — so a fix to `DeviceTemplateNuSmvValidator`
+  // shipped on Fast CI only. A wrong edit there admits a manifest whose generated model NuSMV refuses,
+  // which is the defect class the schema entry exists to guard.
+  const decision = route(
+    ['backend/src/main/java/cn/edu/nju/Iot_Verify/component/template/DeviceTemplateNuSmvValidator.java'],
+    { ref: 'refs/heads/feature/x' },
+  );
+  assert.equal(decision.full, true);
+  assert.ok(
+    decision.reasons.some((r) => r === 'template admission gate'),
+    decision.reasons.join('; '),
+  );
+});
+
+test('scene files and their generator are model inputs, not documentation', () => {
+  // These reach real-NuSMV regressions, and the generator is their only source. They previously
+  // escalated through the unclassified fail-safe: right tier, wrong reason, and silently dependent on
+  // that fallback staying put. Named explicitly, they must no longer appear as unclassified — a
+  // recognised path crowding that list would bury a genuinely new directory in it.
+  for (const path of [
+    'docs/examples/default-away-mode-unlock-scene.json',
+    'scripts/generate-default-template-scenes.mjs',
+  ]) {
+    const decision = route([path], { ref: 'refs/heads/feature/x' });
+    assert.equal(decision.full, true, path);
+    assert.ok(
+      !decision.reasons.some((r) => r.startsWith('unclassified path')),
+      `${path} should be recognised, got: ${decision.reasons.join('; ')}`,
+    );
+  }
+});
+
 test('an empty change list still runs fast CI', () => {
   const decision = route([], { ref: 'refs/heads/feature/x' });
   assert.equal(decision.fast, true);
