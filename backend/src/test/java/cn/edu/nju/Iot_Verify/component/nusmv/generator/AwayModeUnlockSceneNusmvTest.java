@@ -240,7 +240,12 @@ class AwayModeUnlockSceneNusmvTest {
         for (String state : mustBeReachable) {
             probe.append("\tCTLSPEC AG !(").append(state).append(")\n");
         }
-        Path probeFile = Files.createTempFile("away-mode-reachability", ".smv");
+        // The probe must live in its own directory, not directly in the system temp dir.
+        // `NusmvTempArtifactRegistry` locks the *parent directory* of the model file, so a probe written
+        // straight into /tmp tries to lock all of /tmp — which fails on CI the moment any other NuSMV
+        // test holds it, while passing locally where the temp dir is per-user and uncontended.
+        Path probeDir = Files.createTempDirectory("away-mode-reachability");
+        Path probeFile = probeDir.resolve("probe.smv");
         Files.writeString(probeFile, probe.toString());
         try {
             NusmvExecutor.NusmvResult result = executor.execute(probeFile.toFile());
@@ -253,7 +258,14 @@ class AwayModeUnlockSceneNusmvTest {
                                 + mustBeReachable.get(index));
             }
         } finally {
-            Files.deleteIfExists(probeFile);
+            // The executor writes its own artifacts (output, lock file) beside the model, so clear the
+            // directory's contents before removing it.
+            try (var entries = Files.list(probeDir)) {
+                for (Path entry : entries.toList()) {
+                    Files.deleteIfExists(entry);
+                }
+            }
+            Files.deleteIfExists(probeDir);
         }
     }
 

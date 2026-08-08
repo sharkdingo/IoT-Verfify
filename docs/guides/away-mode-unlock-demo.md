@@ -132,9 +132,43 @@ offered.
 **7. Apply and re-verify.** Apply the removal (confirm the destructive board mutation), then
 verify again: **6 satisfied, 0 violated.** One removal repaired both violated properties.
 
+**Say the cost out loud, before anyone asks "so can I still get in?"** In the repaired model the
+front door is now permanently locked — measured, not inferred: `AG (door_1.LockState = locked)` is
+provable and `EF (door_1.LockState = unlocked)` is false, because the convenience rule was the only
+automation that ever unlocked it. The porch light and the alarm still work. That is what a removal
+*is*: the property is restored by deleting the capability, not by making it safe. A real household
+would follow this with a replacement automation — unlock on an authenticated trigger rather than on
+motion — and re-verify that. Presenting the green 6/0 without this sentence is the one place this
+demo could fairly be called dishonest.
+
 That is the loop: authored automations → machine-checked properties → proof of failure →
 executed-rule attribution → verified repair → confirmed clean. And a tool that tells you
 "the convenient fix does not work" is worth more than one that always has an answer.
+
+### The repair the tool cannot propose (a strong closing note, 90 seconds)
+
+If the room is technical, this is the most honest thing you can show. All three strategies edit or
+delete *existing* rules; none of them adds one. So ask what a competent engineer would actually do,
+and check it with the model rather than asserting it.
+
+Add a fourth automation — "when nobody is home, lock the front door" — placed ahead of the
+convenience rule, and keep the convenience unlock. Measured on this scene with real NuSMV:
+
+| Property | Result |
+| :--- | :--- |
+| Response (`5`): unlocked-while-absent must eventually re-lock | **now satisfied** |
+| Never (`3`): nobody home and door unlocked | **still violated** |
+| The convenience feature still works (`EF door = unlocked`) | **true** |
+
+So a better repair exists than the one the tool offers, and it costs a *specification* change rather
+than a code change: you must accept "if it happens, the home recovers" instead of "it can never
+happen". The Never property cannot hold while the unlock rule exists, because rules act in one step —
+the resident leaves, and the lock command needs the next step to take effect, so one intermediate
+state always shows the door open with nobody home.
+
+That is the honest division of labour: the checker proves what is broken and what any candidate
+repair really guarantees. Which trade-off to accept is a human decision it deliberately does not
+make for you.
 
 ## Act 2 (optional) — one spoofed sensor
 
