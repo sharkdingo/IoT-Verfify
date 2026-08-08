@@ -2802,6 +2802,18 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             }
 
             String label = trimToNull(node.getLabel());
+            // Length belongs here rather than only on the DTO. `DeviceNodeDto.label` carries
+            // `@Size(max = 255)`, which Spring applies on the `@Valid` REST path — but the AI tools call
+            // this service directly from a chat turn, so no `Validator` ever runs on their input (no
+            // service class carries `@Validated`, and `AbstractAiTool`'s field helpers only trim). The
+            // column is `length = 255`, so an over-long label reached the insert and came back as a
+            // `DataIntegrityViolationException` → generic 500 "please retry", which invites the model to
+            // repeat the identical failing call. Reject it here, where the message can name the field.
+            if (label != null && label.length() > RequestLimits.MAX_DEVICE_LABEL_LENGTH) {
+                errors.putIfAbsent(field + ".label",
+                        "Device label must be at most " + RequestLimits.MAX_DEVICE_LABEL_LENGTH
+                                + " characters, but was " + label.length() + ".");
+            }
             if (label != null && !seenLabels.add(label.toLowerCase(Locale.ROOT))) {
                 errors.putIfAbsent(field + ".label", "Duplicate device label: " + label);
             }

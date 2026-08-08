@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.exception.TemplateDeletionConflictException;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
@@ -839,6 +840,42 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         dto.setName(name);
         dto.setManifest(manifest);
         return dto;
+    }
+
+    /**
+     * An over-long device label must be refused, not left to the database.
+     *
+     * <p>`DeviceNodeDto.label` carries `@Size(max = 255)`, which Spring applies on the `@Valid` REST
+     * path. The AI tools call this service directly from a chat turn, and no `Validator` runs there —
+     * no service class carries `@Validated`, and `AbstractAiTool`'s field helpers only trim. The column
+     * is `length = 255`, so an over-long label reached the insert and returned a
+     * `DataIntegrityViolationException`, surfaced to the assistant as a generic 500 "please retry" —
+     * which invites the model to repeat the identical failing call.
+     *
+     * <p>Asserted at 256, one past the limit, so the test pins the boundary rather than some
+     * comfortably-illegal size; and the accepted case is exactly 255.
+     */
+    @Test
+    void saveNodes_whenDeviceLabelExceedsTheColumnLength_shouldRejectBeforePersisting() {
+        DeviceTemplatePo template = templatePo("Light",
+                "{\"Name\":\"Light\",\"Modes\":[\"SwitchState\"],\"InitState\":\"off\","
+                        + "\"WorkingStates\":[{\"Name\":\"off\",\"Trust\":\"trusted\",\"Privacy\":\"public\"},"
+                        + "{\"Name\":\"on\",\"Trust\":\"trusted\",\"Privacy\":\"public\"}],"
+                        + "\"InternalVariables\":[]}");
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+
+        DeviceNodeDto tooLong = buildNode("lamp1", "Light");
+        tooLong.setLabel("L".repeat(RequestLimits.MAX_DEVICE_LABEL_LENGTH + 1));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.saveNodes(1L, List.of(tooLong)));
+        org.assertj.core.api.Assertions.assertThat(ex.getErrors().toString())
+                .contains("label")
+                .contains(String.valueOf(RequestLimits.MAX_DEVICE_LABEL_LENGTH));
+
+        DeviceNodeDto atLimit = buildNode("lamp2", "Light");
+        atLimit.setLabel("L".repeat(RequestLimits.MAX_DEVICE_LABEL_LENGTH));
+        assertDoesNotThrow(() -> service.saveNodes(1L, List.of(atLimit)));
     }
 
     /**

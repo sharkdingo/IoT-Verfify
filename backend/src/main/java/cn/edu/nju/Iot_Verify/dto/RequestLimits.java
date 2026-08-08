@@ -10,6 +10,12 @@ public final class RequestLimits {
     public static final int MAX_SPEC_CONDITIONS = 50;
     public static final int MAX_DEVICE_VARIABLES = 100;
     public static final int MAX_DEVICE_PRIVACIES = 100;
+    /**
+     * Must equal `DeviceNodePo.label`'s column length. The DTO's `@Size` only binds on the `@Valid` REST
+     * path, so the service checks this itself — the AI tools call the service directly and an over-long
+     * label otherwise reached the insert as a `DataIntegrityViolationException` / generic 500.
+     */
+    public static final int MAX_DEVICE_LABEL_LENGTH = 255;
     public static final int MAX_TEMPLATES = 100;
     public static final int MAX_CHAT_SESSIONS = 100;
     public static final int DEFAULT_CHAT_HISTORY_PAGE_SIZE = 50;
