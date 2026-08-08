@@ -47,8 +47,13 @@ Devices, rules and specifications are all hand-authorable once the type exists.
 If someone asks whether the missing form is a gap: it is a real one for a non-technical user, and
 the shape of a manifest is why it has not been built — multi-mode `WorkingStates` are
 semicolon-joined tuples, `APIs` take partial start/end tuples, `Dynamics` has mutually exclusive
-`Value`/`ChangeRate`, and `Reads` is required-or-forbidden depending on `IsInside`. All three
-creation paths validate against the one canonical schema, so nothing here is inconsistent — it is
+`Value`/`ChangeRate`, and `Reads` is required-or-forbidden depending on `IsInside`.
+
+All three paths funnel into `BoardStorageServiceImpl.addDeviceTemplate`, which owns every
+authoritative check — name rule, canonical schema, the NuSMV-specific template validation, the
+per-user cap and the duplicate-name conflict. The assistant tool validates the raw JSON and the
+Modes/InitState/WorkingStates trio *before* calling it, which is early failure so the model gets a
+specific error in the same round, not a stricter standard. So the paths cannot diverge: this is
 unbuilt, not broken.
 
 ## Before you start
@@ -59,10 +64,13 @@ unbuilt, not broken.
       seconds and proves the machine you are about to present on produces these numbers.
 - [ ] Decide in advance whether you are doing Act 2 (attack). It adds ~3 minutes and one
       hard question you must be ready to answer — see [Act 2](#act-2-optional-one-spoofed-sensor).
-- [ ] If you plan to open the AI panel, **send one throwaway message first.**
-      `IOT_VERIFY_OPENAI_API_KEY` defaults to the placeholder `your_api_key_here`, and the
-      boot-time guard only refuses to start under a `prod` profile — so a dev-profile demo
-      starts happily with a dead key and fails after you type a prompt in front of the room.
+- [ ] If you plan to open the AI panel, **send one throwaway message first.** There is no
+      availability pre-flight anywhere in the client: the panel opens unconditionally, and a bad
+      key, an unreachable endpoint, or a wrong base URL all surface only once the stream is
+      already running. The placeholder key is the likeliest cause — `IOT_VERIFY_OPENAI_API_KEY`
+      defaults to `your_api_key_here` and the boot-time guard only refuses to start under a
+      `prod` profile — but the reason to warm it up is the missing pre-flight, not that one
+      default.
 - [ ] Know that the **synchronous** run has no progress bar and no cancel button; both are
       gated on the async path. NuSMV's own ceiling is 120s. This scene verifies in seconds, so
       sync is the right choice for the demo — but if you want a visible progress bar while you
