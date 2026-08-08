@@ -46,6 +46,20 @@ history into a technical spec. The spec content itself now lives under
 
 #### Changed
 
+- **The walkthrough now says which of its four green properties actually carry information.** Two do
+  not, and both readings are measured rather than argued. The template-7 property is satisfied at
+  baseline only because a trust label cannot degrade with no attacker present — this scene declares its
+  `motion` source `trusted`, and `EF (door_1.trust_LockState_unlocked = untrusted)` is `false` — so its
+  baseline green is a control condition whose entire value is the Act 2 contrast. The template-1 privacy
+  property is satisfied because nothing here can make a lock-state label public (`EF (privacy_… =
+  public)` is `false` for both), so it demonstrates that the dimension propagates rather than that a
+  risk was avoided. Only the two Immediate properties earn their green with reachable antecedents.
+  Marking the source `untrusted` would fix the vacuity and cost more than it buys: measured, it turns
+  the baseline into *three* violations, destroys the satisfied-then-violated contrast Act 2 is built on,
+  and duplicates `multi-violation-repair-scene.json`, which already covers that shape. The regression
+  now asserts the attack model makes the trust term reachable, so the contrast cannot silently become
+  two vacuous verdicts in a row (mutation-checked by clearing the source's
+  `FalsifiableWhenCompromised`).
 - **`theory-sources.md` no longer claims `forwardVerify` rules out every vacuous pass.** It rules out
   one kind — a repair certified against a model that never emitted the property
   (`disabledRuleCount`/`skippedSpecCount`). It does not rule out the kind where the repair itself makes

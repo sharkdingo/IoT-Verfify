@@ -200,8 +200,19 @@ class AwayModeUnlockSceneNusmvTest {
         assertTrue(attacked.isSuccess(), attacked::getErrorMessage);
         assertEquals(specs.size(), attacked.getSpecResults().size());
 
-        // Act two of the demo: compromising one sensor makes the untrusted-label safety
-        // property (template 7, index 3) fail, while the privacy property (index 4) holds.
+        // Act two: compromising one sensor makes the untrusted-label property (template 7, index 4)
+        // fail, while the privacy property (index 5) holds.
+        //
+        // This act is the *reason* index 4 is in the scene at all. At baseline its trust term is
+        // unreachable — this scene declares its `motion` source `trusted`, and nothing without an
+        // attacker can degrade a label — so its baseline green is a control condition, not an
+        // achievement. Assert the attack model actually makes that term reachable, or the contrast the
+        // walkthrough is built on would be two vacuous verdicts in a row.
+        assertTrue(probeReachability(executor, attackedModel,
+                        List.of("door_1.trust_LockState_unlocked = untrusted"))
+                        .get("door_1.trust_LockState_unlocked = untrusted"),
+                "the budget-one attack must make the untrusted trust label reachable; otherwise the "
+                        + "template-7 property is as uninformative under attack as it is at baseline");
         assertFalse(attacked.getSpecResults().get(4).isPassed(),
                 "budget-one attack must expose the untrusted-source unlock");
         assertTrue(attacked.getSpecResults().get(5).isPassed(),

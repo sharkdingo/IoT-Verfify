@@ -77,8 +77,8 @@ to hold:
 | 1 | Immediate (`4`) | Porch motion ⇒ the porch light is on in the next state | Satisfied |
 | 2 | Never (`3`) | Nobody home **and** the front door unlocked — never | **Violated** |
 | 3 | Response (`5`) | If the door is ever unlocked while nobody is home, it must eventually re-lock | **Violated** |
-| 4 | Untrusted-label safety (`7`) | The door is never unlocked under an untrusted control source | Satisfied |
-| 5 | Always (`1`) | The door's lock state stays private | Satisfied |
+| 4 | Untrusted-label safety (`7`) | The door is never unlocked under an untrusted control source | Satisfied — *vacuously*, see below |
+| 5 | Always (`1`) | The door's lock state stays private | Satisfied — *trivially*, see below |
 
 Say the number: **4 satisfied, 2 violated**, zero disabled rules, zero skipped
 specifications. A tool that reports everything red is broken; a tool that reports everything
@@ -86,7 +86,26 @@ green is not being asked anything.
 
 Properties 2 and 3 are deliberately two different questions about the same worry. Property 2
 asks "can this ever happen?"; property 3 asks "if it happens, does the home recover?" Both
-fail, and one repair fixes both — that is the shared-root-cause story.
+fail, and one removal clears both — that is the shared-root-cause story. Step 7 comes back to
+*how* each of them goes green, because it is not the same way.
+
+**Two of the four green properties carry no information at baseline, and knowing which is the
+point.** Both readings are measured on this scene, not inferred:
+
+- **Property 4** is satisfied because a trust label cannot degrade with no attacker in the
+  model: this scene's `motion` source is declared `trusted`, and
+  `EF (door_1.trust_LockState_unlocked = untrusted)` is **false**, so the property has nothing
+  to catch. Its whole value is the Act 2 contrast — the same property fails the moment one
+  sensor is compromised. Presenting it as a baseline achievement would be overselling; call it
+  the control condition.
+- **Property 5** is satisfied because nothing in this scene can make a lock-state label public:
+  `EF (privacy_… = public)` is **false** for both labels. It demonstrates that the privacy
+  dimension exists and propagates, not that a risk was avoided.
+
+Properties 0 and 1 are the ones that genuinely earn their green: their antecedents are
+reachable and their conclusions depend on rules that really fire. If you have time for only one
+sentence, say that a satisfied property is only evidence when the situation it forbids can
+arise at all — which is exactly the trap the scene's own regression test exists to catch.
 
 **3. Run verification.** Synchronous, attack mode `NONE`. Properties 2 and 3 come back
 violated.
