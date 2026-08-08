@@ -38,6 +38,16 @@ const HIGH_RISK = [
   { pattern: /^backend\/src\/main\/java\/.*\/component\/fuzz\//, why: 'bounded exploration engine' },
   { pattern: /^backend\/device-template-schema\.json$/, why: 'template schema is the authoring contract' },
   { pattern: /^backend\/src\/main\/resources\/deviceTemplate\//, why: 'bundled template semantics' },
+  // The code that *enforces* that contract belongs with the contract itself. Without this entry a
+  // change to `DeviceTemplateNuSmvValidator` routed as "low-risk source change" — and a wrong edit
+  // there admits a manifest whose generated model NuSMV refuses, which is exactly the class of defect
+  // the schema entry above exists to guard.
+  { pattern: /^backend\/src\/main\/java\/.*\/component\/template\//, why: 'template admission gate' },
+  // Model inputs, not documentation: these scenes are read by real-NuSMV regressions and the generator
+  // is their only source. They previously reached full validation through the unclassified fail-safe,
+  // which gave the right tier for the wrong reason and would have gone quiet if the fallback changed.
+  { pattern: /^docs\/examples\/.*\.json$/, why: 'scene files are verification inputs' },
+  { pattern: /^scripts\/generate-default-template-scenes\.mjs$/, why: 'generator for scene inputs' },
 
   // Authentication, authorization, and rate limiting.
   { pattern: /^backend\/src\/main\/java\/.*\/(security|filter|interceptor)\//, why: 'security filters' },
@@ -111,10 +121,18 @@ export function route(changedPaths, context = {}) {
   const risks = matchAll(paths, HIGH_RISK);
   const areas = new Set(matchAll(paths, AREAS).map((rule) => rule.area));
 
-  // Anything outside backend/, frontend/, or the inert list is unclassified. Escalate rather than
-  // guess: a path we do not recognise is precisely the one whose impact we cannot bound.
+  // Anything outside backend/, frontend/, the inert list, and the high-risk table is unclassified.
+  // Escalate rather than guess: a path we do not recognise is precisely the one whose impact we cannot
+  // bound.
+  //
+  // The HIGH_RISK check matters for a path that lives outside both area trees — `docs/examples/*.json`
+  // and the scene generator. Those are named explicitly, so reporting them as "unclassified" would be
+  // false, and worse, it would bury the signal: if a recognised path always shows up in that list, a
+  // genuinely new top-level directory stops standing out in it.
   const unclassified = paths.filter(
-    (path) => !isInert(path) && !AREAS.some((rule) => rule.pattern.test(path)),
+    (path) => !isInert(path)
+      && !AREAS.some((rule) => rule.pattern.test(path))
+      && !HIGH_RISK.some((rule) => rule.pattern.test(path)),
   );
 
   const reasons = risks.map((rule) => rule.why);
