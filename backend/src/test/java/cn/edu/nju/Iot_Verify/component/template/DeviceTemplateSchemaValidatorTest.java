@@ -99,6 +99,64 @@ class DeviceTemplateSchemaValidatorTest {
                 .contains("Unexpected");
     }
 
+    /**
+     * A content name is an SMV identifier, and used to be the only one nothing checked.
+     *
+     * <p>`SmvDeviceModuleBuilder` concatenates it verbatim into `privacy_<name>`, exactly as it does for
+     * an InternalVariable or an ImpactedVariable — but those two carry this pattern on both the schema and
+     * the Java side, and `Contents.Name` carried it on neither. Measured before the fix: a content named
+     * `my photo` emitted `privacy_my photo: {public, private};` and NuSMV refused the whole model with
+     * `at token "photo": syntax error`. That turned an import-time rejection into a run-time generation
+     * failure on a template the user had already saved.
+     */
+    @Test
+    void contentNameMustBeAnSmvIdentifierLikeEveryOtherEmittedName() throws Exception {
+        JsonNode manifest = objectMapper.readTree("""
+                {
+                  "Name": "Leaky Camera",
+                  "Modes": ["MachineState"],
+                  "InitState": "idle",
+                  "WorkingStates": [
+                    {"Name": "idle", "Trust": "trusted", "Privacy": "public"},
+                    {"Name": "sending", "Trust": "trusted", "Privacy": "private"}
+                  ],
+                  "Contents": [{"Name": "my photo", "Privacy": "private"}],
+                  "APIs": [
+                    {"Name": "send", "StartState": "idle", "EndState": "sending", "Signal": true}
+                  ]
+                }
+                """);
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> validator.validateRawManifest("Leaky Camera", manifest));
+
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage())
+                .contains("Contents")
+                .contains("Name");
+    }
+
+    /** The same manifest with a legal content name must still be accepted. */
+    @Test
+    void contentNameThatIsAnSmvIdentifierIsAccepted() throws Exception {
+        JsonNode manifest = objectMapper.readTree("""
+                {
+                  "Name": "Camera",
+                  "Modes": ["MachineState"],
+                  "InitState": "idle",
+                  "WorkingStates": [
+                    {"Name": "idle", "Trust": "trusted", "Privacy": "public"},
+                    {"Name": "sending", "Trust": "trusted", "Privacy": "private"}
+                  ],
+                  "Contents": [{"Name": "photo", "Privacy": "private"}],
+                  "APIs": [
+                    {"Name": "send", "StartState": "idle", "EndState": "sending", "Signal": true}
+                  ]
+                }
+                """);
+
+        assertDoesNotThrow(() -> validator.validateRawManifest("Camera", manifest));
+    }
+
     @Test
     void securityLabelsRejectUppercaseInsteadOfSilentlyNormalizing() throws Exception {
         JsonNode manifest = objectMapper.readTree("""

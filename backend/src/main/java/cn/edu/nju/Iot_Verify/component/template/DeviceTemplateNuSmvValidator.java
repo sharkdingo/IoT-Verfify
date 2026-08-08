@@ -104,6 +104,19 @@ public class DeviceTemplateNuSmvValidator {
                 validateSmvIdentifier(templateName, "ImpactedVariable", impacted);
             }
         }
+        if (manifest.getContents() != null) {
+            // A content name is concatenated verbatim into `privacy_<name>` by
+            // `SmvDeviceModuleBuilder.appendContentPrivacyVariables`, so it is an SMV identifier just like
+            // the two above — but it was the only one of the three that nothing checked, on either side.
+            // Measured: a content named "my photo" emitted `privacy_my photo: {public, private};` and
+            // NuSMV refused the model with `at token "photo": syntax error`. Rejecting it here turns a
+            // run-time generation failure into an import-time rejection that names the field.
+            for (DeviceManifest.Content content : manifest.getContents()) {
+                if (content != null) {
+                    validateSmvIdentifier(templateName, "Content", content.getName());
+                }
+            }
+        }
 
         // ── Mode-related validation ──
         boolean hasModes = manifest.getModes() != null && !manifest.getModes().isEmpty();
