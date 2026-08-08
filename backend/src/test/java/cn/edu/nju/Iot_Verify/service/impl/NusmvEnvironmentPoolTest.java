@@ -13,6 +13,8 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -259,6 +261,76 @@ class NusmvEnvironmentPoolTest {
                 "the pool's trust label must initialise the affect-only variable's label: " + smv);
         assertTrue(smv.contains("init(privacy_temperature) := private;"),
                 "the pool's privacy label must initialise the affect-only variable's label: " + smv);
+    }
+
+    /**
+     * A label property over an affect-only value must reach NuSMV, not just pass admission.
+     *
+     * <p>Admission is capability-blind here on purpose (`NusmvRequestValidator.validatePropertyReference`):
+     * the device module declares `trust_<name>`/`privacy_<name>` for every declared variable, so
+     * narrowing it would reject a formula the generator emits and NuSMV decides. That argument only
+     * holds if generation agrees, and nothing pinned the *whole* chain — a reviewer reading
+     * `SmvSpecificationBuilder` reported it as narrowing admission and throwing at generation, which
+     * would have turned such a specification into a skipped spec instead of a verdict.
+     *
+     * <p>It does not: its own `internalVariable` lookup is equally blind. This asserts the emitted
+     * formula rather than the absence of an error, because a skipped spec is silent in the SMV text.
+     */
+    @Test
+    void labelSpecificationOverAffectOnlyValueIsEmittedRatherThanSkipped() throws Exception {
+        DeviceManifest.InternalVariable affectOnly = impactNumber("temperature", 15, 35);
+        affectOnly.setTrust("untrusted");
+        affectOnly.setPrivacy("public");
+        DeviceManifest airConditioner = DeviceManifest.builder()
+                .name("Air Conditioner")
+                .modes(List.of("MachineState"))
+                .initState("cool")
+                .impactedVariables(List.of("temperature"))
+                .internalVariables(List.of(affectOnly))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("cool").trust("trusted")
+                                .privacy("public")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature").changeRate("-2").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted")
+                                .privacy("public").build()))
+                .build();
+
+        SmvGenerator generator = generatorFor(Map.of("Air Conditioner", airConditioner));
+        List<DeviceVerificationDto> rawDevices = List.of(device("ac_1", "Air Conditioner", "cool"));
+        Map<String, DeviceSmvData> rawMap = generator.buildDeviceSmvMap(USER_ID, rawDevices);
+        List<BoardEnvironmentVariableDto> merged = NusmvEnvironmentPool.mergeWithDefaults(
+                List.of(new BoardEnvironmentVariableDto("temperature", "28", "untrusted", "public")),
+                rawMap);
+        List<DeviceVerificationDto> expanded = NusmvEnvironmentPool.expandDevices(rawDevices, merged, rawMap);
+
+        SpecConditionDto labelOfAffectOnly = new SpecConditionDto();
+        labelOfAffectOnly.setDeviceId("ac_1");
+        labelOfAffectOnly.setTargetType("privacy");
+        labelOfAffectOnly.setPropertyScope("variable");
+        labelOfAffectOnly.setKey("temperature");
+        labelOfAffectOnly.setRelation("=");
+        labelOfAffectOnly.setValue("public");
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("affect_only_label");
+        spec.setTemplateId("1");
+        spec.setTemplateLabel("Affect-only label property");
+        spec.setDevices(List.of());
+        spec.setAConditions(List.of(labelOfAffectOnly));
+
+        SmvGenerator.GenerateResult generated = generator.generateWithEnvironment(
+                USER_ID, expanded, merged, List.of(), List.of(spec), AttackScenarioDto.none(), true,
+                SmvGenerator.GeneratePurpose.VERIFICATION);
+
+        assertEquals(0, generated.skippedSpecCount(),
+                "a label property over an affect-only value must not be skipped");
+        assertTrue(generated.generationIssues().isEmpty(),
+                () -> "generation must report no issue for it: " + generated.generationIssues());
+        // The generator's own compact form, not NuSMV's echoed spacing.
+        String smv = Files.readString(generated.smvFile().toPath());
+        assertTrue(smv.contains("CTLSPEC AG(ac_1.privacy_temperature=public)"),
+                "the label property must be emitted as a checkable formula: " + smv);
     }
 
     @Test
