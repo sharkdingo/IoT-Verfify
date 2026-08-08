@@ -37,17 +37,21 @@ value for the whole run, which silently turns "require someone to be home" into 
 can never fire" — a repair that disables the rule it claims to keep. The second regression
 test in `AwayModeUnlockSceneNusmvTest` exists to keep that trap closed.
 
-One consequence for the demo: **import the scene rather than rebuilding it live.** A device type
-is created from a manifest JSON — the Templates section's only control is an import (its own
-subtitle is "Import and validate device templates"), and there is no form that walks the manifest
-field by field. The AI assistant's `add_template` tool and `POST /api/board/templates` accept the
-same JSON, so `Occupancy Sensor` *can* be created without the file, just not by filling in a form.
-Devices, rules and specifications are all hand-authorable once the type exists.
+One consequence for the demo: **import the scene rather than rebuilding it live.** A device type is
+created from a manifest JSON. The Templates section offers an import and a **download of the
+canonical schema** (`GET /api/board/templates/schema`, saved as `device-template-schema.json`), and
+its own subtitle is "Import and validate device templates" — so authoring a type means writing that
+JSON against the schema, not filling in a form. The assistant's `add_template` tool and
+`POST /api/board/templates` accept the same JSON, so `Occupancy Sensor` *can* be created without a
+file. Devices, rules and specifications are all hand-authorable once the type exists.
 
-If someone asks whether the missing form is a gap: it is a real one for a non-technical user, and
-the shape of a manifest is why it has not been built — multi-mode `WorkingStates` are
-semicolon-joined tuples, `APIs` take partial start/end tuples, `Dynamics` has mutually exclusive
-`Value`/`ChangeRate`, and `Reads` is required-or-forbidden depending on `IsInside`.
+If someone asks whether the missing form is a gap, the schema download is the answer to give: the
+product's chosen path is schema-assisted JSON, which a JSON-Schema-aware editor turns into
+completion and inline validation. That is a deliberate trade, not an omission — and the manifest's
+shape is why it is a reasonable one: multi-mode `WorkingStates` are semicolon-joined tuples, `APIs`
+take partial start/end tuples, `Dynamics` has mutually exclusive `Value`/`ChangeRate`, and `Reads`
+is required-or-forbidden depending on `IsInside`. It stays a real barrier for a non-technical user;
+it is not a hole in the design.
 
 All three paths funnel into `BoardStorageServiceImpl.addDeviceTemplate`, which owns every
 authoritative check — name rule, canonical schema, the NuSMV-specific template validation, the
@@ -129,11 +133,22 @@ violated.
 
 **4. Walk the counterexample.** Three states — short enough to read on one screen:
 
-| State | What happened |
-| :--- | :--- |
-| 1 | Nobody home, door locked, no porch motion |
-| 2 | The alarm arms (rule 1 fired) |
-| 3 | Porch motion; **the front door unlocks** and the porch light turns on (rules 2 and 3 fired) |
+| State | Readings | Devices | Fired in the step that produced this state |
+| :--- | :--- | :--- | :--- |
+| 1 | nobody home, no porch motion | door locked, alarm off, light off | — (initial state) |
+| 2 | **somebody home, porch motion** | **alarm armed** | rule 1 (nobody home ⇒ arm) |
+| 3 | **nobody home again, motion gone** | **front door unlocked**, light on | rules 2 and 3 (porch motion ⇒ unlock, ⇒ light) |
+
+Read the last column carefully, because this is the one place the demo's temporal convention shows
+through and it is easy to narrate backwards. A rule reads the **current** state and writes the
+**next** one, so the motion that unlocked the door is the motion visible in state 2 — by state 3 the
+reading is already back to `inactive` while the unlock it caused has just landed. The violation is
+state 3: nobody home, door open.
+
+The same convention explains the one thing an audience does query about state 2: it shows *somebody
+home* next to an armed alarm, which looks contradictory until you see that the arming was decided by
+state 1's `nobody home`. Nothing arms the alarm in state 2; state 2 is where state 1's decision
+became visible.
 
 Play it on the timeline. The point: this is not a sampled test run or a guess — it is a path
 the model checker constructed as proof, and it is the shortest one. A 3-state trace plays,
