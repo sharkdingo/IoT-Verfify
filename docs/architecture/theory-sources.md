@@ -69,7 +69,9 @@ their own copy; the citations below are precise enough to check against any copy
 - **Trust and privacy propagation** — `trust`/`privacy` labels belong to states and variables. Under
   MEDIC §3.3, Def. 3.3, Fig. 4, a target becomes untrusted only when every contributing trigger source
   is untrusted, while any private source makes the target private. Implementation:
-  `SmvMainModuleBuilder`'s property transitions.
+  `SmvMainModuleBuilder.appendPropertyTransitions`, whose target is always a **state** label. A
+  variable's label is a propagation *source* and never a target, which has a user-visible consequence
+  recorded with the vacuity shapes below — follow that before writing a property over one.
 - **Attack model** — a per-point *compromised* flag; a compromised sensor reports a random in-domain
   value with `trust := untrusted`, and a compromised actuator or automation link drops the command via a
   not-compromised transition guard. Compromise adds no new actuator state transition. MEDIC §3.4,
@@ -181,6 +183,28 @@ they diverge. Verified conforming:
     *succeeding*. Eliminating `P` is what it was written to demand.
   - For an **implication** shape (`4`, `5`, `6` — `AG (P -> …)`), `P` becoming unreachable makes the
     formula vacuously true. The verdict stops describing behaviour.
+
+  **A third shape sits outside both, and it is structural rather than discovered: a property whose
+  *subject cannot change*.** Trust and privacy labels on *variables* are propagation **sources**, never
+  targets — MEDIC §3.3's relation drives the label of a rule's command target, and in this product that
+  target is always a *state* label (`SmvMainModuleBuilder.appendPropertyTransitions`). A variable's
+  label classifies the value's provenance, so it is emitted as `FROZENVAR` on sensors and as
+  `next(d.trust_v) := d.trust_v` elsewhere, with one exception: the attack path sets
+  `trust_v := untrusted` for a variable declaring `FalsifiableWhenCompromised: true`. That exception is
+  gated on the flag alone and **never on read capability**, so an affect-only shared value is not a
+  special case here — measured: `AG (light_1.trust_illuminance = untrusted)` is provable in the
+  away-mode scene because that variable declares `FalsifiableWhenCompromised: false`, not because it
+  declares `Reads: false`.
+
+  The consequence is user-visible. A template 1/3/7 condition with `propertyScope: "variable"` conjoins
+  a *constant* with the rest of the property, so a specification whose only condition is such a label is
+  decided at `init` by the manifest and Environment Pool rather than by the automation. It is correctly
+  decided — the identifier is declared, initialised and in scope, which is why admission stays
+  capability-blind (`NusmvRequestValidator.validatePropertyReference`) instead of rejecting a formula
+  `SmvSpecificationBuilder` emits successfully. But unlike the two shapes above this is a fact about the
+  transition relation, not about the reachable state space: it is fixed before exploration begins and no
+  repair can introduce or remove it. When explaining such a verdict, "no reachable violation" and "this
+  subject never varies" are different claims, and only the first describes the automation.
 
   So a green forward verification means "no submitted property is violated", never "every property is
   still meaningful". A repair that satisfies an implication property by removing its antecedent is

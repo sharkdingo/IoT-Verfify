@@ -281,8 +281,8 @@ offer one.
 
 ## If you have extra time
 
-**Bounded exploration** (the `/api/fuzz` family — submission is `POST /api/fuzz/async`) as a fast pre-check before the formal run. Fix the
-`seed` so the same candidate path reproduces on stage. Be precise about what it claims: a
+**Bounded exploration** (the `/api/fuzz` family — submission is `POST /api/fuzz/async`) as a
+fast pre-check before the formal run. Fix the `seed` so the same candidate path reproduces on stage. Be precise about what it claims: a
 finite path violating a supported property under the explorer's semantics — a *candidate*
 counterexample, not a verdict, and not accepted by the fix pipeline. Three of this scene's six
 properties are eligible (the two Immediate ones and the Never one); the other three are declined

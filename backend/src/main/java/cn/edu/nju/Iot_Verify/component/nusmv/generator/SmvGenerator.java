@@ -474,11 +474,19 @@ public class SmvGenerator {
             environmentByName.putIfAbsent(variable.getName().trim(), variable);
         }
 
+        // `sharedDeclarations`, not `envVariables`: the latter is the rule/spec *source-capability*
+        // set and excludes affect-only declarations (`Reads: false`). Labels are not a read — the
+        // device module declares `trust_<name>`/`privacy_<name>` for every declared variable and
+        // initialises them from these instance overrides — so keying the pool's labels off the
+        // capability set silently dropped them for exactly the variables a device only writes.
+        // The Environment Pool renders those rows as editable (they enter through
+        // `ImpactedVariables`), so a user could set a source label, have it persist, and get a model
+        // built from the template value instead.
         for (DeviceSmvData smv : deviceSmvMap.values()) {
-            if (smv == null || smv.getEnvVariables() == null) {
+            if (smv == null || smv.getSharedDeclarations() == null) {
                 continue;
             }
-            for (String variableName : smv.getEnvVariables().keySet()) {
+            for (String variableName : smv.getSharedDeclarations().keySet()) {
                 BoardEnvironmentVariableDto environment = environmentByName.get(variableName);
                 if (environment == null) {
                     continue;

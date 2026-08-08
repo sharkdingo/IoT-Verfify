@@ -133,8 +133,11 @@ at-boundary branch. `NaturalChangeRate=[-1, 1]` is MEDIC §3.1, Fig. 2b's exact
 physical disturbance; `0` explicitly means no independent natural change, so only active
 device effects remain and the value stutters when there are none. A wider interval is therefore a
 strictly weaker assumption rather than a different one — modelling only its endpoints would prove
-properties the declaration does not support. An interval that excludes zero is a *mandatory* change:
-`[2, 4]` always rises by 2–4, while `[0, 4]` may also hold. Adding a hidden stutter to every interval
+properties the declaration does not support. An interval that excludes zero is a *mandatory* change
+wherever the declared domain leaves room for it: `[2, 4]` rises by 2–4, while `[0, 4]` may also hold.
+At a saturated boundary the clamp still holds the value — with domain `0..10`, a value of `10` under
+`[2, 5]` yields `10` for every candidate delta, so `AG (v = 10)` is provable. The declared domain
+wins over the declared rate; that is the bound doing its job, not a stutter being injected. Adding a hidden stutter to every interval
 made the mandatory form unstatable and produced traces in which a required change simply did not
 happen. Because the span is a
 state-space cost it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN`, and a wider

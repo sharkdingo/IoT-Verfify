@@ -101,6 +101,14 @@ class AwayModeUnlockSceneNusmvTest {
         assertEquals(0, baselineModel.skippedSpecCount(), "demo scene must emit all six specs");
 
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
+        // Also guards a coupling that has nothing to do with this demo, because this scene happens to
+        // contain an affect-only shared variable (`Light.illuminance`, `Reads: false`). Label
+        // declaration (`SmvDeviceModuleBuilder.appendPropertyVariables`) and label initialisation
+        // (`appendInitialProperty`) are two independent loops over the same variable list, kept
+        // consistent only by both being capability-blind. Reads-gating either one alone emits an
+        // `init` for an undeclared identifier, which is invalid SMV — verified: adding that gate
+        // reddens all three tests here on NuSMV's own parse error, while a string-matching assertion
+        // elsewhere stays green.
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
         assertEquals(specs.size(), baseline.getSpecResults().size());
 

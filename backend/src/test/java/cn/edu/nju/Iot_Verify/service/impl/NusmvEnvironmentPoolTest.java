@@ -205,6 +205,62 @@ class NusmvEnvironmentPoolTest {
         assertTrue(!smv.contains("ac_1.temperature := a_temperature;"), smv);
     }
 
+    /**
+     * A pool label must reach the model for a value a device only *writes*.
+     *
+     * <p>`applyEnvironmentPoolLabels` used to key off `envVariables`, which is the rule/spec
+     * source-capability set and therefore excludes affect-only declarations (`Reads: false`). The
+     * device module nevertheless declares `trust_<name>`/`privacy_<name>` for every declared variable
+     * and initialises them from these instance overrides, so the labels were silently dropped for
+     * exactly the variables a device only writes — and the Environment Pool renders those rows as
+     * editable, because they enter the panel through `ImpactedVariables`. A user could set a source
+     * label, watch it persist, and get a model built from the template value instead.
+     *
+     * <p>Asserting the *opposite* of the template values is what makes this falsifiable: the manifest
+     * below declares `untrusted`/`public`, so seeing `trusted`/`private` in the model can only come
+     * from the pool.
+     */
+    @Test
+    void environmentPoolLabelsReachAffectOnlySharedVariables() throws Exception {
+        DeviceManifest.InternalVariable affectOnly = impactNumber("temperature", 15, 35);
+        affectOnly.setTrust("untrusted");
+        affectOnly.setPrivacy("public");
+        DeviceManifest airConditioner = DeviceManifest.builder()
+                .name("Air Conditioner")
+                .modes(List.of("MachineState"))
+                .initState("cool")
+                .impactedVariables(List.of("temperature"))
+                .internalVariables(List.of(affectOnly))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("cool").trust("trusted")
+                                .privacy("public")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature").changeRate("-2").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted")
+                                .privacy("public").build()))
+                .build();
+
+        SmvGenerator generator = generatorFor(Map.of("Air Conditioner", airConditioner));
+        List<DeviceVerificationDto> rawDevices = List.of(device("ac_1", "Air Conditioner", "cool"));
+        Map<String, DeviceSmvData> rawMap = generator.buildDeviceSmvMap(USER_ID, rawDevices);
+
+        // The pool asserts the opposite of the manifest on both dimensions.
+        List<BoardEnvironmentVariableDto> merged = NusmvEnvironmentPool.mergeWithDefaults(
+                List.of(new BoardEnvironmentVariableDto("temperature", "28", "trusted", "private")),
+                rawMap);
+        List<DeviceVerificationDto> expanded = NusmvEnvironmentPool.expandDevices(rawDevices, merged, rawMap);
+        SmvGenerator.GenerateResult generated = generator.generateWithEnvironment(
+                USER_ID, expanded, merged, List.of(), List.of(), AttackScenarioDto.none(), true,
+                SmvGenerator.GeneratePurpose.VERIFICATION);
+
+        String smv = Files.readString(generated.smvFile().toPath());
+        assertTrue(smv.contains("init(trust_temperature) := trusted;"),
+                "the pool's trust label must initialise the affect-only variable's label: " + smv);
+        assertTrue(smv.contains("init(privacy_temperature) := private;"),
+                "the pool's privacy label must initialise the affect-only variable's label: " + smv);
+    }
+
     @Test
     void unrelatedTemplateCannotSupplyMissingImpactDomain() throws Exception {
         DeviceManifest sensorDomain = DeviceManifest.builder()

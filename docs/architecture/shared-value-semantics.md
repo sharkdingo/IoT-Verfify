@@ -110,6 +110,24 @@ declared variable, so that reference is something the generated model really per
 label is not reading the value. Narrowing it would make admission stricter than the model and refuse
 a specification NuSMV would have decided.
 
+The value branch is not merely "stricter than the model" — it forbids something different in kind.
+`SmvMainModuleBuilder` emits the read mirror `device.<name> := a_<name>` only for a read-capable
+declaration, while `appendInternalVariables` declares `device.<name>` regardless. So for an
+affect-only value that identifier exists but is **never assigned**: a value condition on it would
+compare an unconstrained free variable over the declared domain, not the shared value. Admitting it
+would return `200` and then answer a question about something the device never observes, which is why
+this branch fails closed while the label branch stays open. Two model facts, not one inconsistency.
+
+Its Environment Pool labels do reach the model: `SmvGenerator.applyEnvironmentPoolLabels` keys off
+`sharedDeclarations` (read *and* affect-only), not the narrower capability set. Keying it off the
+latter silently dropped a user's label edit for exactly the rows the panel renders as editable —
+pinned by `NusmvEnvironmentPoolTest.environmentPoolLabelsReachAffectOnlySharedVariables`.
+
+What such a label cannot do is *change*: see the third vacuity shape in
+[theory-sources.md](theory-sources.md) — a variable label is frozen unless the variable declares
+`FalsifiableWhenCompromised` and the run models an attack, so a property over one is decided at
+`init`. That is a fact about the label model as a whole, not about affect-only-ness.
+
 ## 5. Natural evolution
 
 A shared numeric value declares `NaturalChangeRate`, an integer interval constraining the per-step
@@ -117,8 +135,16 @@ change. **[MEDIC]** writes the environment self-loop as `v' - v ∈ [-1 + env.D.
 `[-1, 1]` reproduces the paper exactly and any other interval is **[EXT]** parameterization.
 
 The interval means **exactly itself** — every integer in it, nothing added, nothing omitted.
-**[EXACT]** An interval that excludes `0` is a *mandatory* per-step change; one that includes `0`
-permits holding still. `0` alone means no independent evolution.
+**[EXACT]** An interval that excludes `0` is a per-step change that is mandatory *wherever the
+declared domain leaves room for it*; one that includes `0` permits holding still anywhere. `0` alone
+means no independent evolution.
+
+The domain qualifier is load-bearing, because the declared bound wins over the declared rate. Each
+candidate delta is clamped with `max(lower, min(upper, expr))`, so at a saturated boundary every
+candidate collapses to the same value: with domain `0..10` and rate `[2, 5]`, a value of `10` yields
+`10` for all four deltas and NuSMV *proves* `AG (v = 10)` — measured, not reasoned. No stutter is
+injected into the interval; the value holds because the domain has no room left. Stating the rate as
+unconditionally mandatory would make a provable model behaviour read as a generator bug.
 
 Discrete shared values have no natural-change interval: there is no ordering to move along.
 
