@@ -57,6 +57,40 @@ const implicationSpec = (templateId, ifConditions, thenConditions) => ({
   thenConditions
 })
 
+/**
+ * A scene may define its own device type instead of reusing a bundled manifest. The
+ * away-mode presentation scene needs an occupancy signal that actually evolves, so it
+ * declares `occupancy` as a shared environment variable (`IsInside: false`, `Reads: true`).
+ * A device-local variable would be frozen at its initial value for the whole run, which
+ * would make any repair conditioned on it unreachable — a repair that silently disables
+ * the rule it claims to keep.
+ */
+const occupancySensorTemplate = {
+  name: 'Occupancy Sensor',
+  manifest: {
+    Name: 'Occupancy Sensor',
+    Description: 'Reports whether a resident is present, as a shared environment reading',
+    InternalVariables: [
+      {
+        Name: 'occupancy',
+        Description: 'Whether a resident is currently present',
+        IsInside: false,
+        Reads: true,
+        FalsifiableWhenCompromised: true,
+        Trust: 'trusted',
+        Privacy: 'private',
+        Values: ['present', 'absent']
+      }
+    ],
+    ImpactedVariables: [],
+    Modes: [],
+    InitState: '',
+    WorkingStates: [],
+    Transitions: [],
+    APIs: []
+  }
+}
+
 const scenes = [
   {
     file: 'default-fire-evacuation-scene.json',
@@ -149,6 +183,72 @@ const scenes = [
     ]
   },
   {
+    file: 'default-away-mode-unlock-scene.json',
+    templateNames: ['Alarm', 'Door', 'Light', 'Motion Detector'],
+    extraTemplates: [occupancySensorTemplate],
+    devices: [
+      device('occupancy_1', 'Occupancy Sensor', 'Resident Presence Sensor', 70, 60),
+      device('motion_1', 'Motion Detector', 'Porch Motion Detector', 70, 280),
+      device('alarm_1', 'Alarm', 'Entry Alarm', 360, 40, {
+        state: 'off', currentStateTrust: 'trusted', currentStatePrivacy: 'public'
+      }),
+      device('door_1', 'Door', 'Front Door', 360, 240, {
+        state: 'locked', currentStateTrust: 'trusted', currentStatePrivacy: 'private'
+      }),
+      device('light_1', 'Light', 'Porch Light', 360, 430, {
+        state: 'off', currentStateTrust: 'trusted', currentStatePrivacy: 'public'
+      })
+    ],
+    environmentVariables: [
+      { name: 'occupancy', value: 'absent', trust: 'trusted', privacy: 'private' },
+      { name: 'motion', value: 'inactive', trust: 'trusted', privacy: 'private' },
+      // `illuminance` is required because the Light template impacts it, but the template declares
+      // it `Reads: false`, so no rule or specification in this scene can observe it. It is here to
+      // satisfy environment coverage, not because the demo reasons about light levels.
+      { name: 'illuminance', value: '20', trust: 'untrusted', privacy: 'public' }
+    ],
+    rules: [
+      {
+        name: 'When nobody is home, arm the entry alarm',
+        sources: [valueSource('occupancy_1', 'occupancy', '=', 'absent')],
+        toId: 'alarm_1',
+        toApi: 'strobe'
+      },
+      {
+        name: 'When porch motion is detected, unlock the front door for convenience',
+        sources: [valueSource('motion_1', 'motion', '=', 'active')],
+        toId: 'door_1',
+        toApi: 'unlock'
+      },
+      {
+        name: 'When porch motion is detected, turn on the porch light',
+        sources: [valueSource('motion_1', 'motion', '=', 'active')],
+        toId: 'light_1',
+        toApi: 'on'
+      }
+    ],
+    specs: [
+      implicationSpec('4',
+        [condition('occupancy_1', 'variable', 'occupancy', '=', 'absent')],
+        [condition('alarm_1', 'mode', 'AlertState', '=', 'strobe')]),
+      implicationSpec('4',
+        [condition('motion_1', 'variable', 'motion', '=', 'active')],
+        [condition('light_1', 'mode', 'SwitchState', '=', 'on')]),
+      aSpec('3', [
+        condition('occupancy_1', 'variable', 'occupancy', '=', 'absent'),
+        condition('door_1', 'mode', 'LockState', '=', 'unlocked')
+      ]),
+      implicationSpec('5',
+        [
+          condition('occupancy_1', 'variable', 'occupancy', '=', 'absent'),
+          condition('door_1', 'mode', 'LockState', '=', 'unlocked')
+        ],
+        [condition('door_1', 'mode', 'LockState', '=', 'locked')]),
+      aSpec('7', [condition('door_1', 'mode', 'LockState', '=', 'unlocked')]),
+      aSpec('1', [condition('door_1', 'privacy', 'LockState', '=', 'private', 'state')])
+    ]
+  },
+  {
     file: 'default-rfid-access-scene.json',
     templateNames: ['Alarm', 'Door', 'Door RFID'],
     devices: [
@@ -200,7 +300,10 @@ for (const definition of scenes) {
   const scene = {
     schema: 'iot-verify.board-scene',
     version: 4,
-    templates: definition.templateNames.map(loadTemplate),
+    templates: [
+      ...definition.templateNames.map(loadTemplate),
+      ...(definition.extraTemplates ?? [])
+    ],
     devices: definition.devices,
     environmentVariables: definition.environmentVariables,
     rules: definition.rules,

@@ -137,10 +137,16 @@ class TheorySourceConformanceTest {
         // This is the load-bearing one. A model with disabled rules or skipped specs can pass verification
         // *because* the thing that would have failed was never modelled — reporting that as a repair is the exact
         // dishonesty the whole product is built to avoid.
-        assertTrue(flat.contains("disabledRuleCount() > 0 || genResult.skippedSpecCount() > 0")
-                        || flat.contains("genResult.disabledRuleCount() > 0"),
-                "forwardVerify no longer refuses an incomplete regenerated model, so a vacuous pass could be "
-                        + "reported as a confirmed repair");
+        // Assert both halves separately. They used to be one `||` whose fallback
+        // ("genResult.disabledRuleCount() > 0") was a substring of the primary pattern, so deleting the
+        // skipped-spec half of the refusal left this test green — and a skipped specification is precisely
+        // how a vacuous pass becomes a "confirmed" repair.
+        assertTrue(flat.contains("genResult.disabledRuleCount() > 0"),
+                "forwardVerify no longer refuses a regenerated model with disabled rules, so a vacuous pass "
+                        + "could be reported as a confirmed repair");
+        assertTrue(flat.contains("genResult.skippedSpecCount() > 0"),
+                "forwardVerify no longer refuses a regenerated model with skipped specifications, so a "
+                        + "repair could be certified against a property that was never checked");
 
         String strategy = source("component", "nusmv", "fixer", "strategy", "ParameterAdjustStrategy.java");
         assertTrue(strategy.contains("exclusionInvars"),
@@ -152,9 +158,11 @@ class TheorySourceConformanceTest {
     void documentStillNamesItsSources() throws IOException {
         String doc = Files.readString(DOC, StandardCharsets.UTF_8);
         // Coverage guard: if the document moved or was rewritten, the assertions above would be pinning code
-        // against a description that no longer exists.
+        // against a description that no longer exists. The FSM thesis belongs in this list — its ch.4 repair
+        // loop is pinned by incompleteModelIsNeverAVacuousPass, yet the loop below used to check only three
+        // papers while the display name claimed four.
         List<String> missing = new ArrayList<>();
-        for (String paper : List.of("MEDIC", "Salus", "HAFuzz")) {
+        for (String paper : List.of("MEDIC", "Salus", "HAFuzz", "FSM")) {
             if (!doc.contains(paper)) missing.add(paper);
         }
         assertEquals(List.of(), missing, "theory-sources.md no longer names these papers");

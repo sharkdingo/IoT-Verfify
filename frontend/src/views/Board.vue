@@ -2808,7 +2808,11 @@ const handleNodeMovedOrResized = async (nodeId: string) => {
       commitSemanticScene({
         nodes: mutation.currentNodes,
         availability: mutation,
-        semanticChanged: mutation.operation === 'updated'
+        // Canvas coordinates never reach the SMV model (`buildDevices` omits them), so moving or
+        // resizing a node must not invalidate a verification verdict. The backend still reports
+        // `operation: "updated"` because a layout row did change, which is why this cannot be
+        // derived from the mutation's operation field.
+        semanticChanged: false
       })
       const pending = pendingNodeLayouts.get(nodeId)
       if (pending?.version === version) {

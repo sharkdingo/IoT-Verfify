@@ -24,6 +24,7 @@ NuSMV. `Baseline` and `attack` show satisfied/violated specification counts.
 | [Fire evacuation](../examples/default-fire-evacuation-scene.json) | `4 / 2 / 3 / 5` | `4 / 1` | `1 / 4` | Remove the alarm-to-door unlock rule; then `5 / 0` |
 | [Climate conflict](../examples/default-climate-conflict-scene.json) | `2 / 2 / 2 / 4` | `2 / 2` | `1 / 3` | Remove the first hot-room heating rule; then `4 / 0` |
 | [RFID access](../examples/default-rfid-access-scene.json) | `3 / 0 / 2 / 5` | `5 / 0` | `2 / 3` | No baseline violation to repair |
+| [Away-mode unlock](../examples/default-away-mode-unlock-scene.json) | `5 / 3 / 3 / 6` | `4 / 2` | `1 / 5` | Remove the convenience-unlock rule; one removal repairs both violations, then `6 / 0` |
 
 Every baseline and attack run emits all requested properties with zero disabled rules
 and zero skipped specifications. Simulation produces an animatable trajectory for each
@@ -72,6 +73,49 @@ can coexist with an already unlocked door, and an unlock can carry an untrusted 
 label. The privacy property and unauthorized-alarm response remain satisfied. This is a
 modeled attack-space result, not a statement that a physical badge will be compromised.
 
+## Away-mode unlock
+
+Default templates: `Alarm`, `Door`, `Light`, and `Motion Detector`, plus one scene-defined
+custom type, `Occupancy Sensor`. This is the only bundled scene that declares its own device
+type, so it also demonstrates that a scene file is a self-contained import including new types.
+
+This is the presentation scene; the presenter walkthrough is
+[away-mode-unlock-demo.md](away-mode-unlock-demo.md). Its defect is a convenience automation
+rather than a rule marked unsafe, so the scene reads like something a real household would
+install: nobody is home so the alarm arms, porch motion unlocks the front door "so you do not
+have to find your keys", and the same motion turns on the porch light.
+
+`Occupancy Sensor` declares `occupancy` as a **shared environment** variable
+(`IsInside: false`, `Reads: true`) rather than a device-local one. That is load-bearing. A
+device-local variable with no API writing it compiles to `next(v) := v` — frozen for the whole
+run — which would make every property mentioning "someone is home" vacuous and would let a
+condition repair "keep" a rule it had actually made unreachable.
+`AwayModeUnlockSceneNusmvTest.awayModeUnlockScene_presentsNoVacuouslySatisfiedProperty` pins
+the reachability of every state the walkthrough presents.
+
+Two properties are violated at baseline and they ask different questions about the same worry:
+`Never (nobody home & front door unlocked)`, and a Response property saying that if the door is
+ever unlocked while nobody is home it must eventually re-lock. The counterexample is three
+states — nobody home, alarm arms, then porch motion unlocks the door and lights the porch.
+
+All three rules fired in that trace, so all three appear as localization candidates; the
+porch-light rule shares the convenience rule's trigger. Only one removal is verified, and it
+repairs **both** violated properties.
+
+Repair is where this scene is most instructive, and it is not the flattering result. Parameter
+adjustment reports `SKIPPED_NO_PARAMETERIZABLE_VALUES` (the scene is entirely enum-valued) and
+condition adjustment reports `NO_VERIFIED_SUGGESTION` — adding "only unlock when someone is
+home" genuinely does not repair the property, because occupancy evolves freely and no rule
+re-locks the door after the resident leaves. Permanent removal of the convenience-unlock rule
+is the only verified repair, and forward verification confirms `6 / 0`. A tool that declines
+two strategies with stated reasons is more credible than one that always produces a guard.
+
+With attack budget `1`, five of six properties fail. The one to show is the untrusted-labelled
+event safety property, which held at baseline: a single compromised sensor spoofs its reading
+and the counterexample carries `door_1.trust_LockState_unlocked = untrusted`. The lock-state
+privacy property stays satisfied, so the attack is not indiscriminate. This is a modeled
+attack-space result, not a claim that a physical sensor will be compromised.
+
 ## Reproduce
 
 Regenerate the scene JSON after a bundled template changes:
@@ -80,8 +124,8 @@ Regenerate the scene JSON after a bundled template changes:
 node scripts/generate-default-template-scenes.mjs
 ```
 
-Run the real-NuSMV regression for the original acceptance scene and all three additional
-scenes:
+Run the real-NuSMV regression for the original acceptance scene and the three scenes it
+covers (fire evacuation, climate conflict, RFID access):
 
 ```bash
 cd backend
@@ -94,6 +138,14 @@ command:
 
 ```bash
 mvn -DforkCount=0 -Dtest=AcceptanceDemoScenarioNusmvTest test
+```
+
+The away-mode scene has its own regression, which pins the numbers this guide and the
+presenter walkthrough publish (baseline verdict, blamed rule, non-destructive repair, and
+the budget-one untrusted-label failure):
+
+```bash
+mvn -DforkCount=0 -Dtest=AwayModeUnlockSceneNusmvTest test
 ```
 
 For a UI check, import a file, review the explicit full-replacement preview, run

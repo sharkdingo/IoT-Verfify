@@ -18,8 +18,10 @@ the shared root cause; removing it is forward-verified against all five specific
 leaves the remaining two response rules intact.
 
 For additional default-template examples covering fire evacuation, first-match rule
-priority, and RFID trust/privacy attack propagation, see
-[Additional Default-Template Scenarios](default-template-scenarios.md).
+priority, RFID trust/privacy attack propagation, and away-mode unlock, see
+[Additional Default-Template Scenarios](default-template-scenarios.md). For a scripted
+presentation built on the away-mode scene, see
+[Presenter Walkthrough: "Nobody Home, Door Unlocked"](away-mode-unlock-demo.md).
 
 All four device types (`Motion Detector`, `Camera`, `Alarm`, and `Light`) are built-in
 default templates. The demo does not require creating or editing a custom template.

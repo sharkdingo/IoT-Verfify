@@ -1,0 +1,508 @@
+{
+	"schema": "iot-verify.board-scene",
+	"version": 4,
+	"templates": [
+		{
+			"name": "Alarm",
+			"manifest": {
+				"Name": "Alarm",
+				"Description": "",
+				"InternalVariables": [],
+				"Modes": [
+					"AlertState"
+				],
+				"InitState": "both",
+				"WorkingStates": [
+					{
+						"Name": "both",
+						"Dynamics": [],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "public"
+					},
+					{
+						"Name": "off",
+						"Dynamics": [],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "public"
+					},
+					{
+						"Name": "siren",
+						"Dynamics": [],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "public"
+					},
+					{
+						"Name": "strobe",
+						"Dynamics": [],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "public"
+					}
+				],
+				"Transitions": [],
+				"APIs": [
+					{
+						"Name": "both",
+						"StartState": "",
+						"EndState": "both",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					},
+					{
+						"Name": "off",
+						"StartState": "",
+						"EndState": "off",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					},
+					{
+						"Name": "siren",
+						"StartState": "",
+						"EndState": "siren",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					},
+					{
+						"Name": "strobe",
+						"StartState": "",
+						"EndState": "strobe",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					}
+				]
+			}
+		},
+		{
+			"name": "Door",
+			"manifest": {
+				"Name": "Door",
+				"Description": "",
+				"InternalVariables": [],
+				"Modes": [
+					"LockState"
+				],
+				"InitState": "locked",
+				"WorkingStates": [
+					{
+						"Name": "locked",
+						"Dynamics": [],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "private"
+					},
+					{
+						"Name": "unlocked",
+						"Dynamics": [],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "private"
+					}
+				],
+				"Transitions": [],
+				"APIs": [
+					{
+						"Name": "lock",
+						"StartState": "",
+						"EndState": "locked",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					},
+					{
+						"Name": "unlock",
+						"StartState": "",
+						"EndState": "unlocked",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					}
+				]
+			}
+		},
+		{
+			"name": "Light",
+			"manifest": {
+				"Name": "Light",
+				"Description": "",
+				"InternalVariables": [
+					{
+						"Name": "illuminance",
+						"Description": "Ambient illuminance",
+						"IsInside": false,
+						"Reads": false,
+						"FalsifiableWhenCompromised": false,
+						"Trust": "untrusted",
+						"Privacy": "public",
+						"LowerBound": 0,
+						"UpperBound": 100,
+						"NaturalChangeRate": "[-1, 1]"
+					}
+				],
+				"ImpactedVariables": [
+					"illuminance"
+				],
+				"Modes": [
+					"SwitchState"
+				],
+				"InitState": "on",
+				"WorkingStates": [
+					{
+						"Name": "on",
+						"Dynamics": [
+							{
+								"VariableName": "illuminance",
+								"ChangeRate": "1"
+							}
+						],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "public"
+					},
+					{
+						"Name": "off",
+						"Dynamics": [],
+						"Description": "",
+						"Trust": "trusted",
+						"Privacy": "public"
+					}
+				],
+				"Transitions": [],
+				"APIs": [
+					{
+						"Name": "on",
+						"StartState": "",
+						"EndState": "on",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					},
+					{
+						"Name": "off",
+						"StartState": "",
+						"EndState": "off",
+						"Trigger": null,
+						"Signal": true,
+						"Description": ""
+					}
+				]
+			}
+		},
+		{
+			"name": "Motion Detector",
+			"manifest": {
+				"Name": "Motion Detector",
+				"Description": "",
+				"InternalVariables": [
+					{
+						"Name": "motion",
+						"Description": "",
+						"IsInside": false,
+						"Reads": true,
+						"FalsifiableWhenCompromised": true,
+						"Trust": "trusted",
+						"Privacy": "private",
+						"Values": [
+							"active",
+							"inactive"
+						]
+					}
+				],
+				"Modes": [],
+				"InitState": "",
+				"WorkingStates": [],
+				"Transitions": [],
+				"APIs": []
+			}
+		},
+		{
+			"name": "Occupancy Sensor",
+			"manifest": {
+				"Name": "Occupancy Sensor",
+				"Description": "Reports whether a resident is present, as a shared environment reading",
+				"InternalVariables": [
+					{
+						"Name": "occupancy",
+						"Description": "Whether a resident is currently present",
+						"IsInside": false,
+						"Reads": true,
+						"FalsifiableWhenCompromised": true,
+						"Trust": "trusted",
+						"Privacy": "private",
+						"Values": [
+							"present",
+							"absent"
+						]
+					}
+				],
+				"ImpactedVariables": [],
+				"Modes": [],
+				"InitState": "",
+				"WorkingStates": [],
+				"Transitions": [],
+				"APIs": []
+			}
+		}
+	],
+	"devices": [
+		{
+			"id": "occupancy_1",
+			"templateName": "Occupancy Sensor",
+			"label": "Resident Presence Sensor",
+			"position": {
+				"x": 70,
+				"y": 60
+			},
+			"width": 176,
+			"height": 128
+		},
+		{
+			"id": "motion_1",
+			"templateName": "Motion Detector",
+			"label": "Porch Motion Detector",
+			"position": {
+				"x": 70,
+				"y": 280
+			},
+			"width": 176,
+			"height": 128
+		},
+		{
+			"id": "alarm_1",
+			"templateName": "Alarm",
+			"label": "Entry Alarm",
+			"position": {
+				"x": 360,
+				"y": 40
+			},
+			"state": "off",
+			"currentStateTrust": "trusted",
+			"currentStatePrivacy": "public",
+			"width": 176,
+			"height": 128
+		},
+		{
+			"id": "door_1",
+			"templateName": "Door",
+			"label": "Front Door",
+			"position": {
+				"x": 360,
+				"y": 240
+			},
+			"state": "locked",
+			"currentStateTrust": "trusted",
+			"currentStatePrivacy": "private",
+			"width": 176,
+			"height": 128
+		},
+		{
+			"id": "light_1",
+			"templateName": "Light",
+			"label": "Porch Light",
+			"position": {
+				"x": 360,
+				"y": 430
+			},
+			"state": "off",
+			"currentStateTrust": "trusted",
+			"currentStatePrivacy": "public",
+			"width": 176,
+			"height": 128
+		}
+	],
+	"environmentVariables": [
+		{
+			"name": "occupancy",
+			"value": "absent",
+			"trust": "trusted",
+			"privacy": "private"
+		},
+		{
+			"name": "motion",
+			"value": "inactive",
+			"trust": "trusted",
+			"privacy": "private"
+		},
+		{
+			"name": "illuminance",
+			"value": "20",
+			"trust": "untrusted",
+			"privacy": "public"
+		}
+	],
+	"rules": [
+		{
+			"name": "When nobody is home, arm the entry alarm",
+			"sources": [
+				{
+					"fromId": "occupancy_1",
+					"fromApi": "occupancy",
+					"itemType": "variable",
+					"relation": "=",
+					"value": "absent"
+				}
+			],
+			"toId": "alarm_1",
+			"toApi": "strobe"
+		},
+		{
+			"name": "When porch motion is detected, unlock the front door for convenience",
+			"sources": [
+				{
+					"fromId": "motion_1",
+					"fromApi": "motion",
+					"itemType": "variable",
+					"relation": "=",
+					"value": "active"
+				}
+			],
+			"toId": "door_1",
+			"toApi": "unlock"
+		},
+		{
+			"name": "When porch motion is detected, turn on the porch light",
+			"sources": [
+				{
+					"fromId": "motion_1",
+					"fromApi": "motion",
+					"itemType": "variable",
+					"relation": "=",
+					"value": "active"
+				}
+			],
+			"toId": "light_1",
+			"toApi": "on"
+		}
+	],
+	"specs": [
+		{
+			"templateId": "4",
+			"aConditions": [],
+			"ifConditions": [
+				{
+					"deviceId": "occupancy_1",
+					"targetType": "variable",
+					"key": "occupancy",
+					"relation": "=",
+					"value": "absent"
+				}
+			],
+			"thenConditions": [
+				{
+					"deviceId": "alarm_1",
+					"targetType": "mode",
+					"key": "AlertState",
+					"relation": "=",
+					"value": "strobe"
+				}
+			]
+		},
+		{
+			"templateId": "4",
+			"aConditions": [],
+			"ifConditions": [
+				{
+					"deviceId": "motion_1",
+					"targetType": "variable",
+					"key": "motion",
+					"relation": "=",
+					"value": "active"
+				}
+			],
+			"thenConditions": [
+				{
+					"deviceId": "light_1",
+					"targetType": "mode",
+					"key": "SwitchState",
+					"relation": "=",
+					"value": "on"
+				}
+			]
+		},
+		{
+			"templateId": "3",
+			"aConditions": [
+				{
+					"deviceId": "occupancy_1",
+					"targetType": "variable",
+					"key": "occupancy",
+					"relation": "=",
+					"value": "absent"
+				},
+				{
+					"deviceId": "door_1",
+					"targetType": "mode",
+					"key": "LockState",
+					"relation": "=",
+					"value": "unlocked"
+				}
+			],
+			"ifConditions": [],
+			"thenConditions": []
+		},
+		{
+			"templateId": "5",
+			"aConditions": [],
+			"ifConditions": [
+				{
+					"deviceId": "occupancy_1",
+					"targetType": "variable",
+					"key": "occupancy",
+					"relation": "=",
+					"value": "absent"
+				},
+				{
+					"deviceId": "door_1",
+					"targetType": "mode",
+					"key": "LockState",
+					"relation": "=",
+					"value": "unlocked"
+				}
+			],
+			"thenConditions": [
+				{
+					"deviceId": "door_1",
+					"targetType": "mode",
+					"key": "LockState",
+					"relation": "=",
+					"value": "locked"
+				}
+			]
+		},
+		{
+			"templateId": "7",
+			"aConditions": [
+				{
+					"deviceId": "door_1",
+					"targetType": "mode",
+					"key": "LockState",
+					"relation": "=",
+					"value": "unlocked"
+				}
+			],
+			"ifConditions": [],
+			"thenConditions": []
+		},
+		{
+			"templateId": "1",
+			"aConditions": [
+				{
+					"deviceId": "door_1",
+					"targetType": "privacy",
+					"key": "LockState",
+					"propertyScope": "state",
+					"relation": "=",
+					"value": "private"
+				}
+			],
+			"ifConditions": [],
+			"thenConditions": []
+		}
+	]
+}

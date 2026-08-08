@@ -49,9 +49,16 @@ their own copy; the citations below are precise enough to check against any copy
     pseudo-counterexample the user cannot act on. MEDIC never re-adds a stutter either, because `0` is
     already inside `[-1, 1]`.
 
-  So an interval **excluding** `0` means the value *always* changes; one **including** `0` means it
-  *may* hold. A user who wants "drains 2–4, or holds" writes `[-4, 0]`, which is a strictly weaker
-  claim and says so on its face. This is exact semantics, not a verification abstraction. Because the
+  So an interval **excluding** `0` means the value changes on every step *that is not clamped by the
+  declared domain*; one **including** `0` means it *may* hold anywhere. A user who wants "drains 2–4,
+  or holds" writes `[-4, 0]`, which is a strictly weaker claim and says so on its face.
+
+  The clamp qualifier is load-bearing, not a caveat: the domain bound wins over the rate. With domain
+  `0..10` and rate `[2, 4]`, a value of `10` clamps every candidate back to `10`, so NuSMV *proves*
+  `AG (v = 10)` — measured, not reasoned. Stating the rate as unconditionally mandatory would make a
+  provable model behaviour read as a generator bug. This is still exact semantics rather than a
+  verification abstraction: no stutter is injected into the interval; the value is held because the
+  declared domain has no room left. Because the
   span is a state-space cost, it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN` and a
   wider declaration is rejected rather than silently narrowed.
 - **Device effect timing** — Fig. 2b combines the device effect and the environment step in the same
@@ -67,6 +74,16 @@ their own copy; the citations below are precise enough to check against any copy
   value with `trust := untrusted`, and a compromised actuator or automation link drops the command via a
   not-compromised transition guard. Compromise adds no new actuator state transition. MEDIC §3.4,
   Figs. 5–6. Implementation: `AttackSurface`, `SmvDeviceModuleBuilder`, `SmvMainModuleBuilder`.
+
+  **Narrower than the paper in one declared way:** falsification is *capability-scoped*. A variable is
+  falsifiable only when its manifest sets `FalsifiableWhenCompromised: true`, and `AttackSurface` admits a
+  device to the reading-falsification surface only if it declares at least one such variable
+  (`AttackSurface.java:112-120`). MEDIC treats any sensor reading as spoofable. The product requires the
+  template author to say so, because "which readings an attacker can forge" is a per-device physical claim
+  rather than a property of being a sensor — and a silent default would let an attack run report a surface
+  the template never justified. The cost is real and worth stating: a template that omits the flag is
+  unattackable, so its absence weakens an attack run rather than failing it. `nusmv-model.md` and
+  `backend/CLAUDE.md` own the mechanics.
 
   MEDIC writes this as a boolean `attacked` per device. IoT-Verify names it *compromised* throughout, and the
   generated per-rule identifier is `iot_verify_automation_link_compromised_<n>`
@@ -108,8 +125,10 @@ These are intentional, not drift. Keep the list honest when adding more.
   deliberate domain-specific widening. The interval is modeled exhaustively rather than as a
   shortlist of interesting values, so a wider interval is a genuinely weaker assumption instead of a
   different one. The generator never layers a second hidden `[-1, 1]` term on top of that
-  declaration. An interval that excludes zero (say `[2, 4]`) is a *mandatory* per-step change; to
-  allow holding still the user writes an interval containing zero (`[0, 4]`). Optional device-local
+  declaration. An interval that excludes zero (say `[2, 4]`) is a per-step change that is mandatory
+  wherever the declared domain leaves room for it — at a domain boundary the clamp holds the value
+  instead; to allow holding still anywhere the user writes an interval containing zero (`[0, 4]`).
+  Optional device-local
   numeric rates use the same convention as a project extension; they are not part of MEDIC's shared
   physical-environment equation.
 - Specification templates 1–7 extend MEDIC's two primitive security templates with safety and
@@ -126,8 +145,15 @@ claim below stops being true of the code, naming the paragraph that has become f
 otherwise the kind of assertion that rots silently: the paper does not change, the code does, and nothing fails when
 they diverge. Verified conforming:
 
-- **Salus §5.3 parameter refinement** — candidates are ordered by distance from the original value
-  (`ParameterAdjustStrategy`), so the closest working value is offered first.
+- **Salus §5.3 parameter refinement** — the single-parameter search orders candidates by
+  `distance(value, original) = |value - original|` and walks outward, so it offers the closest working
+  value first (`ParameterAdjustStrategy`). Two other paths in the same class do **not** inherit that
+  guarantee, and claiming they do would overstate conformance: the coordinated multi-parameter path
+  selects the extreme in-bounds tightening hint (`Collections.max`/`min`) because several parameters must
+  hold together, and the joint FROZENVAR solve takes NuSMV's assignment and then narrows it with a
+  budget-capped greedy pass (`refineToClosest`) rather than a proof of minimality. Ties in the
+  single-parameter walk break in the relation's direction (higher first for `>`/`>=`). So "closest first"
+  is a property of the single-parameter walk, not of every suggestion the strategy can return.
 - **Salus §5.2 condition candidates** — candidate conditions to add are derived from the violated
   specification's own conditions (`FixStrategyUtils`), not invented.
 - **HAFuzz distance-guided search** — the explorer keeps the minimum-distance seed per round and

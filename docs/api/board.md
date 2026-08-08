@@ -843,8 +843,17 @@ auto-fix parameterization identifiers active in that model.
   a 32-bit integer such as `1` or a bracketed, ascending two-integer interval such as
   `[-1, 1]`; unbracketed pairs and extra endpoints are invalid. It is required when the numeric
   variable is shared (`IsInside=false`): `[-1, 1]` reproduces MEDIC §3.1, `0` explicitly
-  disables independent natural change, and another interval is a visible endpoint model
-  extension whose candidates are the unique lower endpoint, zero, and upper endpoint.
+  disables independent natural change, and another interval is a visible parameterized extension.
+  The interval constrains `v' - v` and is modeled **exhaustively** — every integer in it is
+  admissible, none added and none omitted — then clamped to the declared domain. Away from a domain
+  boundary, an interval excluding zero therefore means the value changes every step; to allow
+  holding still anywhere, include zero. **At a boundary the clamp can still hold the value:** with
+  domain `0..10` and rate `[2, 5]`, a value of `10` clamps every candidate back to `10`, so
+  `AG (v = 10)` is provable. That is the declared domain winning over the declared rate, not a
+  stutter being injected. A bare integer is shorthand for the interval between it and zero
+  (`1` means `[0, 1]`, `-2` means `[-2, 0]`).
+  Semantics are owned by
+  [../architecture/theory-sources.md](../architecture/theory-sources.md).
 - `WorkingState`: `Name`, `Description`, required `Trust`, required `Privacy`, `Dynamics[]`
   (`Dynamic` = `VariableName`, `Value`, `ChangeRate`). In a multi-mode template, every
   working-state name is a complete semicolon-separated tuple with one concrete value per

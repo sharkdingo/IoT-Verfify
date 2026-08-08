@@ -92,6 +92,7 @@ class AcceptanceDemoScenarioNusmvTest {
     @Test
     void documentedSceneTemplateSnapshots_matchBundledTemplates() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper();
+        DeviceTemplateSchemaValidator schemaValidator = new DeviceTemplateSchemaValidator(objectMapper);
         Path examplesDir = Path.of("..", "docs", "examples");
         Path bundledTemplatesDir = Path.of("src", "main", "resources", "deviceTemplate");
 
@@ -101,15 +102,26 @@ class AcceptanceDemoScenarioNusmvTest {
                     .sorted()
                     .toList()) {
                 JsonNode scene = objectMapper.readTree(Files.readString(scenePath));
+                int checked = 0;
                 for (JsonNode template : scene.path("templates")) {
                     String templateName = template.path("name").asText();
                     Path bundledTemplate = bundledTemplatesDir.resolve(templateName + ".json");
-                    assertTrue(Files.exists(bundledTemplate),
-                            () -> scenePath.getFileName() + " references a non-bundled template: " + templateName);
-                    JsonNode bundledManifest = objectMapper.readTree(Files.readString(bundledTemplate));
-                    assertEquals(bundledManifest, template.path("manifest"),
-                            () -> scenePath.getFileName() + " has a stale template snapshot: " + templateName);
+                    if (Files.exists(bundledTemplate)) {
+                        // A copied bundled manifest must stay byte-equal, or an import would silently
+                        // create a second device type that differs from the default it shadows.
+                        JsonNode bundledManifest = objectMapper.readTree(Files.readString(bundledTemplate));
+                        assertEquals(bundledManifest, template.path("manifest"),
+                                () -> scenePath.getFileName() + " has a stale template snapshot: " + templateName);
+                    } else {
+                        // A scene may legitimately define its own device type (the away-mode scene declares
+                        // `Occupancy Sensor`). That is not exempt from checking — it must satisfy the same
+                        // canonical schema the template endpoint enforces, or the scene would fail to import.
+                        schemaValidator.validateRawManifest(templateName, template.path("manifest"));
+                    }
+                    checked++;
                 }
+                assertTrue(checked > 0,
+                        () -> scenePath.getFileName() + " declares no templates, so this scan checked nothing");
             }
         }
     }

@@ -528,8 +528,10 @@ inside that variable's declared domain and the source becomes untrusted. API pre
 does not infer this behavior, and attack modeling never widens the declared domain.
 Every shared numeric `InternalVariable` must explicitly
 declare `NaturalChangeRate`: `[-1, 1]` is the MEDIC §3.1 baseline, while `0` explicitly
-means no independent natural change. Wider custom ranges use their unique lower, zero, and
-upper values as per-step delta candidates. Device-local numeric variables may omit it and then
+means no independent natural change. Another interval constrains `v' - v` exhaustively: every
+integer in it is an admissible per-step delta, so away from a domain boundary an interval excluding
+zero forces a change each step — at a boundary the domain clamp can still hold the value.
+Device-local numeric variables may omit it and then
 retain their value unless a structured Dynamic or Transition changes them.
 
 ## Simulation

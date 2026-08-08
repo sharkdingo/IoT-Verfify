@@ -15,7 +15,110 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-07 (latest)
+### 2026-08-08 (latest)
+
+#### Fixed
+
+- **Dragging a device no longer invalidates a valid verification verdict.** Moving or resizing a node
+  committed with `semanticChanged: mutation.operation === 'updated'`, and a layout write always reports
+  `updated` because a layout row genuinely changed — so nudging a node raised the "re-verify" banner over
+  a result that still described the current model. Canvas coordinates never reach the generated model
+  (`buildDevices` omits them), so the staleness flag was reporting a semantic change that had not
+  happened, against this repo's own rule that only semantic changes invalidate a verdict. The layout call
+  site now states the no-op explicitly instead of deriving it from an operation field that cannot express
+  it. `layoutStaleness.spec.ts` pins both halves: the call site's committed value, and the premise that a
+  moved node produces an identical model fingerprint. Both were verified to redden when the fix is
+  reverted. Coverage stops at the unit level on purpose: an E2E attempt failed **identically** with
+  the fix present and reverted, because observing this needs an open verdict and a pointer-reachable
+  canvas at once, and the result dialog's `position: fixed; inset: 0` overlay covers the board — a
+  raw `page.mouse` drag performs no hit-target check, so it lands on the scrim and never sends a
+  layout request. Closing the dialog first does not help either, since `dismissResultDialog` clears
+  the staleness flag. The reason is recorded in the spec so the next attempt does not repeat it.
+
+- **A conformance guard that could not fail.** `TheorySourceConformanceTest.incompleteModelIsNeverAVacuousPass`
+  asserted the vacuous-pass refusal through one `||` whose fallback string
+  (`"genResult.disabledRuleCount() > 0"`) was a substring of the primary pattern, so deleting the
+  **skipped-specification** half of `forwardVerify`'s refusal left the test green — and a skipped
+  specification is exactly how a repair gets certified against a property that was never checked. The two
+  halves are now asserted separately; verified by deleting each half and watching the matching assertion
+  redden. Also widened `documentStillNamesItsSources` to the four papers its display name claims: the FSM
+  thesis was pinned by a sibling assertion but absent from the coverage loop.
+
+#### Changed
+
+- **The example-scene template guard now checks scene-defined types instead of rejecting them.**
+  `documentedSceneTemplateSnapshots_matchBundledTemplates` asserted every template in every
+  `docs/examples/` scene resolves to a bundled manifest, which made a legitimate custom device type
+  unrepresentable. Copied bundled manifests still must stay byte-equal; a scene-defined type is now
+  validated against the canonical `backend/device-template-schema.json` — the same gate the template
+  endpoint applies — so it is held to a different standard rather than waved through. Verified by
+  removing a required `Reads` field and watching the guard fail with the schema path. The scan also
+  asserts it found templates, so a scene with an empty `templates` array can no longer pass by
+  iterating nothing.
+- **`theory-sources.md` now declares that attack falsification is capability-scoped.** A variable is
+  falsifiable only when its manifest sets `FalsifiableWhenCompromised: true`, so `AttackSurface` admits a
+  device to the reading-falsification surface only if it declares one. That narrows MEDIC §3.4, which treats
+  any sensor reading as spoofable, and it was documented in `nusmv-model.md` and `backend/CLAUDE.md` but
+  missing from the page that owns paper deviations — the worst category, a real deviation left undeclared.
+  The note also states its cost: a template omitting the flag is unattackable, so the omission weakens an
+  attack run rather than failing it.
+- **Corrected an overstated Salus §5.3 conformance claim.** The page presented distance-ordered parameter
+  candidates as an unqualified property of `ParameterAdjustStrategy`. It holds for the single-parameter
+  walk; the coordinated multi-parameter path deliberately selects the *extreme* in-bounds tightening hint
+  because several parameters must hold together, and the joint FROZENVAR solve narrows NuSMV's assignment
+  with a budget-capped greedy pass rather than proving minimality.
+- **Corrected an over-absolute `NaturalChangeRate` claim in four documents.** They stated that an
+  interval excluding zero means the value changes every step. It does not at a domain boundary: with
+  domain `0..10` and rate `[2, 5]`, a value of `10` clamps every candidate back to `10`, and NuSMV
+  proves `AG (v = 10)` — measured against real NuSMV, not reasoned. The domain bound wins over the
+  rate, so the claim now carries that qualifier in `theory-sources.md` (which owns the semantics),
+  `docs/api/board.md`, `docs/api/ai-tools.md`, and `docs/architecture/data-authority-model.md`.
+  Stating it unconditionally would make a provable model behaviour read as a generator bug — the
+  opposite of the honesty the surrounding paragraph exists to enforce.
+- **Three documents still described a `NaturalChangeRate` semantics the repo itself calls unsound.**
+  `docs/api/board.md`, `docs/api/ai-tools.md`, and `docs/architecture/data-authority-model.md` said a custom
+  interval samples "the unique lower endpoint, zero, and upper endpoint" — the endpoint shortlist that once
+  made NuSMV *prove* a false `SATISFIED`, and that a stutter-injecting variant made mandatory-change
+  intervals unstatable. All three now state the exhaustive `v' - v` semantics and defer to
+  `theory-sources.md`.
+
+#### Added
+
+- **A presentation scene whose defect is a feature, not a labelled mistake.** The bundled demo scenes
+  either name their bad rule (`Unsafe conflicting rule: …`) or pair obviously dangerous devices, so an
+  audience sees the answer before the tool finds it. The new away-mode scene
+  (`docs/examples/default-away-mode-unlock-scene.json`, generated by
+  `scripts/generate-default-template-scenes.mjs`) instead composes three individually reasonable
+  automations — nobody home so the alarm arms, porch motion unlocks the front door for convenience, the
+  same motion lights the porch — and proves the house can sit empty with the front door unlocked.
+  Baseline is `4` satisfied / `2` violated: a Never property and a Response property asking different
+  questions about the same worry, both repaired by one removal. Walkthrough:
+  `docs/guides/away-mode-unlock-demo.md`.
+- **The first bundled scene that declares its own device type.** `Occupancy Sensor` is defined in the
+  scene file rather than bundled, which also demonstrates that a version 4 scene is a self-contained
+  import including new types. It declares `occupancy` as a **shared environment** variable
+  (`IsInside: false`, `Reads: true`), and that choice is load-bearing rather than cosmetic: a
+  device-local variable with no API writing it compiles to `next(v) := v`, frozen for the whole run. An
+  earlier draft keyed the scene on the bundled `Car.location` and was discarded after NuSMV showed what
+  that produces — `AG !(car_1.location = garage)` provably true, so the garage rule was dead code, a
+  Never property over it was vacuously satisfied, and the "keep the rule, add a guard" repair silently
+  disabled the rule it claimed to keep. All three read as a clean demo.
+- **A scene that shows two fix strategies declining, with stated reasons.** Parameter adjustment reports
+  `SKIPPED_NO_PARAMETERIZABLE_VALUES` (the scene is enum-valued) and condition adjustment reports
+  `NO_VERIFIED_SUGGESTION` — adding "only unlock when someone is home" genuinely does not repair the
+  property, because occupancy evolves freely and no rule re-locks the door after the resident leaves.
+  Permanent removal of the convenience-unlock rule is the only verified repair and clears both
+  violations. A tool that refuses to offer a guard that fails re-checking is more credible than one that
+  always has an answer, and no other bundled scene exercises that path.
+- **`AwayModeUnlockSceneNusmvTest`** pins what both documents publish, against real NuSMV: the baseline
+  verdict and violated formulas, the three-state trace, the blamed rules, each strategy's status,
+  forward verification of the offered repair, and the budget-one untrusted-label failure carrying
+  `is_attack = TRUE`. A second test asserts every state the walkthrough presents is **reachable**, so
+  the frozen-variable trap above fails the suite instead of the demonstration. Both verified to redden:
+  pre-repairing the defect breaks the first, and reverting `occupancy` to a device-local variable breaks
+  both — and makes the condition strategy report `VERIFIED` for the repair that disables the rule.
+
+### 2026-08-07
 
 #### Fixed
 
