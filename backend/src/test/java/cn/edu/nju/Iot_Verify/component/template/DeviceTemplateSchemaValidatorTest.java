@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.template;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import com.fasterxml.jackson.databind.JsonNode;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
@@ -133,6 +134,53 @@ class DeviceTemplateSchemaValidatorTest {
         org.assertj.core.api.Assertions.assertThat(ex.getMessage())
                 .contains("Contents")
                 .contains("Name");
+    }
+
+    /**
+     * Every bundled template must satisfy the Java-side validator too, not only the schema.
+     *
+     * <p>First-login seeding (`DeviceTemplateServiceImpl.loadDefaultTemplateEntities`) runs
+     * `validateRawManifest` and stops there, while the three user-facing writers all reach
+     * `validateTemplateManifestForNuSmv` through `addDeviceTemplate`. So every check that lives only on
+     * the Java side — generated-identifier collisions, state-name tokens, and the enum-value tokens
+     * added alongside this test — does **not** run on the bundled files.
+     *
+     * <p>All 45 pass today, so the gap has no consequence. But that is luck rather than design: nothing
+     * stopped a bundled template from being authored past a gate the seeding path never applies, and the
+     * failure would surface as an engine error on a template the user never edited. This test converts the
+     * accident into an invariant without touching the seeding path, whose cycle
+     * (`DeviceTemplateServiceImpl` → `DeviceTemplateNuSmvValidator` → `SmvGenerator` →
+     * `DeviceSmvDataFactory` → `DeviceTemplateService`) makes injecting the validator a design change
+     * rather than a fix.
+     */
+    @Test
+    void everyBundledTemplatePassesTheJavaSideValidatorTheSeedingPathSkips() throws Exception {
+        DeviceTemplateNuSmvValidator nuSmvValidator = new DeviceTemplateNuSmvValidator(
+                org.mockito.Mockito.mock(
+                        cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator.class));
+        java.nio.file.Path dir = java.nio.file.Path.of("src", "main", "resources", "deviceTemplate");
+        java.util.List<String> rejected = new java.util.ArrayList<>();
+        int checked = 0;
+        try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.list(dir)) {
+            for (java.nio.file.Path file : files
+                    .filter(path -> path.toString().endsWith(".json"))
+                    .sorted()
+                    .toList()) {
+                String name = file.getFileName().toString().replace(".json", "");
+                DeviceTemplateDto.DeviceManifest manifest = objectMapper.readValue(
+                        java.nio.file.Files.readString(file), DeviceTemplateDto.DeviceManifest.class);
+                try {
+                    nuSmvValidator.validateTemplateManifestForNuSmv(name, manifest);
+                    checked++;
+                } catch (RuntimeException rejection) {
+                    rejected.add(name + ": " + rejection.getMessage());
+                }
+            }
+        }
+        org.assertj.core.api.Assertions.assertThat(rejected).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(checked)
+                .as("the scan must actually find the bundled templates, not silently check nothing")
+                .isGreaterThanOrEqualTo(40);
     }
 
     /** The same manifest with a legal content name must still be accepted. */
