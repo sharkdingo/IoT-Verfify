@@ -453,7 +453,14 @@ An accepted autonomous Transition has one modeled effect only: one concrete mode
 or one variable assignment. Combined/multi-mode/multi-assignment effects are rejected at
 template and generation boundaries because independently generated `next(...)` branches
 could otherwise apply only part of the declared action. Environment-variable triggers
-read the shared `a_<name>` value; impact-only environment declarations remain write-only.
+read the shared `a_<name>` value; impact-only environment declarations remain write-only, and a
+Trigger naming one is **rejected** (`SmvModelValidator.buildLegalAttributeSet`). That rejection is
+what makes the sentence true rather than aspirational: the generator declares `device.<name>` for
+every manifest variable but mirrors `a_<name>` into it only for a readable declaration, so before
+the check such a Trigger compiled into a comparison against an identifier that is declared, never
+initialised and never assigned — an unconstrained free state variable re-picking a value every
+step, unrelated to the shared value it names. NuSMV accepts and answers that model, so the wrong
+answer arrives silently.
 Enum/mode/boolean trigger values use equality/inequality and numeric thresholds must lie
 inside the declared range, preventing an accepted transition from silently becoming
 impossible or tautological.

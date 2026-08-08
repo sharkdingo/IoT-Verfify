@@ -130,10 +130,16 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   collections plus template dependencies atomically. See
   [../docs/api/board.md](../docs/api/board.md).
 - **NuSMV identifiers**: mode/state names are sanitized at generation time
-  (`sanitizeSmvToken`), but InternalVariable/ImpactedVariable names are validated (and
+  (`sanitizeSmvToken`), but InternalVariable/ImpactedVariable/**Content** names are validated (and
   rejected) at persist time — they are cross-referenced by `.equals()`, so sanitizing
   them would break matching. Don't "fix" this by sanitizing them later. See
   [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
+
+  Content names were the omission that proves the rule: they are concatenated into
+  `privacy_<name>` exactly like the other two, but carried the pattern on neither the schema nor the
+  Java side, so a content named `my photo` emitted `privacy_my photo` and NuSMV refused the model at
+  *run* time (`at token "photo": syntax error`) for a template the user had already saved. If a
+  manifest field reaches an emitted identifier, it belongs in this list on both sides.
 - **Admission and generation must normalize the same string the same way.** Every rule/spec field
   that names something in a device manifest — command `action`, condition `attribute`, `targetType`,
   device refs — is resolved by `equals()` at generation time, so any trim/case difference between the
