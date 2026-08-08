@@ -2834,6 +2834,32 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return;
         }
 
+        // The fix generator's reserved prefixes, checked here as well as at request time.
+        // `SmvConstants.FIX_GENERATED_NAME_PREFIXES` had exactly one consumer,
+        // `NusmvRequestValidator.rejectFixGeneratedPrefix`, which rejects by *prefix* on every verify and
+        // simulate request. This pass registers only *concrete* generated names — `lambda_r{i}_c{j}` and
+        // `param_r{i}_c{j}` for the rules and conditions that exist right now — and never looked at
+        // `condition_value_` at all. So a device named `condition_value_r0_c1` (or `param_`/`lambda_`
+        // with any index the current board does not happen to produce) was saved and then rejected on
+        // every verification until renamed.
+        //
+        // Cheaper to refuse the name once, at the boundary that owns it, than to persist a board no
+        // verification can run against.
+        for (int nodeIndex = 0; nodeIndex < nodes.size(); nodeIndex++) {
+            DeviceNodeDto node = nodes.get(nodeIndex);
+            if (node == null || !hasText(node.getId())) continue;
+            String normalized = node.getId().trim().toLowerCase(Locale.ROOT);
+            for (String prefix : SmvConstants.FIX_GENERATED_NAME_PREFIXES) {
+                if (normalized.startsWith(prefix)) {
+                    errors.putIfAbsent("nodes[" + nodeIndex + "].id",
+                            "Device name '" + node.getId() + "' starts with '" + prefix
+                                    + "', which the automatic-fix generator reserves for its own "
+                                    + "variables. Rename the device.");
+                    break;
+                }
+            }
+        }
+
         Map<String, String> generated = new LinkedHashMap<>();
         Map<String, DeviceManifest.InternalVariable> environment =
                 collectRequiredEnvironmentVariables(nodes, templateManifests);

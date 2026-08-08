@@ -841,6 +841,57 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         return dto;
     }
 
+    /**
+     * A device name reserved by the fix generator must be refused when the board is saved.
+     *
+     * <p>`SmvConstants.FIX_GENERATED_NAME_PREFIXES` had one consumer:
+     * `NusmvRequestValidator.rejectFixGeneratedPrefix`, which rejects by *prefix* on every verify and
+     * simulate request. Board admission's namespace pass registered only *concrete* generated names —
+     * `lambda_r{i}_c{j}` and `param_r{i}_c{j}` for the rules and conditions present at the time — and
+     * never considered `condition_value_` at all.
+     *
+     * <p>So the device persisted and then every verification returned a `400` naming a prefix the user
+     * had no reason to know about, until they renamed the device. Milder than an HTTP 500, but the same
+     * shape: accepted, stored, unusable.
+     *
+     * <p>All three prefixes are asserted, because the gap was not uniform — `param_`/`lambda_` were
+     * caught only when the index happened to match a current rule/condition, and `condition_value_`
+     * never was.
+     */
+    @Test
+    void saveNodes_whenDeviceNameUsesAFixGeneratorPrefix_shouldRejectBeforePersisting() {
+        DeviceTemplatePo template = templatePo("Light",
+                "{\"Name\":\"Light\",\"Modes\":[\"SwitchState\"],\"InitState\":\"off\","
+                        + "\"WorkingStates\":[{\"Name\":\"off\",\"Trust\":\"trusted\",\"Privacy\":\"public\"},"
+                        + "{\"Name\":\"on\",\"Trust\":\"trusted\",\"Privacy\":\"public\"}],"
+                        + "\"InternalVariables\":[]}");
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+
+        for (String prefix : cn.edu.nju.Iot_Verify.util.SmvConstants.FIX_GENERATED_NAME_PREFIXES) {
+            String reserved = prefix + "r0_c1";
+            ValidationException ex = assertThrows(ValidationException.class,
+                    () -> service.saveNodes(1L, List.of(buildNode(reserved, "Light"))),
+                    () -> "reserved prefix must be refused at the board boundary: " + reserved);
+            org.assertj.core.api.Assertions.assertThat(ex.getErrors().toString())
+                    .contains(prefix)
+                    .contains("Rename the device");
+        }
+    }
+
+    /** A name that merely *contains* a reserved prefix is legitimate and must stay accepted. */
+    @Test
+    void saveNodes_whenDeviceNameOnlyContainsAReservedPrefix_shouldBeAccepted() {
+        DeviceTemplatePo template = templatePo("Light",
+                "{\"Name\":\"Light\",\"Modes\":[\"SwitchState\"],\"InitState\":\"off\","
+                        + "\"WorkingStates\":[{\"Name\":\"off\",\"Trust\":\"trusted\",\"Privacy\":\"public\"},"
+                        + "{\"Name\":\"on\",\"Trust\":\"trusted\",\"Privacy\":\"public\"}],"
+                        + "\"InternalVariables\":[]}");
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+
+        // The guard is `startsWith`, matching the request-time check it mirrors — not `contains`.
+        assertDoesNotThrow(() -> service.saveNodes(1L, List.of(buildNode("myParam_light", "Light"))));
+    }
+
     private static String discreteWriterManifest(String name, String value) {
         return "{\"Name\":\"" + name + "\",\"Modes\":[\"MachineState\"],\"InitState\":\"off\","
                 + "\"WorkingStates\":[{\"Name\":\"on\",\"Trust\":\"trusted\",\"Privacy\":\"public\","
