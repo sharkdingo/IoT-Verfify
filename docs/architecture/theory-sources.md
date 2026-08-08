@@ -163,7 +163,29 @@ they diverge. Verified conforming:
 - **FSM thesis ch.4 repair loop** — the ¬ρ search proposes candidate values and `forwardVerify`
   re-checks each against the real specification; a rejected candidate is added to the exclusion
   invariants rather than retried. `forwardVerify` also refuses to confirm a fix whose regenerated
-  model is incomplete, so a vacuous pass is never reported as a repair.
+  model is incomplete (`disabledRuleCount`/`skippedSpecCount`), so a repair is never certified
+  against a property that was never emitted.
+
+  **That covers one kind of vacuity, and this page used to claim it covered all of them.** It does
+  not, and the distinction matters because the uncovered kind looks identical on screen. A verified
+  repair can make an *implication* property's antecedent unreachable, and the property then holds
+  for the empty reason: nothing it talks about can happen any more. Measured on
+  `docs/examples/default-away-mode-unlock-scene.json` with real NuSMV: the verified removal makes
+  `EF (a_occupancy = absent & door_1.LockState = unlocked)` **false**, so its template-5 Response
+  property ("if the door is ever unlocked while nobody is home, it must eventually re-lock") passes
+  while carrying no information at all.
+
+  The direction of the effect depends on the template, so no single rule covers both:
+
+  - For a **prohibition** shape (`1`, `3`, `7` — `AG !(P)`), `P` becoming unreachable is the property
+    *succeeding*. Eliminating `P` is what it was written to demand.
+  - For an **implication** shape (`4`, `5`, `6` — `AG (P -> …)`), `P` becoming unreachable makes the
+    formula vacuously true. The verdict stops describing behaviour.
+
+  So a green forward verification means "no submitted property is violated", never "every property is
+  still meaningful". A repair that satisfies an implication property by removing its antecedent is
+  reported as verified, and callers that present the result to a user should say which kind of
+  satisfaction they are showing rather than implying the stronger one.
 
 ## Review discipline
 

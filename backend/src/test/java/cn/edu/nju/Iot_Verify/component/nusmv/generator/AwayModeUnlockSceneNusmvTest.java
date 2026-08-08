@@ -52,7 +52,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** Temporary demo-scene probe for candidate B ("nobody home" security scene). */
+/**
+ * Real-NuSMV regression for the away-mode presentation scene ("nobody home, door unlocked").
+ *
+ * <p>Pins what {@code docs/guides/away-mode-unlock-demo.md} publishes, so a drift in generation, fix,
+ * or attack semantics fails here rather than in front of an audience.
+ */
 class AwayModeUnlockSceneNusmvTest {
 
     private static final long USER_ID = 1L;
@@ -60,13 +65,17 @@ class AwayModeUnlockSceneNusmvTest {
             Path.of("..", "docs", "examples", "default-away-mode-unlock-scene.json");
 
     /**
-     * Pins the demo runbook's published numbers (docs/guides/away-mode-unlock-demo.md).
-     * The presentation claims a specific baseline verdict, a specific blamed rule, and a
-     * non-destructive repair that survives forward verification; if any of those change,
-     * the runbook is wrong and this test must fail rather than the demo failing live.
+     * Pins the runbook's published numbers: the baseline verdict, the three-state counterexample, the
+     * blamed rules, each strategy's outcome, and the budget-one attack.
+     *
+     * <p>Two strategies must keep *declining* — parameter tuning for want of a numeric inequality,
+     * condition tightening because no added guard survives re-checking — so removal stays the only
+     * verified repair. And because that removal leaves the door permanently locked, this also pins the
+     * asymmetry the walkthrough explains: the prohibition property is genuinely achieved, while the
+     * Response property becomes vacuously true once its antecedent is unreachable.
      */
     @Test
-    void awayModeUnlockScene_violatesUnlockSafetyAndIsRepairedByConditionStrategy() throws Exception {
+    void awayModeUnlockScene_violatesUnlockSafetyAndIsRepairedOnlyByRemoval() throws Exception {
         String nusmvPath = resolveNusmvPath();
         Assumptions.assumeTrue(nusmvPath != null && Files.exists(Path.of(nusmvPath)),
                 "NuSMV executable is required for this demo-scene regression test");
@@ -83,19 +92,20 @@ class AwayModeUnlockSceneNusmvTest {
         List<DeviceVerificationDto> devices = readDevices(scene);
         List<BoardEnvironmentVariableDto> environment = readEnvironment(scene);
         List<RuleDto> rules = readRules(scene);
-        List<SpecificationDto> specs = readSpecs(scene, devices, "candidateB");
+        List<SpecificationDto> specs = readSpecs(scene, devices, "awayMode");
 
         SmvGenerator.GenerateResult baselineModel = generator.generateWithEnvironment(
                 USER_ID, devices, environment, rules, specs,
                 AttackScenarioDto.none(), true, SmvGenerator.GeneratePurpose.VERIFICATION);
         assertEquals(0, baselineModel.disabledRuleCount(), "demo scene must not disable rules");
-        assertEquals(0, baselineModel.skippedSpecCount(), "demo scene must emit all five specs");
+        assertEquals(0, baselineModel.skippedSpecCount(), "demo scene must emit all six specs");
 
         NusmvExecutor.NusmvResult baseline = executor.execute(baselineModel.smvFile());
         assertTrue(baseline.isSuccess(), baseline::getErrorMessage);
         assertEquals(specs.size(), baseline.getSpecResults().size());
 
-        // Exactly one baseline violation: "never (car away & front door unlocked)" (spec index 2).
+        // Two baseline violations sharing one root cause: the Never property (index 2) and the Response
+        // property (index 3), both about the door being unlocked while nobody is home.
         List<Integer> violatedIndices = new ArrayList<>();
         for (int i = 0; i < baseline.getSpecResults().size(); i++) {
             if (!baseline.getSpecResults().get(i).isPassed()) {
@@ -163,8 +173,24 @@ class AwayModeUnlockSceneNusmvTest {
             assertFalse(repaired.hasAnyViolation(),
                     () -> "repair from strategy '" + s.getStrategy() + "' left a violation");
             assertEquals(specs.size(), repaired.getSpecResults().size());
-            // One removal repairs both violated properties, which is the runbook's shared-root-cause claim.
+            // One removal clears both violations, which is the runbook's shared-root-cause claim.
             assertEquals(rules.size() - 1, repairedRules.size());
+
+            // …but the two properties do not go green the same way, and the walkthrough says so out loud.
+            // Deleting the only rule that ever unlocked the door leaves the door permanently locked, which
+            // *achieves* the prohibition property (index 2) and *empties* the implication property
+            // (index 3): its antecedent can no longer arise, so it holds for the empty reason.
+            //
+            // Pinned because a green forward verification cannot tell these apart, and presenting the
+            // vacuous one as a repair is the most misleading thing this demo could do.
+            Map<String, Boolean> reachable = probeReachability(executor, repairedModel, List.of(
+                    "door_1.LockState = unlocked",
+                    "a_occupancy = absent & door_1.LockState = unlocked"));
+            assertFalse(reachable.get("door_1.LockState = unlocked"),
+                    "the removal must leave the door permanently locked, as the runbook states");
+            assertFalse(reachable.get("a_occupancy = absent & door_1.LockState = unlocked"),
+                    "the Response property's antecedent must be unreachable after the removal, which is "
+                            + "exactly why the walkthrough calls its satisfaction vacuous rather than earned");
         }
 
         SmvGenerator.GenerateResult attackedModel = generator.generateWithEnvironment(
@@ -234,32 +260,52 @@ class AwayModeUnlockSceneNusmvTest {
                 "alarm_1.AlertState = strobe",
                 "light_1.SwitchState = on");
 
-        String smv = Files.readString(model.smvFile().toPath());
-        String head = smv.substring(0, smv.indexOf("-- Specifications"));
-        StringBuilder probe = new StringBuilder(head).append("-- Specifications\n");
+        Map<String, Boolean> reachable = probeReachability(executor, model, mustBeReachable);
         for (String state : mustBeReachable) {
-            probe.append("\tCTLSPEC AG !(").append(state).append(")\n");
+            assertFalse(reachable.get(state) == null,
+                    () -> "the probe returned no verdict for: " + state);
+            assertTrue(reachable.get(state),
+                    () -> "state is unreachable, so any property over it is vacuous: " + state);
         }
-        // The probe must live in its own directory, not directly in the system temp dir.
-        // `NusmvTempArtifactRegistry` locks the *parent directory* of the model file, so a probe written
-        // straight into /tmp tries to lock all of /tmp — which fails on CI the moment any other NuSMV
-        // test holds it, while passing locally where the temp dir is per-user and uncontended.
+    }
+
+    /**
+     * Asks NuSMV which of {@code states} the model can actually reach, as {state -> reachable}.
+     *
+     * <p>Each state is emitted as {@code AG !(state)} — "this never happens". A *failing* check means
+     * NuSMV found a witness, so the state is reachable; the verdict is therefore inverted here once,
+     * rather than at each call site where the double negative invites a wrong reading.
+     *
+     * <p>The probe gets its own directory. `NusmvTempArtifactRegistry` locks the *parent directory* of
+     * the model file it is handed, so a probe written straight into the system temp dir asks for a lock
+     * on all of it — which passes locally, where that directory is per-user and uncontended, and fails
+     * on CI the moment any other NuSMV test holds it.
+     */
+    private Map<String, Boolean> probeReachability(NusmvExecutor executor,
+                                                   SmvGenerator.GenerateResult model,
+                                                   List<String> states) throws Exception {
+        String smv = Files.readString(model.smvFile().toPath());
+        StringBuilder probe = new StringBuilder(smv.substring(0, smv.indexOf("-- Specifications")))
+                .append("-- Specifications").append(System.lineSeparator());
+        for (String state : states) {
+            probe.append("\tCTLSPEC AG !(").append(state).append(')').append(System.lineSeparator());
+        }
+
         Path probeDir = Files.createTempDirectory("away-mode-reachability");
         Path probeFile = probeDir.resolve("probe.smv");
         Files.writeString(probeFile, probe.toString());
         try {
             NusmvExecutor.NusmvResult result = executor.execute(probeFile.toFile());
             assertTrue(result.isSuccess(), result::getErrorMessage);
-            assertEquals(mustBeReachable.size(), result.getSpecResults().size());
-            for (int i = 0; i < mustBeReachable.size(); i++) {
-                int index = i;
-                assertFalse(result.getSpecResults().get(i).isPassed(),
-                        () -> "state is unreachable, so any property over it is vacuous: "
-                                + mustBeReachable.get(index));
+            assertEquals(states.size(), result.getSpecResults().size(),
+                    "the probe must return one verdict per requested state");
+            Map<String, Boolean> reachable = new java.util.LinkedHashMap<>();
+            for (int i = 0; i < states.size(); i++) {
+                reachable.put(states.get(i), !result.getSpecResults().get(i).isPassed());
             }
+            return reachable;
         } finally {
-            // The executor writes its own artifacts (output, lock file) beside the model, so clear the
-            // directory's contents before removing it.
+            // The executor writes its own artifacts (output, lock file) beside the model.
             try (var entries = Files.list(probeDir)) {
                 for (Path entry : entries.toList()) {
                     Files.deleteIfExists(entry);

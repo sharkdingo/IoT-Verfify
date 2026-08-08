@@ -46,6 +46,24 @@ history into a technical spec. The spec content itself now lives under
 
 #### Changed
 
+- **`theory-sources.md` no longer claims `forwardVerify` rules out every vacuous pass.** It rules out
+  one kind — a repair certified against a model that never emitted the property
+  (`disabledRuleCount`/`skippedSpecCount`). It does not rule out the kind where the repair itself makes
+  an *implication* property's antecedent unreachable, and that kind looks identical on screen. Measured
+  on the away-mode scene: the verified removal makes
+  `EF (a_occupancy = absent & door_1.LockState = unlocked)` **false**, so its template-5 Response
+  property passes while describing nothing. The direction depends on the template and no single rule
+  covers both — for `AG !(P)` an unreachable `P` is the property *succeeding*; for `AG (P -> …)` it is
+  vacuity — so the page now states both and says a green forward verification means "nothing violated",
+  never "everything still meaningful". The presenter walkthrough reads its own `6/0` the same way, and
+  `AwayModeUnlockSceneNusmvTest` pins the asymmetry with a reachability probe over the repaired model
+  (mutation-checked: swapping the porch-light rule for an auto-lock rule reddens it).
+- **Cleaned stale wording out of `AwayModeUnlockSceneNusmvTest`.** Its class comment still called itself
+  a "temporary probe for candidate B", its test was named `…IsRepairedByConditionStrategy` while the
+  condition strategy is precisely the one that declines, and a javadoc promised a "non-destructive
+  repair" that does not exist for this scene. A test whose name contradicts its assertions misleads the
+  next reader faster than no name at all.
+
 - **The example-scene template guard now checks scene-defined types instead of rejecting them.**
   `documentedSceneTemplateSnapshots_matchBundledTemplates` asserted every template in every
   `docs/examples/` scene resolves to a bundled manifest, which made a legitimate custom device type
