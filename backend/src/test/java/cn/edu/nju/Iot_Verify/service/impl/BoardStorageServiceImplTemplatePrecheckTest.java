@@ -841,6 +841,79 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         return dto;
     }
 
+    private static String discreteWriterManifest(String name, String value) {
+        return "{\"Name\":\"" + name + "\",\"Modes\":[\"MachineState\"],\"InitState\":\"off\","
+                + "\"WorkingStates\":[{\"Name\":\"on\",\"Trust\":\"trusted\",\"Privacy\":\"public\","
+                + "\"Dynamics\":[{\"VariableName\":\"airQuality\",\"Value\":\"" + value + "\"}]},"
+                + "{\"Name\":\"off\",\"Trust\":\"trusted\",\"Privacy\":\"public\"}],"
+                + "\"InternalVariables\":[{\"Name\":\"airQuality\",\"IsInside\":false,\"Reads\":false,"
+                + "\"FalsifiableWhenCompromised\":false,\"Trust\":\"trusted\",\"Privacy\":\"public\","
+                + "\"Values\":[\"good\",\"bad\"]}],"
+                + "\"ImpactedVariables\":[\"airQuality\"],"
+                + "\"APIs\":[{\"Name\":\"turnOn\",\"StartState\":\"off\",\"EndState\":\"on\","
+                + "\"Signal\":true}]}";
+    }
+
+    /**
+     * Two devices must not be admitted when they declare different values for one shared discrete value.
+     *
+     * <p>`SmvModelValidator.validateDiscreteWriterAgreement` refuses this at generation time, because
+     * there is no defined way to combine two different values. Nothing checked it at admission: the
+     * sibling domain-consistency pass compares *declarations* — type, range, enum values,
+     * `NaturalChangeRate`, default labels — and never reads `WorkingStates[].Dynamics[].Value`.
+     *
+     * <p>The template gate cannot catch it either, being inherently single-manifest: each template is
+     * valid alone, and only the pair is contradictory. So both devices persisted and every verification
+     * afterwards returned HTTP 500 (`SmvGenerationException` maps to `INTERNAL_SERVER_ERROR`) until one
+     * device was deleted. Measured before the fix: generation threw `Env variable 'airQuality' conflict:
+     * … device 'writer_good_1' sets it to 'good' while device 'writer_bad_1' sets it to 'bad'`.
+     */
+    @Test
+    void saveNodes_whenTwoDevicesDeclareConflictingDiscreteEffects_shouldRejectBeforePersisting() {
+        DeviceTemplatePo good = templatePo("Writer Good", discreteWriterManifest("Writer Good", "good"));
+        DeviceTemplatePo bad = DeviceTemplatePo.builder()
+                .id(501L).userId(1L).name("Writer Bad")
+                .manifestJson(discreteWriterManifest("Writer Bad", "bad"))
+                .defaultTemplate(false).build();
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(good, bad));
+
+        ValidationException ex = assertThrows(ValidationException.class, () ->
+                service.saveNodes(1L, List.of(
+                        buildNode("writerGood1", "Writer Good"),
+                        buildNode("writerBad1", "Writer Bad"))));
+
+        org.assertj.core.api.Assertions.assertThat(ex.getErrors().toString())
+                .contains("airQuality")
+                .contains("conflicting declared effects");
+    }
+
+    /**
+     * The same pair of values on **one** template is legitimate and must stay admitted.
+     *
+     * <p>A device whose two working states drive a shared value to different values is normal — that is
+     * what a state machine does. Only *two different devices* disagreeing has no defined combination, so
+     * the check must not fire on a single writer. Without this half, narrowing the check to reject any
+     * repeated value would pass the test above while breaking ordinary templates.
+     */
+    @Test
+    void saveNodes_whenOneDeviceDrivesTheSameValueBothWays_shouldBeAccepted() {
+        String manifest = "{\"Name\":\"Swinger\",\"Modes\":[\"MachineState\"],\"InitState\":\"off\","
+                + "\"WorkingStates\":[{\"Name\":\"on\",\"Trust\":\"trusted\",\"Privacy\":\"public\","
+                + "\"Dynamics\":[{\"VariableName\":\"airQuality\",\"Value\":\"good\"}]},"
+                + "{\"Name\":\"off\",\"Trust\":\"trusted\",\"Privacy\":\"public\","
+                + "\"Dynamics\":[{\"VariableName\":\"airQuality\",\"Value\":\"bad\"}]}],"
+                + "\"InternalVariables\":[{\"Name\":\"airQuality\",\"IsInside\":false,\"Reads\":false,"
+                + "\"FalsifiableWhenCompromised\":false,\"Trust\":\"trusted\",\"Privacy\":\"public\","
+                + "\"Values\":[\"good\",\"bad\"]}],"
+                + "\"ImpactedVariables\":[\"airQuality\"],"
+                + "\"APIs\":[{\"Name\":\"turnOn\",\"StartState\":\"off\",\"EndState\":\"on\","
+                + "\"Signal\":true}]}";
+        when(deviceTemplateRepo.findByUserId(1L))
+                .thenReturn(List.of(templatePo("Swinger", manifest)));
+
+        assertDoesNotThrow(() -> service.saveNodes(1L, List.of(buildNode("swinger1", "Swinger"))));
+    }
+
     private DeviceNodeDto buildNode(String id, String templateName) {
         DeviceNodeDto node = new DeviceNodeDto();
         node.setId(id);

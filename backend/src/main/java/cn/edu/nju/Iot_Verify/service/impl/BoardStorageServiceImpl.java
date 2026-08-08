@@ -2479,6 +2479,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         validateNodeTemplateRefs(nodes, errors, templateManifests);
         validateNodeRuntimeSemantics(errors, nodes, templateManifests);
         validateActiveEnvironmentDomainConsistency(errors, nodes, templateManifests);
+        validateActiveDiscreteWriterAgreement(errors, nodes, templateManifests);
         validateGeneratedMainNamespace(errors, nodes, rules, templateManifests);
 
         if (rules != null) {
@@ -2999,11 +3000,92 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
     }
 
+    /**
+     * Two devices must not declare different values for one shared discrete value.
+     *
+     * <p>`SmvModelValidator.validateDiscreteWriterAgreement` already refuses this at generation time,
+     * because there is no defined way to combine two different values and the verdict otherwise
+     * depended on device iteration order. But nothing checked it at admission: the sibling
+     * domain-consistency pass above compares *declarations* (type, range, enum values,
+     * `NaturalChangeRate`, default labels) and never reads `WorkingStates[].Dynamics[].Value`.
+     *
+     * <p>So each template passed `addDeviceTemplate` on its own — the template gate is inherently
+     * single-manifest and cannot see a pair — both devices persisted through `addNodes` and through
+     * scene import, and every verification afterwards returned **HTTP 500**
+     * (`SmvGenerationException` maps to `INTERNAL_SERVER_ERROR`) until one device was deleted.
+     * Measured: two templates differing only in `Dynamics.Value` (`good` vs `bad`) over the same
+     * `{good, bad}` domain were both admitted, and generation then threw
+     * `Env variable 'airQuality' conflict: … device 'writer_good_1' sets it to 'good' while device
+     * 'writer_bad_1' sets it to 'bad'`.
+     *
+     * <p>Kept deliberately narrow, matching the generator: discrete domains only (numeric effects sum
+     * and are combined, so disagreement there is not a conflict), and a device never conflicts with
+     * itself.
+     */
+    private void validateActiveDiscreteWriterAgreement(Map<String, String> errors,
+                                                       List<DeviceNodeDto> nodes,
+                                                       Map<String, DeviceManifest> templateManifests) {
+        if (nodes == null || templateManifests == null) {
+            return;
+        }
+        // shared value -> declared value -> the device that declared it
+        Map<String, Map<String, String>> assignments = new LinkedHashMap<>();
+        for (int nodeIndex = 0; nodeIndex < nodes.size(); nodeIndex++) {
+            DeviceNodeDto node = nodes.get(nodeIndex);
+            if (node == null) continue;
+            DeviceManifest manifest = manifestForTemplateName(node.getTemplateName(), templateManifests);
+            if (manifest == null || manifest.getWorkingStates() == null) continue;
+            String deviceLabel = deviceDisplayName(node);
+            for (DeviceManifest.WorkingState state : manifest.getWorkingStates()) {
+                if (state == null || state.getDynamics() == null) continue;
+                for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
+                    if (dynamic == null || !hasText(dynamic.getVariableName())
+                            || !hasText(dynamic.getValue())) {
+                        continue;
+                    }
+                    String name = dynamic.getVariableName().trim();
+                    DeviceManifest.InternalVariable domain =
+                            EnvironmentDomainUtils.resolveImpactDomain(manifest, name);
+                    if (domain == null || domain.getValues() == null || domain.getValues().isEmpty()) {
+                        // Numeric or device-local: not this check's business.
+                        continue;
+                    }
+                    String value = dynamic.getValue().replace(" ", "");
+                    Map<String, String> byValue = assignments.computeIfAbsent(
+                            name.toLowerCase(Locale.ROOT), key -> new LinkedHashMap<>());
+                    String owner = byValue.putIfAbsent(value, deviceLabel);
+                    if (owner != null && owner.equals(deviceLabel)) {
+                        continue;
+                    }
+                    for (Map.Entry<String, String> other : byValue.entrySet()) {
+                        if (other.getKey().equals(value) || other.getValue().equals(deviceLabel)) {
+                            continue;
+                        }
+                        errors.putIfAbsent("nodes[" + nodeIndex + "].templateName",
+                                "Shared environment variable '" + name + "' would receive conflicting "
+                                        + "declared effects: device '" + other.getValue() + "' sets it to '"
+                                        + other.getKey() + "' while device '" + deviceLabel + "' sets it to '"
+                                        + value + "'. There is no defined way to combine two different "
+                                        + "values, so change one template declaration or keep only one of "
+                                        + "these devices.");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     private void requireActiveEnvironmentDomainConsistency(
             List<DeviceNodeDto> nodes,
             Map<String, DeviceManifest> templateManifests) {
         Map<String, String> errors = new LinkedHashMap<>();
         validateActiveEnvironmentDomainConsistency(errors, nodes, templateManifests);
+        // Also here, not only in `validateBoardReferences`: scene replacement
+        // (`applySceneReplacement`) reaches this method and never that one, so wiring the
+        // discrete-writer check into the reference pass alone would have left the atomic import route
+        // — one of the two the defect was reproduced through — still able to persist a board that
+        // fails every later verification.
+        validateActiveDiscreteWriterAgreement(errors, nodes, templateManifests);
         if (!errors.isEmpty()) {
             throw new ValidationException(errors);
         }
