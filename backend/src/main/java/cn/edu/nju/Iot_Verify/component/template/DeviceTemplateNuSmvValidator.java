@@ -489,8 +489,26 @@ public class DeviceTemplateNuSmvValidator {
             if (states == null) {
                 continue;
             }
+            // The mode leg must be the *rescued* token, because that is what the generator emits:
+            // `DeviceSmvDataFactory.extractModes` stores `sanitizeSmvToken(rawMode)` and
+            // `SmvDeviceModuleBuilder.appendStatePropertyVariables` builds `trust_<mode>_<state>` from
+            // that. `DeviceManifestModes.modeNames` only trims, so this comparison used the pre-rescue
+            // name and could not see a collision against the post-rescue one.
+            //
+            // Measured: mode `Next` passes the schema (its reserved-word enum is case-*sensitive*) while
+            // `sanitizeSmvToken` rejects case-*insensitively* and rescues to `_Next`. A template with
+            // that mode plus an InternalVariable named `trust__Next_cold` was admitted here, emitted
+            // `trust__Next_cold` twice, and NuSMV refused the model with
+            // `multiple declaration of identifier`. The control — mode `Power`, needing no rescue — was
+            // correctly rejected, so the rescue was the whole difference.
+            //
+            // The state leg already sanitises (`DeviceManifestModes.modeStates` routes each segment
+            // through `cleanStateName`), which is why only the mode component was wrong. This is also
+            // the other half of the fix documented above `generatedToken`: that one routed
+            // *mode-uniqueness* through the emitted token and left this registration on raw names.
+            String emittedMode = DeviceSmvDataFactory.sanitizeSmvToken(mode);
             for (String state : states) {
-                String suffix = mode + "_" + state;
+                String suffix = emittedMode + "_" + state;
                 registerSmvIdentifier(templateName, identifiers, "trust_" + suffix,
                         "generated trust for state '" + suffix + "'");
                 registerSmvIdentifier(templateName, identifiers, "privacy_" + suffix,
