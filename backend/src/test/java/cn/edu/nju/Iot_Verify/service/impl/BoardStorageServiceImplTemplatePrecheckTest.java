@@ -54,6 +54,7 @@ import java.util.Objects;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -1256,6 +1257,77 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
         assertEquals(302L, saved.getId());
         assertFalse(precheckFile.exists());
+    }
+
+    /**
+     * An enum value is emitted as a bare SMV token, so it must be a legal one.
+     *
+     * <p>`SmvDeviceModuleBuilder` writes `Values` straight into the `{...}` domain and onto the
+     * right-hand side of every comparison against the variable. Nothing checked them: the schema had
+     * only `minLength: 1`, and the Java side checked emptiness and duplication *after* a
+     * `replace(" ", "")` whose own comment calls it cosmetic ("match sample.smv"). That strip removes
+     * the one character NuSMV tolerates as a separator and keeps every character it rejects.
+     *
+     * <p>Measured before the fix: `Values: ["hot!", "ok"]` passed the schema and all four validators,
+     * emitted `authState: {hot!, ok};`, and NuSMV refused the model with `at token "!": syntax error`.
+     * The template persisted, so every later verification of any board using it died in the engine.
+     *
+     * <p>Validation happens after space removal on purpose, and the second half of this test pins that:
+     * bundled `Door RFID` ("not authorized") and `Thermostat` ("pending cool", …) depend on the
+     * allowance, so a stricter pattern would have broken template loading instead.
+     */
+    @Test
+    void addDeviceTemplate_enumValueThatIsNotAnSmvToken_shouldReject() {
+        DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
+        variable.setName("authState");
+        variable.setIsInside(true);
+        variable.setFalsifiableWhenCompromised(false);
+        variable.setTrust("trusted");
+        variable.setPrivacy("public");
+        variable.setValues(List.of("hot!", "ok"));
+
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of());
+        manifest.setInitState("");
+        manifest.setWorkingStates(List.of());
+        manifest.setInternalVariables(List.of(variable));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("Bad Values Sensor");
+        dto.setManifest(manifest);
+
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                .contains("authState")
+                .contains("hot!")
+                .contains("legal NuSMV token");
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+    }
+
+    /** A value legal only after space removal must still be accepted — bundled templates rely on it. */
+    @Test
+    void addDeviceTemplate_enumValueWithSpaces_shouldBeAccepted() {
+        DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
+        variable.setName("RFID");
+        variable.setIsInside(true);
+        variable.setFalsifiableWhenCompromised(false);
+        variable.setTrust("trusted");
+        variable.setPrivacy("private");
+        variable.setValues(List.of("authorized", "not authorized"));
+
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of());
+        manifest.setInitState("");
+        manifest.setWorkingStates(List.of());
+        manifest.setInternalVariables(List.of(variable));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("Spaced Values Sensor");
+        dto.setManifest(manifest);
+
+        assertDoesNotThrow(() -> service.addDeviceTemplate(1L, dto));
     }
 
     @Test

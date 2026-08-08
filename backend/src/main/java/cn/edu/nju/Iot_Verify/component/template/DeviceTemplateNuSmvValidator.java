@@ -198,6 +198,24 @@ public class DeviceTemplateNuSmvValidator {
                     throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                             + name + "' contains empty or duplicate enum values after model normalization.");
                 }
+                // An enum value is emitted as a bare SMV token — inside the `{...}` domain and on the
+                // right-hand side of every comparison against it — so it is an identifier, and nothing
+                // checked it. The space-stripping above is cosmetic (its comment says "match sample.smv"),
+                // and it happens to remove the one character NuSMV tolerates while leaving every character
+                // NuSMV rejects. Measured: `Values: ["hot!", "ok"]` passed the schema and all four
+                // validators, emitted `authState: {hot!, ok};`, and NuSMV refused the model with
+                // `at token "!": syntax error`. The template persisted, so every later verification of any
+                // board using it died in the engine.
+                //
+                // Validated after space removal, matching how mode and state names are handled: the
+                // bundled `Door RFID` ("not authorized") and `Thermostat` ("pending cool", …) rely on that
+                // allowance, and all 58 bundled values pass.
+                if (!SAFE_SMV_TOKEN.matcher(value).matches()) {
+                    throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                            + name + "' has enum value '" + rawValue + "' which is not a legal NuSMV token. "
+                            + "After spaces are removed it must start with a letter or underscore and "
+                            + "contain only letters, digits and underscores.");
+                }
             }
         }
         boolean numeric = lowerBound != null && upperBound != null;
