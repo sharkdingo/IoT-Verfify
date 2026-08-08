@@ -24,7 +24,7 @@ NuSMV. `Baseline` and `attack` show satisfied/violated specification counts.
 | [Fire evacuation](../examples/default-fire-evacuation-scene.json) | `4 / 2 / 3 / 5` | `4 / 1` | `1 / 4` | Remove the alarm-to-door unlock rule; then `5 / 0` |
 | [Climate conflict](../examples/default-climate-conflict-scene.json) | `2 / 2 / 2 / 4` | `2 / 2` | `1 / 3` | Remove the first hot-room heating rule; then `4 / 0` |
 | [RFID access](../examples/default-rfid-access-scene.json) | `3 / 0 / 2 / 5` | `5 / 0` | `2 / 3` | No baseline violation to repair |
-| [Away-mode unlock](../examples/default-away-mode-unlock-scene.json) | `5 / 3 / 3 / 6` | `4 / 2` | `1 / 5` | Remove the convenience-unlock rule; one removal repairs both violations, then `6 / 0` |
+| [Away-mode unlock](../examples/default-away-mode-unlock-scene.json) | `5 / 3 / 3 / 6` | `4 / 2` | `1 / 5` | Remove the convenience-unlock rule; one removal clears both violations, then `6 / 0` — but see the section below for which of those greens carry information |
 
 Every baseline and attack run emits all requested properties with zero disabled rules
 and zero skipped specifications. Simulation produces an animatable trajectory for each
@@ -100,7 +100,7 @@ states — nobody home, alarm arms, then porch motion unlocks the door and light
 
 All three rules fired in that trace, so all three appear as localization candidates; the
 porch-light rule shares the convenience rule's trigger. Only one removal is verified, and it
-repairs **both** violated properties.
+clears **both** violated properties — though not in the same way, as the next paragraph but one explains.
 
 Repair is where this scene is most instructive, and it is not the flattering result. Parameter
 adjustment reports `SKIPPED_NO_PARAMETERIZABLE_VALUES` (the scene is entirely enum-valued) and
@@ -109,6 +109,18 @@ home" genuinely does not repair the property, because occupancy evolves freely a
 re-locks the door after the resident leaves. Permanent removal of the convenience-unlock rule
 is the only verified repair, and forward verification confirms `6 / 0`. A tool that declines
 two strategies with stated reasons is more credible than one that always produces a guard.
+
+Read the repaired `6 / 0` property by property, because the two violations do not clear the same
+way. Removing the only rule that ever unlocked the door leaves it permanently locked
+(`AG (door_1.LockState = locked)` is provable), which *achieves* the Never property and makes the
+Response property **vacuously** true — its antecedent
+`EF (a_occupancy = absent & door_1.LockState = unlocked)` becomes unreachable, so it holds while
+describing nothing. Two of the four baseline greens are likewise uninformative: the template-7
+property cannot be violated without an attacker in the model (this scene's `motion` source is
+`trusted`), and the template-1 privacy property cannot be violated at all here. A green forward
+verification means "nothing violated", never "everything still meaningful";
+[away-mode-unlock-demo.md](away-mode-unlock-demo.md) walks the distinction, and
+`AwayModeUnlockSceneNusmvTest` pins it with reachability probes.
 
 With attack budget `1`, five of six properties fail. The one to show is the untrusted-labelled
 event safety property, which held at baseline: a single compromised sensor spoofs its reading
