@@ -37,10 +37,19 @@ value for the whole run, which silently turns "require someone to be home" into 
 can never fire" — a repair that disables the rule it claims to keep. The second regression
 test in `AwayModeUnlockSceneNusmvTest` exists to keep that trap closed.
 
-One consequence for the demo: **importing this scene is required, not a shortcut.** The
-Templates section creates a device type only by importing a manifest JSON — there is no
-manifest authoring form — so `Occupancy Sensor` cannot be hand-built on stage. Devices,
-rules and specifications *can* all be authored by hand once the type exists.
+One consequence for the demo: **import the scene rather than rebuilding it live.** A device type
+is created from a manifest JSON — the Templates section's only control is an import (its own
+subtitle is "Import and validate device templates"), and there is no form that walks the manifest
+field by field. The AI assistant's `add_template` tool and `POST /api/board/templates` accept the
+same JSON, so `Occupancy Sensor` *can* be created without the file, just not by filling in a form.
+Devices, rules and specifications are all hand-authorable once the type exists.
+
+If someone asks whether the missing form is a gap: it is a real one for a non-technical user, and
+the shape of a manifest is why it has not been built — multi-mode `WorkingStates` are
+semicolon-joined tuples, `APIs` take partial start/end tuples, `Dynamics` has mutually exclusive
+`Value`/`ChangeRate`, and `Reads` is required-or-forbidden depending on `IsInside`. All three
+creation paths validate against the one canonical schema, so nothing here is inconsistent — it is
+unbuilt, not broken.
 
 ## Before you start
 
