@@ -332,6 +332,83 @@ class SmvGeneratorFixesTest {
         assertTrue(ex.getMessage().contains("t1"));
     }
 
+    /**
+     * A Transition Trigger must not read a value the device only writes.
+     *
+     * <p>An affect-only shared declaration ({@code IsInside: false, Reads: false}) gets no
+     * {@code device.<name> := a_<name>} mirror, yet `appendInternalVariables` still declares the
+     * identifier — so a Trigger naming one used to compile into a comparison against a variable that is
+     * declared, never initialised and never assigned. NuSMV treats that as an unconstrained free state
+     * variable that re-picks a value from its domain every step, unrelated to the shared value it appears
+     * to name, and answers the model without complaint. Measured before the fix on a `0..100` lamp:
+     * {@code EF (lamp_1.illuminance >= 80 & a_illuminance <= 21)} was **true** — the guard fired on noise
+     * while the real reading sat at 20.
+     *
+     * <p>Both halves are asserted together so a future edit cannot split them: the affect-only name is
+     * refused, and a read-capable shared name on the same manifest still works. Without the second half,
+     * deleting the whole variable branch of `buildLegalAttributeSet` would leave this test green.
+     */
+    @Test
+    @DisplayName("P1: a Trigger may not read an affect-only shared value, but may read a readable one")
+    void triggerAttribute_affectOnlySharedValue_throwsWhileReadableIsAccepted() {
+        DeviceManifest.InternalVariable affectOnly = numericVar("illuminance", false, 0, 100);
+        affectOnly.setReads(false);
+        DeviceManifest.InternalVariable readable = numericVar("brightness", false, 0, 100);
+        readable.setReads(true);
+
+        DeviceManifest rejected = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(affectOnly, readable))
+                .impactedVariables(List.of("illuminance"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build()))
+                // A real state change, so the only thing that can reject this manifest is the trigger
+                // attribute itself. With `startState == endState` the test passed only because the
+                // trigger check happens to run first, and reverting the fix then failed it on the
+                // *wrong* assertion — a test that depends on validation order tests the order.
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("autoOff").startState("on").endState("off")
+                        .trigger(DeviceManifest.Trigger.builder()
+                                .attribute("illuminance").relation(">=").value("80").build())
+                        .build()))
+                .build();
+        Map<String, DeviceSmvData> rejectedMap = new LinkedHashMap<>();
+        rejectedMap.put("lamp_1", buildSmvData("lamp_1", "Lamp",
+                List.of("Mode"), Map.of("Mode", List.of("on", "off")),
+                List.of(affectOnly, readable), rejected));
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> validator.validate(rejectedMap));
+        assertTrue(ex.getMessage().contains("illuminance"),
+                () -> "the message must name the offending attribute: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("autoOff"),
+                () -> "the message must name the Transition: " + ex.getMessage());
+
+        // Same shape, read-capable attribute: still legal, so the narrowing is about capability and not
+        // about shared-ness.
+        DeviceManifest accepted = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(affectOnly, readable))
+                .impactedVariables(List.of("illuminance"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("autoOff").startState("on").endState("off")
+                        .trigger(DeviceManifest.Trigger.builder()
+                                .attribute("brightness").relation(">=").value("80").build())
+                        .build()))
+                .build();
+        Map<String, DeviceSmvData> acceptedMap = new LinkedHashMap<>();
+        acceptedMap.put("lamp_1", buildSmvData("lamp_1", "Lamp",
+                List.of("Mode"), Map.of("Mode", List.of("on", "off")),
+                List.of(affectOnly, readable), accepted));
+
+        assertDoesNotThrow(() -> validator.validate(acceptedMap),
+                "a read-capable shared value stays a legal trigger attribute");
+    }
+
     @Test
     @DisplayName("P1: illegal trigger relation throws SmvGenerationException")
     void triggerRelation_illegal_throws() {

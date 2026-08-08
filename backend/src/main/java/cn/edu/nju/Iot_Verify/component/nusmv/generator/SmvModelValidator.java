@@ -194,7 +194,7 @@ public class SmvModelValidator {
                     normalizedValue, modeValues, "mode");
             return;
         }
-        DeviceManifest.InternalVariable variable = findReadableTriggerDomain(smv, attribute);
+        DeviceManifest.InternalVariable variable = findTriggerValueDomain(smv, attribute);
         if (variable == null) {
             return;
         }
@@ -244,7 +244,15 @@ public class SmvModelValidator {
         }
     }
 
-    private DeviceManifest.InternalVariable findReadableTriggerDomain(DeviceSmvData smv, String attribute) {
+    /**
+     * Resolves a trigger attribute's declared domain so its comparison value can be range-checked.
+     *
+     * <p>Deliberately capability-blind, and named for what it does rather than for a filter it does not
+     * apply: read capability is enforced earlier, by `buildLegalAttributeSet`, so an affect-only name
+     * cannot reach here. It was previously called `findReadableTriggerDomain`, which claimed a check it
+     * never performed — the readability gate was missing entirely, and the name is why nobody noticed.
+     */
+    private DeviceManifest.InternalVariable findTriggerValueDomain(DeviceSmvData smv, String attribute) {
         if (smv.getManifest().getInternalVariables() == null) {
             return null;
         }
@@ -396,12 +404,32 @@ public class SmvModelValidator {
         }
     }
 
+    /**
+     * Attributes a Transition Trigger may compare against — i.e. what this device can *read*.
+     *
+     * <p>Excludes an affect-only shared declaration ({@code IsInside: false, Reads: false}). The generator
+     * emits no {@code device.<name> := a_<name>} mirror for one, yet `appendInternalVariables` still
+     * declares the identifier, so a Trigger naming it compiled to a comparison against a variable that is
+     * declared, never initialised and never assigned: an unconstrained free state variable that re-picks a
+     * value from its domain every step, unrelated to the shared value it appears to name. NuSMV accepts
+     * that model and answers it, so the failure is silent — a lamp declaring
+     * "switch off when illuminance >= 80" would fire on noise while the real reading sat at 20.
+     *
+     * <p>This is the same narrowing already applied to rule and specification value conditions
+     * (`NusmvRequestValidator.internalVariable`, `BoardStorageServiceImpl.conditionSourceVariable`): a
+     * Trigger is a read, so it gets the read capability set. Writes are unaffected — `Assignments` targets
+     * are checked elsewhere, and writing an affect-only value is exactly what the declaration is for.
+     */
     private Set<String> buildLegalAttributeSet(DeviceSmvData smv) {
         Set<String> attrs = new LinkedHashSet<>();
         attrs.addAll(smv.getModes());
         if (smv.getManifest().getInternalVariables() != null) {
             for (DeviceManifest.InternalVariable iv : smv.getManifest().getInternalVariables()) {
-                if (iv.getName() != null) attrs.add(iv.getName());
+                if (iv.getName() == null) continue;
+                boolean affectOnlyShared = !Boolean.TRUE.equals(iv.getIsInside())
+                        && Boolean.FALSE.equals(iv.getReads());
+                if (affectOnlyShared) continue;
+                attrs.add(iv.getName());
             }
         }
         return attrs;
