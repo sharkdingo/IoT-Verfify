@@ -1424,6 +1424,42 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         assertFalse(precheckFile.exists());
     }
 
+    /**
+     * A mode whose rescued token equals a working-state value declares one identifier twice.
+     *
+     * <p>NuSMV keeps variables and enumeration constants in one module namespace, so a mode variable named
+     * `_next` alongside a state `next` — which `sanitizeSmvToken` also rescues to `_next` — emits the
+     * identifier twice. Measured on 2.7.1: `FanMode: {_next, idle}; _next: {on, auto};` gives
+     * `line 4: multiple declaration of identifier: _next`, exit 1.
+     *
+     * <p>The accepted half is the one that matters most here: two *modes* legitimately share a state value.
+     * The bundled `Thermostat` has `auto` in both `ThermostatFanMode` and `ThermostatMode` and that model is
+     * accepted by the engine, so the guard checks mode-token-against-state-token one way rather than
+     * registering state names as identifiers, which would refuse a shipped template.
+     *
+     * <p>Found by `ManifestAdmissionParsesInNuSmvPropertyTest`, which generates mode names from a pool of
+     * rescue-colliding tokens and parses each model with the real engine. `2e2b1e4` had closed mode-vs-mode
+     * and `trust_<mode>_<state>`; this namespace pair had no counterpart.
+     */
+    @Test
+    void addDeviceTemplate_whenAModeTokenEqualsAStateToken_shouldReject() {
+        DeviceTemplateDto rejected = twoModeTemplate("Mode State Clash", "next;on", "idle;auto");
+        rejected.getManifest().setModes(List.of("_next", "Fan"));
+
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, rejected));
+        org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                .contains("_next")
+                .contains("working-state value");
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+
+        // Two modes sharing a state value is legal — the Thermostat shape. Both columns must still vary,
+        // or the single-distinct-state check fires first and this would pass for the wrong reason.
+        DeviceTemplateDto accepted = twoModeTemplate("Shared State Value", "auto;on", "low;auto");
+        accepted.getManifest().setModes(List.of("FanMode", "HvacMode"));
+        assertDoesNotThrow(() -> service.addDeviceTemplate(1L, accepted));
+    }
+
     private static DeviceTemplateDto twoModeTemplate(String name, String stateA, String stateB) {
         DeviceManifest manifest = new DeviceManifest();
         manifest.setModes(List.of("Power", "Fan"));

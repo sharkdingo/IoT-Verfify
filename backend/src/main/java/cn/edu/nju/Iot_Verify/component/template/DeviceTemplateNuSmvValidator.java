@@ -541,8 +541,57 @@ public class DeviceTemplateNuSmvValidator {
         registerSmvIdentifier(templateName, identifiers, "is_attack", "generated attack flag");
 
         for (String mode : modes) {
-            String cleaned = mode == null ? "" : mode.replace(" ", "");
-            registerSmvIdentifier(templateName, identifiers, cleaned, "mode '" + mode + "'");
+            // The *rescued* token, because that is what `SmvDeviceModuleBuilder.appendModeVariables`
+            // declares. `2e2b1e4` made this correction for the `trust_<mode>_<state>` leg below and left
+            // this one on `replace(" ", "")`, so two modes that differ only before rescue — `next` and
+            // `_next`, which `sanitizeSmvToken` folds to one token — registered as distinct here and then
+            // emitted the same identifier twice: `multiple declaration of identifier: _next`.
+            //
+            // Found by the property probe, not by reading: `ManifestAdmissionParsesInNuSmvPropertyTest`
+            // generates mode names from a pool of rescue-colliding tokens and parses each model with the
+            // real engine.
+            String emitted = mode == null ? "" : DeviceSmvDataFactory.sanitizeSmvToken(mode);
+            registerSmvIdentifier(templateName, identifiers, emitted, "mode '" + mode + "'");
+        }
+
+        // A state name is emitted as an enum constant inside some mode's domain, and NuSMV keeps constants
+        // and variables in one module namespace. So a mode whose rescued token equals any rescued state name
+        // declares the same identifier twice. Measured on 2.7.1:
+        //
+        //     FanMode: {_next, idle};   _next: {on, auto};
+        //       line 4: multiple declaration of identifier: _next        (exit 1)
+        //
+        // Checked one-way against a de-duplicated set rather than registered into `identifiers`, because two
+        // *modes* legitimately share a state name — the bundled `Thermostat` has `auto` in both
+        // `ThermostatFanMode` and `ThermostatMode`, and that model is accepted (verified). Registering state
+        // names would reject it.
+        //
+        // Found by `ManifestAdmissionParsesInNuSmvPropertyTest`: `2e2b1e4` closed mode-vs-mode and
+        // `trust_<mode>_<state>` collisions, and this namespace pair had no counterpart.
+        Set<String> emittedStateTokens = new LinkedHashSet<>();
+        for (List<String> states : DeviceManifestModes.modeStates(manifest).values()) {
+            if (states == null) {
+                continue;
+            }
+            for (String state : states) {
+                if (hasText(state)) {
+                    emittedStateTokens.add(DeviceSmvDataFactory.sanitizeSmvToken(state)
+                            .toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        for (String mode : modes) {
+            if (mode == null) {
+                continue;
+            }
+            String emitted = DeviceSmvDataFactory.sanitizeSmvToken(mode);
+            if (emittedStateTokens.contains(emitted.toLowerCase(Locale.ROOT))) {
+                throw new BadRequestException("Template '" + templateName + "': mode '" + mode
+                        + "' generates the NuSMV identifier '" + emitted + "', which is also a working-state "
+                        + "value. A mode variable and an enumeration constant share one namespace, so the "
+                        + "generated model would declare '" + emitted + "' twice and the engine would refuse "
+                        + "it. Rename the mode or the state.");
+            }
         }
 
         if (manifest.getInternalVariables() != null) {
