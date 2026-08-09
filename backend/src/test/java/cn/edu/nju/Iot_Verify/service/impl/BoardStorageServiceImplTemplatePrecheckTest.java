@@ -1425,6 +1425,136 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     }
 
     /**
+     * A domain of exactly one value is a constant to NuSMV, and a constant cannot be initialised.
+     *
+     * <p>Generation always emits `init(<name>) := <value>`. Measured on 2.7.1:
+     * `VAR level: 5..5; ASSIGN init(level) := 5;` produces
+     * `WARNING: single-value variable 'level' has been stored as a constant` followed by
+     * `A variable is expected in left-hand-side of assignment`, exit 1. The identical model with `5..6`
+     * is clean, so cardinality is the whole difference.
+     *
+     * <p>Only `LowerBound > UpperBound` was checked, so `5 == 5` passed all four template gates; the
+     * template persisted and every later verification of a board using it died in the engine.
+     * `runTemplateNuSmvPrecheck` cannot catch it — it generates model text without invoking NuSMV, and it
+     * runs after `saveAndFlush` in any case.
+     *
+     * <p>Three cases, because the defect has three spellings and one boundary: numeric `5..5`, a
+     * one-member enum, and the control `5..6` that must stay accepted.
+     */
+    @Test
+    void addDeviceTemplate_whenADomainHasExactlyOneValue_shouldReject() {
+        DeviceManifest.InternalVariable numeric = new DeviceManifest.InternalVariable();
+        numeric.setName("level");
+        numeric.setIsInside(true);
+        numeric.setFalsifiableWhenCompromised(false);
+        numeric.setTrust("trusted");
+        numeric.setPrivacy("public");
+        numeric.setLowerBound(5);
+        numeric.setUpperBound(5);
+
+        BadRequestException numericFailure = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, singleVariableTemplate("Narrow Numeric", numeric)));
+        org.assertj.core.api.Assertions.assertThat(numericFailure.getMessage())
+                .contains("level")
+                .contains("LowerBound equal to UpperBound");
+
+        DeviceManifest.InternalVariable singleEnum = new DeviceManifest.InternalVariable();
+        singleEnum.setName("smoke");
+        singleEnum.setIsInside(true);
+        singleEnum.setFalsifiableWhenCompromised(false);
+        singleEnum.setTrust("trusted");
+        singleEnum.setPrivacy("public");
+        singleEnum.setValues(List.of("detected"));
+
+        BadRequestException enumFailure = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, singleVariableTemplate("Narrow Enum", singleEnum)));
+        org.assertj.core.api.Assertions.assertThat(enumFailure.getMessage())
+                .contains("smoke")
+                .contains("single enum value");
+
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+
+        // The boundary: a two-wide domain is the narrowest NuSMV can model as a variable.
+        DeviceManifest.InternalVariable widest = new DeviceManifest.InternalVariable();
+        widest.setName("level");
+        widest.setIsInside(true);
+        widest.setFalsifiableWhenCompromised(false);
+        widest.setTrust("trusted");
+        widest.setPrivacy("public");
+        widest.setLowerBound(5);
+        widest.setUpperBound(6);
+        assertDoesNotThrow(() ->
+                service.addDeviceTemplate(1L, singleVariableTemplate("Two Wide", widest)));
+    }
+
+    private static DeviceTemplateDto singleVariableTemplate(
+            String name, DeviceManifest.InternalVariable variable) {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of());
+        manifest.setInitState("");
+        manifest.setWorkingStates(List.of());
+        manifest.setInternalVariables(List.of(variable));
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName(name);
+        dto.setManifest(manifest);
+        return dto;
+    }
+
+    private static String rescuedModeManifest(String variableName) {
+        return "{\"Name\":\"Rescue Probe\",\"Modes\":[\"Next\"],\"InitState\":\"cold\","
+                + "\"WorkingStates\":[{\"Name\":\"cold\",\"Trust\":\"trusted\",\"Privacy\":\"public\"},"
+                + "{\"Name\":\"warm\",\"Trust\":\"trusted\",\"Privacy\":\"public\"}],"
+                + "\"InternalVariables\":[{\"Name\":\"" + variableName + "\",\"IsInside\":true,"
+                + "\"FalsifiableWhenCompromised\":false,\"Trust\":\"trusted\",\"Privacy\":\"public\","
+                + "\"Values\":[\"low\",\"high\"]}],"
+                + "\"APIs\":[{\"Name\":\"warmUp\",\"StartState\":\"cold\",\"EndState\":\"warm\","
+                + "\"Signal\":true}]}";
+    }
+
+    /**
+     * The collision guard must compare the token generation actually emits, not the authored one.
+     *
+     * <p>`DeviceSmvDataFactory.extractModes` stores `sanitizeSmvToken(rawMode)`, and
+     * `SmvDeviceModuleBuilder.appendStatePropertyVariables` builds `trust_<mode>_<state>` from that.
+     * `DeviceManifestModes.modeNames` only trims, so the guard once compared the pre-rescue name and
+     * could not see a collision against the post-rescue one.
+     *
+     * <p>Mode `Next` is the entrance: the schema's reserved-word enum is case-**sensitive** so it is
+     * admitted, while `sanitizeSmvToken` folds case and rescues it to `_Next`. Measured before the fix —
+     * a template with that mode plus an InternalVariable named `trust__Next_cold` was admitted, emitted
+     * `trust__Next_cold` twice, and NuSMV refused the model with `multiple declaration of identifier`.
+     *
+     * <p>Both names are asserted, and that pairing is the whole point: the **post**-rescue name must be
+     * refused, and the **pre**-rescue name must still be accepted. Asserting only the rejection would
+     * also pass if the guard compared the raw name, which is the bug. The state leg needs no such case
+     * because `DeviceManifestModes.modeStates` already routes each segment through `cleanStateName`.
+     *
+     * <p>This regression was missing: the fix shipped as a production-only change, so reverting it left
+     * the whole suite green.
+     */
+    @Test
+    void addDeviceTemplate_whenVariableCollidesWithTheRescuedModeToken_shouldReject() {
+        DeviceTemplateDto rejected = new DeviceTemplateDto();
+        rejected.setName("Rescue Probe");
+        rejected.setManifest(JsonUtils.fromJson(
+                rescuedModeManifest("trust__Next_cold"), DeviceManifest.class));
+
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, rejected));
+        org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                .contains("trust__Next_cold")
+                .contains("collides");
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+
+        // The pre-rescue spelling collides with nothing the generator emits, so it must stay accepted.
+        DeviceTemplateDto accepted = new DeviceTemplateDto();
+        accepted.setName("Rescue Probe");
+        accepted.setManifest(JsonUtils.fromJson(
+                rescuedModeManifest("trust_Next_cold"), DeviceManifest.class));
+        assertDoesNotThrow(() -> service.addDeviceTemplate(1L, accepted));
+    }
+
+    /**
      * A reserved word is a legal SMV token and an illegal enumeration constant.
      *
      * <p>The pattern check added alongside this one cannot catch it: `next` matches

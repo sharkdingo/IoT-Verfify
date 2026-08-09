@@ -190,6 +190,29 @@ public class DeviceTemplateNuSmvValidator {
             throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                     + name + "' has LowerBound " + lowerBound + " greater than UpperBound " + upperBound + ".");
         }
+        // A domain of exactly one value is not a variable to NuSMV. It stores such a declaration as a
+        // *constant*, and a constant cannot be the left-hand side of an assignment — while generation
+        // always emits `init(<name>) := <value>`. Measured on 2.7.1:
+        //
+        //     VAR level: 5..5;  ASSIGN init(level) := 5;
+        //       WARNING: single-value variable 'level' has been stored as a constant
+        //       line 5: A variable is expected in left-hand-side of assignment      (exit 1)
+        //
+        // `5..6` on the identical model is clean, so cardinality is the whole difference. Only
+        // `lowerBound > upperBound` was checked, so `5 == 5` passed all four template gates and the
+        // template persisted; every later verification of any board using it then died in the engine.
+        // `runTemplateNuSmvPrecheck` cannot catch it — it generates text without invoking NuSMV, so a
+        // parse failure is invisible to it, and it runs after `saveAndFlush` regardless.
+        //
+        // No bundled template or example scene declares a single-value domain, verified before adding
+        // this, since a check that refuses a shipped template would be worse than the gap.
+        if (lowerBound != null && upperBound != null && lowerBound.equals(upperBound)) {
+            throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                    + name + "' has LowerBound equal to UpperBound (" + lowerBound + "). NuSMV stores a "
+                    + "single-value domain as a constant, which cannot be assigned an initial value, so "
+                    + "the generated model would be rejected by the engine. Widen the range, or model "
+                    + "the value as a fixed enumeration with at least two members.");
+        }
         if (values != null) {
             Set<String> normalizedValues = new LinkedHashSet<>();
             for (String rawValue : values) {
@@ -197,6 +220,16 @@ public class DeviceTemplateNuSmvValidator {
                 if (value.isEmpty() || !normalizedValues.add(value)) {
                     throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                             + name + "' contains empty or duplicate enum values after model normalization.");
+                }
+                if (values.size() < 2) {
+                    // Same engine limitation as the numeric single-value domain above: `{detected}` is
+                    // stored as a constant and `init(a_smoke) := detected` is then rejected. Counted
+                    // *after* the duplicate check, so `["on", "on"]` reports as duplicates rather than
+                    // as a one-member domain — the more specific message for the same authored mistake.
+                    throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                            + name + "' declares a single enum value. NuSMV stores a one-member domain as "
+                            + "a constant, which cannot be assigned an initial value, so the generated "
+                            + "model would be rejected by the engine. Declare at least two values.");
                 }
                 // An enum value is emitted as a bare SMV token — inside the `{...}` domain and on the
                 // right-hand side of every comparison against it — so it is an identifier, and nothing
