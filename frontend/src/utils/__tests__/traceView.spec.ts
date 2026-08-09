@@ -141,6 +141,22 @@ describe('playback device facts', () => {
     expect(isPlaybackDeviceAttacked(idle)).toBe(false)
   })
 
+  // An affect-only shared declaration (`Reads: false`) reaches the client as `observed: false` with an
+  // empty value, because the model never constrained it and NuSMV printed an arbitrary domain member.
+  // It must vanish from the summary rather than read `illuminance=N/A`: `N/A` claims a reading was
+  // expected and went missing, while this device never took one. The real value is on the environment
+  // strip. Omitting the flag must keep the old meaning, so a persisted trace still renders.
+  it('omits an unobserved variable from the summary and keeps observed ones', () => {
+    expect(playbackDeviceSummaryParts({
+      deviceId: 'light_1',
+      state: 'on',
+      variables: [
+        { name: 'illuminance', value: '', observed: false },
+        { name: 'temperature', value: '20' }
+      ]
+    })).toEqual(['on', 'temperature=20'])
+  })
+
   it('formats playback summaries and structured security labels without mutating trace data', () => {
     const device = {
       deviceId: 'camera_1',

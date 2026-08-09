@@ -5,6 +5,8 @@ export type TraceVariableLike = {
   name: string
   value?: unknown
   trust?: string
+  /** See `TraceVariable.observed` in `@/types/verify`. Missing means observed. */
+  observed?: boolean
 }
 
 export type TraceTrustPrivacyLike = {

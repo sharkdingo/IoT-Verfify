@@ -195,6 +195,15 @@ public class SmvTraceParser {
 
         if (isKnownDeviceVariable(smv, attr)) {
             TraceVariableDto varTrace = findOrCreateVariable(devTrace, attr);
+            // An affect-only shared declaration is declared but never assigned, so `cleanValue` is an
+            // arbitrary domain member rather than a reading. Keep the row (the fixer requires one per
+            // manifest variable) and keep the trust the label line supplies, but do not publish the
+            // number as this device's own. See TraceVariableDto#observed.
+            if (isAffectOnlySharedVariable(smv, attr)) {
+                varTrace.setObserved(false);
+                varTrace.setValue("");
+                return;
+            }
             varTrace.setValue(cleanValue);
             return;
         }
@@ -391,7 +400,13 @@ public class SmvTraceParser {
                     created.setName(update.getName());
                     return created;
                 });
-                if (update.getValue() != null) target.setValue(update.getValue());
+                if (update.getValue() != null) {
+                    target.setValue(update.getValue());
+                    // Observability travels with the value, or a later state that reprints an
+                    // affect-only row would inherit `observed=true` from the carried-forward copy and
+                    // fail the integrity invariant on a blank value.
+                    target.setObserved(update.isObserved());
+                }
                 if (update.getTrust() != null) target.setTrust(update.getTrust());
                 if (update.getModelTokenSource() != null) {
                     target.setModelTokenSource(update.getModelTokenSource());
@@ -405,6 +420,7 @@ public class SmvTraceParser {
         TraceVariableDto copy = new TraceVariableDto();
         copy.setName(source.getName());
         copy.setValue(source.getValue());
+        copy.setObserved(source.isObserved());
         copy.setTrust(source.getTrust());
         copy.setModelTokenSource(source.getModelTokenSource());
         return copy;
@@ -557,6 +573,26 @@ public class SmvTraceParser {
         return (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(name))
                 || (smv.getImpactedEnvironmentVariables() != null
                 && smv.getImpactedEnvironmentVariables().containsKey(name));
+    }
+
+    /**
+     * A shared declaration this device only affects. Mirrors the {@code Reads=false} gate in
+     * {@code DeviceSmvDataFactory#extractEnvVariables}: omitting {@code Reads} keeps the historical
+     * meaning that a shared declaration reads, so only an explicit {@code false} is affect-only.
+     * Read from the manifest variable list, which carries every declaration whatever its capability.
+     */
+    private boolean isAffectOnlySharedVariable(DeviceSmvData smv, String name) {
+        if (smv == null || smv.getVariables() == null) {
+            return false;
+        }
+        for (DeviceManifest.InternalVariable variable : smv.getVariables()) {
+            if (variable == null || !name.equals(variable.getName())) {
+                continue;
+            }
+            return (variable.getIsInside() == null || !variable.getIsInside())
+                    && Boolean.FALSE.equals(variable.getReads());
+        }
+        return false;
     }
 
     private void processTrustVariable(TraceDeviceDto devTrace,

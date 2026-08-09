@@ -840,6 +840,11 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
   const traceDevice = isTraceActive.value ? getLatestTraceDeviceForNode(node.id) : null
   const configuredVariables = node.variables || []
   const traceOnlyVariables = (traceDevice?.variables || [])
+    // An unobserved row carries no reading, so there is no badge to draw. Dropped here rather than in
+    // the `shown` filter below, because that filter's second disjunct resurrects any row that merely
+    // has an empty value — which would print `illuminance` with a blank number instead of hiding it.
+    // The shared value the user wants is on the environment strip, published once and correctly.
+    .filter(variable => variable.observed !== false)
     .map(variable => ({
       name: variable.name,
       value: normalizeTraceComparable(variable.value),

@@ -797,7 +797,16 @@ model-boundary identity; user-facing trace and simulation UIs should display
 `deviceLabel` when it is present and keep `deviceId` in technical/debug details.
 `compromised` is the user-facing boolean translated from NuSMV's internal attack flag;
 the internal `is_attack` variable is not mixed into `variables[]`.
-`TraceVariableDto`: `{ name, value, trust, modelTokenSource }`.
+`TraceVariableDto`: `{ name, value, trust, observed, modelTokenSource }`.
+`observed` is `false` only for an affect-only shared declaration (`IsInside=false`,
+`Reads=false`): the model declares `<device>.<name>` so the trust/impact machinery has an
+identifier, but never constrains it, so there is no reading to report and `value` is the
+empty string. The row is still present in every state — it carries the variable's trust, and
+counterexample-based fixing requires one row per manifest variable — but clients must not
+render its value as a device reading. The true shared value is published once, in the
+state's `envVariables[]`. A persisted trace with `observed: false` and a non-empty `value` is
+invalid. Anything else is `observed: true`, which is also the reading for a trace persisted
+before this field existed.
 `modelTokenSource` is `BUNDLED`, `CUSTOM`, or `UNKNOWN`. Device provenance is frozen
 from the exact template captured for the run. An environment variable has one source
 only when every active template declaring it has that same source; mixed declarations

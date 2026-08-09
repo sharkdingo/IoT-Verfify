@@ -56,7 +56,7 @@ export interface PlaybackDevice {
   state?: string | null
   mode?: string | null
   compromised?: boolean
-  variables?: Array<{ name: string; value: string; trust?: string | null }>
+  variables?: Array<{ name: string; value: string; trust?: string | null; observed?: boolean }>
   trustPrivacy?: Array<{ name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string | null; trust?: boolean | null; privacy?: string | null }>
   privacies?: Array<{ name: string; propertyScope: 'state' | 'variable' | 'content'; mode?: string | null; trust?: boolean | null; privacy?: string | null }>
 }
@@ -210,9 +210,13 @@ export const playbackDeviceSummaryParts = (
   // change list. The backend's parser creates a variable row before its value is parsed, so a
   // missing value is reachable — and rendering it as `name=` shows unknown data as blank while the
   // other surface for the same step says `N/A`.
-  ;(device.variables || []).forEach(variable => parts.push(
-    `${formatToken(variable.name)}=${formatToken(playbackValue(variable.value))}`
-  ))
+  // An unobserved row is omitted rather than shown as `N/A`: `N/A` claims the reading was expected and
+  // went missing, whereas this device never had one to report. See `TraceVariable.observed`.
+  ;(device.variables || [])
+    .filter(variable => variable.observed !== false)
+    .forEach(variable => parts.push(
+      `${formatToken(variable.name)}=${formatToken(playbackValue(variable.value))}`
+    ))
   return parts
 }
 

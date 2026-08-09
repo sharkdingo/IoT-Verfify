@@ -27,9 +27,12 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.util.TraceStateIntegrity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Assumptions;
@@ -131,6 +134,49 @@ class AwayModeUnlockSceneNusmvTest {
         List<TraceStateDto> states = new SmvTraceParser().parseCounterexampleStates(
                 violation.getCounterexample(), baselineModel.deviceSmvMap(), rules);
         assertEquals(3, states.size(), "runbook walks a three-state counterexample");
+
+        /*
+         * `Light.illuminance` is affect-only (`Reads: false`), so the model declares `light_1.illuminance`
+         * without ever constraining it and NuSMV prints an arbitrary domain member — it printed `0` in
+         * every state here while the shared value was 20/19/19. Publishing that as a device reading put a
+         * contradiction on one screen: "Porch Light: illuminance 0" beside an environment strip reading 20.
+         *
+         * The row must survive: `CounterexampleInitialStateConstraints` requires one per manifest variable
+         * and reads this variable's trust from it. So the value is emptied and `observed` marks why. The
+         * previous attempt at this fix nulled the value instead, which `TraceStateIntegrity` rejects on
+         * every persisted read — breaking automatic fix on this very scene. Hence the integrity assertion
+         * below, and hence the whole fix pipeline running afterwards on these same states.
+         */
+        int assertedIlluminanceRows = 0;
+        for (TraceStateDto state : states) {
+            TraceVariableDto shared = state.getEnvVariables().stream()
+                    .filter(v -> "illuminance".equals(v.getName()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("shared illuminance missing from the state"));
+            assertTrue(shared.isObserved(), "the environment's own illuminance is a real value");
+            assertFalse(shared.getValue().isBlank(), "shared illuminance must carry the pool value");
+
+            TraceDeviceDto light = state.getDevices().stream()
+                    .filter(d -> "light_1".equals(d.getDeviceId()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("light_1 missing from the trace state"));
+            TraceVariableDto illuminance = light.getVariables().stream()
+                    .filter(v -> "illuminance".equals(v.getName()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "the row itself must stay — the fixer requires one per manifest variable"));
+            assertFalse(illuminance.isObserved(),
+                    "an affect-only declaration is not a reading this device took");
+            assertEquals("", illuminance.getValue(),
+                    "no arbitrary domain member may be published as light_1's own illuminance");
+            assertEquals("untrusted", illuminance.getTrust(),
+                    "the label the generator emitted must still reach the fixer");
+            assertedIlluminanceRows++;
+        }
+        assertEquals(3, assertedIlluminanceRows, "every state must carry the marked row");
+
+        // The check the reverted attempt tripped: this is what `TraceMapper` runs on every persisted read.
+        assertEquals(3, TraceStateIntegrity.requireValidStates(states).size());
 
         FixResultDto fixResult = allStrategyFixer(generator, executor, 240_000).fix(
                 901L, specs.get(violatedIndex).getId(), states, rules, devices, environment, specs,

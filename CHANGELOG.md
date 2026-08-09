@@ -19,6 +19,16 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **A counterexample published an unconstrained value as a device reading.** The same affect-only shared
+  declaration that the `Trigger` fix below closed at generation still reached the UI through the trace:
+  because `<device>.<name>` is declared but never assigned, NuSMV prints an arbitrary domain member, and
+  the shipped away-mode demo drew "Porch Light: illuminance 0" beside an environment strip reading 20.
+  `TraceVariableDto` now carries `observed`, `false` for such a row, with an empty `value`; the canvas
+  strip and the playback summary omit it rather than print a blank or `N/A`. The row itself stays, because
+  it carries the variable's trust and counterexample-based fixing requires one row per manifest variable —
+  deleting the value outright had broken automatic fix on this scene. The true shared value keeps being
+  published once, in the state's `envVariables[]`. See `docs/api/verification.md`.
+
 Ten admission and modelling defects, each reproduced against real NuSMV 2.7.1 and pinned by a
 mutation-checked regression. Nine of them share one shape: input that passed validation, persisted, and
 then failed at *run* time — either in the engine or as a wrong answer.

@@ -277,6 +277,12 @@ public final class TraceStateIntegrity {
         if (variable.getValue() == null) {
             throw new IllegalArgumentException("Trace variable value is missing");
         }
+        // This class has no manifest, so it cannot decide which variables are observable. It can still
+        // reject the incoherent half of the claim: a row flagged unobserved must not also carry a
+        // value, so `observed=false` cannot become a way to publish a number while disowning it.
+        if (!variable.isObserved() && !variable.getValue().isEmpty()) {
+            throw new IllegalArgumentException("Trace variable is unobserved but carries a value");
+        }
         if (variable.getModelTokenSource() == null) {
             throw new IllegalArgumentException("Trace variable model token source is missing");
         }

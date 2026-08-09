@@ -157,6 +157,11 @@ export interface TraceVariable {
   name: string;
   value: string;
   trust?: string | null;    // 改为可选
+  // False when `value` is not a reading this device took: an affect-only shared declaration
+  // (IsInside=false, Reads=false) is declared but never constrained, so the model has no value to
+  // report and `value` is empty. The true shared value is in the state's envVariables[].
+  // Absent on a trace persisted before this field existed; treat a missing flag as observed.
+  observed?: boolean;
   modelTokenSource: ModelTokenSource;
 }
 

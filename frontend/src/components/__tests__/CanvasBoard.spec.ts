@@ -574,6 +574,55 @@ describe('CanvasBoard device context actions', () => {
     wrapper.unmount()
   })
 
+  // The canvas strip is where the contradiction was visible: the demo scene drew "illuminance 0" on the
+  // Porch Light beside an environment strip reading 20, because an affect-only shared declaration is
+  // declared-unconstrained and NuSMV prints an arbitrary domain member. The backend now sends the row
+  // with `observed: false` and an empty value, and the chip must disappear rather than render blank —
+  // `getNodeRuntimeBadges` has a second disjunct that resurrects any merely-empty value.
+  it('drops an unobserved trace variable from the node strip and keeps observed ones', () => {
+    const wrapper = mount(CanvasBoard, {
+      props: {
+        nodes: [{
+          id: 'light-1', label: 'Porch Light', templateName: 'Light',
+          position: { x: 0, y: 0 }, state: 'on', width: 176, height: 128
+        }],
+        edges: [],
+        pan: { x: 0, y: 0 },
+        zoom: 1,
+        highlightedTrace: {
+          selectedStateIndex: 0,
+          states: [{
+            devices: [{
+              deviceId: 'light_1',
+              state: 'on',
+              modelTokenSource: 'BUNDLED' as const,
+              variables: [
+                {
+                  name: 'illuminance', value: '', trust: 'untrusted',
+                  observed: false, modelTokenSource: 'BUNDLED' as const
+                },
+                {
+                  name: 'brightness', value: '80', trust: 'trusted',
+                  modelTokenSource: 'BUNDLED' as const
+                }
+              ]
+            }]
+          }]
+        },
+        getNodeIcon: () => '',
+        hasNodeStateMachine: () => true,
+        getNodeEffectiveState: () => 'on'
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const node = wrapper.get('[data-node-id="light-1"]')
+    const labels = node.findAll('.device-runtime-chip__label').map(chip => chip.text())
+    expect(labels).toEqual(['brightness'])
+    expect(node.text()).not.toContain('illuminance')
+    wrapper.unmount()
+  })
+
   it('uses historical state-machine evidence instead of the current template', () => {
     const recordedStateful = {
       id: 'was-stateful-1',
