@@ -216,6 +216,28 @@ public class DeviceTemplateNuSmvValidator {
                             + "After spaces are removed it must start with a letter or underscore and "
                             + "contain only letters, digits and underscores.");
                 }
+                // A reserved word is a legal *token* and an illegal *value*, so the pattern above cannot
+                // catch it. `SAFE_SMV_TOKEN` alone left `Values: ["next"]` admitted, emitting
+                // `authState: {next, ok};` — measured, NuSMV then refused the model with
+                // `at token "next": syntax error` (`TRUE`/`FALSE` fail as `Invalid enumerative value`).
+                // Same class as the punctuation case this check was written for.
+                //
+                // Case-**sensitive**, unlike `validateSmvIdentifier`'s three-way fold for *names*, and the
+                // difference is not an oversight: NuSMV's lexer is case-sensitive here. Measured on 2.7.1,
+                // `{Next, ok}` and `{NEXT, ok}` compile while `{next, ok}` does not, so folding case would
+                // reject values the engine accepts. Names can afford to over-reject because they are
+                // `.equals()`-matched and never rescued; a value is emitted verbatim, so the rule must be
+                // exactly what the engine enforces.
+                //
+                // All 58 bundled enum values pass under either policy, so this cannot break template
+                // loading — verified rather than assumed, since a check that refuses a bundled template
+                // would be worse than the gap it closes.
+                if (DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(value)) {
+                    throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                            + name + "' has enum value '" + rawValue + "' which is a NuSMV reserved word. "
+                            + "NuSMV cannot parse it as an enumeration constant, so the generated model "
+                            + "would be rejected by the engine. Rename the value.");
+                }
             }
         }
         boolean numeric = lowerBound != null && upperBound != null;

@@ -1421,6 +1421,76 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     }
 
     /**
+     * A reserved word is a legal SMV token and an illegal enumeration constant.
+     *
+     * <p>The pattern check added alongside this one cannot catch it: `next` matches
+     * `^[a-zA-Z_][a-zA-Z0-9_]*$` perfectly. Measured before this check — `Values: ["next", "ok"]` passed
+     * all three admission stages, emitted `authState: {next, ok};`, and NuSMV 2.7.1 refused the model
+     * with `at token "next": syntax error` (exit 1). `TRUE`/`FALSE` fail slightly differently, as
+     * `Invalid enumerative value`, but also exit 1.
+     *
+     * <p>The case-sensitivity is the part worth pinning, and it deliberately differs from
+     * `validateSmvIdentifier`, which folds case for *names*. NuSMV's lexer is case-sensitive here:
+     * measured, `{Next, ok}` and `{NEXT, ok}` compile while `{next, ok}` does not. So folding case would
+     * reject values the engine accepts. A name can afford to over-reject — it is `.equals()`-matched and
+     * never rescued — but a value is emitted verbatim, so the rule must match the engine exactly.
+     */
+    @Test
+    void addDeviceTemplate_enumValueThatIsAReservedWord_shouldReject() {
+        DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
+        variable.setName("authState");
+        variable.setIsInside(true);
+        variable.setFalsifiableWhenCompromised(false);
+        variable.setTrust("trusted");
+        variable.setPrivacy("public");
+        variable.setValues(List.of("next", "ok"));
+
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of());
+        manifest.setInitState("");
+        manifest.setWorkingStates(List.of());
+        manifest.setInternalVariables(List.of(variable));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("Reserved Value Sensor");
+        dto.setManifest(manifest);
+
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                .contains("authState")
+                .contains("next")
+                .contains("reserved word");
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+    }
+
+    /** A case variant NuSMV actually accepts must stay admitted — the check must not fold case. */
+    @Test
+    void addDeviceTemplate_enumValueThatIsACaseVariantOfAReservedWord_shouldBeAccepted() {
+        DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
+        variable.setName("authState");
+        variable.setIsInside(true);
+        variable.setFalsifiableWhenCompromised(false);
+        variable.setTrust("trusted");
+        variable.setPrivacy("public");
+        // NuSMV 2.7.1 compiles `{Next, ok}` — verified directly against the engine.
+        variable.setValues(List.of("Next", "ok"));
+
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of());
+        manifest.setInitState("");
+        manifest.setWorkingStates(List.of());
+        manifest.setInternalVariables(List.of(variable));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("Case Variant Sensor");
+        dto.setManifest(manifest);
+
+        assertDoesNotThrow(() -> service.addDeviceTemplate(1L, dto));
+    }
+
+    /**
      * An enum value is emitted as a bare SMV token, so it must be a legal one.
      *
      * <p>`SmvDeviceModuleBuilder` writes `Values` straight into the `{...}` domain and onto the
