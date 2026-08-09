@@ -1370,8 +1370,6 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     rateExpr == null ? shifted : shifted + " + " + rateExpr, lower, upper));
         }
         content.append("\t\tTRUE: {").append(String.join(", ", rateCandidates)).append("};\n");
-        if (rateExpr == null) {
-        }
     }
 
     /**
