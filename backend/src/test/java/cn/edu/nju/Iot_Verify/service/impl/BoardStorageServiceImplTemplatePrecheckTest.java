@@ -1424,6 +1424,58 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         assertFalse(precheckFile.exists());
     }
 
+    private static DeviceTemplateDto twoModeTemplate(String name, String stateA, String stateB) {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of("Power", "Fan"));
+        manifest.setInitState(stateA);
+        manifest.setWorkingStates(List.of(
+                workingState(stateA), workingState(stateB)));
+        manifest.setInternalVariables(List.of());
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName(name);
+        dto.setManifest(manifest);
+        return dto;
+    }
+
+    private static DeviceManifest.WorkingState workingState(String tuple) {
+        DeviceManifest.WorkingState state = new DeviceManifest.WorkingState();
+        state.setName(tuple);
+        state.setTrust("trusted");
+        state.setPrivacy("public");
+        return state;
+    }
+
+    /**
+     * A mode with only one distinct working state is a constant NuSMV cannot initialise.
+     *
+     * <p>Same engine limitation as a single-value `InternalVariables` domain, one field over. Measured on
+     * 2.7.1: `VAR Power: {on}; ASSIGN init(Power) := on;` gives
+     * `WARNING: single-value variable 'p_1.Power' has been stored as a constant` then
+     * `A variable is expected in left-hand-side of assignment`, exit 1.
+     *
+     * <p>Reachable with entirely ordinary names — no reserved word, no rescue, no punctuation: modes
+     * `["Power","Fan"]` with tuples `on;low` and `on;high` leave `Power` with the single value `on`. The
+     * earlier fix closed the variable-domain spelling of this and did not reach the per-mode one.
+     *
+     * <p>Found by a property probe that generated manifests and parsed each with the real engine, which
+     * is the point worth keeping: the field-by-field approach cannot find the field nobody thought of.
+     *
+     * <p>Both directions asserted, and the accepted case matters as much as the rejection — every
+     * multi-mode bundled template relies on a mode legitimately having two or more states.
+     */
+    @Test
+    void addDeviceTemplate_whenAModeHasOnlyOneDistinctState_shouldReject() {
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, twoModeTemplate("Single State Mode", "on;low", "on;high")));
+        org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                .contains("Power")
+                .contains("one distinct working state");
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+
+        assertDoesNotThrow(() ->
+                service.addDeviceTemplate(1L, twoModeTemplate("Two State Modes", "on;low", "off;high")));
+    }
+
     /**
      * A domain too wide for the engine must be refused, because the engine fails *silently*.
      *

@@ -565,6 +565,28 @@ public class DeviceTemplateNuSmvValidator {
             if (states == null) {
                 continue;
             }
+            // A mode whose WorkingStates give it exactly one distinct value is a constant to NuSMV, and a
+            // constant cannot be initialised — the same engine limitation a single-value
+            // `InternalVariables` domain hits, one field over. Measured on 2.7.1:
+            //
+            //     VAR Power: {on};  ASSIGN init(Power) := on;
+            //       WARNING: single-value variable 'p_1.Power' has been stored as a constant
+            //       line 6: A variable is expected in left-hand-side of assignment      (exit 1)
+            //
+            // Reachable with entirely ordinary names: modes ["Power","Fan"] with states `on;low` and
+            // `on;high` gives `Power` the single value `on`. Found by a property probe that generated
+            // manifests and parsed each with the real engine, not by reading — the field-by-field
+            // approach had closed the variable-domain case and missed this one.
+            //
+            // No bundled template has this shape (all 45 scanned), so nothing that ships is refused.
+            Set<String> distinctStates = new LinkedHashSet<>(states);
+            if (distinctStates.size() == 1) {
+                throw new BadRequestException("Template '" + templateName + "': mode '" + mode
+                        + "' has only one distinct working state ('" + distinctStates.iterator().next()
+                        + "'). NuSMV stores a single-value mode as a constant, which cannot be assigned an "
+                        + "initial value, so the generated model would be rejected by the engine. Give "
+                        + "this mode at least two states, or remove it.");
+            }
             // The mode leg must be the *rescued* token, because that is what the generator emits:
             // `DeviceSmvDataFactory.extractModes` stores `sanitizeSmvToken(rawMode)` and
             // `SmvDeviceModuleBuilder.appendStatePropertyVariables` builds `trust_<mode>_<state>` from
