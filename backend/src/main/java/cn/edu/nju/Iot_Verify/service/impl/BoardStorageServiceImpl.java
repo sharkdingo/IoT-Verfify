@@ -3118,12 +3118,19 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             Map<String, DeviceManifest> templateManifests) {
         Map<String, String> errors = new LinkedHashMap<>();
         validateActiveEnvironmentDomainConsistency(errors, nodes, templateManifests);
-        // Also here, not only in `validateBoardReferences`: scene replacement
-        // (`applySceneReplacement`) reaches this method and never that one, so wiring the
-        // discrete-writer check into the reference pass alone would have left the atomic import route
-        // — one of the two the defect was reproduced through — still able to persist a board that
-        // fails every later verification.
-        validateActiveDiscreteWriterAgreement(errors, nodes, templateManifests);
+        // Deliberately NOT the pair-wise discrete-writer check. It lives only in
+        // `validateBoardReferences`, which every write route reaches — including scene replacement,
+        // via `saveBoardBatch` at the `validateBoardReferences(userId, nextNodes, nextRules, nextSpecs)`
+        // call. An earlier version of this method also ran it, justified by a claim that scene
+        // replacement reached only here; that claim was false, and it named `applySceneReplacement`,
+        // a method that does not exist.
+        //
+        // The redundancy was not harmless. Of this method's five call sites, one is inside
+        // `projectEnvironmentVariablesForNodes`, reached from `getEnvironmentVariables` — i.e.
+        // `GET /api/board/environment`. A per-declaration consistency check is idempotent and safe to
+        // repeat on a read; a *pair-wise* conflict check is not, because a board persisted before that
+        // check existed then fails a plain read of its own environment pool. Keep pair-wise invariants
+        // on the write path only.
         if (!errors.isEmpty()) {
             throw new ValidationException(errors);
         }

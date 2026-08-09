@@ -639,6 +639,78 @@ class BoardStorageServiceImplBatchTest {
     }
 
     @Test
+    void getEnvironmentVariables_whenPersistedDevicesConflictOnDiscreteEffects_staysReadable() {
+        // A pair-wise invariant must not run on a read path.
+        //
+        // The discrete-writer conflict check belongs to `validateBoardReferences`, which every write
+        // route reaches — including scene replacement, via `saveBoardBatch`. It was briefly *also*
+        // wired into `requireActiveEnvironmentDomainConsistency`, justified by a claim that scene
+        // replacement reached only the latter. That claim was false, and it named
+        // `applySceneReplacement`, a method that does not exist in this repo.
+        //
+        // The redundancy was not harmless: one of that method's five call sites sits inside
+        // `projectEnvironmentVariablesForNodes`, which `getEnvironmentVariables` reaches through
+        // `refreshEnvironmentVariablesInternal`. So `GET /api/board/environment` began rejecting any
+        // board that already held a conflicting pair — locking the user out of reading their own
+        // environment pool, for data saved before the check existed.
+        //
+        // A per-declaration consistency check is idempotent and safe to repeat on a read; a pair-wise
+        // conflict check is not. This pins the read side; the write side is pinned by
+        // `saveNodes_whenTwoDevicesDeclareConflictingDiscreteEffects_shouldRejectBeforePersisting`.
+        BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
+                nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
+
+        DeviceTemplateDto.DeviceManifest.InternalVariable airQuality =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("airQuality").isInside(false).reads(false)
+                        .falsifiableWhenCompromised(false)
+                        .values(List.of("good", "bad"))
+                        .trust("trusted").privacy("public").build();
+        DeviceTemplatePo goodWriter = DeviceTemplatePo.builder()
+                .userId(1L).name("Writer Good")
+                .manifestJson(JsonUtils.toJson(DeviceTemplateDto.DeviceManifest.builder()
+                        .name("Writer Good")
+                        .modes(List.of("MachineState")).initState("on")
+                        .workingStates(List.of(DeviceTemplateDto.DeviceManifest.WorkingState.builder()
+                                .name("on").trust("trusted").privacy("public")
+                                .dynamics(List.of(DeviceTemplateDto.DeviceManifest.Dynamic.builder()
+                                        .variableName("airQuality").value("good").build()))
+                                .build()))
+                        .internalVariables(List.of(airQuality))
+                        .impactedVariables(List.of("airQuality"))
+                        .build()))
+                .build();
+        DeviceTemplatePo badWriter = DeviceTemplatePo.builder()
+                .userId(1L).name("Writer Bad")
+                .manifestJson(JsonUtils.toJson(DeviceTemplateDto.DeviceManifest.builder()
+                        .name("Writer Bad")
+                        .modes(List.of("MachineState")).initState("on")
+                        .workingStates(List.of(DeviceTemplateDto.DeviceManifest.WorkingState.builder()
+                                .name("on").trust("trusted").privacy("public")
+                                .dynamics(List.of(DeviceTemplateDto.DeviceManifest.Dynamic.builder()
+                                        .variableName("airQuality").value("bad").build()))
+                                .build()))
+                        .internalVariables(List.of(airQuality))
+                        .impactedVariables(List.of("airQuality"))
+                        .build()))
+                .build();
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(new DeviceNodePo(), new DeviceNodePo()));
+        when(deviceNodeMapper.toDto(any())).thenReturn(
+                boardNode("writerGood1", "Writer Good", "Purifier"),
+                boardNode("writerBad1", "Writer Bad", "Stove"));
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(goodWriter, badWriter));
+        when(environmentRepo.findByUserIdOrderByNameAsc(1L)).thenReturn(new java.util.ArrayList<>());
+        // `transactionTemplate` is already stubbed in setUp; re-stubbing it here overrode that with a
+        // version that mishandled the callback argument.
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> serviceWithTemplates.getEnvironmentVariables(1L),
+                "reading the environment pool must not enforce a pair-wise write invariant");
+    }
+
+    @Test
     void saveEnvironmentVariables_rejectsActiveDevicesWithConflictingEnvironmentSemantics() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
                 nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
