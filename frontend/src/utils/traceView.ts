@@ -438,9 +438,22 @@ const formatCondition = (condition: any, translate?: TraceTranslator): string =>
     : condition?.key || condition?.attribute || (translate ? translate('app.value') : 'value')
   const relation = formatTraceRelation(condition?.relation, translate)
   const value = quoteConditionValue(condition?.value)
+  // A trust or privacy condition is about a *label* on a target, not the target's own value, and
+  // `utils/spec.ts` renders it that way (`sensitivity(...)`, `controlSource(...) = untrusted`). This
+  // renderer branched only on `state` and dropped the wrapper, so the label value landed in the slot a
+  // state value belongs in: specification 6 of the demo scene read `Front Door.LockState = "private"` —
+  // domain-impossible, since LockState's own values are locked/unlocked. A user comparing that against
+  // the correct formula preview cannot tell which one is their actual property.
+  const target = `${device}.${key}`
+  if (condition?.targetType === 'privacy') {
+    return value ? `sensitivity(${target}) ${relation} ${value}` : `sensitivity(${target})`
+  }
+  if (condition?.targetType === 'trust') {
+    return value ? `controlSource(${target}) ${relation} ${value}` : `controlSource(${target})`
+  }
   return value
-    ? `${device}.${key} ${relation} ${value}`
-    : `${device}.${key}`
+    ? `${target} ${relation} ${value}`
+    : target
 }
 
 const joinConditions = (conditions?: any[], translate?: TraceTranslator): string =>

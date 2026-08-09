@@ -54,6 +54,29 @@ describe('canOpenTracePlayback', () => {
       aConditions: [condition]
     }))).toBe('Always: Front Door.contact not in "closed,locked"')
 
+    // A trust or privacy condition is about a label on a target, not the target's own value.
+    // Rendering it bare put the label value where a state value belongs, so demo specification 6 read
+    // `Front Door.LockState = "private"` — impossible, since LockState's values are locked/unlocked.
+    // `utils/spec.ts` already wrapped these correctly; this renderer did not, so the two disagreed and
+    // the user had no way to tell which described their property.
+    expect(formatTraceSpec(JSON.stringify({
+      templateId: '1',
+      templateLabel: 'Always',
+      aConditions: [{
+        deviceLabel: 'Front Door', targetType: 'privacy', key: 'LockState',
+        relation: 'EQ', value: 'private'
+      }]
+    }))).toBe('Always: sensitivity(Front Door.LockState) = "private"')
+
+    expect(formatTraceSpec(JSON.stringify({
+      templateId: '1',
+      templateLabel: 'Always',
+      aConditions: [{
+        deviceLabel: 'Front Door', targetType: 'trust', key: 'LockState',
+        relation: 'EQ', value: 'untrusted'
+      }]
+    }))).toBe('Always: controlSource(Front Door.LockState) = "untrusted"')
+
     expect(formatTraceSpec(JSON.stringify({
       templateId: '5',
       templateLabel: 'Response',
