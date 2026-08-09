@@ -1425,6 +1425,51 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     }
 
     /**
+     * A domain too wide for the engine must be refused, because the engine fails *silently*.
+     *
+     * <p>Measured on NuSMV 2.7.1: `v: 0..300000` prints the banner and dies — rc=127, no error text,
+     * **zero verdicts** — deterministically, in batch and `-int` mode alike. `0..100000` still answers in
+     * 0.37 s, so the cliff sits between them. Nothing bounded the width before: the schema declares
+     * `LowerBound`/`UpperBound` as plain `integer`, and this validator checked only `low > high` and
+     * `low == high`. So the template persisted and every later verification of any board using it
+     * returned nothing at all, with no diagnosis pointing back at the template.
+     *
+     * <p>Both directions asserted. The 45 bundled templates and 6 example scenes top out at **101**
+     * values across 30 numeric domains, so the accepted case sits far above anything shipped while
+     * staying under the cap — a check that crept down toward 101 would start refusing real templates,
+     * and this pins that it does not.
+     */
+    @Test
+    void addDeviceTemplate_whenNumericDomainIsTooWideForTheEngine_shouldReject() {
+        DeviceManifest.InternalVariable tooWide = new DeviceManifest.InternalVariable();
+        tooWide.setName("reading");
+        tooWide.setIsInside(true);
+        tooWide.setFalsifiableWhenCompromised(false);
+        tooWide.setTrust("trusted");
+        tooWide.setPrivacy("public");
+        tooWide.setLowerBound(0);
+        tooWide.setUpperBound(RequestLimits.MAX_NUMERIC_DOMAIN_VALUES);
+
+        BadRequestException exception = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, singleVariableTemplate("Too Wide", tooWide)));
+        org.assertj.core.api.Assertions.assertThat(exception.getMessage())
+                .contains("reading")
+                .contains(String.valueOf(RequestLimits.MAX_NUMERIC_DOMAIN_VALUES));
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+
+        DeviceManifest.InternalVariable atLimit = new DeviceManifest.InternalVariable();
+        atLimit.setName("reading");
+        atLimit.setIsInside(true);
+        atLimit.setFalsifiableWhenCompromised(false);
+        atLimit.setTrust("trusted");
+        atLimit.setPrivacy("public");
+        atLimit.setLowerBound(1);
+        atLimit.setUpperBound(RequestLimits.MAX_NUMERIC_DOMAIN_VALUES);
+        assertDoesNotThrow(() ->
+                service.addDeviceTemplate(1L, singleVariableTemplate("At Limit", atLimit)));
+    }
+
+    /**
      * A domain of exactly one value is a constant to NuSMV, and a constant cannot be initialised.
      *
      * <p>Generation always emits `init(<name>) := <value>`. Measured on 2.7.1:

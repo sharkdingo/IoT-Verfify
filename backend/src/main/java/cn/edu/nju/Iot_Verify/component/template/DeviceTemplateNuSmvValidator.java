@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
@@ -206,6 +207,26 @@ public class DeviceTemplateNuSmvValidator {
         //
         // No bundled template or example scene declares a single-value domain, verified before adding
         // this, since a check that refuses a shipped template would be worse than the gap.
+        // An enormous domain does not merely slow the engine down — it makes it give up silently.
+        // Measured on NuSMV 2.7.1: `v: 0..300000` produces the banner and then nothing, rc=127, zero
+        // verdicts, deterministic across repeat runs in batch and `-int` mode. `0..100000` still answers
+        // in 0.37 s. Since the template persisted, every later verification of any board using it
+        // returned no result and no diagnosis.
+        //
+        // Bounded here rather than in the schema because the message can name the field and the count.
+        // The 45 bundled templates and 6 example scenes top out at 101 values across 30 numeric domains,
+        // so this rejects nothing that ships. `MAX_NATURAL_CHANGE_RATE_SPAN` is the precedent: the same
+        // quantity — a span — already capped for the same stated reason.
+        if (lowerBound != null && upperBound != null) {
+            long declaredValues = (long) upperBound - (long) lowerBound + 1L;
+            if (declaredValues > RequestLimits.MAX_NUMERIC_DOMAIN_VALUES) {
+                throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
+                        + name + "' declares " + declaredValues + " possible values ("
+                        + lowerBound + ".." + upperBound + "), above the limit of "
+                        + RequestLimits.MAX_NUMERIC_DOMAIN_VALUES + ". A domain this wide makes NuSMV "
+                        + "abort without producing any verdict. Narrow the range.");
+            }
+        }
         if (lowerBound != null && upperBound != null && lowerBound.equals(upperBound)) {
             throw new BadRequestException("Template '" + templateName + "': " + kind + " '"
                     + name + "' has LowerBound equal to UpperBound (" + lowerBound + "). NuSMV stores a "

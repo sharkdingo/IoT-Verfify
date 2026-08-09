@@ -36,6 +36,26 @@ public final class RequestLimits {
      * and rejected at validation rather than silently narrowed to the endpoints.
      */
     public static final int MAX_NATURAL_CHANGE_RATE_SPAN = 100;
+    /**
+     * Largest number of distinct values a numeric variable domain may declare.
+     *
+     * <p>Bounded for the same reason as the span above — it is a state-space cost — but the immediate
+     * cause is harsher than slowness. Measured on NuSMV 2.7.1: a variable declared `0..300000` makes the
+     * engine print its banner and die with **no error and zero verdicts** (rc=127), deterministically,
+     * in batch and interactive mode alike. `0..100000` still answers in 0.37 s, so the cliff sits
+     * between them; this cap keeps a wide margin below it.
+     *
+     * <p>Nothing bounded it before: `device-template-schema.json` declares `LowerBound`/`UpperBound` as
+     * plain `integer` with no `minimum`/`maximum`, and the Java validator checked only
+     * `low > high` and `low == high`. So a template with a huge domain was admitted and persisted, and
+     * every later verification of any board using it returned nothing at all —
+     * `runTemplateNuSmvPrecheck` cannot catch it because it generates model text without ever starting
+     * NuSMV, and it runs after `saveAndFlush` regardless.
+     *
+     * <p>Widest domain in the 45 bundled templates and 6 example scenes is **101** values (`0..100`,
+     * across 30 numeric domains), so this rejects nothing that ships.
+     */
+    public static final int MAX_NUMERIC_DOMAIN_VALUES = 10_000;
     /*
      * The MAX_TEMPLATE_* constants below are mirrored by `maxItems` in `backend/device-template-schema.json`,
      * which is where they are actually enforced — the template endpoint accepts a raw `JsonNode` and runs
