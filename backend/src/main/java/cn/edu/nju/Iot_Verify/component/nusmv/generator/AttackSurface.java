@@ -10,7 +10,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** The compromise choices that can actually change behavior in the generated model. */
+/**
+ * The compromise choices the generated model offers.
+ *
+ * <p>Not all of them change behaviour. {@code automationLinkCount} is {@code rules.size()}, counted
+ * before generation runs, so it includes a rule the generator then disables — an unresolvable command
+ * action, say. Such a link gets its {@code FROZENVAR} and its term in the budget sum while appearing in
+ * no transition, so an exhaustive budget search spends one of its cases on a no-op.
+ *
+ * <p>That costs accuracy in what the user is told, not soundness: measured, the budget invariant
+ * {@code count <= N} leaves every point independently selectable, so a dead link crowds out no live one
+ * and no reachable attack is missed. Narrowing the count would mean deciding which rules survive
+ * generation before generating, which is the reverse of the current order.
+ */
 public record AttackSurface(Set<String> deviceVarNames,
                             int automationLinkCount,
                             Set<String> falsifiableReadingDeviceVarNames,

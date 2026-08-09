@@ -307,6 +307,15 @@ updating target trust/privacy labels. Template internal transitions and unrelate
 dynamics are not frozen, and the attacker is not given an arbitrary actuator-state
 hijack branch.
 
+That last sentence bounds the *branches*, not the reachable states, and the difference matters when
+reading an attack result. Priority blocking negates a higher rule's whole guard including its attack
+terms, so cutting that rule's link makes a lower rule targeting the same mode live. Measured on two
+rules sharing a trigger and a target mode, budget 1: `AG (compromisedPointCount = 0 -> AG !(mode = cool))`
+is **true** while `AG !(mode = cool)` is **false** — the second rule's end state is reachable only when a
+point is spent. No transition was invented; a shadowed one was promoted, which is MEDIC §3.4's
+undelivered-command semantics. So an attack run can reach actuator states the clean model proves
+impossible, and that is faithful rather than a leak.
+
 The automation link is a logical delivery path derived from one TAP rule. Physical
 network routes, packet timing, encryption, and multiple network segments are not
 modeled.
