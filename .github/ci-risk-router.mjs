@@ -43,6 +43,15 @@ const HIGH_RISK = [
   // there admits a manifest whose generated model NuSMV refuses, which is exactly the class of defect
   // the schema entry above exists to guard.
   { pattern: /^backend\/src\/main\/java\/.*\/component\/template\//, why: 'template admission gate' },
+  // The board admission gate, for the same reason as the template one above: it decides what may be
+  // persisted, and a wrong edit there admits a board whose generated model NuSMV refuses — or refuses a
+  // board that was always legal. Both happened on this branch. `BoardStorageServiceImpl` alone carries
+  // the discrete-writer conflict check, the fix-generator prefix guard and the label-length check, and a
+  // 127-line change to it routed as "low-risk source change" and skipped Full CI.
+  { pattern: /^backend\/src\/main\/java\/.*\/service\/impl\/BoardStorageServiceImpl\.java$/,
+    why: 'board admission gate' },
+  { pattern: /^backend\/src\/main\/java\/.*\/service\/impl\/NusmvRequestValidator\.java$/,
+    why: 'verification request admission gate' },
   // Model inputs, not documentation: these scenes are read by real-NuSMV regressions and the generator
   // is their only source. They previously reached full validation through the unclassified fail-safe,
   // which gave the right tier for the wrong reason and would have gone quiet if the fallback changed.

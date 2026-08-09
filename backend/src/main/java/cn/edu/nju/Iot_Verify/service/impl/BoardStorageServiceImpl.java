@@ -2863,10 +2863,17 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             String normalized = node.getId().trim().toLowerCase(Locale.ROOT);
             for (String prefix : SmvConstants.FIX_GENERATED_NAME_PREFIXES) {
                 if (normalized.startsWith(prefix)) {
+                    // The remedy must name something the user can actually do. A device *id* is
+                    // immutable — `renameNode` changes only the label — so the request-time wording
+                    // "Rename the device" sends a user into a loop: renaming the label re-runs this
+                    // check, which fails on the id again. Ids are caller-supplied only on scene import
+                    // (`createNode` mints `device_<uuid>`), so that is the one place to change it.
                     errors.putIfAbsent("nodes[" + nodeIndex + "].id",
-                            "Device name '" + node.getId() + "' starts with '" + prefix
+                            "Device id '" + node.getId() + "' starts with '" + prefix
                                     + "', which the automatic-fix generator reserves for its own "
-                                    + "variables. Rename the device.");
+                                    + "variables. A device id cannot be changed after creation: use a "
+                                    + "different id in the imported scene, or delete this device and "
+                                    + "add it again.");
                     break;
                 }
             }

@@ -15,7 +15,54 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-08 (latest)
+### 2026-08-09 (latest)
+
+#### Fixed
+
+Ten admission and modelling defects, each reproduced against real NuSMV 2.7.1 and pinned by a
+mutation-checked regression. Nine of them share one shape: input that passed validation, persisted, and
+then failed at *run* time — either in the engine or as a wrong answer.
+
+- **A Transition `Trigger` could read a value the device never observes.** An affect-only shared
+  declaration (`IsInside: false, Reads: false`) gets no read mirror, so `device.<name>` was declared and
+  never assigned — an unconstrained variable NuSMV re-picks every step. A template declaring "switch off
+  when illuminance >= 80" fired on noise while the real reading sat at 20. Now refused at generation.
+- **`Contents[].Name` reached NuSMV unvalidated.** A content named `my photo` emitted
+  `privacy_my photo` and the engine refused the model (`at token "photo": syntax error`) for a template
+  already saved. Validated on both the schema and Java sides, like every other emitted identifier.
+- **`InternalVariables[].Values[]` reached NuSMV unvalidated**, in two steps: punctuation
+  (`{hot!, ok}` → parse error), then reserved words (`{next, ok}` → parse error, which the identifier
+  pattern cannot catch). Both validated after space removal, so the bundled values containing spaces
+  (`not authorized`, `fan only`, `pending cool`, `vent economizer`) still load. The reserved-word check is
+  case-**sensitive** because NuSMV's lexer is: `{Next, ok}` compiles, `{next, ok}` does not.
+- **Two devices could declare conflicting effects on one shared discrete value.** Each template was
+  valid alone; only the pair contradicted, and no per-template gate can see a pair. The board persisted
+  and every verification then returned HTTP 500. Now refused when the board is saved.
+- **A device id starting with an automatic-fix reserved prefix** (`param_`, `lambda_`,
+  `condition_value_`) was accepted at save and rejected on every verification afterwards. Now refused at
+  save, with a remedy that names something the user can actually do — a device id is immutable.
+- **An over-long device label reached the database as a 500.** `@Size` binds only on the REST path;
+  assistant-authored labels bypassed it and hit the column limit as a `DataIntegrityViolationException`.
+- **A partial multi-mode state tuple leaked into the mode it left blank**, silently overriding the
+  template's `InitState`. Invisible in every bundled template, because the only one with a value shared
+  between two modes has an `InitState` where the wrong and right answers coincide.
+- **An Environment Pool trust/privacy edit was discarded for affect-only rows** the panel renders as
+  editable — the label source used the read-capability set where the declaration set was required.
+- **A generated-identifier collision could pass the guard** when a mode name needed sanitising: the
+  guard compared the pre-rescue name while the generator emits the rescued one, so mode `Next` admitted a
+  template that emitted a duplicate declaration.
+- **A pair-wise write invariant was rejecting a plain read.** The discrete-writer check was wired into a
+  path reached by `GET /api/board/environment`, so a board that already held a conflicting pair could no
+  longer read its own environment pool. A per-declaration check is safe to repeat on a read; a pair-wise
+  one is not.
+
+#### Changed
+
+- The CI risk router now escalates changes to the template admission gate, the board admission gate, the
+  verification request validator, and the example scene files. Each decides what may be persisted or
+  verified; a change to one previously routed as an ordinary source change and skipped full validation.
+
+### 2026-08-08
 
 #### Fixed
 

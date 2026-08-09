@@ -190,9 +190,11 @@ The main SMV module has one namespace for device instances, generated environmen
 variables (`a_<name>`), the internal compromised-point counter, automation-link choices,
 rule probes, and
 auto-fix parameterization variables.
-Generation rejects concrete collisions in that namespace, but it does not make prefixes
-such as `a_`, `param_`, or `lambda_` part of the user contract. A device id may contain
-those strings unless the same scene can generate an identical internal name. Board writes
+Generation rejects concrete collisions in that namespace. The automatic-fix prefixes
+`param_`, `lambda_` and `condition_value_` **are** part of the user contract: a device id
+may not *start* with any of them, refused at board admission and again at request time. A
+device id may still *contain* them (`my_param_x` is fine), and `a_` is not prefix-reserved —
+a collision with a generated `a_<name>` is judged on the concrete name, not the prefix. Board writes
 preflight collisions derivable from stored environment domains, rules, attack analysis,
 and existing fixable conditions before persistence; run-specific generation repeats the
 check. Ordinary creation uses opaque `device_*` references, so this diagnostic is mainly

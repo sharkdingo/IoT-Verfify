@@ -911,7 +911,11 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                     () -> "reserved prefix must be refused at the board boundary: " + reserved);
             org.assertj.core.api.Assertions.assertThat(ex.getErrors().toString())
                     .contains(prefix)
-                    .contains("Rename the device");
+                    // The remedy must be something the user can do: a device id is immutable
+                    // (`renameNode` changes only the label), so "rename the device" sent them into a
+                    // loop — the rename re-runs this check and fails on the id again.
+                    .contains("cannot be changed after creation")
+                    .doesNotContain("Rename the device");
         }
     }
 

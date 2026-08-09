@@ -118,6 +118,31 @@ test('the template admission gate is high risk, like the contract it enforces', 
   );
 });
 
+test('the two admission gates are high risk, and ordinary service classes are not', () => {
+  // Same reasoning as the template gate: these decide what may be persisted or verified, so a wrong
+  // edit admits a board whose generated model the engine refuses — or refuses a board that was always
+  // legal. Both happened on this branch, and the 127-line change that caused the second one routed as
+  // "low-risk source change" and skipped Full CI entirely.
+  for (const [path, why] of [
+    ['backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/BoardStorageServiceImpl.java',
+      'board admission gate'],
+    ['backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/NusmvRequestValidator.java',
+      'verification request admission gate'],
+  ]) {
+    const decision = route([path], { ref: 'refs/heads/feature/x' });
+    assert.equal(decision.full, true, path);
+    assert.ok(decision.reasons.some((r) => r === why), decision.reasons.join('; '));
+  }
+
+  // The narrowing half: `service/impl/` is a large package and must not escalate wholesale, or the
+  // escalation stops meaning anything.
+  const ordinary = route(
+    ['backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/UserServiceImpl.java'],
+    { ref: 'refs/heads/feature/x' },
+  );
+  assert.equal(ordinary.full, false, ordinary.reasons.join('; '));
+});
+
 test('scene files and their generator are model inputs, not documentation', () => {
   // These reach real-NuSMV regressions, and the generator is their only source. They previously
   // escalated through the unclassified fail-safe: right tier, wrong reason, and silently dependent on

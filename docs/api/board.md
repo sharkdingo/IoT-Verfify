@@ -838,8 +838,9 @@ auto-fix parameterization identifiers active in that model.
   exactly one explicit domain: `Values` (enum, including `TRUE`/`FALSE` for booleans)
   XOR `LowerBound`+`UpperBound` (numeric range); never omit the domain, provide both
   forms, or provide only one bound** (backend `@AssertTrue isValidVariableDefinition`).
-  Numeric bounds must be ascending. Enum values must remain distinct after spaces are
-  removed for NuSMV. `NaturalChangeRate` is valid only for numeric domains and accepts exactly
+  Numeric bounds must be ascending. Enum values are emitted as bare SMV tokens, so after
+  spaces are removed each must be distinct, must match `^[a-zA-Z_][a-zA-Z0-9_]*$`, and must
+  not be a NuSMV reserved word (compared case-sensitively, matching the engine's lexer). `NaturalChangeRate` is valid only for numeric domains and accepts exactly
   a 32-bit integer such as `1` or a bracketed, ascending two-integer interval such as
   `[-1, 1]`; unbracketed pairs and extra endpoints are invalid. It is required when the numeric
   variable is shared (`IsInside=false`): `[-1, 1]` reproduces MEDIC §3.1, `0` explicitly
@@ -905,7 +906,8 @@ auto-fix parameterization identifiers active in that model.
   source. It does not model payload bytes, an upload protocol, access control, encryption,
   or successful delivery. Rules cannot attach content labels to ordinary actions that do
   not declare this capability.
-- `Content`: `Name`, optional `Description`, `Privacy`.
+- `Content`: `Name` (an SMV identifier — it is emitted as `privacy_<Name>`), optional
+  `Description`, `Privacy`.
 
 Only templates instantiated by current board devices contribute environment semantics.
 Installed but unused templates are irrelevant. Declarations for the same active shared

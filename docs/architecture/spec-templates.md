@@ -228,8 +228,9 @@ The following chains are closed loops in the current backend implementation:
    returns `null`; the caller `buildDeviceSmvMap()` collects all missing devices and
    ultimately throws `SmvGenerationException.multipleDevicesFailed()`. Custom-template
    creation runs a NuSMV probe-generate pre-check: InternalVariable/ImpactedVariable names
-   must be legal identifiers and not reserved words; mode/state names are sanitized
-   automatically at generation time; normalized identifiers of different kinds must not
+   must be legal identifiers and not reserved words; `Contents[].Name` and each
+   `InternalVariables[].Values[]` entry are validated the same way, because they too are
+   emitted verbatim; mode/state names are sanitized automatically at generation time; normalized identifiers of different kinds must not
    collide (Mode vs InternalVariable vs ImpactedVariable). InternalVariable and
    ImpactedVariable may share a name only when the InternalVariable is an environment
    variable (`IsInside=false`), never when it is local. `loadManifest()` classifies

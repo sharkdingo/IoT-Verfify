@@ -87,7 +87,7 @@ template author can act on rather than as a schema path.
 The user-facing panel derives its label from the same flag: an affect-only declaration is shown as
 *affects*, never as *reads*, because the generator emits no read mirror for it.
 
-**Condition-source eligibility is gated three times, once per writer boundary**, because a rule can
+**Condition-source eligibility is gated five times, once per writer boundary**, because a rule can
 reach storage by three routes and each was independently permissive:
 
 | Gate | Covers | Behaviour |
@@ -97,6 +97,14 @@ reach storage by three routes and each was independently permissive:
 | `BoardSemanticValidator.findVariable` | the assistant's rule/spec tools, before writing | refused with an actionable reason |
 | `BoardStorageServiceImpl.conditionSourceVariable` | persist time — REST board endpoints, assistant tools, scene import | rejected with the variable named |
 | `NusmvRequestValidator.internalVariable` | a verification/simulation request | rejected before generation |
+
+A sixth read-capability narrowing exists outside that table, deliberately. A Transition `Trigger` is
+template authoring rather than a condition source, so it has no writer boundary among the five above,
+but it is still a *read*: `SmvModelValidator.buildLegalAttributeSet` excludes an affect-only name from
+the legal trigger attributes. Without it a Trigger compiled into a comparison against `device.<name>`,
+which for an affect-only declaration is declared and never assigned — an unconstrained variable NuSMV
+re-picks every step. Measured before the check: a lamp declaring "switch off when illuminance >= 80"
+fired while the real shared value sat at 20.
 
 **Two lookups that must stay distinct, and one that must stay permissive.** Each of the gates above
 is a *narrowing* of a capability-blind existence lookup that is kept beside it and left alone: those

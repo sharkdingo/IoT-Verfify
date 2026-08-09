@@ -400,7 +400,11 @@ conditions is rejected — and `ConditionAdjustStrategy` already excludes such s
 during the search, since an empty-condition rule is fail-closed in NuSMV (never fires) and
 so could otherwise verify yet be un-appliable (`RuleDto.conditions` is `@NotEmpty`).
 Parameter and condition searches generate NuSMV-only FROZENVARs such as `param_r0_c0`
-and `lambda_r0_c0`. These names are not user-facing reserved prefixes. During
+and `lambda_r0_c0`. Their prefixes — `param_`, `lambda_`, `condition_value_` — are
+reserved: a device id may not start with one. Refused at board admission
+(`validateGeneratedMainNamespace`) and again per request
+(`NusmvRequestValidator.rejectFixGeneratedPrefix`), so the clash surfaces when the board is
+saved rather than when a fix is later requested. During
 parameterized model generation, `SmvMainModuleBuilder` checks them against the active
 `MODULE main` namespace (device instances, generated `a_<environmentName>` variables,
 the internal compromised-point counter, automation-link choices, and rule probes) and fails generation rather
