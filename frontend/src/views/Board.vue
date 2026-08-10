@@ -13770,7 +13770,7 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-sm board-text-warning" aria-hidden="true">tune</span>
               {{ t('app.advancedInitialValuesOverrides') }}
             </span>
-            <span class="material-symbols-outlined text-sm text-slate-400 dark:text-slate-500" aria-hidden="true">expand_more</span>
+            <span class="material-symbols-outlined text-sm text-slate-400" aria-hidden="true">expand_more</span>
           </summary>
 
           <p class="mt-2 text-[length:var(--iot-font-min)] leading-relaxed text-slate-500 dark:text-slate-400">
@@ -14554,11 +14554,10 @@ const counterexampleTraceHelpText = computed(() => {
       data-testid="mini-task-indicator"
       class="board-mini-tasks fixed z-40 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border shadow-2xl"
     >
-      <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 px-3 py-2">
+      <div class="flex items-center justify-between border-b border-slate-100 px-3 py-2">
         <div class="flex items-center gap-2">
           <span class="material-symbols-outlined board-text-info text-lg">pending_actions</span>
-          <span class="font-medium text-slate-700 dark:text-slate-300">{{ t('app.miniTasksPanelTitle') }}</span>
-          <span class="text-xs font-bold text-slate-700 dark:text-slate-300">
+          <span class="text-xs font-bold text-slate-700">
             {{ t('app.backgroundTasks') }}
           </span>
         </div>
@@ -14582,17 +14581,17 @@ const counterexampleTraceHelpText = computed(() => {
         >
           <div class="flex items-center justify-between gap-2">
             <div class="min-w-0">
-              <div class="truncate text-xs font-semibold text-slate-700 dark:text-slate-300">
+              <div class="truncate text-xs font-semibold text-slate-700">
                 {{ task.label }}
               </div>
-              <div class="truncate text-[11px] text-slate-500 dark:text-slate-400">
+              <div class="truncate text-[11px] text-slate-500">
                 {{ task.status }}
               </div>
             </div>
             <HintTooltip :content="miniTaskCancelLabel(task.kind)">
               <button
                 type="button"
-                class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 dark:text-slate-400 hover:board-chip-danger hover:board-text-danger"
+                class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 hover:board-chip-danger hover:board-text-danger"
                 :aria-label="miniTaskCancelLabel(task.kind)"
                 @click="cancelMiniTask(task.kind, task.id)"
               >
@@ -14601,7 +14600,7 @@ const counterexampleTraceHelpText = computed(() => {
             </HintTooltip>
           </div>
           <div
-            class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
+            class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"
             role="progressbar"
             :aria-label="`${task.label}: ${task.status}`"
             aria-valuemin="0"
@@ -14726,13 +14725,13 @@ const counterexampleTraceHelpText = computed(() => {
         </section>
 
         <!-- Attack Mode -->
-        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60 dark:border-slate-700/60">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-3">
             <div class="w-8 h-8 board-chip-danger rounded-lg flex items-center justify-center">
               <span class="material-symbols-outlined board-text-danger text-lg">warning</span>
             </div>
-            <label class="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
               {{ t('app.attackMode') }}
             </label>
             </div>
@@ -14795,7 +14794,7 @@ const counterexampleTraceHelpText = computed(() => {
             <label
               v-for="point in boardAttackSurface.points"
               :key="point.key"
-              class="flex min-h-8 items-center gap-2 border board-border-subtle bg-white dark:bg-slate-800 px-2 py-1.5 text-xs text-slate-700 dark:text-slate-300"
+              class="flex min-h-8 items-center gap-2 border board-border-subtle bg-white px-2 py-1.5 text-xs text-slate-700"
               :class="!point.selectable ? 'opacity-55' : 'cursor-pointer'"
             >
               <input
@@ -14809,7 +14808,7 @@ const counterexampleTraceHelpText = computed(() => {
                 {{ point.kind === 'DEVICE' ? 'memory' : 'conversion_path' }}
               </span>
               <span class="min-w-0 flex-1 break-words">{{ point.label }}</span>
-              <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold uppercase text-slate-500 dark:text-slate-400">
+              <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold uppercase text-slate-500">
                 {{ point.kind === 'DEVICE' ? t('app.device') : t('app.automationLink') }}
               </span>
             </label>
@@ -14858,13 +14857,13 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!-- Privacy Analysis -->
-        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60 dark:border-slate-700/60">
+        <div class="board-card board-card--raised p-3 rounded-xl border border-slate-200/60">
           <div class="flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-3">
             <div class="w-8 h-8 board-chip-info rounded-lg flex items-center justify-center">
               <span class="material-symbols-outlined board-text-info text-lg">security</span>
             </div>
-            <label class="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
               {{ t('app.privacyAnalysis') }}
             </label>
             <InfoTooltip
@@ -14900,7 +14899,7 @@ const counterexampleTraceHelpText = computed(() => {
               {{ t('app.runMode') }}
             </label>
           </div>
-          <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 dark:bg-slate-800 p-1">
+          <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
             <HintTooltip :content="t('app.syncVerificationModeHint')">
               <button
                 type="button"
@@ -14909,7 +14908,7 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="verification-mode-sync"
                 :aria-pressed="!verificationForm.isAsync"
                 class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                :class="!verificationForm.isAsync ? 'bg-white dark:bg-slate-900 board-text-success shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'"
+                :class="!verificationForm.isAsync ? 'bg-white board-text-success shadow-sm' : 'text-slate-500 hover:text-slate-700'"
               >
                 {{ t('app.runNow') }}
               </button>
@@ -14922,13 +14921,13 @@ const counterexampleTraceHelpText = computed(() => {
                 data-testid="verification-mode-async"
                 :aria-pressed="verificationForm.isAsync"
                 class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                :class="verificationForm.isAsync ? 'bg-white dark:bg-slate-900 board-text-info shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'"
+                :class="verificationForm.isAsync ? 'bg-white board-text-info shadow-sm' : 'text-slate-500 hover:text-slate-700'"
               >
                 {{ t('app.backgroundTask') }}
               </button>
             </HintTooltip>
           </div>
-          <p class="mt-2 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+          <p class="mt-2 text-[11px] leading-snug text-slate-500">
             {{ verificationForm.isAsync ? t('app.asyncVerificationModeHint') : t('app.syncVerificationModeHint') }}
           </p>
         </div>
@@ -16543,7 +16542,7 @@ const counterexampleTraceHelpText = computed(() => {
             <label
               v-for="point in boardAttackSurface.points"
               :key="point.key"
-              class="flex min-h-8 items-center gap-2 border board-border-subtle bg-white dark:bg-slate-800 px-2 py-1.5 text-xs text-slate-700 dark:text-slate-300"
+              class="flex min-h-8 items-center gap-2 border board-border-subtle bg-white px-2 py-1.5 text-xs text-slate-700"
               :class="!point.selectable ? 'opacity-55' : 'cursor-pointer'"
             >
               <input
@@ -16557,7 +16556,7 @@ const counterexampleTraceHelpText = computed(() => {
                 {{ point.kind === 'DEVICE' ? 'memory' : 'conversion_path' }}
               </span>
               <span class="min-w-0 flex-1 break-words">{{ point.label }}</span>
-              <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold uppercase text-slate-500 dark:text-slate-400">
+              <span class="shrink-0 text-[length:var(--iot-font-min)] font-semibold uppercase text-slate-500">
                 {{ point.kind === 'DEVICE' ? t('app.device') : t('app.automationLink') }}
               </span>
             </label>
@@ -16606,7 +16605,7 @@ const counterexampleTraceHelpText = computed(() => {
               {{ t('app.runMode') }}
             </label>
           </div>
-          <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 dark:bg-slate-800 p-1">
+          <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
             <HintTooltip :content="t('app.syncSimulationModeHint')">
               <button
                 type="button"

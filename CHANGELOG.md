@@ -15,7 +15,24 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-10 (latest)
+### 2026-08-11
+
+#### Fixed
+
+- **An uppercase `A_` variable name slipped past the environment-pool prefix guard.** Template admission
+  rejected an InternalVariable named `a_temperature` — the generator prepends `a_` for the environment
+  pool, so the author's name would have compiled to `a_a_temperature` and collided with another device's
+  shared `temperature`. The guard compared `startsWith("a_")` on the raw name, but NuSMV identifier
+  generation folds pool identifiers to lowercase during registration, so `A_temperature` was admitted
+  and then produced the same normalized collision the guard exists to prevent. The comparison now folds
+  the name first (`toLowerCase(Locale.ROOT)`), closing the case-variant hole. The reserved-word and 
+  mode-collision gates were already case-insensitive and are unchanged. Found by adversarial audit 
+  (round 11). The fix is defence-in-depth: the collision scenario requires both `A_temperature` and 
+  `a_temperature` to exist, but the second was already rejected by the case-sensitive check, so the 
+  vulnerability was not exploitable via normal admission. Compilation rules: 
+  [nusmv-model.md](docs/architecture/nusmv-model.md).
+
+### 2026-08-10
 
 #### Added
 

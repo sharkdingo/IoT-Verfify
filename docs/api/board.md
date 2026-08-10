@@ -831,6 +831,15 @@ ids must not collide with generated `a_<environmentName>`, the internal compromi
 counter, or
 auto-fix parameterization identifiers active in that model.
 
+Three further admission gates apply to `InternalVariables[].Name` and reject the upload
+with `400`:
+
+- `Template '<t>': InternalVariable name '<n>' must not start with 'a_' (reserved for
+  environment pool identifiers).` — compared case-insensitively.
+- `Template '<t>': InternalVariable name '<n>' is a NuSMV reserved word.`
+- `Template '<t>': InternalVariable '<n>' collides with mode name.` — compared after
+  NuSMV token normalization, so `Power` and `power` collide.
+
 - `InternalVariable`: `Name`, `Description`, required `IsInside`,
   `FalsifiableWhenCompromised`, required `Trust`, required `Privacy`,
   `LowerBound`, `UpperBound`, `NaturalChangeRate`, `Values`. `Privacy` is a model

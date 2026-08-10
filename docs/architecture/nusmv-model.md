@@ -599,6 +599,16 @@ safe nor violated.
 Mode/state/module identifiers are normalized through the generator's canonical helper.
 Template variable and impacted-variable names are cross-referenced structurally and are
 therefore rejected at persistence time if they are illegal rather than silently renamed.
+
+Two prohibitions therefore apply to author-supplied names, both enforced at template
+admission rather than by renaming. An `InternalVariable` name must not begin with `a_`
+in any letter case: the generator prepends `a_` for the environment pool, so `a_x`
+would be emitted as `a_a_x` and collide with another device's shared `x`. Mode names
+and `InternalVariable` names also share one namespace — both are emitted as
+`device.<name>` — so a variable must not collide with a mode of the same device. Both
+comparisons fold case, and the mode comparison additionally normalizes through the
+generator's token helper, so `Power` and `power` are the same name for this purpose.
+
 The validator also rejects case-insensitive collisions with generated identifiers such
 as environment aliases, trust/privacy labels, event signals, attack fields, and auto-fix
 parameters.
