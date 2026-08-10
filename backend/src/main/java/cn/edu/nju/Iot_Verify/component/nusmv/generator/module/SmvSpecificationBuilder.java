@@ -788,9 +788,26 @@ public class SmvSpecificationBuilder {
             // that choice, and it costs nothing that admission allows.
             DeviceManifest.InternalVariable shared = envVariable;
             if (shared == null) {
-                throw new InvalidConditionException("variable '" + normalizedKey + "' on device "
-                        + cond.getDeviceId() + " is device-local, so it has no value in the home to compare "
-                        + "against; use variableSource=reported");
+                // Distinguish device-local (IsInside=true) from affect-only shared (Reads=false).
+                // internalVariable contains all InternalVariables; envVariable is Reads-gated.
+                boolean isDeviceLocal = internalVariable != null && Boolean.TRUE.equals(internalVariable.getIsInside());
+                boolean isAffectOnly = internalVariable != null
+                        && !Boolean.TRUE.equals(internalVariable.getIsInside())
+                        && Boolean.FALSE.equals(internalVariable.getReads());
+
+                if (isDeviceLocal) {
+                    throw new InvalidConditionException("variable '" + normalizedKey + "' on device "
+                            + cond.getDeviceId() + " is device-local (IsInside=true), so it has no value in "
+                            + "the home to compare against; use variableSource=reported");
+                } else if (isAffectOnly) {
+                    throw new InvalidConditionException("variable '" + normalizedKey + "' on device "
+                            + cond.getDeviceId() + " is affect-only (Reads=false), so this device cannot observe "
+                            + "the environment value; use variableSource=reported to check what the device itself "
+                            + "tracks, or add a sensor device with Reads=true for this variable");
+                } else {
+                    throw new InvalidConditionException("variable '" + normalizedKey + "' on device "
+                            + cond.getDeviceId() + " is not declared in this device's InternalVariables");
+                }
             }
             return buildVariableConditionExpr("a_" + normalizedKey, cond, shared);
         }
