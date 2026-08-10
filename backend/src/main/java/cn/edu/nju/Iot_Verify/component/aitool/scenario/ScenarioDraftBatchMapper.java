@@ -100,6 +100,10 @@ public class ScenarioDraftBatchMapper {
             condition.put("targetType", requiredText(portable, "targetType"));
             condition.put("key", requiredText(portable, "key"));
             copyOptionalText(portable, condition, "propertyScope");
+            // Carried, not dropped: `RecommendScenarioTool` validates and stores this on every variable
+            // condition, and stripping it here made the draft fail admission on a field the draft actually
+            // had — an error naming a field the user never wrote and cannot fix.
+            copyOptionalText(portable, condition, "variableSource");
             condition.put("relation", requiredText(portable, "relation"));
             condition.put("value", requiredText(portable, "value"));
             conditions.add(condition);

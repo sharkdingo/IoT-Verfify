@@ -34,14 +34,32 @@ const valueSource = (fromId, fromApi, relation, value) => ({
 
 const apiSource = (fromId, fromApi) => ({ fromId, fromApi, itemType: 'api' })
 
-const condition = (deviceId, targetType, key, relation, value, propertyScope) => ({
-  deviceId,
-  targetType,
-  key,
-  ...(propertyScope ? { propertyScope } : {}),
-  relation,
-  value
-})
+/**
+ * A `variable` condition must say which of two questions it asks, so `variableSource` is a required
+ * positional argument rather than an option: `environment` reads the shared pool value ("did this
+ * actually happen in the home"), `reported` reads what this device said. They diverge once the device
+ * is compromised, so there is no safe default and every writer rejects a missing value. Passing it for
+ * a non-variable target, or omitting it for a variable one, throws here rather than emitting a scene
+ * the importer will refuse.
+ */
+const condition = (deviceId, targetType, key, relation, value, propertyScope, variableSource) => {
+  if (targetType === 'variable' && !variableSource) {
+    throw new Error(`condition(${deviceId}, ${key}): a variable condition requires variableSource `
+      + `('environment' for the value in the home, 'reported' for what this device said)`)
+  }
+  if (targetType !== 'variable' && variableSource) {
+    throw new Error(`condition(${deviceId}, ${key}): variableSource is only valid for variable conditions`)
+  }
+  return {
+    deviceId,
+    targetType,
+    key,
+    ...(propertyScope ? { propertyScope } : {}),
+    ...(variableSource ? { variableSource } : {}),
+    relation,
+    value
+  }
+}
 
 const aSpec = (templateId, aConditions) => ({
   templateId,
@@ -133,7 +151,7 @@ const scenes = [
     ],
     specs: [
       implicationSpec('4',
-        [condition('smoke_1', 'variable', 'smoke', '=', 'detected')],
+        [condition('smoke_1', 'variable', 'smoke', '=', 'detected', null, 'environment')],
         [condition('alarm_1', 'mode', 'AlertState', '=', 'siren')]),
       implicationSpec('4',
         [condition('alarm_1', 'api', 'siren', '=', 'TRUE')],
@@ -172,10 +190,10 @@ const scenes = [
     ],
     specs: [
       implicationSpec('4',
-        [condition('temperature_1', 'variable', 'temperature', '>=', '28')],
+        [condition('temperature_1', 'variable', 'temperature', '>=', '28', null, 'environment')],
         [condition('ac_1', 'mode', 'HvacMode', '=', 'cool')]),
       aSpec('3', [
-        condition('temperature_1', 'variable', 'temperature', '>=', '28'),
+        condition('temperature_1', 'variable', 'temperature', '>=', '28', null, 'environment'),
         condition('ac_1', 'mode', 'HvacMode', '=', 'heat')
       ]),
       aSpec('1', [condition('ac_1', 'privacy', 'HvacMode', '=', 'private', 'state')]),
@@ -229,18 +247,18 @@ const scenes = [
     ],
     specs: [
       implicationSpec('4',
-        [condition('occupancy_1', 'variable', 'occupancy', '=', 'absent')],
+        [condition('occupancy_1', 'variable', 'occupancy', '=', 'absent', null, 'environment')],
         [condition('alarm_1', 'mode', 'AlertState', '=', 'strobe')]),
       implicationSpec('4',
-        [condition('motion_1', 'variable', 'motion', '=', 'active')],
+        [condition('motion_1', 'variable', 'motion', '=', 'active', null, 'environment')],
         [condition('light_1', 'mode', 'SwitchState', '=', 'on')]),
       aSpec('3', [
-        condition('occupancy_1', 'variable', 'occupancy', '=', 'absent'),
+        condition('occupancy_1', 'variable', 'occupancy', '=', 'absent', null, 'environment'),
         condition('door_1', 'mode', 'LockState', '=', 'unlocked')
       ]),
       implicationSpec('5',
         [
-          condition('occupancy_1', 'variable', 'occupancy', '=', 'absent'),
+          condition('occupancy_1', 'variable', 'occupancy', '=', 'absent', null, 'environment'),
           condition('door_1', 'mode', 'LockState', '=', 'unlocked')
         ],
         [condition('door_1', 'mode', 'LockState', '=', 'locked')]),
@@ -280,13 +298,13 @@ const scenes = [
     ],
     specs: [
       implicationSpec('4',
-        [condition('rfid_1', 'variable', 'RFID', '=', 'authorized')],
+        [condition('rfid_1', 'variable', 'RFID', '=', 'authorized', null, 'reported')],
         [condition('door_1', 'mode', 'LockState', '=', 'unlocked')]),
       implicationSpec('4',
-        [condition('rfid_1', 'variable', 'RFID', '=', 'not authorized')],
+        [condition('rfid_1', 'variable', 'RFID', '=', 'not authorized', null, 'reported')],
         [condition('alarm_1', 'mode', 'AlertState', '=', 'siren')]),
       aSpec('3', [
-        condition('rfid_1', 'variable', 'RFID', '=', 'not authorized'),
+        condition('rfid_1', 'variable', 'RFID', '=', 'not authorized', null, 'reported'),
         condition('door_1', 'mode', 'LockState', '=', 'unlocked')
       ]),
       aSpec('7', [condition('door_1', 'mode', 'LockState', '=', 'unlocked')]),
@@ -299,7 +317,11 @@ fs.mkdirSync(outputDir, { recursive: true })
 for (const definition of scenes) {
   const scene = {
     schema: 'iot-verify.board-scene',
-    version: 4,
+    // 5 since `variableSource` became required on a variable spec condition. Must track
+    // `SCENE_FILE_VERSION` in frontend/src/views/board/portableScene.ts: the importer rejects a
+    // mismatch outright, so emitting 4 while writing the field produces a file that is valid under
+    // neither version.
+    version: 5,
     templates: [
       ...definition.templateNames.map(loadTemplate),
       ...(definition.extraTemplates ?? [])
@@ -309,7 +331,10 @@ for (const definition of scenes) {
     rules: definition.rules,
     specs: definition.specs
   }
-  fs.writeFileSync(path.join(outputDir, definition.file), `${JSON.stringify(scene, null, 2)}\n`, 'utf8')
+  // Tab-indented to match the committed scene files. With two spaces this script rewrote every line of
+  // all four scenes on each run, so a real one-field change arrived as a 1600-line diff and the generator
+  // read as drifted from its own output.
+  fs.writeFileSync(path.join(outputDir, definition.file), `${JSON.stringify(scene, null, '\t')}\n`, 'utf8')
 }
 
 console.log(`Generated ${scenes.length} default-template scenes in ${outputDir}`)

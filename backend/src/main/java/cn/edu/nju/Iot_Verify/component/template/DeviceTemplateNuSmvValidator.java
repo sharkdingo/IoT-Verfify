@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
+import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
 import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
 import cn.edu.nju.Iot_Verify.util.NaturalChangeRateParser;
 import lombok.RequiredArgsConstructor;
@@ -70,6 +71,24 @@ public class DeviceTemplateNuSmvValidator {
         if (manifest.getInternalVariables() != null) {
             for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
                 validateSmvIdentifier(templateName, "InternalVariable", iv.getName());
+
+                // Guard against three key-shape vulnerabilities found in adversarial audit round 9:
+                // 1. `a_` prefix collision — user declares `a_temperature`, generator prepends again → `a_a_temperature`
+                //    collides with another device's shared `temperature` whose pool is `a_temperature`.
+                if (iv.getName().startsWith("a_")) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': InternalVariable name '" + iv.getName()
+                                    + "' must not start with 'a_' (reserved for environment pool identifiers).");
+                }
+
+                // 2. Reserved-word collision — a variable named `INIT` or `case` breaks SMV parse.
+                if (DeviceNameNormalizer.NUSMV_RESERVED_WORDS.contains(iv.getName())
+                        || DeviceNameNormalizer.NUSMV_RESERVED_WORDS.contains(iv.getName().toUpperCase(Locale.ROOT))) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': InternalVariable name '" + iv.getName()
+                                    + "' is a NuSMV reserved word.");
+                }
+
                 validateTemplateVariableDomain(templateName, "InternalVariable", iv.getName(),
                         iv.getValues(), iv.getLowerBound(), iv.getUpperBound(), iv.getNaturalChangeRate(),
                         !Boolean.TRUE.equals(iv.getIsInside()));
@@ -97,6 +116,27 @@ public class DeviceTemplateNuSmvValidator {
                                     + iv.getName() + "' must not declare Reads. Read capability applies "
                                     + "only to a shared value (IsInside=false); a device always reads "
                                     + "its own local variable.");
+                }
+            }
+
+            // 3. Mode-variable name collision — if a variable matches a mode name, `device.<name>` is ambiguous
+            //    (the generator emits both mode state and variable in the device module namespace).
+            Set<String> modeNames = new HashSet<>();
+            if (manifest.getModes() != null) {
+                for (String modeName : manifest.getModes()) {
+                    if (modeName != null) {
+                        modeNames.add(modeName);
+                    }
+                }
+            }
+            if (!modeNames.isEmpty() && manifest.getInternalVariables() != null) {
+                for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
+                    if (modeNames.contains(iv.getName())) {
+                        throw new BadRequestException(
+                                "Template '" + templateName + "': InternalVariable name '" + iv.getName()
+                                        + "' collides with a mode name (both emit device." + iv.getName()
+                                        + " in the same namespace).");
+                    }
                 }
             }
         }

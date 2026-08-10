@@ -100,4 +100,37 @@ class RecommendationCapabilityViewTest {
         assertEquals("derived", view.get("descriptionSource"));
         assertTrue(String.valueOf(view.get("description")).contains("Stateful device template"));
     }
+
+    @Test
+    void deviceLocal_isABooleanEvenWhenIsInsideIsOmitted() {
+        /*
+         * `IsInside` is a tri-state Boolean and an omitted declaration means *shared* everywhere in the
+         * product. Emitting the raw value left a shared variable as `deviceLocal: null`, which matched
+         * neither branch of the rule the recommendation prompt states about this field ("environment only
+         * for deviceLocal=false; deviceLocal=true only reported"), so the model had no applicable
+         * instruction for the most common declaration shape.
+         */
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Sensor")
+                .internalVariables(List.of(
+                        DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                .name("sharedNoFlag")
+                                .lowerBound(0)
+                                .upperBound(100)
+                                .build(),
+                        DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                .name("deviceOwned")
+                                .isInside(true)
+                                .lowerBound(0)
+                                .upperBound(100)
+                                .build()))
+                .build();
+
+        Map<String, Object> view = RecommendationCapabilityView.fromManifest(manifest);
+        List<?> variables = (List<?>) view.get("variables");
+
+        assertEquals(Boolean.FALSE, ((Map<?, ?>) variables.get(0)).get("deviceLocal"),
+                "an omitted IsInside means shared, so deviceLocal must be false rather than null");
+        assertEquals(Boolean.TRUE, ((Map<?, ?>) variables.get(1)).get("deviceLocal"));
+    }
 }

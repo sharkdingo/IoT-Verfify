@@ -3,6 +3,18 @@
 export type SpecSide = 'a' | 'if' | 'then'
 export type SpecTargetType = 'state' | 'mode' | 'variable' | 'api' | 'trust' | 'privacy'
 export type SpecPropertyScope = 'state' | 'variable'
+/**
+ * Which of two different questions a `variable` condition asks. There is no default: the two
+ * answers diverge exactly when a device is compromised, so picking one for the author is what
+ * previously let a specification read SATISFIED against a falsified reading.
+ *
+ * - `environment` — the shared pool value, i.e. what actually happened in the home. No device
+ *   participates in the formula. Only valid for a shared variable (manifest `IsInside` not true),
+ *   but valid regardless of `Reads`, because the pool value exists either way.
+ * - `reported` — what this device said. Device-level, and the only meaningful answer for a
+ *   device-local variable (`IsInside: true`), which has no pool value at all.
+ */
+export type SpecVariableSource = 'environment' | 'reported'
 export type SpecTemplateId = '1' | '2' | '3' | '4' | '5' | '6' | '7'
 
 export interface SpecCondition {
@@ -13,6 +25,8 @@ export interface SpecCondition {
     targetType: SpecTargetType
     key: string
     propertyScope?: SpecPropertyScope
+    /** Required whenever `targetType` is `variable`; absent means the author has not decided yet. */
+    variableSource?: SpecVariableSource
     relation: string
     value: string
 }

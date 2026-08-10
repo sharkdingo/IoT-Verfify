@@ -704,11 +704,11 @@ class SmvGeneratorFixesTest {
         assertDoesNotThrow(() -> validator.validate(Map.of("sensor_1", firstDevice, "sensor_2", secondDevice)));
     }
 
-    // ======================== P4: env transition 用 a_var ========================
+    // ======================== P4: env transition 引用已声明标识符 ========================
 
     @Test
-    @DisplayName("P4: env transition condition uses a_time instead of clock_1.time")
-    void envTransition_usesAVar() {
+    @DisplayName("P4: env transition condition uses the declared device mirror clock_1.time")
+    void envTransition_usesDeclaredMirror() {
         DeviceManifest.InternalVariable timeVar = numericVar("time", false, 0, 23);
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
@@ -742,14 +742,73 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, AttackScenarioDto.none(), false);
 
-        // P4 核心断言：条件应为 a_time=23，而非 clock_1.time=23
-        assertTrue(result.contains("a_time=23"), "Should use a_time, got:\n" + result);
-        assertFalse(result.contains("clock_1.time=23"), "Should NOT use clock_1.time");
+        // P4 was about never comparing against an UNDECLARED identifier. `clock_1.time` satisfies
+        // that: the mirror `clock_1.time := a_time` is emitted in main for every shared reading, so
+        // the guard is fully constrained by the pool value. It is additionally the *sound* reference —
+        // a Transition is the device's own behaviour and must read what the device observes, so that a
+        // compromised sensor's falsified reading can drive its own controller. Reading `a_time`
+        // directly would bypass the attack mirror and hide sensor spoofing.
+        assertTrue(result.contains("clock_1.time := a_time"),
+                "The read mirror must be emitted, got:\n" + result);
+        assertTrue(result.contains("clock_1.time=23"),
+                "Transition guard should read the device mirror, got:\n" + result);
+        assertFalse(result.contains("a_time=23"),
+                "Transition guard must NOT read the pool ground truth directly");
+    }
+
+    /**
+     * The sensor-spoofing attack must stay reachable. A compromised device's falsified reading lives on
+     * its own mirror (`<device>.<attr>`), so an autonomous Transition guard that read `a_<attr>` instead
+     * made the device immune to its own compromise and the engine returned SATISFIED for the canonical
+     * attack.
+     */
+    @Test
+    @DisplayName("Attack: an autonomous transition guard reads the falsifiable mirror, not the pool")
+    void autonomousTransitionUnderAttack_readsFalsifiableMirror() {
+        DeviceManifest.InternalVariable smoke = numericVar("smokeLevel", false, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(smoke))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("silent").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("alarming").trust("trusted").build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("raise alarm")
+                        .startState("silent")
+                        .endState("alarming")
+                        .trigger(DeviceManifest.Trigger.builder()
+                                .attribute("smokeLevel").relation(">=").value("60").build())
+                        .build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("detector_1", "SmokeDetector",
+                List.of("Mode"), Map.of("Mode", List.of("silent", "alarming")),
+                List.of(smoke), manifest);
+        smv.getEnvVariables().put("smokeLevel", smoke);
+        smv.getCurrentModeStates().put("Mode", "silent");
+
+        DeviceVerificationDto dto = device("detector_1", "SmokeDetector");
+        dto.setState("silent");
+
+        assertDoesNotThrow(() -> validator.validate(Map.of("detector_1", smv)),
+                "the trigger attribute must be a legal read for this test to exercise the guard");
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(),
+                Map.of("detector_1", smv), AttackScenarioDto.anyUpToBudget(1), false);
+
+        // The attack branch is what a compromised sensor feeds itself; it must be on the identifier the
+        // guard reads, otherwise compromise cannot influence the device's own behaviour.
+        assertTrue(result.contains("detector_1.is_attack=TRUE"),
+                "the falsifiable mirror must carry an attack branch, got:\n" + result);
+        assertTrue(result.contains("detector_1.Mode=silent & detector_1.smokeLevel>=60: alarming;"),
+                "the transition guard must read the device mirror, got:\n" + result);
+        assertFalse(result.contains("a_smokeLevel>=60"),
+                "the guard must not bypass the attack mirror by reading the pool ground truth");
     }
 
     @Test
-    @DisplayName("Environment-triggered state transition reads the shared environment variable")
-    void stateTransitionTriggeredByEnvironment_usesSharedReference() {
+    @DisplayName("Environment-triggered state transition reads the device's own mirror of the shared value")
+    void stateTransitionTriggeredByEnvironment_usesDeviceMirror() {
         DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 0, 50);
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
@@ -776,8 +835,9 @@ class SmvGeneratorFixesTest {
         String result = mainBuilder.build(
                 1L, List.of(dto), List.of(), Map.of("heater_1", smv), AttackScenarioDto.none(), false);
 
-        assertTrue(result.contains("heater_1.Mode=off & a_temperature>=30: on;"), result);
-        assertFalse(result.contains("heater_1.temperature>=30"), result);
+        assertTrue(result.contains("heater_1.temperature := a_temperature"), result);
+        assertTrue(result.contains("heater_1.Mode=off & heater_1.temperature>=30: on;"), result);
+        assertFalse(result.contains("a_temperature>=30"), result);
     }
 
     // ======================== P5: trust/privacy next=self ========================
@@ -1108,6 +1168,11 @@ class SmvGeneratorFixesTest {
         cond.setDeviceId("ts_1");
         cond.setTargetType("variable");
         cond.setKey("temperature");
+        // `reported`, because this fixture declares the variable on the device without populating the
+        // shared/env maps, so there is no pool identifier to read. These two cases are about attack-budget
+        // injection, not about sourcing; asking `environment` here would skip the spec and make the
+        // assertions below vacuous, which is exactly how they were silently neutered.
+        cond.setVariableSource("reported");
         cond.setRelation("GT");
         cond.setValue("30");
 
@@ -1124,6 +1189,11 @@ class SmvGeneratorFixesTest {
 
         String result = specBuilder.build(List.of(spec), map, false);
 
+        // Positive first: without it, a skipped specification yields an empty string and every
+        // assertFalse below passes vacuously. Both cases here were silently neutered exactly that way
+        // when variableSource became required, and stayed green.
+        assertTrue(result.contains("ts_1.temperature>30"),
+                () -> "the specification must be emitted for this check to mean anything, got: " + result);
         assertFalse(result.contains("attackBudget<="), "Spec should not inject attackBudget constraint");
     }
 
@@ -1134,6 +1204,11 @@ class SmvGeneratorFixesTest {
         cond.setDeviceId("ts_1");
         cond.setTargetType("variable");
         cond.setKey("temperature");
+        // `reported`, because this fixture declares the variable on the device without populating the
+        // shared/env maps, so there is no pool identifier to read. These two cases are about attack-budget
+        // injection, not about sourcing; asking `environment` here would skip the spec and make the
+        // assertions below vacuous, which is exactly how they were silently neutered.
+        cond.setVariableSource("reported");
         cond.setRelation("GT");
         cond.setValue("30");
 
@@ -1150,6 +1225,8 @@ class SmvGeneratorFixesTest {
 
         String result = specBuilder.build(List.of(spec), map, false);
 
+        assertTrue(result.contains("ts_1.temperature>30"),
+                () -> "the specification must be emitted for this check to mean anything, got: " + result);
         assertFalse(result.contains("attackBudget<="), "Safety spec should not inject attackBudget constraint");
         assertFalse(result.contains(".is_attack=FALSE"),
                 "Safety checks must include attacked target paths instead of excluding them");
@@ -2699,6 +2776,79 @@ class SmvGeneratorFixesTest {
                 snapshot.generationIssues().get(0).getReason());
     }
 
+    /**
+     * The classifier matches on substrings of the thrown message, so ARM ORDER is load-bearing: both
+     * variableSource messages necessarily talk about values, and the `contains("value")` arm would otherwise
+     * claim the value is outside its domain — sending the user to check a range that was never wrong.
+     */
+    @Test
+    void missingVariableSource_isReportedAsAnUnansweredQuestionNotABadValue() {
+        DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ts_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("ts_1");
+        cond.setTargetType("variable");
+        cond.setKey("temperature");
+        cond.setRelation("GT");
+        cond.setValue("30");
+        // No variableSource: the author never chose.
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_no_source");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        specBuilder.build(List.of(spec), map, false, context);
+        SmvGenerationContext.WarningSnapshot snapshot = context.warningsSnapshot();
+
+        assertEquals(1, snapshot.skippedSpecCount());
+        assertEquals(ModelGenerationIssueReasonCode.SPEC_VARIABLE_SOURCE_REQUIRED,
+                snapshot.generationIssues().get(0).getReasonCode());
+    }
+
+    @Test
+    void environmentOnADeviceLocalVariable_isNotReportedAsAnUnansweredQuestion() {
+        // The author DID choose; the choice is illegal for this declaration. Reporting
+        // SPEC_VARIABLE_SOURCE_REQUIRED here would tell them to make a choice they already made.
+        DeviceSmvData smv = buildSmvData(
+                "ts_1", "Sensor", List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(numericVar("localOnly", true, 0, 100)),
+                DeviceManifest.builder()
+                        .modes(List.of("Mode"))
+                        .internalVariables(List.of(numericVar("localOnly", true, 0, 100)))
+                        .workingStates(List.of(
+                                DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                        .build());
+        smv.getCurrentModeStates().put("Mode", "on");
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ts_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("ts_1");
+        cond.setTargetType("variable");
+        cond.setKey("localOnly");
+        cond.setVariableSource("environment");
+        cond.setRelation("GT");
+        cond.setValue("30");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_local_env");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        specBuilder.build(List.of(spec), map, false, context);
+        SmvGenerationContext.WarningSnapshot snapshot = context.warningsSnapshot();
+
+        assertEquals(1, snapshot.skippedSpecCount());
+        assertNotEquals(ModelGenerationIssueReasonCode.SPEC_VARIABLE_SOURCE_REQUIRED,
+                snapshot.generationIssues().get(0).getReasonCode(),
+                "a chosen-but-illegal reading must not be reported as an unanswered question");
+    }
+
     @Test
     @DisplayName("P12: ambiguous multi-mode state value skips the spec with an actionable issue")
     void specStateValueAmbiguousAcrossModes_skipsWithActionableIssue() {
@@ -2762,6 +2912,8 @@ class SmvGeneratorFixesTest {
         cond.setDeviceId("sensor_1");
         cond.setTargetType("variable");
         cond.setKey("temperature");
+        // Shared declaration; each of these asserts the pool identifier a_temperature.
+        cond.setVariableSource("environment");
         cond.setRelation("GT");
         cond.setValue("30");
 
@@ -2878,6 +3030,8 @@ class SmvGeneratorFixesTest {
         cond.setDeviceId("sensor_1");
         cond.setTargetType("variable");
         cond.setKey("temperature");
+        // Shared declaration; each of these asserts the pool identifier a_temperature.
+        cond.setVariableSource("environment");
         cond.setRelation(" GT ");
         cond.setValue("30");
 
@@ -2914,6 +3068,8 @@ class SmvGeneratorFixesTest {
         cond.setDeviceId("sensor_1");
         cond.setTargetType("variable");
         cond.setKey("temperature");
+        // Shared declaration; each of these asserts the pool identifier a_temperature.
+        cond.setVariableSource("environment");
         cond.setRelation("CONTAINS");
         cond.setValue("30");
 
@@ -2957,6 +3113,8 @@ class SmvGeneratorFixesTest {
         cond.setDeviceId("sensor_1");
         cond.setTargetType("variable");
         cond.setKey("temperature");
+        // Shared declaration; each of these asserts the pool identifier a_temperature.
+        cond.setVariableSource("environment");
         cond.setRelation("GT");
         cond.setValue("30");
 

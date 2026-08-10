@@ -3,34 +3,16 @@ import type {
     SpecCondition,
     Specification
 } from '../types/spec'
-import type { DeviceTemplate } from '../types/device'
 import { specTemplateDetails } from '../assets/config/specTemplates'
 import { normalizeModelRelation } from './modelRequest'
 
 interface SpecFormulaContext {
     nodes?: DeviceNode[]
-    deviceTemplates?: DeviceTemplate[]
 }
 
 /* =========================================
  * 条件创建 & 模式判断
  * =======================================*/
-
-function getTemplateByNodeId(
-    nodeId: string,
-    nodes: DeviceNode[],
-    templates: DeviceTemplate[]
-): DeviceTemplate | undefined {
-    const n = nodes.find(n => n.id === nodeId)
-    if (!n) return undefined
-    const target = String(n.templateName || '').trim().toLowerCase()
-    return templates.find(t => {
-        const names = [t.name, t.manifest?.Name]
-            .map(name => String(name || '').trim().toLowerCase())
-            .filter(Boolean)
-        return names.includes(target)
-    })
-}
 
 const previewQuote = (value: unknown): string =>
     JSON.stringify(String(value ?? '?'))
@@ -41,22 +23,32 @@ const previewDevice = (condition: SpecCondition, context?: SpecFormulaContext): 
     return previewQuote(label || 'Unknown device')
 }
 
-const previewManifest = (
-    condition: SpecCondition,
-    context?: SpecFormulaContext
-): DeviceTemplate['manifest'] | undefined => {
-    if (!context?.nodes || !context.deviceTemplates) return undefined
-    return getTemplateByNodeId(condition.deviceId, context.nodes, context.deviceTemplates)?.manifest
-}
-
+/**
+ * Which value a `variable` condition names is read from the condition, never inferred from the
+ * manifest. Inferring it from `IsInside` is the defect this field exists to fix: every condition on
+ * a shared variable rendered (and compiled) as the pool value, so the device the author picked
+ * vanished from the formula and a falsified reading could not be expressed at all.
+ *
+ * An undecided condition renders as `<unresolved>` rather than silently picking a side; the run is
+ * blocked separately, so the preview must not look like a valid formula.
+ */
 const previewVariableTarget = (condition: SpecCondition, context?: SpecFormulaContext): string => {
     const key = String(condition.key || '').trim()
-    const variable = (previewManifest(condition, context)?.InternalVariables || [])
-        .find(candidate => candidate?.Name === key)
-    return variable?.IsInside === false
-        ? `Environment.${previewQuote(key)}`
-        : `${previewDevice(condition, context)}.${previewQuote(key)}`
+    if (condition.variableSource === 'environment') return `Environment.${previewQuote(key)}`
+    // `<device>.<key>`, matching what the generator emits and what the backend's own formula preview
+    // shows. An earlier draft wrote `<device>.reported.<key>`, which named no identifier in the model and
+    // put internal vocabulary in front of the user; the reading is conveyed by the badge and the
+    // plain-language sentence beside this formula, not by inventing a segment inside it.
+    if (condition.variableSource === 'reported') {
+        return `${previewDevice(condition, context)}.${previewQuote(key)}`
+    }
+    return `<unresolved>.${previewQuote(key)}`
 }
+
+// A trust/privacy condition with variable scope carries no `variableSource`: the generator always
+// reads the device's own label mirror for it, so there is no second question to ask.
+const previewPropertyVariableTarget = (condition: SpecCondition, context?: SpecFormulaContext): string =>
+    `${previewDevice(condition, context)}.${previewQuote(String(condition.key || '').trim())}`
 
 const previewConditionTarget = (condition: SpecCondition, context?: SpecFormulaContext): string => {
     const device = previewDevice(condition, context)
@@ -71,13 +63,13 @@ const previewConditionTarget = (condition: SpecCondition, context?: SpecFormulaC
         case 'trust': {
             const source = condition.propertyScope === 'state'
                 ? `${device}.current ${key} state`
-                : previewVariableTarget(condition, context)
+                : previewPropertyVariableTarget(condition, context)
             return `controlSource(${source})`
         }
         case 'privacy': {
             const source = condition.propertyScope === 'state'
                 ? `${device}.current ${key} state`
-                : previewVariableTarget(condition, context)
+                : previewPropertyVariableTarget(condition, context)
             return `sensitivity(${source})`
         }
         default:
@@ -88,7 +80,11 @@ const previewConditionTarget = (condition: SpecCondition, context?: SpecFormulaC
 const previewScalar = (value: unknown): string => {
     const text = String(value ?? '').trim()
     if (/^-?\d+(?:\.\d+)?$/.test(text)) return text
-    if (/^(?:true|false|trusted|untrusted|public|private)$/i.test(text)) return text.toLowerCase()
+    // Split from the label literals below: NuSMV booleans are uppercase and the backend's own preview
+    // renders them that way, so folding all six to lowercase made the same condition display as `true`
+    // here and `TRUE` there — two spellings of one formula, from the two halves of one feature.
+    if (/^(?:true|false)$/i.test(text)) return text.toUpperCase()
+    if (/^(?:trusted|untrusted|public|private)$/i.test(text)) return text.toLowerCase()
     return previewQuote(text)
 }
 
@@ -116,10 +112,36 @@ const conditionGroupToFormula = (conditions: SpecCondition[] = [], context?: Spe
     return terms.length > 0 ? terms.join(' AND ') : 'TRUE'
 }
 
+/**
+ * The subject of template 7's untrusted-label disjunct, matching what the generator resolves per target
+ * type. A label is always device-scoped — there is no pool-level `trust_a_<key>` — so no arm may render
+ * `Environment.`:
+ *   - `variable` -> `<device>."<key>"`, the device's own value label (`trust_<key>`). Reusing the VALUE
+ *     target rendered an `environment` condition as `controlSource(Environment."<key>")`, naming a label
+ *     the model never declares.
+ *   - `mode` -> the mode's currently active state, since the generator emits `trust_<mode>_<value>`, a
+ *     state-property label rather than a value label.
+ *   - everything else keeps its own target, which already names the device.
+ */
+const untrustedLabelSource = (condition: SpecCondition, context?: SpecFormulaContext): string => {
+    if (condition.targetType === 'variable') return previewPropertyVariableTarget(condition, context)
+    const device = previewDevice(condition, context)
+    const key = previewQuote(String(condition.key || '').trim())
+    if (condition.targetType === 'mode') return `${device}.current ${key} state`
+    // The generator resolves an API's untrusted source through the end state the action leads to, not the
+    // event itself.
+    if (condition.targetType === 'api') return `${device}.state after ${key}`
+    // Admission refuses trust/privacy as template-7 A conditions — the label is what the template derives.
+    // These used to fall through to a target that already returns `controlSource(...)`, so the caller wrapped
+    // it twice. Plain device target keeps the preview readable if one ever leaks past admission.
+    if (condition.targetType === 'trust' || condition.targetType === 'privacy') return `${device}.${key}`
+    return previewConditionTarget(condition, context)
+}
+
 const conditionGroupToSafetyBody = (conditions: SpecCondition[] = [], context?: SpecFormulaContext): string => {
     const conditionTerms = conditions.map(condition => conditionToFormulaTerm(condition, context)).filter(Boolean)
     const untrustedSources = conditions.map(condition => {
-        const source = previewConditionTarget(condition, context)
+        const source = untrustedLabelSource(condition, context)
         return source ? `controlSource(${source}) = untrusted` : ''
     }).filter(Boolean)
     if (conditionTerms.length === 0) return 'TRUE'
@@ -179,6 +201,9 @@ const specificationConditionKeys = (conditions: SpecCondition[] = []): string[] 
             deviceId: String(condition.deviceId || '').trim(),
             targetType,
             propertyScope: String(condition.propertyScope || '').trim().toLowerCase(),
+            // Part of the identity: the same key with the other source is a different question, so
+            // two such specifications must not compare as the same one.
+            variableSource: String(condition.variableSource || '').trim().toLowerCase(),
             key: String(condition.key || '').trim(),
             relation,
             value: normalizeSpecificationSetValue(condition.value, relation, targetType)
@@ -197,6 +222,23 @@ export const buildSpecificationSemanticKey = (specification: Pick<
 
 export const isSameSpecification = (a: Specification, b: Specification): boolean =>
     buildSpecificationSemanticKey(a) === buildSpecificationSemanticKey(b)
+
+/**
+ * A stored `variable` condition that never recorded which value it means. The backend rejects it,
+ * and no client-side default is honest, so it stays unresolved: displays mark it and the run is
+ * blocked until the author decides.
+ */
+export const isSpecConditionVariableSourceUnresolved = (condition: SpecCondition): boolean =>
+    condition?.targetType === 'variable'
+    && condition.variableSource !== 'environment'
+    && condition.variableSource !== 'reported'
+
+export const specificationsWithUnresolvedVariableSource = (
+    specifications: Specification[]
+): Specification[] =>
+    (specifications || []).filter(specification =>
+        [specification.aConditions, specification.ifConditions, specification.thenConditions]
+            .some(conditions => (conditions || []).some(isSpecConditionVariableSourceUnresolved)))
 
 export const isSpecRelatedToNode = (spec: Specification, nodeId: string) => {
     // 检查规约选择的设备

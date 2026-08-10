@@ -742,8 +742,11 @@ public class BoardStorageController {
         RecommendationAudit audit = parseRecommendationAudit(result, true, context);
         PortableSceneDto scene = convertRecommendationItem(
                 result.get("scene"), PortableSceneDto.class, context, "scene");
+        // Must track RecommendScenarioTool.SCENE_VERSION and the frontend's SCENE_FILE_VERSION. Left at 4
+        // while the tool emitted 5, this rejected every generated scenario as "unsupported" — the producer
+        // and the importer were both bumped and this validator was not.
         if (!"iot-verify.board-scene".equals(scene.getSchema())
-                || !Integer.valueOf(4).equals(scene.getVersion())) {
+                || !Integer.valueOf(5).equals(scene.getVersion())) {
             throw invalidRecommendationResult(context, "scene schema/version is unsupported");
         }
         if (scene.getTemplates() == null || scene.getDevices() == null

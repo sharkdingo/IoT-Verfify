@@ -43,6 +43,7 @@ describe('canOpenTracePlayback', () => {
       deviceId: 'door_1',
       deviceLabel: 'Front Door',
       targetType: 'variable',
+      variableSource: 'environment',
       key: 'contact',
       relation: 'NOT_IN',
       value: 'closed,locked'
@@ -52,7 +53,7 @@ describe('canOpenTracePlayback', () => {
       templateId: '1',
       templateLabel: 'Always',
       aConditions: [condition]
-    }))).toBe('Always: Front Door.contact not in "closed,locked"')
+    }))).toBe('Always: the actual contact in the home not in "closed,locked"')
 
     // A trust or privacy condition is about a label on a target, not the target's own value.
     // Rendering it bare put the label value where a state value belongs, so demo specification 6 read
@@ -82,13 +83,38 @@ describe('canOpenTracePlayback', () => {
       templateLabel: 'Response',
       ifConditions: [{ ...condition, relation: 'EQ', value: 'open' }],
       thenConditions: [{ ...condition, key: 'alarm', relation: 'GTE', value: '1' }]
-    }))).toBe('Response: IF Front Door.contact = "open", THEN eventually Front Door.alarm >= "1"')
+    }))).toBe('Response: IF the actual contact in the home = "open", '
+      + 'THEN eventually the actual alarm in the home >= "1"')
 
     expect(formatTraceSpec(JSON.stringify({
       templateId: '7',
       templateLabel: 'Safety',
       aConditions: [condition]
-    }))).toBe('Safety: Front Door.contact not in "closed,locked" must not hold with an untrusted control-source label')
+    }))).toBe('Safety: the actual contact in the home not in "closed,locked" '
+      + 'must not hold with an untrusted control-source label')
+  })
+
+  it('distinguishes the two variable questions a counterexample can be about', () => {
+    // A verdict is unreadable without knowing which value it answered: the two diverge exactly when
+    // the device is falsifying its readings, which is what most counterexamples are about.
+    const spec = (variableSource?: string) => formatTraceSpec(JSON.stringify({
+      templateId: '1',
+      templateLabel: 'Always',
+      aConditions: [{
+        deviceLabel: 'Front Door',
+        targetType: 'variable',
+        ...(variableSource ? { variableSource } : {}),
+        key: 'contact',
+        relation: 'EQ',
+        value: 'closed'
+      }]
+    }))
+
+    expect(spec('environment')).toBe('Always: the actual contact in the home = "closed"')
+    expect(spec('reported')).toBe('Always: the contact Front Door reports = "closed"')
+    expect(spec('environment')).not.toBe(spec('reported'))
+    // A stored condition with no recorded source is marked, not shown as either answer.
+    expect(spec()).toBe('Always: Front Door contact (which value it means was not recorded) = "closed"')
   })
 
   it('uses localized trace wording instead of hard-coded English', () => {

@@ -526,6 +526,7 @@ export type FormalRunReadinessIssue =
   | 'NO_DEVICES'
   | 'NO_SPECIFICATIONS'
   | 'RULE_TRIGGER_REQUIRED'
+  | 'SPEC_VARIABLE_SOURCE_REQUIRED'
   | 'INVALID_SIMULATION_STEPS'
 
 export const formalRunReadinessIssue = (
@@ -535,11 +536,15 @@ export const formalRunReadinessIssue = (
     specificationCount: number
     rulesHaveTriggers: boolean
     simulationStepsValid: boolean
+    specVariableSourcesResolved: boolean
   }
 ): FormalRunReadinessIssue | null => {
   if (input.deviceCount <= 0) return 'NO_DEVICES'
   if (kind === 'verification' && input.specificationCount <= 0) return 'NO_SPECIFICATIONS'
   if (!input.rulesHaveTriggers) return 'RULE_TRIGGER_REQUIRED'
+  // A stored condition that never said which value it means is unresolved, not defaultable: the
+  // request would be refused at admission, and either guess changes what the specification asserts.
+  if (!input.specVariableSourcesResolved) return 'SPEC_VARIABLE_SOURCE_REQUIRED'
   if (kind === 'simulation' && !input.simulationStepsValid) return 'INVALID_SIMULATION_STEPS'
   return null
 }
@@ -661,7 +666,8 @@ import {
   buildSpecificationSemanticKey,
   buildSpecFormula,
   isSameSpecification,
-  isSpecRelatedToNode
+  isSpecRelatedToNode,
+  specificationsWithUnresolvedVariableSource
 } from '../utils/spec'
 import { assertRuleHasTrigger, getLinkPoints, ruleSimilarityReasonKey } from '../utils/rule'
 import {
@@ -690,6 +696,8 @@ import {
   getAttackSelectionIssue,
   selectedAttackPoints
 } from './board/attackSurface'
+import { verdictVariableSourceKeys } from './board/verdictVariableSource'
+import { recommendedReadingKey } from './board/recommendedReadingSuffix'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { requestInteractiveCancellation } from '@/utils/interactiveCancellation'
 import {
@@ -2949,7 +2957,13 @@ const formatRecommendedSpecConditionTarget = (condition: any): string => {
     const dimension = targetType === 'trust' ? t('app.sourceLabel') : t('app.sensitivityLabel')
     return `${device} · ${property} · ${dimension}`
   }
-  return key ? `${device}.${displayKey}` : device
+  if (key) {
+    // Names the reading the card will persist on Apply, in the same words the condition rows and verdict
+    // badges use. Rule extracted to `board/recommendedReadingSuffix.ts` so it is unit-testable.
+    const readingKey = recommendedReadingKey(targetType, condition?.variableSource)
+    return readingKey ? `${device}.${displayKey} · ${t(readingKey)}` : `${device}.${displayKey}`
+  }
+  return device
 }
 
 const formatRecommendedSpecConditionValue = (condition: any): string =>
@@ -5948,8 +5962,7 @@ const handleAddSpec = async (data: {
         }
         attemptedSpec = newSpec
         newSpec.formula = buildSpecFormula(newSpec, {
-          nodes: nodes.value,
-          deviceTemplates: deviceTemplates.value
+          nodes: nodes.value
         })
         newSpec.devices = buildSpecDeviceRefsFromConditions([
           ...(aConditions || []),
@@ -6187,8 +6200,7 @@ const getChatSuggestionContext = () => {
     specs: specifications.value.slice(0, 6).map((spec, index) => ({
       name: getSpecResultDisplayTitle(spec, index),
       formulaPreview: buildSpecFormula(spec, {
-        nodes: nodes.value,
-        deviceTemplates: deviceTemplates.value
+        nodes: nodes.value
       })
     })),
     templates: deviceTemplates.value
@@ -7815,8 +7827,7 @@ const formatScenarioRuleAction = (rule: RuleForm): string => {
 
 const formatScenarioSpecFormula = (spec: Specification): string =>
   buildSpecFormula(spec, {
-    nodes: recommendedScenarioScene.value?.devices || [],
-    deviceTemplates: recommendedScenarioScene.value?.templates || []
+    nodes: recommendedScenarioScene.value?.devices || []
   })
 
 const recommendedSpecTemplateLabel = (templateId: unknown): string => {
@@ -7887,8 +7898,7 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
       ifConditions,
       thenConditions
     }, {
-      nodes: nodes.value,
-      deviceTemplates: deviceTemplates.value
+      nodes: nodes.value
     })
   }
 
@@ -8393,6 +8403,9 @@ const boardRunBlockedReason = computed(() => {
   return ''
 })
 
+const specVariableSourcesResolved = computed(() =>
+  specificationsWithUnresolvedVariableSource(specifications.value).length === 0)
+
 const rulesHaveValidTriggers = computed(() => {
   try {
     rules.value.forEach((rule, index) => assertRuleHasTrigger(rule, index))
@@ -8411,6 +8424,7 @@ const formalRunIssueMessage = (
   }
   if (issue === 'NO_SPECIFICATIONS') return t('app.noSpecsToVerify')
   if (issue === 'RULE_TRIGGER_REQUIRED') return t('app.ruleTriggerSourceRequired')
+  if (issue === 'SPEC_VARIABLE_SOURCE_REQUIRED') return t('app.specVariableSourceUnresolvedBlocked')
   if (issue === 'INVALID_SIMULATION_STEPS') {
     return t('app.integerBetween', {
       field: t('app.simulationSteps'),
@@ -8425,7 +8439,8 @@ const verificationReadinessIssue = computed(() => formalRunReadinessIssue('verif
   deviceCount: nodes.value.length,
   specificationCount: specifications.value.length,
   rulesHaveTriggers: rulesHaveValidTriggers.value,
-  simulationStepsValid: true
+  simulationStepsValid: true,
+  specVariableSourcesResolved: specVariableSourcesResolved.value
 }))
 
 const simulationReadinessIssue = computed(() => formalRunReadinessIssue('simulation', {
@@ -8434,7 +8449,8 @@ const simulationReadinessIssue = computed(() => formalRunReadinessIssue('simulat
   rulesHaveTriggers: rulesHaveValidTriggers.value,
   simulationStepsValid: Number.isInteger(simulationForm.steps)
     && simulationForm.steps >= SIMULATION_STEPS_MIN
-    && simulationForm.steps <= SIMULATION_STEPS_MAX
+    && simulationForm.steps <= SIMULATION_STEPS_MAX,
+  specVariableSourcesResolved: specVariableSourcesResolved.value
 }))
 
 const verificationRunBlockedReason = computed(() => {
@@ -13193,6 +13209,11 @@ const showCanvasEmptyState = computed(() =>
 const verificationGenerationWarningCounts = computed(() => getGenerationWarningCounts(verificationResult.value))
 const verificationGenerationIssues = computed(() => getGenerationIssues(verificationResult.value))
 const verificationCheckLogs = computed(() => verificationResult.value?.checkLogs || [])
+// Rule extracted to `board/verdictVariableSource.ts` so it is unit-testable; this only resolves the id
+// against the current specifications and translates.
+const verdictVariableSourceLabels = (specId: string | undefined): string[] =>
+  verdictVariableSourceKeys(specifications.value.find(candidate => candidate.id === specId)).map(key => t(key))
+
 const verificationSpecResultSummary = computed(() => {
   const results = normalizeSpecResults(verificationResult.value?.specResults).map((result, index) => {
     const submittedSpecSnapshot = {
@@ -13202,6 +13223,7 @@ const verificationSpecResultSummary = computed(() => {
     return {
       ...result,
       displayTitle: getSpecResultDisplayTitle(submittedSpecSnapshot, index),
+      variableSourceLabels: verdictVariableSourceLabels(result.specId),
       presentation: result.outcome === 'SATISFIED'
         ? {
             borderClass: 'board-border-subtle',
@@ -17402,6 +17424,15 @@ const counterexampleTraceHelpText = computed(() => {
                       <span class="text-xs font-semibold text-slate-500">#{{ Number(index) + 1 }}</span>
                       <span class="text-xs font-semibold text-slate-700">{{ result.displayTitle }}</span>
                       <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold text-slate-600">{{ result.formulaKind }}</span>
+                      <!-- Names the reading this verdict is about. Two specs asking different questions of
+                           one key share a template label, so without this they read as identical rows with
+                           opposite verdicts. -->
+                      <span
+                        v-for="label in result.variableSourceLabels"
+                        :key="label"
+                        class="rounded bg-slate-100 px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-semibold text-slate-600"
+                        data-testid="spec-result-variable-source"
+                      >{{ label }}</span>
                     </div>
                     <div class="mt-2 rounded-md bg-slate-50 px-2 py-1.5">
                       <!-- slate-500, not slate-400: this labels the formula below it, and slate-400 measured
@@ -17782,8 +17813,10 @@ const counterexampleTraceHelpText = computed(() => {
           click that changes nothing. What earns the height is the content: which automation produced this
           state. That stays unconditionally visible, so nothing moved behind an interaction.
 
-          Device and environment values are deliberately absent; the canvas nodes are their authority and
-          render them more richly (previous value, changed tint, trust and privacy pills).
+          DEVICE values are deliberately absent; the canvas nodes are their authority and render them more
+          richly (previous value, changed tint, trust and privacy pills). Environment values are NOT covered
+          by that authority — a canvas node shows what its device reported, never the shared pool value — so
+          the pool is rendered here instead.
         -->
         <div
           class="mb-2 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1"
@@ -17793,6 +17826,27 @@ const counterexampleTraceHelpText = computed(() => {
             {{ traceAnimationState.selectedStateIndex === 0
               ? t('app.traceVisualization.initialModelState')
               : t('app.traceVisualization.rulesAppliedToReachState') }}
+          </span>
+          <!--
+            The shared pool's own values, as absolutes. The canvas nodes render each device's *reported*
+            reading, and the change popover lists only environment values that CHANGED — so in the case this
+            whole distinction exists for (the home holds 20, a compromised sensor reports 40) the pool value
+            is stable, produces no change row, and appeared nowhere. The counterexample could not show the
+            divergence it was proving. Absolute, always, beside the reported readings.
+          -->
+          <span
+            v-if="activePlaybackEnvironmentVariables.length > 0"
+            class="flex min-w-0 flex-wrap items-center gap-1.5"
+            data-testid="trace-step-environment-values"
+          >
+            <span class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
+              {{ t('app.environmentPool') }}
+            </span>
+            <span
+              v-for="variable in activePlaybackEnvironmentVariables"
+              :key="variable.name"
+              class="rounded border border-[color:var(--board-border)] bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-[color:var(--board-text)] dark:bg-slate-800"
+            >{{ variable.name }} = {{ formatPlaybackEnvironmentModelToken(variable.name, variable.value) }}</span>
           </span>
           <span
             v-if="traceAnimationState.selectedStateIndex > 0 && currentTraceTriggeredRules.length > 0"

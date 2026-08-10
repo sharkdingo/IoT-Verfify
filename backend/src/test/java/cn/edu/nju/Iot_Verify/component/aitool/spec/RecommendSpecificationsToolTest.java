@@ -141,7 +141,7 @@ class RecommendSpecificationsToolTest {
                               "templateId": "1",
                               "templateLabel": "always",
                               "aConditions": [
-                                {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","key":"temperature","relation":">","value":"30"}
+                                {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","variableSource":"reported","key":"temperature","relation":">","value":"30"}
                               ],
                               "ifConditions": [],
                               "thenConditions": [],
@@ -394,7 +394,7 @@ class RecommendSpecificationsToolTest {
                               "templateLabel": "immediate",
                               "aConditions": [],
                               "ifConditions": [
-                                {"side":"then","deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","key":"temperature","relation":">","value":"30"}
+                                {"side":"then","deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","variableSource":"reported","key":"temperature","relation":">","value":"30"}
                               ],
                               "thenConditions": [
                                 {"side":"if","deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"state","key":"state","relation":"=","value":"safe"}
@@ -429,7 +429,7 @@ class RecommendSpecificationsToolTest {
                               "templateLabel": "always",
                               "aConditions": [],
                               "ifConditions": [
-                                {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","key":"temperature","relation":">","value":"30"}
+                                {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","variableSource":"reported","key":"temperature","relation":">","value":"30"}
                               ],
                               "thenConditions": [
                                 {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"state","key":"state","relation":"=","value":"safe"}
@@ -555,6 +555,35 @@ class RecommendSpecificationsToolTest {
 
         assertEquals(0, json.path("count").asInt());
         assertEquals("missingSpecificationRationale",
+                json.path("filteredItems").get(0).path("reasonCode").asText());
+    }
+
+    @Test
+    void execute_filtersVariableCandidateThatDidNotSayWhichValueItMeans() throws Exception {
+        /*
+         * Filtered and counted like any other malformed field. Unvalidated, this candidate reached the
+         * client and threw a whole-response contract error there, discarding every *other* recommendation
+         * in the batch over one bad row — and the user could accept a recommendation that `addSpec` would
+         * then refuse.
+         */
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {"recommendations":[{
+                          "rationale":"Keep the room from overheating",
+                          "templateId":"1",
+                          "aConditions":[{"deviceId":"node-thermostat","targetType":"variable",
+                            "key":"temperature","relation":">","value":"30"}],
+                          "ifConditions":[],"thenConditions":[]
+                        }]}
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals(0, json.path("count").asInt());
+        assertEquals("conditionMissingVariableSource",
                 json.path("filteredItems").get(0).path("reasonCode").asText());
     }
 

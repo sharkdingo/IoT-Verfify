@@ -33,7 +33,7 @@ import {
   validateDeviceRuntimeConfig,
   type DeviceRuntimeConfig
 } from '@/utils/deviceRuntime'
-import { buildSpecFormula } from '@/utils/spec'
+import { buildSpecFormula, isSpecConditionVariableSourceUnresolved } from '@/utils/spec'
 import {
   mergeSourcedEnvironmentPatches,
   type EnvironmentPatchConflict
@@ -922,6 +922,7 @@ const editingConditionData = reactive<Partial<SpecCondition>>({
   targetType: 'state',
   key: '',
   propertyScope: undefined,
+  variableSource: undefined,
   relation: '=',
   value: ''
 })
@@ -988,7 +989,7 @@ const openConditionDialog = (side: SpecSide, index: number = -1) => {
     // Edit existing condition
     const conditions = getConditionsForSide(side)
     const condition = conditions[index]
-    Object.assign(editingConditionData, { propertyScope: undefined }, condition)
+    Object.assign(editingConditionData, { propertyScope: undefined, variableSource: undefined }, condition)
   } else {
     // Add new condition - reset to defaults
     Object.assign(editingConditionData, {
@@ -999,6 +1000,7 @@ const openConditionDialog = (side: SpecSide, index: number = -1) => {
       targetType: 'state',
       key: '',
       propertyScope: undefined,
+      variableSource: undefined,
       relation: '=',
       value: ''
     })
@@ -1019,6 +1021,12 @@ const specConditionBlockedReason = computed<string | null>(() => {
   if ((draft.targetType === 'trust' || draft.targetType === 'privacy')
     && !['state', 'variable'].includes(draft.propertyScope || '')) {
     return t('app.selectProperty')
+  }
+  // Never defaulted: the two readings differ when a device is compromised, so presenting either as
+  // the author's intent is the defect this choice exists to fix.
+  if (draft.targetType === 'variable'
+    && draft.variableSource !== 'environment' && draft.variableSource !== 'reported') {
+    return t('app.specVariableSourceRequired')
   }
   // An API condition only records that the API was called, so it carries no value.
   if (draft.targetType !== 'api' && !draft.value?.trim()) return t('app.enterValue')
@@ -1057,6 +1065,11 @@ const saveCondition = () => {
     key: keyValue,
     ...((editingConditionData.targetType === 'trust' || editingConditionData.targetType === 'privacy')
       ? { propertyScope: editingConditionData.propertyScope as 'state' | 'variable' }
+      : {}),
+    // Present only on a variable condition, and only because the author picked it — the blocked
+    // reason above refuses to save without one.
+    ...(editingConditionData.targetType === 'variable'
+      ? { variableSource: editingConditionData.variableSource }
       : {}),
     relation: editingConditionData.relation || '=',
     value: finalValue
@@ -1149,6 +1162,65 @@ const decodePropertySelection = (value: string): { propertyScope: 'state' | 'var
   }
   return null
 }
+
+/**
+ * A `variable` condition asks one of two different questions, and the author must say which. The
+ * shared-pool answer ("did this happen in the home") and the device's own answer ("what this device
+ * reported") only diverge when the device is compromised — which is exactly the case a
+ * specification exists to catch — so neither is preselected for a shared variable.
+ *
+ * A device-local variable has no value in the home at all, so only the device's own answer exists
+ * and it is selected automatically: there is nothing to choose between.
+ */
+const editingConditionVariableIsDeviceLocal = computed(() => {
+  if (editingConditionData.targetType !== 'variable' || !editingConditionData.key) return false
+  const manifest = getDeviceManifestForCondition(editingConditionData.deviceId || '')
+  const variable = Array.isArray(manifest?.InternalVariables)
+    ? manifest.InternalVariables.find((item: any) => item?.Name === editingConditionData.key)
+    : null
+  return variable?.IsInside === true
+})
+
+/**
+ * Whether the selected reading can actually diverge in a run that models compromise.
+ *
+ * The general help text explains that the two readings differ "once a device is compromised", which is
+ * true but leaves the user to answer the only question that decides their choice — can *this* device
+ * falsify *this* reading? That is a declared manifest fact, already the predicate behind the attack-surface
+ * count, and already one property access away on the variable resolved above. Without it the choice looks
+ * arbitrary exactly when it is inert, and unremarkable exactly when it matters.
+ */
+const editingConditionVariableIsFalsifiable = computed(() => {
+  if (editingConditionData.targetType !== 'variable' || !editingConditionData.key) return false
+  const manifest = getDeviceManifestForCondition(editingConditionData.deviceId || '')
+  const variable = Array.isArray(manifest?.InternalVariables)
+    ? manifest.InternalVariables.find((item: any) => item?.Name === editingConditionData.key)
+    : null
+  return variable?.FalsifiableWhenCompromised === true
+})
+
+const editingConditionVariableSourceOptions = computed<Array<{ value: 'environment' | 'reported', label: string }>>(() => {
+  if (editingConditionData.targetType !== 'variable' || !editingConditionData.key) return []
+  const reported = {
+    value: 'reported' as const,
+    label: t('app.specVariableSourceReported', { device: getDeviceLabel(editingConditionData.deviceId || '') })
+  }
+  if (editingConditionVariableIsDeviceLocal.value) return [reported]
+  return [{ value: 'environment' as const, label: t('app.specVariableSourceEnvironment') }, reported]
+})
+
+// Only the no-alternative case is auto-filled. A stale pick is cleared rather than carried over,
+// so switching to a device-local variable cannot leave `environment` selected — the backend refuses
+// that combination, and the author never chose it for this variable.
+watch(editingConditionVariableSourceOptions, options => {
+  if (options.length === 1) {
+    editingConditionData.variableSource = options[0].value
+    return
+  }
+  if (!options.some(option => option.value === editingConditionData.variableSource)) {
+    editingConditionData.variableSource = undefined
+  }
+}, { immediate: true })
 
 const conditionKeySelection = computed({
   get: () => {
@@ -1257,6 +1329,20 @@ const formatConditionPropertyLabel = (condition: Pick<SpecCondition, 'deviceId' 
   return condition.key ? formatTemplateModelToken(template, condition.key) : t('app.value')
 }
 
+/**
+ * A short badge naming which value a stored variable condition asks about, so a saved row states it
+ * rather than leaving the reader to guess. An older condition with no recorded choice reads as
+ * unresolved; the run is blocked until it is re-edited.
+ */
+const formatConditionVariableSourceLabel = (
+  condition: Pick<SpecCondition, 'targetType' | 'variableSource' | 'deviceId'>
+): string | null => {
+  if (condition.targetType !== 'variable') return null
+  if (condition.variableSource === 'environment') return t('app.specVariableSourceEnvironmentShort')
+  if (condition.variableSource === 'reported') return t('app.specVariableSourceReportedShort')
+  return t('app.specVariableSourceUnresolvedShort')
+}
+
 // Computed available keys for current editing condition
 const availableKeys = computed(() => {
   if (!editingConditionData.deviceId) return []
@@ -1267,6 +1353,10 @@ const availableKeys = computed(() => {
 const handleTargetTypeChange = () => {
   editingConditionData.key = ''
   editingConditionData.propertyScope = undefined
+  // Cleared alongside its siblings rather than relying on the options watcher collapsing to []. The
+  // watcher does currently clear it, but a reset function that resets two of three per-target fields
+  // invites the next reader to assume the third is intentionally sticky.
+  editingConditionData.variableSource = undefined
   editingConditionData.value = ''
   // Reset relation to default based on new type
   if (editingConditionData.targetType === 'state') {
@@ -1457,8 +1547,7 @@ const updateFormula = () => {
     ifConditions: specForm.ifConditions,
     thenConditions: specForm.thenConditions
   }, {
-    nodes: props.nodes,
-    deviceTemplates: props.deviceTemplates
+    nodes: props.nodes
   })
 }
 
@@ -1476,7 +1565,15 @@ const naturalLanguageRule = computed(() => {
     const keyName = formatConditionPropertyLabel(condition)
     switch (condition.targetType) {
       case 'variable':
-        return t('app.specPreviewVariableSubject', { key: keyName, device: deviceName })
+        // The plain-language sentence must name the same question the formula compiles, otherwise a
+        // reader checking one against the other cannot tell which one their specification is.
+        if (condition.variableSource === 'environment') {
+          return t('app.specPreviewVariableEnvironmentSubject', { key: keyName })
+        }
+        if (condition.variableSource === 'reported') {
+          return t('app.specPreviewVariableReportedSubject', { key: keyName, device: deviceName })
+        }
+        return t('app.specPreviewVariableSourceUnresolvedSubject', { key: keyName, device: deviceName })
       case 'mode':
         return t('app.specPreviewModeSubject', { key: keyName, device: deviceName })
       case 'state':
@@ -3246,6 +3343,17 @@ watch(() => props.readOnly, readOnly => {
                         </span>
                         <span class="text-slate-500 flex-shrink-0">·</span>
                         <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <!-- Which of the two variable questions this row asks. A row with no
+                             recorded choice is marked unresolved rather than shown as either. -->
+                        <span
+                          v-if="condition.targetType === 'variable'"
+                          class="text-[length:var(--iot-font-min)] px-1 py-0.5 rounded flex-shrink-0 border"
+                          :class="isSpecConditionVariableSourceUnresolved(condition)
+                            ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
+                            : 'text-slate-600 bg-slate-100 border-slate-200'"
+                          :title="formatConditionVariableSourceLabel(condition) || ''"
+                          data-testid="spec-condition-row-variable-source"
+                        >{{ formatConditionVariableSourceLabel(condition) }}</span>
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
@@ -3333,6 +3441,17 @@ watch(() => props.readOnly, readOnly => {
                         </span>
                         <span class="text-slate-500 flex-shrink-0">·</span>
                         <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <!-- Which of the two variable questions this row asks. A row with no
+                             recorded choice is marked unresolved rather than shown as either. -->
+                        <span
+                          v-if="condition.targetType === 'variable'"
+                          class="text-[length:var(--iot-font-min)] px-1 py-0.5 rounded flex-shrink-0 border"
+                          :class="isSpecConditionVariableSourceUnresolved(condition)
+                            ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
+                            : 'text-slate-600 bg-slate-100 border-slate-200'"
+                          :title="formatConditionVariableSourceLabel(condition) || ''"
+                          data-testid="spec-condition-row-variable-source"
+                        >{{ formatConditionVariableSourceLabel(condition) }}</span>
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
@@ -3420,6 +3539,17 @@ watch(() => props.readOnly, readOnly => {
                         </span>
                         <span class="text-slate-500 flex-shrink-0">·</span>
                         <span class="text-[length:var(--iot-font-min)] board-text-warning font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <!-- Which of the two variable questions this row asks. A row with no
+                             recorded choice is marked unresolved rather than shown as either. -->
+                        <span
+                          v-if="condition.targetType === 'variable'"
+                          class="text-[length:var(--iot-font-min)] px-1 py-0.5 rounded flex-shrink-0 border"
+                          :class="isSpecConditionVariableSourceUnresolved(condition)
+                            ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
+                            : 'text-slate-600 bg-slate-100 border-slate-200'"
+                          :title="formatConditionVariableSourceLabel(condition) || ''"
+                          data-testid="spec-condition-row-variable-source"
+                        >{{ formatConditionVariableSourceLabel(condition) }}</span>
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ getRelationLabel(condition.relation || '=') }}
                         </span>
@@ -3645,6 +3775,63 @@ watch(() => props.readOnly, readOnly => {
           </div>
         </div>
 
+        <!--
+          Which value the condition means. Radios rather than a dropdown so both questions are
+          visible at once: they read almost identically until a device is falsifying its readings,
+          which is the case the author needs to see before choosing.
+        -->
+        <fieldset
+          class="space-y-2"
+          v-if="editingConditionVariableSourceOptions.length > 0"
+          data-testid="spec-condition-variable-source"
+        >
+          <legend class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span class="text-sm font-bold text-black">{{ t('app.specVariableSourceTitle') }}</span>
+          </legend>
+          <label
+            v-for="option in editingConditionVariableSourceOptions"
+            :key="option.value"
+            class="flex items-start gap-2 w-full bg-white border-2 rounded-lg px-3 py-2.5 text-sm text-black cursor-pointer"
+            :class="editingConditionData.variableSource === option.value
+              ? 'border-[color:var(--accent-border)]'
+              : 'border-slate-300'"
+            :data-testid="`spec-condition-variable-source-${option.value}`"
+          >
+            <!-- `name` is what makes these ONE radio group. Without it the browser treats each input as
+                 its own group, so arrow keys do not move between the two options and a screen reader
+                 announces two independent controls instead of "1 of 2". -->
+            <input
+              type="radio"
+              name="spec-condition-variable-source"
+              class="mt-0.5 flex-shrink-0"
+              :value="option.value"
+              :checked="editingConditionData.variableSource === option.value"
+              @change="editingConditionData.variableSource = option.value"
+            />
+            <span class="min-w-0">{{ option.label }}</span>
+          </label>
+          <p class="text-xs text-slate-600" data-testid="spec-condition-variable-source-help">
+            {{ editingConditionVariableSourceOptions.length === 1
+              ? t('app.specVariableSourceDeviceLocalHelp')
+              : t('app.specVariableSourceHelp') }}
+          </p>
+          <!-- The general help says the two readings differ "once a device is compromised". Whether THIS
+               device can falsify THIS reading is the fact that decides the choice, it is declared in the
+               manifest, and without it the choice looks arbitrary exactly when it is inert. -->
+          <p
+            v-if="editingConditionVariableSourceOptions.length > 1"
+            class="text-xs text-slate-600"
+            data-testid="spec-condition-variable-source-falsifiable"
+          >
+            {{ editingConditionVariableIsFalsifiable
+              ? t('app.specVariableSourceFalsifiableHint')
+              : t('app.specVariableSourceNotFalsifiableHint') }}
+          </p>
+        </fieldset>
+
         <!-- Condition Details -->
         <div class="space-y-2" v-if="showRelationAndValue">
           <div class="flex items-center gap-2">
@@ -3716,6 +3903,14 @@ watch(() => props.readOnly, readOnly => {
             <template v-if="editingConditionData.targetType !== 'state' && editingConditionData.key">
               <span class="text-slate-500">.</span>
               <span class="board-text-danger font-bold">{{ formatEditingConditionModelToken(editingConditionData.key) }}</span>
+            </template>
+            <!-- Without this the preview reads the same for both questions, which is what let an
+                 author believe they had pinned the device's own reading. -->
+            <template v-if="editingConditionData.targetType === 'variable' && editingConditionData.key">
+              <span
+                class="ml-1 text-slate-600"
+                data-testid="spec-condition-preview-variable-source"
+              >({{ formatConditionVariableSourceLabel(editingConditionData as SpecCondition) }})</span>
             </template>
             <template v-if="showRelationAndValue">
               <span class="text-slate-500 mx-1">{{ getRelationLabel(editingConditionData.relation || '=') }}</span>

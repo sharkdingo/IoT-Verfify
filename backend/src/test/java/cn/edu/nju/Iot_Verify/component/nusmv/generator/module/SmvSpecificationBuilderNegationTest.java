@@ -233,8 +233,12 @@ class SmvSpecificationBuilderNegationTest {
         DeviceSmvData smv = new DeviceSmvData();
         smv.setVarName("sensor_1");
         smv.setVariables(List.of(temperature, humidity));
+        // Both declarations are device-local (IsInside=true above), so `reported` is the only meaningful
+        // source and it is what the asserted `sensor_1.` identifiers require.
         SpecConditionDto hot = buildCondition("sensor_1", "variable", "temperature", ">", "30");
+        hot.setVariableSource("reported");
         SpecConditionDto humid = buildCondition("sensor_1", "variable", "humidity", ">", "70");
+        humid.setVariableSource("reported");
         SpecificationDto spec = buildSpec("7", List.of(hot, humid), null, null);
 
         String generated = builder.generateSpecString(spec, Map.of("sensor_1", smv));

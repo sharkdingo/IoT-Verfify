@@ -152,6 +152,42 @@ describe('recommendation materialization', () => {
     })
   })
 
+  it('requires a recommended variable condition to say which value it means', () => {
+    // Defaulting it would put words in the model's mouth about a distinction that only matters
+    // under compromise, so an incomplete candidate is malformed rather than assumed.
+    expect(() => materializeSpecificationRecommendationConditions([{
+      deviceId: 'sensor-1',
+      targetType: 'variable',
+      key: 'temperature',
+      relation: '>',
+      value: '28'
+    }], 'a', index => `condition-${index}`)).toThrow(expect.objectContaining({
+      field: 'aConditions[1].variableSource'
+    }))
+
+    const [condition] = materializeSpecificationRecommendationConditions([{
+      deviceId: 'sensor-1',
+      targetType: 'variable',
+      variableSource: 'reported',
+      key: 'temperature',
+      relation: '>',
+      value: '28'
+    }], 'a', index => `condition-${index}`)
+    expect(condition).toMatchObject({ variableSource: 'reported' })
+
+    // The field is meaningless on any other condition type, and admission refuses it there.
+    expect(() => materializeSpecificationRecommendationConditions([{
+      deviceId: 'door-1',
+      targetType: 'state',
+      variableSource: 'environment',
+      key: 'state',
+      relation: '=',
+      value: 'open'
+    }], 'a', index => `condition-${index}`)).toThrow(expect.objectContaining({
+      field: 'aConditions[1].variableSource'
+    }))
+  })
+
   it('rejects REST-null fields instead of treating them as omitted device defaults', () => {
     expect(() => validateDeviceRecommendationCandidate({
       templateName: 'DoorSensor',

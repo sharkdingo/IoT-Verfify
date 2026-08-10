@@ -81,7 +81,8 @@ describe('Board formal-run readiness', () => {
     deviceCount: 1,
     specificationCount: 1,
     rulesHaveTriggers: true,
-    simulationStepsValid: true
+    simulationStepsValid: true,
+    specVariableSourcesResolved: true
   }
 
   it('mirrors verification prerequisites before attack configuration is considered', () => {
@@ -91,6 +92,12 @@ describe('Board formal-run readiness', () => {
       .toBe('NO_SPECIFICATIONS')
     expect(formalRunReadinessIssue('verification', { ...ready, rulesHaveTriggers: false }))
       .toBe('RULE_TRIGGER_REQUIRED')
+    // An unresolved variable source blocks both kinds of run: the request would be refused at
+    // admission, and neither reading can be assumed on the author's behalf.
+    expect(formalRunReadinessIssue('verification', { ...ready, specVariableSourcesResolved: false }))
+      .toBe('SPEC_VARIABLE_SOURCE_REQUIRED')
+    expect(formalRunReadinessIssue('simulation', { ...ready, specVariableSourcesResolved: false }))
+      .toBe('SPEC_VARIABLE_SOURCE_REQUIRED')
     expect(formalRunReadinessIssue('verification', ready)).toBeNull()
   })
 

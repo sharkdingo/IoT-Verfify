@@ -47,7 +47,8 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             Set.of("category", "rationale", "templateId", "templateLabel",
                     "aConditions", "ifConditions", "thenConditions");
     private static final Set<String> CONDITION_FIELDS =
-            Set.of("deviceId", "deviceLabel", "targetType", "key", "propertyScope", "relation", "value");
+            Set.of("deviceId", "deviceLabel", "targetType", "key", "propertyScope", "variableSource",
+                    "relation", "value");
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)规约推荐助手。你的任务是分析用户面板中现有的设备、规则和规约，
@@ -103,7 +104,8 @@ value/trust/privacy 是用户当前覆盖后的共享值。
 
 7. **禁止使用 currentState 作为 key**，因为它不是设备模板中定义的属性名
 
-8. 确保 targetType 和 key/value/propertyScope 的组合在设备的 variables、modes、apiSignals、propertyTargets 或 states 中确实存在；api 条件省略 value 时等价于 TRUE
+8. variable 条件必须给出 variableSource=environment|reported。environment 只能用于 capabilities 中 deviceLocal=false 的变量；deviceLocal=true 的只能用 reported。（不要依赖变量描述文字判断：模板作者填写了 Description 时会覆盖派生描述。）
+9. 确保 targetType 和 key/value/propertyScope 的组合在设备的 variables、modes、apiSignals、propertyTargets 或 states 中确实存在；api 条件省略 value 时等价于 TRUE
 
 ## 输出要求
 请分析现有设备和规则的功能，推荐可以验证系统正确性的规约，返回符合以下JSON格式的推荐：
@@ -121,6 +123,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
           "targetType": "state|mode|variable|api|trust|privacy",
           "key": "状态/模式/变量/API名称或 propertyTargets 中的 key",
           "propertyScope": "仅 trust/privacy 必填，必须与 propertyTargets 一致：state|variable",
+          "variableSource": "仅 targetType=variable 必填：environment 表示家中实际值（要求 capabilities 中该变量的 deviceLocal 为 false），reported 表示该设备上报值；设备被入侵时两者不同，没有默认值",
           "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 可省略，默认 =",
           "value": "期望值（api 可省略，默认 TRUE）"
         }
@@ -132,6 +135,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
           "targetType": "state|mode|variable|api|trust|privacy",
           "key": "状态/模式/变量/API名称或 propertyTargets 中的 key",
           "propertyScope": "仅 trust/privacy 必填，必须与 propertyTargets 一致：state|variable",
+          "variableSource": "仅 targetType=variable 必填：environment 表示家中实际值（要求 capabilities 中该变量的 deviceLocal 为 false），reported 表示该设备上报值；设备被入侵时两者不同，没有默认值",
           "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 可省略，默认 =",
           "value": "期望值（api 可省略，默认 TRUE）"
         }
@@ -143,6 +147,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
           "targetType": "state|mode|variable|api|trust|privacy",
           "key": "状态/模式/变量/API名称或 propertyTargets 中的 key",
           "propertyScope": "仅 trust/privacy 必填，必须与 propertyTargets 一致：state|variable",
+          "variableSource": "仅 targetType=variable 必填：environment 表示家中实际值（要求 capabilities 中该变量的 deviceLocal 为 false），reported 表示该设备上报值；设备被入侵时两者不同，没有默认值",
           "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 可省略，默认 =",
           "value": "期望值（api 可省略，默认 TRUE）"
         }
@@ -617,6 +622,11 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             row.put("targetType", condition.getTargetType());
             row.put("key", condition.getKey());
             row.put("propertyScope", condition.getPropertyScope());
+            // This is how the model sees the board's existing specifications. Withheld, it could not tell
+            // that a spec already asks one of the two questions, so the prompt's requirement to supply the
+            // field would be satisfied by recommending the *other* one as a new spec — a duplicate the user
+            // has to reject. The prompt asks for it; the context has to show it.
+            row.put("variableSource", condition.getVariableSource());
             row.put("relation", condition.getRelation());
             row.put("value", condition.getValue());
             return row;
@@ -772,6 +782,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
                 String targetType = asTrimmedString(condition.get("targetType"));
                 String key = asTrimmedString(condition.get("key"));
                 String propertyScope = asTrimmedString(condition.get("propertyScope"));
+                String variableSource = asTrimmedString(condition.get("variableSource"));
                 String relation = asTrimmedString(condition.get("relation"));
                 String value = asTrimmedString(condition.get("value"));
 
@@ -781,6 +792,27 @@ value/trust/privacy 是用户当前覆盖后的共享值。
                 String targetTypeLower = targetType.toLowerCase(Locale.ROOT);
                 if (!"trust".equals(targetTypeLower) && !"privacy".equals(targetTypeLower)
                         && propertyScope != null) {
+                    return invalid("invalidConditionCapability", language);
+                }
+                // Presence and spelling only, so a bad candidate is *filtered and counted* like every other
+                // malformed field. Unchecked, the field reached the client and threw a whole-response
+                // contract error, discarding every other recommendation in the batch over one bad row.
+                //
+                // Whether `environment` is legal for this particular declaration is NOT checked here, unlike
+                // at the three writer boundaries: this tool sees devices through
+                // `DeviceInfoHelper.VariableInfo`, which carries no `IsInside`. So a recommendation asking
+                // `environment` of a device-local variable is still presented and refused later by
+                // `addSpec`. Closing that needs sharedness on `VariableInfo` and the capability view — worth
+                // doing, but a wider change than this validation.
+                if ("variable".equals(targetTypeLower)) {
+                    String normalizedSource = variableSource == null
+                            ? null : variableSource.toLowerCase(Locale.ROOT);
+                    if (normalizedSource == null
+                            || (!"environment".equals(normalizedSource) && !"reported".equals(normalizedSource))) {
+                        return invalid("conditionMissingVariableSource", language);
+                    }
+                    condition.put("variableSource", normalizedSource);
+                } else if (variableSource != null) {
                     return invalid("invalidConditionCapability", language);
                 }
                 if (value == null && "api".equals(targetTypeLower)) {
@@ -881,6 +913,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             dto.setTargetType(asTrimmedString(condition.get("targetType")));
             dto.setKey(asTrimmedString(condition.get("key")));
             dto.setPropertyScope(asTrimmedString(condition.get("propertyScope")));
+            dto.setVariableSource(asTrimmedString(condition.get("variableSource")));
             dto.setRelation(asTrimmedString(condition.get("relation")));
             dto.setValue(asTrimmedString(condition.get("value")));
             result.add(dto);
@@ -926,6 +959,11 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             case "conditionMissingValue" -> zh
                     ? "规约条件缺少期望值。"
                     : "A specification condition is missing its expected value.";
+            case "conditionMissingVariableSource" -> zh
+                    ? "变量条件未说明检查的是家中实际值（environment）还是设备上报值（reported）。两者在设备被入侵时不同，没有默认值。"
+                    : "A variable condition does not say whether it checks the actual value in the home "
+                            + "(environment) or what the device reports (reported). The two differ when a "
+                            + "device is compromised, so there is no default.";
             case "invalidRelation" -> zh
                     ? "规约条件使用了不支持的关系运算符。"
                     : "A specification condition uses an unsupported relation operator.";

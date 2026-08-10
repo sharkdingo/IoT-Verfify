@@ -8,12 +8,10 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 /** Formats a descriptive formula in user concepts; it never emits executable NuSMV. */
 public final class SpecificationFormulaPreview {
@@ -40,30 +38,7 @@ public final class SpecificationFormulaPreview {
             }
         }
 
-        Map<String, Set<String>> sharedVariablesByDeviceId = new LinkedHashMap<>();
-        for (DeviceNodeDto node : nodes == null ? List.<DeviceNodeDto>of() : nodes) {
-            String deviceId = node == null ? null : text(node.getId());
-            String templateName = node == null ? null : text(node.getTemplateName());
-            if (deviceId == null || templateName == null) {
-                continue;
-            }
-            DeviceTemplateDto template = templatesByName.get(templateName.toLowerCase(Locale.ROOT));
-            DeviceTemplateDto.DeviceManifest manifest = template == null ? null : template.getManifest();
-            if (manifest == null || manifest.getInternalVariables() == null) {
-                continue;
-            }
-            Set<String> sharedNames = new HashSet<>();
-            for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
-                String variableName = variable == null ? null : text(variable.getName());
-                if (variableName != null && !Boolean.TRUE.equals(variable.getIsInside())) {
-                    sharedNames.add(variableName.toLowerCase(Locale.ROOT));
-                }
-            }
-            if (!sharedNames.isEmpty()) {
-                sharedVariablesByDeviceId.put(deviceId, sharedNames);
-            }
-        }
-        return new Context(labelsById, sharedVariablesByDeviceId);
+        return new Context(labelsById);
     }
     /** Builds a display context from the immutable model-boundary device/template snapshot. */
     public static Context modelContext(
@@ -81,7 +56,6 @@ public final class SpecificationFormulaPreview {
             }
         }
 
-        Map<String, Set<String>> sharedVariablesByDeviceId = new LinkedHashMap<>();
         for (DeviceVerificationDto device : devices == null
                 ? List.<DeviceVerificationDto>of() : devices) {
             String id = device == null ? null : text(device.getVarName());
@@ -90,24 +64,8 @@ public final class SpecificationFormulaPreview {
             }
             String label = text(device.getDeviceLabel());
             labelsById.put(id, label != null ? label : "Unknown device");
-            String templateName = text(device.getTemplateName());
-            DeviceTemplateDto.DeviceManifest manifest = templateName == null
-                    ? null : manifestsByName.get(templateName.toLowerCase(Locale.ROOT));
-            if (manifest == null || manifest.getInternalVariables() == null) {
-                continue;
-            }
-            Set<String> sharedNames = new HashSet<>();
-            for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
-                String variableName = variable == null ? null : text(variable.getName());
-                if (variableName != null && !Boolean.TRUE.equals(variable.getIsInside())) {
-                    sharedNames.add(variableName.toLowerCase(Locale.ROOT));
-                }
-            }
-            if (!sharedNames.isEmpty()) {
-                sharedVariablesByDeviceId.put(id, sharedNames);
-            }
         }
-        return new Context(labelsById, sharedVariablesByDeviceId);
+        return new Context(labelsById);
     }
 
     public static String format(SpecificationDto spec, Context context) {
@@ -165,7 +123,6 @@ public final class SpecificationFormulaPreview {
     }
 
     private static String target(SpecConditionDto condition, Context context) {
-        String deviceId = text(condition.getDeviceId());
         String device = quote(context.displayLabel(condition));
         String keyText = text(condition.getKey());
         String key = quote(keyText == null ? "property" : keyText);
@@ -178,29 +135,108 @@ public final class SpecificationFormulaPreview {
             return "actionEvent(" + device + ", " + key + ")";
         }
 
-        String variableTarget = context.isSharedVariable(deviceId, keyText)
-                ? "Environment." + key
-                : device + "." + key;
+        // A trust/privacy label is always the device's own (`<device>.trust_<key>`), whatever the value's
+        // sharedness — asking about a label is not reading the value. Kept separate from the value target
+        // below, which now depends on the question the author chose rather than on sharedness.
+        String labelTarget = device + "." + key;
         if ("trust".equals(targetType)) {
             String source = "state".equalsIgnoreCase(condition.getPropertyScope())
                     ? device + ".current " + key + " state"
-                    : variableTarget;
+                    : labelTarget;
             return "controlSource(" + source + ")";
         }
         if ("privacy".equals(targetType)) {
             String source = "state".equalsIgnoreCase(condition.getPropertyScope())
                     ? device + ".current " + key + " state"
-                    : variableTarget;
+                    : labelTarget;
             return "sensitivity(" + source + ")";
+        }
+        // Everything that is not a `variable` keeps naming the device. Guarding this explicitly rather than
+        // falling through: a `mode` condition carries no reading and never can, so letting it reach the
+        // logic below rendered it `<unresolved>."FanMode"` — an unanswered question reported for a condition
+        // that was never asked one, on every template, not just template 7.
+        if (!"variable".equals(targetType)) {
+            return labelTarget;
+        }
+
+        // Read the declared question, never re-derive it from sharedness. This preview is what a verdict
+        // shows as the formula it answered, so inferring here reproduced the original defect one layer
+        // later: a condition saved as `reported` on a shared value displayed as `Environment."temperature"`
+        // while NuSMV had actually checked the device's own reading.
+        String variableSource = condition.getVariableSource() == null
+                ? null : condition.getVariableSource().trim().toLowerCase(java.util.Locale.ROOT);
+        String variableTarget;
+        if ("environment".equals(variableSource)) {
+            variableTarget = "Environment." + key;
+        } else if ("reported".equals(variableSource)) {
+            variableTarget = device + "." + key;
+        } else {
+            // Never chosen: say so rather than picking a side and stating it as fact.
+            variableTarget = "<unresolved>." + key;
         }
         return variableTarget;
     }
 
+    /**
+     * The subject of template 7's untrusted-label disjunct, matching what the generator resolves per target
+     * type. A label is always device-scoped — there is no pool-level {@code trust_a_<key>} — so no arm here
+     * may render {@code Environment.}:
+     * <ul>
+     *   <li>{@code variable} → {@code <device>."<key>"}, the device's own value label
+     *       ({@code trust_<key>}). Reusing the <em>value</em> target here rendered an {@code environment}
+     *       condition as {@code controlSource(Environment."<key>")}, naming a label the model never
+     *       declares.</li>
+     *   <li>{@code mode} → the mode's currently active state, since the generator emits
+     *       {@code trust_<mode>_<value>}, a state-property label rather than a value label.</li>
+     *   <li>{@code state} → {@code <device>.state}, its own target. The generator resolves this to one label
+     *       per participating mode, disjoined; naming the state is the readable paraphrase of that set.</li>
+     *   <li>{@code api} → the end state the action leads to, matching the generator resolving an API's
+     *       untrusted source through its {@code EndState} label rather than the event itself.</li>
+     * </ul>
+     *
+     * <p>{@code trust} and {@code privacy} are absent on purpose: admission refuses them as template-7 A
+     * conditions ({@code NusmvRequestValidator.validateSafetyTemplateConditions}), because the control-source
+     * label is what the template derives rather than something an author asserts. They previously fell
+     * through to {@code target()}, which already returns {@code controlSource(...)}, so the caller wrapped it
+     * twice into {@code controlSource(controlSource(...))}. Returning the plain device target instead keeps
+     * the preview readable if one ever leaks past admission, rather than rendering a nonsense formula.
+     */
+    private static String untrustedLabelSource(SpecConditionDto condition, Context context) {
+        String targetType = text(condition.getTargetType());
+        targetType = targetType == null ? "" : targetType.toLowerCase(Locale.ROOT);
+        String device = quote(context.displayLabel(condition));
+        String keyText = text(condition.getKey());
+        String key = quote(keyText == null ? "property" : keyText);
+        if ("variable".equals(targetType)) {
+            return device + "." + key;
+        }
+        if ("mode".equals(targetType)) {
+            return device + ".current " + key + " state";
+        }
+        if ("api".equals(targetType)) {
+            return device + ".state after " + key;
+        }
+        if ("trust".equals(targetType) || "privacy".equals(targetType)) {
+            return device + "." + key;
+        }
+        return target(condition, context);
+    }
+
+    /**
+     * The untrusted-source disjunct of template 7, naming the device whose label is actually checked.
+     *
+     * <p>Deliberately not {@code target(condition, context)}. A trust label is device-scoped — the generator
+     * emits {@code <device>.trust_<key>} whatever the reading, and no pool-level {@code trust_a_<key>}
+     * exists — so reusing the value target rendered an {@code environment} condition as
+     * {@code controlSource(Environment."x")}, a label the model never declares. That is the same defect this
+     * whole change fixed one layer earlier: the preview claimed a property about the home's own provenance
+     * while NuSMV checked one named device's label, and under two devices the choice changes what is proved.
+     */
     private static String untrustedSourcePreview(List<SpecConditionDto> conditions, Context context) {
         List<String> sources = new ArrayList<>();
         for (SpecConditionDto condition : conditions == null ? List.<SpecConditionDto>of() : conditions) {
             if (condition != null) {
-                sources.add("controlSource(" + target(condition, context) + ") = untrusted");
+                sources.add("controlSource(" + untrustedLabelSource(condition, context) + ") = untrusted");
             }
         }
         if (sources.isEmpty()) {
@@ -246,10 +282,15 @@ public final class SpecificationFormulaPreview {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    public record Context(Map<String, String> labelsById,
-                          Map<String, Set<String>> sharedVariablesByDeviceId) {
+    /**
+     * Display labels only. It also carried a per-device set of shared variable names, whose sole purpose was
+     * to infer whether a variable condition meant the pool value or the device's reading — the inference the
+     * condition's own {@code variableSource} replaced. Keeping it meant walking every device's manifest on
+     * every board read, spec write and verification result to populate a map nothing consulted.
+     */
+    public record Context(Map<String, String> labelsById) {
         private static Context empty() {
-            return new Context(Map.of(), Map.of());
+            return new Context(Map.of());
         }
 
         public String displayLabel(SpecConditionDto condition) {
@@ -261,14 +302,5 @@ public final class SpecificationFormulaPreview {
             return snapshot != null ? snapshot : "Unknown device";
         }
 
-        public boolean isSharedVariable(String deviceId, String variableName) {
-            String id = text(deviceId);
-            String name = text(variableName);
-            if (id == null || name == null) {
-                return false;
-            }
-            return sharedVariablesByDeviceId.getOrDefault(id, Set.of())
-                    .contains(name.toLowerCase(Locale.ROOT));
-        }
     }
 }

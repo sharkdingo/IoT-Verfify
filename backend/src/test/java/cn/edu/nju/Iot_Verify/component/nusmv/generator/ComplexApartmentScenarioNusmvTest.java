@@ -281,6 +281,13 @@ class ComplexApartmentScenarioNusmvTest {
         condition.setDeviceLabel(deviceLabel);
         condition.setTargetType(targetType);
         condition.setKey(key);
+        // This scenario's only variable condition is the antecedent of a response specification ("motion
+        // should trigger alarm"), and the rule it is asserting about fires on the device's own reading. So
+        // it asks `reported`: the two questions coincide in the clean model but only this one lines up with
+        // what the automation actually reacts to.
+        if ("variable".equals(targetType)) {
+            condition.setVariableSource("reported");
+        }
         condition.setRelation(relation);
         condition.setValue(value);
         return condition;

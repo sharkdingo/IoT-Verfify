@@ -339,7 +339,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "verificationReady":true,"readinessIssues":[],
                  "semanticWarnings":[{"code":"NO_AUTOMATION_RULES",
                  "message":"The final draft contains no retained automation rules."}],
-                 "scene":{"schema":"iot-verify.board-scene","version":4,
+                 "scene":{"schema":"iot-verify.board-scene","version":5,
                  "templates":[{"name":"Sensor","manifest":{"Name":"Sensor"}}],
                  "devices":[{"id":"device_1","templateName":"Sensor","label":"Hall sensor",
                  "position":{"x":0,"y":0},"width":176,"height":128}],
@@ -388,7 +388,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                    {"code":"NO_AUTOMATION_RULES","message":"No retained rules."},
                    {"code":"UNREFERENCED_DEVICES","message":"One device is unreferenced."}
                  ],
-                 "scene":{"schema":"iot-verify.board-scene","version":4,
+                 "scene":{"schema":"iot-verify.board-scene","version":5,
                  "templates":[],"devices":[{"id":"device_1","templateName":"Sensor",
                  "label":"Hall sensor","position":{"x":0,"y":0},"width":176,"height":128}],
                  "environmentVariables":[],"rules":[],"specs":[]}}
@@ -415,7 +415,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                    {"code":"NO_AUTOMATION_RULES","message":"No retained rules."},
                    {"code":"UNREFERENCED_DEVICES","message":"One device is unreferenced."}
                  ],
-                 "scene":{"schema":"iot-verify.board-scene","version":4,
+                 "scene":{"schema":"iot-verify.board-scene","version":5,
                  "templates":[],"devices":[{"id":"device_1","templateName":"Sensor",
                  "label":"Hall sensor","position":{"x":0,"y":0},"width":176,"height":128}],
                  "environmentVariables":[],"rules":[],"specs":[]}}

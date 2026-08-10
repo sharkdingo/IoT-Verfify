@@ -16,6 +16,7 @@ export const isKnownFuzzingTemplateSupported = (templateId: unknown): boolean =>
 export type KnownFuzzingSpecificationIssue =
   | 'UNSUPPORTED_TEMPLATE'
   | 'TRUST_PRIVACY_UNSUPPORTED'
+  | 'REPORTED_READING_UNSUPPORTED'
 
 export const getKnownFuzzingSpecificationIssue = (
   specification: Pick<Specification, 'templateId' | 'aConditions' | 'ifConditions' | 'thenConditions'>
@@ -26,12 +27,22 @@ export const getKnownFuzzingSpecificationIssue = (
     ...(specification.ifConditions || []),
     ...(specification.thenConditions || [])
   ]
-  return conditions.some(condition => {
-    const targetType = String(condition?.targetType ?? '').trim().toLowerCase()
-    return targetType === 'trust' || targetType === 'privacy'
-  })
-    ? 'TRUST_PRIVACY_UNSUPPORTED'
-    : null
+  const normalizedTargetTypes = conditions.map(condition =>
+    ({ condition, targetType: String(condition?.targetType ?? '').trim().toLowerCase() }))
+  if (normalizedTargetTypes.some(({ targetType }) =>
+    targetType === 'trust' || targetType === 'privacy')) {
+    return 'TRUST_PRIVACY_UNSUPPORTED'
+  }
+  // Mirrors the backend's own exclusion. The explorer keeps one value per shared reading and models no
+  // compromised device, so it cannot tell "what this device said" from "what the home held" — it would
+  // answer the `environment` question and label the answer as this specification's. Pre-warning here keeps
+  // the panel from offering a run the backend will refuse.
+  if (normalizedTargetTypes.some(({ condition, targetType }) =>
+    targetType === 'variable'
+    && String(condition?.variableSource ?? '').trim().toLowerCase() === 'reported')) {
+    return 'REPORTED_READING_UNSUPPORTED'
+  }
+  return null
 }
 
 export const isKnownFuzzingSpecificationSupported = (

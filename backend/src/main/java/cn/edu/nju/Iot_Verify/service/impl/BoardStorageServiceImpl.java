@@ -59,6 +59,7 @@ import cn.edu.nju.Iot_Verify.exception.TemplateDeletionConflictException;
 import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
 import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.SpecConditionNormalization;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -959,6 +960,23 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .anyMatch(condition -> condition != null && nodeId.equals(condition.getDeviceName()));
     }
 
+    /**
+     * Whether deleting {@code nodeId} takes this specification with it.
+     *
+     * <p>Matches on {@code deviceId} for every condition, including a {@code variableSource=environment}
+     * one whose compiled formula is {@code a_<key>} and names no device. That looks over-eager and is not:
+     * the device supplies the <em>declaration</em> that gives the key its domain, which is what validates
+     * the condition's value and what makes {@code environment} legal for that key at all
+     * ({@code SmvSpecificationBuilder} resolves the shared declaration through the selected device, and
+     * refuses the condition when that device declares the key device-local). A specification whose anchor
+     * is gone can no longer be checked, so removing it is the honest outcome rather than leaving a
+     * condition that would be refused at the next run.
+     *
+     * <p>Deletion is previewed with the affected specifications listed, confirmed against an impact token,
+     * and journaled for undo, so the removal is neither silent nor final. What the product does <em>not</em>
+     * do is offer to re-anchor such a condition onto another device declaring the same shared key — that is
+     * well-defined but is a product decision about editing a specification on the user's behalf.
+     */
     private boolean specificationReferencesNode(SpecificationDto spec, String nodeId) {
         if (spec == null) return false;
         if (safeList(spec.getDevices()).stream()
@@ -1103,6 +1121,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<SpecificationDto> existing = new ArrayList<>(getSpecsInternal(userId));
                 requireAdditionalCapacity(
                         "specifications", existing.size(), 1, RequestLimits.MAX_SPECS);
+                // Demanded on the specification being authored, not on the whole stored collection: this is
+                // the point where a choice is actually being made, so refusing here names a field the
+                // request contains. The shared revalidation below deliberately tolerates an absent reading
+                // on already-stored specifications, or a legacy row would block this write too.
+                requireResolvedVariableSource(spec);
                 existing.add(spec);
                 validateBoardReferences(userId, currentNodes, null, existing);
                 List<SpecificationDto> saved = saveSpecsInternal(userId, existing, currentNodes);
@@ -1335,6 +1358,47 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return target;
     }
 
+    /**
+     * Demands that a specification <em>being authored</em> says which value each variable condition means.
+     *
+     * <p>Runs only on what the caller is writing, which is why it can require a choice at all — see
+     * {@link #validateSpecConditionSemanticsForAnyOrigin} for why the shared validation cannot. Validity of a
+     * chosen value stays there, being a reference error wherever it appears.
+     */
+    private void requireResolvedVariableSource(SpecificationDto spec) {
+        if (spec == null) {
+            return;
+        }
+        Map<String, String> errors = new LinkedHashMap<>();
+        requireResolvedVariableSource(errors, "aConditions", spec.getAConditions());
+        requireResolvedVariableSource(errors, "ifConditions", spec.getIfConditions());
+        requireResolvedVariableSource(errors, "thenConditions", spec.getThenConditions());
+        if (!errors.isEmpty()) {
+            throw new ValidationException(errors);
+        }
+    }
+
+    private void requireResolvedVariableSource(Map<String, String> errors,
+                                               String field,
+                                               List<SpecConditionDto> conditions) {
+        if (conditions == null) {
+            return;
+        }
+        for (int i = 0; i < conditions.size(); i++) {
+            SpecConditionDto condition = conditions.get(i);
+            if (condition == null
+                    || !"variable".equals(normalizeTargetType(condition.getTargetType()))) {
+                continue;
+            }
+            if (normalizeVariableSource(condition.getVariableSource()) == null) {
+                errors.putIfAbsent(field + "[" + i + "].variableSource",
+                        "variableSource is required for a variable condition and must be environment "
+                                + "(the value in the home) or reported (what this device said). The two differ "
+                                + "when a device is compromised, so there is no safe default");
+            }
+        }
+    }
+
     private List<SpecConditionDto> canonicalizeSpecConditionsForStorage(
             List<SpecConditionDto> conditions,
             Map<String, String> labelsById) {
@@ -1362,6 +1426,13 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     copy.setKey(trimToNull(condition.getKey()));
                     copy.setPropertyScope(("trust".equals(targetType) || "privacy".equals(targetType))
                             ? normalizePropertyScope(condition.getPropertyScope())
+                            : null);
+                    // Normalized here for the same reason as propertyScope above: this is the one spec write
+                    // path, so a field absent here is validated on the request and then persisted blank —
+                    // the spec would reload unresolved and block the next run, for every variable condition
+                    // the user authored.
+                    copy.setVariableSource("variable".equals(targetType)
+                            ? normalizeVariableSource(condition.getVariableSource())
                             : null);
                     copy.setRelation(relation);
                     copy.setValue(canonicalSpecLabelValue(
@@ -1460,6 +1531,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 List<SpecificationDto> nextSpecs = batch.getSpecs();
                 validateNoIdenticalRules(nextRules, nextNodes);
                 validateNoIdenticalSpecifications(nextSpecs, nextNodes);
+                // Every specification here is being written by this request (batch is a full replacement),
+                // so each must state its reading — unlike the shared revalidation below, which also sees
+                // already-stored specifications and tolerates an absent one.
+                safeList(nextSpecs).forEach(this::requireResolvedVariableSource);
                 validateBoardReferences(userId, nextNodes, nextRules, nextSpecs);
                 if (batch.getTemplateSnapshots() != null) {
                     validateCompleteSceneEnvironment(userId, nextNodes, batch.getEnvironmentVariables());
@@ -2729,7 +2804,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             }
             requireBoardNodeRef(errors, field + "[" + i + "].deviceId",
                     condition.getDeviceId(), nodeIds, "Unknown spec condition device");
-            validateSpecConditionSemantics(errors, field + "[" + i + "]",
+            validateSpecConditionSemanticsForAnyOrigin(errors, field + "[" + i + "]",
                     condition, nodesById, templateManifests);
         }
     }
@@ -3436,7 +3511,22 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
     }
 
-    private void validateSpecConditionSemantics(Map<String, String> errors,
+    /**
+     * Validates a spec condition against the resolved manifest, for conditions of ANY origin.
+     *
+     * <p>The name says {@code ForAnyOrigin} because this runs over the specifications <em>already in
+     * storage</em> as part of the whole-board revalidation that guards device, rule, and layout writes — not
+     * only over what a request is writing. So it may only reject what is wrong for a specification that
+     * already exists: a dangling device reference, an out-of-domain value, a reading that is illegal for its
+     * declaration.
+     *
+     * <p>It must NOT reject a newly-required field for being absent. Doing that for {@code variableSource}
+     * made one specification written before the field existed block every unrelated mutation: adding a
+     * device returned {@code specs[0].aConditions[0].variableSource is required}, naming a specification the
+     * request did not contain, and the only operation left was deleting it. Requirements on newly-authored
+     * data belong in {@code requireResolvedVariableSource}, which the authoring paths call.
+     */
+    private void validateSpecConditionSemanticsForAnyOrigin(Map<String, String> errors,
                                                 String field,
                                                 SpecConditionDto condition,
                                                 Map<String, DeviceNodeDto> nodesById,
@@ -3469,6 +3559,33 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         } else if (hasText(condition.getPropertyScope())) {
             errors.putIfAbsent(field + ".propertyScope",
                     "propertyScope is only valid for trust/privacy conditions");
+        }
+
+        // Which of two questions a variable condition asks, and whether that question even exists for this
+        // declaration. `environment` reads the shared pool value — "did this happen in the home" — and
+        // `reported` reads what this device said. They diverge only when the device is compromised.
+        //
+        // A device-local declaration (IsInside=true) has no pool value at all, so `environment` would name
+        // an identifier the generated model never declares. Refusing it here, where the manifest is
+        // resolved, turns that into a field error naming the declaration instead of a NuSMV parse failure
+        // or a silently skipped specification.
+        if ("variable".equals(targetType)) {
+            String variableSource = normalizeVariableSource(condition.getVariableSource());
+            if (variableSource == null) {
+                // Absent is not rejected here: this also revalidates specifications already in storage, so a
+                // pre-existing one would block unrelated device and rule writes. `requireResolvedVariableSource`
+                // demands the choice on the authoring paths. See shared-value-semantics.md.
+                return;
+            } else if ("environment".equals(variableSource)
+                    && !isEnvironmentVariable(internalVariable(manifest, key))) {
+                errors.putIfAbsent(field + ".variableSource",
+                        "variableSource=environment needs a shared variable, but '" + key
+                                + "' is declared IsInside=true and exists only inside this device. Ask "
+                                + "reported instead, or declare the variable as shared");
+            }
+        } else if (hasText(condition.getVariableSource())) {
+            errors.putIfAbsent(field + ".variableSource",
+                    "variableSource is only valid for variable conditions");
         }
 
         String relation = validateRelationValue(errors, field, condition.getRelation(), condition.getValue(), targetType);
@@ -3941,11 +4058,17 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     private String normalizePropertyScope(String value) {
-        if (!hasText(value)) {
-            return null;
-        }
-        String normalized = value.trim().toLowerCase(Locale.ROOT);
-        return "state".equals(normalized) || "variable".equals(normalized) ? normalized : null;
+        return SpecConditionNormalization.propertyScope(value);
+    }
+
+    /**
+     * Null for absent or unrecognised, so a caller cannot tell "the author chose nothing" from "the author
+     * chose something invalid" — both are refused with the same message, and neither is silently repaired.
+     */
+    // Delegated so this boundary and NusmvRequestValidator cannot fold a value differently; the error text
+    // stays local because each boundary reports to a different audience.
+    private String normalizeVariableSource(String value) {
+        return SpecConditionNormalization.variableSource(value);
     }
 
     private String normalizeTargetType(String targetType) {
@@ -3957,12 +4080,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     private String normalizeSpecTargetType(String targetType) {
-        if (!hasText(targetType)) {
-            return null;
-        }
-        String normalized = targetType.trim().toLowerCase(Locale.ROOT);
-        return Set.of("state", "mode", "variable", "api", "trust", "privacy").contains(normalized)
-                ? normalized : null;
+        return SpecConditionNormalization.knownSpecTargetType(targetType);
     }
 
     private String trimToNull(String value) {

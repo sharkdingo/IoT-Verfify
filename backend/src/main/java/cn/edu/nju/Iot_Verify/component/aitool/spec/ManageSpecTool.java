@@ -67,6 +67,8 @@ public class ManageSpecTool extends AbstractAiTool {
                         "key", Map.of("type", "string", "description", "The key to check: state for full state; mode name for mode; variable name for variable; Signal=true API name for api; mode name or variable name for trust/privacy according to propertyScope"),
                         "propertyScope", Map.of("type", "string", "enum", List.of("state", "variable"),
                                 "description", "Required only for trust/privacy. state checks the label of the currently active state in the mode named by key; variable checks the variable named by key."),
+                        "variableSource", Map.of("type", "string", "enum", List.of("environment", "reported"),
+                                "description", "Required for variable, rejected otherwise. environment checks the real value in the home, independent of any device's report; reported checks what this device says. They differ when the device is compromised, so there is no safe default. environment needs a shared variable (IsInside=false); a device-local variable accepts only reported."),
                         "relation", Map.of("type", "string", "description", "Comparison. Required for non-API conditions. All value conditions support =, !=, in, not in; numeric variables additionally support >, <, >=, <=. Omit with value for an API condition to materialize '= TRUE'."),
                         "value", Map.of("type", "string", "description", "Expected value. Required for non-API conditions. API uses TRUE/FALSE and defaults with an omitted relation/value pair to TRUE; trust uses trusted/untrusted; privacy uses public/private")
                 ),
@@ -305,7 +307,8 @@ public class ManageSpecTool extends AbstractAiTool {
             String conditionLabel = "Condition " + (index + 1) + " on '" + displaySide + "'";
             String conditionPath = collectionPath + "[" + index + "]";
             requireOnlyFields(cn, conditionPath, Set.of(
-                    "deviceId", "deviceLabel", "targetType", "key", "propertyScope", "relation", "value"));
+                    "deviceId", "deviceLabel", "targetType", "key", "propertyScope", "variableSource",
+                    "relation", "value"));
             String inputDeviceId = nullableTextField(cn, "deviceId", conditionPath);
             String deviceId = resolveDeviceIdById(inputDeviceId, deviceLookup);
             if (deviceId == null) {
@@ -336,6 +339,28 @@ public class ManageSpecTool extends AbstractAiTool {
             } else if (propertyScope != null) {
                 throw new IllegalArgumentException(conditionLabel
                         + " may use propertyScope only with trust/privacy.");
+            }
+
+            // Whether the condition asks about the home or about this device's report. Refused here rather
+            // than defaulted, for the same reason the DTO carries no default: the two answers differ once a
+            // device is compromised, so choosing one silently would put words in the author's mouth.
+            // Refusing it here gives the model a message it can act on, rather than the field-path error it
+            // would get from `addSpec`, which this tool delegates to. Whether `environment` is legal for
+            // this particular declaration needs the manifest, and that check lives in the storage-side
+            // semantic validation.
+            String variableSource = nullableTextField(cn, "variableSource", conditionPath);
+            if ("variable".equals(normalizedTargetType)) {
+                variableSource = variableSource == null ? null : variableSource.toLowerCase(Locale.ROOT);
+                // Null-checked before the set: Set.of(...).contains(null) throws NPE, which would surface an
+                // omitted field as a 500 instead of the message that tells the model what to send.
+                if (variableSource == null || !Set.of("environment", "reported").contains(variableSource)) {
+                    throw new IllegalArgumentException(conditionLabel
+                            + " requires variableSource='environment' (the real value in the home) or "
+                            + "'reported' (what this device says) for a variable condition.");
+                }
+            } else if (variableSource != null) {
+                throw new IllegalArgumentException(conditionLabel
+                        + " may use variableSource only with variable.");
             }
 
             String relationInput = nullableTextField(cn, "relation", conditionPath);
@@ -385,6 +410,7 @@ public class ManageSpecTool extends AbstractAiTool {
             dto.setTargetType(normalizedTargetType);
             dto.setKey(key);
             dto.setPropertyScope(propertyScope);
+            dto.setVariableSource(variableSource);
             dto.setRelation(relation);
             dto.setValue(value);
             String semanticError = BoardSemanticValidator.validateSpecCondition(

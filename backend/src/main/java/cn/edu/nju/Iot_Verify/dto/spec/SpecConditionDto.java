@@ -51,6 +51,30 @@ public class SpecConditionDto {
     @Pattern(regexp = "(?i:state|variable)",
             message = "propertyScope must be one of: state, variable")
     private String propertyScope;
+    /**
+     * Which of two different questions a shared-variable condition asks. Required only for
+     * {@code targetType=variable}, and rejected on every other target type.
+     *
+     * <p>{@code environment} compiles to the pool value {@code a_<key>} — "did this actually happen in the
+     * home". {@code reported} compiles to {@code <device>.<key>} — "is this what the device said". Outside
+     * attack modelling the two are provably equal; a compromised device may report a value the environment
+     * never held, and then they diverge. Measured before this field existed: a specification reading
+     * "temperature never exceeds 30" was reported SATISFIED while a falsified reading reached 40 and the
+     * rule fired, because the builder always chose the pool value and silently dropped the device the
+     * author had picked.
+     *
+     * <p>Deliberately has **no default**. A null value means the author never chose, which is a real and
+     * distinct state for every specification written before this field: presenting either value as their
+     * intent is the defect being fixed. Generation refuses such a condition and reports it as a skipped
+     * specification rather than guessing, and the client renders it as unresolved rather than as a verdict.
+     */
+    // Whitespace-tolerant like `relation` below, and for the same reason: every service-layer normalizer
+    // trims before comparing, so a padded value is one the semantic gates accept and canonicalize. Anchoring
+    // without `\s*` made bean validation reject `" environment "` with this generic message, hiding the
+    // actionable one that explains why there is no default.
+    @Pattern(regexp = "^\\s*(?i:environment|reported)\\s*$",
+            message = "variableSource must be one of: environment, reported")
+    private String variableSource;
     @NotBlank(message = "Relation is required for spec condition")
     @Pattern(
             regexp = "^\\s*(=|==|!=|>|>=|<|<=|(?i:eq|neq|gt|gte|lt|lte|in|not_in|not in))\\s*$",

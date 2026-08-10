@@ -57,6 +57,78 @@ describe('scene file envelope validation', () => {
     })
 })
 
+describe('scene specification variable conditions', () => {
+  // A specification condition is reference-checked against the scene's devices, so the fixture
+  // carries the device it names and the template that device instantiates.
+  const sceneWithCondition = (condition: Record<string, unknown>) => ({
+    ...minimalScene(),
+    templates: [{
+      name: 'Temperature Sensor',
+      manifest: {
+        Name: 'Temperature Sensor',
+        Description: '',
+        Modes: ['SensorState'],
+        InitState: 'working',
+        ImpactedVariables: [],
+        InternalVariables: [
+          { Name: 'temperature', IsInside: true, FalsifiableWhenCompromised: true, LowerBound: 0, UpperBound: 50, Trust: 'trusted', Privacy: 'public' }
+        ],
+        WorkingStates: [{ Name: 'working', Dynamics: [], Description: '', Trust: 'trusted', Privacy: 'public' }],
+        APIs: []
+      }
+    }],
+    devices: [{
+      id: 'sensor-1',
+      templateName: 'Temperature Sensor',
+      label: 'Temperature Sensor',
+      position: { x: 0, y: 0 },
+      state: 'working',
+      width: 120,
+      height: 100
+    }],
+    specs: [{
+      templateId: '1',
+      aConditions: [condition],
+      ifConditions: [],
+      thenConditions: []
+    }]
+  })
+
+  const variableCondition = (variableSource?: string) => ({
+    deviceId: 'sensor-1',
+    targetType: 'variable',
+    key: 'temperature',
+    ...(variableSource ? { variableSource } : {}),
+    relation: '>',
+    value: '28'
+  })
+
+  it('rejects a variable condition that does not say which value it means', () => {
+    // Assigning a side would silently change what the imported specification asserts, and the two
+    // sides differ exactly when a device is compromised.
+    expect(() => codec.normalizeSceneFile(sceneWithCondition(variableCondition())))
+      .toThrow(/sceneImportMissingField/)
+    expect(() => codec.normalizeSceneFile(sceneWithCondition(variableCondition('whatever'))))
+      .toThrow(/sceneImportInvalidEnum/)
+  })
+
+  it('keeps an explicit variable source through import', () => {
+    const scene = codec.normalizeSceneFile(sceneWithCondition(variableCondition('reported')))
+    expect(scene.specs[0].aConditions[0]).toMatchObject({ variableSource: 'reported' })
+  })
+
+  it('refuses the field on a condition type that has no such question', () => {
+    expect(() => codec.normalizeSceneFile(sceneWithCondition({
+      deviceId: 'sensor-1',
+      targetType: 'state',
+      key: 'state',
+      variableSource: 'environment',
+      relation: '=',
+      value: 'open'
+    }))).toThrow(/sceneImportUnexpectedField/)
+  })
+})
+
 describe('scene device identity', () => {
   it('rejects duplicate device ids instead of silently keeping the last one', () => {
     const devices = [

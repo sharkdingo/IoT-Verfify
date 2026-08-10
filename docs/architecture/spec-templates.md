@@ -82,6 +82,21 @@ A-condition. Attack selection is not used to exclude a condition from the proper
 CTLSPEC AG !(fan_1.FanMode=auto & fan_1.trust_FanMode_auto=untrusted)
 ```
 
+A `variable` A-condition with `variableSource: environment` produces a property with **two subjects**, by
+design: the value term is the shared pool value `a_<key>` while the label term stays the selected device's
+`<device>.trust_<key>`, because a trust label is device-scoped and no pool-level `trust_a_<key>` exists.
+So the property reads "the home's value held while *this* device's label was untrusted". The device is
+therefore load-bearing even though it does not appear in the value half, and under two devices declaring
+the same key the choice changes what is proved. Both formula previews render this exactly — earlier they
+reused the value target and displayed `controlSource(Environment."<key>")`, naming a label the model never
+declares.
+
+```smv
+-- input: aConditions = [{ deviceId: "sensor_1", targetType: "variable",
+--                         variableSource: "environment", key: "temperature", relation: ">", value: "30" }]
+CTLSPEC AG !(a_temperature>30 & sensor_1.trust_temperature=untrusted)
+```
+
 The same formula shape is emitted with attack modeling on or off. When attack modeling
 is on, compromised falsifiable readings can make the trust predicate untrusted and are
 therefore included in the safety check; there is deliberately no
@@ -107,9 +122,10 @@ Each `SpecConditionDto` maps by `targetType`:
 ```
 state    → deviceVarName.ModeName = stateName
 mode     → deviceVarName.ModeName OP stateName   (key is the concrete mode name; value must be legal in that mode)
-variable → a_varName OP value            (environment var: key is the literal template variable name in the device's envVariables)
-         → deviceVarName.varName OP value (internal var: key is in the device's internalVariables)
-         → otherwise → InvalidConditionException
+variable → decided by the condition's own `variableSource`, never inferred from whether the key is shared:
+           variableSource=environment → a_varName OP value            (the value in the home; requires a shared declaration)
+           variableSource=reported    → deviceVarName.varName OP value (what this device reported)
+           absent → the specification is skipped, with a reason (no default: the two differ under compromise)
 api      → deviceVarName.apiName_a OP TRUE/FALSE   (only =, !=, IN, NOT_IN; authoring helpers default omitted value to TRUE)
 trust    → deviceVarName.trust_{key} OP value      (key is literal; no generated-prefix stripping)
 privacy  → deviceVarName.privacy_{key} OP value    (key is literal; no generated-prefix stripping)

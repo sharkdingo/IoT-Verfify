@@ -135,7 +135,7 @@ class AcceptanceDemoScenarioNusmvTest {
         ObjectMapper objectMapper = new ObjectMapper();
         JsonNode scene = objectMapper.readTree(Files.readString(SCENE_PATH));
         assertEquals("iot-verify.board-scene", scene.path("schema").asText());
-        assertEquals(4, scene.path("version").asInt());
+        assertEquals(5, scene.path("version").asInt());
         assertEquals(4, scene.path("devices").size());
         assertEquals(3, scene.path("rules").size());
         assertEquals(5, scene.path("specs").size());
@@ -262,7 +262,7 @@ class AcceptanceDemoScenarioNusmvTest {
         ObjectMapper objectMapper = new ObjectMapper();
         JsonNode scene = objectMapper.readTree(Files.readString(MULTI_VIOLATION_SCENE_PATH));
         assertEquals("iot-verify.board-scene", scene.path("schema").asText());
-        assertEquals(4, scene.path("version").asInt());
+        assertEquals(5, scene.path("version").asInt());
         assertEquals(4, scene.path("devices").size());
         assertEquals(2, scene.path("environmentVariables").size());
         assertEquals(3, scene.path("rules").size());
@@ -1178,7 +1178,7 @@ class AcceptanceDemoScenarioNusmvTest {
         for (AdditionalScenarioExpectation expectation : ADDITIONAL_SCENARIOS) {
             JsonNode scene = objectMapper.readTree(Files.readString(expectation.path()));
             assertEquals("iot-verify.board-scene", scene.path("schema").asText(), expectation.name());
-            assertEquals(4, scene.path("version").asInt(), expectation.name());
+            assertEquals(5, scene.path("version").asInt(), expectation.name());
             assertEquals(expectation.deviceCount(), scene.path("devices").size(), expectation.name());
             assertEquals(expectation.environmentCount(), scene.path("environmentVariables").size(),
                     expectation.name());
@@ -1525,6 +1525,15 @@ class AcceptanceDemoScenarioNusmvTest {
         condition.setDeviceId(deviceId);
         condition.setTargetType(targetType);
         condition.setKey(key);
+        // Which question each variable condition asks, filled here rather than at 20 call sites.
+        // `temperature`/`smoke` are shared declarations (IsInside=false) and these scenarios assert what
+        // the home actually reached, so they ask `environment`. `occupied` is device-local
+        // (IsInside=true, declared at line 1400) — it has no pool value at all, so `reported` is the
+        // only meaningful answer and asking `environment` of it would name an identifier the model
+        // never declares.
+        if ("variable".equals(targetType)) {
+            condition.setVariableSource("occupied".equals(key) ? "reported" : "environment");
+        }
         condition.setRelation(relation);
         condition.setValue(value);
         return condition;
@@ -1674,6 +1683,7 @@ class AcceptanceDemoScenarioNusmvTest {
             condition.setTargetType(row.path("targetType").asText());
             condition.setKey(row.path("key").asText());
             condition.setPropertyScope(textOrNull(row, "propertyScope"));
+            condition.setVariableSource(textOrNull(row, "variableSource"));
             condition.setRelation(row.path("relation").asText());
             condition.setValue(row.path("value").asText());
             conditions.add(condition);

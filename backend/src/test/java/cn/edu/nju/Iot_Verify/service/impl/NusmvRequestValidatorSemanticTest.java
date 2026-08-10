@@ -550,7 +550,7 @@ class NusmvRequestValidatorSemanticTest {
         spec.setId("spec-env-prefix");
         spec.setTemplateId("1");
         spec.setTemplateLabel("Always");
-        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "a_temperature", ">", "28"))));
+        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "a_temperature", ">", "28", "environment"))));
         spec.setIfConditions(new ArrayList<>());
         spec.setThenConditions(new ArrayList<>());
         spec.setDevices(new ArrayList<>());
@@ -568,7 +568,7 @@ class NusmvRequestValidatorSemanticTest {
         spec.setId("spec-env-literal-prefix");
         spec.setTemplateId("1");
         spec.setTemplateLabel("Always");
-        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "a_temperature", ">", "28"))));
+        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "a_temperature", ">", "28", "environment"))));
         spec.setIfConditions(new ArrayList<>());
         spec.setThenConditions(new ArrayList<>());
         spec.setDevices(new ArrayList<>());
@@ -587,7 +587,7 @@ class NusmvRequestValidatorSemanticTest {
         spec.setId("spec-env-literal-prefix");
         spec.setTemplateId("1");
         spec.setTemplateLabel("Always");
-        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "a_temperature", ">", "28"))));
+        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "a_temperature", ">", "28", "environment"))));
         spec.setIfConditions(new ArrayList<>());
         spec.setThenConditions(new ArrayList<>());
         spec.setDevices(new ArrayList<>());
@@ -658,13 +658,58 @@ class NusmvRequestValidatorSemanticTest {
     }
 
 
+    /**
+     * The verify request is a third writer boundary, independent of board storage and the AI tools, and
+     * this gate was added with no test of its own — a request could otherwise carry an unanswered question
+     * straight to the generator and come back as a silently skipped specification.
+     */
+    @Test
+    void validateSpecificationSemantics_requiresVariableSourceOnTheVerifyPath() {
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec-missing-source");
+        spec.setTemplateId("1");
+        spec.setTemplateLabel("Always");
+        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "fanMode", "=", "fan only"))));
+        spec.setIfConditions(new ArrayList<>());
+        spec.setThenConditions(new ArrayList<>());
+        spec.setDevices(new ArrayList<>());
+
+        NusmvRequestValidator.validateSpecificationSemantics(List.of(spec), Map.of("sensor_1", smv()), errors);
+
+        assertEquals("variableSource is required for a variable condition and must be environment "
+                        + "(the value in the home) or reported (what this device said)",
+                errors.get("specs[0].aConditions[0].variableSource"));
+    }
+
+    @Test
+    void validateSpecificationSemantics_refusesEnvironmentOnADeviceLocalVariable() {
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec-local-environment");
+        spec.setTemplateId("1");
+        spec.setTemplateLabel("Always");
+        // `fanMode` is declared IsInside=true in smv(), so it has no value in the home to compare against.
+        spec.setAConditions(new ArrayList<>(List.of(
+                condition("variable", "fanMode", "=", "fan only", "environment"))));
+        spec.setIfConditions(new ArrayList<>());
+        spec.setThenConditions(new ArrayList<>());
+        spec.setDevices(new ArrayList<>());
+
+        NusmvRequestValidator.validateSpecificationSemantics(List.of(spec), Map.of("sensor_1", smv()), errors);
+
+        assertTrue(errors.getOrDefault("specs[0].aConditions[0].variableSource", "")
+                        .contains("needs a shared variable"),
+                () -> "Expected a shared-variable rejection, got " + errors);
+    }
+
     @Test
     void specificationBuilder_cleansEnumVariableValuesWithSpaces() {
         SpecificationDto spec = new SpecificationDto();
         spec.setId("spec3");
         spec.setTemplateId("1");
         spec.setTemplateLabel("Always");
-        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "fanMode", "=", "fan only"))));
+        spec.setAConditions(new ArrayList<>(List.of(condition("variable", "fanMode", "=", "fan only", "reported"))));
         spec.setIfConditions(new ArrayList<>());
         spec.setThenConditions(new ArrayList<>());
         spec.setDevices(new ArrayList<>());
@@ -676,12 +721,24 @@ class NusmvRequestValidatorSemanticTest {
     }
 
     private static SpecConditionDto condition(String targetType, String key, String relation, String value) {
+        return condition(targetType, key, relation, value, null);
+    }
+
+    /**
+     * @param variableSource which question a variable condition asks — {@code environment} for the shared
+     *                       pool value, {@code reported} for this device's own reading. Required for
+     *                       {@code variable} and passed explicitly per test, because the two compile to
+     *                       different identifiers and a blanket default here would decide the assertion.
+     */
+    private static SpecConditionDto condition(String targetType, String key, String relation, String value,
+                                              String variableSource) {
         SpecConditionDto condition = new SpecConditionDto();
         condition.setSide("a");
         condition.setDeviceId("sensor_1");
         condition.setDeviceLabel("Sensor");
         condition.setTargetType(targetType);
         condition.setKey(key);
+        condition.setVariableSource(variableSource);
         condition.setRelation(relation);
         condition.setValue(value);
         return condition;

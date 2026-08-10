@@ -85,6 +85,22 @@ class BoardSemanticFingerprintTest {
     }
 
     @Test
+    void variableSource_changesTheFingerprint() {
+        // The fingerprint gates the fix pipeline's drift check: "is the board still the one this fix was
+        // computed for". `environment` and `reported` compile to different identifiers and ask different
+        // questions of the same key, so a fingerprint blind to the field would let a fix be applied to a
+        // specification whose meaning had changed underneath it.
+        SpecificationDto environment = spec("safety-1", "30");
+        environment.getIfConditions().get(0).setVariableSource("environment");
+        SpecificationDto reported = spec("safety-1", "30");
+        reported.getIfConditions().get(0).setVariableSource("reported");
+
+        assertNotEquals(
+                BoardSemanticFingerprint.of(List.of(), List.of(environment), Map.of()),
+                BoardSemanticFingerprint.of(List.of(), List.of(reported), Map.of()));
+    }
+
+    @Test
     void deviceOrder_doesNotAffectFingerprint() {
         List<DeviceVerificationDto> a = List.of(device("sensor", "t1"), device("lamp", "t2"));
         List<DeviceVerificationDto> b = List.of(device("lamp", "t2"), device("sensor", "t1"));

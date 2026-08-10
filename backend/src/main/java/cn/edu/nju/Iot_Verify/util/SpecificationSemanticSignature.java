@@ -61,6 +61,11 @@ public final class SpecificationSemanticSignature {
                     normalize(condition.getDeviceId()),
                     targetType,
                     normalize(condition.getPropertyScope()).toLowerCase(Locale.ROOT),
+                    // Part of authored identity: the same key asked as `environment` (the value in the
+                    // home) and as `reported` (what the device said) are two different specifications.
+                    // Without it, "delete only if unchanged" and the undo conflict check would treat one
+                    // as the other and land a delete on a record the user never reviewed.
+                    normalize(condition.getVariableSource()).toLowerCase(Locale.ROOT),
                     normalize(condition.getKey()),
                     relation,
                     normalizeValue(condition.getValue(), relation, targetType)), 1L, Long::sum);

@@ -885,6 +885,131 @@ describe('board mutation response contracts', () => {
     })
   })
 
+  it('sends which value a variable condition means, and only for a variable condition', async () => {
+    // Dropping this field is what made every variable specification fail admission with
+    // "variableSource is required"; the backend refuses it on any other target type.
+    const condition = (overrides: Record<string, unknown>) => ({
+      id: 'condition-1',
+      side: 'a' as const,
+      deviceId: 'device_1',
+      deviceLabel: 'Hall sensor',
+      key: 'temperature',
+      relation: '=',
+      value: '20',
+      ...overrides
+    })
+    const specification = (overrides: Record<string, unknown>): Specification => ({
+      id: 'spec-1',
+      templateId: '1',
+      templateLabel: 'Always',
+      formula: '',
+      devices: [],
+      aConditions: [condition(overrides) as Specification['aConditions'][number]],
+      ifConditions: [],
+      thenConditions: []
+    })
+
+    const sentCondition = async (overrides: Record<string, unknown>) => {
+      const spec = specification(overrides)
+      vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+        operation: 'created',
+        affectedItem: spec,
+        currentItems: [spec],
+        currentCount: 1,
+        canUndo: true,
+        canRedo: false
+      }))
+      await boardApi.addSpec(spec)
+      return (vi.mocked(http.post).mock.calls.at(-1)![1] as any).aConditions[0]
+    }
+
+    expect(await sentCondition({ targetType: 'variable', variableSource: 'reported' }))
+      .toMatchObject({ variableSource: 'reported' })
+    expect(await sentCondition({ targetType: 'state', key: 'state', variableSource: 'reported' }))
+      .not.toHaveProperty('variableSource')
+  })
+
+  it('accepts a stored specification that never chose a source, but rejects an unrecognised one', async () => {
+    /*
+     * A specification written before this field existed comes back without it, and that is a state the
+     * user can act on — the list badges it unresolved, the editor asks, the run gate blocks with a
+     * reason. Rejecting it as a contract violation made the entire specifications collection fail to
+     * load, so the user saw a permanent error banner instead, and the unresolved path was unreachable
+     * for the only data it existed for. A present-but-unrecognised value stays a violation: the server
+     * normalizes to one of two literals.
+     */
+    const specWithSource = (variableSource: unknown): unknown => ({
+      id: 'spec-1',
+      templateId: '1',
+      templateLabel: 'Always',
+      formula: '',
+      devices: [],
+      aConditions: [{
+        id: 'condition-1',
+        side: 'a',
+        deviceId: 'device_1',
+        deviceLabel: 'Hall sensor',
+        targetType: 'variable',
+        key: 'temperature',
+        ...(variableSource === undefined ? {} : { variableSource }),
+        relation: '=',
+        value: '20'
+      }],
+      ifConditions: [],
+      thenConditions: []
+    })
+
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope([specWithSource(undefined)]))
+    const legacy = await boardApi.getSpecs()
+    expect(legacy).toHaveLength(1)
+    expect(legacy[0].aConditions[0].variableSource).toBeUndefined()
+
+    vi.mocked(http.get).mockResolvedValue(resultEnvelope([specWithSource('Environment')]))
+    await expect(boardApi.getSpecs()).rejects.toThrow(/variableSource/)
+  })
+
+  it('preserves the source the server echoes back on a write, without inventing one', async () => {
+    const specification = {
+      id: 'spec-1',
+      templateId: '1',
+      templateLabel: 'Always',
+      formula: '',
+      devices: [],
+      aConditions: [{
+        id: 'condition-1',
+        side: 'a',
+        deviceId: 'device_1',
+        deviceLabel: 'Hall sensor',
+        targetType: 'variable',
+        key: 'temperature',
+        variableSource: 'reported',
+        relation: '=',
+        value: '20'
+      }],
+      ifConditions: [],
+      thenConditions: []
+    } as unknown as Specification
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      operation: 'created',
+      affectedItem: specification,
+      currentItems: [specification],
+      currentCount: 1,
+      canUndo: true,
+      canRedo: false
+    }))
+
+    /*
+     * The reading must survive the write round trip: the client renders the verdict and the formula from
+     * what came back, so silently losing it here would show the user a different question than the one
+     * they saved. This asserts preservation rather than rejection-on-absence — the loader deliberately
+     * tolerates an absent source so a specification stored before the field existed still loads and can
+     * be repaired, which the read test above pins.
+     */
+    const created = await boardApi.addSpec(specification)
+    expect(created.affectedItem.aConditions[0].variableSource).toBe('reported')
+    expect(created.currentItems[0].aConditions[0].variableSource).toBe('reported')
+  })
+
   it('rejects a reversible specification mutation without undo availability', async () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({
       operation: 'created',

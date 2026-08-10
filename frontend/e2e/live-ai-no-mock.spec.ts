@@ -53,7 +53,7 @@ test.describe('live AI full-stack audit', () => {
     expect(recommendationBody.code, JSON.stringify(recommendationBody)).toBe(200)
     expect(recommendationBody.data.scene).toMatchObject({
       schema: 'iot-verify.board-scene',
-      version: 4
+      version: 5
     })
     expect(Array.isArray(recommendationBody.data.scene.devices)).toBeTruthy()
     expect(Array.isArray(recommendationBody.data.scene.rules)).toBeTruthy()

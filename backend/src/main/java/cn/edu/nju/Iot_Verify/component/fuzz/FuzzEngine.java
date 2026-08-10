@@ -436,6 +436,10 @@ public final class FuzzEngine {
             if ("trust".equals(targetType) || "privacy".equals(targetType)) {
                 return trustPrivacyUnsupported();
             }
+            if ("variable".equals(targetType)
+                    && "reported".equals(normalized(condition.getVariableSource()))) {
+                return reportedReadingUnsupported();
+            }
         }
         try {
             model.validateSpecification(specification);
@@ -443,6 +447,21 @@ public final class FuzzEngine {
         } catch (FuzzModel.ModelException exception) {
             return new UnsupportedReason("INVALID_SPECIFICATION", exception.getMessage());
         }
+    }
+
+    /**
+     * The explorer has one value per shared key and no per-device mirror, and models no compromise, so it
+     * cannot tell "what this device said" from "what the home held" — it would answer the {@code
+     * environment} question and label the answer as the {@code reported} specification's. Reporting the
+     * specification as unexplored is the honest outcome: a user cannot otherwise learn that the falsification
+     * case they asked about was never covered, because the run-level limitation notes are generic.
+     */
+    private static UnsupportedReason reportedReadingUnsupported() {
+        return new UnsupportedReason(
+                "REPORTED_READING_UNSUPPORTED",
+                "Bounded exploration keeps one value per shared reading and models no compromised device, so "
+                        + "it cannot answer what a device reports as distinct from what the home held; use "
+                        + "formal verification for this specification.");
     }
 
     private static UnsupportedReason trustPrivacyUnsupported() {

@@ -31,6 +31,15 @@ public class SpecificationRecommendationDto {
         private String targetType;
         private String key;
         private String propertyScope;
+        /**
+         * Which question a variable condition asks — see {@code SpecConditionDto.variableSource}.
+         *
+         * <p>Required here for the same reason as in the portable scene DTO: the mapper is strict about
+         * unknown properties, so one recommended variable condition carrying this field would fail
+         * {@code convertValue}, which the controller reports as a 502 for the whole response — the user
+         * gets no recommendations rather than the rest of them.
+         */
+        private String variableSource;
         private String relation;
         private String value;
     }

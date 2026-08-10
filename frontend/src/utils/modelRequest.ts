@@ -216,8 +216,25 @@ const buildSpecs = (specifications: Specification[]) => {
   const resolveConditionRef = (ref: string | null | undefined) =>
     ref ? resolveDeviceVarName(ref) : ref
 
+  // A variable condition must say which value it means. Sending it without one would fail
+  // admission anyway; throwing here names the condition instead of surfacing a field-path error
+  // from the server, and guarantees no code path can invent a default on the way out.
+  const requireVariableSource = (condition: any): string => {
+    const source = String(condition?.variableSource || '').trim().toLowerCase()
+    if (source !== 'environment' && source !== 'reported') {
+      throw new Error(
+        `Specification variable condition on '${condition?.key}' requires variableSource`)
+    }
+    return source
+  }
+
   const mapCondition = (condition: any) => ({
     ...condition,
+    // The backend refuses the field on a non-variable condition, so it is dropped rather than
+    // passed through from a draft that changed type after the source was picked.
+    variableSource: condition.targetType === 'variable'
+      ? requireVariableSource(condition)
+      : undefined,
     deviceId: resolveConditionRef(condition.deviceId),
     relation: condition.targetType === 'api'
       ? (normalizeModelRelation(condition.relation) || '=')

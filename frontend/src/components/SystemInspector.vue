@@ -13,6 +13,7 @@ import type { Specification } from '../types/spec'
 import { specTemplateDetails } from '../assets/config/specTemplates'
 import { useI18n } from 'vue-i18n'
 import { buildSpecFormula } from '@/utils/spec'
+import { verdictVariableSourceKeys } from '@/views/board/verdictVariableSource'
 import {
   canonicalNaturalChangeRate,
   naturalChangeCandidateValues,
@@ -682,9 +683,13 @@ const displaySpecs = computed(() => {
       id: spec.id,
       name: `${specType}${deviceInfo}`,
       formula: buildSpecFormula(spec, {
-        nodes: props.devices,
-        deviceTemplates: props.deviceTemplates
+        nodes: props.devices
       }),
+      // The formula alone renders the two readings as one differing token in a monospace string, and an
+      // unrecorded one as a literal `<unresolved>`. This is the surface where a user scans their whole
+      // specification set, so it names the reading in the same words the editor and verdict rows use.
+      variableSourceLabels: verdictVariableSourceKeys(spec)
+        .map(key => ({ key, label: t(key), unresolved: key === 'app.specVariableSourceUnresolvedShort' })),
       status: t('app.active'),
       searchText: [
         spec.id,
@@ -693,9 +698,9 @@ const displaySpecs = computed(() => {
         specType,
         deviceInfo,
         ...(spec.devices || []).flatMap(device => [device.deviceId, device.deviceLabel, ...(device.selectedApis || [])]),
-        ...(spec.aConditions || []).flatMap(condition => [condition.deviceId, condition.deviceLabel, condition.targetType, condition.propertyScope, condition.key, condition.relation, condition.value]),
-        ...(spec.ifConditions || []).flatMap(condition => [condition.deviceId, condition.deviceLabel, condition.targetType, condition.propertyScope, condition.key, condition.relation, condition.value]),
-        ...(spec.thenConditions || []).flatMap(condition => [condition.deviceId, condition.deviceLabel, condition.targetType, condition.propertyScope, condition.key, condition.relation, condition.value])
+        ...(spec.aConditions || []).flatMap(condition => [condition.deviceId, condition.deviceLabel, condition.targetType, condition.propertyScope, condition.variableSource, condition.key, condition.relation, condition.value]),
+        ...(spec.ifConditions || []).flatMap(condition => [condition.deviceId, condition.deviceLabel, condition.targetType, condition.propertyScope, condition.variableSource, condition.key, condition.relation, condition.value]),
+        ...(spec.thenConditions || []).flatMap(condition => [condition.deviceId, condition.deviceLabel, condition.targetType, condition.propertyScope, condition.variableSource, condition.key, condition.relation, condition.value])
       ].join(' ')
     }
   })
@@ -1616,6 +1621,20 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <p class="ml-7 block max-w-full whitespace-pre-wrap break-all rounded border border-slate-100 bg-slate-50 p-1.5 font-mono text-[11px] leading-tight text-slate-600" :data-full-text="spec.formula">
               {{ spec.formula }}
             </p>
+            <!-- Which reading each variable condition asks about, in the user's words rather than as the
+                 `Environment.` / `<device>.` token inside the formula above. -->
+            <div v-if="spec.variableSourceLabels.length" class="ml-7 mt-1 flex flex-wrap gap-1">
+              <!-- An unresolved reading blocks the run, so it must not read as a neutral fact here. -->
+              <span
+                v-for="entry in spec.variableSourceLabels"
+                :key="entry.key"
+                class="rounded border px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
+                :class="entry.unresolved
+                  ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
+                  : 'border-slate-200 bg-slate-100 text-slate-600'"
+                data-testid="inspector-spec-variable-source"
+              >{{ entry.label }}</span>
+            </div>
           </div>
 
           <!-- Empty state when no specifications -->

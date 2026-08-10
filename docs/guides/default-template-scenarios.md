@@ -1,7 +1,7 @@
 # Additional Default-Template Scenarios
 
 These scenes exercise default templates beyond the night-watch acceptance demo. Each
-file is a standard version 4 `iot-verify.board-scene` document that can be imported from
+file is a standard version 5 `iot-verify.board-scene` document that can be imported from
 the Board without creating or editing a custom template.
 
 Verified against code and real NuSMV on 2026-07-13. Sources:

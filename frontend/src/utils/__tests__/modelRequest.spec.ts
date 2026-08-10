@@ -140,6 +140,49 @@ describe('modelRequest', () => {
     expect(verification.rules[0].id).toBeUndefined()
   })
 
+  it('refuses to send a variable condition that never said which value it means', () => {
+    const withVariableCondition = (variableSource?: string) => () => buildLocalSceneFingerprint({
+      nodes,
+      deviceTemplates,
+      rules: [],
+      specifications: [
+        {
+          ...specifications[0],
+          aConditions: [{
+            ...specifications[0].aConditions[0],
+            targetType: 'variable',
+            ...(variableSource ? { variableSource } : {}),
+            key: 'power',
+            relation: '=',
+            value: '1'
+          }]
+        }
+      ] as any[],
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
+      enablePrivacy: false
+    })
+
+    expect(withVariableCondition()).toThrow(/variableSource/)
+    expect(withVariableCondition('reported')().specs![0].aConditions[0].variableSource)
+      .toBe('reported')
+    // The backend refuses the field on other condition types, so a draft that changed type after
+    // the source was picked must not carry it out.
+    const stateCondition = buildLocalSceneFingerprint({
+      nodes,
+      deviceTemplates,
+      rules: [],
+      specifications: [
+        {
+          ...specifications[0],
+          aConditions: [{ ...specifications[0].aConditions[0], variableSource: 'reported' }]
+        }
+      ] as any[],
+      attackScenario: { mode: 'NONE', budget: 0, points: [] },
+      enablePrivacy: false
+    })
+    expect(stateCondition.specs![0].aConditions[0].variableSource).toBeUndefined()
+  })
+
   it('canonicalizes disabled attack inputs to a NONE scenario', () => {
     const verification = buildVerificationRequestPayload({
       attackScenario: { mode: 'NONE', budget: 9, points: [] },
@@ -501,6 +544,7 @@ describe('modelRequest', () => {
               ...specifications[0].aConditions[0],
               key: 'power',
               targetType: 'variable',
+              variableSource: 'environment',
               relation: 'NOT_IN',
               value: '1,2'
             }

@@ -26,6 +26,7 @@ import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.BoardEnvironmentVariablePo;
 import cn.edu.nju.Iot_Verify.po.BoardEditEntityType;
 import cn.edu.nju.Iot_Verify.po.BoardEditOperation;
+import cn.edu.nju.Iot_Verify.po.DeviceNodeId;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.po.RulePo;
@@ -61,6 +62,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -501,6 +503,127 @@ class BoardStorageServiceImplBatchTest {
                         && savedSpec.getDevices().size() == 1
                         && "sensor1".equals(savedSpec.getDevices().get(0).getDeviceId())
                         && savedSpec.getDevices().get(0).getSelectedApis().isEmpty()), anyLong());
+    }
+
+    @Test
+    void addNodes_isNotBlockedByAStoredSpecificationThatNeverChoseItsReading() {
+        /*
+         * Device, rule and layout writes revalidate the WHOLE stored specification collection. When a
+         * missing reading was rejected there, one specification written before the field existed made every
+         * unrelated mutation fail — adding a device returned `specs[0].aConditions[0].variableSource is
+         * required`, naming a specification the request did not contain, and the user could no longer add or
+         * rename a device at all. The only operation left was deleting the specification.
+         *
+         * The absent case stays fail-closed where it belongs: the generator refuses to compile it, the
+         * verification request validator rejects the run, and the board blocks the run with a reason. What
+         * it must not do is block writes that have nothing to do with it.
+         */
+        DeviceNodeDto node = boardNode("sensor1", "Temperature Sensor", "Living Sensor");
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L)
+                .name("Temperature Sensor")
+                .manifestJson(JsonUtils.toJson(DeviceTemplateDto.DeviceManifest.builder()
+                        .name("Temperature Sensor")
+                        .internalVariables(List.of(
+                                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                        .name("temperature")
+                                        .isInside(false)
+                                        .lowerBound(0)
+                                        .upperBound(100)
+                                        .trust("untrusted")
+                                        .privacy("public")
+                                        .build()))
+                        .build()))
+                .build();
+
+        SpecConditionDto legacyCondition = new SpecConditionDto();
+        legacyCondition.setId("legacy-c1");
+        legacyCondition.setSide("a");
+        legacyCondition.setDeviceId("sensor1");
+        legacyCondition.setTargetType("variable");
+        legacyCondition.setKey("temperature");
+        legacyCondition.setRelation(">");
+        legacyCondition.setValue("28");
+        // No variableSource: exactly what a row written before this field deserializes to.
+
+        SpecificationDto legacySpec = new SpecificationDto();
+        legacySpec.setId("legacy-spec");
+        legacySpec.setTemplateId("1");
+        legacySpec.setAConditions(List.of(legacyCondition));
+
+        SpecificationPo legacyPo = new SpecificationPo();
+        // Lenient: the point of the test is that the write SUCCEEDS, so which of the persistence collabo-
+        // rators it happens to touch is not the claim. Strict stubbing would make this test fail whenever
+        // saveNodes' internals change, for a reason unrelated to what it asserts.
+        lenient().when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        lenient().when(specRepo.findByUserId(1L)).thenReturn(List.of(legacyPo));
+        lenient().when(specificationMapper.toDto(legacyPo)).thenReturn(legacySpec);
+        lenient().when(ruleRepo.findByUserId(1L)).thenReturn(List.of());
+        lenient().when(deviceNodeMapper.toEntity(any(), anyLong())).thenReturn(new DeviceNodePo());
+        lenient().when(nodeRepo.saveAll(any())).thenReturn(List.of(new DeviceNodePo()));
+        lenient().when(deviceNodeMapper.toDto(any())).thenReturn(node);
+
+        assertDoesNotThrow(() -> service.saveNodes(1L, List.of(node)),
+                "a stored specification with no recorded reading must not block an unrelated device write");
+    }
+
+    @Test
+    void saveBoardBatch_normalizesVariableSourceForStorage() {
+        /*
+         * Asserted at the mapper boundary rather than at validation, because that is where the defect was:
+         * `canonicalizeSpecConditionsForStorage` rebuilds each condition field by field, and the field was
+         * missing from it. Validation accepted the request, the row persisted blank, and the specification
+         * reloaded unresolved — for every variable condition a user authored. The accept-side validation
+         * tests could not see it; they stop one layer above.
+         */
+        DeviceNodeDto node = boardNode("sensor1", "Temperature Sensor", "Living Sensor");
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L)
+                .name("Temperature Sensor")
+                .manifestJson(JsonUtils.toJson(DeviceTemplateDto.DeviceManifest.builder()
+                        .name("Temperature Sensor")
+                        .internalVariables(List.of(
+                                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                        .name("temperature")
+                                        .isInside(false)
+                                        .lowerBound(0)
+                                        .upperBound(100)
+                                        .trust("untrusted")
+                                        .privacy("public")
+                                        .build()))
+                        .build()))
+                .build();
+
+        SpecConditionDto condition = new SpecConditionDto();
+        condition.setId("c1");
+        condition.setSide("a");
+        condition.setDeviceId("sensor1");
+        condition.setTargetType("variable");
+        condition.setKey("temperature");
+        // Mixed case on purpose: canonicalization must normalize it, not reject or pass it through, or the
+        // generator's equals() lookup and this stored value would disagree.
+        condition.setVariableSource("Environment");
+        condition.setRelation(">");
+        condition.setValue("28");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec1");
+        spec.setTemplateId("3");
+        spec.setAConditions(List.of(condition));
+
+        when(deviceNodeMapper.toEntity(any(), anyLong())).thenReturn(new DeviceNodePo());
+        when(nodeRepo.saveAll(any())).thenReturn(List.of(new DeviceNodePo()));
+        when(deviceNodeMapper.toDto(any())).thenReturn(node);
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(ruleRepo.findByUserId(1L)).thenReturn(List.of());
+        when(specificationMapper.toEntity(any(), anyLong())).thenReturn(new SpecificationPo());
+        when(specRepo.saveAll(any())).thenReturn(List.of());
+
+        service.saveBoardBatch(1L,
+                confirmedBatch(service, new BoardBatchDto(List.of(node), List.of(), List.of(spec))));
+
+        verify(specificationMapper).toEntity(argThat(savedSpec ->
+                "environment".equals(savedSpec.getAConditions().get(0).getVariableSource())), anyLong());
     }
 
     @Test
@@ -1509,6 +1632,171 @@ class BoardStorageServiceImplBatchTest {
         verify(nodeRepo).save(stored);
     }
 
+    /**
+     * A variable condition names one of two different values, so admission must make the author say which.
+     *
+     * <p>{@code environment} compiles to the shared pool value — "did this happen in the home" —
+     * and {@code reported} to what this device said. They are equal until the device is compromised, and
+     * then they are not: before this field existed the builder always chose the pool value and dropped the
+     * device the author picked, so "temperature never exceeds 30" was reported SATISFIED while a falsified
+     * reading of 40 drove the rule.
+     *
+     * <p>Four outcomes are pinned here because each fails differently: absent (no question chosen),
+     * environment-on-a-device-local variable (names an identifier the model never declares), present on a
+     * non-variable target (meaningless), and the two legitimate accepts.
+     */
+    private SpecificationDto specWithVariableSource(String key, String variableSource, String targetType) {
+        SpecConditionDto condition = new SpecConditionDto();
+        condition.setId("condition-1");
+        condition.setSide("a");
+        condition.setDeviceId("sensor_1");
+        condition.setTargetType(targetType);
+        condition.setKey(key);
+        condition.setVariableSource(variableSource);
+        condition.setRelation("=");
+        condition.setValue("present");
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("safety-1");
+        spec.setTemplateId("7");
+        spec.setAConditions(List.of(condition));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+        return spec;
+    }
+
+    /** {@code shared} declares occupancy with IsInside=false, so it has a pool value; local does not. */
+    private BoardStorageServiceImpl serviceWithVariableTemplate(boolean shared) {
+        BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
+                nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
+        DeviceTemplateDto.DeviceManifest.InternalVariable variable =
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("occupancy")
+                        .isInside(!shared)
+                        .values(List.of("present", "absent"))
+                        .trust("trusted")
+                        .privacy("public")
+                        .build();
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Sensor")
+                .internalVariables(List.of(variable))
+                // Mode-less on purpose: a sensor with modes would need a node state as well, which is
+                // scaffolding unrelated to the variableSource gate under test.
+                .modes(List.of())
+                .initState("")
+                .workingStates(List.of())
+                .build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L)
+                .name("Sensor")
+                .manifestJson(JsonUtils.toJson(manifest))
+                .build();
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Occupancy Sensor");
+        node.setTemplateName("Sensor");
+        DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+        position.setX(0.0);
+        position.setY(0.0);
+        node.setPosition(position);
+        node.setWidth(176);
+        node.setHeight(128);
+        // Lenient because this helper serves tests that stop at different depths: the
+        // missing-reading case is refused before any template is consulted (that check needs no
+        // declaration), while the environment-on-device-local case must reach the manifest.
+        lenient().when(nodeRepo.findByUserId(1L)).thenReturn(List.of(new DeviceNodePo()));
+        lenient().when(deviceNodeMapper.toDto(any())).thenReturn(node);
+        lenient().when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        lenient().when(specRepo.findByUserId(1L)).thenReturn(List.of());
+        return serviceWithTemplates;
+    }
+
+    @Test
+    void addSpec_rejectsVariableConditionWithoutVariableSource() {
+        /*
+         * Refused before any template or manifest is consulted, because "did the author choose?" needs no
+         * declaration to answer. That ordering is deliberate: the same semantic validation also runs over
+         * *stored* specifications to guard device and rule writes, so requiring a choice there would have
+         * made one legacy specification block every unrelated mutation. The requirement lives on the write
+         * that authors the specification instead — hence `lenient()`, as the template stubs this fixture
+         * sets up are no longer reached.
+         */
+        BoardStorageServiceImpl service = serviceWithVariableTemplate(true);
+
+        ValidationException error = assertThrows(ValidationException.class,
+                () -> service.addSpec(1L, specWithVariableSource("occupancy", null, "variable")));
+
+        assertTrue(error.getErrors().values().stream()
+                        .anyMatch(message -> message.contains("variableSource is required")),
+                () -> "Expected a variableSource requirement, got " + error.getErrors());
+        verify(specRepo, never()).save(any());
+    }
+
+    @Test
+    void addSpec_rejectsVariableSourceOnANonVariableTarget() {
+        // The class comment claims this outcome is pinned; it was not. A reading on a state or mode
+        // condition is meaningless — there is no second value to choose between — and silently ignoring it
+        // would let a caller believe a distinction was recorded when none applies.
+        BoardStorageServiceImpl service = serviceWithVariableTemplate(true);
+
+        ValidationException error = assertThrows(ValidationException.class,
+                () -> service.addSpec(1L, specWithVariableSource("state", "environment", "state")));
+
+        assertTrue(error.getErrors().values().stream()
+                        .anyMatch(message -> message.contains("only valid for variable conditions")),
+                () -> "Expected a non-variable rejection, got " + error.getErrors());
+        verify(specRepo, never()).save(any());
+    }
+
+    @Test
+    void addSpec_rejectsEnvironmentSourceOnDeviceLocalVariable() {
+        BoardStorageServiceImpl service = serviceWithVariableTemplate(false);
+
+        ValidationException error = assertThrows(ValidationException.class,
+                () -> service.addSpec(1L, specWithVariableSource("occupancy", "environment", "variable")));
+
+        assertTrue(error.getErrors().values().stream()
+                        .anyMatch(message -> message.contains("needs a shared variable")),
+                () -> "Expected a shared-variable rejection, got " + error.getErrors());
+        verify(specRepo, never()).save(any());
+    }
+
+    /**
+     * The accepts are asserted as "not rejected by validation", not as a completed save: this class stubs
+     * the specification mapper only where a test needs the persisted row, and reaching the mapper at all
+     * proves the condition cleared every semantic gate. A {@link ValidationException} here would be the
+     * regression; the NPE from the unstubbed mapper is this fixture's boundary, not a product failure.
+     */
+    private void assertPassesSpecValidation(BoardStorageServiceImpl service, SpecificationDto spec) {
+        try {
+            service.addSpec(1L, spec);
+        } catch (ValidationException rejected) {
+            throw new AssertionError("Expected the condition to clear validation, got " + rejected.getErrors(),
+                    rejected);
+        } catch (RuntimeException reachedPersistence) {
+            // Past validation. Anything the stub-less mapper throws is out of scope for this assertion.
+        }
+    }
+
+    @Test
+    void addSpec_bothVariableSourcesClearValidationOnASharedDeclaration() {
+        BoardStorageServiceImpl service = serviceWithVariableTemplate(true);
+
+        assertPassesSpecValidation(service,
+                specWithVariableSource("occupancy", "environment", "variable"));
+        assertPassesSpecValidation(service,
+                specWithVariableSource("occupancy", "reported", "variable"));
+    }
+
+    @Test
+    void addSpec_acceptsReportedOnADeviceLocalVariable() {
+        BoardStorageServiceImpl service = serviceWithVariableTemplate(false);
+
+        assertPassesSpecValidation(service,
+                specWithVariableSource("occupancy", "reported", "variable"));
+    }
+
     @Test
     void addSpec_rejectsUntrustedSourceSafetyApiWithoutModeledEndState() {
         BoardStorageServiceImpl serviceWithTemplates = new BoardStorageServiceImpl(
@@ -1893,6 +2181,10 @@ class BoardStorageServiceImplBatchTest {
         firstCondition.setDeviceLabel("Old label");
         firstCondition.setTargetType("variable");
         firstCondition.setKey("temperature");
+        // Must match the candidate's reading, differently spelled: two conditions are the same
+        // specification only if they ask the same question, and canonicalization is what makes the
+        // spellings comparable.
+        firstCondition.setVariableSource("reported");
         firstCondition.setRelation(">=");
         firstCondition.setValue("30");
 
@@ -1930,6 +2222,10 @@ class BoardStorageServiceImplBatchTest {
         duplicateFirst.setDeviceLabel("New label");
         duplicateFirst.setTargetType("VARIABLE");
         duplicateFirst.setKey("temperature");
+        // Mixed case on both fields on purpose: this test is about duplicate detection, so the condition
+        // must survive authoring validation to reach it, and the reading must normalize the same way the
+        // target type does.
+        duplicateFirst.setVariableSource("Reported");
         duplicateFirst.setRelation("GTE");
         duplicateFirst.setValue("30");
 
@@ -2245,5 +2541,70 @@ class BoardStorageServiceImplBatchTest {
                 service, "conditionSourceVariable", manifest, "illuminance"));
         assertNotNull(ReflectionTestUtils.invokeMethod(
                 service, "conditionSourceVariable", manifest, "temperature"));
+    }
+
+    @Test
+    void deletionPreviewIncludesSpecificationAnchoredToDeviceReadingEnvironmentValue() {
+        /*
+         * An `environment` spec whose anchor device is deleted is correctly removed — the device supplies
+         * the declaration validating the value, making deletion load-bearing — but defect 13 found this
+         * was undisclosed when no verdict row was selected. This test pins that the preview populates
+         * `removedSpecifications` for both cases.
+         */
+        BoardStorageServiceImpl service = new BoardStorageServiceImpl(
+                nodeRepo, environmentRepo, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
+
+        DeviceNodeDto device = boardNode("sensor1", "Temperature Sensor", "Hall");
+        DeviceNodePo devicePo = new DeviceNodePo();
+        devicePo.setId("sensor1");
+
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .internalVariables(List.of(
+                        DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                .name("temperature")
+                                .isInside(false)
+                                .reads(true)
+                                .trust("trusted")
+                                .privacy("public")
+                                .values(List.of("10", "20", "30"))
+                                .build()))
+                .build();
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Temperature Sensor");
+        template.setManifest(manifest);
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec1");
+        spec.setTemplateId("1");
+        spec.setTemplateLabel("Always");
+        SpecConditionDto condition = new SpecConditionDto();
+        condition.setDeviceId("sensor1");
+        condition.setTargetType("variable");
+        condition.setKey("temperature");
+        condition.setVariableSource("environment");
+        condition.setRelation("=");
+        condition.setValue("20");
+        spec.setAConditions(List.of(condition));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        DeviceTemplatePo templatePo = new DeviceTemplatePo();
+        SpecificationPo specPo = new SpecificationPo();
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(devicePo));
+        when(deviceNodeMapper.toDto(devicePo)).thenReturn(device);
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(templatePo));
+        when(environmentRepo.findByUserIdOrderByNameAsc(1L)).thenReturn(List.of());
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of(specPo));
+        when(specificationMapper.toDto(specPo)).thenReturn(spec);
+
+        var preview = service.previewNodeDeletion(1L, "sensor1");
+
+        assertEquals(1, preview.getRemovedSpecifications().size(),
+                "environment spec anchored to deleted device must appear in preview");
+        assertEquals("spec1", preview.getRemovedSpecifications().get(0).getId());
     }
 }

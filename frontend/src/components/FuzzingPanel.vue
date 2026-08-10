@@ -18,6 +18,7 @@ import {
   FUZZ_POPULATION_MIN,
   FUZZ_TARGET_SPEC_MAX,
   getKnownFuzzingSpecificationIssue,
+  type KnownFuzzingSpecificationIssue,
   isKnownFuzzingSpecificationSupported
 } from '@/utils/fuzzingConfig'
 import { fuzzingLimitationKey } from '@/utils/fuzzingPresentation'
@@ -219,10 +220,18 @@ const isOnlySelectedSpec = (id: string) =>
 
 const isSpecEligible = (spec: Specification) => eligibleIds.value.has(spec.id)
 
-const specIneligibilityMessageKey = (spec: Specification) =>
-  getKnownFuzzingSpecificationIssue(spec) === 'TRUST_PRIVACY_UNSUPPORTED'
-    ? 'app.fuzzEligibilityTrustPrivacyUnsupported'
-    : 'app.fuzzEligibilityUnsupportedTemplate'
+// A lookup, not a ternary: a two-way branch silently reported every issue that was not trust/privacy as an
+// unsupported TEMPLATE, so a third reason would have been mislabelled rather than left unhandled.
+const SPEC_INELIGIBILITY_MESSAGE_KEYS: Record<KnownFuzzingSpecificationIssue, string> = {
+  UNSUPPORTED_TEMPLATE: 'app.fuzzEligibilityUnsupportedTemplate',
+  TRUST_PRIVACY_UNSUPPORTED: 'app.fuzzEligibilityTrustPrivacyUnsupported',
+  REPORTED_READING_UNSUPPORTED: 'app.fuzzEligibilityReportedReadingUnsupported'
+}
+
+const specIneligibilityMessageKey = (spec: Specification) => {
+  const issue = getKnownFuzzingSpecificationIssue(spec)
+  return issue ? SPEC_INELIGIBILITY_MESSAGE_KEYS[issue] : 'app.fuzzEligibilityUnsupportedTemplate'
+}
 
 const onSpecChange = (id: string, event: Event) => {
   toggleSpec(id, (event.target as HTMLInputElement).checked)

@@ -205,4 +205,33 @@ describe('fuzzing bounds mirror the backend', () => {
 
       expect(diverged).toEqual([])
     })
+
+  it('flags a reported-reading specification as unexplorable, mirroring the backend', () => {
+    /*
+     * The explorer keeps one value per shared reading and models no compromised device, so it cannot tell
+     * "what this device said" from "what the home held" — it would answer the `environment` question and
+     * label the answer as this specification's. The backend refuses these with
+     * `REPORTED_READING_UNSUPPORTED`; this rule exists so the panel does not offer a run that will be
+     * refused, and must stay in step with it.
+     */
+    const spec = (variableSource?: string) => ({
+      templateId: '1',
+      aConditions: [{
+        deviceId: 'd1',
+        targetType: 'variable',
+        key: 'temperature',
+        variableSource,
+        relation: '>',
+        value: '30'
+      }],
+      ifConditions: [],
+      thenConditions: []
+    }) as any
+
+    expect(getKnownFuzzingSpecificationIssue(spec('reported'))).toBe('REPORTED_READING_UNSUPPORTED')
+    // `environment` IS answerable: it is the one question the explorer's single value represents.
+    expect(getKnownFuzzingSpecificationIssue(spec('environment'))).toBeNull()
+    // A legacy condition that never chose is blocked earlier, at the run gate, not misreported here.
+    expect(getKnownFuzzingSpecificationIssue(spec(undefined))).toBeNull()
+  })
 })

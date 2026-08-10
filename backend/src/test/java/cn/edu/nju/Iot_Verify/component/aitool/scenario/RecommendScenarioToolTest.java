@@ -222,7 +222,7 @@ class RecommendScenarioToolTest {
                                 "id":"spec_1",
                                 "templateId":"4",
                                 "templateLabel":"Immediate response",
-                                "ifConditions":[{"deviceId":"sensor_1","targetType":"variable","key":"a_noise","relation":"=","value":"high"}],
+                                "ifConditions":[{"deviceId":"sensor_1","targetType":"variable","variableSource":"environment","key":"a_noise","relation":"=","value":"high"}],
                                 "thenConditions":[{"deviceId":"light_1","targetType":"state","key":"state","relation":"=","value":"on"}]
                               }
                             ]
@@ -247,7 +247,10 @@ class RecommendScenarioToolTest {
         JsonNode scene = json.path("scene");
 
         assertTrue(json.path("error").isMissingNode(), "unexpected error envelope: " + result);
-        assertEquals(4, scene.path("version").asInt());
+        // 5 since `variableSource` became required on a variable spec condition: the frontend importer
+        // rejects a version-4 file because it cannot supply the field, so a scene this tool emits must
+        // declare 5 or every AI-generated scene would be refused at import.
+        assertEquals(5, scene.path("version").asInt());
         assertEquals(2, scene.path("devices").size());
         assertFalse(scene.path("devices").get(0).has("state"));
         assertEquals(1, scene.path("rules").size());
@@ -454,8 +457,8 @@ class RecommendScenarioToolTest {
                                 "templateId":"1",
                                 "templateLabel":"Always",
                                 "aConditions":[
-                                  {"deviceId":"sensor_1","targetType":"variable","key":"a_noise","relation":"=","value":"high"},
-                                  {"deviceId":"sensor_1","targetType":"variable","key":"missing_variable","relation":"=","value":"high"}
+                                  {"deviceId":"sensor_1","targetType":"variable","variableSource":"environment","key":"a_noise","relation":"=","value":"high"},
+                                  {"deviceId":"sensor_1","targetType":"variable","variableSource":"environment","key":"missing_variable","relation":"=","value":"high"}
                                 ]
                               }
                             ]

@@ -126,6 +126,58 @@ compare an unconstrained free variable over the declared domain, not the shared 
 would return `200` and then answer a question about something the device never observes, which is why
 this branch fails closed while the label branch stays open. Two model facts, not one inconsistency.
 
+### Two questions, and which one a specification asks
+
+Because the mirror exists, a shared value has **two** identifiers in the model, and a specification
+condition on one is a different question from the same condition on the other:
+
+| `variableSource` | Compiles to | Asks |
+| :--- | :--- | :--- |
+| `environment` | `a_<name>` | Did this actually happen in the home? |
+| `reported` | `<device>.<name>` | Is this what this device said? |
+
+Outside attack modelling the two are provably equal, because the mirror is *defined* as the pool
+value. Under compromise they diverge: a falsifiable declaration's mirror is free over its domain, so
+the device can report a value the home never held. This is why `SpecConditionDto.variableSource` has
+**no default** — presenting either as the author's intent is a false statement about what was
+verified. A `variable` condition without it is refused on every path that **authors** a
+specification — board storage's `addSpec` and `/board/batch`, the verify request validator, and
+`ManageSpecTool` — and generation reports it as a skipped specification rather than guessing.
+
+Whole-board revalidation is the deliberate exception. Device, rule, and layout writes re-check the
+specifications *already in storage*, and demanding a reading there made one specification written
+before the field existed block every unrelated mutation: adding a device failed with
+`specs[0].aConditions[0].variableSource is required`, naming a specification the request did not
+contain. Absence is already fail-closed where it decides an answer — the generator refuses to compile
+it, the verify validator rejects the run, and the board blocks the run with an inline reason and badges
+the specification unresolved — so a fourth refusal there bought nothing and cost the user every other
+operation. An **invalid** value, and `environment` on a device-local declaration, stay refused wherever
+they appear: those are reference errors, not an unanswered question.
+
+The generator's `environment` branch inherits the read-capability gate rather than re-deriving it: it
+resolves the key through the Reads-gated `getEnvVariables()`, so an affect-only declaration lands on the
+existing "no value in the home to compare against" refusal instead of compiling against a pool value the
+device never observes. Combined with the narrowing in §4, which rejects such a key at both writer
+boundaries before `variableSource` is examined, the two questions are only ever asked of a read-capable
+declaration. Widening that would mean deciding an affect-only value is a legitimate *specification*
+subject — a product question, not a normalization detail. Separately, `environment` requires a shared
+declaration: a device-local value (`IsInside: true`) has no pool identifier at all, so asking it is
+refused with the declaration named.
+
+The client carries the same "no default" rule rather than filling it in before the request: the
+condition editor presents both readings for a shared value with neither preselected, offers only
+`reported` for a device-local one, and names the chosen reading on every display surface (formula
+preview, plain-language description, condition rows, counterexample verdicts). A stored condition
+without a recorded choice renders as unresolved and blocks the run instead of being assigned a side
+on load. Portable scene files declare `version: 5` for this reason — a version-4 file cannot supply
+the field and no guess preserves what its specifications assert.
+
+The asymmetry with rules is intended and load-bearing. A rule or a device transition is *inside* the
+system and can only act on what a sensor reported, so it always compiles to the mirror. A
+specification is an observer's assertion *about* the system, so it may read ground truth. Without
+that asymmetry a spoofed reading would be both the question and the answer, and attack modelling
+could prove nothing.
+
 Its Environment Pool labels do reach the model: `SmvGenerator.applyEnvironmentPoolLabels` keys off
 `sharedDeclarations` (read *and* affect-only), not the narrower capability set. Keying it off the
 latter silently dropped a user's label edit for exactly the rows the panel renders as editable —

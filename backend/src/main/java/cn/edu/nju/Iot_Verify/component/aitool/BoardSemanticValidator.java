@@ -186,7 +186,10 @@ public final class BoardSemanticValidator {
                 RuleDto.Condition::getTargetType,
                 RuleDto.Condition::getAttribute,
                 RuleDto.Condition::getRelation,
-                RuleDto.Condition::getValue
+                RuleDto.Condition::getValue,
+                // A rule guard has no such choice: it always reads the device's own value, so all
+                // rule conditions on one key belong to a single jointly-constrained group.
+                ignored -> null
         );
         if (variableIssue != null) {
             return variableIssue;
@@ -327,7 +330,8 @@ public final class BoardSemanticValidator {
                 SpecConditionDto::getTargetType,
                 SpecConditionDto::getKey,
                 SpecConditionDto::getRelation,
-                SpecConditionDto::getValue
+                SpecConditionDto::getValue,
+                SpecConditionDto::getVariableSource
         );
         if (variableIssue != null) {
             return withSpecSide(variableIssue, side);
@@ -448,14 +452,22 @@ public final class BoardSemanticValidator {
             Function<T, String> targetTypeGetter,
             Function<T, String> keyGetter,
             Function<T, String> relationGetter,
-            Function<T, String> valueGetter) {
+            Function<T, String> valueGetter,
+            Function<T, String> variableSourceGetter) {
         Map<String, List<T>> groups = new LinkedHashMap<>();
         for (T condition : conditions) {
             if (condition == null || !"variable".equals(normalize(targetTypeGetter.apply(condition)))
                     || !hasText(deviceGetter.apply(condition)) || !hasText(keyGetter.apply(condition))) {
                 continue;
             }
-            String groupKey = deviceGetter.apply(condition).trim() + "\u0000" + keyGetter.apply(condition).trim();
+            // The reading belongs in the group key: two conditions on one key asking *different* questions
+            // are not jointly constrained, because under compromise the pool value and the device's report
+            // may legitimately disagree. Grouped together, "the home is below 30 AND this sensor reports
+            // above 40" — the falsified-reading specification this field exists to express — collapsed into
+            // one contradictory group and was refused as unsatisfiable.
+            String groupKey = deviceGetter.apply(condition).trim()
+                    + "\u0000" + normalize(variableSourceGetter.apply(condition))
+                    + "\u0000" + keyGetter.apply(condition).trim();
             groups.computeIfAbsent(groupKey, ignored -> new ArrayList<>()).add(condition);
         }
         for (List<T> group : groups.values()) {

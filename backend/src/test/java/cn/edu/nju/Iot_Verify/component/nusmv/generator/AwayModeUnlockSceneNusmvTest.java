@@ -86,7 +86,7 @@ class AwayModeUnlockSceneNusmvTest {
         ObjectMapper objectMapper = new ObjectMapper();
         JsonNode scene = objectMapper.readTree(Files.readString(SCENE_PATH));
         assertEquals("iot-verify.board-scene", scene.path("schema").asText());
-        assertEquals(4, scene.path("version").asInt());
+        assertEquals(5, scene.path("version").asInt());
         assertEquals(5, scene.path("devices").size());
         assertEquals(3, scene.path("rules").size());
         assertEquals(6, scene.path("specs").size());
@@ -590,6 +590,7 @@ class AwayModeUnlockSceneNusmvTest {
             condition.setTargetType(row.path("targetType").asText());
             condition.setKey(row.path("key").asText());
             condition.setPropertyScope(textOrNull(row, "propertyScope"));
+            condition.setVariableSource(textOrNull(row, "variableSource"));
             condition.setRelation(row.path("relation").asText());
             condition.setValue(row.path("value").asText());
             conditions.add(condition);

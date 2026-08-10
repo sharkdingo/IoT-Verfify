@@ -61,6 +61,10 @@ public final class SpecificationToolPresenter {
             putIfText(row, "targetType", condition.getTargetType());
             putIfText(row, "key", condition.getKey());
             putIfText(row, "propertyScope", condition.getPropertyScope());
+            // The structured row is what the assistant rebuilds a condition from when asked to edit one.
+            // With the reading only in the prose summary it could describe a specification correctly and
+            // still round-trip it into the other question, or omit the now-required field and be rejected.
+            putIfText(row, "variableSource", condition.getVariableSource());
             putIfText(row, "relation", condition.getRelation());
             putIfText(row, "value", condition.getValue());
             row.put("summary", describeCondition(condition, context));
@@ -106,8 +110,19 @@ public final class SpecificationToolPresenter {
                 && text(condition.getPropertyScope()) != null) {
             subject = label + " " + condition.getPropertyScope().trim() + " "
                     + (key != null ? key : "property") + " " + targetType;
-        } else if (context.isSharedVariable(condition.getDeviceId(), key)) {
-            subject = "Environment." + (key != null ? key : "property");
+        } else if ("variable".equalsIgnoreCase(targetType)) {
+            // The declared question, not an inference from sharedness. This prose is what the assistant
+            // reads back when describing existing specifications, so guessing here would have it tell the
+            // user their spec is about the home when it is about what one device reported.
+            String variableSource = text(condition.getVariableSource());
+            String named = key != null ? key : "property";
+            if (variableSource == null) {
+                subject = "<unresolved>." + named;
+            } else if ("environment".equalsIgnoreCase(variableSource.trim())) {
+                subject = "Environment." + named;
+            } else {
+                subject = label + "." + named;
+            }
         } else {
             subject = label + "." + (key != null ? key : targetType != null ? targetType : "property");
         }

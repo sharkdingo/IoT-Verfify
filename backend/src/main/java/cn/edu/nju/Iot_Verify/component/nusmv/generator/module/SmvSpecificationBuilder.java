@@ -193,6 +193,25 @@ public class SmvSpecificationBuilder {
         String detail = exception != null && exception.getMessage() != null
                 ? exception.getMessage().toLowerCase(Locale.ROOT)
                 : "";
+        // First, because this classifier matches on substrings and the message below necessarily talks
+        // about values. Left to fall through, it matched the `contains("value")` arm and told the user to
+        // check a value domain that was never the problem.
+        // Matches the *unanswered* case only, by the phrase unique to it. Matching bare "variablesource"
+        // also caught the device-local rejection below, whose message ends "use variableSource=reported" —
+        // telling a user who DID choose to go and choose. Both arms must precede the `contains("value")` one
+        // further down, since either message necessarily talks about values.
+        if (detail.contains("does not say which value it means")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_VARIABLE_SOURCE_REQUIRED,
+                    "A condition does not say whether it checks the actual value in the home or what the "
+                            + "device reported. Edit the specification and choose one.");
+        }
+        if (detail.contains("no value in the home to compare")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_INVALID_VALUE,
+                    "A condition asks about the value in the home for a property that exists only inside "
+                            + "one device, so there is nothing in the home to compare against.");
+        }
         if (detail.contains("unsupported relation") || detail.contains("only supports")) {
             return translationFailure(
                     ModelGenerationIssueReasonCode.SPEC_UNSUPPORTED_RELATION,
@@ -739,14 +758,43 @@ public class SmvSpecificationBuilder {
         }
         String normalizedKey = key.trim();
 
+        // Which of two different questions this condition asks is declared, never inferred. It used to be
+        // decided by `envVariables` membership alone, which dropped the `varName` the author had picked: a
+        // condition on a shared variable always compiled to the pool value, so "temperature never exceeds
+        // 30" was reported SATISFIED while a compromised device reported 40 and the rule fired. The device
+        // the user selected in the editor appeared nowhere in the formula. Read-capability handling for each
+        // branch is explained at the branch itself, below.
+        String source = cond.getVariableSource() == null
+                ? null
+                : cond.getVariableSource().trim().toLowerCase(Locale.ROOT);
+        if (source == null || (!"environment".equals(source) && !"reported".equals(source))) {
+            throw new InvalidConditionException("variable condition on '" + normalizedKey + "' for device "
+                    + cond.getDeviceId() + " does not say which value it means: variableSource must be "
+                    + "environment (the value in the home) or reported (what this device said). There is no "
+                    + "default, because the two differ exactly when a device is compromised");
+        }
+
         DeviceManifest.InternalVariable envVariable = smv.getEnvVariables() != null
                 ? smv.getEnvVariables().get(normalizedKey)
                 : null;
-        if (envVariable != null) {
-            return buildVariableConditionExpr("a_" + normalizedKey, cond, envVariable);
+        DeviceManifest.InternalVariable internalVariable = internalVariable(smv, normalizedKey);
+
+        if ("environment".equals(source)) {
+            // `getEnvVariables()` is Reads-gated, and that is the right gate to inherit rather than work
+            // around. An affect-only shared declaration (Reads=false) is refused on the *key* by both writer
+            // boundaries, so it cannot legitimately arrive here; a capability-blind lookup existed to
+            // resolve it anyway, which would have compiled a condition against a pool value this device
+            // never observes instead of refusing it. Failing closed on the throw below is the safer half of
+            // that choice, and it costs nothing that admission allows.
+            DeviceManifest.InternalVariable shared = envVariable;
+            if (shared == null) {
+                throw new InvalidConditionException("variable '" + normalizedKey + "' on device "
+                        + cond.getDeviceId() + " is device-local, so it has no value in the home to compare "
+                        + "against; use variableSource=reported");
+            }
+            return buildVariableConditionExpr("a_" + normalizedKey, cond, shared);
         }
 
-        DeviceManifest.InternalVariable internalVariable = internalVariable(smv, normalizedKey);
         if (internalVariable != null) {
             return buildVariableConditionExpr(varName + "." + normalizedKey, cond, internalVariable);
         }

@@ -997,6 +997,41 @@ class FuzzEngineTest {
     }
 
     @Test
+    void reportsAReportedReadingAsUnexploredRatherThanAnsweringTheEnvironmentQuestion() {
+        /*
+         * The explorer keeps ONE value per shared reading and models no compromised device, so it cannot
+         * tell "what this device said" from "what the home held". Left eligible, such a specification was
+         * evaluated against the pool value and handed a verdict — the falsification case the author asked
+         * about was never covered and nothing said so. `environment` stays eligible, because that is the one
+         * question the single value does represent, and a legacy condition that never chose is blocked at the
+         * run gate rather than mislabelled here.
+         */
+        SpecConditionDto reported = condition("variable", "weather", "=", "rain");
+        reported.setVariableSource("reported");
+        SpecConditionDto environment = condition("variable", "weather", "=", "rain");
+        environment.setVariableSource("environment");
+        SpecConditionDto unchosen = condition("variable", "weather", "=", "rain");
+
+        BoardDataConverter.ModelInputSnapshot snapshot = snapshot(
+                List.of(specification("reported", "1", reported),
+                        specification("environment", "1", environment),
+                        specification("unchosen", "1", unchosen)),
+                List.of(),
+                switchManifest());
+
+        FuzzEngineResult result = engine.run(
+                new FuzzEngineInput(snapshot, new FuzzEngineConfig(List.of(), 0, 3, 2, 5L)),
+                null,
+                () -> false);
+
+        assertEquals("REPORTED_READING_UNSUPPORTED", result.eligibility().get(0).reasonCode());
+        assertTrue(result.eligibility().get(1).supported(),
+                "the environment reading is exactly what the explorer's single value represents");
+        assertTrue(result.eligibility().get(2).supported(),
+                "an unchosen reading is blocked at the run gate, not reported as unexplorable here");
+    }
+
+    @Test
     void usesTypedUnsupportedSemanticsInsteadOfIdentifierSubstrings() {
         SpecificationDto ordinary = specification(
                 "ordinary", "1", conditionForDevice("attack_alarm", "state", "state", "=", "off"));

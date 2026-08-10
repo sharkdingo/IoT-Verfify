@@ -319,6 +319,9 @@ const toBackendSpecificationWriteDto = (spec: Specification) => ({
         targetType: condition.targetType,
         key: condition.key,
         ...(condition.propertyScope ? { propertyScope: condition.propertyScope } : {}),
+        // Required for a variable condition and refused on any other type. Dropping it here is what
+        // made every variable specification fail admission with "variableSource is required".
+        ...(condition.targetType === 'variable' ? { variableSource: condition.variableSource } : {}),
         relation: normalizeModelRelation(condition.relation) || condition.relation,
         value: condition.value
     })),
@@ -327,6 +330,9 @@ const toBackendSpecificationWriteDto = (spec: Specification) => ({
         targetType: condition.targetType,
         key: condition.key,
         ...(condition.propertyScope ? { propertyScope: condition.propertyScope } : {}),
+        // Required for a variable condition and refused on any other type. Dropping it here is what
+        // made every variable specification fail admission with "variableSource is required".
+        ...(condition.targetType === 'variable' ? { variableSource: condition.variableSource } : {}),
         relation: normalizeModelRelation(condition.relation) || condition.relation,
         value: condition.value
     })),
@@ -335,6 +341,9 @@ const toBackendSpecificationWriteDto = (spec: Specification) => ({
         targetType: condition.targetType,
         key: condition.key,
         ...(condition.propertyScope ? { propertyScope: condition.propertyScope } : {}),
+        // Required for a variable condition and refused on any other type. Dropping it here is what
+        // made every variable specification fail admission with "variableSource is required".
+        ...(condition.targetType === 'variable' ? { variableSource: condition.variableSource } : {}),
         relation: normalizeModelRelation(condition.relation) || condition.relation,
         value: condition.value
     }))
@@ -2018,6 +2027,18 @@ const validateBoardSpecificationResult = (value: unknown, context: string): Spec
             }
             if (!['state', 'mode', 'variable', 'api', 'trust', 'privacy'].includes(condition.targetType)) {
                 throw new BoardResponseContractError(context, `${field}[${index}].targetType is invalid`)
+            }
+            // Deliberately NOT rejected when absent. A specification stored before this field existed has
+            // no source, and that is a state the user can act on: the list badges it as unresolved, the
+            // editor asks for a choice, and the run gate blocks with a reason. Throwing here made the whole
+            // specifications collection fail to load, so the user got a permanent red banner and a Retry
+            // that could never succeed — the unresolved path was unreachable for exactly the data it
+            // existed for. A *present but unrecognised* value is still a contract violation: the server
+            // normalizes to one of two literals, so anything else means the payload is not ours.
+            if (condition.targetType === 'variable'
+                && condition.variableSource !== null && condition.variableSource !== undefined
+                && condition.variableSource !== 'environment' && condition.variableSource !== 'reported') {
+                throw new BoardResponseContractError(context, `${field}[${index}].variableSource is invalid`)
             }
             if (!SPEC_RELATIONS.has(normalizeModelRelation(condition.relation) || '')) {
                 throw new BoardResponseContractError(context, `${field}[${index}].relation is invalid`)

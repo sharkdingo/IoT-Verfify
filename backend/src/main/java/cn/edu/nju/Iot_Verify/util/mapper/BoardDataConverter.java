@@ -187,6 +187,7 @@ public class BoardDataConverter {
                     copy.setTargetType(c.getTargetType());
                     copy.setKey(c.getKey());
                     copy.setPropertyScope(c.getPropertyScope());
+                    copy.setVariableSource(c.getVariableSource());
                     copy.setRelation(c.getRelation());
                     copy.setValue(c.getValue());
                     return copy;

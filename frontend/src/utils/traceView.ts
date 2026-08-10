@@ -430,6 +430,25 @@ const formatTraceRelation = (relation?: string, translate?: TraceTranslator): st
   return relations[normalized] || normalized
 }
 
+const formatVariableTarget = (
+  condition: any,
+  device: string,
+  key: string,
+  translate?: TraceTranslator
+): string => {
+  const source = String(condition?.variableSource || '').trim().toLowerCase()
+  if (source === 'environment') {
+    return translateTraceText(translate, 'app.traceVariableInHome', { key },
+      `the actual ${key} in the home`)
+  }
+  if (source === 'reported') {
+    return translateTraceText(translate, 'app.traceVariableReported', { device, key },
+      `the ${key} ${device} reports`)
+  }
+  return translateTraceText(translate, 'app.traceVariableSourceUnresolved', { device, key },
+    `${device} ${key} (which value it means was not recorded)`)
+}
+
 const formatCondition = (condition: any, translate?: TraceTranslator): string => {
   const device = condition?.deviceLabel || condition?.deviceId
     || (translate ? translate('app.unknownDevice') : 'device')
@@ -444,7 +463,15 @@ const formatCondition = (condition: any, translate?: TraceTranslator): string =>
   // state value belongs in: specification 6 of the demo scene read `Front Door.LockState = "private"` —
   // domain-impossible, since LockState's own values are locked/unlocked. A user comparing that against
   // the correct formula preview cannot tell which one is their actual property.
-  const target = `${device}.${key}`
+  // A variable condition answers one of two different questions, and a verdict is unreadable
+  // without knowing which: `environment` is the value in the home (no device participates),
+  // `reported` is what this device said. They diverge exactly when the device is compromised, which
+  // is the case a counterexample is most often about, so the distinction is rendered rather than
+  // collapsed into `device.key`. A condition that never recorded a source is marked unresolved
+  // instead of being shown as either one.
+  const target = condition?.targetType === 'variable'
+    ? formatVariableTarget(condition, device, key, translate)
+    : `${device}.${key}`
   if (condition?.targetType === 'privacy') {
     return value ? `sensitivity(${target}) ${relation} ${value}` : `sensitivity(${target})`
   }

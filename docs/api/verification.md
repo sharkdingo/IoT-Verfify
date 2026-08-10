@@ -415,7 +415,7 @@ clients do not combine a percentage from one phase with a label from another pha
 `SPEC_NO_CHECKABLE_CONDITIONS`,
 `SPEC_PRIVACY_MODELING_DISABLED`, `SPEC_UNSUPPORTED_RELATION`,
 `SPEC_AMBIGUOUS_STATE`, `SPEC_UNDECLARED_SECURITY_PROPERTY`,
-`SPEC_UNKNOWN_DEVICE`, `SPEC_TEMPLATE_SHAPE_MISMATCH`, `SPEC_INVALID_VALUE`,
+`SPEC_UNKNOWN_DEVICE`, `SPEC_TEMPLATE_SHAPE_MISMATCH`, `SPEC_VARIABLE_SOURCE_REQUIRED`, `SPEC_INVALID_VALUE`,
 `SPEC_UNSUPPORTED_CONDITION`, or `UNCLASSIFIED_GENERATION_ISSUE`.
 
 ### `ModelSemanticsDto`
@@ -656,6 +656,7 @@ any API, not only signal APIs.
 | `targetType` | **Required**; `state`, `mode`, `variable`, `api`, `trust`, or `privacy` |
 | `key` | **Required** |
 | `propertyScope` | Required only for `trust`/`privacy`: `state` means the active state in the mode named by `key`; `variable` means the literal template variable named by `key`. Generated `Mode_state` names are invalid |
+| `variableSource` | **Required for `targetType: variable`**, rejected on every other target type. `environment` asks about the value in the home (compiles to the shared pool value, and requires a shared declaration); `reported` asks what this device said. The two differ only when that device is compromised, so there is **no default** — a missing value is rejected here rather than guessed. See [shared-value-semantics.md](../architecture/shared-value-semantics.md) |
 | `relation` | **Required**; same enum as rule conditions |
 | `value` | **Required**; API conditions may be authored without a value in UI/AI helpers and are normalized to `TRUE` before this API boundary |
 

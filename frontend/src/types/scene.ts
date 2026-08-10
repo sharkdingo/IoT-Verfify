@@ -1,7 +1,7 @@
 import type { DeviceManifest } from './device'
 import type { NodePrivacyState, NodeVariableState } from './node'
 import type { RuleSourceItemType } from './rule'
-import type { SpecPropertyScope, SpecTargetType, SpecTemplateId } from './spec'
+import type { SpecPropertyScope, SpecTargetType, SpecTemplateId, SpecVariableSource } from './spec'
 
 export interface PortableSceneTemplate {
   name: string
@@ -51,6 +51,8 @@ export interface PortableSceneCondition {
   targetType: SpecTargetType
   key: string
   propertyScope?: SpecPropertyScope
+  /** Required for a `variable` condition; a scene without it is rejected rather than defaulted. */
+  variableSource?: SpecVariableSource
   relation: string
   value: string
 }
@@ -64,7 +66,7 @@ export interface PortableSceneSpecification {
 
 export interface PortableSceneFile {
   schema: 'iot-verify.board-scene'
-  version: 4
+  version: 5
   templates: PortableSceneTemplate[]
   devices: PortableSceneDevice[]
   environmentVariables: PortableSceneEnvironmentVariable[]

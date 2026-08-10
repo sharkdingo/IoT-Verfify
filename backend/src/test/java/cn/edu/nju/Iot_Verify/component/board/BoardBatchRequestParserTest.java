@@ -108,6 +108,78 @@ class BoardBatchRequestParserTest {
         assertThat(exception.getErrors()).containsKey("nodes[0].id");
     }
 
+    /**
+     * This parser is the scene-import boundary, and it deserializes strictly: a field missing from the DTO
+     * is rejected outright rather than dropped. So the DTO carrying `variableSource` is what makes an
+     * exported scene re-importable at all — without it every bundled scene fails with
+     * "Unknown field 'variableSource'" and no board data changes.
+     */
+    @Test
+    void variableSource_isAcceptedByStrictSceneParsing() throws Exception {
+        JsonNode body = objectMapper.readTree("""
+                {
+                  "impactToken": "token-1",
+                  "nodes": [],
+                  "environmentVariables": [],
+                  "rules": [],
+                  "templateSnapshots": [],
+                  "specs": [{
+                    "id": "spec-1",
+                    "templateId": "1",
+                    "aConditions": [{
+                      "side": "a",
+                      "deviceId": "sensor_1",
+                      "targetType": "variable",
+                      "key": "temperature",
+                      "variableSource": "environment",
+                      "relation": ">",
+                      "value": "30"
+                    }],
+                    "ifConditions": [],
+                    "thenConditions": []
+                  }]
+                }
+                """);
+
+        BoardBatchDto batch = parser.parse(body);
+
+        assertThat(batch.getSpecs().get(0).getAConditions().get(0).getVariableSource())
+                .isEqualTo("environment");
+    }
+
+    @Test
+    void variableSource_toleratesSurroundingWhitespaceLikeRelationDoes() throws Exception {
+        // The service layer trims before comparing, so a padded value is one the semantic gates accept and
+        // canonicalize. Anchoring the DTO pattern without \s* rejected it here first, with a generic message
+        // that hid the actionable one explaining why there is no default.
+        JsonNode body = objectMapper.readTree("""
+                {
+                  "impactToken": "token-1",
+                  "nodes": [],
+                  "environmentVariables": [],
+                  "rules": [],
+                  "templateSnapshots": [],
+                  "specs": [{
+                    "id": "spec-1",
+                    "templateId": "1",
+                    "aConditions": [{
+                      "side": "a",
+                      "deviceId": "sensor_1",
+                      "targetType": "variable",
+                      "key": "temperature",
+                      "variableSource": " environment ",
+                      "relation": " > ",
+                      "value": "30"
+                    }],
+                    "ifConditions": [],
+                    "thenConditions": []
+                  }]
+                }
+                """);
+
+        assertThat(parser.parse(body).getSpecs()).hasSize(1);
+    }
+
     @Test
     void completeEmptyCollectionsRemainAValidReplacementRequest() throws Exception {
         BoardBatchDto batch = parser.parse(objectMapper.readTree("""

@@ -1882,9 +1882,24 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         }
         String triggerRelation = normalizeTriggerRelationOrThrow(
                 smv.getVarName(), "Transition '" + transition.getName() + "'", trigger.getRelation());
-        String triggerRef = smv.getEnvVariables().containsKey(trigger.getAttribute())
-                ? "a_" + trigger.getAttribute()
-                : varName + "." + trigger.getAttribute();
+        // A Transition is the device's own autonomous behaviour, so its guard must read what the
+        // device observes (`<device>.<attr>`), never the environment pool ground truth (`a_<attr>`).
+        // Reading the pool made the device omniscient: under attack the mirror
+        // (`<device>.<attr> := case is_attack: <domain>; TRUE: a_<attr>; esac`) carries the falsified
+        // value, but a pool-reading guard bypassed it, so a compromised sensor could not drive its own
+        // controller and the canonical sensor-spoofing attack was proved impossible (SATISFIED).
+        // `<device>.<attr>` is never dangling. Note that DECLARATION is not the distinguishing step:
+        // `SmvDeviceModuleBuilder.appendInternalVariables` declares every manifest internal variable,
+        // shared and device-local alike (including affect-only ones). What differs is ASSIGNMENT:
+        //   - a mode is declared and assigned by the device module;
+        //   - a device-local variable is assigned by `appendInitialValues` and
+        //     `appendInternalVariableTransitions`, both of which skip non-local names;
+        //   - a shared *reading* is assigned by `appendExternalVariableAssignments` below, as the mirror.
+        // So the residue is "declared but never assigned" — the affect-only shared declaration
+        // (IsInside=false, Reads=false) — and that is exactly what
+        // `SmvModelValidator.buildLegalAttributeSet` refuses as a trigger attribute. An unassigned
+        // identifier is legal SMV that NuSMV re-picks freely every step, which is why refusing it matters.
+        String triggerRef = varName + "." + trigger.getAttribute();
         String triggerCondition = triggerRef + triggerRelation + trigger.getValue().replace(" ", "");
         String startStateGuard = buildStartStateCondition(smv, varName, transition.getStartState());
         return startStateGuard.isEmpty()

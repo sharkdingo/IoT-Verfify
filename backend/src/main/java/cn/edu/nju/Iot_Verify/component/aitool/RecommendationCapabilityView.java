@@ -90,7 +90,11 @@ public final class RecommendationCapabilityView {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("name", variable.getName());
         putDescription(result, variable.getDescription(), variableDescription(variable));
-        result.put("deviceLocal", variable.getIsInside());
+        // Normalized, not passed through raw: `IsInside` is a tri-state Boolean and an omitted declaration
+        // means *shared* everywhere in the product (every gate uses `!Boolean.TRUE.equals(getIsInside())`).
+        // Emitting null here left a shared variable matching neither branch of the rule the prompt states
+        // about this field, with no instruction covering it.
+        result.put("deviceLocal", Boolean.TRUE.equals(variable.getIsInside()));
         result.put("falsifiableWhenCompromised", variable.getFalsifiableWhenCompromised());
         result.put("trust", variable.getTrust());
         result.put("privacy", variable.getPrivacy());

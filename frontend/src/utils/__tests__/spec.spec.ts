@@ -86,7 +86,7 @@ describe('spec formula preview', () => {
     expect(formula).toBe('CTL AG("Living Room AC".state = "on;cool")')
   })
 
-  it('previews external variables at the model boundary as environment variables', () => {
+  it('previews an environment-source variable as the value in the home', () => {
     const formula = buildSpecFormula({
       templateId: '5',
       templateLabel: 'Response',
@@ -97,6 +97,7 @@ describe('spec formula preview', () => {
         deviceId: 'sensor-1',
         deviceLabel: 'Temperature Sensor',
         targetType: 'variable',
+        variableSource: 'environment',
         key: 'temperature',
         relation: '>',
         value: '28'
@@ -116,21 +117,39 @@ describe('spec formula preview', () => {
     expect(formula).toBe('CTL AG((Environment."temperature" > 28) -> AF("Living Room AC"."Mode" = "cool"))')
   })
 
-  it('uses explicitly shared variables as environment values in formula previews', () => {
-    const explicitSharedTemplates: DeviceTemplate[] = deviceTemplates.map(template =>
-      template.name === 'Temperature Sensor'
-        ? {
-            ...template,
-            manifest: {
-              ...template.manifest,
-              InternalVariables: [
-                { Name: 'temperature', IsInside: false, FalsifiableWhenCompromised: true, LowerBound: 0, UpperBound: 50, Trust: 'trusted', Privacy: 'public' }
-              ]
-            }
-          }
-        : template
-    )
+  it('renders the two variable questions distinctly, from the condition rather than the manifest', () => {
+    // `temperature` is declared shared here, so the manifest alone cannot tell the two apart. This
+    // is the defect the field fixes: the preview used to read as the pool value either way, so a
+    // condition the author pinned to one device's reading looked like a claim about the home.
+    const preview = (variableSource: 'environment' | 'reported') => buildSpecFormula({
+      templateId: '1',
+      templateLabel: 'Always',
+      aConditions: [{
+        id: 'a1',
+        side: 'a',
+        deviceId: 'sensor-1',
+        deviceLabel: 'Temperature Sensor',
+        targetType: 'variable',
+        variableSource,
+        key: 'temperature',
+        relation: '>',
+        value: '28'
+      }],
+      ifConditions: [],
+      thenConditions: []
+    } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, context)
 
+    expect(preview('environment')).toBe('CTL AG(Environment."temperature" > 28)')
+    // `<device>."<key>"`, matching the emitted identifier and the backend's own formula preview. The
+    // reading is conveyed by the badge and the plain-language sentence, not by a `.reported.` segment
+    // that exists in no model and leaks internal vocabulary into a formula the user reads.
+    expect(preview('reported')).toBe('CTL AG("Temperature Sensor"."temperature" > 28)')
+    expect(preview('environment')).not.toBe(preview('reported'))
+  })
+
+  it('renders a condition with no recorded variable source as unresolved', () => {
+    // Defaulting either way would present a formula the author never authorised, so the preview
+    // must not look valid. The run is blocked separately.
     const formula = buildSpecFormula({
       templateId: '1',
       templateLabel: 'Always',
@@ -146,12 +165,9 @@ describe('spec formula preview', () => {
       }],
       ifConditions: [],
       thenConditions: []
-    } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, {
-      nodes,
-      deviceTemplates: explicitSharedTemplates
-    })
+    } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, context)
 
-    expect(formula).toBe('CTL AG(Environment."temperature" > 28)')
+    expect(formula).toBe('CTL AG(<unresolved>."temperature" > 28)')
   })
 
   it('previews relation aliases with the canonical NuSMV operators', () => {
@@ -164,6 +180,7 @@ describe('spec formula preview', () => {
         deviceId: 'sensor-1',
         deviceLabel: 'Temperature Sensor',
         targetType: 'variable',
+        variableSource: 'environment',
         key: 'temperature',
         relation: 'GTE',
         value: '28'
@@ -173,6 +190,39 @@ describe('spec formula preview', () => {
     } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, context)
 
     expect(formula).toBe('CTL AG(Environment."temperature" >= 28)')
+  })
+
+  it('names the device in a template-7 trust predicate even for an environment reading', () => {
+    /*
+     * A trust label is device-scoped: the generator emits `<device>.trust_<key>` whatever the reading, and
+     * no pool-level `trust_a_<key>` exists in the model. Reusing the VALUE target rendered this as
+     * `controlSource(Environment."temperature")` — a label NuSMV never declares — so the preview claimed a
+     * property about the home's own provenance while the check was against one named device's label. Under
+     * two sensors the device chosen changes what is proved, and the preview showed nothing to tell them
+     * apart. The value half stays `Environment."..."`, because that IS the pool value.
+     */
+    const formula = buildSpecFormula({
+      templateId: '7',
+      templateLabel: 'Safety',
+      aConditions: [{
+        id: 'a1',
+        side: 'a',
+        deviceId: 'sensor-1',
+        deviceLabel: 'Temperature Sensor',
+        targetType: 'variable',
+        variableSource: 'environment',
+        key: 'temperature',
+        relation: '>',
+        value: '28'
+      }],
+      ifConditions: [],
+      thenConditions: []
+    } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, context)
+
+    // Mixed subjects on purpose, matching the emitted formula: the home's value, that device's label.
+    expect(formula).toContain('Environment."temperature" > 28')
+    expect(formula).toContain('controlSource("Temperature Sensor"."temperature") = untrusted')
+    expect(formula).not.toContain('controlSource(Environment.')
   })
 
   it('previews template 7 safety specs with a concrete trust predicate', () => {
@@ -185,6 +235,7 @@ describe('spec formula preview', () => {
           deviceId: 'sensor-1',
           deviceLabel: 'Temperature Sensor',
           targetType: 'variable',
+          variableSource: 'environment',
           key: 'temperature',
           relation: '>',
           value: '28'
@@ -193,7 +244,7 @@ describe('spec formula preview', () => {
       thenConditions: []
     } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, context)
 
-    expect(formula).toBe('CTL AG NOT (Environment."temperature" > 28 AND controlSource(Environment."temperature") = untrusted)')
+    expect(formula).toBe('CTL AG NOT (Environment."temperature" > 28 AND controlSource("Temperature Sensor"."temperature") = untrusted)')
   })
 
   it('previews every reliability label that contributes to a multi-mode safety state', () => {
@@ -229,6 +280,7 @@ describe('spec formula preview', () => {
           deviceId: 'sensor-1',
           deviceLabel: 'Temperature Sensor',
           targetType: 'variable',
+          variableSource: 'environment',
           key: 'temperature',
           relation: '>',
           value: '28'
@@ -239,6 +291,7 @@ describe('spec formula preview', () => {
           deviceId: 'sensor-1',
           deviceLabel: 'Temperature Sensor',
           targetType: 'variable',
+          variableSource: 'environment',
           key: 'humidity',
           relation: '>',
           value: '70'
@@ -248,24 +301,13 @@ describe('spec formula preview', () => {
       thenConditions: []
     } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, context)
 
-    expect(formula).toBe('CTL AG NOT (Environment."temperature" > 28 AND Environment."humidity" > 70 AND (controlSource(Environment."temperature") = untrusted OR controlSource(Environment."humidity") = untrusted))')
+    expect(formula).toBe('CTL AG NOT (Environment."temperature" > 28 AND Environment."humidity" > 70 AND (controlSource("Temperature Sensor"."temperature") = untrusted OR controlSource("Temperature Sensor"."humidity") = untrusted))')
   })
 
   it('treats a_ as part of a real environment variable name in formula previews', () => {
-    const prefixedTemplates: DeviceTemplate[] = deviceTemplates.map(template =>
-      template.name === 'Temperature Sensor'
-        ? {
-            ...template,
-            manifest: {
-              ...template.manifest,
-              InternalVariables: [
-                { Name: 'a_temperature', IsInside: false, FalsifiableWhenCompromised: true, LowerBound: 0, UpperBound: 50, Trust: 'trusted', Privacy: 'public' }
-              ]
-            }
-          }
-        : template
-    )
-
+    // No manifest fixture: the preview reads the condition's own `variableSource`, so a key that merely
+    // *looks* generated (`a_temperature`) is treated as the literal name the author declared. This used to
+    // need a template whose InternalVariables said the key was shared — that lookup is gone.
     const formula = buildSpecFormula({
       templateId: '7',
       templateLabel: 'Safety',
@@ -275,6 +317,7 @@ describe('spec formula preview', () => {
         deviceId: 'sensor-1',
         deviceLabel: 'Temperature Sensor',
         targetType: 'variable',
+        variableSource: 'environment',
         key: 'a_temperature',
         relation: '>',
         value: '28'
@@ -282,12 +325,39 @@ describe('spec formula preview', () => {
       ifConditions: [],
       thenConditions: []
     } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, {
-      nodes,
-      deviceTemplates: prefixedTemplates
+      nodes
     })
 
-    expect(formula).toBe('CTL AG NOT (Environment."a_temperature" > 28 AND controlSource(Environment."a_temperature") = untrusted)')
+    expect(formula).toBe('CTL AG NOT (Environment."a_temperature" > 28 AND controlSource("Temperature Sensor"."a_temperature") = untrusted)')
     expect(formula).not.toContain('a_a_temperature')
+  })
+
+  it('treats variableSource as part of specification condition identity', () => {
+    // The same key with the other source is a different claim, so the two specifications must not
+    // be deduplicated into one.
+    const spec = (variableSource: 'environment' | 'reported'): Specification => ({
+      id: 'spec-1',
+      templateId: '1',
+      templateLabel: 'Always',
+      devices: [],
+      formula: '',
+      ifConditions: [],
+      thenConditions: [],
+      aConditions: [{
+        id: 'a1',
+        side: 'a',
+        deviceId: 'sensor-1',
+        deviceLabel: 'Temperature Sensor',
+        targetType: 'variable',
+        variableSource,
+        key: 'temperature',
+        relation: '>',
+        value: '28'
+      }]
+    })
+
+    expect(isSameSpecification(spec('environment'), spec('environment'))).toBe(true)
+    expect(isSameSpecification(spec('environment'), spec('reported'))).toBe(false)
   })
 
   it('treats targetType as part of specification condition identity', () => {
@@ -360,7 +430,7 @@ describe('spec formula preview', () => {
       aConditions: [
         {
           id: 'a1', side: 'a', deviceId: 'sensor-1', deviceLabel: 'Old label',
-          targetType: 'variable', key: 'temperature', relation: 'GTE', value: '30'
+          targetType: 'variable', variableSource: 'environment', key: 'temperature', relation: 'GTE', value: '30'
         },
         {
           id: 'a2', side: 'a', deviceId: 'sensor-1', deviceLabel: 'Old label',
@@ -381,5 +451,34 @@ describe('spec formula preview', () => {
     }
 
     expect(isSameSpecification(first, second)).toBe(true)
+  })
+
+  it('spells boolean and label literals the way the backend preview does', () => {
+    /*
+     * The backend renders NuSMV booleans uppercase and trust/privacy labels lowercase
+     * (`SpecificationFormulaPreview.value`). Folding all six to lowercase here made the same condition
+     * display as `true` in the client and `TRUE` in a verdict — one formula, two spellings, from the two
+     * halves of one feature. These strings are the contract; if the backend's change, this reddens.
+     */
+    const preview = (value: string) => buildSpecFormula({
+      templateId: '1',
+      templateLabel: 'Always',
+      aConditions: [{
+        id: 'a1',
+        side: 'a',
+        deviceId: 'sensor-1',
+        deviceLabel: 'Temperature Sensor',
+        targetType: 'mode',
+        key: 'Enabled',
+        relation: '=',
+        value
+      }],
+      ifConditions: [],
+      thenConditions: []
+    } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>, context)
+
+    expect(preview('true')).toBe('CTL AG("Temperature Sensor"."Enabled" = TRUE)')
+    expect(preview('TRUE')).toBe('CTL AG("Temperature Sensor"."Enabled" = TRUE)')
+    expect(preview('Untrusted')).toBe('CTL AG("Temperature Sensor"."Enabled" = untrusted)')
   })
 })

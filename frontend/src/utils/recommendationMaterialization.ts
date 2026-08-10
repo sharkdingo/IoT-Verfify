@@ -129,6 +129,18 @@ export const materializeSpecificationRecommendationConditions = (
       throw new RecommendationCandidateError(`${prefix}.propertyScope`)
     }
 
+    // A recommended variable condition must state which value it means. Defaulting it here would
+    // put words in the model's mouth about a distinction that only matters under compromise, so an
+    // incomplete candidate is rejected as malformed instead.
+    const variableSource = optionalText(condition.variableSource, `${prefix}.variableSource`)?.toLowerCase()
+    if (targetType === 'variable') {
+      if (variableSource !== 'environment' && variableSource !== 'reported') {
+        throw new RecommendationCandidateError(`${prefix}.variableSource`)
+      }
+    } else if (variableSource !== undefined) {
+      throw new RecommendationCandidateError(`${prefix}.variableSource`)
+    }
+
     const deviceId = text(condition.deviceId, `${prefix}.deviceId`)
     const deviceLabel = optionalText(condition.deviceLabel, `${prefix}.deviceLabel`) || deviceId
     return {
@@ -140,6 +152,9 @@ export const materializeSpecificationRecommendationConditions = (
       key: text(condition.key, `${prefix}.key`),
       ...((targetType === 'trust' || targetType === 'privacy')
         ? { propertyScope: propertyScope as 'state' | 'variable' }
+        : {}),
+      ...(targetType === 'variable'
+        ? { variableSource: variableSource as SpecCondition['variableSource'] }
         : {}),
       relation: normalizedRelation,
       value: text(condition.value, `${prefix}.value`)

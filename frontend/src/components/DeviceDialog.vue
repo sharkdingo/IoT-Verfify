@@ -7,6 +7,7 @@ import type {DeviceManifest, DeviceTemplate, InternalVariable} from '../types/de
 import type {DeviceNode} from '../types/node'
 import type {Specification} from '../types/spec'
 import { buildSpecFormula } from '@/utils/spec'
+import { verdictVariableSourceKeys } from '@/views/board/verdictVariableSource'
 import { resolveImpactEnvironmentDefinition } from '@/utils/device'
 import { specTemplateDetails } from '@/assets/config/specTemplates'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
@@ -874,12 +875,15 @@ const deviceSpecs = computed(() => {
       }
 
       const formula = buildSpecFormula(spec, {
-        nodes: props.nodes || [],
-        deviceTemplates: props.deviceTemplates || []
+        nodes: props.nodes || []
       })
 
       return {
         id: spec.id,
+        // Named in the user's words; the formula above distinguishes the readings only by the token before
+        // the dot, and renders an unrecorded one as a literal `<unresolved>`.
+        variableSourceLabels: verdictVariableSourceKeys(spec)
+          .map(key => ({ key, label: t(key), unresolved: key === 'app.specVariableSourceUnresolvedShort' })),
         type: specType,
         formula,
         formulaKind: getSpecFormulaKind(spec, formula),
@@ -1436,6 +1440,18 @@ const deviceSpecs = computed(() => {
                       </div>
                       <div class="text-xs text-slate-700 leading-relaxed font-mono break-all">
                       {{ spec.formula }}
+                      </div>
+                      <div v-if="spec.variableSourceLabels.length" class="mt-1 flex flex-wrap gap-1">
+                        <!-- An unresolved reading blocks the run; do not render it as a neutral fact. -->
+                        <span
+                          v-for="entry in spec.variableSourceLabels"
+                          :key="entry.key"
+                          class="rounded border px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
+                          :class="entry.unresolved
+                            ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
+                            : 'border-slate-200 bg-slate-100 text-slate-600'"
+                          data-testid="device-dialog-spec-variable-source"
+                        >{{ entry.label }}</span>
                       </div>
                       <details class="mt-2 text-[11px] text-slate-500">
                         <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>

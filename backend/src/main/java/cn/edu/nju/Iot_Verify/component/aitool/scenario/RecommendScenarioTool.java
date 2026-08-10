@@ -57,7 +57,7 @@ import java.util.Set;
 public class RecommendScenarioTool extends AbstractAiTool {
 
     private static final String SCENE_SCHEMA = "iot-verify.board-scene";
-    private static final int SCENE_VERSION = 4;
+    private static final int SCENE_VERSION = 5;
     private static final int DEFAULT_NODE_WIDTH = 176;
     private static final int DEFAULT_NODE_HEIGHT = 128;
     private static final double TEMPERATURE = 0.7;
@@ -79,7 +79,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
 - 每条规则的触发条件必须可同时满足，并与目标 API 的非空 StartState 兼容；每个规约的 A、IF、THEN 条件数组也必须各自可同时满足。
 - 规则只能调用模板里真实存在的 API；规则触发条件只能使用 signal API、变量、模式或 state。
 - 规则 sources 有两种互斥结构：itemType=api 时 fromApi 必须是 Signal=true 的可观察 API，并且必须省略 relation 和 value；itemType=variable|mode|state 时必须给出 relation 和 value。不要把规约中 API 条件的 = TRUE 写法套到规则 API 事件源。
-- 规约条件只能使用 state、mode、variable、api、trust、privacy。trust/privacy 必须带 propertyScope=state|variable；state 范围的 key 是模式名，variable 范围的 key 是变量名。
+- 规约条件只能使用 state、mode、variable、api、trust、privacy。trust/privacy 必须带 propertyScope=state|variable；variable 条件必须带 variableSource=environment|reported，二者在设备被攻陷时含义不同，不得省略；state 范围的 key 是模式名，variable 范围的 key 是变量名。
 - devices[].variables/privacies 只允许模板中 IsInside=true 的本地变量；共享环境量必须放在 environmentVariables。无法确定初始值或标签时应省略，不得猜测模板范围外的值。
 - devices[].id 只是本次回答内供规则/规约关联设备的临时别名，后端会统一改写；不要把它当作用户名称或永久技术 ID。
 - 只有同时声明 Modes 和 WorkingStates 的模板才填写 state/currentStateTrust/currentStatePrivacy。无状态机模板必须省略这三个字段，用变量表达读数。
@@ -147,7 +147,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
 - contentDevice 与 content 必须同时为 null，或同时填写。content 必须来自对应设备模板的 Contents，且目标 API 必须声明 AcceptsContent=true；仅在动作携带该内容且需要分析敏感性标签传播时使用。该标签不表示系统复制了真实数据或实施了访问控制。
 - templateId 3 也用于隐私泄露：把公开动作/状态与对应 privacy=private 一起放进 aConditions。
 - templateId 7 的 aConditions 不得直接使用 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。
-- 每个 condition: {deviceId, targetType, key, propertyScope?, relation?, value?}。propertyScope 仅 trust/privacy 必填；非 API 条件必须给出 relation/value，API 条件可省略二者并按 = TRUE 处理；不要输出内部 id、side、deviceLabel、templateLabel、formula、Mode_state 生成键或 devices 缓存。
+- 每个 condition: {deviceId, targetType, key, propertyScope?, variableSource?, relation?, value?}。propertyScope 仅 trust/privacy 必填；variableSource 仅 targetType=variable 必填，取 environment（家中实际值，要求该变量是共享声明 IsInside=false）或 reported（该设备上报值）；非 API 条件必须给出 relation/value，API 条件可省略二者并按 = TRUE 处理；不要输出内部 id、side、deviceLabel、templateLabel、formula、Mode_state 生成键或 devices 缓存。
 """).formatted(SpecificationTemplateSemantics.chinesePromptReference());
 
     private final PromptCompletionService promptCompletionService;
@@ -1306,6 +1306,8 @@ public class RecommendScenarioTool extends AbstractAiTool {
             dto.setKey(String.valueOf(condition.get("key")));
             dto.setPropertyScope(condition.get("propertyScope") == null
                     ? null : String.valueOf(condition.get("propertyScope")));
+            dto.setVariableSource(condition.get("variableSource") == null
+                    ? null : String.valueOf(condition.get("variableSource")));
             dto.setRelation(String.valueOf(condition.get("relation")));
             dto.setValue(String.valueOf(condition.get("value")));
             result.add(dto);
@@ -1329,6 +1331,21 @@ public class RecommendScenarioTool extends AbstractAiTool {
             boolean propertyCondition = "trust".equals(targetType) || "privacy".equals(targetType);
             if (propertyCondition && !Set.of("state", "variable").contains(propertyScope)) continue;
             if (!propertyCondition && !propertyScope.isBlank()) continue;
+            // Which question a variable condition asks. Filtered, never defaulted: this generator drops a
+            // candidate it cannot validate, and choosing a source the model did not state would put an
+            // assertion in the scene that nobody authored. `environment` additionally needs a shared
+            // declaration, so a device-local variable may only be asked as `reported`.
+            String variableSource = text(row.path("variableSource"), "").toLowerCase(Locale.ROOT);
+            if ("variable".equals(targetType)) {
+                if (!Set.of("environment", "reported").contains(variableSource)) continue;
+                if ("environment".equals(variableSource)) {
+                    DeviceTemplateDto.DeviceManifest.InternalVariable declared =
+                            findVariable(device.template, key);
+                    if (declared == null || Boolean.TRUE.equals(declared.getIsInside())) continue;
+                }
+            } else if (!variableSource.isBlank()) {
+                continue;
+            }
             boolean relationProvided = isProvided(row.path("relation"));
             boolean valueProvided = isProvided(row.path("value"));
             if (!"api".equals(targetType) && (!relationProvided || !valueProvided)) continue;
@@ -1344,6 +1361,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
             condition.put("targetType", targetType);
             condition.put("key", cap.key);
             if (propertyCondition) condition.put("propertyScope", propertyScope);
+            if ("variable".equals(targetType)) condition.put("variableSource", variableSource);
             condition.put("relation", cap.relation);
             condition.put("value", cap.value);
             conditions.add(condition);

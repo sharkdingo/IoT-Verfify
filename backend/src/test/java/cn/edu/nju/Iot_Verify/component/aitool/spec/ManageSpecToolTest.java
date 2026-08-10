@@ -231,6 +231,75 @@ class ManageSpecToolTest {
                 specification(result).path("aConditions").get(0).path("deviceLabel").asText());
     }
 
+    /**
+     * The assistant must choose which question a variable condition asks, and be refused if it does not.
+     *
+     * <p>Bean Validation is inert on this path — {@code service/} carries no {@code @Validated}, so the
+     * DTO's {@code @Pattern} never runs and this parse is the binding gate. Without it the model can write
+     * a condition that the storage boundary then rejects, or worse, one the generator reports as a skipped
+     * specification: a run that silently answers less than it was asked.
+     */
+    @Test
+    void add_variableConditionWithoutVariableSource_shouldBeRejected() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(sensorTemplate()));
+
+        String result = tool.execute("""
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"variable",
+                      "key":"temperature",
+                      "relation":">",
+                      "value":"28"
+                    }
+                  ]
+                }
+                """);
+
+        assertTrue(result.contains("requires variableSource"),
+                () -> "Expected a variableSource requirement, got " + result);
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    @Test
+    void add_variableSourceOnANonVariableTarget_shouldBeRejected() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(sensorTemplate()));
+
+        String result = tool.execute("""
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"state",
+                      "variableSource":"environment",
+                      "key":"state",
+                      "relation":"=",
+                      "value":"On"
+                    }
+                  ]
+                }
+                """);
+
+        assertTrue(result.contains("may use variableSource only with variable"),
+                () -> "Expected a target-type rejection, got " + result);
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
     @Test
     void add_withLegacyGeneratedEnvironmentAlias_shouldRejectWhenNoLiteralVariableExists() {
         DeviceNodeDto node = new DeviceNodeDto();
@@ -248,6 +317,7 @@ class ManageSpecToolTest {
                     {
                       "deviceId":"sensor_1",
                       "targetType":"variable",
+                      "variableSource":"environment",
                       "key":"a_temperature",
                       "relation":">",
                       "value":"28"
@@ -282,6 +352,7 @@ class ManageSpecToolTest {
                     {
                       "deviceId":"sensor_1",
                       "targetType":"variable",
+                      "variableSource":"environment",
                       "key":"a_temperature",
                       "relation":">",
                       "value":"28"
@@ -321,6 +392,7 @@ class ManageSpecToolTest {
                     {
                       "deviceId":"sensor_1",
                       "targetType":"variable",
+                      "variableSource":"environment",
                       "key":"temperature",
                       "relation":">",
                       "value":"28"

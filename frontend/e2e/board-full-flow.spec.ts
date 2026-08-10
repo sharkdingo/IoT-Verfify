@@ -156,9 +156,9 @@ const configureRedundantUnsafeHeatingScene = (scene: any) => {
   scene.specs = [{
     templateId: '3',
     aConditions: [{
-      deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+      deviceId: 'occupancy_1', targetType: 'variable', variableSource: 'reported', key: 'occupied', relation: '=', value: 'absent'
     }, {
-      deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<', value: '35'
+      deviceId: 'temperature_1', targetType: 'variable', variableSource: 'environment', key: 'temperature', relation: '<', value: '35'
     }, {
       deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
     }],
@@ -244,19 +244,60 @@ const addMotionRuleViaDialog = async (
   return waitForApi<any[]>(request, auth, '/api/board/rules', rules => rules.length === expectedRuleCount)
 }
 
+/**
+ * Asserts the required-reading gate for a shared variable: both readings offered, neither preselected, Save
+ * blocked, and the reason NAMES the reading. Passed to `fillSpecCondition` as its `beforeVariableSource`
+ * hook, so the gate is proven inside a flow that then goes on to succeed — the suite would otherwise only
+ * exercise the happy path it was patched into.
+ */
+const assertVariableSourceGate = async (page: Page) => {
+  await expect(page.getByTestId('spec-condition-variable-source-environment')).toBeVisible()
+  await expect(page.getByTestId('spec-condition-variable-source-reported')).toBeVisible()
+  // The compromise divergence is explained where the decision is made, not only in the docs.
+  await expect(page.getByTestId('spec-condition-variable-source-help')).toBeVisible()
+  // And whether THIS reading can actually diverge. `motion` on a Motion Detector is declared
+  // `FalsifiableWhenCompromised: true`, so the affirmative branch must be the one shown — asserting mere
+  // visibility would pass on the opposite text, which tells the user the choice is inert here.
+  await expect(page.getByTestId('spec-condition-variable-source-falsifiable'))
+    .toHaveText(/declares falsifiable when compromised/i)
+  await expect(page.getByTestId('spec-condition-save')).toBeDisabled()
+  // The reason names the reading. A bare visibility check would pass for the wrong reason, because the
+  // value is also still empty at this point.
+  await expect(page.getByTestId('spec-condition-blocked-reason'))
+    .toHaveText(/actual value in the home|device reports/i)
+}
+
 const fillSpecCondition = async (
   page: Page,
   deviceId: string,
   type: string,
   key: string | null,
   relation: string,
-  value: string
+  value: string,
+  /**
+   * Which value a `variable` condition asks about — `environment` for the shared pool value, `reported`
+   * for what this device said. Required for `variable`: nothing is preselected, so Save stays disabled
+   * until one is picked. The radios only render once a key is chosen, hence the ordering below. A
+   * device-local variable offers only `reported` and auto-selects it, so passing nothing is correct there.
+   */
+  variableSource?: 'environment' | 'reported',
+  /**
+   * Optional hook run after the key is chosen and before the reading is — the only moment the
+   * required-reading gate is observable without leaving the dialog half-filled.
+   */
+  beforeVariableSource?: (page: Page) => Promise<void>
 ) => {
   await expect(page.getByTestId('spec-condition-dialog')).toBeVisible()
   await page.getByTestId('spec-condition-device').selectOption(deviceId)
   await page.getByTestId('spec-condition-type').selectOption(type)
   if (key) {
     await page.getByTestId('spec-condition-key').selectOption(key)
+  }
+  if (beforeVariableSource) {
+    await beforeVariableSource(page)
+  }
+  if (variableSource) {
+    await page.getByTestId(`spec-condition-variable-source-${variableSource}`).click()
   }
   await page.getByTestId('spec-condition-relation').selectOption(relation)
   const valueControl = page.locator('[data-testid="spec-condition-value"]:visible')
@@ -340,7 +381,7 @@ test.describe('board full-stack NuSMV user flow', () => {
           templateId: '4',
           aConditions: [],
           ifConditions: [{
-            deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<', value: '35'
+            deviceId: 'temperature_1', targetType: 'variable', variableSource: 'environment', key: 'temperature', relation: '<', value: '35'
           }],
           thenConditions: [{
             deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'off'
@@ -349,7 +390,7 @@ test.describe('board full-stack NuSMV user flow', () => {
           templateId: '4',
           aConditions: [],
           ifConditions: [{
-            deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '>=', value: '35'
+            deviceId: 'temperature_1', targetType: 'variable', variableSource: 'environment', key: 'temperature', relation: '>=', value: '35'
           }],
           thenConditions: [{
             deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
@@ -385,7 +426,7 @@ test.describe('board full-stack NuSMV user flow', () => {
         scene.specs = [{
           templateId: '3',
           aConditions: [{
-            deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+            deviceId: 'occupancy_1', targetType: 'variable', variableSource: 'reported', key: 'occupied', relation: '=', value: 'absent'
           }, {
             deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
           }],
@@ -809,9 +850,9 @@ test.describe('board full-stack NuSMV user flow', () => {
     scene.specs = [{
       templateId: '3',
       aConditions: [{
-        deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+        deviceId: 'occupancy_1', targetType: 'variable', variableSource: 'reported', key: 'occupied', relation: '=', value: 'absent'
       }, {
-        deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<', value: '35'
+        deviceId: 'temperature_1', targetType: 'variable', variableSource: 'environment', key: 'temperature', relation: '<', value: '35'
       }, {
         deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
       }],
@@ -821,9 +862,9 @@ test.describe('board full-stack NuSMV user flow', () => {
       templateId: '4',
       aConditions: [],
       ifConditions: [{
-        deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+        deviceId: 'occupancy_1', targetType: 'variable', variableSource: 'reported', key: 'occupied', relation: '=', value: 'absent'
       }, {
-        deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<=', value: '35'
+        deviceId: 'temperature_1', targetType: 'variable', variableSource: 'environment', key: 'temperature', relation: '<=', value: '35'
       }],
       thenConditions: [{
         deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'off'
@@ -832,7 +873,7 @@ test.describe('board full-stack NuSMV user flow', () => {
       templateId: '4',
       aConditions: [],
       ifConditions: [{
-        deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '>=', value: '36'
+        deviceId: 'temperature_1', targetType: 'variable', variableSource: 'environment', key: 'temperature', relation: '>=', value: '36'
       }],
       thenConditions: [{
         deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
@@ -1523,7 +1564,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     await openControlSection(page, 'specs')
     await page.getByTestId('spec-template-select').selectOption('5')
     await page.getByTestId('spec-add-condition-if').click()
-    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'active')
+    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'active', 'environment')
     await page.getByTestId('spec-add-condition-then').click()
     await fillSpecCondition(page, alarm.id, 'privacy', JSON.stringify(['state', 'AlertState']), '=', 'private')
     await page.getByTestId('spec-create').click()
@@ -1531,7 +1572,7 @@ test.describe('board full-stack NuSMV user flow', () => {
 
     await page.getByTestId('spec-template-select').selectOption('1')
     await page.getByTestId('spec-add-condition-a').click()
-    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'inactive')
+    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'inactive', 'environment')
     await page.getByTestId('spec-create').click()
     const specsBeforeExport = await waitForApi<any[]>(request, auth, '/api/board/specs', value => value.length === 2)
     expect(specsBeforeExport.map(spec => spec.templateId)).toEqual(['5', '1'])
@@ -1543,7 +1584,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(firstPath).toBeTruthy()
     const firstJson = fs.readFileSync(firstPath!, 'utf8')
     const firstScene = JSON.parse(firstJson)
-    expect(firstScene).toMatchObject({ schema: 'iot-verify.board-scene', version: 4 })
+    expect(firstScene).toMatchObject({ schema: 'iot-verify.board-scene', version: 5 })
     expect(firstScene).not.toHaveProperty('exportedAt')
     expect(firstScene.devices).toHaveLength(2)
     const exportedMotion = firstScene.devices.find((device: any) => device.templateName === 'Motion Detector')
@@ -1605,11 +1646,13 @@ test.describe('board full-stack NuSMV user flow', () => {
     await expect(page.getByTestId('scene-import')).toBeEnabled()
     await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
 
-    const futureScene = { ...firstScene, version: 5 }
+    // 6, one past the current format: at 5 this file is VALID and would import successfully, inverting
+    // the rejection this block asserts.
+    const futureScene = { ...firstScene, version: 6 }
     const futurePath = testInfo.outputPath('scene-future-version.json')
     fs.writeFileSync(futurePath, JSON.stringify(futureScene, null, 2), 'utf8')
     await page.getByTestId('scene-import-file').setInputFiles(futurePath)
-    await expect(page.locator('.el-message').filter({ hasText: /version 5|版本 5/i })).toBeVisible()
+    await expect(page.locator('.el-message').filter({ hasText: /version 6|版本 6/i })).toBeVisible()
     await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
 
     const internalFieldScene = JSON.parse(firstJson)
@@ -2087,11 +2130,26 @@ test.describe('board full-stack NuSMV user flow', () => {
 
     await page.getByTestId('spec-template-select').selectOption('5')
     await page.getByTestId('spec-add-condition-if').click()
-    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'active')
+
+    /*
+     * The required reading is asserted inside the helper's own flow rather than by probing the dialog first:
+     * an earlier version selected device/type/key up front to check the blocked state, and the subsequent
+     * `fillSpecCondition` call then re-entered those selects on an already-dirty dialog and never saved.
+     * `assertVariableSourceGate` runs between choosing the key and choosing the reading, which is exactly
+     * the moment the gate is observable, without leaving the dialog in a half-filled state.
+     */
+    await fillSpecCondition(
+      page, motion.id, 'variable', 'motion', '=', 'active', 'environment',
+      assertVariableSourceGate
+    )
+    // The saved row names its reading, so the list cannot show two identical-looking conditions.
+    await expect(page.getByTestId('spec-condition-row-variable-source').first()).toBeVisible()
     await page.getByTestId('spec-add-condition-then').click()
     await fillSpecCondition(page, alarm.id, 'mode', 'AlertState', '=', 'siren')
     await page.getByTestId('spec-create').click()
     const specs = await waitForApi<any[]>(request, auth, '/api/board/specs', value => value.length === 2)
+    // Persisted as chosen, not silently defaulted or dropped between the dialog and the row.
+    expect(specs[1].ifConditions[0].variableSource).toBe('environment')
     expect(specs.map(spec => spec.templateId)).toEqual(['3', '5'])
     const focusedSpec = page.locator(`[data-spec-id="${specs[1].id}"]`)
     await expect(focusedSpec).toBeVisible()

@@ -254,6 +254,11 @@ public final class BoardSemanticFingerprint {
             parts.add(nullSafe(device)
                     + "#" + nullSafe(c.getTargetType())
                     + "#" + nullSafe(c.getPropertyScope())
+                    // Load-bearing: `environment` and `reported` compile to different identifiers and ask
+                    // different questions of the same key. Omitting it made two specifications with
+                    // different meanings fingerprint identically, so a drift check could accept a spec set
+                    // whose question had changed under it.
+                    + "#" + nullSafe(c.getVariableSource())
                     + "#" + nullSafe(c.getKey())
                     + "#" + nullSafe(c.getRelation())
                     + "#" + normalizeValue(c.getValue()));

@@ -96,7 +96,7 @@ boundary values, while internal service calls cannot bypass the public range che
 The same closure applies to scalar types and required semantics: portable string fields
 are never synthesized from JSON numbers/booleans, and export fails on incomplete
 environment/rule/specification values instead of filtering or defaulting them. This is
-required for the v4 file mapping to remain an inverse of the canvas semantic model rather
+required for the portable file mapping to remain an inverse of the canvas semantic model rather
 than a best-effort cleanup pass.
 
 Board saves reject duplicate `id` values and duplicate NuSMV-normalized ids. A device
@@ -109,7 +109,7 @@ mode-based devices must provide a legal current state, no-mode devices may use t
 canvas placeholder `Working`, and unknown variables, out-of-range variable values, and
 invalid trust/privacy values are rejected with `422`.
 
-The portable `iot-verify.board-scene` v4 shape does not expose the no-mode canvas
+The portable `iot-verify.board-scene` v5 shape does not expose the no-mode canvas
 placeholder. Stateful templates require `devices[].state` and may carry current-state
 source/sensitivity overrides; stateless templates omit `state`, `currentStateTrust`, and
 `currentStatePrivacy`. The frontend restores `Working` only in its canvas DTO and removes

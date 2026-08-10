@@ -421,7 +421,7 @@ unnamed environment value/rule source or inventing a missing relation. A complet
 import/export therefore never means that malformed input was silently repaired into a
 different scene.
 
-The standard portable JSON shape is `{ schema: "iot-verify.board-scene", version: 4,
+The standard portable JSON shape is `{ schema: "iot-verify.board-scene", version: 5,
 templates, devices, environmentVariables, rules, specs }`. It contains stable device
 references and authored semantics, but excludes database rule/spec/template ids and
 derived caches (`templateLabel`, `formula`, `devices[]`, condition ids/sides/display
@@ -429,7 +429,10 @@ labels). Every shared environment variable required by a referenced template app
 exactly once with explicit `value`, `trust`, and `privacy`. Export
 canonicalizes ordering and relations; import rejects unsupported versions, unknown
 device references, incomplete environment/template snapshots, and internal/derived fields before
-calling the atomic batch endpoint. Consequently a valid exported file can be imported
+calling the atomic batch endpoint. Version 5 requires `variableSource` on every `variable`
+specification condition and rejects it on every other target type; a version-4 file cannot supply
+it and guessing one would change what its specifications assert, so those files are rejected by the
+version check rather than half-read. Consequently a valid exported file can be imported
 and exported byte-identically, while the reconstructed canvas may use new database ids
 for rules/specs without changing its semantic model. Portable device geometry uses the
 same domain as targeted canvas writes and AI scene drafts: coordinates are finite within
@@ -456,11 +459,11 @@ explicit non-blank `value`; `privacies[]` names are also unique. Every shared
 `environmentVariables[]` entry likewise has a unique non-blank `name` and an explicit
 non-blank `value`. Duplicate names fail before the replacement preview or batch request.
 An omitted or empty runtime value would mean "use a default" in targeted creation/update semantics,
-which is not lossless scene semantics, so v4 import rejects it. A rule's human-readable
+which is not lossless scene semantics, so v5 import rejects it. A rule's human-readable
 `name` is optional; rule array order and its structured trigger/action fields carry the
 model semantics.
 
-Version 4 removes the canvas-only `Working` placeholder from portable semantics. A device
+Version 4 removed the canvas-only `Working` placeholder from portable semantics. A device
 whose template has both `Modes` and non-empty `WorkingStates` must include `state` and may
 include `currentStateTrust` / `currentStatePrivacy`. A no-state-machine device must omit all
 three fields and express readings through local variables or the shared environment pool.
@@ -497,7 +500,7 @@ including errors and planned renames beyond the first screen, inspectable before
 all-or-nothing create action is enabled.
 
 After a scene-replacement `200` response, the Board canonicalizes the returned nodes,
-environment pool, rules, and specifications and compares them with the requested v4
+environment pool, rules, and specifications and compares them with the requested v5
 semantics before showing a completed replacement. Template-manifest object properties
 that are explicitly `null` in the request compare equal to properties omitted by the
 backend's non-null DTO serialization. This equivalence does not apply to non-null values
@@ -529,7 +532,10 @@ normalizes those ids.
 
 The authoritative specification write shape is `{ id, templateId, aConditions,
 ifConditions, thenConditions }`. Each condition write contains only `deviceId`,
-`targetType`, `key`, optional `propertyScope`, `relation`, and `value`. The shared Java
+`targetType`, `key`, optional `propertyScope`, `variableSource` (required for
+`targetType: variable`, rejected on every other target type — see
+[shared-value-semantics.md](../architecture/shared-value-semantics.md)), `relation`, and
+`value`. The shared Java
 response DTO also contains `templateLabel`, `formula`, `devices[]`, condition `id`,
 `side`, and `deviceLabel`; callers must not treat those fields as writable semantics.
 Board storage ignores contradictory supplied display values and rebuilds them from the

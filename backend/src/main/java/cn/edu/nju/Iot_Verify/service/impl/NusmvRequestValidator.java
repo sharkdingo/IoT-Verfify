@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
+import cn.edu.nju.Iot_Verify.util.SpecConditionNormalization;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -718,6 +719,24 @@ final class NusmvRequestValidator {
                                 "Unknown internal or environment variable for specification: " + key);
                     } else {
                         validateVariableValues(errors, prefix + ".value", variable, relation, condition.getValue());
+                        // Stricter than the storage side's *shared* semantic validation, which deliberately
+                        // tolerates an absent reading because it also runs over already-stored
+                        // specifications to guard unrelated device and rule writes. A verify request is
+                        // authoring a run, so it must have one: otherwise a condition that never chose its
+                        // question reaches the generator and is reported as a skipped specification — a run
+                        // that silently answers less than it was asked. (Board storage demands the choice on
+                        // its own authoring paths, `addSpec` and `/board/batch`.) `environment` additionally
+                        // needs a pool value to read, which a device-local declaration does not have.
+                        String variableSource = normalizeVariableSource(condition.getVariableSource());
+                        if (variableSource == null) {
+                            putError(errors, prefix + ".variableSource",
+                                    "variableSource is required for a variable condition and must be environment "
+                                            + "(the value in the home) or reported (what this device said)");
+                        } else if ("environment".equals(variableSource) && !isEnvironmentVariable(variable)) {
+                            putError(errors, prefix + ".variableSource",
+                                    "variableSource=environment needs a shared variable, but '" + key
+                                            + "' exists only inside this device. Ask reported instead");
+                        }
                     }
                 }
                 case "trust" -> {
@@ -1271,11 +1290,12 @@ final class NusmvRequestValidator {
     }
 
     private static String normalizePropertyScope(String value) {
-        if (!hasText(value)) {
-            return null;
-        }
-        String normalized = value.trim().toLowerCase(Locale.ROOT);
-        return "state".equals(normalized) || "variable".equals(normalized) ? normalized : null;
+        return SpecConditionNormalization.propertyScope(value);
+    }
+
+    // Delegated so this boundary and BoardStorageServiceImpl cannot fold a value differently.
+    private static String normalizeVariableSource(String value) {
+        return SpecConditionNormalization.variableSource(value);
     }
 
     private static List<String> splitStateCandidates(String rawValue, String relation, DeviceSmvData smv) {
@@ -1351,12 +1371,7 @@ final class NusmvRequestValidator {
     }
 
     private static String normalizeSpecTargetType(String targetType) {
-        if (!hasText(targetType)) {
-            return null;
-        }
-        String normalized = targetType.trim().toLowerCase(Locale.ROOT);
-        return Set.of("state", "mode", "variable", "api", "trust", "privacy").contains(normalized)
-                ? normalized : null;
+        return SpecConditionNormalization.knownSpecTargetType(targetType);
     }
 
     private static String trimToNull(String value) {

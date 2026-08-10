@@ -14,6 +14,7 @@ export type GenerationIssueReasonKey =
   | 'app.generationIssueSpecUnknownSecurityProperty'
   | 'app.generationIssueSpecUnknownDevice'
   | 'app.generationIssueSpecTemplateMismatch'
+  | 'app.generationIssueSpecVariableSourceRequired'
   | 'app.generationIssueSpecInvalidValue'
   | 'app.generationIssueSpecUnsupportedCondition'
   | 'app.generationIssueUnknown'
@@ -32,6 +33,7 @@ const reasonKeys: Record<ModelGenerationIssueReasonCode, GenerationIssueReasonKe
   SPEC_UNDECLARED_SECURITY_PROPERTY: 'app.generationIssueSpecUnknownSecurityProperty',
   SPEC_UNKNOWN_DEVICE: 'app.generationIssueSpecUnknownDevice',
   SPEC_TEMPLATE_SHAPE_MISMATCH: 'app.generationIssueSpecTemplateMismatch',
+  SPEC_VARIABLE_SOURCE_REQUIRED: 'app.generationIssueSpecVariableSourceRequired',
   SPEC_INVALID_VALUE: 'app.generationIssueSpecInvalidValue',
   SPEC_UNSUPPORTED_CONDITION: 'app.generationIssueSpecUnsupportedCondition',
   UNCLASSIFIED_GENERATION_ISSUE: 'app.generationIssueUnknown'

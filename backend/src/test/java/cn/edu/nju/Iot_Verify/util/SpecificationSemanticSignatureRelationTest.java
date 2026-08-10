@@ -57,6 +57,33 @@ class SpecificationSemanticSignatureRelationTest {
         }
     }
 
+    private static SpecificationDto specWithVariableSource(String variableSource) {
+        SpecificationDto spec = specWithRelation(">");
+        spec.getAConditions().get(0).setVariableSource(variableSource);
+        return spec;
+    }
+
+    @Test
+    @DisplayName("variableSource participates in specification identity")
+    void variableSourceIsPartOfAuthoredIdentity() {
+        /*
+         * The same key asked two ways is two questions: `environment` compiles to the shared pool value,
+         * `reported` to the device's own reading, and they diverge once that device is compromised. The
+         * signature omitted the field when it was added, so these compared as identical — meaning "delete
+         * only if unchanged" and the undo conflict check would have accepted one as the other and landed a
+         * delete on a specification the user never reviewed.
+         */
+        assertFalse(SpecificationSemanticSignature.exactlyMatches(
+                        specWithVariableSource("environment"), specWithVariableSource("reported")),
+                "asking about the home and asking what a device reported are different specifications");
+        assertTrue(SpecificationSemanticSignature.exactlyMatches(
+                        specWithVariableSource("environment"), specWithVariableSource("environment")),
+                "the same question must still be one identity");
+        assertFalse(SpecificationSemanticSignature.exactlyMatches(
+                        specWithVariableSource(null), specWithVariableSource("reported")),
+                "a specification that never chose its question is not one that chose reported");
+    }
+
     @Test
     @DisplayName("different relations stay different identities")
     void distinctRelationsDoNotCollapse() {

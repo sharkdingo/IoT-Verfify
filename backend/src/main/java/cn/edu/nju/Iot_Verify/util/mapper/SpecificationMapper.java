@@ -93,6 +93,7 @@ public class SpecificationMapper {
         copy.setTargetType(condition.getTargetType());
         copy.setKey(condition.getKey());
         copy.setPropertyScope(condition.getPropertyScope());
+        copy.setVariableSource(condition.getVariableSource());
         copy.setRelation(condition.getRelation());
         copy.setValue(condition.getValue());
         return copy;

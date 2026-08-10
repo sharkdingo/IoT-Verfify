@@ -1,6 +1,6 @@
 {
 	"schema": "iot-verify.board-scene",
-	"version": 4,
+	"version": 5,
 	"templates": [
 		{
 			"name": "Air Conditioner",
@@ -324,6 +324,7 @@
 					"deviceId": "temperature_1",
 					"targetType": "variable",
 					"key": "temperature",
+					"variableSource": "environment",
 					"relation": ">=",
 					"value": "28"
 				}
@@ -345,6 +346,7 @@
 					"deviceId": "temperature_1",
 					"targetType": "variable",
 					"key": "temperature",
+					"variableSource": "environment",
 					"relation": ">=",
 					"value": "28"
 				},

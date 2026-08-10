@@ -15,6 +15,8 @@ public enum ModelGenerationIssueReasonCode {
     SPEC_UNDECLARED_SECURITY_PROPERTY,
     SPEC_UNKNOWN_DEVICE,
     SPEC_TEMPLATE_SHAPE_MISMATCH,
+    /** A variable condition did not say whether it asks about the home or about a device's report. */
+    SPEC_VARIABLE_SOURCE_REQUIRED,
     SPEC_INVALID_VALUE,
     SPEC_UNSUPPORTED_CONDITION,
     UNCLASSIFIED_GENERATION_ISSUE

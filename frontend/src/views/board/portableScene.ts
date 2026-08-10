@@ -22,7 +22,10 @@ import type {
 
 /** Identifies an exported board scene file and the shape its readers must expect. */
 export const SCENE_FILE_SCHEMA = 'iot-verify.board-scene'
-export const SCENE_FILE_VERSION = 4
+// 5: a `variable` specification condition must carry `variableSource`. A version-4 file cannot
+// supply it, and guessing one would silently change what its specifications assert, so those files
+// are rejected by the version check rather than half-read.
+export const SCENE_FILE_VERSION = 5
 
 /** The board-side scene model: domain objects, before serialization to a portable file. */
 export type BoardSceneModel = {
@@ -438,6 +441,28 @@ export const createSceneCodec = (t: Translate) => {
     throw new Error(t('app.sceneImportInvalidEnum', { field: 'specs.conditions.targetType', value: normalized || t('app.empty') }))
   }
 
+  /**
+   * A `variable` condition must declare which value it means; the two answers differ when a device
+   * is compromised, so an imported scene that omits it is rejected rather than assigned a side.
+   * The field is refused on every other condition type, matching admission.
+   */
+  const normalizeSceneVariableSource = (
+    value: unknown,
+    targetType: SpecCondition['targetType'],
+    field: string
+  ): SpecCondition['variableSource'] | undefined => {
+    const normalized = normalizeSceneString(value, field).toLowerCase()
+    if (targetType !== 'variable') {
+      if (normalized) throw new Error(t('app.sceneImportUnexpectedField', { field }))
+      return undefined
+    }
+    if (!normalized) throw new Error(t('app.sceneImportMissingField', { field }))
+    if (normalized !== 'environment' && normalized !== 'reported') {
+      throw new Error(t('app.sceneImportInvalidEnum', { field, value: normalized }))
+    }
+    return normalized
+  }
+
   const normalizeSceneSpecConditions = (
     value: unknown,
     side: SpecCondition['side'],
@@ -457,7 +482,7 @@ export const createSceneCodec = (t: Translate) => {
       rejectSceneInternalField(row, 'deviceLabel')
       assertSceneAllowedFields(
         row,
-        ['deviceId', 'targetType', 'key', 'propertyScope', 'relation', 'value'],
+        ['deviceId', 'targetType', 'key', 'propertyScope', 'variableSource', 'relation', 'value'],
         `${field}[${index}]`
       )
       const conditionField = `${field}[${index}]`
@@ -477,6 +502,8 @@ export const createSceneCodec = (t: Translate) => {
       if (!isPropertyCondition && propertyScope) {
         throw new Error(t('app.sceneImportUnexpectedField', { field: `${field}[${index}].propertyScope` }))
       }
+      const variableSource = normalizeSceneVariableSource(
+        row.variableSource, targetType, `${conditionField}.variableSource`)
       const relation = normalizeSceneString(row.relation, `${conditionField}.relation`)
       const conditionValue = normalizeSceneString(row.value, `${conditionField}.value`)
       if (!relation) throw new Error(t('app.sceneImportMissingField', { field: `${field}[${index}].relation` }))
@@ -493,6 +520,7 @@ export const createSceneCodec = (t: Translate) => {
         targetType,
         key,
         ...(isPropertyCondition ? { propertyScope: propertyScope as 'state' | 'variable' } : {}),
+        ...(variableSource ? { variableSource } : {}),
         relation: normalizedRelation,
         value: conditionValue
       }
@@ -865,6 +893,8 @@ export const createSceneCodec = (t: Translate) => {
     const targetType = normalizeSceneSpecTargetType(condition.targetType, `${field}.targetType`)
     const key = normalizeSceneString(condition.key, `${field}.key`)
     const propertyScope = normalizeSceneString(condition.propertyScope, `${field}.propertyScope`).toLowerCase()
+    const variableSource = normalizeSceneVariableSource(
+      condition.variableSource, targetType, `${field}.variableSource`)
     const relation = normalizeSceneString(condition.relation, `${field}.relation`)
     const value = normalizeSceneString(condition.value, `${field}.value`)
     if (!deviceId) throw new Error(t('app.sceneImportMissingField', { field: `${field}.deviceId` }))
@@ -887,6 +917,7 @@ export const createSceneCodec = (t: Translate) => {
       targetType,
       key,
       ...(isPropertyCondition ? { propertyScope: propertyScope as 'state' | 'variable' } : {}),
+      ...(variableSource ? { variableSource } : {}),
       relation: normalizedRelation,
       value
     }
@@ -983,8 +1014,7 @@ export const createSceneCodec = (t: Translate) => {
     })).map(spec => ({
       ...spec,
       formula: buildSpecFormula(spec, {
-        nodes: scene.devices,
-        deviceTemplates: scene.templates
+        nodes: scene.devices
       }),
       devices: buildSpecDeviceRefsFromConditions([
         ...spec.aConditions,

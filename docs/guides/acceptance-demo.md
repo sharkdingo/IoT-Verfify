@@ -25,7 +25,7 @@ presentation built on the away-mode scene, see
 
 All four device types (`Motion Detector`, `Camera`, `Alarm`, and `Light`) are built-in
 default templates. The demo does not require creating or editing a custom template.
-The standard scene file still embeds exact template snapshots because version 4 scene
+The standard scene file still embeds exact template snapshots because version 5 scene
 JSON is self-contained and must support lossless export/import; import matches those
 snapshots to the existing defaults instead of creating duplicate device types. If a
 default template was edited before the demo, reset it to the project default first so

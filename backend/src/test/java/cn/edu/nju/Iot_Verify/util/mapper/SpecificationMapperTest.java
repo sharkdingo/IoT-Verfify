@@ -68,6 +68,29 @@ class SpecificationMapperTest {
     }
 
     @Test
+    void variableSource_survivesEntityRoundTrip() {
+        /*
+         * A round trip, not a field copy, because the field was dropped by FIVE separate hand-written
+         * copy sites before this test existed — including the one on the only spec write path, where the
+         * request validated, persisted blank, and reloaded unresolved. Asserting up to the mapper boundary
+         * is what let that through: the bug lived exactly where the assertion stopped.
+         */
+        SpecificationDto spec = validSpec();
+        SpecConditionDto condition = validCondition("a");
+        condition.setTargetType("variable");
+        condition.setKey("temperature");
+        condition.setVariableSource("reported");
+        condition.setRelation(">");
+        condition.setValue("30");
+        spec.setAConditions(List.of(condition));
+
+        SpecificationDto restored = mapper.toDto(mapper.toEntity(spec, 1L));
+
+        assertEquals("reported", restored.getAConditions().get(0).getVariableSource(),
+                "a persisted variable condition must come back asking the same question");
+    }
+
+    @Test
     void blankPersistedConditionColumnFailsClosedInsteadOfBecomingEmpty() {
         SpecificationPo po = new SpecificationPo();
         po.setId("spec_bad");

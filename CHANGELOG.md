@@ -15,7 +15,110 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
-### 2026-08-09 (latest)
+### 2026-08-10 (latest)
+
+#### Added
+
+- **A specification now states which of two questions it asks about a shared value.** A shared value has
+  two identifiers in the generated model — the environment pool value and the reporting device's mirror —
+  and they diverge exactly when that device is compromised. The generator used to pick the pool value
+  whenever the key was shared and silently discard the device the author had selected, so a specification
+  reading "temperature never exceeds 30" was reported SATISFIED while a falsified reading of 40 drove the
+  automation. Spec conditions with `targetType: variable` now carry a required `variableSource`:
+  `environment` ("did this actually happen in the home") or `reported` ("is this what this device said").
+  There is deliberately no default — presenting either as the author's intent is a false statement about
+  what was verified — so a condition without it is refused on every path that authors a specification, and
+  generation reports it as a skipped specification rather than guessing. Whole-board revalidation, which
+  device and rule writes run over already-stored specifications, deliberately tolerates an absent reading. `environment` additionally requires a shared declaration: a device-local value has
+  no pool identifier, and that is now refused with the declaration named instead of compiling to an
+  identifier the model never declares. Semantics: [shared-value-semantics.md](docs/architecture/shared-value-semantics.md).
+- **The specification builder now asks that question instead of answering it silently.** The condition
+  editor presents both readings side by side for a shared value — "the actual value in the home" and
+  "what this device reports" — with neither preselected and the compromise divergence explained where the
+  choice is made; a device-local value offers only the device's reading, because the home has no
+  counterpart to compare against. Every display surface says which reading it means: the formula preview,
+  the plain-language description, the saved condition rows, and counterexample verdicts. A stored
+  condition that never recorded a choice renders as unresolved and blocks verification and simulation with
+  an inline reason rather than being assigned a side on load. Scene files are version **5**: a `variable`
+  condition must carry `variableSource`, and version-4 files are rejected rather than half-read, since no
+  guess preserves what their specifications assert. A recommended condition without the field is rejected
+  as malformed rather than completed on the model's behalf.
+
+#### Fixed
+
+- **Template admission now guards against three variable-name collision vulnerabilities.** Variable names
+  starting with `a_` (the environment pool prefix), NuSMV reserved words (`INIT`, `case`, etc.), and names
+  colliding with mode names are now rejected at template upload with an explicit error. These shapes would
+  have caused identifier collisions in the generated NuSMV module or broken parse entirely. Found by
+  adversarial audit (round 10) following the `variableSource` field addition.
+- **Counterexample environment value chips now adapt to dark theme.** The trace playback strip rendering
+  environment pool values used hardcoded light-mode colors (`border-slate-200 bg-slate-50 text-slate-700`),
+  making them illegible in dark mode. They now use CSS variables (`var(--board-border)`,
+  `var(--board-surface-subtle)`, `var(--board-text)`) that adapt to the user's theme. Cosmetic only; found
+  by completeness audit (round 10).
+- **Deletion preview now tested for `environment` specifications.** A new test drives deletion of a device
+  anchoring an `environment` specification and asserts the spec appears in `removedSpecifications`. Defect 13
+  was fixed in round 9, but the fix had no test exercising the mechanism. Test coverage gap closed.
+- **A compromised sensor could not drive its own controller, so sensor spoofing was proved impossible.**
+  A device's autonomous `Transition` guard compiled to the environment pool value (`a_<name>`) whenever
+  the trigger attribute was a shared reading, instead of to the device's own read mirror
+  (`<device>.<name>`). The mirror is where compromise takes effect — under attack it becomes
+  `case is_attack=TRUE: <domain>; TRUE: a_<name>; esac` — so a pool-reading guard made the device
+  omniscient about the real value in the home and immune to the falsified reading it was itself
+  reporting. The canonical attack (a spoofed smoke level driving a detector into alarm) was returned as
+  `SATISFIED`; the same model now returns `VIOLATED`, confirmed against real NuSMV. Trigger guards now
+  always read `<device>.<attribute>`; the write target of an environment transition is unchanged and
+  remains the pool. Compilation rules: [nusmv-model.md](docs/architecture/nusmv-model.md).
+- **A safety property's trust predicate named a label the model never declares.** Template 7 pairs each
+  A condition with its untrusted-source term, and both formula previews built that term from the
+  condition's *value* target — so a condition asking about the home rendered
+  `controlSource(Environment."temperature")`. A trust label is device-scoped: the generator emits
+  `<device>.trust_<key>` whatever the reading, and there is no pool-level `trust_a_<key>`. The preview
+  therefore described a property about the home's own provenance while NuSMV checked one named device's
+  label, and under two devices declaring the key the choice changes what is proved. The value term still
+  names the pool, because that is what `environment` means; the label term now names the device. A `mode`
+  condition's term names the mode's active state, matching the `trust_<mode>_<value>` the generator emits,
+  and an `api` condition's names the end state the action leads to. Two-subject formulas are documented in
+  [spec-templates.md](docs/architecture/spec-templates.md).
+- **A mode condition was reported as an unanswered question.** Making the formula preview read the declared
+  reading let every non-`variable` condition fall into that logic, and a `mode` condition carries no reading
+  and never can — so it rendered as `<unresolved>."FanMode"` on every template, telling the user a choice
+  was missing from a condition nobody is ever asked to make one for.
+- **Bounded exploration answered a question it cannot ask.** The explorer keeps one value per shared reading
+  and models no compromised device, so a specification asking what a device *reports* was evaluated against
+  the pool value and given a verdict — the falsification case the author asked about was never covered, and
+  nothing said so. Such a specification is now reported as unexplored with its own reason, alongside the
+  existing trust/privacy exclusion, and the panel says so before the run rather than after.
+- **A counterexample could not show the divergence it was proving.** Canvas nodes render each device's
+  reported reading and the change popover lists only environment values that *changed*, so in the case this
+  distinction exists for — the home holds 20 while a compromised sensor reports 40 — the pool value is
+  stable, produced no change row, and appeared nowhere on screen. The trace step now carries the pool's
+  values as absolutes beside the reported readings.
+- **The same condition displayed two different formulas.** The client rendered NuSMV booleans lowercase
+  while the server rendered them uppercase, so one specification read `= true` in the editor and `= TRUE`
+  in its verdict. The two previews are independent implementations of one contract and nothing compared
+  them; a cross-side test now pins the literals.
+- **A specification asserting that a device's report disagrees with the home was refused as
+  self-contradictory.** The assistant's satisfiability pre-check grouped variable conditions by device and
+  key alone, so "the home is actually below 30 **and** this sensor reports 30 or above" — the falsified
+  reading a compromised device produces, and the reason the two readings are distinguishable at all —
+  collapsed into one group with no common legal value and was rejected. The reading is now part of the
+  grouping key, and a genuine contradiction within one reading is still caught.
+- **Two verdicts about the same value read as identical rows.** A verification result is titled by its
+  specification template, so two specifications asking different questions about one key produced two rows
+  with the same title and opposite verdicts, distinguishable only by one token inside the monospace
+  formula. Each row now names the reading it answered about, and a specification mixing both names both.
+- **A specification stored before this change made the whole board fail to load.** The client rejected a
+  returned condition with no `variableSource` as a contract violation, so the specifications collection
+  errored out with a retry that could never succeed — and the unresolved-state handling built for exactly
+  that data was unreachable. An absent value now loads and renders as unresolved; a present but
+  unrecognised value is still a contract violation.
+- **A skipped specification blamed the wrong thing.** The generation-issue classifier matches on message
+  substrings, and the missing-reading message necessarily talks about values, so it was reported as
+  `SPEC_INVALID_VALUE` — sending the user to check a value domain that was correct. It now has its own
+  `SPEC_VARIABLE_SOURCE_REQUIRED` code and message.
+
+### 2026-08-09
 
 #### Fixed
 

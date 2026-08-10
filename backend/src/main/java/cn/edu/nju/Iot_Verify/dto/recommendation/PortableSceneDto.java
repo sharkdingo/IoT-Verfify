@@ -93,6 +93,15 @@ public class PortableSceneDto {
         private String targetType;
         private String key;
         private String propertyScope;
+        /**
+         * Which question a variable condition asks — see {@code SpecConditionDto.variableSource}.
+         *
+         * <p>Declared here because the injected mapper sets {@code FAIL_ON_UNKNOWN_PROPERTIES}: the
+         * scenario tool emits this on every variable condition, so omitting the field did not drop it
+         * quietly — {@code convertValue} threw, and the controller turned that into a 502 for the whole
+         * recommendation response. Not a partial loss: nothing came back at all.
+         */
+        private String variableSource;
         private String relation;
         private String value;
     }

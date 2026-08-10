@@ -55,6 +55,39 @@ class BoardSemanticValidatorTest {
     }
 
     @Test
+    void acceptsOneKeyAskedFromBothSources() {
+        /*
+         * "The home is actually below 10 AND this sensor reports at or above 10" is the falsified-reading
+         * specification the whole variableSource field exists to express: satisfiable exactly when the
+         * device lies. Grouping by (device, key) alone folded the two readings into one group and refused
+         * it as contradictory — a false reject of the feature's own headline case.
+         */
+        SpecConditionDto inTheHome = specCondition("variable", "temperature", "<", "10");
+        inTheHome.setVariableSource("environment");
+        SpecConditionDto asReported = specCondition("variable", "temperature", ">=", "10");
+        asReported.setVariableSource("reported");
+
+        assertNull(BoardSemanticValidator.validateSpecConditionGroup(
+                        context(), List.of(inTheHome, asReported), "a"),
+                "two different questions about one key are independently satisfiable");
+    }
+
+    @Test
+    void stillRejectsContradictoryConditionsAskingTheSameQuestion() {
+        // The negative half: folding the reading into the group key must not stop the check from catching a
+        // genuine contradiction, or it would trade a false reject for a false accept.
+        SpecConditionDto low = specCondition("variable", "temperature", "<", "10");
+        low.setVariableSource("reported");
+        SpecConditionDto high = specCondition("variable", "temperature", ">=", "10");
+        high.setVariableSource("reported");
+
+        BoardSemanticValidator.GroupValidationIssue issue =
+                BoardSemanticValidator.validateSpecConditionGroup(context(), List.of(low, high), "a");
+
+        assertEquals("CONTRADICTORY_CONDITION_GROUP", issue.reasonCode());
+    }
+
+    @Test
     void rejectsContradictoryFiniteDomainConditions() {
         BoardSemanticValidator.GroupValidationIssue issue =
                 BoardSemanticValidator.validateSpecConditionGroup(context(), List.of(

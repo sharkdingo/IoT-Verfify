@@ -129,6 +129,10 @@ public final class ModelTraceToolPresenter {
             putText(item, "deviceLabel", condition.getDeviceLabel());
             putText(item, "targetType", condition.getTargetType());
             putText(item, "propertyScope", condition.getPropertyScope());
+            // Without this the assistant explaining a counterexample cannot tell whether the violated
+            // condition was about the home or about one device's reading — the distinction the trace is
+            // most often used to explain, since the two only diverge when a device lies.
+            putText(item, "variableSource", condition.getVariableSource());
             putText(item, "key", condition.getKey());
             putText(item, "relation", condition.getRelation());
             putText(item, "value", condition.getValue());

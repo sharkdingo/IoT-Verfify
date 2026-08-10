@@ -418,7 +418,14 @@ const fillSpecCondition = async (
   key: string | null,
   relation: string,
   value: string | string[],
-  propertyScope?: 'state' | 'variable'
+  propertyScope?: 'state' | 'variable',
+  /**
+   * Which value a `variable` condition asks about — `environment` for the shared pool value, `reported`
+   * for what this device said. Required for `variable`: nothing is preselected, so Save stays disabled
+   * until one is picked. A device-local variable offers only `reported` and auto-selects it, so passing
+   * nothing is correct in that case.
+   */
+  variableSource?: 'environment' | 'reported'
 ) => {
   await expect(page.getByTestId('spec-condition-dialog')).toBeVisible({ timeout: 10_000 })
   await page.getByTestId('spec-condition-device').selectOption(deviceId)
@@ -433,6 +440,11 @@ const fillSpecCondition = async (
       selectedKey
     ), { timeout: 10_000, message: `Missing ${type} property option ${selectedKey}` }).toBe(true)
     await keyControl.selectOption(selectedKey, { timeout: 10_000 })
+  }
+  // After the key: the reading fieldset only renders once a key is chosen, since which options exist
+  // depends on whether that declaration is shared.
+  if (variableSource) {
+    await page.getByTestId(`spec-condition-variable-source-${variableSource}`).click()
   }
   await page.getByTestId('spec-condition-relation').selectOption(relation)
   const valueControl = page.locator('[data-testid="spec-condition-value"]:visible')
@@ -456,13 +468,13 @@ const addNeverSpec = async (
   page: Page,
   request: APIRequestContext,
   auth: AuthUser,
-  condition: { deviceId: string, type: string, key: string | null, propertyScope?: 'state' | 'variable', relation: string, value: string | string[] },
+  condition: { deviceId: string, type: string, key: string | null, propertyScope?: 'state' | 'variable', variableSource?: 'environment' | 'reported', relation: string, value: string | string[] },
   expectedSpecCount: number
 ) => {
   await openControlSection(page, 'specs')
   await selectSpecTemplate(page, '3')
   await page.getByTestId('spec-add-condition-a').click()
-  await fillSpecCondition(page, condition.deviceId, condition.type, condition.key, condition.relation, condition.value, condition.propertyScope)
+  await fillSpecCondition(page, condition.deviceId, condition.type, condition.key, condition.relation, condition.value, condition.propertyScope, condition.variableSource)
   await page.getByTestId('spec-create').click()
   return waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length === expectedSpecCount)
 }
@@ -471,13 +483,13 @@ const addAlwaysSpec = async (
   page: Page,
   request: APIRequestContext,
   auth: AuthUser,
-  condition: { deviceId: string, type: string, key: string | null, propertyScope?: 'state' | 'variable', relation: string, value: string | string[] },
+  condition: { deviceId: string, type: string, key: string | null, propertyScope?: 'state' | 'variable', variableSource?: 'environment' | 'reported', relation: string, value: string | string[] },
   expectedSpecCount: number
 ) => {
   await openControlSection(page, 'specs')
   await selectSpecTemplate(page, '1')
   await page.getByTestId('spec-add-condition-a').click()
-  await fillSpecCondition(page, condition.deviceId, condition.type, condition.key, condition.relation, condition.value, condition.propertyScope)
+  await fillSpecCondition(page, condition.deviceId, condition.type, condition.key, condition.relation, condition.value, condition.propertyScope, condition.variableSource)
   await page.getByTestId('spec-create').click()
   return waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length === expectedSpecCount)
 }
@@ -486,16 +498,16 @@ const addResponseSpec = async (
   page: Page,
   request: APIRequestContext,
   auth: AuthUser,
-  ifCondition: { deviceId: string, type: string, key: string | null, relation: string, value: string | string[] },
-  thenCondition: { deviceId: string, type: string, key: string | null, relation: string, value: string | string[] },
+  ifCondition: { deviceId: string, type: string, key: string | null, variableSource?: 'environment' | 'reported', relation: string, value: string | string[] },
+  thenCondition: { deviceId: string, type: string, key: string | null, variableSource?: 'environment' | 'reported', relation: string, value: string | string[] },
   expectedSpecCount: number
 ) => {
   await openControlSection(page, 'specs')
   await selectSpecTemplate(page, '5')
   await page.getByTestId('spec-add-condition-if').click()
-  await fillSpecCondition(page, ifCondition.deviceId, ifCondition.type, ifCondition.key, ifCondition.relation, ifCondition.value)
+  await fillSpecCondition(page, ifCondition.deviceId, ifCondition.type, ifCondition.key, ifCondition.relation, ifCondition.value, undefined, ifCondition.variableSource)
   await page.getByTestId('spec-add-condition-then').click()
-  await fillSpecCondition(page, thenCondition.deviceId, thenCondition.type, thenCondition.key, thenCondition.relation, thenCondition.value)
+  await fillSpecCondition(page, thenCondition.deviceId, thenCondition.type, thenCondition.key, thenCondition.relation, thenCondition.value, undefined, thenCondition.variableSource)
   await page.getByTestId('spec-create').click()
   return waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length === expectedSpecCount)
 }
@@ -822,7 +834,14 @@ test.describe('authority model full-stack audit', () => {
     const browserErrors: string[] = []
     page.on('pageerror', error => browserErrors.push(error.message))
     page.on('console', message => {
-      if (message.type() === 'error') browserErrors.push(message.text())
+      // Record the location too. A bare "Failed to load resource: 404" names no URL, so when this sink
+      // reddens there is nothing to diagnose from — and with no trace on a non-retried run, the offending
+      // request is unrecoverable afterwards.
+      if (message.type() === 'error') {
+        const location = message.location()
+        const where = location?.url ? ` @ ${location.url}` : ''
+        browserErrors.push(`${message.text()}${where}`)
+      }
     })
     const capturedPosts = captureModelPosts(page)
 
@@ -993,6 +1012,7 @@ test.describe('authority model full-stack audit', () => {
     await addResponseSpec(page, request, auth, {
       deviceId: motion.id,
       type: 'variable',
+      variableSource: 'environment',
       key: 'motion',
       relation: '=',
       value: 'active'
@@ -1006,6 +1026,7 @@ test.describe('authority model full-stack audit', () => {
     await addResponseSpec(page, request, auth, {
       deviceId: tempSensor.id,
       type: 'variable',
+      variableSource: 'environment',
       key: 'temperature',
       relation: '>',
       value: '28'
@@ -1371,7 +1392,14 @@ test.describe('authority model full-stack audit', () => {
     const browserErrors: string[] = []
     page.on('pageerror', error => browserErrors.push(error.message))
     page.on('console', message => {
-      if (message.type() === 'error') browserErrors.push(message.text())
+      // Record the location too. A bare "Failed to load resource: 404" names no URL, so when this sink
+      // reddens there is nothing to diagnose from — and with no trace on a non-retried run, the offending
+      // request is unrecoverable afterwards.
+      if (message.type() === 'error') {
+        const location = message.location()
+        const where = location?.url ? ` @ ${location.url}` : ''
+        browserErrors.push(`${message.text()}${where}`)
+      }
     })
     const capturedPosts = captureModelPosts(page)
 
@@ -1486,6 +1514,7 @@ test.describe('authority model full-stack audit', () => {
     await addResponseSpec(page, request, auth, {
       deviceId: smoke.id,
       type: 'variable',
+      variableSource: 'environment',
       key: 'smoke',
       relation: '=',
       value: 'detected'
@@ -1499,6 +1528,7 @@ test.describe('authority model full-stack audit', () => {
     await addResponseSpec(page, request, auth, {
       deviceId: gas.id,
       type: 'variable',
+      variableSource: 'environment',
       key: 'gas',
       relation: '>',
       value: '70'
@@ -1512,6 +1542,7 @@ test.describe('authority model full-stack audit', () => {
     await addResponseSpec(page, request, auth, {
       deviceId: gas.id,
       type: 'variable',
+      variableSource: 'environment',
       key: 'gas',
       relation: '>',
       value: '70'

@@ -242,7 +242,7 @@ Its methods return already-unwrapped values. Non-exhaustive:
 - Scene import/export lives in the Board header as a whole-board portability affordance,
   not as a backend endpoint. Export requests a browser download for an
   `iot-verify.board-scene` JSON file with
-  exact `schema`, `version: 4`, referenced `templates`, `devices`,
+  exact `schema`, `version: 5`, referenced `templates`, `devices`,
   `environmentVariables`, `rules`, and
   `specs`; there is no timestamp inside the JSON because scene files are meant to be
   canonical and round-trip comparable. The toast reports that the download was requested,
@@ -258,7 +258,7 @@ Its methods return already-unwrapped values. Non-exhaustive:
   an imported scene creates fresh backend rows, as do specifications; only stable device ids are
   preserved.
   Import rejects a missing/different schema or any unsupported version instead of
-  guessing aliases and rewriting future data into version 4. It validates duplicate
+  guessing aliases and rewriting future data into version 5. It validates duplicate
   device ids, required identity/position/size, state required only for state-machine
   templates, state forbidden for stateless templates, required rule target command fields
   (`toId`/`toApi`), supported relation operators, specification template condition-side
@@ -274,7 +274,7 @@ Its methods return already-unwrapped values. Non-exhaustive:
   are limited to `-1000000..1000000`, width to `80..2000`, and height to `60..2000`.
   This exact domain also applies to AI scene drafts, preserving export/import closure at
   the range boundaries.
-  The canvas may hold `Working` as a stateless rendering placeholder, but version 4 export
+  The canvas may hold `Working` as a stateless rendering placeholder, but version 5 export
   omits it together with current-state trust/privacy; import restores it only internally.
   Specification `templateLabel`, formula/device caches, and condition display metadata
   are excluded and rebuilt from `templateId` plus conditions. The environment pool is

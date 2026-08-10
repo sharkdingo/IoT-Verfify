@@ -461,11 +461,23 @@ against declared target domains so accepted template behavior is never silently 
 An accepted autonomous Transition has one modeled effect only: one concrete mode update
 or one variable assignment. Combined/multi-mode/multi-assignment effects are rejected at
 template and generation boundaries because independently generated `next(...)` branches
-could otherwise apply only part of the declared action. Environment-variable triggers
-read the shared `a_<name>` value; impact-only environment declarations remain write-only, and a
+could otherwise apply only part of the declared action. A Transition guard always reads the device's **own** reference,
+`<device>.<attribute>` — never the environment pool identifier `a_<name>`. A Transition is the
+device's autonomous behaviour, so it must decide from what the device observes, and the read mirror
+`<device>.<name> := a_<name>` is exactly that observation. The distinction is only visible under
+attack, where it is decisive: the mirror of a `FalsifiableWhenCompromised` variable becomes
+`case is_attack=TRUE: <domain>; TRUE: a_<name>; esac`, so a guard reading `a_<name>` bypassed the
+falsified value and made the device immune to its own compromise. That proved the canonical
+sensor-spoofing attack impossible and returned `SATISFIED`; the same model returns `VIOLATED` once
+the guard reads the mirror.
+Impact-only environment declarations remain write-only, and a
 Trigger naming one is **rejected** (`SmvModelValidator.buildLegalAttributeSet`). That rejection is
-what makes the sentence true rather than aspirational: the generator declares `device.<name>` for
-every manifest variable but mirrors `a_<name>` into it only for a readable declaration, so before
+what keeps the mirror reference sound rather than dangling: the generator declares `device.<name>`
+for every manifest variable but mirrors `a_<name>` into it only for a readable declaration
+(`SmvMainModuleBuilder.appendExternalVariableAssignments`). The two predicates are not identical —
+`buildLegalAttributeSet` also admits device-local names, which the mirror pass never touches because
+the device module assigns them — but they coincide on shared declarations, which is what this
+argument needs. Without
 the check such a Trigger compiled into a comparison against an identifier that is declared, never
 initialised and never assigned — an unconstrained free state variable re-picking a value every
 step, unrelated to the shared value it names. NuSMV accepts and answers that model, so the wrong
