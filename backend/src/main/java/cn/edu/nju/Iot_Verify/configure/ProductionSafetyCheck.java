@@ -1,9 +1,16 @@
 package cn.edu.nju.Iot_Verify.configure;
 
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateNuSmvValidator;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -36,6 +43,7 @@ public class ProductionSafetyCheck {
     private static final String PLACEHOLDER_LLM_API_KEY = "your_api_key_here";
 
     private final Environment environment;
+    private final DeviceTemplateNuSmvValidator templateValidator;
 
     @Value("${jwt.secret:}")
     private String jwtSecret;
@@ -46,8 +54,9 @@ public class ProductionSafetyCheck {
     @Value("${llm.api-key:}")
     private String llmApiKey;
 
-    public ProductionSafetyCheck(Environment environment) {
+    public ProductionSafetyCheck(Environment environment, DeviceTemplateNuSmvValidator templateValidator) {
         this.environment = environment;
+        this.templateValidator = templateValidator;
     }
 
     @PostConstruct
@@ -70,6 +79,12 @@ public class ProductionSafetyCheck {
             violations.add("llm.api-key (IOT_VERIFY_OPENAI_API_KEY) is still the placeholder default or empty");
         }
 
+        // Validate bundled default templates (added in round 11 audit)
+        // Only run if templateValidator is available (not in unit tests with null)
+        if (templateValidator != null) {
+            violations.addAll(validateBundledDefaultTemplates());
+        }
+
         if (!violations.isEmpty()) {
             String msg = "Production safety check failed - insecure defaults detected:\n  - "
                     + String.join("\n  - ", violations);
@@ -77,6 +92,61 @@ public class ProductionSafetyCheck {
         }
 
         log.info("Production safety check passed");
+    }
+
+    /**
+     * Validates all bundled default templates in classpath:/deviceTemplate/*.json.
+     * <p>
+     * A malformed or collision-vulnerable default template would break every user's first board access
+     * with a 500 error. This check catches it at startup instead of in production.
+     * <p>
+     * Added in adversarial audit round 11, which found that a bundled template with variable name
+     * collisions (a_ prefix, reserved words, mode-variable conflicts) would not be detected until
+     * runtime user access.
+     *
+     * @return list of validation error messages, empty if all templates are valid
+     */
+    private List<String> validateBundledDefaultTemplates() {
+        List<String> errors = new ArrayList<>();
+        PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
+
+        // Create ObjectMapper with same config as the app uses for bundled templates
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        mapper.configure(com.fasterxml.jackson.databind.MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true);
+
+        try {
+            Resource[] resources = resolver.getResources("classpath:deviceTemplate/*.json");
+            log.info("Validating {} bundled default templates", resources.length);
+
+            for (Resource resource : resources) {
+                try {
+                    String json = new String(resource.getInputStream().readAllBytes());
+                    DeviceTemplateDto template = mapper.readValue(json, DeviceTemplateDto.class);
+
+                    if (template == null || template.getManifest() == null) {
+                        errors.add("Bundled template " + resource.getFilename() + " has null manifest");
+                        continue;
+                    }
+
+                    // Run the same admission gates that user uploads go through
+                    templateValidator.validateTemplateManifestForNuSmv(template.getName(), template.getManifest());
+
+                } catch (Exception e) {
+                    errors.add("Bundled template " + resource.getFilename() + " validation failed: " + e.getMessage());
+                }
+            }
+
+            if (errors.isEmpty()) {
+                log.info("All {} bundled default templates passed validation", resources.length);
+            }
+
+        } catch (Exception e) {
+            errors.add("Failed to load bundled templates: " + e.getMessage());
+        }
+
+        return errors;
     }
 
     /**

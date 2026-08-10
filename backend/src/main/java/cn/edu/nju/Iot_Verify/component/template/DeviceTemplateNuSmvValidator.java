@@ -75,7 +75,8 @@ public class DeviceTemplateNuSmvValidator {
                 // Guard against three key-shape vulnerabilities found in adversarial audit round 9:
                 // 1. `a_` prefix collision — user declares `a_temperature`, generator prepends again → `a_a_temperature`
                 //    collides with another device's shared `temperature` whose pool is `a_temperature`.
-                if (iv.getName().startsWith("a_")) {
+                //    Case-insensitive check (round 11): 'A_temp' normalizes to 'a_a_temp', same collision.
+                if (iv.getName().toLowerCase(Locale.ROOT).startsWith("a_")) {
                     throw new BadRequestException(
                             "Template '" + templateName + "': InternalVariable name '" + iv.getName()
                                     + "' must not start with 'a_' (reserved for environment pool identifiers).");

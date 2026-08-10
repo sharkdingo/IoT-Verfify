@@ -1195,6 +1195,83 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     }
 
     @Test
+    void addDeviceTemplate_internalVarWithLowercaseA_Prefix_shouldReject() {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setInitState("idle");
+        manifest.setWorkingStates(List.of(workingState("idle")));
+        manifest.setInternalVariables(List.of(
+                DeviceManifest.InternalVariable.builder()
+                        .name("a_temperature")
+                        .isInside(true)
+                        .lowerBound(0)
+                        .upperBound(100)
+                        .build()));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("BadPrefix");
+        dto.setManifest(manifest);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage())
+                .contains("must not start with 'a_'")
+                .contains("reserved for environment pool identifiers");
+    }
+
+    @Test
+    void addDeviceTemplate_internalVarWithUppercaseA_Prefix_shouldReject() {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setInitState("idle");
+        manifest.setWorkingStates(List.of(workingState("idle")));
+        manifest.setInternalVariables(List.of(
+                DeviceManifest.InternalVariable.builder()
+                        .name("A_temperature")
+                        .isInside(true)
+                        .lowerBound(0)
+                        .upperBound(100)
+                        .build()));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("UppercasePrefix");
+        dto.setManifest(manifest);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage())
+                .contains("must not start with 'a_'")
+                .contains("reserved for environment pool identifiers");
+    }
+
+    @Test
+    void addDeviceTemplate_internalVarWithMixedCaseA_Prefix_shouldReject() {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setInitState("idle");
+        manifest.setWorkingStates(List.of(workingState("idle")));
+        manifest.setInternalVariables(List.of(
+                DeviceManifest.InternalVariable.builder()
+                        .name("a_TEMP")
+                        .isInside(true)
+                        .lowerBound(0)
+                        .upperBound(100)
+                        .build()));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("MixedCasePrefix");
+        dto.setManifest(manifest);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage())
+                .contains("must not start with 'a_'");
+    }
+
+    @Test
     void addDeviceTemplate_impactedVarCollidesWithLocalInternalVar_shouldReject() {
         DeviceTemplateDto dto = buildTemplateWithVar("T1", "temperature", null);
         dto.getManifest().setImpactedVariables(List.of("Temperature"));

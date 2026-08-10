@@ -91,7 +91,7 @@ class ProductionSafetyCheckTest {
                                                    String jwtSecret,
                                                    String dbPassword,
                                                    String llmApiKey) {
-        ProductionSafetyCheck check = new ProductionSafetyCheck(environment);
+        ProductionSafetyCheck check = new ProductionSafetyCheck(environment, null);
         ReflectionTestUtils.setField(check, "jwtSecret", jwtSecret);
         ReflectionTestUtils.setField(check, "dbPassword", dbPassword);
         ReflectionTestUtils.setField(check, "llmApiKey", llmApiKey);
