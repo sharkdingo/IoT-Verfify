@@ -79,7 +79,7 @@ public class DeviceTemplateNuSmvValidator {
                 if (iv.getName().toLowerCase(Locale.ROOT).startsWith("a_")) {
                     throw new BadRequestException(
                             "Template '" + templateName + "': InternalVariable name '" + iv.getName()
-                                    + "' must not start with 'a_' (reserved for environment pool identifiers).");
+                                    + "' must not start with 'a_' in any letter case (reserved for environment pool identifiers).");
                 }
 
                 // 2. Reserved-word collision — a variable named `INIT` or `case` breaks SMV parse.

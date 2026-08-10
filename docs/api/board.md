@@ -837,8 +837,9 @@ with `400`:
 - `Template '<t>': InternalVariable name '<n>' must not start with 'a_' (reserved for
   environment pool identifiers).` — compared case-insensitively.
 - `Template '<t>': InternalVariable name '<n>' is a NuSMV reserved word.`
-- `Template '<t>': InternalVariable '<n>' collides with mode name.` — compared after
-  NuSMV token normalization, so `Power` and `power` collide.
+- `Template '<t>': InternalVariable name '<n>' collides with a mode name (both emit 
+  device.<n> in the same namespace).` — compared after NuSMV token normalization, so 
+  `Power` and `power` collide.
 
 - `InternalVariable`: `Name`, `Description`, required `IsInside`,
   `FalsifiableWhenCompromised`, required `Trust`, required `Privacy`,
