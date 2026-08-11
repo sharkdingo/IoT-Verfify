@@ -1041,6 +1041,9 @@ test.describe('authority model full-stack audit', () => {
       deviceId: phone.id,
       type: 'variable',
       key: 'location',
+      // `location` is a scene-level shared declaration, so the dialog offers both readings and
+      // auto-selects neither; omitting this leaves the save button disabled.
+      variableSource: 'environment',
       relation: '=',
       value: 'home'
     }, {

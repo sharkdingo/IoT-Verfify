@@ -23,7 +23,7 @@ NuSMV. `Baseline` and `attack` show satisfied/violated specification counts.
 | :--- | :--- | :--- | :--- | :--- |
 | [Fire evacuation](../examples/default-fire-evacuation-scene.json) | `4 / 2 / 3 / 5` | `4 / 1` | `1 / 4` | Remove the alarm-to-door unlock rule; then `5 / 0` |
 | [Climate conflict](../examples/default-climate-conflict-scene.json) | `2 / 2 / 2 / 4` | `2 / 2` | `1 / 3` | Remove the first hot-room heating rule; then `4 / 0` |
-| [RFID access](../examples/default-rfid-access-scene.json) | `3 / 0 / 2 / 5` | `5 / 0` | `2 / 3` | No baseline violation to repair |
+| [RFID access](../examples/default-rfid-access-scene.json) | `3 / 0 / 2 / 5` | `5 / 0` | `3 / 2` | No baseline violation to repair |
 | [Away-mode unlock](../examples/default-away-mode-unlock-scene.json) | `5 / 3 / 3 / 6` | `4 / 2` | `1 / 5` | Remove the convenience-unlock rule; one removal clears both violations, then `6 / 0` — but see the section below for which of those greens carry information |
 
 Every baseline and attack run emits all requested properties with zero disabled rules
@@ -64,14 +64,22 @@ scene tests rule priority independently from an unrelated sensitivity-label viol
 Default templates: `Door RFID`, `Door`, and `Alarm`.
 
 The badge reader uses a device-local `RFID` value, not an Environment Pool value. Its
-initial value is `authorized`, trusted, and private. An authorized reading unlocks the
-door; a `not authorized` reading sounds the alarm. All five baseline properties pass.
+initial value is `none` in the `idle` working state, trusted and private — no card has been
+presented yet. An authorized reading unlocks the door; a `not authorized` reading sounds the
+alarm. All five baseline properties pass.
 
 With attack budget `1`, admissible compromised-reader or automation-link branches expose
-three counterexamples: the authorized response can be disrupted, an unauthorized state
-can coexist with an already unlocked door, and an unlock can carry an untrusted control
-label. The privacy property and unauthorized-alarm response remain satisfied. This is a
-modeled attack-space result, not a statement that a physical badge will be compromised.
+two counterexamples: an unauthorized state can coexist with an already unlocked door, and
+an unlock can carry an untrusted control label. The privacy property, the unauthorized-alarm
+response, and the authorized-unlock response remain satisfied. This is a modeled attack-space
+result, not a statement that a physical badge will be compromised.
+
+The scene previously reported a third counterexample, on the authorized-unlock response
+`AG (RFID = authorized -> AX LockState = unlocked)`. That one needed no attack: the reader
+started at `RFID = authorized` while the door was still `locked`, so the obligation failed in
+the initial state. It described a contradictory fixture rather than the attack surface, and it
+disappeared when the reader gained its `idle` / `none` starting point. All five properties are
+still evaluated in both runs — nothing is skipped, so none of these greens is vacuous.
 
 ## Away-mode unlock
 

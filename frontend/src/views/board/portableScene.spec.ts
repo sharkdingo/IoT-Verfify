@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createSceneCodec, SCENE_FILE_SCHEMA, SCENE_FILE_VERSION } from './portableScene'
 
@@ -250,5 +252,37 @@ describe('canonicalization', () => {
       FalsifiableWhenCompromised: false,
       LowerBound: 0
     })
+  })
+})
+
+/**
+ * The scene files under `docs/examples/` are shipped fixtures: seven E2E specs import them through
+ * the UI, and a user following the docs imports them by hand. Nothing else asserts they are still
+ * importable, so a backend template change that makes one invalid was only observable as a 15-minute
+ * E2E run failing on a confirmation dialog that never appeared.
+ *
+ * That happened: cd194bd gave Door RFID three WorkingStates, which turned a stateless device in
+ * `default-rfid-access-scene.json` into a stateful one, and the codec rightly rejected it for
+ * carrying no `state`. This test puts the failure a second away from the edit instead.
+ */
+describe('bundled example scenes', () => {
+  it('every scene under docs/examples imports through the codec', () => {
+    const directory = join(__dirname, '../../../../docs/examples')
+    const files = readdirSync(directory).filter(file => file.endsWith('.json'))
+    // Without this the whole test passes vacuously if the directory moves.
+    expect(files.length, 'no example scenes were found').toBeGreaterThan(5)
+
+    const rejected: string[] = []
+    for (const file of files) {
+      const raw = JSON.parse(readFileSync(join(directory, file), 'utf8'))
+      try {
+        const scene = codec.normalizeSceneFile(raw)
+        expect(scene.devices.length, `${file} imported no devices`).toBeGreaterThan(0)
+      } catch (error) {
+        rejected.push(`${file}: ${(error as Error).message}`)
+      }
+    }
+
+    expect(rejected, `example scenes the codec refuses:\n${rejected.join('\n')}`).toEqual([])
   })
 })

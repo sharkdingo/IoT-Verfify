@@ -43,6 +43,9 @@ history into a technical spec. The spec content itself now lives under
 
 - **Door RFID RFID variable domain**: Extended value set from `["authorized", "not authorized"]` to `["authorized", "not authorized", "none"]` to properly represent idle state (no card present/scanned).
 
+- **`docs/examples/default-rfid-access-scene.json` badge reader**: now carries `state: "idle"` with `RFID: "none"`. Door RFID gaining WorkingStates turned this into a stateful device, and a stateful device without a `state` is refused on import — the shipped scene could no longer be imported. The reader's initial value follows the same fail-closed intent as the template fix above (it was `"authorized"`).
+  - **Verification result change**: the attack-budget-1 run now reports **2** counterexamples instead of 3 (`docs/guides/default-template-scenarios.md` updated). The dropped one was the authorized-unlock response `AG (RFID = authorized -> AX LockState = unlocked)`, which failed in the *initial* state — the old fixture asserted an authorized badge while the door was still locked, so that counterexample described the fixture, not the attack surface. Measured both ways: all five properties are still evaluated (`skippedSpecCount: 0`, `modelComplete: true`), so the newly satisfied property is not vacuous.
+
 #### Technical Details
 
 - **Modified templates** (9): Car.json, Door RFID.json, Dryer.json, Email.json, Mobile Phone.json, Oven.json, Refrigerator Door Sensor.json, Thermostat.json, Washer Machine.json

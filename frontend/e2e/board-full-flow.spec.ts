@@ -98,9 +98,24 @@ const addOccupancySensor = (scene: any, temperatureValue: string) => {
         Trust: 'trusted',
         Privacy: 'public'
       }],
-      Modes: [],
-      InitState: '',
-      WorkingStates: [],
+      // `occupied` is a local enum, so the template validator requires a driver for it: without one
+      // it would hold a nondeterministic initial value through every benign run. Binding it to two
+      // working states keeps it device-local, which is what the specs below read via `reported`.
+      Modes: ['OccupancyState'],
+      InitState: 'absent',
+      WorkingStates: [{
+        Name: 'absent',
+        Description: '',
+        Trust: 'trusted',
+        Privacy: 'public',
+        Dynamics: [{ VariableName: 'occupied', Value: 'absent' }]
+      }, {
+        Name: 'present',
+        Description: '',
+        Trust: 'trusted',
+        Privacy: 'public',
+        Dynamics: [{ VariableName: 'occupied', Value: 'present' }]
+      }],
       Transitions: [],
       APIs: []
     }
@@ -112,6 +127,9 @@ const addOccupancySensor = (scene: any, temperatureValue: string) => {
     position: { x: 90, y: 320 },
     width: 176,
     height: 128,
+    state: 'absent',
+    currentStateTrust: 'trusted',
+    currentStatePrivacy: 'public',
     variables: [{ name: 'occupied', value: 'absent', trust: 'trusted' }]
   })
   scene.environmentVariables.find((row: any) => row.name === 'temperature').value = temperatureValue
@@ -340,7 +358,13 @@ test.describe('board full-stack NuSMV user flow', () => {
       file: 'default-rfid-access-scene.json',
       counts: { devices: 3, environment: 0, rules: 2, specs: 5 },
       baselineViolations: 0,
-      attackViolations: 3,
+      // Two, not three: the reader now starts `idle` with `RFID = none`. Measured, both ways — the
+      // third counterexample was the immediate-response spec
+      // `AG (rfid_1.RFID = authorized -> AX door_1.LockState = unlocked)` failing at state 0, where
+      // the old scene asserted an authorized badge while the door was still locked. It needed no
+      // attack to fail, so it described the fixture's contradictory initial state rather than the
+      // attack surface. All five specs are still evaluated (skippedSpecCount 0, modelComplete true).
+      attackViolations: 2,
       animatedState: 'unlocked',
       removedRule: null,
       repairedRuleCount: 2
@@ -1031,13 +1055,19 @@ test.describe('board full-stack NuSMV user flow', () => {
         && value.some(node => node.label === 'import_alarm'))
     const importedPhone = nodes.find(node => node.label === 'import_phone')
     const importedAlarm = nodes.find(node => node.label === 'import_alarm')
-    expect(importedPhone.variables).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'location', value: 'home', trust: 'trusted' }),
+    // `location` is a scene-level shared declaration, so it commits as an environment patch rather
+    // than a per-device variable — the backend refuses it as a device variable outright (422). Only
+    // the device-local `steps` stays on the node.
+    expect(importedPhone.variables).toEqual([
       expect.objectContaining({ name: 'steps', value: '23', trust: 'trusted' })
-    ]))
-    expect(importedPhone.privacies).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'location', privacy: 'public' }),
+    ])
+    expect(importedPhone.privacies).toEqual([
       expect.objectContaining({ name: 'steps', privacy: 'public' })
+    ])
+    const phoneEnvironment = await waitForApi<any[]>(request, auth, '/api/board/environment',
+      rows => rows.some(row => row.name === 'location'))
+    expect(phoneEnvironment).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'location', value: 'home', trust: 'trusted', privacy: 'public' })
     ]))
     expect(importedAlarm.state).toBe('both')
     expect(importedAlarm.currentStateTrust).toBe('trusted')
