@@ -240,13 +240,13 @@
 				"x": 80,
 				"y": 120
 			},
-			"state": "idle",
+			"state": "authorized",
 			"currentStateTrust": "trusted",
 			"currentStatePrivacy": "private",
 			"variables": [
 				{
 					"name": "RFID",
-					"value": "none",
+					"value": "authorized",
 					"trust": "trusted"
 				}
 			],

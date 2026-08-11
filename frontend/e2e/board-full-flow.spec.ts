@@ -358,13 +358,7 @@ test.describe('board full-stack NuSMV user flow', () => {
       file: 'default-rfid-access-scene.json',
       counts: { devices: 3, environment: 0, rules: 2, specs: 5 },
       baselineViolations: 0,
-      // Two, not three: the reader now starts `idle` with `RFID = none`. Measured, both ways — the
-      // third counterexample was the immediate-response spec
-      // `AG (rfid_1.RFID = authorized -> AX door_1.LockState = unlocked)` failing at state 0, where
-      // the old scene asserted an authorized badge while the door was still locked. It needed no
-      // attack to fail, so it described the fixture's contradictory initial state rather than the
-      // attack surface. All five specs are still evaluated (skippedSpecCount 0, modelComplete true).
-      attackViolations: 2,
+      attackViolations: 3,
       animatedState: 'unlocked',
       removedRule: null,
       repairedRuleCount: 2
