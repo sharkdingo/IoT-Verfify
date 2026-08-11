@@ -577,6 +577,16 @@ public class DeviceTemplateNuSmvValidator {
      * frozen at their nondeterministically chosen initial value throughout benign runs.
      * A local enum variable must be driven by WorkingState Dynamics, Transition Assignment,
      * or (for numeric variables) NaturalChangeRate.
+     *
+     * <p><b>Current implementation checks for at least one WorkingState with Dynamics.</b>
+     * Partial coverage (some WorkingStates without Dynamics for this variable) is permitted.
+     * This means a variable may be driven in state A but hold a stale value in state B,
+     * which can still lead to incorrect behavior but is less severe than complete freezing.
+     *
+     * <p>Example: A thermostat with 15 WorkingStates where only 10 bind {@code operatingState}
+     * will pass this check, but the 5 unbound states will report stale values. This is a
+     * known limitation of the "at least one" approach. Future enhancement: require full
+     * coverage or emit a warning on partial coverage.
      */
     private void checkLocalEnumVariablesHaveDrivers(String templateName, DeviceManifest manifest) {
         if (manifest.getInternalVariables() == null) {

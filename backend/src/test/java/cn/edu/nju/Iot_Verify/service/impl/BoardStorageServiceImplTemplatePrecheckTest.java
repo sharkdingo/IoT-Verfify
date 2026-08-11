@@ -1825,8 +1825,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void addDeviceTemplate_enumValueThatIsACaseVariantOfAReservedWord_shouldBeAccepted() {
         DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
         variable.setName("authState");
-        variable.setIsInside(false);  // Shared variable - no driver needed
-        variable.setReads(true);
+        variable.setIsInside(true);  // Restored: test local variable path
         variable.setFalsifiableWhenCompromised(false);
         variable.setTrust("trusted");
         variable.setPrivacy("public");
@@ -1834,9 +1833,29 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         variable.setValues(List.of("Next", "ok"));
 
         DeviceManifest manifest = new DeviceManifest();
-        manifest.setModes(List.of());
-        manifest.setInitState("");
-        manifest.setWorkingStates(List.of());
+        manifest.setModes(List.of("TestMode"));
+        manifest.setInitState("idle");
+
+        // Add 2 WorkingStates with Dynamics (NuSMV requires at least 2 states per mode)
+        DeviceManifest.WorkingState idle = new DeviceManifest.WorkingState();
+        idle.setName("idle");
+        idle.setTrust("trusted");
+        idle.setPrivacy("public");
+        DeviceManifest.Dynamic dynamic = new DeviceManifest.Dynamic();
+        dynamic.setVariableName("authState");
+        dynamic.setValue("Next");
+        idle.setDynamics(List.of(dynamic));
+
+        DeviceManifest.WorkingState active = new DeviceManifest.WorkingState();
+        active.setName("active");
+        active.setTrust("trusted");
+        active.setPrivacy("public");
+        DeviceManifest.Dynamic dynamic2 = new DeviceManifest.Dynamic();
+        dynamic2.setVariableName("authState");
+        dynamic2.setValue("ok");
+        active.setDynamics(List.of(dynamic2));
+
+        manifest.setWorkingStates(List.of(idle, active));
         manifest.setInternalVariables(List.of(variable));
 
         DeviceTemplateDto dto = new DeviceTemplateDto();
@@ -1867,17 +1886,36 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void addDeviceTemplate_enumValueThatIsNotAnSmvToken_shouldReject() {
         DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
         variable.setName("authState");
-        variable.setIsInside(false);  // Shared variable - no driver needed
-        variable.setReads(true);
+        variable.setIsInside(true);  // Restored: test local variable path
         variable.setFalsifiableWhenCompromised(false);
         variable.setTrust("trusted");
         variable.setPrivacy("public");
         variable.setValues(List.of("hot!", "ok"));
 
         DeviceManifest manifest = new DeviceManifest();
-        manifest.setModes(List.of());
-        manifest.setInitState("");
-        manifest.setWorkingStates(List.of());
+        manifest.setModes(List.of("TestMode"));
+        manifest.setInitState("idle");
+
+        // Add 2 WorkingStates with Dynamics
+        DeviceManifest.WorkingState idle = new DeviceManifest.WorkingState();
+        idle.setName("idle");
+        idle.setTrust("trusted");
+        idle.setPrivacy("public");
+        DeviceManifest.Dynamic d1 = new DeviceManifest.Dynamic();
+        d1.setVariableName("authState");
+        d1.setValue("ok");
+        idle.setDynamics(List.of(d1));
+
+        DeviceManifest.WorkingState active = new DeviceManifest.WorkingState();
+        active.setName("active");
+        active.setTrust("trusted");
+        active.setPrivacy("public");
+        DeviceManifest.Dynamic d2 = new DeviceManifest.Dynamic();
+        d2.setVariableName("authState");
+        d2.setValue("ok");
+        active.setDynamics(List.of(d2));
+
+        manifest.setWorkingStates(List.of(idle, active));
         manifest.setInternalVariables(List.of(variable));
 
         DeviceTemplateDto dto = new DeviceTemplateDto();
@@ -1899,17 +1937,36 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void addDeviceTemplate_enumValueWithSpaces_shouldBeAccepted() {
         DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
         variable.setName("RFID");
-        variable.setIsInside(false);  // Shared variable - no driver needed
-        variable.setReads(true);
+        variable.setIsInside(true);  // Restored: test local variable path
         variable.setFalsifiableWhenCompromised(false);
         variable.setTrust("trusted");
         variable.setPrivacy("private");
         variable.setValues(List.of("authorized", "not authorized"));
 
         DeviceManifest manifest = new DeviceManifest();
-        manifest.setModes(List.of());
-        manifest.setInitState("");
-        manifest.setWorkingStates(List.of());
+        manifest.setModes(List.of("RFIDMode"));
+        manifest.setInitState("idle");
+
+        // Add 2 WorkingStates with Dynamics
+        DeviceManifest.WorkingState idle = new DeviceManifest.WorkingState();
+        idle.setName("idle");
+        idle.setTrust("trusted");
+        idle.setPrivacy("private");
+        DeviceManifest.Dynamic d1 = new DeviceManifest.Dynamic();
+        d1.setVariableName("RFID");
+        d1.setValue("authorized");
+        idle.setDynamics(List.of(d1));
+
+        DeviceManifest.WorkingState scanning = new DeviceManifest.WorkingState();
+        scanning.setName("scanning");
+        scanning.setTrust("trusted");
+        scanning.setPrivacy("private");
+        DeviceManifest.Dynamic d2 = new DeviceManifest.Dynamic();
+        d2.setVariableName("RFID");
+        d2.setValue("not authorized");
+        scanning.setDynamics(List.of(d2));
+
+        manifest.setWorkingStates(List.of(idle, scanning));
         manifest.setInternalVariables(List.of(variable));
 
         DeviceTemplateDto dto = new DeviceTemplateDto();
