@@ -1,0 +1,16 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 汽车 - 已离开 (away) -->
+    <!-- 车身，行驶中 -->
+    <path d="M10 22L14 13H28L32 22V28H10V22Z" fill="#3B82F6"/>
+    <path d="M10 22L14 13H28L32 22V28H10V22Z" stroke="#1D4ED8" stroke-width="2"/>
+    <!-- 车窗 -->
+    <path d="M16 17H26L28 22H14L16 17Z" fill="#93C5FD"/>
+    <!-- 车轮 -->
+    <circle cx="15" cy="30" r="4" fill="#374151"/>
+    <circle cx="28" cy="30" r="4" fill="#374151"/>
+    <circle cx="15" cy="30" r="2" fill="#9CA3AF"/>
+    <circle cx="28" cy="30" r="2" fill="#9CA3AF"/>
+    <!-- 速度线，表示远离 -->
+    <path d="M3 18H9" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+    <path d="M2 23H7" stroke="#CBD5E1" stroke-width="2" stroke-linecap="round"/>
+</svg>

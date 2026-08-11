@@ -54,10 +54,14 @@ describe('disabled fill legibility', () => {
 
     for (const { name, text } of sources()) {
       const clean = stripComments(text)
+      // Split into rules once and reuse. Matching `[^{}]*:disabled[^{}]*\{` against the whole file
+      // instead backtracks catastrophically on the long sources (145ms on Board.vue, 81ms on the
+      // 39KB base.css — the disproportion is the tell), which is what timed this spec out in CI.
+      const rules = [...clean.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
 
       // Base classes painted with a role fill under light ink — the combination opacity ruins.
       const filled = new Set<string>()
-      for (const rule of clean.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      for (const rule of rules) {
         const body = rule[2]
         if (!/background[^;]*var\(--(?:danger|warning|success|info|accent)-fill\)/.test(body)) continue
         if (!/color\s*:\s*(#fff(fff)?|white)/i.test(body)) continue
@@ -65,7 +69,8 @@ describe('disabled fill legibility', () => {
       }
       if (!filled.size) continue
 
-      for (const rule of clean.matchAll(/([^{}]*:disabled[^{}]*)\{([^{}]*)\}/g)) {
+      for (const rule of rules) {
+        if (!rule[1].includes(':disabled')) continue
         const selector = rule[1].trim().replace(/\s+/g, ' ')
         const body = rule[2]
         if (!/opacity:\s*0?\.\d/.test(body)) continue

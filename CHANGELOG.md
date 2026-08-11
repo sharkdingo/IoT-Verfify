@@ -31,6 +31,10 @@ history into a technical spec. The spec content itself now lives under
 
 - **Frozen-variable test coverage**: Added `DeviceTemplateNuSmvValidatorFrozenVariableTest` with 4 test cases covering: rejecting local enum without driver, accepting local enum with Dynamics, accepting shared enum without driver, accepting local numeric with NaturalChangeRate.
 
+- **Working-state artwork for the three newly stateful templates**: Car (`garage`, `away`), Door RFID (`idle`, `authorized`, `not authorized`), and Refrigerator Door Sensor (`closed`, `open`) previously rendered a single `Working.svg`; each declared state now owns its own icon, so the canvas shows which state a device is in.
+
+- **Localized labels for the new model tokens**: `CarLocation`, `ScanState` and the eight new transition names (`arrive home`, `leave home`, `scan authorized card`, `scan unauthorized card`, `reset from authorized`, `reset from unauthorized`, `detect open`, `detect closed`) now display translated text in both zh-CN and en instead of the raw manifest identifier.
+
 #### Changed
 
 - **Email and Mobile Phone semantic scope**: Changed `Email.receiveKey`, `Email.receiveMail`, and `Mobile Phone.location` from per-device-instance variables (`IsInside: true`) to scene-level shared variables (`IsInside: false`, `Reads: true`).

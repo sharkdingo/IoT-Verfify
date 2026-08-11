@@ -1,0 +1,13 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 门 RFID - 授权通过 (authorized) -->
+    <rect x="12" y="6" width="16" height="28" rx="2" fill="#3B82F6"/>
+    <rect x="12" y="6" width="16" height="28" rx="2" stroke="#1D4ED8" stroke-width="2"/>
+    <!-- RFID读卡器 -->
+    <rect x="14" y="10" width="12" height="12" rx="2" fill="white"/>
+    <!-- 通过对勾 -->
+    <path d="M16 16L19 19L24 13" stroke="#22C55E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- 门把手 -->
+    <circle cx="24" cy="24" r="2" fill="#FCD34D"/>
+    <!-- 指示灯，绿色 -->
+    <circle cx="20" cy="32" r="2.5" fill="#22C55E"/>
+</svg>

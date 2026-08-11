@@ -1,0 +1,13 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 冰箱门传感器 - 门关闭 (closed) -->
+    <rect x="10" y="8" width="20" height="24" rx="3" fill="#F8FAFC"/>
+    <rect x="10" y="8" width="20" height="24" rx="3" stroke="#94A3B8" stroke-width="2"/>
+    <!-- 门缝，闭合 -->
+    <path d="M10 18H30" stroke="#94A3B8" stroke-width="2"/>
+    <!-- 门把手 -->
+    <rect x="26" y="12" width="2" height="8" rx="1" fill="#64748B"/>
+    <!-- 传感器指示灯，绿色表示已闭合 -->
+    <circle cx="16" cy="12" r="2.5" fill="#22C55E"/>
+    <!-- 闭合锁扣 -->
+    <path d="M15 24H25" stroke="#22C55E" stroke-width="2" stroke-linecap="round"/>
+</svg>

@@ -4,8 +4,6 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.List;
 
@@ -14,11 +12,10 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Tests for frozen-variable validation (local enum variables without driver mechanisms).
  */
-@SpringBootTest
 class DeviceTemplateNuSmvValidatorFrozenVariableTest {
 
-    @Autowired
-    private DeviceTemplateNuSmvValidator validator;
+    // Manifest validation never reaches the generator; only runTemplateNuSmvPrecheck uses it.
+    private final DeviceTemplateNuSmvValidator validator = new DeviceTemplateNuSmvValidator(null);
 
     @Test
     @DisplayName("reject local enum variable without any driver mechanism")
