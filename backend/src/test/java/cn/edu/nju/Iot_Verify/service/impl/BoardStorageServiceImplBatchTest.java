@@ -22,6 +22,7 @@ import cn.edu.nju.Iot_Verify.exception.DeviceLabelConflictException;
 import cn.edu.nju.Iot_Verify.exception.DeviceLayoutConflictException;
 import cn.edu.nju.Iot_Verify.exception.DeviceRuntimeConflictException;
 import cn.edu.nju.Iot_Verify.exception.EnvironmentVariableConflictException;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.BoardEnvironmentVariablePo;
 import cn.edu.nju.Iot_Verify.po.BoardEditEntityType;
@@ -58,6 +59,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -2037,6 +2039,145 @@ class BoardStorageServiceImplBatchTest {
                 savedRule.getId() == null
                         && "<=".equals(savedRule.getConditions().get(0).getRelation())
                         && "variable".equals(savedRule.getConditions().get(0).getTargetType())), anyLong());
+    }
+
+    /**
+     * The documented per-rule condition cap has to live in the service, not only on the DTO.
+     *
+     * <p>`RequestLimits.MAX_RULE_CONDITIONS` was referenced in exactly one place — `@Size` on
+     * `RuleDto.conditions` — which Spring applies only on the `@Valid` REST path. The AI tools call this
+     * service straight from a chat turn with no `Validator` in between (no service class carries
+     * `@Validated`, and `AbstractAiTool`'s field helpers only trim), and `ManageRuleTool` loops the JSON
+     * conditions array without a cap. So the assistant could store a rule the UI cannot submit, and the
+     * two write paths disagreed on what a legal rule is.
+     *
+     * <p>Pinned one past the limit and exactly at it, so this fails on an off-by-one rather than only on
+     * a comfortably-illegal size.
+     */
+    @Test
+    void addRule_whenConditionsExceedTheDocumentedCap_shouldRejectOnTheSharedServicePath() {
+        DeviceNodeDto node = boardNode("sensor1", null, "Sensor");
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of(new DeviceNodePo()));
+        when(deviceNodeMapper.toDto(any())).thenReturn(node);
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of(), List.of());
+        when(ruleMapper.toEntity(any(), anyLong())).thenReturn(new RulePo());
+        RulePo savedEntity = new RulePo();
+        savedEntity.setId(1L);
+        when(ruleRepo.save(any())).thenReturn(savedEntity);
+
+        ValidationException error = assertThrows(ValidationException.class,
+                () -> service.addRule(1L, ruleWithConditions(RequestLimits.MAX_RULE_CONDITIONS + 1)));
+        assertTrue(error.getErrors().toString().contains(String.valueOf(RequestLimits.MAX_RULE_CONDITIONS)),
+                () -> "the error should name the limit, got " + error.getErrors());
+        verify(ruleRepo, never()).save(any());
+
+        assertDoesNotThrow(() -> service.addRule(1L, ruleWithConditions(RequestLimits.MAX_RULE_CONDITIONS)));
+    }
+
+    /**
+     * The preview bound must not sit behind the conditions null-guard.
+     *
+     * <p>`ruleString` does not depend on `conditions`, so a check placed after `if (conditions == null)
+     * continue` is skipped entirely by a request that omits the array — and `rule_string` is TEXT, so an
+     * unbounded preview then persists silently, which is the exact case the bound exists to stop.
+     */
+    @Test
+    void saveBoardBatch_whenConditionsAreAbsent_stillBoundsTheRulePreview() {
+        // Driven through the batch path on purpose: `addRule` cannot reach the null case, because
+        // `canonicalizeRuleRelationsForStorage` rewrites absent conditions to an empty list before any
+        // validation runs. A test written against `addRule` would pass for that reason instead of this one.
+        RuleDto rule = RuleDto.builder()
+                .command(RuleDto.Command.builder().deviceName("sensor1").action("heat").build())
+                .ruleString("x".repeat(RequestLimits.MAX_DESCRIPTION_LENGTH + 1))
+                .build();
+
+        ValidationException error = assertThrows(ValidationException.class,
+                () -> service.saveBoardBatch(1L, confirmedBatch(service,
+                        new BoardBatchDto(List.of(), List.of(rule), List.of()))));
+        assertTrue(error.getErrors().containsKey("ruleString"),
+                () -> "the preview bound should name ruleString, got " + error.getErrors());
+        verify(ruleRepo, never()).deleteByUserId(anyLong());
+    }
+
+    /**
+     * The spec-condition cap must report under its own error key.
+     *
+     * <p>The distinct suffix keeps the cap legible where `validateSpecTemplateShape` also reports: that
+     * check owns `aConditions` / `ifConditions` for its shape errors, so sharing the key made a
+     * template-4 specification with 60 A-conditions report only "uses IF/THEN conditions only" — the
+     * shape complaint — while the real reason went unsaid. Uses template 4 so both are in play at once;
+     * the request is rejected before the shape check now, and the key still says which list was too long.
+     */
+    @Test
+    void addSpec_whenConditionsExceedTheCap_reportsUnderAKeyTheShapeCheckDoesNotOwn() {
+        SpecificationDto spec = new SpecificationDto();
+        spec.setTemplateId("4");
+        List<SpecConditionDto> conditions = new ArrayList<>();
+        for (int i = 0; i < RequestLimits.MAX_SPEC_CONDITIONS + 1; i++) {
+            SpecConditionDto condition = new SpecConditionDto();
+            condition.setSide("a");
+            condition.setDeviceId("sensor1");
+            condition.setTargetType("state");
+            condition.setKey("state");
+            condition.setRelation("=");
+            condition.setValue("on");
+            conditions.add(condition);
+        }
+        spec.setAConditions(conditions);
+
+        ValidationException error = assertThrows(ValidationException.class, () -> service.addSpec(1L, spec));
+        assertTrue(error.getErrors().containsKey("aConditions.size"),
+                () -> "the cap should have its own key, got " + error.getErrors());
+        verify(specRepo, never()).saveAll(any());
+    }
+
+    @Test
+    void saveNodes_isNotBlockedByAStoredRuleThatExceedsTheConditionCap() {
+        /*
+         * Same shape as the stored-specification-with-no-reading test above, and the reason the caps
+         * live in the authoring paths rather than in `validateBoardReferences`.
+         *
+         * That re-validator sees the WHOLE stored collection on every device add, layout move, spec add
+         * and undo. `rule_string` is TEXT and the condition array is JSON, so unlike the device label —
+         * whose column is `length = 255` and therefore cannot already hold an over-long value — an
+         * oversized rule CAN already be persisted, and the AI tools could write one before the cap
+         * existed. Checking it there rejected unrelated writes over a rule the request never mentioned,
+         * leaving the user unable to add a device to get unstuck.
+         */
+        DeviceNodeDto node = boardNode("sensor1", null, "Living Sensor");
+        RulePo oversizedPo = new RulePo();
+        // The ordered query, not findByUserId: getRulesInternal reads execution order because that is
+        // model semantics, and stubbing the wrong one leaves the re-validator seeing an empty collection —
+        // which made this test pass against the very placement it exists to reject.
+        lenient().when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L))
+                .thenReturn(List.of(oversizedPo));
+        lenient().when(ruleMapper.toDto(oversizedPo))
+                .thenReturn(ruleWithConditions(RequestLimits.MAX_RULE_CONDITIONS + 5));
+        lenient().when(specRepo.findByUserId(1L)).thenReturn(List.of());
+        lenient().when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of());
+        lenient().when(deviceNodeMapper.toEntity(any(), anyLong())).thenReturn(new DeviceNodePo());
+        lenient().when(nodeRepo.saveAll(any())).thenReturn(List.of(new DeviceNodePo()));
+        lenient().when(deviceNodeMapper.toDto(any())).thenReturn(node);
+
+        assertDoesNotThrow(() -> service.saveNodes(1L, List.of(node)),
+                "a stored oversized rule must not block an unrelated device write");
+    }
+
+    private RuleDto ruleWithConditions(int count) {
+        List<RuleDto.Condition> conditions = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            conditions.add(RuleDto.Condition.builder()
+                    .deviceName("sensor1")
+                    .attribute("temperature")
+                    .targetType("variable")
+                    .relation("<=")
+                    .value(String.valueOf(20 + i))
+                    .build());
+        }
+        return RuleDto.builder()
+                .conditions(conditions)
+                .command(RuleDto.Command.builder().deviceName("sensor1").action("heat").build())
+                .build();
     }
 
     @Test

@@ -1,8 +1,11 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { i18n } from '@/assets/i18n'
 import {
   canonicalNaturalChangeRate,
   getDeviceIconUrl,
+  normalizeAssetFolder,
   MANIFEST_VALIDATION_MESSAGE_KEYS,
   naturalChangeCandidateValues,
   naturalChangeDeltas,
@@ -23,6 +26,104 @@ describe('device icon resolution', () => {
     expect(icon).toMatch(/^data:image\/svg\+xml/)
     expect(svg).toContain("viewBox='0 0 40 40'")
     expect(svg).toContain("M10 16H30")
+  })
+
+  // Every bundled working state must render the artwork drawn for THAT state. Asserting identity
+  // against the file on disk, rather than "did not fall through", is what makes this falsifiable:
+  // `getDeviceIconUrl` serves the alphabetically first file in the folder before it ever reaches the
+  // generated placeholder, so a state with no artwork looks exactly like a state with artwork unless
+  // the content is compared. A weaker version of this test that only checked for a generated icon and
+  // for two states colliding passed with `Home_Mode/sleep;idle.svg` deleted, because that state then
+  // matched `Working.svg`, which no sibling uses.
+  //
+  // A state name may contain a space and a filename may not, so the assets encode it as "_"
+  // ("taking photo" -> taking_photo.svg). Accept either spelling of the state's own file, and
+  // nothing else.
+  //
+  // The identity checks below are each other's blind spot when resolution dies completely: the
+  // generated placeholder embeds the state name, so every state gets a DISTINCT data URI and
+  // neither the sibling-collision check nor the generic-fallback comparison fires. Assert that
+  // real artwork was reached first — a positive claim that no dead pipeline can satisfy.
+  it('renders every bundled working state with the artwork drawn for that state', () => {
+    const directory = resolve(process.cwd(), '../backend/src/main/resources/deviceTemplate')
+    const assetsRoot = resolve(process.cwd(), 'src/assets')
+    const templates = readdirSync(directory).filter(file => file.endsWith('.json'))
+    // A scan that matches nothing asserts nothing.
+    expect(templates.length, 'no bundled templates were scanned').toBeGreaterThan(40)
+
+    // The icon URL cannot be compared against the file on disk: Vite inlines some of these SVGs as
+    // minified percent-encoded text (rewriting " to ') and others as raw base64, so equal artwork
+    // does not imply equal bytes. Every check below is therefore independent of that encoding — the
+    // fall-through test keys on the generated placeholder being the only artwork on a 72x72 canvas
+    // (every bundled asset is 40x40 or 48x48), which is true under both inlining forms.
+    const isGenerated = (uri: string) =>
+      decodeDataSvg(uri.startsWith('data:image/svg+xml;base64,')
+        ? `,${Buffer.from(uri.slice('data:image/svg+xml;base64,'.length), 'base64').toString('utf8')}`
+        : uri).includes('0 0 72 72')
+
+    const missingArtwork: string[] = []
+    const wrongArtwork: string[] = []
+    const fellThrough: string[] = []
+    let checked = 0
+
+    for (const file of templates) {
+      const manifest = JSON.parse(readFileSync(join(directory, file), 'utf8')) as {
+        WorkingStates?: Array<{ Name?: string }>
+      }
+      const template = file.replace(/\.json$/, '')
+      const folder = normalizeAssetFolder(template)
+      const declared = (manifest.WorkingStates ?? [])
+        .map(state => state?.Name)
+        .filter((name): name is string => typeof name === 'string' && name.trim() !== '')
+      // A stateless template renders through the first-in-folder fallback with whatever state the
+      // caller passes — the very mechanism this test polices — so it must not be skipped. Its icon
+      // is reached under the default `getDeviceIconUrl` state rather than a declared name.
+      const states = declared.length > 0 ? declared : ['Working']
+
+      // 1. Every state owns a file. A filesystem check, so the first-in-folder fallback cannot
+      //    disguise a missing asset as a working one.
+      for (const state of states) {
+        checked++
+        const owned = [state.trim(), state.trim().replace(/\s+/g, '_')]
+          .some(name => existsSync(join(assetsRoot, folder, `${name}.svg`)))
+        if (!owned) missingArtwork.push(`${template}: "${state}"`)
+        // 1b. Real artwork was reached at all. Without this the two identity checks below are
+        //     mutually blind: a dead resolver returns a distinct generated icon per state.
+        if (isGenerated(getDeviceIconUrl(template, state))) {
+          fellThrough.push(`${template}: "${state}" rendered the generated placeholder`)
+        }
+      }
+      if (declared.length === 0) continue
+
+      // 2. The resolver actually reaches that file. Both ways it can fail land the state on some
+      //    other icon in the same folder, so compare renders: against the sibling states, and
+      //    against the generic names the variant chain falls back to. Comparing only siblings let a
+      //    deleted `sleep;idle.svg` pass, because `Working.svg` is used by no Home Mode state.
+      const rendered = new Map<string, string>()
+      for (const state of states) rendered.set(state, getDeviceIconUrl(template, state))
+      for (const [state, icon] of rendered) {
+        for (const [other, otherIcon] of rendered) {
+          if (other !== state && otherIcon === icon) {
+            wrongArtwork.push(`${template}: "${state}" and "${other}" render the same icon`)
+          }
+        }
+        for (const generic of ['Working', 'working', 'On', 'on', 'Off', 'off']) {
+          // A state literally named "off" reaching Off.svg is the case-insensitive probe finding its
+          // own artwork, not a fallback. Only a state with a different name landing there is a bug.
+          if (state.trim().toLowerCase() === generic.toLowerCase()) continue
+          if (states.some(other => other.trim().toLowerCase() === generic.toLowerCase())) continue
+          if (!existsSync(join(assetsRoot, folder, `${generic}.svg`))) continue
+          if (getDeviceIconUrl(template, generic) === icon) {
+            wrongArtwork.push(`${template}: "${state}" fell back to ${generic}.svg`)
+          }
+        }
+      }
+    }
+
+    expect(checked, 'no working states were checked').toBeGreaterThan(100)
+    expect(fellThrough, `bundled states served by the generated placeholder:\n${fellThrough.join('\n')}`).toEqual([])
+    expect(missingArtwork, `bundled states with no icon file of their own:\n${missingArtwork.join('\n')}`).toEqual([])
+    expect(wrongArtwork, `bundled states rendering another state's icon:\n${wrongArtwork.join('\n')}`).toEqual([])
   })
 
   it('generates a stable fallback icon for custom templates without assets', () => {

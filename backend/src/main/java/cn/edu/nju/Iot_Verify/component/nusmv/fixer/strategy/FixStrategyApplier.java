@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.fix.ParameterAdjustment;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.util.RulePreviewText;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
@@ -184,7 +185,7 @@ public final class FixStrategyApplier {
         for (int ruleIndex : adjustedRuleIndices) {
             RuleDto rule = rules.get(ruleIndex);
             if (rule != null) {
-                rule.setRuleString(buildRuleString(rule, displayDeviceNames));
+                rule.setRuleString(RulePreviewText.bounded(buildRuleString(rule, displayDeviceNames)));
             }
         }
     }

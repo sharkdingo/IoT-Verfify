@@ -1126,6 +1126,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 // request contains. The shared revalidation below deliberately tolerates an absent reading
                 // on already-stored specifications, or a legacy row would block this write too.
                 requireResolvedVariableSource(spec);
+                requireSpecWithinDeclaredBounds(spec);
                 existing.add(spec);
                 validateBoardReferences(userId, currentNodes, null, existing);
                 List<SpecificationDto> saved = saveSpecsInternal(userId, existing, currentNodes);
@@ -1378,6 +1379,76 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
     }
 
+    /**
+     * Enforces the collection-size bounds that {@code RuleDto} and {@code SpecificationDto} declare as
+     * {@code @Size}, on the record <em>being authored</em>.
+     *
+     * <p>Only Spring's {@code @Valid} REST path applies those annotations: the AI tools call this service
+     * straight from a chat turn with no {@code Validator} in between, and {@code ManageRuleTool} /
+     * {@code ManageSpecTool} loop the JSON arrays uncapped, so an assistant could store a record the UI
+     * cannot submit.
+     *
+     * <p>Deliberately <em>not</em> in {@link #validateBoardReferences}, unlike the device-label length:
+     * that column is {@code length = 255}, so an over-long label cannot already be stored and the check
+     * can only ever fire on the request. These lists have no such floor — {@code rule_string} is
+     * {@code TEXT} and the condition arrays are JSON — so an account already holding an oversized row
+     * would have every later device add, layout move and undo rejected over a record its request never
+     * mentions, with no way to get unstuck. Same reasoning as {@link #requireResolvedVariableSource}.
+     */
+    private void requireRuleWithinDeclaredBounds(RuleDto rule) {
+        if (rule == null) {
+            return;
+        }
+        Map<String, String> errors = new LinkedHashMap<>();
+        List<RuleDto.Condition> conditions = rule.getConditions();
+        if (conditions != null && conditions.size() > RequestLimits.MAX_RULE_CONDITIONS) {
+            errors.put("conditions",
+                    "At most " + RequestLimits.MAX_RULE_CONDITIONS
+                            + " conditions are allowed per rule, but was " + conditions.size() + ".");
+        }
+        // Checked independently of `conditions`: the preview does not depend on them, so guarding it
+        // behind a null-conditions check would let a request omitting `conditions` persist an unbounded
+        // preview — exactly the case this bound exists to stop.
+        String preview = rule.getRuleString();
+        if (preview != null && preview.length() > RequestLimits.MAX_DESCRIPTION_LENGTH) {
+            errors.put("ruleString",
+                    "Rule preview must be at most " + RequestLimits.MAX_DESCRIPTION_LENGTH
+                            + " characters, but was " + preview.length() + ".");
+        }
+        if (!errors.isEmpty()) {
+            throw new ValidationException(errors);
+        }
+    }
+
+    /** Spec counterpart of {@link #requireRuleWithinDeclaredBounds}; same authoring-only reasoning. */
+    private void requireSpecWithinDeclaredBounds(SpecificationDto spec) {
+        if (spec == null) {
+            return;
+        }
+        Map<String, String> errors = new LinkedHashMap<>();
+        requireSpecConditionCount(errors, "aConditions", spec.getAConditions());
+        requireSpecConditionCount(errors, "ifConditions", spec.getIfConditions());
+        requireSpecConditionCount(errors, "thenConditions", spec.getThenConditions());
+        if (!errors.isEmpty()) {
+            throw new ValidationException(errors);
+        }
+    }
+
+    private void requireSpecConditionCount(Map<String, String> errors,
+                                           String field,
+                                           List<SpecConditionDto> conditions) {
+        if (conditions == null || conditions.size() <= RequestLimits.MAX_SPEC_CONDITIONS) {
+            return;
+        }
+        // `.size` rather than the bare field name, which `validateSpecTemplateShape` already claims for
+        // its shape errors on `aConditions` / `ifConditions`. Nothing collides today — this runs first
+        // and throws — but a size complaint and a shape complaint are different answers to "what is
+        // wrong with this list", so they should not be able to overwrite each other under one key.
+        errors.put(field + ".size",
+                "At most " + RequestLimits.MAX_SPEC_CONDITIONS
+                        + " conditions are allowed, but was " + conditions.size() + ".");
+    }
+
     private void requireResolvedVariableSource(Map<String, String> errors,
                                                String field,
                                                List<SpecConditionDto> conditions) {
@@ -1535,6 +1606,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 // so each must state its reading — unlike the shared revalidation below, which also sees
                 // already-stored specifications and tolerates an absent one.
                 safeList(nextSpecs).forEach(this::requireResolvedVariableSource);
+                safeList(nextSpecs).forEach(this::requireSpecWithinDeclaredBounds);
+                safeList(nextRules).forEach(this::requireRuleWithinDeclaredBounds);
                 validateBoardReferences(userId, nextNodes, nextRules, nextSpecs);
                 if (batch.getTemplateSnapshots() != null) {
                     validateCompleteSceneEnvironment(userId, nextNodes, batch.getEnvironmentVariables());
@@ -4155,6 +4228,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
                 RuleDto canonicalRule = canonicalizeRuleRelationsForStorage(rule);
+                requireRuleWithinDeclaredBounds(canonicalRule);
                 canonicalRule.setId(null); // new rule, let DB assign ID
                 List<RuleDto> nextRules = new ArrayList<>(getRulesInternal(userId));
                 requireAdditionalCapacity("rules", nextRules.size(), 1, RequestLimits.MAX_RULES);

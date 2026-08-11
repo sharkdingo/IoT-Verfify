@@ -103,4 +103,109 @@ class AiToolCatalogDocumentationTest {
         assertTrue(names.stream().allMatch(name -> name.endsWith("Tool.java")),
                 () -> "every catalog entry should be a *Tool class, got: " + names);
     }
+
+    /**
+     * A tool's schema is what the model plans against; {@code requireOnlyFields} is what the tool
+     * accepts. A field advertised by one and refused by the other costs the model a round on a
+     * guaranteed {@code VALIDATION_ERROR}, and the model cannot see the allowlist to know better.
+     *
+     * <p>The catalog is consistent today, so this test does not fix anything — it removes the need to
+     * remember. The rule was previously carried only as prose in {@code backend/CLAUDE.md}, and the
+     * two declaration idioms in use ({@code props.put(...)} and an inline {@code Map.of(...)} passed
+     * straight to the constructor) make the drift easy to introduce and invisible in review.
+     *
+     * <p>Checked in one direction only. A name the allowlist accepts but the top-level schema omits is
+     * legitimate: nested object and array members are validated by the same helper deeper in the
+     * payload, so requiring symmetry would report every composite-argument tool.
+     */
+    @Test
+    void everyAdvertisedArgumentIsAcceptedByTheToolThatAdvertisesIt() throws IOException {
+        Pattern propsPut = Pattern.compile("(?:props|properties)\\.put\\(\\s*\"([^\"]+)\"");
+        Pattern inlineSchema = Pattern.compile("new FunctionParameterSchema\\(\\s*\"object\"\\s*,\\s*Map\\.of\\(",
+                Pattern.DOTALL);
+        Pattern allowlist = Pattern.compile("requireOnlyFields\\([^;]*?Set\\.of\\(([^)]*)\\)", Pattern.DOTALL);
+        Pattern quoted = Pattern.compile("\"([^\"]+)\"");
+
+        List<String> drift = new ArrayList<>();
+        int parsed = 0;
+
+        for (Path tool : concreteTools()) {
+            String source = Files.readString(tool);
+            String name = tool.getFileName().toString().replace(".java", "");
+
+            int definitionStart = source.indexOf("public LlmToolSpec getDefinition");
+            if (definitionStart < 0) continue;
+            int definitionEnd = source.indexOf("protected String doExecute", definitionStart);
+            String definition = source.substring(definitionStart,
+                    definitionEnd > 0 ? definitionEnd : source.length());
+
+            List<String> advertised = new ArrayList<>();
+            Matcher put = propsPut.matcher(definition);
+            while (put.find()) advertised.add(put.group(1));
+            Matcher inline = inlineSchema.matcher(definition);
+            if (inline.find()) {
+                advertised.addAll(topLevelKeys(definition.substring(inline.end())));
+            }
+            if (advertised.isEmpty()) continue;
+
+            List<String> accepted = new ArrayList<>();
+            Matcher allow = allowlist.matcher(source);
+            boolean validates = false;
+            while (allow.find()) {
+                validates = true;
+                Matcher field = quoted.matcher(allow.group(1));
+                while (field.find()) accepted.add(field.group(1));
+            }
+            if (!validates) {
+                drift.add(name + " declares " + advertised + " but never calls requireOnlyFields");
+                continue;
+            }
+            parsed++;
+
+            for (String field : advertised) {
+                if (!accepted.contains(field)) {
+                    drift.add(name + " advertises \"" + field + "\" but requireOnlyFields rejects it");
+                }
+            }
+        }
+
+        // A scan that matches nothing asserts nothing: if the declaration idiom changes and the parse
+        // stops finding arguments, fail here rather than reporting a clean catalog.
+        int toolsWithArguments = parsed;
+        assertTrue(toolsWithArguments >= 40,
+                () -> "expected most tools to declare arguments, parsed only " + toolsWithArguments
+                        + " — the schema declaration idiom probably changed");
+        assertTrue(drift.isEmpty(),
+                () -> "a tool's schema and its requireOnlyFields allowlist disagree:\n"
+                        + String.join("\n", drift));
+    }
+
+    /**
+     * Property names of an inline {@code Map.of(...)} schema, i.e. the keys at depth 0. The nested
+     * {@code Map.of("type", ..., "description", ...)} values sit deeper and are JSON-Schema keywords,
+     * not argument names, so this counts parentheses instead of matching every quoted string.
+     */
+    private static List<String> topLevelKeys(String afterMapOf) {
+        List<String> keys = new ArrayList<>();
+        int depth = 0;
+        boolean expectKey = true;
+        for (int i = 0; i < afterMapOf.length(); i++) {
+            char c = afterMapOf.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                if (depth == 0) break;
+                depth--;
+            } else if (c == ',' && depth == 0) {
+                expectKey = true;
+            } else if (c == '"') {
+                int end = afterMapOf.indexOf('"', i + 1);
+                if (end < 0) break;
+                if (depth == 0 && expectKey) keys.add(afterMapOf.substring(i + 1, end));
+                if (depth == 0) expectKey = false;
+                i = end;
+            }
+        }
+        return keys;
+    }
 }

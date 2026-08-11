@@ -41,7 +41,8 @@ public class SearchNodeTool extends AbstractAiTool {
         props.put("keyword", Map.of(
                 "type", "string",
                 "maxLength", 100,
-                "description", "Device template keyword (e.g. 'AC Cooler') or device name. Leave empty to return all devices."
+                "description", "Case-insensitive substring matched against device name, template name "
+                        + "(e.g. 'Air Conditioner') and device id. Leave empty to return all devices."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(

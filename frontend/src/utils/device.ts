@@ -14,7 +14,12 @@ const deviceIconModules = import.meta.glob('../assets/*/*.svg', {
     import: 'default'
 }) as Record<string, string>
 
-const normalizeAssetFolder = (name: string) =>
+/**
+ * Template name to asset directory. Exported because the bundled-artwork guard must exercise this
+ * mapping rather than re-implement it: a test carrying its own copy stays green when the production
+ * separator changes, which is the one failure it exists to catch.
+ */
+export const normalizeAssetFolder = (name: string) =>
     String(name || 'Device').trim().replace(/\s+/g, '_')
 
 const normalizeStateName = (state: string) => String(state || 'Working').trim()
@@ -73,12 +78,28 @@ const createGeneratedDeviceIcon = (deviceType: string, state?: string): string =
 
 const getStateVariants = (state: string): string[] => {
     const cleanState = normalizeStateName(state)
+    // Asset filenames cannot carry the spaces that state names do, so the bundled icons encode a
+    // space as "_" ("taking photo" -> taking_photo.svg, "auto;emergency heat" ->
+    // auto;emergency_heat.svg). Probing only the raw name left six bundled states showing another
+    // state's artwork while their own icon sat on disk unreachable — and never a visibly missing
+    // icon, because getDeviceIconUrl serves the first file in the folder before the generated
+    // placeholder, so this class of bug is silent by construction.
+    const underscored = cleanState.replace(/\s+/g, '_')
+    // Trimmed per segment, not just at the outer edges: normalizeStateName cannot reach the inner
+    // whitespace of "auto ; heat", so an untrimmed split yields "auto " -> "auto_" and probes a
+    // filename no asset uses, losing the compound-state fallback entirely.
+    const firstSegment = cleanState.includes(';') ? cleanState.split(';')[0].trim() : ''
+    const underscoredFirstSegment = firstSegment.replace(/\s+/g, '_')
     const variants = [
         cleanState,
+        underscored,
         cleanState.toLowerCase(),
+        underscored.toLowerCase(),
         cleanState.charAt(0).toUpperCase() + cleanState.slice(1).toLowerCase(),
-        cleanState.includes(';') ? cleanState.split(';')[0] : '',
-        cleanState.includes(';') ? cleanState.split(';')[0].toLowerCase() : '',
+        firstSegment,
+        underscoredFirstSegment,
+        firstSegment.toLowerCase(),
+        underscoredFirstSegment.toLowerCase(),
         'Working',
         'working',
         'On',

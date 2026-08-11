@@ -19,6 +19,201 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **Three documented request limits were enforced on the REST path only, so an AI tool could store data
+  the UI cannot submit.** `MAX_RULE_CONDITIONS`, `MAX_SPEC_CONDITIONS` (both 50) and the 4000-character
+  `ruleString` cap existed solely as `@Size` annotations on `RuleDto`/`SpecificationDto`, which Spring
+  applies only where `@Valid` runs. The AI tools call `BoardStorageServiceImpl` straight from a chat
+  turn and no service class carries `@Validated`, while `ManageRuleTool`/`ManageSpecTool` loop the JSON
+  arrays uncapped — measured by disabling the new check: a 51-condition rule persisted with no
+  exception at all. `ruleString` was worse hidden, because its column is `TEXT` rather than `VARCHAR`,
+  so an over-long preview never even failed at the insert.
+
+  All three are now checked on the record being authored — `addRule`, `addSpec` and `saveBoardBatch` —
+  rather than inside `validateBoardReferences`. That re-validator was the first choice, by analogy with
+  the device-label length checked there, and the analogy does not hold: `device_node.label` is
+  `length = 255`, so an over-long label cannot already be stored and the check can only ever fire on the
+  request. `rule_string` is `TEXT` and the condition arrays are JSON, so an oversized row *can* already
+  exist — precisely the rows this change exists to stop the assistant from writing. Since the
+  re-validator re-reads the whole stored collection on every device add, layout move, spec add and undo,
+  checking it there would have rejected all of those over a rule the request never mentioned, leaving no
+  way to get unstuck; the same trap `requireResolvedVariableSource` already documents.
+  `saveNodes_isNotBlockedByAStoredRuleThatExceedsTheConditionCap` pins that, and fails with the lockout
+  when the check is moved back.
+
+  Two further details the first attempt got wrong. The `ruleString` bound sat below the
+  `conditions == null` guard although the preview does not depend on conditions, so a request omitting
+  the array skipped it entirely and persisted an unbounded preview — it is now independent
+  (`saveBoardBatch_whenConditionsAreAbsent_stillBoundsTheRulePreview`, driven through the batch path
+  because `canonicalizeRuleRelationsForStorage` rewrites absent conditions to an empty list before
+  `addRule` can see the null). And the spec cap reported under the bare `aConditions`/`ifConditions` key
+  that `validateSpecTemplateShape` already claims, so a template-4 spec with 51 A-conditions showed only
+  the shape complaint; the key is now `<group>.size`.
+
+- **A rule the product accepts could compose a rule preview the product then rejects.** `ruleString` is
+  generated server-side in two places — `ManageRuleTool` when the model supplies no `label`, and
+  `FixStrategyApplier` when an automatic fix rewrites a rule — both before validation runs, and its
+  rendered length is driven by device labels that are legal up to 255 characters. Measured: 50
+  conditions (the legal maximum) with 60-character labels renders 4,226 characters, so the new cap above
+  would have failed an otherwise-valid automatic fix on a display string the caller never supplied. Both
+  composition sites now pass through `RulePreviewText.bounded`, which truncates with an ellipsis so a cut
+  preview is not read as the complete rule. A caller-supplied `label` is still rejected rather than
+  silently trimmed — that value is the caller's choice. `RulePreviewTextTest` pins the arithmetic, not
+  just the helper, so the reason survives.
+
+- **`apply_scenario` described its `confirmed` argument as the gate that decides whether the board is
+  replaced.** It is not, and must not be: authority comes from `UserContextHolder`, set in
+  `ChatServiceImpl` from the user's own confirming turn. Ignoring a model-supplied `confirmed:false`
+  when the user *has* confirmed is the correct behaviour — otherwise the model could veto the user — but
+  the schema promised a gate that does not exist, which is the same class of contract defect the
+  backend rules already name. The description now states that the argument is the model's intent and
+  that the decision is server-side. No logic changed.
+
+- **`search_devices` understated what its `keyword` matches, and nothing checked that a tool's schema
+  agrees with what it accepts.** The description offered "template keyword or device name" while
+  `NodeServiceImpl.searchNodes` matches a case-insensitive substring against the device label, the
+  template name **and** the device id. Understating is milder than the reverse — it wastes no model
+  round — but it hides a capability the model would otherwise use after it has a device id in hand.
+  Description and `docs/api/ai-tools.md` now state all three fields.
+
+  `everyAdvertisedArgumentIsAcceptedByTheToolThatAdvertisesIt` now enforces the underlying rule across
+  all 53 tools: every argument a schema advertises must be accepted by that tool's
+  `requireOnlyFields` allowlist. The catalog was already consistent, so this fixes nothing — it
+  removes the need to remember a rule that was carried only as prose, and which is easy to break
+  invisibly because arguments are declared two different ways (`props.put(...)` and an inline
+  `Map.of(...)` passed straight to the constructor). Checked in one direction only: a name the
+  allowlist accepts but the top-level schema omits is legitimate, because nested object and array
+  members are validated by the same helper deeper in the payload.
+
+- **A freshly placed Alarm started with its siren and strobe already sounding.** `Alarm.json` declared
+  `"InitState": "both"`, so dragging an Alarm onto the canvas produced a device already in full alert.
+  On a verification platform that is more than cosmetic: a safety property stating the alarm must not
+  sound without cause is violated at step 0 by the initial state alone, before any rule fires.
+
+  It was not a deliberate choice. 27 of the 29 stateful bundled templates take `WorkingStates[0]` as
+  their `InitState`, which is harmless while entry 0 is a resting state — but Alarm's list is
+  alphabetical (`both`, `off`, `siren`, `strobe`), so entry 0 was `both`. Every other template's
+  default is a resting state (`off`, `idle`, `closed`, `locked`, `ready`), and all five bundled
+  example scenes that place an Alarm already override it to `off`, i.e. each scene author corrected
+  this by hand. Now `"off"`.
+
+  **This reaches new accounts only.** Bundled templates are seeded per user at first login and the
+  stored copy is authoritative afterwards (`DeviceTemplateServiceImpl.initDefaultTemplates` skips a
+  user who already has templates), which is deliberate — a redeploy must not silently overwrite a
+  user's own template edits. An existing account keeps `both` until it runs the bundled-template reset
+  (`POST /api/board/templates/defaults/reset`, the "restore bundled defaults" command in the UI).
+  Measured on this database: 147 existing users, all still holding `both`. Note the reset is an undo
+  history boundary by design, so it reports the affected entry count before confirmation.
+
+  `noBundledDeviceStartsInAnAlertingState` pins it. The check is deliberately narrow — it names the
+  alerting state values and skips templates that declare none. A first attempt asserted that
+  `InitState` must equal the state the example scenes give the device, which sounded stronger and was
+  wrong: four of the five overridden templates already agreed, and the fifth was Light, which those
+  scenes set to `off` because they depict night and away-from-home situations. A light starting on is
+  an ordinary default, so that version would have reported scene intent as a defect.
+
+- **Removed `frontend/src/assets/AC_Cooler/`, artwork for a template that no longer exists.** The
+  single-purpose `AC Cooler`/`AC Heater` pair was superseded by the mode-based `Air Conditioner`
+  template when device templates moved from a frontend list into the backend seed (commit `4542709`);
+  `AC_Heater/` was cleaned up then, `AC_Cooler/` was not. It was the last asset directory with no
+  matching template, and every bundled template still has its own directory. The only reference to
+  the name anywhere was the `search_devices` tool schema, whose example keyword advertised the
+  nonexistent `'AC Cooler'` to the model; it now names `'Air Conditioner'`.
+
+- **Eight bundled device states rendered the wrong icon, or none, because the resolver never tried
+  the underscored filename.** A state name may contain a space, a filename may not, so the bundled
+  assets encode the space as `_` (`taking photo` → `taking_photo.svg`, `auto;emergency heat` →
+  `auto;emergency_heat.svg`). `normalizeAssetFolder` applied that `\s+`→`_` substitution to the
+  folder, but `normalizeStateName` only trimmed, so `getStateVariants` never probed the underscored
+  form. Six states had their correct icon sitting on disk and unreachable: Camera and Mobile Phone
+  `taking photo` plus Mobile Phone `uploading to cloud` fell through to `on.svg`, and the three
+  Thermostat `…;emergency heat` tuples exhausted the variant chain and were served
+  `auto;auto.svg` — `getDeviceIconUrl` falls back to the alphabetically first file in the folder
+  before it ever reaches the generated placeholder, so a wrong icon, not a missing one, is what this
+  class of failure looks like. `getStateVariants` now probes the underscored name alongside the raw
+  one at each precedence level.
+
+  Two further states had no artwork at all and were being served another state's icon by that same
+  first-in-folder fallback: `Home Mode` `sleep;idle` (matched `Working.svg` via the variant chain)
+  and `Washer Machine` `rinse;run` (served `heavy;pause.svg`). Both are now authored to match their
+  siblings — `Home_Mode/sleep;idle.svg` and `Washer_Machine/rinse;run.svg`.
+
+  All 116 bundled working states now resolve to an icon of their own; previously 108 did. The
+  regression test asserts that whole invariant over every bundled template rather than the eight
+  names found here, so a new template shipping a state without artwork fails too. It checks the
+  filesystem for ownership *and* compares rendered icons, because the first-in-folder fallback makes
+  a missing asset indistinguishable from a present one by URL shape: an earlier version that only
+  looked for the generated placeholder and for two siblings colliding passed with
+  `Home_Mode/sleep;idle.svg` deleted, since that state then matched `Working.svg`, which no sibling
+  uses. Icon content cannot be compared against the file on disk — Vite inlines some of these SVGs
+  as minified percent-encoded text and others as raw base64, so equal artwork is not equal bytes.
+
+  Three follow-ups after review, all in the guard rather than the resolver. Its two identity checks were
+  each other's blind spot: with bundled resolution dead entirely, the generated placeholder embeds the
+  state name, so every state gets a *distinct* data URI, no siblings collide, nothing matches a generic
+  name, and the test reported success against a fully dead pipeline. It now asserts positively that real
+  artwork was reached first — the placeholder is the only artwork on a 72×72 canvas, which holds under
+  both inlining forms. It also re-implemented the production template→folder mapping instead of calling
+  it, so changing the separator to `-` left it green; `normalizeAssetFolder` is now exported and used.
+  And it skipped all 16 stateless templates (the sensors, Clock, Car, Door RFID, Weather and the rest),
+  which are served *entirely* by the first-in-folder fallback this test exists to police; they are now
+  checked under the resolver's default state. Each of the three was verified by mutation.
+
+  One dead variant removed from the resolver in the same pass: the title-cased underscored spelling
+  (`Taking_photo`, `Auto;emergency_heat`) matches no bundled asset, because no bundled state name has
+  both a space and a capital first letter, and where it equalled the plain form the `Set` discarded it.
+  The `;` first-segment split is now trimmed, so a state written `auto ; heat` still probes `auto`
+  rather than the `auto_` no asset uses — `normalizeStateName` only trims the outer edges.
+
+- **An AI tool offered the model an example device template that does not exist.** `search_devices`
+  described its `keyword` argument as "e.g. 'AC Cooler'", but no such bundled template exists — the
+  name survives only as a stale `frontend/src/assets/AC_Cooler/` asset directory. A schema
+  description is part of a tool's contract, so an example naming a non-existent template invites a
+  round that returns nothing. Now names `Air Conditioner`, which is bundled.
+
+- **A missing translation key would have rendered as literal `app.unknownDevice` in a
+  counterexample trace.** `traceView.ts` formats a trace condition whose device is unnamed via
+  `translate('app.unknownDevice')`, but that key existed in no locale — vue-i18n returns the key
+  itself when lookup fails, so the user would read `app.unknownDevice` where a device name belongs.
+  Added `unknownDevice` to both locales (`未知设备` / `Unknown device`).
+
+  The existing `i18nLiteralKeys` guard could not have caught this: it matched only a callee named
+  `t`/`$t`, while `traceView.ts` receives an injected translator named `translate`, making every key
+  in that file invisible to it. The unit spec passed because it stubs its own dictionary, which
+  *defined* the key production lacked. The guard now also audits any dotted string literal under a
+  real message namespace, regardless of what consumes it — taking the namespace list from the loaded
+  bundle rather than a hand-kept one, since a hardcoded `app|specTemplates` would have left all 43
+  `auth.*` keys unaudited. Both checks assert their scan matched something before concluding it found
+  no problems. The call-shaped pattern is kept alongside the literal one: the literal pattern finds
+  every key the call pattern does and 423 more, but being anchored to namespaces that exist it cannot
+  see a key invented under a namespace that does not, which the call-shaped one reports as missing.
+
+- **Six bundled model-token labels were ambiguous or wrong in Chinese.** `formatBuiltInModelToken`
+  resolves labels through one flat, capability-unaware map, so a token that means two things across
+  two capabilities gets a single label. An audit of every state, API, variable and variable-domain
+  value in all 45 bundled templates (158 distinct token segments) found six defects; none was a
+  missing label (coverage was already complete).
+  - `dry` rendered as `除湿` (dehumidify), the Air Conditioner HVAC mode, but Soil Moisture Sensor
+    uses `dry` as a value of its `water` domain (`dry`/`wet`), where dehumidification is not
+    something a sensor does. Now `干燥`, which is correct for the soil reading and consistent with
+    the neighbouring `dryClean` = `干燥清洁` on the Air Conditioner. Rendered via
+    `DeviceDialog.vue` variable list and the instance-config domain dropdown.
+  - `sendingPhoto`, `sendingAlertMessage` and `uploadingToCloud` were byte-identical to the
+    commands `send photo`, `send alert message` and `upload to cloud`, losing the in-progress
+    aspect on the same device (Home Mode, Mobile Phone). Now `正在…`, matching the convention the
+    map already applied to every other such pair (`sending`/`sent`, `posting`/`posted`,
+    `takingPhoto`/`takePhoto`, `running`/`run`).
+  - `closed` shared `关闭` with the switch value `off`, which reads as "powered down" rather than
+    physically shut for the `contact` domains of Garage Door, Refrigerator Door Sensor and Window.
+    Now `已关闭`, following the participle convention already used by `locked` = `已锁定`,
+    `paused` = `已暂停` and `finished` = `已完成`, which also separates the state from the `close`
+    command.
+  - The Alarm value `both` named a quantity rather than the state. Now `警笛与闪光` / `Siren +
+    strobe`, naming the two outputs that fire together.
+
+  Left unchanged as verified-benign collisions: `fanOnly`/`fan only` and `emergency
+  heat`/`emergencyHeat` are spelling variants of one concept (they collide in English too), and
+  `off`/`close` never co-occur — their device sets are disjoint.
+
 - **An uppercase `A_` variable name slipped past the environment-pool prefix guard.** Template admission
   rejected an InternalVariable named `a_temperature` — the generator prepends `a_` for the environment
   pool, so the author's name would have compiled to `a_a_temperature` and collided with another device's

@@ -604,7 +604,7 @@ requests without passing through board storage.
 | `id` | `Long` | Null for unsaved rules |
 | `conditions` | `Condition[]` | `@NotEmpty`; at most 50 conditions |
 | `command` | `Command` | `@NotNull` |
-| `ruleString` | `String` | Human-readable form |
+| `ruleString` | `String` | Human-readable form; at most 4,000 chars. A caller-supplied value over that is rejected, while one the server composes is truncated — see [board.md](board.md) |
 | `createdAt` | `LocalDateTime` | |
 
 Rule ownership is derived from authentication. The internal `userId` field is

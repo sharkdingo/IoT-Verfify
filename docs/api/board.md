@@ -73,7 +73,16 @@ A device addition that would derive more than 200 Environment Pool variables als
 back. The Board UI blocks known over-capacity additions across dialogs, template drag/drop,
 recommendation application, and scene import before sending them. It also enforces the
 per-device override and per-rule/per-specification-group condition limits while authoring;
-the backend remains authoritative for stale or concurrent clients. Legacy data
+the backend remains authoritative for stale or concurrent clients. A rule accepts at most
+50 conditions (`conditions`) and a 4,000-character display preview (`ruleString`); each
+specification condition group — `aConditions`, `ifConditions`, `thenConditions` — accepts at
+most 50 conditions (reported under `<group>.size`). The service checks these itself on the
+record being written, not only through HTTP DTO validation, because the AI tools call it
+directly with no `@Valid` step. They are deliberately checked on the record being authored
+rather than during whole-board revalidation, so an account already holding an over-limit row
+can still add devices, move them, and undo. A server-composed `ruleString` — one the AI rule
+tool or an automatic fix generated rather than the caller supplying it — is truncated to the
+limit instead of rejected, because long device labels can push a legal rule past it. Legacy data
 already above a limit is never truncated automatically: deletion remains available so the
 user can reduce it to the supported range before creating more items, reordering rules,
 running a complete model, or round-tripping a scene.
@@ -375,7 +384,9 @@ The subsequent batch requires non-null complete `nodes`, `environmentVariables`,
 `specs`, and `templateSnapshots` arrays. `nodes`, `rules`, `specs`, and
 `templateSnapshots` each accept at most 100 items; `environmentVariables` accepts at most
 200. The service repeats these limits for internal/AI callers rather than relying only on
-HTTP DTO validation. There is no partial-update form of this endpoint; ordinary targeted
+HTTP DTO validation, and does the same for the per-record rule and specification condition
+limits described above — a full replacement authors every record it carries. There is no
+partial-update form of this endpoint; ordinary targeted
 endpoints own partial intent.
 
 | Field | Direction | Meaning |

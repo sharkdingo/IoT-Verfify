@@ -48,7 +48,10 @@ public class ApplyScenarioTool extends AbstractAiTool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("confirmed", Map.of(
                 "type", "boolean",
-                "description", "Use false to preview the atomic full-scene replacement. Use true only in a later user turn that explicitly confirms that exact preview."
+                "description", "Your intent, not the gate: pass false to request a preview, true when a "
+                        + "later user turn confirms that exact preview. Whether the replacement actually "
+                        + "runs is decided server-side from the user's own confirmation, so true cannot "
+                        + "force it and false cannot cancel an already-confirmed one."
         ));
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", properties, List.of("confirmed"));

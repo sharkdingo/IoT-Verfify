@@ -11,7 +11,7 @@
 				"Modes": [
 					"AlertState"
 				],
-				"InitState": "both",
+				"InitState": "off",
 				"WorkingStates": [
 					{
 						"Name": "both",

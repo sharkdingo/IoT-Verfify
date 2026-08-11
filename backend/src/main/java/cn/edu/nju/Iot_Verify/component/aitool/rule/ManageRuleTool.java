@@ -14,6 +14,7 @@ import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
+import cn.edu.nju.Iot_Verify.util.RulePreviewText;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -304,7 +305,10 @@ public class ManageRuleTool extends AbstractAiTool {
 
         String ruleString = nullableTextField(args, "label", "arguments");
         if (ruleString == null) {
-            ruleString = buildRuleString(conditions, command, labelsById);
+            // Bounded only on this branch: a composed preview is the product's own output, and long
+            // device labels can push a legal rule past the cap, so truncating is right. A `label` the
+            // caller supplied is its choice and stays subject to rejection.
+            ruleString = RulePreviewText.bounded(buildRuleString(conditions, command, labelsById));
         }
 
         RuleDto newRule = RuleDto.builder()

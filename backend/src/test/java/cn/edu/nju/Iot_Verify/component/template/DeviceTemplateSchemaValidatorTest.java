@@ -10,7 +10,12 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -1471,5 +1476,60 @@ class DeviceTemplateSchemaValidatorTest {
         assertEquals(cn.edu.nju.Iot_Verify.dto.RequestLimits.MAX_TEMPLATE_MODES,
                 schema.path("properties").path("Modes").path("maxItems").asInt(),
                 "the schema bound and RequestLimits should agree on Modes");
+    }
+
+    @Test
+    void noBundledDeviceStartsInAnAlertingState() throws Exception {
+        // InitState is the state a device holds the moment it is dragged onto the canvas, and 27 of the 29
+        // stateful bundled templates simply take WorkingStates[0]. That is harmless while entry 0 is a resting
+        // state, but Alarm's list is alphabetical ("both", "off", "siren", "strobe"), so entry 0 was `both`:
+        // a freshly placed alarm sat with siren *and* strobe already sounding. On a verification platform that
+        // is worse than cosmetic — a safety property saying the alarm must not sound without cause is violated
+        // at step 0 by the initial state alone, before any rule fires.
+        //
+        // The invariant is deliberately narrow. An earlier attempt asserted that InitState must equal the
+        // state the bundled example scenes give the device, which looked stronger and was wrong: four of the
+        // five overridden templates already agreed, and the fifth was Light, which those scenes set to "off"
+        // because they depict night and away-from-home situations. A light starting on is an ordinary default,
+        // not a defect, so that test would have reported scene intent as a bug. Alerting outputs are the case
+        // where a non-resting default is indefensible regardless of scenario, so name exactly those.
+        Set<String> alertingStates = Set.of("both", "siren", "strobe");
+
+        Path templateDir = Path.of("src/main/resources/deviceTemplate");
+        List<Path> templates;
+        try (Stream<Path> stream = Files.list(templateDir)) {
+            templates = stream.filter(p -> p.getFileName().toString().endsWith(".json")).sorted().toList();
+        }
+        assertFalse(templates.isEmpty(), "default templates should exist");
+
+        List<String> offenders = new ArrayList<>();
+        int alarmLike = 0;
+        for (Path template : templates) {
+            JsonNode manifest = objectMapper.readTree(template.toFile());
+            String initState = manifest.path("InitState").asText("");
+            if (initState.isBlank()) continue;
+
+            // Only devices that actually own an alerting state are in scope; every segment of a composite
+            // state counts, so a multi-mode device cannot hide one behind a mode value.
+            List<String> declared = new ArrayList<>();
+            for (JsonNode state : manifest.path("WorkingStates")) {
+                for (String segment : state.path("Name").asText("").split("[;,|]")) declared.add(segment.trim());
+            }
+            if (declared.stream().noneMatch(alertingStates::contains)) continue;
+            alarmLike++;
+
+            for (String segment : initState.split("[;,|]")) {
+                if (alertingStates.contains(segment.trim())) {
+                    offenders.add(template.getFileName() + ": InitState=\"" + initState
+                            + "\" starts the device in alerting state \"" + segment.trim() + "\"");
+                }
+            }
+        }
+
+        // A scan that matches nothing asserts nothing: if no bundled template declares an alerting state,
+        // this test cannot fail and must not be read as evidence.
+        assertTrue(alarmLike > 0, "expected at least one bundled template with an alerting state");
+        assertTrue(offenders.isEmpty(),
+                "a bundled device must not be placed already alerting:\n" + String.join("\n", offenders));
     }
 }
