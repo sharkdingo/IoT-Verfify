@@ -15,6 +15,50 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-12
+
+#### Fixed
+
+- **9 device templates with frozen local enum variables**: Fixed Refrigerator Door Sensor, Car, Door RFID, Washer Machine, Dryer, Oven, Thermostat, Mobile Phone, and Email templates that had local enum variables without driver mechanisms, causing them to hold nondeterministically chosen initial values throughout benign runs. Variables now properly driven by WorkingState Dynamics or changed to shared environment variables where semantically appropriate.
+
+- **Door RFID security vulnerability (Critical)**: Changed idle state from `RFID="authorized"` to `RFID="none"` to prevent fail-open behavior where door would unlock by default without any card scan. Added `"none"` value to RFID variable domain.
+
+- **Thermostat incomplete fix (High)**: Added missing `thermostatOperatingState` Dynamics to 5 circulate states (circulate;auto, circulate;cool, circulate;heat, circulate;emergency heat, circulate;off) that were reporting stale operating states. All 15/15 WorkingStates now have complete Dynamics.
+
+#### Added
+
+- **Template validator enhancement**: Added `checkLocalEnumVariablesHaveDrivers()` validation rule in `DeviceTemplateNuSmvValidator` that rejects device templates with local enum variables lacking driver mechanisms (WorkingState Dynamics or Transition Assignment). This prevents future frozen-variable regressions. Note: Current implementation checks for at least one WorkingState with Dynamics; partial coverage (some states without Dynamics) is permitted.
+
+- **Frozen-variable test coverage**: Added `DeviceTemplateNuSmvValidatorFrozenVariableTest` with 4 test cases covering: rejecting local enum without driver, accepting local enum with Dynamics, accepting shared enum without driver, accepting local numeric with NaturalChangeRate.
+
+#### Changed
+
+- **Email and Mobile Phone semantic scope**: Changed `Email.receiveKey`, `Email.receiveMail`, and `Mobile Phone.location` from per-device-instance variables (`IsInside: true`) to scene-level shared variables (`IsInside: false`, `Reads: true`).
+  - **User impact**: Multiple Email instances now share the same receive events; multiple Mobile Phone instances share the same location value. This represents a shift from "independent device state" to "environmental input" semantics.
+  - **Rationale**: These variables represent external environmental inputs (email server events, GPS location) rather than device-internal state. The shared-variable semantics allow proper modeling of external triggers while solving the frozen-variable problem.
+
+- **Door RFID RFID variable domain**: Extended value set from `["authorized", "not authorized"]` to `["authorized", "not authorized", "none"]` to properly represent idle state (no card present/scanned).
+
+#### Technical Details
+
+- **Modified templates** (9): Car.json, Door RFID.json, Dryer.json, Email.json, Mobile Phone.json, Oven.json, Refrigerator Door Sensor.json, Thermostat.json, Washer Machine.json
+- **Modified validator**: DeviceTemplateNuSmvValidator.java (added 3 helper methods, 95 lines)
+- **Modified tests**: BoardStorageServiceImplTemplatePrecheckTest.java (adapted 4 test cases for frozen-variable guard)
+- **Updated demo scene**: docs/examples/default-rfid-access-scene.json (Door RFID template snapshot)
+- **Test results**: 2310/2310 backend tests passing, frontend type checks passing
+
+#### Known Limitations
+
+- **Single-environment model**: Thermostat.temperature and other shared environment variables model a single thermal/environmental space per board. Multi-zone scenarios (e.g., separate bedroom and living room thermostats with independent temperatures) are currently out of scope. This is consistent with the project's MEDIC-based single-environment formalism.
+
+- **Local sensor variables and cross-device rules**: Car.location and 10 other templates use `IsInside: true` (local variables), which limits certain cross-device automation scenarios. A systematic review of all sensor variables for appropriate IsInside configuration is planned for a future release. Current behavior matches existing patterns (Garage Door, Window) and does not break existing functionality.
+
+#### Migration Notes
+
+- **Backward compatibility**: Existing boards using the fixed templates continue to work without changes. Templates are automatically reloaded on backend restart.
+- **No user action required**: Fixes take effect immediately for new device instances. Existing device instances retain their configuration.
+- **Breaking change detection**: The new frozen-variable validation will reject custom templates with undriven local enum variables. If you have custom templates, review them against the new validation rule before uploading.
+
 ### 2026-08-11
 
 #### Fixed

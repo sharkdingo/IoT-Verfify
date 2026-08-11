@@ -17,63 +17,108 @@
 	"WorkingStates": [
 		{
 			"Name": "regular;pause",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "none"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "regular;run",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "drying"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "regular;stop",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "finished"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "lowHeat;pause",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "none"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "lowHeat;run",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "drying"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "lowHeat;stop",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "finished"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "highHeat;pause",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "none"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "highHeat;run",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "drying"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "highHeat;stop",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "dryerJobState",
+					"Value": "finished"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"

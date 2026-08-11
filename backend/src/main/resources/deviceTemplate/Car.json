@@ -12,12 +12,51 @@
 			"Values": ["garage", "away"]
 		}
 	],
-	"Modes": [],
-	"InitState": "",
+	"Modes": ["CarLocation"],
+	"InitState": "away",
 	"WorkingStates": [
+		{
+			"Name": "garage",
+			"Dynamics": [
+				{
+					"VariableName": "location",
+					"Value": "garage"
+				}
+			],
+			"Description": "",
+			"Trust": "untrusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "away",
+			"Dynamics": [
+				{
+					"VariableName": "location",
+					"Value": "away"
+				}
+			],
+			"Description": "",
+			"Trust": "untrusted",
+			"Privacy": "private"
+		}
 	],
-	"Transitions": [
-	],
+	"Transitions": [],
 	"APIs": [
+		{
+			"Name": "arrive home",
+			"StartState": "",
+			"EndState": "garage",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "leave home",
+			"StartState": "",
+			"EndState": "away",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		}
 	]
 }

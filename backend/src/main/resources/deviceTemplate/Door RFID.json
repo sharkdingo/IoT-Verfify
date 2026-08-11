@@ -9,15 +9,89 @@
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "private",
-			"Values": ["authorized", "not authorized"]
+			"Values": ["authorized", "not authorized", "none"]
 		}
 	],
-	"Modes": [],
-	"InitState": "",
+	"Modes": ["ScanState"],
+	"InitState": "idle",
 	"WorkingStates": [
+		{
+			"Name": "idle",
+			"Dynamics": [
+				{
+					"VariableName": "RFID",
+					"Value": "none"
+				}
+			],
+			"Description": "",
+			"Trust": "untrusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "authorized",
+			"Dynamics": [
+				{
+					"VariableName": "RFID",
+					"Value": "authorized"
+				}
+			],
+			"Description": "",
+			"Trust": "untrusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "not authorized",
+			"Dynamics": [
+				{
+					"VariableName": "RFID",
+					"Value": "not authorized"
+				}
+			],
+			"Description": "",
+			"Trust": "untrusted",
+			"Privacy": "private"
+		}
 	],
 	"Transitions": [
+		{
+			"Name": "reset from authorized",
+			"StartState": "authorized",
+			"EndState": "idle",
+			"Trigger": {
+				"Attribute": "ScanState",
+				"Relation": "=",
+				"Value": "authorized"
+			},
+			"Description": ""
+		},
+		{
+			"Name": "reset from unauthorized",
+			"StartState": "not authorized",
+			"EndState": "idle",
+			"Trigger": {
+				"Attribute": "ScanState",
+				"Relation": "=",
+				"Value": "not authorized"
+			},
+			"Description": ""
+		}
 	],
 	"APIs": [
+		{
+			"Name": "scan authorized card",
+			"StartState": "",
+			"EndState": "authorized",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "scan unauthorized card",
+			"StartState": "",
+			"EndState": "not authorized",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		}
 	]
 }

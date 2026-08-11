@@ -17,84 +17,144 @@
 	"WorkingStates": [
 		{
 			"Name": "regular;pause",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "none"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "regular;run",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "wash"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "regular;stop",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "finish"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "heavy;pause",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "none"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "heavy;run",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "wash"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "heavy;stop",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "finish"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "rinse;pause",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "none"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "rinse;run",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "rinse"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "rinse;stop",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "finish"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "spinDry;pause",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "none"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "spinDry;run",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "spin"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "spinDry;stop",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "washerJobState",
+					"Value": "finish"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"

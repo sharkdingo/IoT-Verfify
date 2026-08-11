@@ -12,13 +12,51 @@
 			"Values": ["closed", "open"]
 		}
 	],
-	"Modes": [],
-	"InitState": "",
+	"Modes": ["DoorState"],
+	"InitState": "closed",
 	"WorkingStates": [
+		{
+			"Name": "closed",
+			"Dynamics": [
+				{
+					"VariableName": "contact",
+					"Value": "closed"
+				}
+			],
+			"Description": "",
+			"Trust": "untrusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "open",
+			"Dynamics": [
+				{
+					"VariableName": "contact",
+					"Value": "open"
+				}
+			],
+			"Description": "",
+			"Trust": "untrusted",
+			"Privacy": "private"
+		}
 	],
-	"Transitions": [
-	],
+	"Transitions": [],
 	"APIs": [
-
+		{
+			"Name": "detect closed",
+			"StartState": "",
+			"EndState": "closed",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "detect open",
+			"StartState": "",
+			"EndState": "open",
+			"Trigger": null,
+			"Signal": true,
+			"Description": ""
+		}
 	]
 }

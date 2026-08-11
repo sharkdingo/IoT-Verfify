@@ -569,6 +569,81 @@ public class DeviceTemplateNuSmvValidator {
         }
 
         checkGeneratedSmvIdentifierCollisions(templateName, manifest, modes);
+        checkLocalEnumVariablesHaveDrivers(templateName, manifest);
+    }
+
+    /**
+     * Reject local enum variables without driver mechanisms to prevent them from being
+     * frozen at their nondeterministically chosen initial value throughout benign runs.
+     * A local enum variable must be driven by WorkingState Dynamics, Transition Assignment,
+     * or (for numeric variables) NaturalChangeRate.
+     */
+    private void checkLocalEnumVariablesHaveDrivers(String templateName, DeviceManifest manifest) {
+        if (manifest.getInternalVariables() == null) {
+            return;
+        }
+
+        for (DeviceManifest.InternalVariable var : manifest.getInternalVariables()) {
+            if (var == null || var.getName() == null) {
+                continue;
+            }
+
+            // Only check local enum variables
+            if (!Boolean.TRUE.equals(var.getIsInside())) {
+                continue; // Shared variables are environment inputs, no driver needed
+            }
+            if (var.getValues() == null || var.getValues().isEmpty()) {
+                continue; // Numeric variables can use NaturalChangeRate
+            }
+
+            // Check for driver mechanisms
+            boolean hasDynamics = hasWorkingStateDynamics(manifest, var.getName());
+            boolean hasTransition = hasTransitionAssignment(manifest, var.getName());
+
+            if (!hasDynamics && !hasTransition) {
+                throw new BadRequestException(
+                        "Template '" + templateName + "': local enum variable '" + var.getName()
+                                + "' has no driver mechanism (no WorkingState Dynamics, no Transition Assignment). "
+                                + "It will hold its nondeterministically chosen initial value throughout benign runs. "
+                                + "Either: (1) add WorkingState Dynamics to bind it to device state, "
+                                + "(2) convert it to a Signal API if it represents an event, "
+                                + "or (3) make it shared (IsInside=false) if it is an environmental input.");
+            }
+        }
+    }
+
+    private boolean hasWorkingStateDynamics(DeviceManifest manifest, String variableName) {
+        if (manifest.getWorkingStates() == null) {
+            return false;
+        }
+        for (DeviceManifest.WorkingState state : manifest.getWorkingStates()) {
+            if (state == null || state.getDynamics() == null) {
+                continue;
+            }
+            for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
+                if (dynamic != null && variableName.equals(dynamic.getVariableName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasTransitionAssignment(DeviceManifest manifest, String variableName) {
+        if (manifest.getTransitions() == null) {
+            return false;
+        }
+        for (DeviceManifest.Transition transition : manifest.getTransitions()) {
+            if (transition == null || transition.getAssignments() == null) {
+                continue;
+            }
+            for (DeviceManifest.Assignment assignment : transition.getAssignments()) {
+                if (assignment != null && variableName.equals(assignment.getAttribute())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

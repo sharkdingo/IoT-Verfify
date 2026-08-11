@@ -41,7 +41,12 @@
 	"WorkingStates": [
 		{
 			"Name": "auto;auto",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "idle"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -52,6 +57,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"-1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "cooling"
 				}
 			],
 			"Description": "",
@@ -64,6 +73,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "heating"
 				}
 			],
 			"Description": "",
@@ -76,6 +89,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "heating"
 				}
 			],
 			"Description": "",
@@ -84,14 +101,24 @@
 		},
 		{
 			"Name": "auto;off",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "idle"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "circulate;auto",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "fan only"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -102,6 +129,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"-1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "cooling"
 				}
 			],
 			"Description": "",
@@ -114,6 +145,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "heating"
 				}
 			],
 			"Description": "",
@@ -126,6 +161,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "heating"
 				}
 			],
 			"Description": "",
@@ -134,14 +173,24 @@
 		},
 		{
 			"Name": "circulate;off",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "fan only"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "on;auto",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "idle"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -152,6 +201,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"-1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "cooling"
 				}
 			],
 			"Description": "",
@@ -164,6 +217,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "heating"
 				}
 			],
 			"Description": "",
@@ -176,6 +233,10 @@
 				{
 					"VariableName":"temperature",
 					"ChangeRate":"1"
+				},
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "heating"
 				}
 			],
 			"Description": "",
@@ -184,7 +245,12 @@
 		},
 		{
 			"Name": "on;off",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "thermostatOperatingState",
+					"Value": "idle"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"

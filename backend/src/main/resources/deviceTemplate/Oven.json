@@ -39,84 +39,144 @@
 	"WorkingStates": [
 		{
 			"Name": "heating;ready",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "heating;running",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "cooking"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "heating;paused",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "grill;ready",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "grill;running",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "cooking"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "grill;paused",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "warming;ready",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "warming;running",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "cooking"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "warming;paused",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "defrosting;ready",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "defrosting;running",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "cooking"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
 		},
 		{
 			"Name": "defrosting;paused",
-			"Dynamics": [],
+			"Dynamics": [
+				{
+					"VariableName": "ovenJobState",
+					"Value": "ready"
+				}
+			],
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"

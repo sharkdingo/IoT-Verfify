@@ -5,7 +5,8 @@
 		{
 			"Name": "location",
 			"Description": "",
-			"IsInside": true,
+			"IsInside": false,
+			"Reads": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "private",

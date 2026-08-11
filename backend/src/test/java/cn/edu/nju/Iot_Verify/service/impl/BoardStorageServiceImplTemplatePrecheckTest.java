@@ -1712,8 +1712,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
     private static String rescuedModeManifest(String variableName) {
         return "{\"Name\":\"Rescue Probe\",\"Modes\":[\"Next\"],\"InitState\":\"cold\","
-                + "\"WorkingStates\":[{\"Name\":\"cold\",\"Trust\":\"trusted\",\"Privacy\":\"public\"},"
-                + "{\"Name\":\"warm\",\"Trust\":\"trusted\",\"Privacy\":\"public\"}],"
+                + "\"WorkingStates\":[{\"Name\":\"cold\",\"Dynamics\":[{\"VariableName\":\"" + variableName + "\",\"Value\":\"low\"}],\"Trust\":\"trusted\",\"Privacy\":\"public\"},"
+                + "{\"Name\":\"warm\",\"Dynamics\":[{\"VariableName\":\"" + variableName + "\",\"Value\":\"high\"}],\"Trust\":\"trusted\",\"Privacy\":\"public\"}],"
                 + "\"InternalVariables\":[{\"Name\":\"" + variableName + "\",\"IsInside\":true,"
                 + "\"FalsifiableWhenCompromised\":false,\"Trust\":\"trusted\",\"Privacy\":\"public\","
                 + "\"Values\":[\"low\",\"high\"]}],"
@@ -1783,16 +1783,27 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void addDeviceTemplate_enumValueThatIsAReservedWord_shouldReject() {
         DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
         variable.setName("authState");
-        variable.setIsInside(true);
+        variable.setIsInside(true);  // Restored: test本地变量路径
         variable.setFalsifiableWhenCompromised(false);
         variable.setTrust("trusted");
         variable.setPrivacy("public");
         variable.setValues(List.of("next", "ok"));
 
         DeviceManifest manifest = new DeviceManifest();
-        manifest.setModes(List.of());
-        manifest.setInitState("");
-        manifest.setWorkingStates(List.of());
+        manifest.setModes(List.of("TestMode"));
+        manifest.setInitState("idle");
+
+        // 添加WorkingState with Dynamics以通过frozen-variable检查
+        DeviceManifest.WorkingState idle = new DeviceManifest.WorkingState();
+        idle.setName("idle");
+        idle.setTrust("trusted");
+        idle.setPrivacy("public");
+        DeviceManifest.Dynamic dynamic = new DeviceManifest.Dynamic();
+        dynamic.setVariableName("authState");
+        dynamic.setValue("ok");
+        idle.setDynamics(List.of(dynamic));
+
+        manifest.setWorkingStates(List.of(idle));
         manifest.setInternalVariables(List.of(variable));
 
         DeviceTemplateDto dto = new DeviceTemplateDto();
@@ -1814,7 +1825,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void addDeviceTemplate_enumValueThatIsACaseVariantOfAReservedWord_shouldBeAccepted() {
         DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
         variable.setName("authState");
-        variable.setIsInside(true);
+        variable.setIsInside(false);  // Shared variable - no driver needed
+        variable.setReads(true);
         variable.setFalsifiableWhenCompromised(false);
         variable.setTrust("trusted");
         variable.setPrivacy("public");
@@ -1855,7 +1867,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void addDeviceTemplate_enumValueThatIsNotAnSmvToken_shouldReject() {
         DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
         variable.setName("authState");
-        variable.setIsInside(true);
+        variable.setIsInside(false);  // Shared variable - no driver needed
+        variable.setReads(true);
         variable.setFalsifiableWhenCompromised(false);
         variable.setTrust("trusted");
         variable.setPrivacy("public");
@@ -1886,7 +1899,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     void addDeviceTemplate_enumValueWithSpaces_shouldBeAccepted() {
         DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
         variable.setName("RFID");
-        variable.setIsInside(true);
+        variable.setIsInside(false);  // Shared variable - no driver needed
+        variable.setReads(true);
         variable.setFalsifiableWhenCompromised(false);
         variable.setTrust("trusted");
         variable.setPrivacy("private");

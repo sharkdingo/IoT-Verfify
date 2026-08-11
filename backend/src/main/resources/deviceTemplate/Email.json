@@ -5,7 +5,8 @@
 		{
 			"Name": "receiveKey",
 			"Description": "",
-			"IsInside": true,
+			"IsInside": false,
+			"Reads": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "private",
@@ -14,7 +15,8 @@
 		{
 			"Name": "receiveMail",
 			"Description": "",
-			"IsInside": true,
+			"IsInside": false,
+			"Reads": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "private",
