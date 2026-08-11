@@ -229,19 +229,22 @@ history into a technical spec. The spec content itself now lives under
   vulnerability unexploitable via normal admission. Compilation rules: 
   [nusmv-model.md](docs/architecture/nusmv-model.md).
 
-- **Twenty-one i18n keys rendered literally when Board data failed to load.** When the backend returns
-  an incomplete Board snapshot (network interruption, partial 5xx failure), the UI blocks editing and
-  shows which collections failed: `app.boardDataEditBlocked` takes a `{collections}` placeholder that
-  was filled with `boardDataKey_templates`, `boardDataKey_nodes`, etc.—but those five keys had no
-  translations, so the error displayed raw key names like `app.boardDataKey_templates,
-  app.boardDataKey_nodes` instead of localized labels. Similarly, 8 `taskProgressStage_*` keys for
-  async verification/simulation progress (QUEUED, STARTING, GENERATING_MODEL, etc.) were missing,
-  causing raw key fallback in the run-history spinner. The three scenario issue collections
-  (`scenarioObjectiveIssues`, `scenarioReadiness`, `scenarioSemanticWarnings`) already had translations
-  deeper in the file but were not being reached by dynamic lookup—those turned out to be correctly
-  placed and working; the new keys are `boardDataKey_*` (5) and `taskProgressStage_*` (8) only. All 13
-  are now defined in both Chinese and English. Found by user report with screenshot showing the literal
-  keys in a load-failed banner.
+- **Twenty-one i18n keys rendered literally when Board data failed to load or during fix operations.**
+  When the backend returns an incomplete Board snapshot (network interruption, partial 5xx failure), the
+  UI blocks editing and shows which collections failed: `app.boardDataEditBlocked` takes a
+  `{collections}` placeholder that was filled with `boardDataKey_templates`, `boardDataKey_nodes`,
+  etc.—but those five keys had no translations, so the error displayed raw key names like
+  `app.boardDataKey_templates, app.boardDataKey_nodes` instead of localized labels. Similarly, 8
+  `taskProgressStage_*` keys for async verification/simulation progress (QUEUED, STARTING,
+  GENERATING_MODEL, etc.) were missing, causing raw key fallback in the run-history spinner. Finally, 8
+  `fixProgressStage_*` keys for interactive fix operations (QUEUED, RUNNING, PREPARING_CONTEXT,
+  REQUESTING_MODEL, VALIDATING_RESULT, PREPARING_MODEL, FINALIZING, CANCELLING) were missing—only
+  SEARCHING_AND_VERIFYING had a translation—so the fix dialog showed literal keys during AI-assisted
+  repair stages. The three scenario issue collections (`scenarioObjectiveIssues`, `scenarioReadiness`,
+  `scenarioSemanticWarnings`) already had translations deeper in the file and were working correctly.
+  All 21 keys (5 + 8 + 8) are now defined in both Chinese and English. Found by user report with
+  screenshot showing literal keys in a load-failed banner, then expanded via full-stack dynamic i18n
+  audit using parallel subagents.
 
 ### 2026-08-10
 
