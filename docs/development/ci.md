@@ -115,6 +115,19 @@ demand, never a merge blocker. Three reasons:
 It is the only tier without `--fail-on-flaky-tests`, for the same reason: a transport failure is not a
 defect in this repository.
 
+**Without the secret the run is skipped, not failed.** A `preflight` job reads
+`IOT_VERIFY_OPENAI_API_KEY` and publishes a boolean the real job gates on — the `secrets` context is
+unavailable in a job-level `if:`, so a secret cannot gate a job directly. A missing or whitespace-only
+key produces a warning annotation and a job summary stating that the AI path was **not** verified, then
+skips; red stays reserved for an actual break in that path.
+
+That distinction was learned the hard way: the gate previously hard-failed at a credential check, so it
+went red on **eleven consecutive nightly runs**, each exiting in under a minute without building
+anything. A daily red that carries no information and that no reader can act on is worse than no gate,
+because it trains people to ignore the colour. If this tier is skipping and you want it live, set
+`IOT_VERIFY_OPENAI_API_KEY` (and `IOT_VERIFY_OPENAI_BASE_URL` for a non-OpenAI endpoint) as repository
+secrets.
+
 ## Caching
 
 | cached | key derived from | why it is safe |
@@ -148,6 +161,12 @@ as an artifact, which is reuse of a verified build rather than a stale one.
   reports "never became ready" for a backend that was fine.
 - **Aggregate status check**: `fast-ci` succeeds only if no required tier failed, so branch protection
   can require one stable check name instead of a list that changes whenever routing does.
+- **Actions are pinned to a commit SHA with the version in a trailing comment**, so a moved tag cannot
+  change what runs. The comment is documentation and nothing verifies it — one bump left `# v4.2.0`
+  beside a v4.3.0 SHA — so when bumping, resolve the tag to its SHA and update both halves together.
+  Every pinned action must run on `node24`: GitHub now forces the Node 20 runtimes it deprecated onto
+  Node 24 regardless of what `action.yml` declares, and a deprecation warning is the only notice you
+  get before the pin starts running on an untested runtime.
 
 ## Branch protection
 

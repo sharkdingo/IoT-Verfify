@@ -17,7 +17,26 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-12
 
+#### Changed
+
+- **Live-AI CI skips instead of failing when no API key is configured**: A `preflight` job now probes
+  `IOT_VERIFY_OPENAI_API_KEY` and publishes a boolean the gate depends on, because the `secrets` context
+  is unavailable in a job-level `if:`. A missing or whitespace-only key produces a warning annotation
+  and a job summary stating the AI path was *not* verified, then skips the suite. Previously the gate
+  hard-failed at a credential check, producing eleven consecutive nightly reds that each exited in
+  under a minute without building anything.
+
+- **`actions/cache` bumped from v4.3.0 to v6.1.0** in all three workflows and the `setup-nusmv`
+  composite action. It was the last action on the deprecated Node 20 runtime, which GitHub now forces
+  onto Node 24; v5.0.0 made that migration and v6.0.0 moved to ESM. Inputs and outputs are unchanged.
+  The stale `# v4.2.0` pin comments were corrected to match the SHA they annotate.
+
 #### Fixed
+
+- **Repository name typo in the Live AI CI fork guard**: the `if:` compared against
+  `sharkdingo/IoT-Verfify`, matching a misspelled remote. The GitHub repository was renamed to
+  `IoT-Verify` and the guard now matches it.
+
 
 - **9 device templates with frozen local enum variables**: Fixed Refrigerator Door Sensor, Car, Door RFID, Washer Machine, Dryer, Oven, Thermostat, Mobile Phone, and Email templates that had local enum variables without driver mechanisms, causing them to hold nondeterministically chosen initial values throughout benign runs. Variables now properly driven by WorkingState Dynamics or changed to shared environment variables where semantically appropriate.
 

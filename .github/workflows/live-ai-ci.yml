@@ -13,6 +13,13 @@ name: Live AI CI
 #
 # It still runs automatically every night, so a genuine break in the AI path is caught within a day,
 # and on demand for anyone touching that path.
+#
+# When the secret is absent the run is SKIPPED, not failed. The two states mean different things and
+# must look different: "nobody configured a key" is a repository setup fact, while red is reserved for
+# "the AI path is broken". Conflating them cost eleven consecutive nightly failures, every one of them
+# exiting at the credential check before building anything — a daily red that carried no information
+# and that no reader could act on without knowing the history. The skip is announced with a warning
+# annotation and a job summary so it cannot be mistaken for a passing gate.
 
 on:
   schedule:
@@ -31,13 +38,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The `secrets` context is not available in a job-level `if:` (only github, needs, vars, inputs), so
+  # a secret cannot gate a job directly. This job reads it in a `run` step — where it *is* available —
+  # and publishes a boolean the real job gates on. The value is passed through `env` rather than
+  # interpolated into the script body, so it never reaches a command line.
+  preflight:
+    name: Check credentials
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.repository == 'sharkdingo/IoT-Verify'
+    outputs:
+      configured: ${{ steps.probe.outputs.configured }}
+    steps:
+      - name: Probe for an API key
+        id: probe
+        shell: bash
+        env:
+          KEY: ${{ secrets.IOT_VERIFY_OPENAI_API_KEY }}
+        run: |
+          # Trimmed before the emptiness test: a secret holding only whitespace would otherwise read as
+          # configured here and fail 10 minutes later at the model call, which is the confusing failure
+          # this job exists to prevent.
+          if [ -n "$(printf '%s' "${KEY:-}" | tr -d '[:space:]')" ]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+            echo 'Live-AI credentials are configured; the gate will run.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            # A warning, not an error: the run is skipped rather than failed, but it must not read as a
+            # gate that passed. Anyone wanting the gate live needs the two repository secrets below.
+            echo '::warning::IOT_VERIFY_OPENAI_API_KEY is not configured, so the live-AI gate was skipped. The AI path was NOT verified by this run. Set the repository secrets IOT_VERIFY_OPENAI_API_KEY and (if not using api.openai.com) IOT_VERIFY_OPENAI_BASE_URL to enable it.'
+            {
+              echo '### Live-AI gate skipped'
+              echo
+              echo '`IOT_VERIFY_OPENAI_API_KEY` is not configured, so **the AI path was not verified**.'
+              echo 'This is a repository setup state, not a test failure — nothing was run against the model endpoint.'
+              echo
+              echo 'To enable the gate, set these repository secrets:'
+              echo
+              echo '- `IOT_VERIFY_OPENAI_API_KEY` — required.'
+              echo '- `IOT_VERIFY_OPENAI_BASE_URL` — only if the endpoint is not `api.openai.com`.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   live-ai:
     name: Live AI end-to-end
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # No secret means no meaningful run. Skipping loudly is better than a green tick that proved
-    # nothing, and better than a red one nobody can fix.
-    if: github.repository == 'sharkdingo/IoT-Verfify'
+    needs: preflight
+    # A missing secret skips this job instead of failing it. The preflight's warning annotation is what
+    # keeps the skip visible, so it cannot be read as a green tick that proved something.
+    if: needs.preflight.outputs.configured == 'true'
     services:
       mysql:
         image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
@@ -82,13 +132,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Require credentials
-        shell: bash
-        run: |
-          if [ -z "${IOT_VERIFY_OPENAI_API_KEY:-}" ]; then
-            echo "::error::IOT_VERIFY_OPENAI_API_KEY is not configured; this gate cannot run"
-            exit 1
-          fi
+      # No "require credentials" step: `needs.preflight` already proved the key exists, and a second
+      # check would be a second place to keep in sync.
 
       - name: Setup Java
         uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
@@ -116,7 +161,7 @@ jobs:
         run: npm ci
 
       - name: Restore Playwright browsers
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.2.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
