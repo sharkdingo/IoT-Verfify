@@ -1,4 +1,6 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createSceneCodec, SCENE_FILE_SCHEMA, SCENE_FILE_VERSION } from './portableScene'
@@ -290,5 +292,42 @@ describe('bundled example scenes', () => {
 
     expect(rejected, `example scenes the codec refuses:\n${rejected.join('\n')}`).toEqual([])
     expect(empty, `example scenes that imported no devices:\n${empty.join('\n')}`).toEqual([])
+  })
+
+  /**
+   * The test above proves the committed fixtures import. It does not prove the generator still
+   * produces them — and that is a separate failure mode, because `default-template-scenarios.md`
+   * tells the reader to regenerate after a bundled template changes.
+   *
+   * It had already diverged: the generator's `rfid_1` definition carried no `state`, so regenerating
+   * dropped the runtime a hand edit had added and produced a scene the codec rejects. The fixture was
+   * right and the generator was stale, which is the direction no existing check could see.
+   *
+   * Runs the real script into a temp directory rather than re-deriving its output, since a
+   * re-implementation would drift the same way.
+   */
+  it('the generator still reproduces every default-* scene it owns', () => {
+    const repoRoot = join(__dirname, '../../../..')
+    const script = join(repoRoot, 'scripts/generate-default-template-scenes.mjs')
+    const outputDirectory = mkdtempSync(join(tmpdir(), 'iot-verify-scenes-'))
+    try {
+      execFileSync(process.execPath, [script, outputDirectory], { cwd: repoRoot, stdio: 'pipe' })
+
+      const generated = readdirSync(outputDirectory).filter(file => file.endsWith('.json'))
+      expect(generated.length, 'the generator wrote no scenes').toBeGreaterThan(3)
+
+      const drifted: string[] = []
+      for (const file of generated) {
+        const fresh = readFileSync(join(outputDirectory, file), 'utf8')
+        const committed = readFileSync(join(repoRoot, 'docs/examples', file), 'utf8')
+        if (fresh !== committed) drifted.push(file)
+      }
+      expect(
+        drifted,
+        `regenerating these scenes would change the committed fixture, so one side is stale:\n${drifted.join('\n')}`
+      ).toEqual([])
+    } finally {
+      rmSync(outputDirectory, { recursive: true, force: true })
+    }
   })
 })

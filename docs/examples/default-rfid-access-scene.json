@@ -146,7 +146,9 @@
 						]
 					}
 				],
-				"Modes": ["ScanState"],
+				"Modes": [
+					"ScanState"
+				],
 				"InitState": "idle",
 				"WorkingStates": [
 					{

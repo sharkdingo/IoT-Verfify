@@ -4,7 +4,11 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const templateDir = path.join(repoRoot, 'backend', 'src', 'main', 'resources', 'deviceTemplate')
-const outputDir = path.join(repoRoot, 'docs', 'examples')
+// Defaults to the shipped fixtures; an explicit argument lets a check regenerate into a temp
+// directory and diff, without a failed run leaving the committed scenes half-rewritten.
+const outputDir = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.join(repoRoot, 'docs', 'examples')
 
 const loadTemplate = (name) => {
   const manifest = JSON.parse(fs.readFileSync(path.join(templateDir, `${name}.json`), 'utf8'))
@@ -270,7 +274,13 @@ const scenes = [
     file: 'default-rfid-access-scene.json',
     templateNames: ['Alarm', 'Door', 'Door RFID'],
     devices: [
+      // `Door RFID` declares Modes, so the codec requires an explicit state
+      // (`assertSceneDeviceRuntimeShape`) — omitting it regenerated an unimportable scene. The state
+      // must also be `authorized`: the scene's whole point is that a badge already scanned, and
+      // `ScanState`'s first working state is not that. This was fixed in the fixture by hand once
+      // (3712d73) and the generator kept overwriting it.
       device('rfid_1', 'Door RFID', 'Front-door Badge Reader', 80, 120, {
+        state: 'authorized', currentStateTrust: 'trusted', currentStatePrivacy: 'private',
         variables: [{ name: 'RFID', value: 'authorized', trust: 'trusted' }],
         privacies: [{ name: 'RFID', privacy: 'private' }]
       }),

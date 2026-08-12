@@ -4,7 +4,7 @@ These scenes exercise default templates beyond the night-watch acceptance demo. 
 file is a standard version 5 `iot-verify.board-scene` document that can be imported from
 the Board without creating or editing a custom template.
 
-Verified against code and real NuSMV on 2026-07-13. Sources:
+Verified against code and real NuSMV on 2026-08-13. Sources:
 `scripts/generate-default-template-scenes.mjs`, the bundled manifests under
 `backend/src/main/resources/deviceTemplate/`, and
 `AcceptanceDemoScenarioNusmvTest`.

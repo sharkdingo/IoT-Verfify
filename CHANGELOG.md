@@ -19,6 +19,15 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **Regenerating the default scenes corrupted the RFID one into an unimportable file.** `Door RFID`
+  declares Modes, so the scene codec requires an explicit device state, but the generator's `rfid_1`
+  definition passed only `variables`/`privacies` — so `node scripts/generate-default-template-scenes.mjs`,
+  which `default-template-scenarios.md` tells you to run after a template change, dropped `state`,
+  `currentStateTrust` and `currentStatePrivacy` and produced a scene rejected with
+  `sceneImportStateRequiredForStatefulDevice`. The state also has to be `authorized` specifically: both
+  `InitState` and the first working state are `idle`, which freezes the whole scene. This was fixed in the
+  fixture by hand once (3712d73) and the generator kept overwriting it; the generator now carries the
+  runtime, so its output is canonical again and the fixture no longer needs a hand edit.
 - **Four more copies of the single-bound domain rule, found by sweeping for the shape below.** The rule
   builder's value placeholder accepted *either* bound and advertised `(5 - ∞)`; two device-dialog domain
   columns required both bounds but let an explicit `null` through and rendered `[null, 30]`; the
