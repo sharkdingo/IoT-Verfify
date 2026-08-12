@@ -7,7 +7,7 @@
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/RedisTokenBlacklistService.java`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/service/UserOperationGuard.java`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/service/DistributedInteractiveExecutionStore.java`,
-> `backend/src/main/java/cn/edu/nju/Iot_Verify/configure/SecurityConfig.java`.
+> `backend/src/main/java/cn/edu/nju/Iot_Verify/security/SecurityConfig.java`.
 
 Common issues and fixes. For every configuration key mentioned here, see [../getting-started/configuration.md](../getting-started/configuration.md) for the variable, its default, and how it is resolved — this page does not repeat defaults.
 
@@ -78,7 +78,8 @@ The browser blocks requests from the frontend origin.
 Checklist:
 
 - Confirm `nusmv.path` (`NUSMV_PATH`) points to the correct NuSMV executable.
-- Confirm the version is NuSMV 2.6+ and **not nuXmv** (incompatible): `NuSMV -version`.
+- Confirm the version is NuSMV 2.6 or 2.7 and **not nuXmv** (incompatible): `NuSMV -version`. The
+  trace parser depends on that range's English output format.
 - On Linux running a Windows NuSMV build, set `nusmv.command-prefix` (`NUSMV_PREFIX=wine`) so the executable is launched through Wine.
 - Review the specific error in `checkLogs` and, for async tasks, `errorMessage`.
 

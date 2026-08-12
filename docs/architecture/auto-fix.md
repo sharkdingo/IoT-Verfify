@@ -61,7 +61,8 @@ Any candidate that removes or duplicates an explicitly selected automation-link 
 ineligible because it would change that fixed attacker choice rather than repair the model
 under the original scenario.
 
-A deadline (`FIX_TIMEOUT_MS`, default 300000) bounds the strategy pipeline. It is checked
+A deadline (`FIX_TIMEOUT_MS`, default in
+[configuration.md](../getting-started/configuration.md)) bounds the strategy pipeline. It is checked
 before each strategy and inside search loops; every NuSMV capacity wait and child process
 also receives the remaining deadline and uses the smaller of that budget and
 `NUSMV_TIMEOUT_MS`. A strategy that starts but exceeds the deadline is `TIMED_OUT`;

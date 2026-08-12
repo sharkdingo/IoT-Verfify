@@ -22,10 +22,13 @@ frontend/src/
 │   ├── rules.ts         # rule recommendation only (persistence lives in board.ts)
 │   ├── simulation.ts    # default-export object: simulation calls
 │   └── fuzzing.ts       # default-export object: bounded exploration tasks/runs/findings
-└── types/
-    ├── auth.ts   canvas.ts   chat.ts   device.ts   edge.ts   fix.ts
-    ├── fuzzing.ts   node.ts   rule.ts   simulation.ts   spec.ts   verify.ts
+└── types/          # one module per domain — ls the directory rather than trusting a list here
 ```
+
+The `api/` set above is exhaustive and worth stating, because *which* module owns a call is the thing
+people get wrong. `types/` is not listed file by file: it grows with the domain, and a hand-copied
+inventory there was already nine files out of date. The naming is predictable (`rule.ts`, `spec.ts`,
+`verify.ts`, …); the two exceptions that are *not* predictable are called out below.
 
 > There is **no** `api/verify.ts` and **no** `types/trace.ts`. Verification calls live
 > in `board.ts`; trace types (`Trace`, `TraceState`, `TraceDevice`, …) live in

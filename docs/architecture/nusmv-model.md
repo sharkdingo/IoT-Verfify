@@ -75,7 +75,8 @@ a NuSMV probe generation. Invalid templates are rejected, not partially imported
 | Manifest declaration | Model meaning |
 | :--- | :--- |
 | `InternalVariables[].IsInside=true` | Device-local variable, emitted as `device.variable` |
-| `InternalVariables[].IsInside=false` | Shared environment value, stored once in the board environment pool and emitted internally as `a_<name>`. `Reads` (default true) says whether *this* device reads it, i.e. whether its rules/specs may use it as a condition source and whether it gets a `device.name := a_name` read mirror |
+| `InternalVariables[].IsInside=false` | Shared environment value, stored once in the board environment pool and emitted internally as `a_<name>` |
+| `InternalVariables[].Reads=true` | This device reads the shared value: it gets a `device.name := a_name` read mirror and its rules/specs may use the value as a condition source |
 | `InternalVariables[].Reads=false` | This device only *affects* the shared value: it contributes the domain and its declared effect, but gets no read mirror and no rule/spec source capability |
 | `ImpactedVariables[]` | Shared environment value the device may change; this declares a modeled effect, not a modeled read or any authorization |
 | `FalsifiableWhenCompromised=true` | The compromise model may replace this reported value with any value in its declared domain and marks its trust label untrusted |
@@ -121,28 +122,17 @@ assignment, WorkingState Dynamic, or numeric `NaturalChangeRate`; if none applie
 retains its current value. A local numeric rate follows the same interval convention as a
 shared numeric rate, combined with its active
 WorkingState Dynamic when one applies. The generator does not invent arbitrary local device changes.
-A shared numeric environment value must explicitly declare `NaturalChangeRate` and follows
-that interval plus all active device effects within the declared domain. The declaration is a
-constraint on the per-step change, so on every step the generator combines **every integer delta the
-interval admits** with the summed active device-effect expression and clamps each candidate to the
-declared bounds. Each device's `<var>_rate` is a `DEFINE` over that device's current state, so its
-effect reaches the environment in the same step it is acting — Fig. 2b combines the two
-contemporaneously. Holding the rate in a state variable instead delayed every effect by one step and
-let a device that started in an acting mode contribute nothing at all. Clamping pins both boundaries, so saturation at the domain edge needs no separate
-at-boundary branch. `NaturalChangeRate=[-1, 1]` is MEDIC §3.1, Fig. 2b's exact
-physical disturbance; `0` explicitly means no independent natural change, so only active
-device effects remain and the value stutters when there are none. A wider interval is therefore a
-strictly weaker assumption rather than a different one — modelling only its endpoints would prove
-properties the declaration does not support. An interval that excludes zero is a *mandatory* change
-wherever the declared domain leaves room for it: `[2, 4]` rises by 2–4, while `[0, 4]` may also hold.
-At a saturated boundary the clamp still holds the value — with domain `0..10`, a value of `10` under
-`[2, 5]` yields `10` for every candidate delta, so `AG (v = 10)` is provable. The declared domain
-wins over the declared rate; that is the bound doing its job, not a stutter being injected. Adding a hidden stutter to every interval
-made the mandatory form unstatable and produced traces in which a required change simply did not
-happen. Because the span is a
-state-space cost it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN`, and a wider
-declaration is rejected at authoring and generation instead of being narrowed. No second hidden
-`[-1, 1]` term is added.
+A shared numeric environment value follows its declared `NaturalChangeRate` plus all active device
+effects, clamped to the declared domain. **What that interval means — why every admissible integer
+delta is combined, why the domain bound wins over the rate, and what `0` and `[-1, 1]` each assert —
+is owned by [shared-value-semantics.md](shared-value-semantics.md#5-natural-evolution).** Two facts
+about the emitted model that belong here:
+
+- **Each device's `<var>_rate` is a `DEFINE` over that device's current state**, so its effect reaches
+  the environment in the same step it is acting. Holding the rate in a state variable instead delayed
+  every effect by one step and let a device that started in an acting mode contribute nothing at all.
+- **Clamping pins both boundaries**, so saturation at the domain edge needs no separate at-boundary
+  branch, and no second hidden `[-1, 1]` term is ever added on top of the declaration.
 
 The same reasoning bounds the manifest's own collections. Every mode, working state, transition,
 internal variable and enumerated value a template declares becomes part of the generated model, so an

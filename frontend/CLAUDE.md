@@ -7,13 +7,10 @@ Detailed reference lives in [../docs/](../docs/README.md); when code and docs di
 
 ## What this is
 
-Vue 3 + TypeScript single-page app (Vite) for the IoT-Verify platform: a visual device
-canvas, rule/spec builders, bounded candidate-path exploration, verification + formal
-counterexample visualization, an AI chat panel, and bilingual (zh-CN / en) UI. Talks to the Spring Boot backend over HTTP
-(`Result<T>` JSON) plus one SSE stream for chat.
-
-Stack: Vue 3 (Composition API), TypeScript, Vite, Tailwind CSS, Ant Design Vue,
-Element Plus, Vue Router, Vue I18n.
+Vue 3 + TypeScript single-page app (Vite) for the IoT-Verify platform. What it is and how it fits
+the backend: [../docs/architecture/overview.md](../docs/architecture/overview.md); the stack is in
+`package.json`. Both Ant Design Vue and Element Plus are present — match whichever the neighbouring
+component already uses rather than picking one.
 
 This project is in active development and has no released compatibility contract.
 Unless the user explicitly requests a migration path, remove superseded client contracts
@@ -34,118 +31,23 @@ npm run test:e2e   # Playwright; needs the backend on :8080
 `test:e2e` takes minutes — delegate it to a background subagent (see the root CLAUDE.md) instead of
 blocking on it, and keep reading source while it runs.
 
-E2E runs against a **production build** served by `vite preview`, not the dev server: on-demand
-module transforms made two parallel browsers exceed the board's load timeout, failing tests that had
-nothing wrong with them. A failure that appears only under `--workers=2` is usually this class of
-cause — diagnose it rather than forcing `--workers=1`, which hides it and triples the runtime. Two
-further consequences worth knowing before you debug an E2E result:
-
-- `vite.config.ts` needs its `/api` proxy declared under `preview` as well as `server` — `vite
-  preview` does not inherit `server.proxy`.
-- Port 3000 must be free. `reuseExistingServer` is off precisely so a leftover dev server cannot be
-  adopted silently, which would skip the build and test **stale code** while reporting green. A
-  `PreToolUse` hook (`.claude/hooks/guard-e2e-port.sh`) blocks the command while the port is held, so this
-  is enforced rather than remembered. Free the port, or set `E2E_BASE_URL` to a server you manage — as an
-  inline prefix or an exported variable, the hook accepts either. It only matches commands that actually
-  start Playwright's web server, so a script that drives a browser or the API client against a server you
-  are already running is not blocked.
-- **If you serve the build yourself, the port must be one the backend's CORS allowlist knows: 3000, 3001,
-  or 5173–5176** (`CORS_ORIGINS`, `backend/src/main/resources/application.yaml`). This is the trap in the
-  escape hatch above: on any other port the register POST returns **403 `Invalid CORS request`**, the UI shows
-  `注册失败` / `登录失败`, and every auth-dependent test fails in a way that reads exactly like a product
-  regression. One session lost a full run to port 3100 before reading the response body. It is also *not* the
-  rate limiter, so check for 403-vs-429 before reaching for the limit variables below.
-- **A full E2E pass cannot succeed on the default auth rate limits.** `AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR`
-  defaults to **60**, and the suite makes **~67** `createAuthenticatedUser` calls, each of which registers an
-  account. This note used to claim "a full run stays under the cap by design" on the strength of
-  `sharedReadOnlyAccount` being worker-scoped; measurement says otherwise, and a false reassurance here is
-  worse than no note — it sent several sessions hunting product defects in a wall of 429s.
-  The limits are constructor-injected into `final` fields, so **exporting them next to the Playwright command
-  does nothing**; they have to be set on the JVM under test. `e2e/global-setup.ts` now checks the budget once
-  before any browser starts and prints the four variables and the reset time, so this is diagnosed rather than
-  rediscovered. When it exhausts mid-run the failures scatter across the shared fixture and read exactly like
-  regressions — check the `reasonCode` before believing any of them.
-- **To actually run a full pass, start a second backend with raised caps and point the whole run at it.** Do
-  not restart the one someone is developing against:
-
-  ```bash
-  # terminal 1 — a dedicated E2E backend, same database (the suite creates and deletes its own accounts)
-  cd backend
-  SERVER_PORT=8081 \
-    AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR=2000 AUTH_REGISTER_RATE_LIMIT_PER_HOUR=2000 \
-    AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE=2000 AUTH_LOGIN_RATE_LIMIT_PER_MINUTE=2000 \
-    mvn spring-boot:run > e2e-backend.log 2>&1
-
-  # terminal 2
-  cd frontend && E2E_API_BASE_URL=http://127.0.0.1:8081 npx playwright test
-  ```
-
-  One variable moves the whole run because `vite.config.ts` now reads it for the `/api` proxy target as well.
-  It used to hardcode `localhost:8080` in both `server` and `preview`, so pointing a run elsewhere *silently
-  half-worked*: the specs' direct API calls followed `E2E_API_BASE_URL` while the browser kept going to 8080,
-  and one run talked to two servers. Redirect the API and the proxy together or not at all.
-- **Raising only the register limit is not enough — the login ceiling is what a full run actually
-  hits.** `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` (default 120) is a per-source, per-minute
-  window, and `board-full-flow.spec.ts` logs in far more often than it registers. A run with only
-  the register cap raised failed five board specs with `AUTH_LOGIN_RATE_LIMIT_REACHED`
-  (`scope: SOURCE`) — including the account-cleanup fixture, which then reported a second,
-  misleading error. Every failure was the rate limiter, not the product. Raise
-  `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` and `AUTH_LOGIN_RATE_LIMIT_PER_MINUTE` alongside the
-  register caps on the JVM under test, and read the `reasonCode` before believing a board failure.
-- **A pointer position computed from the canvas is stale the moment you await.** CI runs with
-  `--fail-on-flaky-tests`, so one retry-passing test still fails the job. The edge-label hover check
-  measured a hitarea midpoint once and moved the mouse there; under CI load the canvas was still
-  settling, the edge had moved, and no label appeared. Re-derive the coordinate *inside* the poll and
-  re-hover each attempt rather than widening the timeout around a single stale move — the assertion
-  keeps its original strength and stops depending on when the animation happened to land.
-- **A lingering Element Plus tooltip popper eats the next click, and Playwright's click retries do not save
-  you.** `theme-layout.spec.ts`'s "keeps floating panel surfaces coherent" clicks
-  `[data-testid="close-simulation-panel"]` right after hovering the adjacent open-settings control, whose
-  `iot-info-tooltip-popper` is still fading over the button; the click retries for 120s against an element that
-  "intercepts pointer events" and then times out. **Known-flaky, not a regression** — measured across builds:
-  HEAD failed 1 in 19 runs, an unrelated feature branch 2 in 9. Two consequences: dismiss or wait out the
-  popper before clicking a control next to a tooltip trigger, rather than trusting retries; and when
-  attributing this failure, **sample it more than once per build** — single runs of each read as a clean
-  "fails here, passes at HEAD" regression that ten runs contradict.
-- **A route mock must satisfy the same validators as the real response.** `api/chat.ts` validates
-  every field it depends on, so a fixture returning a convenient subset is rejected at the boundary —
-  and the failure surfaces far from the cause. A session mock missing `active`/`userId`/`updatedAt`
-  made session creation throw, so the turn never sent, so a `REFRESH_DATA` command never arrived, and
-  the test failed on an unrelated undo-button assertion. When an E2E failure makes no sense, read the
-  browser console in the Playwright trace (`--trace=retain-on-failure`) before theorising: two rounds
-  of plausible guesses cost more than one look at the actual error.
-
-## Codebase map
-
-```
-src/
-  api/        HTTP layer:
-              http.ts       axios instance + interceptors (token, 401 redirect)
-              auth.ts       authApi — returns the full Result<T> (read .data)
-              board.ts      default-export object: board CRUD + verification + fix
-              chat.ts       named exports: sessions (axios) + SSE streaming (fetch)
-              rules.ts      rules + rule recommendation (cancellable)
-              simulation.ts default-export object: simulation calls
-              fuzzing.ts    default-export object: exploration tasks/runs/findings
-  types/      TypeScript contracts (auth, device, node, edge, rule, spec, verify, fuzzing, fix, …)
-  stores/     reactive state (auth, chat)
-  router/     index.ts       routes + auth guard (reads the auth store, never localStorage)
-              loginRedirect.ts  the single owner of the "session gone → login" location
-  composables/ useTheme, useModalAccessibility, useBodyScrollLock, useRovingTablist
-  views/      Landing / Board / NotFound
-              board/  Board.vue's extracted domain logic — pure, unit-tested modules with no
-                      component dependencies (deep links, semantic commit, assistant refresh
-                      targets, scene-import diagnostics, recommendation wording, portable scene)
-  components/ CanvasBoard, ChatView, ControlCenter, SystemInspector,
-              TraceHistoryPanel, SimulationTimeline, FixResultDialog,
-              RuleBuilderDialog, DeviceDialog, AccountDeleteDialog, …
-  assets/     static assets + i18n (zh-CN / en)
-```
-
-How the frontend calls the backend (real shapes, unwrapping, SSE):
-[../docs/guides/frontend-integration.md](../docs/guides/frontend-integration.md).
+**Four things will make an E2E run lie to you, and all four read as product regressions.** A full
+pass needs a second backend with raised auth rate limits (the defaults cannot carry the suite); port
+3000 must be free, because `reuseExistingServer` is off so a leftover dev server cannot be silently
+adopted and tested as stale code; serving the build yourself on a port outside `CORS_ORIGINS`
+fails every auth test with a 403; and two known-flaky specs have documented non-product causes. The
+recipe, the measurements and the diagnosis order:
+[../docs/development/known-traps.md](../docs/development/known-traps.md#3-e2e-environment). **Read the `reasonCode` or
+the Playwright trace before believing any E2E failure.**
 
 ## Conventions (hard rules)
+
+Directory layout: [../docs/architecture/overview.md](../docs/architecture/overview.md). How the
+frontend calls the backend (real shapes, unwrapping, SSE):
+[../docs/guides/frontend-integration.md](../docs/guides/frontend-integration.md). Two structural
+rules the layout alone does not convey: `views/board/` holds Board.vue's extracted domain logic as
+pure, unit-tested modules with no component dependencies, and `router/loginRedirect.ts` is the
+single owner of the "session gone → login" location.
 
 - **Keep types aligned with backend DTOs.** Fields are camelCase on both sides
   (`userId`, not `user_id`). When a backend DTO changes, update the matching
@@ -307,14 +209,11 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   would shift — so they register depth through `registerModalSurface()` in `utils/feedback.ts`
   instead. Wiring depth to the scroll lock alone left every `confirmDestructive` window unguarded,
   and Ctrl+Z reversed the previous edit behind the prompt.
-- **A `clamp()` whose middle term can never win is a fixed size wearing responsive syntax.** `cqmin` is a
-  percentage of the *container*, so on a 110–137px canvas node `4.3cqmin` is 4.7–5.9px: the declared floor
-  was the rendered size at every viewport, and three node declarations printed 9.28px and 10px under an
-  11px minimum. Before writing a sub-floor floor, compute what the preferred term evaluates to at the
-  container's real size — and if a test exempts the pattern, the exemption needs a measurement, not a
-  comment. `typographyFloor.spec.ts` exempted these on a claim that they "render at 16px", which was
-  false, so the check certified the defect it existed to catch. `--canvas-zoom` is the one legitimate
-  exemption because it *divides*: 11px at 1.0× becomes 14.4px at 0.4×.
+- **A `clamp()` whose middle term can never win is a fixed size wearing responsive syntax.** `cqmin`
+  is a percentage of the *container*, so a sub-floor floor on a canvas node renders below the 11px
+  minimum at every viewport. Compute what the preferred term evaluates to at the container's real
+  size, and never exempt a pattern from `typographyFloor.spec.ts` on a claim you have not measured.
+  Both, with the numbers: [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §7.
 - **A semantic role has an ink half and a paper half.** `--accent`/`--danger`/`--warning`/`--success` are
   tuned as *text*, so the dark theme lightens them — and a fill under light ink inverts that (measured 1.44 to
   2.54:1 across 60 sites, light theme passing throughout, which is why a light-only check misses it). Fill with
@@ -322,19 +221,12 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   opacity, which fades the label with it. Structural neutrals have a floor: `slate-400` is 2.56:1 on white.
   Values, tables and the reasoning:
   [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §6.
-- **A `position: fixed` overlay cannot read a variable scoped to the board.** `--board-floating-gap`,
-  `--board-control-width` and `--board-inspector-width` are declared on `.iot-board`, but the two timeline hosts
-  are **siblings** of it — deliberately, so they float above every panel. Inside them those variables do not
-  resolve, `calc()` becomes invalid at computed-value time, and `left`/`right` fall back to `auto`. A fixed box
-  with both set to `auto` shrink-wraps its content at its static position, i.e. flush against x=0. Measured: the
-  trace overlay sat hard against the left edge with the right half of a 2556px screen empty, and its width was
-  *identical* at 2556 and 1440 (859.859px) — that identity is the tell, because a corridor-positioned element
-  must change with the viewport. On a 101-state trace the shrink-wrap reached **3258px** and put the play button
-  at x=2086, off-screen at a laptop viewport, so playback became unreachable.
-  `var(…, 1rem)` fallbacks had been hiding this, and removing them as "dead text" is what exposed it — the
-  premise that the gap lives at `:root` was wrong, and a test comment had recorded that wrong premise. Restoring
-  a fallback only hides it again: inject the variables onto the fixed element (`boardShellStyle` does this) so it
-  is positioned by values it can see. `boardDockGeometry.spec.ts` pins the injected value against the stylesheet's.
+- **A `position: fixed` overlay cannot read a variable scoped to the board.** The `--board-*` width
+  and gap variables live on `.iot-board`, and the timeline hosts are siblings of it, so inside them
+  `calc()` becomes invalid and the box shrink-wraps flush against x=0. Inject the variables onto the
+  fixed element (`boardShellStyle` does this) rather than restoring a `var(…, 1rem)` fallback, which
+  only hides it. Measurements:
+  [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §7.
 - **Stacking order is a named scale, not a literal.** Add a layer to the `--z-*` block in
   `styles/base.css` and reference it (`z-[var(--z-modal)]` in Tailwind,
   `var(--z-modal)` in CSS). Values inside a component's own stacking context stay local

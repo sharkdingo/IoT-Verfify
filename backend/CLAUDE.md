@@ -7,15 +7,11 @@ fix the doc in the same change (see [../CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 ## What this is
 
-Spring Boot backend for a smart-home IoT verification platform: users define devices,
-rules, and specifications; the backend performs bounded candidate-path exploration,
-generates an SMV model, runs NuSMV, parses formal counterexamples, and suggests
-automatic fixes. There is also an AI assistant
-(any OpenAI-compatible LLM endpoint, SSE streaming) with tool/function-calling.
-
-Stack: Java 17, Spring Boot 3.5.7, Spring Data JPA + MySQL, Redis (JWT blacklist,
-fail-open), Spring Security + JWT, NuSMV 2.6–2.7 (**not** nuXmv), OpenAI Java SDK
-(`com.openai:openai-java`, any OpenAI-compatible endpoint).
+Spring Boot backend for a smart-home IoT verification platform. What it is and how the pieces fit:
+[../docs/architecture/overview.md](../docs/architecture/overview.md); the stack and versions are in
+`pom.xml` and [../docs/getting-started/installation.md](../docs/getting-started/installation.md).
+Two version facts that a manifest cannot tell you: **NuSMV 2.6–2.7 only** (not nuXmv — the trace
+parser depends on its English output), and Redis is a **fail-open** JWT blacklist.
 
 This project is in active development and has no released compatibility contract.
 Unless the user explicitly requests a migration path, reject obsolete persisted shapes
@@ -34,66 +30,22 @@ mvn clean package -DskipTests   # build jar → target/Iot-Verify-0.0.1-SNAPSHOT
 Required env vars before running: `DB_PASSWORD`, `JWT_SECRET`, `IOT_VERIFY_OPENAI_API_KEY`,
 `NUSMV_PATH`. Full list and defaults: [../docs/getting-started/configuration.md](../docs/getting-started/configuration.md).
 
-**Deleting or changing an overloaded method needs `mvn clean`, not `mvn test`.** Maven's incremental
-compile recompiles the changed file against the *previous* `target/classes`, so overload resolution can
-bind to a signature that no longer exists in the sources. Removing two unused list wrappers from
-`FuzzMapper` — the only remaining `this::toFindingSummaryDto` / `this::toFindingDto` method references —
-made javac resolve a two-arg call to the stale `FuzzFindingPo` overload instead of the
-`FuzzFindingSummaryProjection` one, producing 3 compile errors that cascaded into ~100 test errors, a
-`NoClassDefFoundError` sweep, and a bogus "Mockito cannot mock" failure. `mvn clean test-compile` on the
-identical sources succeeds. The failure looks exactly like a real overload bug, so the instinct is to
-"fix" the overloads and break working code — run `mvn clean` first and re-read the error.
+### The build environment lies before the code does
 
-**Anything else writing to `target/classes` corrupts a Maven run, and the failure looks like a code bug.**
-Two symptoms, both seen here: a `BUILD FAILURE` whose error list is empty (the tell is *no*
-`[ERROR] …java:[line]` entries), and mass `NoClassDefFoundError` / `MockitoException: Could not modify all
-classes` / `NoSuchFileException: target\classes\….class` on files javac just wrote.
-
-Two distinct culprits, and the second is the one that bites unattended:
-- **A second Maven build** in the same checkout — don't start one while a delegated subagent is running the
-  suite, or the result describes neither tree.
-- **The VS Code `redhat.java` language server.** Its JDT project for this repo declares
-  `kind="output" path="target/classes"` (check the `.classpath` under
-  `~/AppData/Roaming/Code/User/workspaceStorage/*/redhat.java/jdt_ws/.metadata/.plugins/org.eclipse.core.resources/.projects/Iot-Verify/`),
-  so it auto-builds into the same directory and rewrites class files mid-compile. It is a ~1.3 GB `java.exe`
-  that looks like any other JVM in the process list. This is not hypothetical: it produced
-  `746 tests, 22 failures, 624 errors` on one attempt and a 21-error `testCompile` failure on the next, on a
-  tree whose real result was 2216/2216 green.
-
-So: re-run an unexplained compile or mass-error failure once before believing it, and if it persists, build
-in an isolated copy. A backend-only copy is **not** sufficient — several tests read repo-relative paths and
-need `../docs/`, the root `README.md`, `CLAUDE.md`, and `backend/device-template-schema.json`; omitting the
-schema alone fabricates ~90 failures.
-
-## Codebase map
-
-Base package `cn.edu.nju.Iot_Verify` (entry point `IotVerifyApplication`):
-
-```
-controller/        REST controllers — return Result<T> (SSE endpoints return SseEmitter)
-service/impl/      business logic
-component/
-  nusmv/
-    generator/     SMV model generation: SmvGenerator + Device/Main/Specification builders + SmvModelValidator
-    executor/      NusmvExecutor — subprocess exec, semaphore concurrency, timeout
-    parser/        SmvTraceParser — counterexample parsing
-    fixer/         FaultLocalizer + parameter/condition/permanent-removal fix strategies
-  fuzz/            deterministic bounded path search + finite safety monitor
-  aitool/          53 AI tools (board/node/rule/scenario/spec/template/simulation/verification/fuzz)
-  ai/              LLM abstraction — domain model + LlmProvider (OpenAiLlmProvider) + facades
-dto/ po/ repository/   DTOs, JPA entities, data access
-security/          JWT + Spring Security
-configure/         config, thread pools, ProductionSafetyCheck
-exception/         exception hierarchy + GlobalExceptionHandler
-util/              mappers, JsonUtils, JwtUtil
-resources/
-  application.yaml     config (env-var overridable)
-  deviceTemplate/      default device-template JSON (seeded into DB per user)
-```
-
-Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/overview.md).
+**Four traps produce failures that look exactly like compile or product bugs**, so
+re-run an unexplained compile or mass-error failure once before believing it: removing or changing an
+overloaded method needs `mvn clean` (incremental compile binds to the old signature); a second Maven
+build or the VS Code `redhat.java` language server writing into the same `target/classes` corrupts a
+run; a live `spring-boot:run` JVM serves the classes it started with, and a `mvn clean` underneath it
+is worse than stale. Judge a JVM's staleness by your modified `.java` mtimes, never by
+`target/classes`. Symptoms, evidence and the isolated-copy recipe:
+[../docs/development/known-traps.md](../docs/development/known-traps.md#2-build-environment).
 
 ## Conventions (hard rules)
+
+Base package `cn.edu.nju.Iot_Verify` (entry point `IotVerifyApplication`); the package layout and
+the 53 AI tools are mapped in
+[../docs/architecture/overview.md](../docs/architecture/overview.md).
 
 - Controllers return `Result<T>`; use `Result.success()` for void. SSE endpoints return
   `SseEmitter` directly (not wrapped). The `@CurrentUser` param is always `Long userId`.
@@ -309,36 +261,24 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 `board_environment_variable`, `rules`, `specification`, `board_layout`, `board_edit_journal`,
 `device_templates`, `verification_task`, `simulation_task`, `fuzz_task`, `trace`,
 `simulation_trace`, `fuzz_finding`, `chat_session`, `chat_session_pre_admission_stop`,
-`chat_message`, `ai_session_state`. Notable: `device_node` has a
-composite PK `(id, user_id)` for user isolation; `board_environment_variable` has a
-composite PK `(name, user_id)` for per-user shared environment state;
-`device_templates` has a unique constraint on `(user_id, name)`; `specification` has a
-composite PK `(id, user_id)` and carries `formula` (TEXT) and `devices_json` (JSON) for
-authored-formula/device-binding persistence; `verification_task` carries
-`disabled_rule_count` / `skipped_spec_count`
-mirroring the generation-warning counts surfaced in `VerificationResultDto`. Completed
-rows also back verification run history for both synchronous and asynchronous checks;
-`verification_task`, `simulation_task`, and `fuzz_task` carry internal `worker_id` and
-`lease_expires_at` ownership for queued/running work; worker terminal transitions require
-that live ownership and clear it, user cancellation clears it independently, and maintenance
-recovers only expired active rows. Their lifecycle transitions use the database clock;
-`chat_message` stores a per-turn correlation id plus the exact user-visible assistant execution
-trace, elapsed time, and terminal status on the final assistant row; absent or malformed trace
-evidence is not reconstructed from internal tool blocks. `ai_session_state` durably stores expiring task continuation, scenario draft,
-and protected-action confirmation state shared by backend instances;
-`chat_session` stores the expiring cross-instance execution lease and stop flags so only one
-assistant request can mutate a session at a time; `chat_session_pre_admission_stop` stores a
-database-clock timestamp for each turn-specific Stop fence, keeps at most 64 live fences, and
-expires each one after two minutes before admission; the collection cascades when its owning
-session is deleted;
-the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
-`board_edit_journal` is a per-user append-only record of reversible Board edits: device
-create/update/rename/delete, direct Environment Pool update, rule/specification create/delete, rule
-reorder, and automatic-fix ordered rule-set replacement. Device entries hold the affected devices,
-cascaded rules/specifications and positions, and exact Environment Pool state; rule/specification
-create/delete uses `entity_order` so restore lands at its original position. Entries are written in
-the mutating transaction, moved rather than deleted by undo/redo, and cleared wholesale by confirmed
-scene replacement/clear or the explicit history-clear command.
+`chat_message`, `ai_session_state`.
 
-Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
-`fuzz_finding` rows are heuristic candidate evidence, not formal traces.
+Per-user isolation is carried by the keys, so these are not free to change: `device_node` has a
+composite PK `(id, user_id)`; `board_environment_variable` has a composite PK `(name, user_id)` for
+per-user shared environment state; `specification` has a composite PK `(id, user_id)`;
+`device_templates` has a unique constraint on `(user_id, name)`.
+
+Three ownership rules the column names do not convey:
+
+- `verification_task`, `simulation_task`, and `fuzz_task` carry internal `worker_id` /
+  `lease_expires_at` for queued and running work, and all lifecycle transitions use the **database**
+  clock. See the async-task gotcha above for what may and may not confirm a transition.
+- `chat_message` stores the exact user-visible assistant execution trace, elapsed time, and terminal
+  status on the final assistant row. Absent or malformed trace evidence is **not** reconstructed from
+  internal tool blocks.
+- `board_edit_journal` is a per-user append-only record of reversible Board edits, written inside the
+  mutating transaction and *moved* rather than deleted by undo/redo. `entity_order` is what makes a
+  restore land at its original position.
+
+`fuzz_finding` rows are heuristic candidate evidence, not formal traces — keep them out of anything
+that reads `trace`.

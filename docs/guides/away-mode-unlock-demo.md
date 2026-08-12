@@ -203,7 +203,9 @@ each property:
 
 That asymmetry is the single most useful thing this scene teaches, and it is not a tool defect: a
 green forward verification means "no submitted property is violated", never "every property is still
-meaningful". An implication property whose antecedent a repair removes is reported as verified.
+meaningful". An implication property whose antecedent a repair removes is reported as verified. (The
+three shapes this takes, and why the boundary sits there, are in
+[../architecture/theory-sources.md](../architecture/theory-sources.md).)
 Saying "one removal repaired both properties" without this distinction is the one place this demo
 could fairly be called dishonest — and it sets up the closing note below, where a different repair
 satisfies property 3 *without* emptying it.
@@ -306,7 +308,7 @@ model trajectory, not a prediction of a physical house.
 
 | Symptom | Cause | Fix |
 | :--- | :--- | :--- |
-| Apply is rejected after a long tangent | Fix suggestions are HMAC-signed with a **15-minute** TTL (`FixSuggestionTokenService.java:33`). Two shorter clocks exist but bound different things: the fix *search* has a 5-minute budget (`FIX_TIMEOUT_MS`), and a completed `/fix` request's live status is readable for only 15 seconds | Re-run `/fix`, then apply promptly |
+| Apply is rejected after a long tangent | Fix suggestions are HMAC-signed with a **15-minute** TTL (`FixSuggestionTokenService.java:33`). Two shorter clocks exist but bound different things: the fix *search* is bounded by `FIX_TIMEOUT_MS`, and a completed `/fix` request's live status is readable for only 15 seconds | Re-run `/fix`, then apply promptly |
 | Apply is rejected right away | The board changed after `/fix`; the proposal is checked against the current snapshot | Re-run verification and `/fix` |
 | Result dialog shows a stale banner | The board was edited after that run | Re-verify; do not narrate a stale result |
 | `429`, `USER_FORMAL_OPERATION_BUSY` | One formal operation per user at a time across verification, simulation **and** fix, sync or async, assistant-initiated included. Redis-backed across instances; with Redis down it degrades to a per-instance guard | Wait for the running one — a synchronous run cannot be cancelled |

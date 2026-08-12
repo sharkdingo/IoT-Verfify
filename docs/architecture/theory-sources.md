@@ -9,6 +9,10 @@ different user-facing contract.
 Read the cited section before changing generated-model semantics, then keep the formal checker,
 bounded explorer, API contract, tests, and UI explanation aligned with the chosen product meaning.
 
+Verified against code on 2026-08-12. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/component/nusmv/`,
+`component/fuzz/`. Conformance is also pinned by `TheorySourceConformanceTest`, so a claim here that
+the code contradicts fails the build.
+
 ## The four papers
 
 | Paper | Venue | Owns | Local copy |
@@ -53,14 +57,11 @@ their own copy; the citations below are precise enough to check against any copy
   declared domain*; one **including** `0` means it *may* hold anywhere. A user who wants "drains 2–4,
   or holds" writes `[-4, 0]`, which is a strictly weaker claim and says so on its face.
 
-  The clamp qualifier is load-bearing, not a caveat: the domain bound wins over the rate. With domain
-  `0..10` and rate `[2, 4]`, a value of `10` clamps every candidate back to `10`, so NuSMV *proves*
-  `AG (v = 10)` — measured, not reasoned. Stating the rate as unconditionally mandatory would make a
-  provable model behaviour read as a generator bug. This is still exact semantics rather than a
-  verification abstraction: no stutter is injected into the interval; the value is held because the
-  declared domain has no room left. Because the
-  span is a state-space cost, it is bounded by `RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN` and a
-  wider declaration is rejected rather than silently narrowed.
+  The clamp qualifier is load-bearing, not a caveat: the domain bound wins over the rate, so stating
+  the rate as unconditionally mandatory would make a provable model behaviour read as a generator bug.
+  This is still exact semantics rather than a verification abstraction — no stutter is injected; the
+  value is held because the declared domain has no room left. The worked example and the span bound
+  are in [shared-value-semantics.md](shared-value-semantics.md#5-natural-evolution).
 - **Device effect timing** — Fig. 2b combines the device effect and the environment step in the same
   transition, so each device's `<var>_rate` is a `DEFINE` over its current state rather than a state
   variable. A stored rate is read unprimed while it is itself computed from the current mode, which

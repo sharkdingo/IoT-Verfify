@@ -1,8 +1,12 @@
 # Frontend UI conventions
 
-Two decision records that govern the board's URL surface and all user feedback.
-These are **rules, not descriptions** — when code and this document disagree, one of them is
-a bug. Keep them short; they exist to stop the same argument being re-litigated per PR.
+Decision records governing the board's URL surface, user feedback, undo, dialogs, action emphasis,
+colour roles, type scale, depth, CSS precedence, and replay. These are **rules, not descriptions** —
+when code and this document disagree, one of them is a bug. Keep them short; they exist to stop the
+same argument being re-litigated per PR, and each carries the measurement that settled it.
+
+Verified against code on 2026-08-12. Source: `frontend/src/styles/`, `frontend/src/composables/`,
+`frontend/src/utils/feedback.ts`, and the spec files each rule names.
 
 ## 1. What belongs in the URL
 
@@ -438,6 +442,37 @@ defects:
   section labels, where the loss of word shape is the point (they are scanned, not read).
 
 Pinned by `views/board/actionDockHierarchy.spec.ts` for the dock, which is where the tier inversion was.
+
+### A `clamp()` whose middle term can never win is a fixed size wearing responsive syntax
+
+`cqmin` is a percentage of the *container*, so on a 110–137px canvas node `4.3cqmin` is 4.7–5.9px: the
+declared floor was the rendered size at every viewport, and three node declarations printed 9.28px and 10px
+under an 11px minimum. Before writing a sub-floor floor, compute what the preferred term evaluates to at the
+container's real size.
+
+If a test exempts the pattern, the exemption needs a measurement, not a comment. `typographyFloor.spec.ts`
+exempted these on a claim that they "render at 16px", which was false — so the check certified the defect it
+existed to catch. `--canvas-zoom` is the one legitimate exemption, because it *divides*: 11px at 1.0× becomes
+14.4px at 0.4×.
+
+### A `position: fixed` overlay cannot read a variable scoped to the board
+
+`--board-floating-gap`, `--board-control-width` and `--board-inspector-width` are declared on `.iot-board`,
+but the two timeline hosts are **siblings** of it — deliberately, so they float above every panel. Inside them
+those variables do not resolve, `calc()` becomes invalid at computed-value time, and `left`/`right` fall back
+to `auto`. A fixed box with both set to `auto` shrink-wraps its content at its static position, i.e. flush
+against x=0.
+
+Measured: the trace overlay sat hard against the left edge with the right half of a 2556px screen empty, and
+its width was *identical* at 2556 and 1440 (859.859px) — that identity is the tell, because a
+corridor-positioned element must change with the viewport. On a 101-state trace the shrink-wrap reached
+**3258px** and put the play button at x=2086, off-screen at a laptop viewport, so playback became unreachable.
+
+`var(…, 1rem)` fallbacks had been hiding this, and removing them as "dead text" is what exposed it: the premise
+that the gap lives at `:root` was wrong, and a test comment had recorded that wrong premise. Restoring a
+fallback only hides it again — inject the variables onto the fixed element (`boardShellStyle` does this) so it
+is positioned by values it can see. `boardDockGeometry.spec.ts` pins the injected value against the
+stylesheet's.
 
 ## 8. Depth is a scale, and it means containment
 

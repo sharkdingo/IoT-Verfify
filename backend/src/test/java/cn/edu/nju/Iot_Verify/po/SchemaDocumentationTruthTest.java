@@ -160,8 +160,18 @@ class SchemaDocumentationTruthTest {
          * to prevent.
          */
         String doc = Files.readString(DOC, StandardCharsets.UTF_8);
-        // `\\s*` spans the line wrap: the doc breaks between "has a" and "composite PK".
-        Matcher m = Pattern.compile("`([a-z_]+)` has a\\s*composite PK `\\(([^)]+)\\)`").matcher(doc);
+        /*
+         * Deliberately tolerant of the connecting words: the claim being checked is "this table has this composite
+         * key", and an earlier pattern hard-coded `has a\s*composite PK`, so editing the sentence for brevity
+         * silently dropped the claim from the scan instead of failing — a documentation test must not dictate the
+         * documentation's phrasing.
+         *
+         * The bounded `[^.;]{0,40}?` reaches across any short connector ("has a", "uses a", "carries a") and across
+         * a line wrap, while excluding `.` and `;` so it cannot leave the claim it started in and pair one table
+         * with a later table's key. The `assertTrue` below is what catches an edit that outruns this pattern: if a
+         * rewrite drops a claim from the scan, the count fails rather than silently checking fewer facts.
+         */
+        Matcher m = Pattern.compile("`([a-z_]+)`[^.;]{0,40}?composite PK `\\(([^)]+)\\)`").matcher(doc);
 
         Map<String, String> claims = new LinkedHashMap<>();
         while (m.find()) {

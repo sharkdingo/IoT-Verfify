@@ -18,44 +18,21 @@ counterexample exploration, and use NuSMV for formal conclusions — with formal
 counterexample analysis and automatic fix suggestions. Includes an AI assistant (any
 OpenAI-compatible LLM endpoint, SSE streaming).
 
-## Monorepo map
-
-```
-backend/    Spring Boot API + fuzz/NuSMV orchestration + AI tools → backend/CLAUDE.md
-frontend/   Vue 3 + TypeScript + Vite SPA                       → frontend/CLAUDE.md
-docs/       Single source of truth for all reference docs       → docs/README.md
-.claude/    Hooks that enforce rules mechanically rather than by instruction
-CHANGELOG.md      dated change log (Unreleased + dates)
-CONTRIBUTING.md   contribution + doc-sync rules (authoritative)
-```
-
 ## The prime rule: code is truth, docs stay in sync
 
 **When code and docs disagree, code wins — and you fix the doc in the same change.**
 This repo just finished eliminating code/doc drift; do not reintroduce it.
 
-If a change touches any of the following, update the owning doc **in the same change**
-(this is enforced in [CONTRIBUTING.md](CONTRIBUTING.md); documentation is never an
-"afterwards" task):
+Documentation is never an "afterwards" task. Which doc owns what you changed —
+endpoints, DTO fields, config keys, spec templates, fix strategies, AI tools, paper-derived
+semantics — is the doc-sync checklist in
+[CONTRIBUTING.md](CONTRIBUTING.md#doc-sync-checklist-pr-requirement). Externally visible behaviour
+also gets a dated `CHANGELOG.md` entry.
 
-| You changed… | Update… |
-| :--- | :--- |
-| A controller endpoint (add/remove/rename/re-path) | `docs/api/rest-endpoints.md` + the domain doc |
-| A request/response DTO field | the owning `docs/api/*.md` |
-| A config key or default (`application.yaml` / `.env`) | `docs/getting-started/configuration.md` |
-| The `Result<T>` envelope, auth, or error mapping | `docs/api/overview.md` |
-| A spec template, CTL/LTL formula, or P1–P5 rule | `docs/architecture/spec-templates.md` |
-| NuSMV generation / identifier handling | `docs/architecture/nusmv-model.md` |
-| A fix strategy | `docs/architecture/auto-fix.md` |
-| Any modeling/fix/exploration semantics from a paper | `docs/architecture/theory-sources.md` (cite the section) |
-| An AI tool (add/remove/rename) | `docs/api/ai-tools.md` |
-| Any externally visible behavior | `CHANGELOG.md` (`Unreleased`, dated entry) |
-
-Documentation ownership (avoid duplication — one fact, one home): endpoints live only
-in `rest-endpoints.md` (index) + one domain doc; config defaults live only in
-`configuration.md`; the `Result<T>` envelope/auth/error codes live only in
-`api/overview.md`. Elsewhere, link — do not restate. If you find the same fact in two
-docs, one is wrong: delete the copy and link to the owner.
+**One fact, one home.** Endpoints live only in `rest-endpoints.md` (index) plus one domain doc;
+config defaults only in `configuration.md`; the `Result<T>` envelope, auth and error codes only in
+`api/overview.md`. Elsewhere, link — do not restate. If you find the same fact in two docs, one is
+wrong: delete the copy and link to the owner.
 
 ## Product-first development stage
 
@@ -90,9 +67,20 @@ requirement, a reproduced defect, or a necessary contract. If it does not, delet
   configurability nobody asked for, no handling for impossible cases. A new abstraction must
   remove demonstrated duplication or enforce a named invariant — pass-through layers and one-call
   wrappers need a stated reason.
-- **Surgical scope.** No drive-by edits to nearby code, comments, or formatting. Delete only the
-  orphans your own change created; mention pre-existing dead code instead of removing it unasked.
-  Match the surrounding style even where you would write it differently.
+- **Do not leave working notes in the repo.** No summary reports, status files, audit write-ups,
+  migration plans, or `FINDINGS.md` — the repo carries product code, its tests, `docs/`, and
+  `CHANGELOG.md`, nothing about the process that produced them. Findings belong in your reply to
+  the user; durable facts belong in the owning doc. Scratch files, probe scripts, and backups of
+  files you are about to edit go outside the checkout (`D:\tmp`), and temporary probe specs are
+  deleted before you report the work done.
+- **Surgical scope, but pre-existing defects are fair game.** No drive-by reformatting or
+  restyling. Fixing something you did not introduce is allowed — and preferred over merely
+  reporting it — when you can close the loop: you understand the root cause, the fix is
+  evidence-based, and you verify it the same way you would verify your own work. Say what you
+  fixed and why in the commit. What still needs asking first is anything the autonomy section
+  below reserves (business logic, persisted formats, API contracts, removing behaviour) and
+  anything you cannot verify. Match the surrounding style even where you would write it
+  differently.
 - **Root causes, not symptoms.** Never suppress an error, bypass a validation, or add a
   special-case branch to make a check pass. Never loosen a lint or type config to go green.
 - **Never turn an unknown or failed outcome into apparent success.** Reject malformed boundary
@@ -125,13 +113,11 @@ proceeding either way would be unsafe or wasted, ask one specific question.
 
 ## Shared conventions
 
-- **Language**: all documentation is written in **English** (README, `docs/`,
-  CHANGELOG, CONTRIBUTING, both sub-CLAUDE.md). Code identifiers follow each file's
-  existing style. Chat replies to the user may be in the user's language.
-- **Encoding**: all tracked text files are **UTF-8 without BOM** and use LF line
-  endings. Keep `.editorconfig` and `.gitattributes` aligned; when writing repo files
-  from PowerShell, prefer PowerShell 7 (`pwsh`) and avoid Windows PowerShell 5.1
-  `-Encoding utf8`, which can add a BOM.
+- **Language**: documentation is English ([CONTRIBUTING.md](CONTRIBUTING.md#language-policy) owns the
+  policy); code identifiers follow each file's existing style. Chat replies to the user may be in the
+  user's language.
+- **Encoding**: `.editorconfig` and `.gitattributes` enforce UTF-8 + LF, but **PowerShell can defeat
+  them**: prefer `pwsh` (7) and never Windows PowerShell 5.1 `-Encoding utf8`, which writes a BOM.
 - **Frontend↔backend contract**: field names are camelCase on both sides
   (e.g. `userId`, not `user_id`). All REST responses use the `Result<T>` envelope
   except SSE. Keep TypeScript types in `frontend/src/types/` aligned with the backend
@@ -149,32 +135,17 @@ reading the code you changed is the primary review and the suite is the backstop
 off, read your own complete diff and ask of each change: what breaks if this is wrong, which caller
 depends on it, and which state does it now own?
 
-Three failure modes that a passing suite hides, all of which have actually happened here:
+Three failure modes a passing suite hides:
 
-- **Correct by accident.** The state was right only because some unrelated refresh happened to
-  repair it. Fix: trace the mechanism, do not accept the outcome.
+- **Correct by accident.** Trace the mechanism; do not accept the outcome.
 - **A test that cannot fail.** Before trusting a new test, break the code it covers and confirm it
-  goes red. A test that passes with the fix reverted proves nothing — and has twice revealed that
-  the "bug" being fixed did not exist. One session shipped **five** of these at once, in four
-  recurring shapes worth recognising by sight:
-  - **The empty scan.** A loop over a selector, directory, or field list that matches nothing. Zero
-    iterations assert nothing and report success. Fix: assert the scan found something *before*
-    looping (`expect(rules.length).toBeGreaterThan(0)`).
-  - **The wrong slice.** A source-text assertion whose window excludes the place the defect lives —
-    slicing `<div` up to a `data-testid` examines only whitespace, so a `v-show` after the testid is
-    invisible. Fix: print the slice once and read it.
-  - **The unfalsifiable claim.** Asserting something the framework can never produce
-    (`doesNotContain("isSourceModelComplete")` — Jackson never emits a getter name as a key), or the
-    absence of a symbol that no longer exists anywhere. Prefer a positive assertion about the value
-    you want.
-  - **The unreached path.** A fixture that never enters the branch the test names — a single rule
-    cannot produce a rule *conflict*, so the helper under test is never called. Fix: check the
-    mutation reddens *this* test, not merely some test.
-  A guard scoped to a subset also lies: one written to catch locale-dependent case folds scanned six
-  hand-picked packages and missed the highest-stakes fold in the product, in the boot-time check that
-  refuses to start with default secrets.
+  goes red — and that it reddens *this* test, not merely some test. A guard that scans a hand-picked
+  subset lies the same way.
 - **Verifying stale artifacts.** A rebuilt backend, a cached bundle, or a reused dev server can make
   the run describe code you are not editing.
+
+The recurring shapes, with the incidents behind them:
+[docs/development/known-traps.md](docs/development/known-traps.md#1-test-authoring).
 
 When a check fails, find the root cause. "Flaky" is a conclusion that needs evidence — a different
 test failing each run points at the environment, the same assertion failing points at the code.
@@ -202,15 +173,13 @@ Rules that follow from this:
 - **E2E is the most expensive check in the repo (minutes, needs MySQL + backend).** It earns its
   cost on integration contracts, not on component-local logic a unit test already pins.
 - **Changing a REST request or response shape *is* the E2E trigger, however green the other stages
-  are.** Narrowing the verify/simulate contract to run parameters passed 2148 backend and 1040
-  frontend tests plus a live-backend probe, and still broke three E2E specs — they audited scene
-  semantics by reading the request body, which is a contract only a browser-driven run observes.
-  Reasoning about blast radius works for logic; it does not substitute for E2E on a wire format.
-- **Renaming a class or a test id is the same kind of trigger, even in a pure restyle.** E2E specs address the
-  product by selector, so they are the one consumer that a "no behaviour changed" argument does not cover. A
-  dialog restyle updated every unit spec, passed 1231 unit tests and `vue-tsc`, and still broke an E2E test
-  that clicked a class the migration had deleted. Grep `e2e/` for every selector you rename, and prefer
-  `data-testid` over an appearance class so the next restyle cannot reach it.
+  are.** Reasoning about blast radius works for logic; it does not substitute for E2E on a wire format.
+- **Renaming a class or a test id is the same kind of trigger, even in a pure restyle.** E2E specs
+  address the product by selector, so they are the one consumer a "no behaviour changed" argument
+  does not cover. Grep `e2e/` for every selector you rename, and prefer `data-testid` over an
+  appearance class so the next restyle cannot reach it.
+  Both traps, with the runs that proved them:
+  [docs/development/known-traps.md](docs/development/known-traps.md#4-blast-radius-misjudgements).
 - Re-running a suite that just passed, with nothing changed in between, is never verification.
 
 ### Delegate long runs to background subagents
@@ -226,33 +195,11 @@ them. Restating them here created a second place to keep in sync for no benefit.
 
 Report results honestly: if a step failed, say so with the output; if you skipped one, say that.
 
-**Two E2E environment facts, both learned from real false results:**
-
-- **A reused server tests stale code and reports green.** E2E deliberately refuses to adopt an existing
-  server, and a `PreToolUse` hook (`.claude/hooks/guard-e2e-port.sh`) enforces that rather than trusting
-  anyone to remember it. The port, the proxy and the escape hatch are frontend mechanics:
-  [frontend/CLAUDE.md](frontend/CLAUDE.md).
-- **A stale JVM is the backend's version of that stale dev server, and nothing guards it.** A
-  `spring-boot:run` process started before your last edit serves the old classes, so a fix looks
-  ineffective and an already-fixed defect looks live. This cost five wrong hypotheses in one session.
-  Start the dev backend with its output redirected (`> backend/run.log 2>&1`, already gitignored) so
-  the next unexplained failure begins with a stack trace.
-  **A `mvn clean` while that JVM is alive makes it worse than stale.** The dev JVM keeps loading classes
-  lazily from `target/classes`, so wiping and rebuilding underneath it leaves it serving a mix of two
-  builds. After any `mvn clean` in a checkout with a live `spring-boot:run`, restart that backend before
-  believing anything it says; a live probe against it is otherwise measuring neither tree. It can also hold a
-  lock that fails the `clean` outright (`Failed to delete …/target`, zero tests run, succeeds on a single
-  retry) — intermittently, so one clean run does not disprove it. Do not confuse that with the *other*
-  contender for `target/classes`, the VS Code `redhat.java` language server, whose symptoms are mass
-  `NoClassDefFoundError` rather than a failed delete: [backend/CLAUDE.md](backend/CLAUDE.md).
-  **Compare the process start time against the modified `.java` sources, not against
-  `target/classes`.** A full `mvn compile` rewrites *every* class file, so class timestamps are all
-  identical and always newer than the JVM — comparing against them reports a stale JVM whenever
-  anything was compiled, which is a false alarm every time. It produced one here: the classes read
-  28 minutes newer than the process, while the only source edited after startup was a set of
-  `static final` constants whose values matched the literals they replaced, and a live probe
-  confirmed current behaviour. `git status` names the changed sources; their mtimes are the ones that
-  matter.
+**A long-running dev server serves the code it started with, not the code you just edited — and it
+reports success either way.** Both stacks have a version of this, and each is documented with the
+stack that owns it: the E2E port and preview proxy in [frontend/CLAUDE.md](frontend/CLAUDE.md), the
+`spring-boot:run` JVM and its contention over `target/classes` in
+[backend/CLAUDE.md](backend/CLAUDE.md). Suspect it before you suspect the product.
 
 **`git checkout -- <file>` and `git restore <file>` are destructive here.** They discard every uncommitted
 change in that file, and in a working session that is all of it. This is not theoretical: undoing a

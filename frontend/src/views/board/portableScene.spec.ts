@@ -256,10 +256,10 @@ describe('canonicalization', () => {
 })
 
 /**
- * The scene files under `docs/examples/` are shipped fixtures: seven E2E specs import them through
- * the UI, and a user following the docs imports them by hand. Nothing else asserts they are still
- * importable, so a backend template change that makes one invalid was only observable as a 15-minute
- * E2E run failing on a confirmation dialog that never appeared.
+ * The scene files under `docs/examples/` are shipped fixtures: seven E2E specs and two backend
+ * NuSMV tests read them, and a user following the docs imports them by hand. Nothing else asserted
+ * they are still importable, so a template change that invalidated one was observable only as a
+ * 15-minute E2E run failing on a confirmation dialog that never appeared.
  *
  * That happened: cd194bd gave Door RFID three WorkingStates, which turned a stateless device in
  * `default-rfid-access-scene.json` into a stateful one, and the codec rightly rejected it for
@@ -273,16 +273,22 @@ describe('bundled example scenes', () => {
     expect(files.length, 'no example scenes were found').toBeGreaterThan(5)
 
     const rejected: string[] = []
+    const empty: string[] = []
     for (const file of files) {
       const raw = JSON.parse(readFileSync(join(directory, file), 'utf8'))
+      let scene: ReturnType<typeof codec.normalizeSceneFile>
       try {
-        const scene = codec.normalizeSceneFile(raw)
-        expect(scene.devices.length, `${file} imported no devices`).toBeGreaterThan(0)
+        scene = codec.normalizeSceneFile(raw)
       } catch (error) {
+        // Only a codec rejection belongs here. Asserting inside the try would let a failed
+        // expectation be caught and reported as a rejection, describing the wrong defect.
         rejected.push(`${file}: ${(error as Error).message}`)
+        continue
       }
+      if (scene.devices.length === 0) empty.push(file)
     }
 
     expect(rejected, `example scenes the codec refuses:\n${rejected.join('\n')}`).toEqual([])
+    expect(empty, `example scenes that imported no devices:\n${empty.join('\n')}`).toEqual([])
   })
 })

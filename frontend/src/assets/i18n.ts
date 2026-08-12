@@ -1345,10 +1345,12 @@ const messages = {
                 scanUnauthorizedCard: '刷未授权卡',
                 resetFromAuthorized: '从已授权复位',
                 resetFromUnauthorized: '从未授权复位',
-                detectOpen: '检测到打开',
-                detectClosed: '检测到关闭',
-                arriveHome: '到家',
-                leaveHome: '离家',
+                detectOpen: '上报门已打开',
+                detectClosed: '上报门已关闭',
+                // Signal APIs, i.e. actions the scene can trigger — not states. `away` is already the
+                // working state labelled 离家, so these read as verbs to keep the two distinguishable.
+                arriveHome: '回到车库',
+                leaveHome: '驾车离开',
                 ready: '就绪',
                 run: '运行',
                 running: '运行中',
@@ -1451,7 +1453,10 @@ const messages = {
                 windy: '有风',
                 winter: '冬季',
                 wrinklePrevent: '防皱',
-                close: '关闭',
+                // Action-only (Garage Door / Window / Window Shade / Sprinkler APIs); it is never a
+                // working state. `off` already owns 关闭 as a state, and `closed` is 已关闭, so a verb
+                // keeps the action distinguishable from both in the rule builder's target list.
+                close: '关上',
                 fanAuto: '风扇自动',
                 fanCirculate: '风扇循环',
                 fanOn: '风扇开启',

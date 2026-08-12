@@ -4,10 +4,11 @@ This runbook exercises the main IoT-Verify product loop with one deliberately un
 repairable smart-home scene. It is designed for an acceptance demonstration, not as a
 claim that one scenario covers every possible template or formal property.
 
-The canonical scene file is
+Verified against the scene file on 2026-08-12. Source:
 [`../examples/acceptance-demo-scene.json`](../examples/acceptance-demo-scene.json).
-It contains four device instances, two shared environment values, three automation
-rules, and five formal specifications.
+
+The canonical scene file is that document. It contains four device instances, two shared environment
+values, three automation rules, and five formal specifications.
 
 For a deterministic multi-violation repair demonstration, use
 [`../examples/multi-violation-repair-scene.json`](../examples/multi-violation-repair-scene.json).

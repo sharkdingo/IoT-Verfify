@@ -1,0 +1,244 @@
+# Known traps
+
+An archive of failures that were diagnosed here at real cost, grouped by what produced them. Every
+entry actually happened; none is hypothetical.
+
+The rules distilled from these live in the agent rule files ([CLAUDE.md](../../CLAUDE.md),
+[backend/CLAUDE.md](../../backend/CLAUDE.md), [frontend/CLAUDE.md](../../frontend/CLAUDE.md)), which
+stay short and link here. This file holds the evidence, so a rule can be trusted without being
+re-litigated and a new case can be added without growing a file that loads into every session.
+
+**What they share:** each one reports a failure that reads like a product or compile bug, so the
+first instinct — fix the code it points at — makes things worse. Environment and test-authoring
+faults are cheap to rule out and expensive to misattribute. Check them first.
+
+Contents:
+
+- [1. Test authoring](#1-test-authoring) — tests that cannot fail, guards that lie
+- [2. Build environment](#2-build-environment) — Maven, `target/classes`, the stale dev JVM
+- [3. E2E environment](#3-e2e-environment) — rate limits, ports, CORS, known-flaky specs
+- [4. Blast-radius misjudgements](#4-blast-radius-misjudgements) — what reasoning missed
+
+Variable defaults belong to
+[getting-started/configuration.md](../getting-started/configuration.md); CSS and layout measurements
+belong to [guides/frontend-ui-conventions.md](../guides/frontend-ui-conventions.md) §7. This file
+does not restate either — it records what these incidents did to them.
+
+---
+
+## 1. Test authoring
+
+### Tests that cannot fail
+
+A test that passes with the fix reverted proves nothing. Twice, that check revealed the "bug" being
+fixed did not exist. One session shipped **five** such tests at once, in four recurring shapes worth
+recognising by sight.
+
+**The empty scan.** A loop over a selector, directory, or field list that matches nothing. Zero
+iterations assert nothing and report success. *Fix:* assert the scan found something *before*
+looping — `expect(rules.length).toBeGreaterThan(0)`.
+
+**The wrong slice.** A source-text assertion whose window excludes the place the defect lives.
+Slicing `<div` up to a `data-testid` examines only whitespace, so a `v-show` appearing after the
+testid is invisible to the assertion. *Fix:* print the slice once and read it.
+
+**The unfalsifiable claim.** Asserting something the framework can never produce.
+`doesNotContain("isSourceModelComplete")` passes trivially because Jackson never emits a getter name
+as a key; asserting the absence of a symbol that no longer exists anywhere is the same error. *Fix:*
+prefer a positive assertion about the value you actually want.
+
+**The unreached path.** A fixture that never enters the branch the test names — a single rule cannot
+produce a rule *conflict*, so the helper under test is never called. *Fix:* confirm the mutation
+reddens *this* test, not merely some test.
+
+### Guards scoped to a subset
+
+A guard that scans a hand-picked subset lies by omission. One written to catch locale-dependent case
+folds scanned six hand-picked packages and missed the highest-stakes fold in the product — the
+boot-time check that refuses to start with default secrets.
+
+### Correct by accident
+
+State that was right only because an unrelated refresh happened to repair it. Trace the mechanism; do
+not accept the outcome.
+
+---
+
+## 2. Build environment
+
+**When a compile or mass-error failure makes no sense, suspect the build environment once before
+believing it.** If it persists, build in an isolated copy — a backend-only copy is *not* sufficient,
+because several tests read repo-relative paths and need `../docs/`, the root `README.md`,
+`CLAUDE.md`, and `backend/device-template-schema.json`; omitting the schema alone fabricates ~90
+failures.
+
+### Deleting or changing an overloaded method needs `mvn clean`
+
+Maven's incremental compile recompiles the changed file against the *previous* `target/classes`, so
+overload resolution can bind to a signature that no longer exists in the sources.
+
+Removing two unused list wrappers from `FuzzMapper` — the only remaining `this::toFindingSummaryDto`
+/ `this::toFindingDto` method references — made javac resolve a two-arg call to the stale
+`FuzzFindingPo` overload instead of the `FuzzFindingSummaryProjection` one. Three compile errors
+cascaded into ~100 test errors, a `NoClassDefFoundError` sweep, and a bogus "Mockito cannot mock"
+failure. `mvn clean test-compile` on the identical sources succeeds.
+
+The failure looks exactly like a real overload bug, so the instinct is to "fix" the overloads and
+break working code. Run `mvn clean` first and re-read the error.
+
+### Anything else writing to `target/classes` corrupts the run
+
+Two symptoms: a `BUILD FAILURE` whose error list is empty (the tell is *no* `[ERROR] …java:[line]`
+entries), and mass `NoClassDefFoundError` / `MockitoException: Could not modify all classes` /
+`NoSuchFileException: target\classes\….class` on files javac just wrote.
+
+Two culprits, and the second bites unattended:
+
+- **A second Maven build** in the same checkout. Don't start one while a delegated subagent is
+  running the suite, or the result describes neither tree.
+- **The VS Code `redhat.java` language server.** Its JDT project for this repo declares
+  `kind="output" path="target/classes"` (check the `.classpath` under
+  `~/AppData/Roaming/Code/User/workspaceStorage/*/redhat.java/jdt_ws/.metadata/.plugins/org.eclipse.core.resources/.projects/Iot-Verify/`),
+  so it auto-builds into the same directory and rewrites class files mid-compile. It is a ~1.3 GB
+  `java.exe` that looks like any other JVM in the process list. It produced
+  `746 tests, 22 failures, 624 errors` on one attempt and a 21-error `testCompile` failure on the
+  next, on a tree whose real result was 2216/2216 green.
+
+### A stale `spring-boot:run` JVM serves the classes it started with
+
+A fix looks ineffective and an already-fixed defect looks live. This cost five wrong hypotheses in
+one session. Start the dev backend with its output redirected (`> backend/run.log 2>&1`, already
+gitignored) so the next unexplained failure begins with a stack trace.
+
+**`mvn clean` while that JVM is alive is worse than stale.** It keeps loading classes lazily from
+`target/classes`, so wiping and rebuilding underneath it leaves it serving a mix of two builds —
+restart it before believing anything it says, or a live probe measures neither tree. It can also hold
+a lock that fails the `clean` outright (`Failed to delete …/target`, zero tests run, succeeds on a
+single retry) intermittently, so one clean run does not disprove it. This is not the `redhat.java`
+case above: that one shows mass `NoClassDefFoundError` rather than a failed delete.
+
+**Judge staleness by your modified `.java` mtimes, not `target/classes`.** A full `mvn compile`
+rewrites *every* class file, so class timestamps are identical and always newer than the JVM.
+Comparing against them reports a stale JVM whenever anything was compiled — a false alarm every time,
+and it produced one here: classes read 28 minutes newer than the process, while the only source
+edited after startup was a set of `static final` constants whose values matched the literals they
+replaced, and a live probe confirmed current behaviour. `git status` names the changed sources.
+
+---
+
+## 3. E2E environment
+
+Four things will make an E2E run lie to you, and all four read as product regressions. **Read the
+`reasonCode` or the Playwright trace before believing any E2E failure.**
+
+### Run against a dedicated backend with raised auth caps
+
+**A full pass cannot succeed on the default rate limits.** The suite makes ~67
+`createAuthenticatedUser` calls, each registering an account — measurably more than the shipped
+`AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR` allows per hour. An earlier note claimed "a full run stays
+under the cap by design" because `sharedReadOnlyAccount` is worker-scoped; measurement says
+otherwise, and that false reassurance sent several sessions hunting product defects in a wall of
+429s.
+
+**Raising only the register limit is not enough.** `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` is a
+per-source per-minute window, and `board-full-flow.spec.ts` logs in far more often than it registers.
+A run with only the register cap raised failed five board specs with `AUTH_LOGIN_RATE_LIMIT_REACHED`
+(`scope: SOURCE`) — including the account-cleanup fixture, which then reported a second, misleading
+error. Every failure was the limiter, not the product.
+
+The limits are constructor-injected into `final` fields, so **exporting them next to the Playwright
+command does nothing** — they must be set on the JVM under test. Do not restart the backend someone
+is developing against; start a second one:
+
+```bash
+# terminal 1 — a dedicated E2E backend, same database (the suite creates and deletes its own accounts)
+cd backend
+SERVER_PORT=8081 \
+  AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR=2000 AUTH_REGISTER_RATE_LIMIT_PER_HOUR=2000 \
+  AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE=2000 AUTH_LOGIN_RATE_LIMIT_PER_MINUTE=2000 \
+  mvn spring-boot:run > e2e-backend.log 2>&1
+
+# terminal 2
+cd frontend && E2E_API_BASE_URL=http://127.0.0.1:8081 npx playwright test
+```
+
+One variable moves the whole run because `vite.config.ts` reads it for the `/api` proxy target as
+well. It used to hardcode `localhost:8080` in both `server` and `preview`, so pointing a run
+elsewhere *silently half-worked*: the specs' direct API calls followed `E2E_API_BASE_URL` while the
+browser kept going to 8080, and one run talked to two servers. Redirect the API and the proxy
+together or not at all.
+
+`e2e/global-setup.ts` checks the budget once before any browser starts and prints the four variables
+plus the reset time. When the budget exhausts mid-run the failures scatter across the shared fixture
+and read exactly like regressions.
+
+### Port 3000 must be free
+
+`reuseExistingServer` is off precisely so a leftover dev server cannot be adopted silently, which
+would skip the build and test **stale code** while reporting green. Nothing checks this before the
+run, so the symptom is a mid-suite failure that reads like a product bug. Free the port, or set
+`E2E_BASE_URL` to a server you manage (inline prefix or exported variable).
+
+### Serving the build yourself: the CORS trap
+
+The port must be one the backend's CORS allowlist knows: 3000, 3001, or 5173–5176 (`CORS_ORIGINS`,
+`backend/src/main/resources/application.yaml`). On any other port the register POST returns **403
+`Invalid CORS request`**, the UI shows `注册失败` / `登录失败`, and every auth-dependent test fails in a
+way that reads exactly like a product regression. One session lost a full run to port 3100 before
+reading the response body. This is *not* the rate limiter — check 403-vs-429 first.
+
+### Why a production build, not the dev server
+
+E2E runs against a production build served by `vite preview`. On-demand module transforms made two
+parallel browsers exceed the board's load timeout, failing tests that had nothing wrong with them. A
+failure that appears only under `--workers=2` is usually this class of cause — diagnose it rather
+than forcing `--workers=1`, which hides it and triples the runtime.
+
+Consequence: `vite.config.ts` needs its `/api` proxy declared under `preview` as well as `server` —
+`vite preview` does not inherit `server.proxy`.
+
+### Known-flaky specs, with measured causes
+
+CI runs with `--fail-on-flaky-tests`, so one retry-passing test still fails the job.
+
+- **A pointer position computed from the canvas is stale the moment you await.** The edge-label hover
+  check measured a hitarea midpoint once and moved the mouse there; under CI load the canvas was
+  still settling, the edge had moved, and no label appeared. Re-derive the coordinate *inside* the
+  poll and re-hover each attempt rather than widening the timeout around a single stale move.
+- **A lingering Element Plus tooltip popper eats the next click, and Playwright's click retries do
+  not save you.** `theme-layout.spec.ts`'s "keeps floating panel surfaces coherent" clicks
+  `[data-testid="close-simulation-panel"]` right after hovering the adjacent open-settings control,
+  whose `iot-info-tooltip-popper` is still fading over the button; the click retries for 120s against
+  an element that "intercepts pointer events", then times out. **Known-flaky, not a regression** —
+  measured across builds: HEAD failed 1 in 19 runs, an unrelated feature branch 2 in 9. So dismiss or
+  wait out the popper before clicking a control next to a tooltip trigger, and **sample more than
+  once per build** when attributing this failure: single runs read as a clean "fails here, passes at
+  HEAD" regression that ten runs contradict.
+- **A route mock must satisfy the same validators as the real response.** `api/chat.ts` validates
+  every field it depends on, so a fixture returning a convenient subset is rejected at the boundary —
+  and the failure surfaces far from the cause. A session mock missing `active`/`userId`/`updatedAt`
+  made session creation throw, so the turn never sent, so a `REFRESH_DATA` command never arrived, and
+  the test failed on an unrelated undo-button assertion. When an E2E failure makes no sense, read the
+  browser console in the Playwright trace (`--trace=retain-on-failure`) before theorising.
+
+---
+
+## 4. Blast-radius misjudgements
+
+Two cases where "nothing else can reach this" was wrong. Both now justify an E2E run regardless of
+how green the cheaper stages are.
+
+- **A wire-format change.** Narrowing the verify/simulate contract to run parameters passed 2148
+  backend and 1040 frontend tests plus a live-backend probe, and still broke three E2E specs — they
+  audited scene semantics by reading the request body, which is a contract only a browser-driven run
+  observes.
+- **A selector rename in a pure restyle.** A dialog restyle updated every unit spec, passed 1231 unit
+  tests and `vue-tsc`, and still broke an E2E test that clicked a class the migration had deleted.
+  Grep `e2e/` for every selector you rename, and prefer `data-testid` over an appearance class so the
+  next restyle cannot reach it.
+
+### Verifying stale artifacts
+
+A rebuilt backend, a cached bundle, or a reused dev server makes the run describe code you are not
+editing. Sections [2](#2-build-environment) and [3](#3-e2e-environment) are the two stack-specific
+forms of this.

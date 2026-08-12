@@ -367,7 +367,7 @@ endpoint or prevents that independently validated evidence from replaying.
 | `nusmvOutput` | `String` | The same capped NuSMV diagnostic output as a synchronous result, once completed |
 | `errorMessage` | `String` | Technical failure diagnostic present on `FAILED`; clients show a localized no-result state first and place this text in an advanced/technical disclosure |
 | `progress` | `Integer` | 0–100 |
-| `progressStage` | `TaskProgressStage` | Server-observed active phase: `QUEUED`, `STARTING`, `GENERATING_MODEL`, `EXECUTING_MODEL_CHECKER`, `PARSING_RESULTS`, or `PERSISTING_RESULT` for verification |
+| `progressStage` | `TaskProgressStage` | Server-observed active phase. Verification emits exactly five: `QUEUED`, `STARTING`, `GENERATING_MODEL`, `EXECUTING_MODEL_CHECKER`, `PARSING_RESULTS`. It never emits `PERSISTING_RESULT` — that member belongs to simulation and fuzz — so verification stays on `PARSING_RESULTS` from 80% through completion. Do not render a persistence phase for a verification run |
 
 `@JsonInclude(NON_NULL)` — null fields are omitted. Completed async verification
 tasks carry the same conclusion and per-spec fields as synchronous verification:
@@ -1066,8 +1066,8 @@ available when the current rule was later removed.
 May invoke NuSMV multiple times (bounded by `FIX_TIMEOUT_MS`, see
 [configuration.md](../getting-started/configuration.md)). An opaque `requestId` query parameter
 is required so the client can cancel this exact search through
-`DELETE /api/verify/fix-requests/{requestId}`. It contains 8–80 characters, begins with an
-ASCII letter or digit, and otherwise accepts letters, digits, `.`, `_`, `:`, and `-`.
+`DELETE /api/verify/fix-requests/{requestId}`. Its format is the shared one in
+[overview.md](overview.md#client-supplied-requestid).
 
 While the search is active, `GET /api/verify/fix-requests/{requestId}` returns
 `InteractiveOperationStatusDto` as `{ requestId, state, stage, elapsedMs }`. The final
@@ -1077,14 +1077,10 @@ unknown request returns 404. The fix workflow reports `QUEUED`, `RUNNING`,
 `CANCELLING` as applicable. These are server-observed operational phases, not inferred
 timers or hidden model reasoning.
 
-The request owner, user admission, and initial status are acquired atomically and remain
-token-fenced with cancellation records in Redis. Status and cancellation therefore work when
-a poll is routed to another backend instance, while an expired worker cannot finish over a
-newer owner that reused the same id. The cancellation record is renewed until the callable
-actually exits. Redis unavailability detected before that atomic write uses process-local
-tracking, which another instance cannot observe. An unknown or post-TTL acquisition result
-instead returns `503` after token-fenced cleanup, because distributed ownership may already
-exist. Every new search must use a fresh random request id.
+Ownership, admission and the `503` contract follow the shared interactive-request rules in
+[overview.md](overview.md#interactive-request-ownership-and-the-503-contract). Specific to the fix
+search: the cancellation record is renewed until the callable actually exits, so an expired worker
+cannot finish over a newer owner that reused the same id.
 
 The frontend makes five short cancellation attempts to cover POST-registration races and
 aborts the POST transport only after the server accepts cancellation. It pins the initiating
@@ -1218,47 +1214,28 @@ Its confirmation storage and security boundary are described in
   user to resolve generation warnings and verify again. A saved trace with missing
   `modelComplete` metadata also fails closed: zero omission counts alone are not evidence
   that the source model was complete. Apply checks this before template reads or persistence.
-- **Board-drift guard (rules).** The server's internal rule/condition positions are relative to the
-  trace's verification-time rule snapshot. The server aligns that snapshot with the current board
-  rules by index + **order-preserving** fingerprint (device varName, attribute, relation, value, plus
-  command device/action and `contentDevice`/`content`) and rejects with `400` if the board drifted
-  (rules added/removed/edited/reordered since verification), so a stale index never edits the wrong
-  rule or condition. This check runs **inside the same per-user write lock + transaction** as the save
-  (read → check → apply → write are one atomic critical section), so a concurrent save cannot slip in
-  between the check and the write.
-- **Frozen-template replay and drift guard.** Verification traces persist the exact
-  referenced manifests internally. `/fix` builds its NuSMV model from that frozen set. Before
-  apply, the server compares the current manifests'
-  canonical persisted JSON projection with the saved set and requires the same
-  referenced-template keys. Any modeled-field or template-set difference is **rejected with
-  `400`** and requires re-verification. If the
-  current repository cannot be read, equality is unknown rather than false: `/fix`
-  returns an explicit warning and apply blocks with retryable `503`. It never reports an
-  unavailable comparison as proven drift or silently omits the degradation.
-- **Spec/device/environment-drift guard.** apply also rejects with `400` when the current board's
-  specifications, environment pool, or device instance state (variables, privacies, initial state,
-  trust) changed after the trace was recorded. Apply compares a canonical **semantic fingerprint**
-  of the trace snapshot against the current
-  board. It is *not* a raw-JSON equality check: both sides run through the same normalization (device
-  names canonicalized, effective device-local variable/trust/privacy values and the board
-  environment pool derived from the same manifests NuSMV uses, values de-quoted), so an
-  untouched board matches its model-boundary normalized snapshot instead of misfiring.
-  Environment variables participate as top-level pool values, including variables that
-  are only affected by devices; missing required pool values are normalized to the same
-  defaults used at verification time. Omitted internal
-  enum/numeric variables use the generator's effective defaults. This check runs
-  **inside the same per-user write lock + transaction** as the save, so a concurrent spec/device edit
-  cannot slip in between the check and the write. If the current board no longer builds a valid device
-  model, the check **fails closed**, distinguishing the cause: a genuinely invalid/changed board
-  (device removed, template deleted, manifest unparseable) rejects with `400` ("re-run verification"),
-  while an infrastructure error that leaves drift *unconfirmable* (e.g. template repository unavailable)
-  rejects with `503` ("retry later") rather than misattributing it to a board change.
+- **Three drift guards, and what each returns.** Apply refuses a suggestion whose trace no longer
+  describes the current board. It compares rules (index + order-preserving fingerprint), the frozen
+  template manifests, and a canonical semantic fingerprint of specs, device instance state and the
+  environment pool. Client-observable outcomes:
+  - A **confirmed** difference — rules added/removed/edited/reordered, a modeled template field or
+    the template set changed, a spec/device/environment edit, or a board that no longer builds a
+    valid model — rejects with **`400`** and requires re-verification.
+  - An **unconfirmable** comparison (e.g. the template repository cannot be read) rejects with
+    retryable **`503`** and is never reported as proven drift. `/fix` itself stays usable against the
+    frozen model but adds an explicit warning, so the degradation is never silent.
+  - All checks run inside the same per-user write lock and transaction as the save, so a `400` means
+    nothing was written.
+
   The specialized, proven-pre-write `503` mapping is defined in the
-  [API error mapping](overview.md#error-and-status-codes). Clients treat any unclassified `503` as
-  an uncertain mutation response and reconcile the current rule snapshot before retrying.
-  The structured `attackScenario` and `enablePrivacy` settings belong to the frozen request
-  snapshot; `isAttack` and `attackBudget` are derived response fields. Apply re-proves the
-  candidate under that frozen context. Start a new verification to evaluate different settings.
+  [API error mapping](overview.md#error-and-status-codes); treat any *unclassified* `503` as an
+  uncertain mutation outcome and reconcile the current rule snapshot before retrying. The mechanism
+  behind these guards — fingerprint construction, the normalization both sides share, and the
+  atomicity argument — is owned by
+  [../architecture/auto-fix.md](../architecture/auto-fix.md#applying-a-suggestion-fixstrategyapplier).
+- **Frozen run settings.** The structured `attackScenario` and `enablePrivacy` settings belong to the
+  frozen request snapshot; `isAttack` and `attackBudget` are derived response fields. Apply re-proves
+  the candidate under that frozen context. Start a new verification to evaluate different settings.
 
 The server then applies the token-verified suggestion to a deep copy of the persisted rules. The
 unchanged complete snapshot means the earlier NuSMV evidence still describes the model being

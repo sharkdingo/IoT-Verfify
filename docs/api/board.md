@@ -376,7 +376,7 @@ so a misspelled field cannot be discarded and then reported as a successful impo
 ### `BoardBatchDto` scene-import fields
 
 First call `GET /api/board/replacement-preview`. `BoardReplacementPreviewDto` is
-`{ impactToken, deviceCount, environmentVariableCount, ruleCount, specificationCount }`.
+`{ impactToken, deviceCount, environmentVariableCount, ruleCount, specificationCount, editHistoryEntryCount }`.
 The counts describe the authoritative server scene the user is about to replace, not a
 possibly stale local canvas.
 
@@ -869,18 +869,13 @@ with `400`:
   spaces are removed each must be distinct, must match `^[a-zA-Z_][a-zA-Z0-9_]*$`, and must
   not be a NuSMV reserved word (compared case-sensitively, matching the engine's lexer). `NaturalChangeRate` is valid only for numeric domains and accepts exactly
   a 32-bit integer such as `1` or a bracketed, ascending two-integer interval such as
-  `[-1, 1]`; unbracketed pairs and extra endpoints are invalid. It is required when the numeric
-  variable is shared (`IsInside=false`): `[-1, 1]` reproduces MEDIC §3.1, `0` explicitly
-  disables independent natural change, and another interval is a visible parameterized extension.
-  The interval constrains `v' - v` and is modeled **exhaustively** — every integer in it is
-  admissible, none added and none omitted — then clamped to the declared domain. Away from a domain
-  boundary, an interval excluding zero therefore means the value changes every step; to allow
-  holding still anywhere, include zero. **At a boundary the clamp can still hold the value:** with
-  domain `0..10` and rate `[2, 5]`, a value of `10` clamps every candidate back to `10`, so
-  `AG (v = 10)` is provable. That is the declared domain winning over the declared rate, not a
-  stutter being injected. A bare integer is shorthand for the interval between it and zero
-  (`1` means `[0, 1]`, `-2` means `[-2, 0]`).
-  Semantics are owned by
+  `[-1, 1]`; unbracketed pairs and extra endpoints are invalid. It is **required** when the numeric
+  variable is shared (`IsInside=false`). A bare integer is shorthand for the interval between it and
+  zero (`1` means `[0, 1]`, `-2` means `[-2, 0]`).
+  What the declaration *means* for the model — exhaustive deltas, the domain clamp winning over the
+  rate, and what `0` versus `[-1, 1]` each assert — is owned by
+  [../architecture/shared-value-semantics.md](../architecture/shared-value-semantics.md#5-natural-evolution);
+  its attribution to MEDIC §3.1 by
   [../architecture/theory-sources.md](../architecture/theory-sources.md).
 - `WorkingState`: `Name`, `Description`, required `Trust`, required `Privacy`, `Dynamics[]`
   (`Dynamic` = `VariableName`, `Value`, `ChangeRate`). In a multi-mode template, every
@@ -976,10 +971,9 @@ typed recommendation DTOs inside `Result<T>`; an AI-tool error is translated to 
 matching HTTP status by `throwIfToolError`, and malformed success output fails closed
 instead of crossing the controller as an untyped map.
 
-Every standalone recommendation request requires an opaque `requestId` containing 8–80
-characters. It starts with an ASCII letter or digit and otherwise accepts letters, digits,
-`.`, `_`, `:`, and `-`; the same rule applies to request bodies, query parameters, status
-paths, and cancellation paths.
+Every standalone recommendation request requires an opaque `requestId` in the shared format defined in
+[overview.md](overview.md#client-supplied-requestid). The same rule applies wherever it appears:
+request bodies, query parameters, status paths, and cancellation paths.
 
 | Method | Path | Query / Body | Notes |
 | :--- | :--- | :--- | :--- |
@@ -1168,14 +1162,11 @@ pool saturation returns `503`. While a request is active, its status DTO is
 counts, selected tool, elapsed time, and the actual server-observed stage. It does not infer a
 phase from elapsed time, and these operational stages are not hidden model reasoning. Stop and
 panel-close actions call the cancellation endpoint before aborting the browser request.
-Owner, per-user admission, and initial status are acquired atomically and remain token-fenced
-with cancellation records in Redis, so another backend instance can observe and stop the
-accepted request without allowing an expired worker to overwrite a reused id. Active records
-renew for the callable's lifetime and the final status is retained briefly. Redis unavailability
-detected before that atomic write falls back to process-local tracking; a different instance
-cannot see that local execution. An unknown or post-TTL acquisition result instead returns `503`
-after token-fenced cleanup, because treating possibly acquired ownership as local would allow a
-duplicate worker. Clients use a fresh random request id for every attempt.
+Ownership, admission and the `503` contract follow the shared interactive-request rules in
+[overview.md](overview.md#interactive-request-ownership-and-the-503-contract). Specific to this
+workflow: active cancellation records renew for the callable's lifetime and the final status is
+retained briefly, so a poll routed to another backend instance still observes and can stop the
+accepted request.
 
 After a stop action the Board keeps the workflow visibly stopping until status reports
 `FINISHED`. A first `404` can be a registration-versus-cancellation race and is not treated

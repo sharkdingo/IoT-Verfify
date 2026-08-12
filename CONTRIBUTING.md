@@ -39,6 +39,7 @@ PR:
 | A spec template, CTL/LTL formula, or P1–P5 rule | `docs/architecture/spec-templates.md` |
 | NuSMV generation / identifier handling | `docs/architecture/nusmv-model.md` |
 | A fix strategy | `docs/architecture/auto-fix.md` |
+| Any modeling/fix/exploration semantics from a paper | `docs/architecture/theory-sources.md` (cite the section) |
 | An AI tool (add/remove/rename) | `docs/api/ai-tools.md` |
 | Any externally visible behavior change | `CHANGELOG.md` (`Unreleased`, dated entry) |
 

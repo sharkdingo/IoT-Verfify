@@ -140,11 +140,9 @@ The frontend labels `value` as the **model initial value**, not the current phys
 Each verification, simulation, or bounded-exploration path starts from it; later trace states
 do not write back to the pool. The expanded pool also shows the template-owned evolution:
 the required `NaturalChangeRate` for numeric shared values and each WorkingState device effect.
-`[-1, 1]` is the MEDIC §3.1 baseline disturbance, `0` is an explicit no-natural-change
-choice, and any other interval is a visible project extension. The interval constrains `v' - v`
-and admits every integer inside it, so away from a domain boundary one excluding zero means the
-value changes every step; at a boundary the domain clamp can still hold it. Semantics are owned by
-[theory-sources.md](theory-sources.md).
+What that rate means is owned by
+[shared-value-semantics.md](shared-value-semantics.md#5-natural-evolution); its attribution to
+MEDIC §3.1 by [theory-sources.md](theory-sources.md).
 
 The environment pool is the only persisted source for environment values. `GET
 /api/board/environment` reads current devices/templates, inserts missing required rows,

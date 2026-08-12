@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url'
  *
  * Same variable the specs read, so one setting moves the whole run.
  */
-const apiProxyTarget = process.env.E2E_API_BASE_URL || 'http://localhost:8080'
+// The fallback matches `e2e/support/auth.ts` exactly — same spelling of loopback, not just the same
+// host — so an unset variable cannot reintroduce the split this comment describes.
+const apiProxyTarget = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({

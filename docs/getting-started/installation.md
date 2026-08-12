@@ -12,9 +12,9 @@ This guide covers a local development setup of the IoT-Verify platform (Vue 3 fr
 | ---------- | ------- | ----- |
 | JDK        | 17+     | Backend runtime (Spring Boot 3.5.7 targets Java 17) |
 | Node.js    | 20.19+ on Node 20, or 22.12+ | Frontend runtime; enforced by `frontend/package.json` and `frontend/.npmrc` |
-| Maven      | 3.6+    | Backend build |
-| MySQL      | 8.0+    | Primary datastore |
-| Redis      | 6.0+    | Optional. Logout revocation and cross-instance operation coordination; failures fall back to documented process-local behavior |
+| Maven      | 3.6+    | Backend build. Not pinned by a manifest — there is no Maven wrapper, so this is the tested floor, not an enforced one |
+| MySQL      | 8.0+    | Primary datastore. Not pinned by a manifest; the schema is created by Hibernate `ddl-auto: update` |
+| Redis      | 6.0+    | Optional, and not pinned by a manifest. Logout revocation and cross-instance operation coordination; failures fall back to documented process-local behavior |
 | NuSMV      | 2.6-2.7 | Formal verification engine. **NOT nuXmv — nuXmv is incompatible.** |
 
 ### NuSMV
@@ -23,14 +23,15 @@ Download NuSMV from the [NuSMV official site](http://nusmv.fbk.eu/). You need a 
 
 Typical install paths (used to set `NUSMV_PATH`):
 
-- Windows: `D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe`
+- Windows: the executable under `bin/NuSMV.exe` inside the extracted release directory — the shipped
+  default assumes a specific one, so check [configuration.md](./configuration.md) before relying on it
 - Linux: `/usr/local/bin/NuSMV`
 - macOS: `/usr/local/bin/NuSMV`
 
 Verify the install resolves:
 
 ```bash
-NuSMV -version   # should report 2.6+ (not nuXmv)
+NuSMV -version   # should report 2.6 or 2.7 (not nuXmv)
 ```
 
 ### AI features
@@ -72,10 +73,13 @@ All backend settings can be overridden by environment variables. At minimum you 
 export DB_PASSWORD="your_mysql_password"
 export JWT_SECRET="your-secret-key-here-min-256-bits"
 export IOT_VERIFY_OPENAI_API_KEY="your-api-key"
-export IOT_VERIFY_OPENAI_BASE_URL="https://api.openai.com/v1"
-export IOT_VERIFY_OPENAI_MODEL="gpt-5.6-luna"
+export IOT_VERIFY_OPENAI_BASE_URL="https://your-relay.example/v1"   # omit to use the default
+export IOT_VERIFY_OPENAI_MODEL="your-model-id"                      # omit to use the default
 export NUSMV_PATH="/path/to/NuSMV"
 ```
+
+The two commented lines are only needed to override a default; the defaults themselves are in
+[configuration.md](./configuration.md).
 
 ### 3. Build and run the backend
 

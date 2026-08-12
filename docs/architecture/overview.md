@@ -71,9 +71,13 @@ exception/           exception hierarchy + GlobalExceptionHandler
 util/                utilities
 resources/
   application.yaml              main config (env-var overridable)
-  device-template-schema.json   packaged copy of backend/device-template-schema.json
   deviceTemplate/               default device template JSON (seeded into DB per user)
 ```
+
+`backend/device-template-schema.json` lives at the module root, **not** under `resources/`; a second
+`<resource>` block in `pom.xml` copies it onto the classpath at build time, which is how
+`DeviceTemplateSchemaValidator` loads it as `ClassPathResource("device-template-schema.json")`. Edit
+the module-root copy — a file created under `resources/` would shadow nothing and fight the build.
 
 Key service implementations: `AuthServiceImpl`, `BoardStorageServiceImpl`,
 `VerificationServiceImpl`, `SimulationServiceImpl`, `FuzzServiceImpl`, `FixServiceImpl`, `ChatServiceImpl`,
@@ -110,7 +114,7 @@ surface.
 - **Async tasks**: verification/simulation support sync and async modes; bounded
   exploration is background-only. All expose progress/cancellation and use atomic
   terminal status writes.
-- **Concurrency**: six configurable thread pools; NuSMV runs are bounded by a
+- **Concurrency**: seven configurable thread pools (`ThreadConfig`); NuSMV runs are bounded by a
   semaphore (`NUSMV_MAX_CONCURRENT`). See
   [../getting-started/configuration.md](../getting-started/configuration.md).
 

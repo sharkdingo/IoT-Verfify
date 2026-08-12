@@ -12,6 +12,11 @@ Each rule below is tagged with its origin:
 - **[EXT]** — a deliberate product extension beyond the paper.
 - **[EXACT]** — executable semantics that mean exactly what the user declared.
 - **[ABSTRACTION]** — a deliberate over-approximation, disclosed in `modelSemantics`.
+
+Verified against code on 2026-08-12. Source:
+`backend/src/main/java/cn/edu/nju/Iot_Verify/component/nusmv/generator/`,
+`component/template/DeviceTemplateNuSmvValidator.java`, `backend/device-template-schema.json`.
+Provenance behaviour is pinned by `EnvironmentProvenanceCollectorTest`.
 - **[REJECTED]** — a shape the product refuses to model rather than guess at.
 
 ## 1. Value identity and namespace
@@ -205,6 +210,11 @@ candidate collapses to the same value: with domain `0..10` and rate `[2, 5]`, a 
 `10` for all four deltas and NuSMV *proves* `AG (v = 10)` — measured, not reasoned. No stutter is
 injected into the interval; the value holds because the domain has no room left. Stating the rate as
 unconditionally mandatory would make a provable model behaviour read as a generator bug.
+
+Because the interval's span is a state-space cost, it is bounded by
+`RequestLimits.MAX_NATURAL_CHANGE_RATE_SPAN`. A wider declaration is rejected at authoring and at
+generation rather than silently narrowed — narrowing it would verify a model the author did not
+declare.
 
 Discrete shared values have no natural-change interval: there is no ordering to move along.
 

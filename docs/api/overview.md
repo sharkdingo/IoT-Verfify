@@ -50,6 +50,28 @@ form, and that offset must be valid for the configured zone at the supplied loca
 deserialization returns `400`. The owning zone and default are documented in the
 [configuration reference](../getting-started/configuration.md#application-time).
 
+### Client-supplied `requestId`
+
+Endpoints that start a cancellable interactive search (rule recommendation, fix search) require an
+opaque client-generated `requestId`: **8–80 characters, beginning with an ASCII letter or digit, and
+otherwise letters, digits, `.`, `_`, `:` and `-`** — that is `^[A-Za-z0-9][A-Za-z0-9._:-]*$`. Use a
+fresh random id for every attempt; reusing one across retries makes a late response indistinguishable
+from the current one.
+
+### Interactive-request ownership and the `503` contract
+
+For those same endpoints, the request owner, per-user admission, and initial status are acquired
+atomically and stay token-fenced, with cancellation records in Redis. Two consequences a client must
+handle identically everywhere:
+
+- An **unknown or post-TTL** acquisition result returns **`503`** after token-fenced cleanup, because
+  distributed ownership may already exist. It is an *uncertain* outcome, not a failure — re-read
+  authoritative status rather than assuming nothing happened.
+- Redis being unavailable never silently downgrades to a local-only guarantee once a distributed
+  attempt has begun; it fails closed.
+
+Per-endpoint status semantics stay with each endpoint's own doc.
+
 ---
 
 ## Authentication
