@@ -6,7 +6,27 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { route } from './ci-risk-router.mjs';
 
-const WORKFLOW_DIR = join(dirname(fileURLToPath(import.meta.url)), 'workflows');
+const GITHUB_DIR = dirname(fileURLToPath(import.meta.url));
+const WORKFLOW_DIR = join(GITHUB_DIR, 'workflows');
+
+/**
+ * Every file that can carry a `uses:` line, not just the workflows: a composite action's pins are
+ * exactly as much of a supply-chain surface as a workflow's, and scanning only `workflows/` left
+ * `actions/setup-nusmv/action.yml` unguarded through a version bump.
+ */
+function actionManifests() {
+  const files = readdirSync(WORKFLOW_DIR)
+    .filter((f) => f.endsWith('.yml'))
+    .map((f) => ({ label: `workflows/${f}`, path: join(WORKFLOW_DIR, f) }));
+  for (const entry of readdirSync(join(GITHUB_DIR, 'actions'), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    files.push({
+      label: `actions/${entry.name}/action.yml`,
+      path: join(GITHUB_DIR, 'actions', entry.name, 'action.yml'),
+    });
+  }
+  return files;
+}
 
 /**
  * Routing decides whether a change is allowed to reach main without full validation, so a wrong
@@ -196,19 +216,77 @@ test('every workflow action is pinned to a full commit sha with a version commen
   // infrastructure outage rather than a typo. It cost one red run here: a download-artifact sha was
   // copied from the wrong repository's history and resolved fine against that repo, so a naive check
   // passed. This asserts the shape locally; the comment is what makes a bad pin reviewable.
-  const files = readdirSync(WORKFLOW_DIR).filter((f) => f.endsWith('.yml'));
-  assert.ok(files.length >= 3, `expected the workflow set, found ${files}`);
+  const files = actionManifests();
+  assert.ok(files.length >= 4, `expected the workflow set plus composite actions, found ${files.length}`);
 
-  for (const file of files) {
-    const text = readFileSync(join(WORKFLOW_DIR, file), 'utf8');
+  let pins = 0;
+  for (const { label, path } of files) {
+    const text = readFileSync(path, 'utf8');
     for (const line of text.split(/\r?\n/)) {
       const match = /^\s*uses:\s*([^\s#]+)/.exec(line);
       if (!match) continue;
       const ref = match[1];
       if (ref.startsWith('./')) continue; // local action or reusable workflow
-      assert.match(ref, /@[0-9a-f]{40}$/, `${file}: action must be sha-pinned, got "${ref}"`);
-      assert.match(line, /#\s*v\d/, `${file}: sha pin needs a version comment: "${line.trim()}"`);
+      assert.match(ref, /@[0-9a-f]{40}$/, `${label}: action must be sha-pinned, got "${ref}"`);
+      assert.match(line, /#\s*v\d/, `${label}: sha pin needs a version comment: "${line.trim()}"`);
+      pins += 1;
     }
+  }
+  // Guards the scan itself: a refactor that stopped matching `uses:` lines would otherwise pass this
+  // test by checking nothing, which is the failure mode a structural assertion is worst at showing.
+  assert.ok(pins >= 6, `expected the known pins to be scanned, saw ${pins}`);
+});
+
+test('the live-AI gate cannot silently stop gating', () => {
+  // The gate is skipped when no key is configured, and a skipped job makes the run report `success`.
+  // That is only safe while three things hold together, none of which is visible at the edit site:
+  // the suite gates on the preflight's boolean, the paid job carries its own repository check, and the
+  // `status` job renames itself so an unverified run does not read as a verified one. Dropping any of
+  // them turns a paid gate into a permanent silent skip that no other check notices.
+  const text = readFileSync(join(WORKFLOW_DIR, 'live-ai-ci.yml'), 'utf8');
+
+  assert.match(
+    text,
+    /^\s*configured:\s*\$\{\{\s*steps\.probe\.outputs\.configured\s*\}\}$/m,
+    'preflight must publish the `configured` output the gate depends on',
+  );
+  const suiteGate = /^\s{2}live-ai:[\s\S]*?^\s{4}if:\s*(.+)$/m.exec(text);
+  assert.ok(suiteGate, 'the live-ai job must declare an `if:` gate');
+  assert.match(
+    suiteGate[1],
+    /needs\.preflight\.outputs\.configured\s*==\s*'true'/,
+    'the live-ai job must gate on the preflight boolean',
+  );
+  assert.match(
+    suiteGate[1],
+    /github\.repository\s*==\s*'sharkdingo\/IoT-Verify'/,
+    'the job that spends external quota must carry its own repository check, not inherit it via needs',
+  );
+  assert.match(
+    text,
+    /^\s{2}status:$/m,
+    'a `status` job must exist so a skipped gate does not read as a passing one',
+  );
+  assert.match(
+    text,
+    /name:\s*\$\{\{[^}]*NOT verified/,
+    "the status job's name must announce an unverified run, because the run's own conclusion cannot",
+  );
+});
+
+test('local composite actions declare a supported runtime', () => {
+  // GitHub now forces the Node 20 runtimes it deprecated onto Node 24 regardless of what `action.yml`
+  // declares, so a `node20` declaration means the action runs on a runtime it was never tested on and a
+  // deprecation warning is the only notice. Remote pins need an API call to check and are covered by the
+  // bump procedure in docs/development/ci.md; a local manifest is checkable here, so it is checked here.
+  for (const { label, path } of actionManifests()) {
+    if (!label.startsWith('actions/')) continue;
+    const runtime = /^\s*using:\s*'?([\w.]+)'?/m.exec(readFileSync(path, 'utf8'));
+    assert.ok(runtime, `${label}: must declare a runtime`);
+    assert.ok(
+      ['composite', 'docker', 'node24'].includes(runtime[1]),
+      `${label}: unsupported or deprecated runtime "${runtime[1]}"`,
+    );
   }
 });
 

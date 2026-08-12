@@ -117,9 +117,9 @@ defect in this repository.
 
 **Without the secret the run is skipped, not failed.** A `preflight` job reads
 `IOT_VERIFY_OPENAI_API_KEY` and publishes a boolean the real job gates on — the `secrets` context is
-unavailable in a job-level `if:`, so a secret cannot gate a job directly. A missing or whitespace-only
-key produces a warning annotation and a job summary stating that the AI path was **not** verified, then
-skips; red stays reserved for an actual break in that path.
+unavailable in a job-level `if:`, so a secret cannot gate a job directly. A missing key produces a
+warning annotation and a job summary stating that the AI path was **not** verified, then skips; red
+stays reserved for an actual break in that path.
 
 That distinction was learned the hard way: the gate previously hard-failed at a credential check, so it
 went red on **eleven consecutive nightly runs**, each exiting in under a minute without building
@@ -127,6 +127,22 @@ anything. A daily red that carries no information and that no reader can act on 
 because it trains people to ignore the colour. If this tier is skipping and you want it live, set
 `IOT_VERIFY_OPENAI_API_KEY` (and `IOT_VERIFY_OPENAI_BASE_URL` for a non-OpenAI endpoint) as repository
 secrets.
+
+**A skipped job still makes the run report `success`**, which is why a third `status` job exists. It
+depends on both others with `if: always()` and renames itself to `Live AI NOT verified (no API key)`
+when the gate was skipped, so the check list and the run page carry the state that the run's own
+conclusion cannot. It fails only for a real break: a suite failure, or a `preflight` that did not
+succeed — an unknown credential state is not a skip. The one configuration error it does report red is a
+key containing whitespace, because that is unusable in an HTTP header and would otherwise fail ~10
+minutes later at the model call; unlike an absent key, it is unambiguous and actionable. The preflight
+also reports whether `IOT_VERIFY_OPENAI_BASE_URL` is set, since it cannot know whether this key belongs
+to `api.openai.com` or to a compatible endpoint — that line is what makes a later auth or 404 failure
+diagnosable.
+
+The three invariants this rests on — the suite gates on the preflight boolean, the paid job carries its
+own repository check rather than inheriting it through `needs:`, and the `status` job announces an
+unverified run — are asserted in `.github/ci-risk-router.test.mjs`, because dropping any of them turns a
+paid gate into a permanent silent skip that nothing else notices.
 
 ## Caching
 
@@ -162,11 +178,15 @@ as an artifact, which is reuse of a verified build rather than a stale one.
 - **Aggregate status check**: `fast-ci` succeeds only if no required tier failed, so branch protection
   can require one stable check name instead of a list that changes whenever routing does.
 - **Actions are pinned to a commit SHA with the version in a trailing comment**, so a moved tag cannot
-  change what runs. The comment is documentation and nothing verifies it — one bump left `# v4.2.0`
-  beside a v4.3.0 SHA — so when bumping, resolve the tag to its SHA and update both halves together.
+  change what runs. The pin *shape* is asserted for every `uses:` line in `.github/workflows/` **and**
+  every `.github/actions/*/action.yml` — scanning only the workflows once left the `setup-nusmv`
+  composite action unguarded through a version bump. What no test can check is whether the comment names
+  the SHA's actual tag: one bump left `# v4.2.0` beside a v4.3.0 SHA. When bumping, resolve the tag with
+  `gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq .object.sha` and update both halves together.
   Every pinned action must run on `node24`: GitHub now forces the Node 20 runtimes it deprecated onto
   Node 24 regardless of what `action.yml` declares, and a deprecation warning is the only notice you
-  get before the pin starts running on an untested runtime.
+  get before the pin starts running on an untested runtime. Local composite actions are asserted;
+  for a remote pin, check `using:` in its `action.yml` at the SHA you are pinning.
 
 ## Branch protection
 

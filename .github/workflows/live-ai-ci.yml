@@ -18,8 +18,9 @@ name: Live AI CI
 # must look different: "nobody configured a key" is a repository setup fact, while red is reserved for
 # "the AI path is broken". Conflating them cost eleven consecutive nightly failures, every one of them
 # exiting at the credential check before building anything — a daily red that carried no information
-# and that no reader could act on without knowing the history. The skip is announced with a warning
-# annotation and a job summary so it cannot be mistaken for a passing gate.
+# and that no reader could act on without knowing the history. A skipped job still makes the run report
+# `success`, though, so the skip is carried by the `status` job's *name* -- visible in the check list and
+# on the run page -- rather than only by an annotation buried inside a job nobody opens.
 
 on:
   schedule:
@@ -55,13 +56,40 @@ jobs:
         shell: bash
         env:
           KEY: ${{ secrets.IOT_VERIFY_OPENAI_API_KEY }}
+          BASE_URL: ${{ secrets.IOT_VERIFY_OPENAI_BASE_URL }}
         run: |
-          # Trimmed before the emptiness test: a secret holding only whitespace would otherwise read as
-          # configured here and fail 10 minutes later at the model call, which is the confusing failure
-          # this job exists to prevent.
-          if [ -n "$(printf '%s' "${KEY:-}" | tr -d '[:space:]')" ]; then
+          # `set -e` matters here specifically: without it a failed $GITHUB_OUTPUT write still exits 0,
+          # the output resolves to the empty string, and the gate skips exactly as it would with no key
+          # at all -- an unwritable output file must not be indistinguishable from an unconfigured repo.
+          set -euo pipefail
+
+          # Whitespace is stripped before the emptiness test: a secret holding only whitespace would
+          # otherwise read as configured and fail 10 minutes later at the model call, which is the
+          # confusing failure this job exists to prevent. Embedded whitespace is rejected for the same
+          # reason -- a key pasted with a stray newline passes a non-empty test but is unusable in an
+          # HTTP header, so it must fail here rather than after the build.
+          key_stripped="$(printf '%s' "${KEY:-}" | tr -d '[:space:]')"
+          if [ -n "$key_stripped" ] && [ "$key_stripped" != "${KEY:-}" ]; then
+            echo '::error::IOT_VERIFY_OPENAI_API_KEY contains whitespace. It cannot be sent as an HTTP header, so the gate would fail after a ~10 minute build. Re-set the secret without leading, trailing, or embedded whitespace.'
+            exit 1
+          fi
+
+          if [ -n "$key_stripped" ]; then
             echo 'configured=true' >> "$GITHUB_OUTPUT"
-            echo 'Live-AI credentials are configured; the gate will run.' >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo '### Live-AI gate running'
+              echo
+              echo '`IOT_VERIFY_OPENAI_API_KEY` is configured.'
+              # The base URL is reported, never required: the probe cannot know whether this key belongs
+              # to api.openai.com or to a compatible endpoint. Stating which of the two the run assumed
+              # is what makes an auth or 404 failure at the model call diagnosable from the summary.
+              if [ -n "$(printf '%s' "${BASE_URL:-}" | tr -d '[:space:]')" ]; then
+                echo '`IOT_VERIFY_OPENAI_BASE_URL` is set, so a non-default endpoint will be used.'
+              else
+                echo '`IOT_VERIFY_OPENAI_BASE_URL` is not set, so the run assumes `api.openai.com`.'
+                echo 'If this key belongs to a compatible endpoint instead, the model call will fail on auth or 404.'
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'configured=false' >> "$GITHUB_OUTPUT"
             # A warning, not an error: the run is skipped rather than failed, but it must not read as a
@@ -85,9 +113,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: preflight
-    # A missing secret skips this job instead of failing it. The preflight's warning annotation is what
-    # keeps the skip visible, so it cannot be read as a green tick that proved something.
-    if: needs.preflight.outputs.configured == 'true'
+    # A missing secret skips this job instead of failing it. The repository check is repeated rather than
+    # inherited from `preflight`: this is the job that spends real quota and real money, so the condition
+    # that keeps it off forks belongs where the cost is, not one `needs:` edge away from it.
+    if: github.repository == 'sharkdingo/IoT-Verify' && needs.preflight.outputs.configured == 'true'
     services:
       mysql:
         image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
@@ -185,3 +214,42 @@ jobs:
             ${{ runner.temp }}/backend-e2e.log
             frontend/playwright-report/
             frontend/test-results/
+
+  # A skipped job makes the whole run report `success`, so without this job the Actions list, the badge
+  # and the nightly notification all show a passing Live AI gate for a run that never called the model.
+  # The warning annotation inside `preflight` is not enough: it is invisible from everywhere the outcome
+  # is actually read. This job carries the state in its *name*, which the run page and the check list
+  # both show, so an unverified run cannot be mistaken for a verified one without inventing a red that
+  # nobody can act on. It still fails for a genuine break in the AI path, or if `preflight` itself
+  # broke -- an unknown credential state is not a skip.
+  status:
+    name: ${{ needs.preflight.result == 'success' && needs.preflight.outputs.configured != 'true' && 'Live AI NOT verified (no API key)' || 'Live AI status' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [preflight, live-ai]
+    if: always() && github.repository == 'sharkdingo/IoT-Verify'
+    steps:
+      - name: Report the gate outcome
+        shell: bash
+        env:
+          PREFLIGHT: ${{ needs.preflight.result }}
+          CONFIGURED: ${{ needs.preflight.outputs.configured }}
+          # Index syntax, not `needs.live-ai.result`: a hyphen in a job id parses as subtraction in a
+          # GitHub expression, which evaluates to an empty string instead of erroring.
+          SUITE: ${{ needs['live-ai'].result }}
+        run: |
+          set -euo pipefail
+          if [ "$PREFLIGHT" != 'success' ]; then
+            echo "::error::The credential preflight did not succeed (result: $PREFLIGHT), so whether the AI path works is unknown."
+            exit 1
+          fi
+          if [ "$CONFIGURED" != 'true' ]; then
+            echo '::warning::The live-AI gate was skipped: no API key is configured. The AI path was NOT verified by this run.'
+            echo 'AI path NOT verified: no API key configured. See the Check credentials job.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$SUITE" != 'success' ]; then
+            echo "::error::The live-AI suite did not pass (result: $SUITE)."
+            exit 1
+          fi
+          echo 'AI path verified against the real model endpoint.' >> "$GITHUB_STEP_SUMMARY"

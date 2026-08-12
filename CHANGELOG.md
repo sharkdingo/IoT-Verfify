@@ -24,7 +24,11 @@ history into a technical spec. The spec content itself now lives under
   is unavailable in a job-level `if:`. A missing or whitespace-only key produces a warning annotation
   and a job summary stating the AI path was *not* verified, then skips the suite. Previously the gate
   hard-failed at a credential check, producing eleven consecutive nightly reds that each exited in
-  under a minute without building anything.
+  under a minute without building anything. Because a skipped job still makes the whole run report
+  `success`, a third `status` job renames itself to *Live AI NOT verified (no API key)* when the gate
+  was skipped, so the check list carries a state the run conclusion cannot. A key containing whitespace
+  is now rejected at the preflight rather than ~10 minutes later at the model call, and the summary
+  states whether `IOT_VERIFY_OPENAI_BASE_URL` is set so a later auth or 404 failure is diagnosable.
 
 - **`actions/cache` bumped from v4.3.0 to v6.1.0** in all three workflows and the `setup-nusmv`
   composite action. It was the last action on the deprecated Node 20 runtime, which GitHub now forces
@@ -35,8 +39,12 @@ history into a technical spec. The spec content itself now lives under
 
 - **Repository name typo in the Live AI CI fork guard**: the `if:` compared against
   `sharkdingo/IoT-Verfify`, matching a misspelled remote. The GitHub repository was renamed to
-  `IoT-Verify` and the guard now matches it.
+  `IoT-Verify` and the guard now matches it. The check is now also repeated on the job that spends the
+  external quota, instead of reaching it only through a `needs:` edge.
 
+- **CI guard gaps**: the action-pin assertion scanned only `.github/workflows/`, so the `setup-nusmv`
+  composite action's pin was unchecked; local composite actions are now asserted to declare a supported
+  runtime, and the live-AI gate's three invariants are pinned by tests.
 
 - **9 device templates with frozen local enum variables**: Fixed Refrigerator Door Sensor, Car, Door RFID, Washer Machine, Dryer, Oven, Thermostat, Mobile Phone, and Email templates that had local enum variables without driver mechanisms, causing them to hold nondeterministically chosen initial values throughout benign runs. Variables now properly driven by WorkingState Dynamics or changed to shared environment variables where semantically appropriate.
 
