@@ -707,8 +707,10 @@ const variables = computed(() => {
     m.InternalVariables.forEach(iv => {
       // 智能格式化 Value 列：显示枚举值 或 数值范围
       let valDisplay = ''
-      if (iv.Values && iv.Values.length) valDisplay = iv.Values.map(formatDeviceModelToken).join(' / ')
-      else if (iv.LowerBound !== undefined && iv.UpperBound !== undefined) valDisplay = `[${iv.LowerBound}, ${iv.UpperBound}]`
+      // The owner predicates, not a local `!== undefined` pair: a board response serializes an absent
+      // bound as `null`, which passed that test and rendered `[null, 30]`.
+      if (templateVariableHasEnumValues(iv)) valDisplay = iv.Values!.map(formatDeviceModelToken).join(' / ')
+      else if (templateVariableUsesNumericBounds(iv)) valDisplay = `[${iv.LowerBound}, ${iv.UpperBound}]`
 
       const isEnvironment = iv.IsInside !== true
       list.push({
@@ -731,9 +733,9 @@ const variables = computed(() => {
       // 避免重复显示
       if (!list.some(item => item.name === vName)) {
         const definition = resolveImpactEnvironmentDefinition(m, vName)
-        const range = definition?.Values?.length
-          ? definition.Values.map(formatDeviceModelToken).join(' / ')
-          : definition?.LowerBound !== undefined && definition?.UpperBound !== undefined
+        const range = definition && templateVariableHasEnumValues(definition)
+          ? definition.Values!.map(formatDeviceModelToken).join(' / ')
+          : definition && templateVariableUsesNumericBounds(definition)
             ? `[${definition.LowerBound}, ${definition.UpperBound}]`
             : ''
         list.push({

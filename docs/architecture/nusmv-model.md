@@ -321,8 +321,10 @@ Template declarations are the default label authority. A state's initial trust/p
 comes from its matching `WorkingStates[]` entry, and a variable's label comes from its
 `InternalVariables[]` entry. Device runtime fields override only the current state or
 named variable when explicitly supplied; omitted fields do not materialize a copied
-instance value. Shared Environment Pool entries similarly fall back to their active
-template domain labels when an override is absent. Trust labels describe provenance and
+instance value. A **shared** value's labels are not a device runtime field at all: the Environment Pool
+owns them scenario-wide and is their only writer, so they fall back to the active template declaration
+when the pool carries no override, and a per-device label for a shared name is rejected rather than
+merged — [scope rule](shared-value-semantics.md#the-scope-of-a-security-label). Trust labels describe provenance and
 propagation; `untrusted` does not mean the device is selected as compromised.
 
 Default source labels follow MEDIC's origin semantics rather than a generic sensor
@@ -334,8 +336,10 @@ may start as `trusted`. This distinction does not claim that motion sensing is i
 more accurate or authenticated; it states only the modeled origin assumption. Compromise
 can still falsify any value whose template explicitly sets
 `FalsifiableWhenCompromised=true` and then forces that value's source label to
-`untrusted`. Users may override initial labels when their deployment assumptions differ;
-the label is neither authentication nor an attack probability.
+`untrusted`. Users may override initial labels when their deployment assumptions differ — per device for
+a device-local variable or the current state, and through the Environment Pool for a shared value, which
+is scenario-wide and has no per-device surface. The label is neither authentication nor an attack
+probability.
 
 Default privacy labels encode the fact's sensitivity classification. MEDIC §3.3 derives that
 classification from who is expected to access content, but the resulting model label does not
@@ -343,7 +347,8 @@ grant or deny access. Routine appliance modes and ordinary environmental reading
 start as `public`; location, activity/occupancy, security access, communications, financial,
 health, and personal-content facts start as `private`. These are reviewable template
 authoring assumptions used by propagation and verification, not runtime access-control
-decisions. Users may override them when the actual deployment has different privacy assumptions.
+decisions. Users may override them when the actual deployment has different privacy assumptions, on the
+same two surfaces as trust above.
 
 Concrete built-in examples follow that classification: social-network `posting`, phone
 `taking photo` / `uploading to cloud`, and door/window/garage open/contact facts are

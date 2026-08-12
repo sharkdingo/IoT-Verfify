@@ -19,7 +19,11 @@ import {
   naturalChangeCandidateValues,
   resolveImpactEnvironmentDefinition
 } from '@/utils/device'
-import { getTemplateVariableDefaultValue } from '@/utils/deviceRuntime'
+import {
+  getTemplateVariableDefaultValue,
+  templateVariableHasEnumValues,
+  templateVariableUsesNumericBounds
+} from '@/utils/deviceRuntime'
 import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { hasModeledStateMachine, resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
@@ -228,12 +232,17 @@ const formatModelToken = (value: unknown) => formatBuiltInModelToken(
 const isBundledDevice = (device?: DeviceNode) =>
   Boolean(device && isBundledTemplate(findTemplateForDevice(device)))
 
+/* The fifth copy of the single-bound laxity `utils/deviceRuntime.ts` already owns: this accepted
+   *either* bound and filled the missing side with an infinity the schema cannot produce
+   (`oneOf: [{Values}, {LowerBound, UpperBound}]`), so it advertised a shape the server refuses to
+   store. Two such declarations also passed every domain-conflict check — those key off "both bounds
+   present" — and surfaced as "mixed ranges" instead of a named mismatch. Use the owner's predicate. */
 const getVariableRange = (variable: InternalVariable) => {
-  if (Array.isArray(variable.Values) && variable.Values.length > 0) {
-    return variable.Values.join(' / ')
+  if (templateVariableHasEnumValues(variable)) {
+    return variable.Values!.join(' / ')
   }
-  if (variable.LowerBound !== undefined || variable.UpperBound !== undefined) {
-    return `${variable.LowerBound ?? '-∞'} - ${variable.UpperBound ?? '∞'}`
+  if (templateVariableUsesNumericBounds(variable)) {
+    return `${variable.LowerBound} - ${variable.UpperBound}`
   }
   return t('app.modelControlled')
 }
@@ -285,11 +294,11 @@ interface EnvironmentGroup {
   conflicts: string[]
 }
 
-const hasEnumDomain = (variable: InternalVariable) =>
-  Array.isArray(variable.Values) && variable.Values.length > 0
-
-const hasNumericDomain = (variable: InternalVariable) =>
-  variable.LowerBound !== undefined && variable.UpperBound !== undefined
+/* Aliases, not new rules: these were local re-implementations of the `utils/deviceRuntime.ts` pair
+   that treated an explicit `null` bound as a domain where the owner does not. Board responses do
+   serialize an absent bound as `null`, so the two answered differently for the same variable. */
+const hasEnumDomain = templateVariableHasEnumValues
+const hasNumericDomain = templateVariableUsesNumericBounds
 
 const environmentDefinitionIncompatibility = (
   leftName: string,
@@ -458,9 +467,13 @@ const environmentVariables = computed(() => {
       return {
         ...variable,
         displayName: variable.bundled ? formatModelToken(variable.name) : variable.name,
+        // No "mixed ranges" fallback: two declarations that render different ranges necessarily differ
+        // in domain shape or bounds, which `environmentDefinitionIncompatibility` already reports above
+        // as a named conflict. The old fallback could only be reached by a single-bound declaration the
+        // schema rejects, and it replaced a specific mismatch with a vague label.
         rangeLabel: variable.conflicts.length > 0
           ? t('app.conflictingDefinitions')
-          : (ranges.length === 1 ? ranges[0] : t('app.mixedRanges')),
+          : ranges[0] || t('app.modelControlled'),
         naturalChangeRateLabel: hasNumericDomain(variable.definition)
           ? (variable.definition.NaturalChangeRate
               ? t('app.environmentNumericEvolution', {

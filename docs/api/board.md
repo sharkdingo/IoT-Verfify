@@ -329,7 +329,11 @@ lossless without freezing template labels into every device.
 | `privacy` | `String` | GET/response label; create-time/internal patches accept `public` / `private` or preserve it when omitted/null. Complete scene replacement requires the field explicitly |
 
 The environment pool is persisted in `board_environment_variable` and scoped to the
-current user's single development board. `GET /api/board/environment` is intentionally
+current user's single development board. `trust` and `privacy` here are **scenario-wide**: this pool is
+their only writer, so every device declaring the name is generated with the same labels, and supplying
+one per device is rejected rather than merged — see
+[shared value semantics](../architecture/shared-value-semantics.md#the-scope-of-a-security-label) for
+the rule and the single attack-modelling exception. `GET /api/board/environment` is intentionally
 self-healing: it reads current nodes/templates, inserts missing required variables with
 the default value above, preserves existing values, and prunes variables no current
 device can read or affect. `POST /api/board/environment` accepts only names required by

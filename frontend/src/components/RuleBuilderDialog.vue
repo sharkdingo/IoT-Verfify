@@ -338,10 +338,12 @@ const currentValuePlaceholder = computed(() => {
     return t('app.selectPlaceholder')
   }
   const bounds = selectedSourceOption.value
-  if (bounds?.lowerBound !== undefined || bounds?.upperBound !== undefined) {
-    const min = bounds.lowerBound ?? '-∞'
-    const max = bounds.upperBound ?? '∞'
-    return `${t('app.enterValuePlaceholder')} (${min} - ${max})`
+  // Both bounds or no range: a domain is an enum or a complete interval, never one bound
+  // (`device-template-schema.json` `oneOf`). Accepting either bound and printing the missing side as
+  // an infinity advertised a domain the server refuses to store — see the note in
+  // `utils/deviceRuntime.ts`, which owns this rule.
+  if (bounds?.lowerBound !== undefined && bounds?.upperBound !== undefined) {
+    return `${t('app.enterValuePlaceholder')} (${bounds.lowerBound} - ${bounds.upperBound})`
   }
   return t('app.enterValuePlaceholder')
 })

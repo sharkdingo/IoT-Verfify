@@ -12,12 +12,13 @@ Each rule below is tagged with its origin:
 - **[EXT]** — a deliberate product extension beyond the paper.
 - **[EXACT]** — executable semantics that mean exactly what the user declared.
 - **[ABSTRACTION]** — a deliberate over-approximation, disclosed in `modelSemantics`.
+- **[REJECTED]** — a shape the product refuses to model rather than guess at.
 
-Verified against code on 2026-08-12. Source:
+Verified against code on 2026-08-13. Source:
 `backend/src/main/java/cn/edu/nju/Iot_Verify/component/nusmv/generator/`,
 `component/template/DeviceTemplateNuSmvValidator.java`, `backend/device-template-schema.json`.
-Provenance behaviour is pinned by `EnvironmentProvenanceCollectorTest`.
-- **[REJECTED]** — a shape the product refuses to model rather than guess at.
+Provenance behaviour is pinned by `EnvironmentProvenanceCollectorTest`; label scope (§2, invariant 13)
+by `NusmvEnvironmentPoolTest`.
 
 ## 1. Value identity and namespace
 
@@ -45,6 +46,47 @@ This is a deliberate choice among three candidates:
 
 The Environment Pool owns the **runtime state** of a shared value — its current value, trust, and
 privacy — not its contract. That split is why the pool table stores `value/trust/privacy` only.
+
+### The scope of a security label
+
+A shared value's trust and privacy labels are **scenario-wide**: one label per name, owned by the pool,
+identical on every device that declares it. This follows §1 — if two devices naming `temperature` mean
+one physical quantity, its provenance classification is a property of that quantity, not of each
+reader. **[EXT]**
+
+This needs stating because the *model* could express the alternative. Labels are emitted per device
+(`<device>.trust_<name>`, `SmvDeviceModuleBuilder`), never as a pool-level `trust_a_<name>`, so
+`applyEnvironmentPoolLabels` fans one pool label out into N per-device model labels. MEDIC does not
+decide this for us: it places labels on "states and variables" (MEDIC §3.3) without indexing them by
+device, so the scope is a product decision. The alternatives:
+
+| Candidate | Why not / why yes |
+| :--- | :--- |
+| Each device instance labels the shared values it reads | **Rejected for now**, and the cost is real: a scene cannot say "the outdoor thermometer is untrusted while the indoor one is trusted", which is exactly the distinction a threat model wants. It is rejected because a label is not only a display attribute: it feeds MEDIC's propagation as a *source* (see [theory-sources.md](theory-sources.md), which explains why a variable's label is never a propagation target) and it is a specification subject in its own right. Two labels for one value make "was this value trusted?" ambiguous, and answering it would require naming a device in every label reference, including those that read the pool value rather than a reading. Reconsider together with per-instance falsifiability, not before. |
+| Derive the label from the declaring templates and drop the pool's copy | **Rejected.** Templates already must agree on the default label (invariant 2), so the derived value carries no scene-specific information — and a scene needs to override it without editing a portable template. |
+| **The pool owns one label; every declaring device receives it** | **Chosen.** One value, one provenance answer, and a scene-level override that no template edit is needed for. The fan-out is uniform by construction and pinned by invariant 13 rather than assumed. |
+
+The fan-out keys off the device's *shared declarations*, not its narrower read-capability set, because
+a label is not a reading: the device module declares `trust_<name>`/`privacy_<name>` for every declared
+variable, so an affect-only declaration (§4) has a label to initialise even though it gets no value
+mirror. Keying it off the capability set silently dropped a user's label edit for exactly the rows the
+Environment Pool renders as editable.
+
+Two consequences worth knowing before reading further. A per-device label for a shared name is
+**[REJECTED]** at both writer boundaries rather than merged — `BoardStorageServiceImpl.validateNodeVariables`
+and `NusmvRequestValidator.validateDeviceVariables` both name the pool as the place to supply it — so
+this is a diagnosable `422` naming the field, not a silent overwrite. And the device dialog's runtime section renders
+only when the template has modes *with* working states or at least one device-local variable
+(`DeviceDialog.hasRuntimeFields`), so a template that is purely a shared-value reader has no per-device
+runtime surface at all — 13 of the bundled ones, every single-reading sensor among them. For those the
+Environment Pool is not merely the preferred place to edit a label but the only one.
+
+Attack modelling is the sole place a label diverges across devices, and only for a value whose
+declaration sets `FalsifiableWhenCompromised`: such an instance's `trust_<name>` is forced to
+`untrusted` while its peers keep the pool's label. Compromising a device whose declaration omits the
+flag moves no label. That is per-run selection, not a stored per-device label — see
+[theory-sources.md](theory-sources.md) for why falsifiability is a per-device physical claim while the
+label's resting value is not.
 
 ## 3. Type and domain
 
@@ -183,10 +225,10 @@ specification is an observer's assertion *about* the system, so it may read grou
 that asymmetry a spoofed reading would be both the question and the answer, and attack modelling
 could prove nothing.
 
-Its Environment Pool labels do reach the model: `SmvGenerator.applyEnvironmentPoolLabels` keys off
-`sharedDeclarations` (read *and* affect-only), not the narrower capability set. Keying it off the
-latter silently dropped a user's label edit for exactly the rows the panel renders as editable —
-pinned by `NusmvEnvironmentPoolTest.environmentPoolLabelsReachAffectOnlySharedVariables`.
+Its Environment Pool labels do reach the model, on the same scenario-wide terms as any other shared
+value's — §2 owns that rule and the reason the fan-out keys off `sharedDeclarations` rather than the
+narrower read-capability set. The affect-only half of it is pinned by
+`NusmvEnvironmentPoolTest.environmentPoolLabelsReachAffectOnlySharedVariables`.
 
 What such a label cannot do is *change*: see the third vacuity shape in
 [theory-sources.md](theory-sources.md) — a variable label is frozen unless the variable declares
@@ -272,8 +314,9 @@ Numeric writers are never in conflict: they compose additively by §7.
 Checkable statements this model must satisfy. Each is enforced somewhere and tested.
 
 1. **One namespace.** All participants in a name refer to one value with one contract.
-2. **Contract agreement.** Participating templates declare identical type, domain, and natural rate;
-   disagreement is rejected with a named mismatch.
+2. **Contract agreement.** Participating templates declare an identical type, domain, natural rate,
+   default trust, default privacy, and literal name casing; disagreement is rejected with a named
+   mismatch (`EnvironmentDomainUtils.incompatibility`, reached from both board writes and generation).
 3. **Capability is declared, never inferred.** No code path grants read or affect capability from
    placement, absence, or defaults.
 4. **Read implies mirror, and only read implies mirror.** A device gets `device.name := a_name` if
@@ -290,6 +333,10 @@ Checkable statements this model must satisfy. Each is enforced somewhere and tes
 11. **Both engines agree.** NuSMV and the bounded explorer implement one transition relation.
 12. **Disclosure.** Every abstraction in this page appears in `modelSemantics`, and the rule that
     applied to each individual value appears in that run's frozen provenance (§10).
+13. **One label per value, on every declaring device.** The pool is the only writer of a shared
+    value's trust/privacy, so all devices declaring the name carry identical labels in the generated
+    model. A per-device label for a shared name is rejected, not merged (§2). The single exception is
+    attack modelling, which forces one compromised instance's `trust_<name>` to `untrusted`.
 
 ## 10. How a stored run stays explainable
 

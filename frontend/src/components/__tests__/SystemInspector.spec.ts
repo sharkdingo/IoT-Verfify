@@ -259,6 +259,68 @@ describe('SystemInspector rule execution order', () => {
     ]])
   })
 
+  // The range chip had its own single-bound rule: it accepted either bound and printed the missing
+  // side as an infinity, which `device-template-schema.json` cannot produce. Nothing asserted the chip,
+  // so the divergence from `templateVariableUsesNumericBounds` was invisible. A `null` bound is the
+  // case that separated the two predicates, because board responses serialize an absent bound that way.
+  it('renders a numeric range only when both bounds are declared', async () => {
+    const boundedTemplate: DeviceTemplate = {
+      name: 'Thermometer',
+      manifest: {
+        Name: 'Thermometer',
+        InternalVariables: [{
+          Name: 'temperature',
+          IsInside: false,
+          FalsifiableWhenCompromised: false,
+          Trust: 'untrusted',
+          Privacy: 'public',
+          LowerBound: 15,
+          UpperBound: 35,
+          NaturalChangeRate: '[-1, 1]'
+        }]
+      }
+    }
+    const halfBounded: DeviceTemplate = {
+      name: 'Drifting probe',
+      manifest: {
+        Name: 'Drifting probe',
+        InternalVariables: [{
+          Name: 'pressure',
+          IsInside: false,
+          FalsifiableWhenCompromised: false,
+          Trust: 'untrusted',
+          Privacy: 'public',
+          LowerBound: 5,
+          UpperBound: null,
+          NaturalChangeRate: '[-1, 1]'
+        } as never]
+      }
+    }
+    const wrapper = mount(SystemInspector, {
+      props: {
+        activeSection: 'devices',
+        deviceTemplates: [boundedTemplate, halfBounded],
+        devices: [
+          { ...devices[0], id: 'thermo-1', label: 'Indoor', templateName: 'Thermometer' },
+          { ...devices[1], id: 'probe-1', label: 'Probe', templateName: 'Drifting probe' }
+        ],
+        environmentVariables: [
+          { name: 'temperature', value: '20', trust: 'untrusted', privacy: 'public' },
+          { name: 'pressure', value: '7', trust: 'untrusted', privacy: 'public' }
+        ]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('[data-testid="toggle-environment-pool"]').trigger('click')
+    const chips = wrapper.findAll('[data-testid="environment-pool"] article button span[data-full-text]')
+      .map(chip => chip.attributes('data-full-text'))
+    expect(chips).toContain('15 - 35')
+    // A half-declared domain is not a range: it reports "default value", never "5 - ∞".
+    expect(chips).toContain('Default value')
+    expect(chips.some(chip => chip?.includes('∞'))).toBe(false)
+  })
+
   it('disables environment controls and explains when the authoritative value is missing', async () => {
     const finiteTemplate: DeviceTemplate = {
       name: 'Signal source',

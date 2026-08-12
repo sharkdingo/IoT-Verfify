@@ -84,10 +84,14 @@ CTLSPEC AG !(fan_1.FanMode=auto & fan_1.trust_FanMode_auto=untrusted)
 
 A `variable` A-condition with `variableSource: environment` produces a property with **two subjects**, by
 design: the value term is the shared pool value `a_<key>` while the label term stays the selected device's
-`<device>.trust_<key>`, because a trust label is device-scoped and no pool-level `trust_a_<key>` exists.
+`<device>.trust_<key>`, because a trust label is emitted per device and no pool-level `trust_a_<key>` exists.
 So the property reads "the home's value held while *this* device's label was untrusted". The device is
-therefore load-bearing even though it does not appear in the value half, and under two devices declaring
-the same key the choice changes what is proved. Both formula previews render this exactly — earlier they
+therefore load-bearing even though it does not appear in the value half. Under two devices declaring the
+same key, which one you name changes what is proved **only in an attack run**: the Environment Pool is
+the single writer of a shared value's labels, so outside compromise every declaring device carries the
+same one (invariant 13 in
+[shared-value-semantics.md](shared-value-semantics.md#9-invariants)), while attack modelling forces the
+compromised instance's label to `untrusted` and leaves its peers alone. Both formula previews render this exactly — earlier they
 reused the value target and displayed `controlSource(Environment."<key>")`, naming a label the model never
 declares.
 

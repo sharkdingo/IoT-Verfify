@@ -2003,7 +2003,12 @@ public class RecommendScenarioTool extends AbstractAiTool {
     private String defaultVariableValue(DeviceTemplateDto.DeviceManifest.InternalVariable variable) {
         if (variable == null) return "";
         if (variable.getValues() != null && !variable.getValues().isEmpty()) return String.valueOf(variable.getValues().get(0));
-        if (variable.getLowerBound() != null) return String.valueOf(variable.getLowerBound());
+        // Both bounds, like every other defaulter (BoardStorageServiceImpl.defaultEnvironmentValue,
+        // NusmvEnvironmentPool:143, NodeServiceImpl:334): a lone LowerBound is not a domain the schema admits,
+        // so defaulting from it invented a value for a variable that has none.
+        if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
+            return String.valueOf(variable.getLowerBound());
+        }
         return "";
     }
 

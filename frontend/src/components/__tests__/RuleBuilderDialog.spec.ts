@@ -33,6 +33,7 @@ const i18n = createI18n({
         state: 'State',
         none: 'None',
         selectPlaceholder: 'Select',
+        enterValuePlaceholder: 'Enter value',
         selectDevicePlaceholder: 'Select device',
         selectAction: 'Select action',
         type: 'Type',
@@ -246,6 +247,47 @@ describe('RuleBuilderDialog action semantics', () => {
     const contentOption = wrapper.get('[data-testid="rule-content-name"] option[value="photo"]')
     expect(contentOption.text()).toBe('photo')
     expect(contentOption.attributes('value')).toBe('photo')
+  })
+
+  // The value placeholder had its own single-bound rule: it accepted *either* bound and printed the
+  // missing side as an infinity, so it advertised `(5 - ∞)` for a domain `device-template-schema.json`
+  // cannot express (`oneOf: [{Values}, {LowerBound, UpperBound}]`). Nothing asserted the placeholder,
+  // which is how the divergence from `templateVariableUsesNumericBounds` stayed invisible.
+  it('shows a value range only when the variable declares both bounds', async () => {
+    const boundedTemplate = {
+      name: 'Sensors',
+      manifest: {
+        Name: 'Sensors',
+        APIs: [],
+        InternalVariables: [
+          { Name: 'temperature', IsInside: true, LowerBound: 15, UpperBound: 35 },
+          { Name: 'pressure', IsInside: true, LowerBound: 5 }
+        ],
+        Modes: [],
+        WorkingStates: [],
+        Contents: []
+      }
+    }
+    const sensorNodes: DeviceNode[] = [
+      { id: 'probe', label: 'Probe', templateName: 'Sensors', position: { x: 0, y: 0 }, state: 'idle', width: 176, height: 128 },
+      { id: 'sink', label: 'Sink', templateName: 'Sensors', position: { x: 220, y: 0 }, state: 'idle', width: 176, height: 128 }
+    ]
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes: sensorNodes, deviceTemplates: [boundedTemplate as never] },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('#rule-source-device').setValue('probe')
+    await wrapper.get('#rule-source-type').setValue('variable')
+
+    await wrapper.get('#rule-source-variable').setValue('temperature')
+    expect(wrapper.get('#rule-source-value').attributes('placeholder')).toBe('Enter value (15 - 35)')
+
+    // A half-declared domain is not a range: no suffix, and never an infinity.
+    await wrapper.get('#rule-source-variable').setValue('pressure')
+    const halfBounded = wrapper.get('#rule-source-value').attributes('placeholder')
+    expect(halfBounded).toBe('Enter value')
+    expect(halfBounded).not.toContain('∞')
   })
 
   it('offers only observable action events as IF sources while keeping all actions available for THEN', async () => {

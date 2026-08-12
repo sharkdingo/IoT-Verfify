@@ -264,6 +264,92 @@ class NusmvEnvironmentPoolTest {
     }
 
     /**
+     * Invariant 13 (§9 of shared-value-semantics.md): every device declaring a shared name carries the
+     * same labels, because the pool is their only writer.
+     *
+     * <p>Nothing pinned this. The suite asserted pool-over-*template* on a single device twice, so
+     * `applyEnvironmentPoolLabels` could have written one device and skipped the rest — or been keyed
+     * off the narrower read-capability set — and stayed green. A whole-file `contains` cannot see the
+     * difference either: one matching module satisfies it. So this asserts the label per module and
+     * counts the modules, which is the only shape that fails when the fan-out is partial.
+     *
+     * <p>The two devices declare the shared value through the two different entry points — one
+     * read-capable, one affect-only — and use different template names so their generated module names
+     * differ (a module name is `<template>_<instance>`, so one template would yield one module).
+     */
+    @Test
+    void environmentPoolLabelsAreIdenticalAcrossEveryDeclaringDevice() throws Exception {
+        DeviceManifest.InternalVariable reader = envNumber("temperature", 15, 35);
+        reader.setTrust("untrusted");
+        reader.setPrivacy("public");
+        DeviceManifest thermometer = DeviceManifest.builder()
+                .name("Temperature Sensor")
+                .internalVariables(List.of(reader))
+                .build();
+
+        DeviceManifest.InternalVariable affectOnly = impactNumber("temperature", 15, 35);
+        affectOnly.setTrust("untrusted");
+        affectOnly.setPrivacy("public");
+        DeviceManifest airConditioner = DeviceManifest.builder()
+                .name("Air Conditioner")
+                .modes(List.of("MachineState"))
+                .initState("cool")
+                .impactedVariables(List.of("temperature"))
+                .internalVariables(List.of(affectOnly))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("cool").trust("trusted")
+                                .privacy("public")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature").changeRate("-2").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted")
+                                .privacy("public").build()))
+                .build();
+
+        SmvGenerator generator = generatorFor(Map.of(
+                "Temperature Sensor", thermometer,
+                "Air Conditioner", airConditioner));
+        List<DeviceVerificationDto> rawDevices = List.of(
+                device("sensor_1", "Temperature Sensor"),
+                device("ac_1", "Air Conditioner", "cool"));
+        Map<String, DeviceSmvData> rawMap = generator.buildDeviceSmvMap(USER_ID, rawDevices);
+
+        // Both manifests declare untrusted/public, so trusted/private can only come from the pool.
+        List<BoardEnvironmentVariableDto> merged = NusmvEnvironmentPool.mergeWithDefaults(
+                List.of(new BoardEnvironmentVariableDto("temperature", "28", "trusted", "private")),
+                rawMap);
+        List<DeviceVerificationDto> expanded = NusmvEnvironmentPool.expandDevices(rawDevices, merged, rawMap);
+        SmvGenerator.GenerateResult generated = generator.generateWithEnvironment(
+                USER_ID, expanded, merged, List.of(), List.of(), AttackScenarioDto.none(), true,
+                SmvGenerator.GeneratePurpose.VERIFICATION);
+
+        String smv = Files.readString(generated.smvFile().toPath());
+        Map<String, String> modules = deviceModules(smv);
+        assertEquals(2, modules.size(), "expected one module per device: " + modules.keySet());
+        modules.forEach((moduleName, body) -> {
+            assertTrue(body.contains("init(trust_temperature) := trusted;"),
+                    "module '" + moduleName + "' must carry the pool's trust label: " + body);
+            assertTrue(body.contains("init(privacy_temperature) := private;"),
+                    "module '" + moduleName + "' must carry the pool's privacy label: " + body);
+        });
+    }
+
+    /** Splits generated SMV into its device modules, keyed by module name; `main` is excluded. */
+    private static Map<String, String> deviceModules(String smv) {
+        Map<String, String> modules = new LinkedHashMap<>();
+        String[] sections = smv.split("(?m)^MODULE\\s+");
+        for (String section : sections) {
+            String trimmed = section.strip();
+            if (trimmed.isEmpty()) continue;
+            String header = trimmed.lines().findFirst().orElse("").strip();
+            // A generated comment can contain the word MODULE, so require a legal NuSMV identifier.
+            if (!header.matches("[A-Za-z_][A-Za-z0-9_]*") || "main".equals(header)) continue;
+            modules.put(header, trimmed);
+        }
+        return modules;
+    }
+
+    /**
      * A label property over an affect-only value must reach NuSMV, not just pass admission.
      *
      * <p>Admission is capability-blind here on purpose (`NusmvRequestValidator.validatePropertyReference`):

@@ -179,8 +179,10 @@ public final class SpecificationFormulaPreview {
 
     /**
      * The subject of template 7's untrusted-label disjunct, matching what the generator resolves per target
-     * type. A label is always device-scoped — there is no pool-level {@code trust_a_<key>} — so no arm here
-     * may render {@code Environment.}:
+     * type. A label is always emitted <em>per device</em> — there is no pool-level {@code trust_a_<key>} —
+     * so no arm here may render {@code Environment.}. Emitted per device is not the same as scoped per
+     * device: for a shared value the Environment Pool is the only writer, so every declaring device
+     * carries the same label (see {@code docs/architecture/shared-value-semantics.md} §2):
      * <ul>
      *   <li>{@code variable} → {@code <device>."<key>"}, the device's own value label
      *       ({@code trust_<key>}). Reusing the <em>value</em> target here rendered an {@code environment}
@@ -225,12 +227,13 @@ public final class SpecificationFormulaPreview {
     /**
      * The untrusted-source disjunct of template 7, naming the device whose label is actually checked.
      *
-     * <p>Deliberately not {@code target(condition, context)}. A trust label is device-scoped — the generator
-     * emits {@code <device>.trust_<key>} whatever the reading, and no pool-level {@code trust_a_<key>}
-     * exists — so reusing the value target rendered an {@code environment} condition as
-     * {@code controlSource(Environment."x")}, a label the model never declares. That is the same defect this
-     * whole change fixed one layer earlier: the preview claimed a property about the home's own provenance
-     * while NuSMV checked one named device's label, and under two devices the choice changes what is proved.
+     * <p>Deliberately not {@code target(condition, context)}. A trust label is emitted per device — the
+     * generator emits {@code <device>.trust_<key>} whatever the reading, and no pool-level
+     * {@code trust_a_<key>} exists — so reusing the value target rendered an {@code environment} condition as
+     * {@code controlSource(Environment."x")}, a label the model never declares. The preview must therefore
+     * name the device whose label NuSMV actually checks. For a shared value that device is not a free
+     * choice of subject: the pool writes every declaring device the same label, so the naming matters for
+     * legibility, and for what is proved only when that instance is an attack compromise point.
      */
     private static String untrustedSourcePreview(List<SpecConditionDto> conditions, Context context) {
         List<String> sources = new ArrayList<>();

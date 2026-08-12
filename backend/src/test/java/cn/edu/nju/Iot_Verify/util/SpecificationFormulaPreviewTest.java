@@ -68,8 +68,9 @@ class SpecificationFormulaPreviewTest {
     @Test
     void template7NamesTheDeviceWhoseTrustLabelIsCheckedEvenForAnEnvironmentReading() {
         /*
-         * A trust label is device-scoped — the generator emits `<device>.trust_<key>` whatever the reading,
-         * and no pool-level `trust_a_<key>` is ever declared. Reusing the VALUE target rendered this as
+         * A trust label is emitted per device — the generator emits `<device>.trust_<key>` whatever the
+         * reading, and no pool-level `trust_a_<key>` is ever declared. (Per device is not per scope: for a
+         * shared value the pool writes them all the same label.) Reusing the VALUE target rendered this as
          * `controlSource(Environment."temperature")`, naming a label the model does not have, so the preview
          * asserted something about the home's own provenance while the check was against one device's label.
          * The value half stays the pool value, because that is what `environment` means.

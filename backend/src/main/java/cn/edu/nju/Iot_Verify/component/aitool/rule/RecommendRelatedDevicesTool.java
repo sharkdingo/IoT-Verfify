@@ -722,13 +722,14 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
             }
             return null;
         }
-        if (variable.getLowerBound() != null || variable.getUpperBound() != null) {
+        // A numeric domain is a complete interval: `device-template-schema.json` admits an enum or both
+        // bounds, never one. The old `||` gate half-validated a shape that cannot be stored, and
+        // `Double.parseDouble` accepted "25.5" for an integer domain — both let a suggestion through
+        // that the board would then reject.
+        if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
             try {
-                double number = Double.parseDouble(value);
-                if (variable.getLowerBound() != null && number < variable.getLowerBound()) {
-                    return null;
-                }
-                if (variable.getUpperBound() != null && number > variable.getUpperBound()) {
+                int number = Integer.parseInt(value.trim());
+                if (number < variable.getLowerBound() || number > variable.getUpperBound()) {
                     return null;
                 }
                 return value;

@@ -194,12 +194,13 @@ describe('spec formula preview', () => {
 
   it('names the device in a template-7 trust predicate even for an environment reading', () => {
     /*
-     * A trust label is device-scoped: the generator emits `<device>.trust_<key>` whatever the reading, and
-     * no pool-level `trust_a_<key>` exists in the model. Reusing the VALUE target rendered this as
+     * A trust label is emitted per device: the generator emits `<device>.trust_<key>` whatever the reading,
+     * and no pool-level `trust_a_<key>` exists in the model. Reusing the VALUE target rendered this as
      * `controlSource(Environment."temperature")` — a label NuSMV never declares — so the preview claimed a
-     * property about the home's own provenance while the check was against one named device's label. Under
-     * two sensors the device chosen changes what is proved, and the preview showed nothing to tell them
-     * apart. The value half stays `Environment."..."`, because that IS the pool value.
+     * property about the home's own provenance while the check was against one named device's label. The
+     * preview must name that device. It is not a free choice of subject, though: for a shared value the
+     * pool writes every declaring device the same label, so which one is named changes what is proved only
+     * under attack modelling. The value half stays `Environment."..."`, because that IS the pool value.
      */
     const formula = buildSpecFormula({
       templateId: '7',

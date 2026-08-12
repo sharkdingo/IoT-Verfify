@@ -768,8 +768,10 @@ Device trust/privacy labels use template declarations by default. Ordinary devic
 creation sends no label override; advanced settings may explicitly override the current
 state or a local variable. Choosing "use template default" removes that override instead
 of copying the current template value into the device instance. Existing imported or
-persisted explicit overrides remain authoritative. Shared Environment Pool labels follow
-the same backend template fallback and are edited in the inspector's advanced details.
+persisted explicit overrides remain authoritative. A **shared** value's labels are not a device
+override at all: they are scenario-wide, owned by the Environment Pool, and edited in the inspector's
+advanced details — the device dialog neither shows nor accepts them
+([scope rule](../architecture/shared-value-semantics.md#the-scope-of-a-security-label)).
 
 Verification results and completed async verification tasks include `outcome`,
 `modelComplete`, `disabledRuleCount`, `skippedSpecCount`, and item-level

@@ -352,6 +352,64 @@ class RecommendRelatedDevicesToolTest {
         assertFalse(defaults.has("privacies.battery.privacy"));
     }
 
+    /**
+     * A suggested value must be an integer inside the declared domain, because that is the only thing the
+     * board will store. `Double.parseDouble` accepted "25.5" for an integer domain and let a recommendation
+     * through that `validateVariableValues` then rejected — the model's suggestion looked applicable and was
+     * not. The sibling tools already parse with `Integer.parseInt`.
+     *
+     * <p>The whole candidate is filtered rather than the value silently replaced, matching every other
+     * unusable-runtime rejection in this method (unknown name, duplicate name, bad trust): a recommendation
+     * whose runtime cannot be applied is reported as filtered, not repaired into a different suggestion.
+     */
+    @Test
+    void executeBoardRecommendations_dropsCandidateWithNonIntegerValueForAnIntegerDomain() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(numericTemplate("Thermometer")));
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [{
+                            "templateName":"Thermometer",
+                            "suggestedPlacement":"Hall",
+                            "intendedUse":"Hall monitoring",
+                            "description":"Monitor the hall",
+                            "initialVariables":[{"name":"temperature","value":"25.5"}]
+                          }]
+                        }
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.executeBoardRecommendations("{\"maxRecommendations\":5}"));
+
+        assertEquals(0, json.path("count").asInt());
+        assertEquals(1, json.path("filteredCount").asInt());
+        assertEquals("invalidInitialRuntime", json.path("filteredItems").get(0).path("reasonCode").asText());
+    }
+
+    /** An in-domain integer is kept verbatim — the guard above must not reject legal values. */
+    @Test
+    void executeBoardRecommendations_keepsAnInDomainIntegerValue() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(numericTemplate("Thermometer")));
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [{
+                            "templateName":"Thermometer",
+                            "suggestedPlacement":"Hall",
+                            "intendedUse":"Hall monitoring",
+                            "description":"Monitor the hall",
+                            "initialVariables":[{"name":"temperature","value":"22"}]
+                          }]
+                        }
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.executeBoardRecommendations("{\"maxRecommendations\":5}"));
+
+        assertEquals("22", json.path("recommendations").get(0)
+                .path("initialVariables").get(0).path("value").asText());
+    }
+
     @Test
     void executeBoardRecommendations_rejectsExplicitBlankRuntimeInsteadOfDefaultingIt() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
@@ -394,6 +452,29 @@ class RecommendRelatedDevicesToolTest {
         dto.setManifest(DeviceTemplateDto.DeviceManifest.builder()
                 .name(name)
                 .description(name)
+                .build());
+        return dto;
+    }
+
+    /** A template whose only variable carries a complete integer domain, for value-canonicalization tests. */
+    private DeviceTemplateDto numericTemplate(String name) {
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName(name);
+        dto.setManifest(DeviceTemplateDto.DeviceManifest.builder()
+                .name(name)
+                .description(name)
+                .modes(List.of("SensorState"))
+                .initState("idle")
+                .workingStates(List.of(
+                        DeviceTemplateDto.DeviceManifest.WorkingState.builder().name("idle").build()))
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("temperature")
+                        .isInside(true)
+                        .lowerBound(15)
+                        .upperBound(35)
+                        .trust("trusted")
+                        .privacy("public")
+                        .build()))
                 .build());
         return dto;
     }

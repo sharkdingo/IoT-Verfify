@@ -15,6 +15,57 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-13
+
+#### Fixed
+
+- **Four more copies of the single-bound domain rule, found by sweeping for the shape below.** The rule
+  builder's value placeholder accepted *either* bound and advertised `(5 - ∞)`; two device-dialog domain
+  columns required both bounds but let an explicit `null` through and rendered `[null, 30]`; the
+  `recommend_related_devices` tool half-validated a one-bound domain and accepted `"25.5"` for an integer
+  one, so a suggestion could pass the tool and then be rejected by the board; `recommend_scenario`
+  defaulted a value from a lone `LowerBound`, unlike every other backend defaulter. A dev probe script
+  had the same defaulting plus a `'0'` fallback that could sit outside the declared domain, and now
+  fails loudly instead. The two live surfaces are pinned by new tests; the AI-tool value guard now
+  filters the candidate with `invalidInitialRuntime` rather than repairing it into a different
+  suggestion, matching its sibling rejections.
+- **The Environment Pool's range chip advertised a domain the server refuses to store.** It carried a
+  fifth copy of a single-bound rule `utils/deviceRuntime.ts` already owns: it accepted *either* numeric
+  bound and printed the missing side as `-∞`/`∞`, while `device-template-schema.json` admits only an
+  enum or *both* bounds. Two such declarations also passed every domain-conflict check — those key off
+  "both bounds present" — and surfaced as a vague "mixed ranges" chip instead of a named mismatch. The
+  chip now uses the owning predicates, and that fallback is gone: any two declarations rendering
+  different ranges already differ in a way the conflict list reports specifically. Nothing asserted the
+  chip before, so the divergence was invisible; the range is now pinned, including the `null`-bound case
+  that separated the two rules. Two local re-implementations of the same predicates, which treated an
+  explicit `null` bound as a declared domain, are now aliases of the owner.
+
+#### Documentation
+
+- **Recorded the scope of a shared value's security label, which was enforced but never argued.** The
+  Environment Pool is the only writer of a shared value's trust/privacy, so all devices declaring the
+  name carry identical labels in the generated model — yet the model *could* express per-device labels
+  (`<device>.trust_<name>` is emitted per device, with no pool-level identifier), MEDIC does not index
+  labels by device, and no invariant or test pinned the fan-out: keying it off the read-capability set
+  or writing only the first device would have left the suite green. `shared-value-semantics.md` §2 now
+  argues the choice against its alternatives, states the cost (a scene cannot mark one of two
+  thermometers untrusted) and names attack modelling as the sole divergence; §9 adds invariant 13, now
+  pinned by `NusmvEnvironmentPoolTest.environmentPoolLabelsAreIdenticalAcrossEveryDeclaringDevice`,
+  which asserts per module so a partial fan-out cannot pass. Invariant 2 also gained the default trust,
+  default privacy and name-casing agreement the code has always enforced.
+- **"A trust label is device-scoped" was copied into six places and is half wrong.** A label is *emitted*
+  per device — there is genuinely no pool-level `trust_a_<key>`, which is the load-bearing half — but for
+  a shared value the pool writes every declaring device the same one, so it is not *scoped* per device.
+  Two of those copies went further and told the reader that "under two devices the choice changes what is
+  proved", which holds only when the named instance is an attack compromise point. Corrected in
+  `spec-templates.md`, `utils/spec.ts`, `SpecificationFormulaPreview` and their two tests.
+- **`nusmv-model.md` invited users to "override initial labels" without saying where.** For a shared
+  value there is no per-device surface, and one sentence attached the pool's fallback to a paragraph about
+  device runtime overrides with "similarly", implying an override path that does not exist. The pool's own
+  UI hint had the mirror-image gap: its device-side sibling says "this device instance" while the pool's
+  said nothing about scope, so a user comparing them would infer the pool label is per-instance too. Both
+  now state it, and `api/board.md` states it on the contract that owns the pool.
+
 ### 2026-08-12
 
 #### Changed

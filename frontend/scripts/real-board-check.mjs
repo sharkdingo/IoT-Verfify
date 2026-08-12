@@ -41,11 +41,16 @@ async function request(method, urlPath, body, token, okStatuses = [200]) {
 const get = (urlPath, token, ok) => request('GET', urlPath, undefined, token, ok)
 const post = (urlPath, body, token, ok) => request('POST', urlPath, body, token, ok)
 
-const valueFor = variable => (
-  Array.isArray(variable.Values) && variable.Values.length
-    ? String(variable.Values[0])
-    : (typeof variable.LowerBound === 'number' ? String(variable.LowerBound) : '0')
-)
+// Both bounds, matching the schema and the backend defaulters. A lone LowerBound is not a domain, and
+// the old `'0'` fallback could submit a value outside the declared one — a probe failure that would
+// read as a product bug.
+const valueFor = variable => {
+  if (Array.isArray(variable.Values) && variable.Values.length) return String(variable.Values[0])
+  if (typeof variable.LowerBound === 'number' && typeof variable.UpperBound === 'number') {
+    return String(variable.LowerBound)
+  }
+  throw new Error(`Variable '${variable?.Name}' declares no usable domain; cannot pick a probe value`)
+}
 
 const localVariablesFor = manifest => (manifest.InternalVariables || [])
   .filter(variable => variable?.IsInside === true)

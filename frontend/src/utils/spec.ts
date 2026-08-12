@@ -114,8 +114,10 @@ const conditionGroupToFormula = (conditions: SpecCondition[] = [], context?: Spe
 
 /**
  * The subject of template 7's untrusted-label disjunct, matching what the generator resolves per target
- * type. A label is always device-scoped — there is no pool-level `trust_a_<key>` — so no arm may render
- * `Environment.`:
+ * type. A label is always emitted *per device* — there is no pool-level `trust_a_<key>` — so no arm may
+ * render `Environment.`. (Emitted per device, not scoped per device: for a shared value the pool is the
+ * only writer, so every declaring device carries the same label. See
+ * `docs/architecture/shared-value-semantics.md` §2.):
  *   - `variable` -> `<device>."<key>"`, the device's own value label (`trust_<key>`). Reusing the VALUE
  *     target rendered an `environment` condition as `controlSource(Environment."<key>")`, naming a label
  *     the model never declares.

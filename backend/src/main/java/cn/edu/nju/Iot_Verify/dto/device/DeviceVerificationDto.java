@@ -19,8 +19,14 @@ import java.util.List;
  * 字段语义：
  * - varName / templateName / state: 设备身份和当前状态
  * - currentStateTrust/currentStatePrivacy: current-state label overrides
- * - variables: 每变量的值和信任 → smv.variableValues + smv.instanceVariableTrust
+ * - variables: device-local variable values and trust (IsInside=true only)
+ *   → smv.variableValues + smv.instanceVariableTrust
  * - privacies: device-local variable sensitivity overrides
+ *
+ * <p>Both collections are device-local only. A shared variable (IsInside=false) is rejected here by
+ * {@code NusmvRequestValidator.validateDeviceVariables} and supplied through the top-level
+ * environmentVariables pool instead, whose labels are scenario-wide; reading this list as "any
+ * variable" suggests a per-device label for a shared value, which no writer accepts.
  */
 @Data
 public class DeviceVerificationDto {
