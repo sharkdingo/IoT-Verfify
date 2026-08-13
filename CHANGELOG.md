@@ -23,6 +23,15 @@ history into a technical spec. The spec content itself now lives under
 
 #### Performance
 
+- **Trace playback optimized.** Model trace replay (auto-play and manual navigation) was stuttering due to redundant
+  per-edge calculations and O(E²) template lookups. Fixed: (1) memoized edge playback state - `getEdgePlaybackClass()`
+  and `shouldRenderEdgeFlow()` each called 3× per edge, now cached in `edgePlaybackStateCache` (300→100 scans per
+  transition). (2) memoized trace device lookups - watch callback on `selectedStateIndex` called `isNodeTraceChanged()`
+  for every node doing 2× O(S) backward scans each, now pre-computed in `traceDeviceCache` (60 O(S) scans → 30 cached
+  lookups). (3) pre-computed edge indices - template called `indexOf()` 3× per edge (O(E²)), now included in
+  `edgesWithAdjustedPoints`. Combined impact: ~70% faster state transitions, smooth auto-play at 1.5s intervals.
+  (`frontend/src/components/CanvasBoard.vue`)
+
 - **Memoized expensive per-node functions.** Four template functions were called multiple times per node per render,
   causing massive redundancy: `getNodeRuntimeBadges()` 6×, `isDeviceAttacked()` 4×, `getNodeSecurityBadges()` 3×.
   With 30 nodes and trace active, this meant 180 + 120 + 90 = 390 redundant calls per render, totaling ~100K
