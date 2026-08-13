@@ -1654,6 +1654,62 @@ describe('DeviceDialog template authority', () => {
     wrapper.unmount()
   })
 
+  /**
+   * A node stored before this rule existed still carries the contradiction, and it must not be displayed as
+   * truth: without re-deriving on open, the read-only field showed `garage` under the label "set by the
+   * initial state" while the state read `away`, and the only way to correct it was to toggle the state away
+   * and back. The server canonicalises a write the same way, so what is shown is what a save would store.
+   */
+  it('re-derives a legacy node whose stored variable contradicts its state', async () => {
+    const manifest: DeviceManifest = {
+      Name: 'Car',
+      Modes: ['CarLocation'],
+      InitState: 'away',
+      WorkingStates: [
+        { Name: 'garage', Trust: 'untrusted', Privacy: 'private', Dynamics: [{ VariableName: 'location', Value: 'garage' }] },
+        { Name: 'away', Trust: 'untrusted', Privacy: 'private', Dynamics: [{ VariableName: 'location', Value: 'away' }] }
+      ],
+      InternalVariables: [
+        { Name: 'location', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'untrusted', Privacy: 'private', Values: ['garage', 'away'] }
+      ],
+      APIs: []
+    } as never
+    const wrapper = mount(DeviceDialog, {
+      attachTo: document.body,
+      props: {
+        // Mounted closed and then opened, because the draft loads from the node only on that transition —
+        // mounting already-visible seeds it from the template instead and would not exercise this path.
+        visible: false,
+        deviceName: 'Car',
+        description: '',
+        label: 'My car',
+        nodeId: 'car-legacy',
+        manifest,
+        nodes: [{
+          id: 'car-legacy',
+          templateName: 'Car',
+          label: 'My car',
+          position: { x: 0, y: 0 },
+          state: 'away',
+          width: 176,
+          height: 128,
+          // The contradiction as the old defect persisted it.
+          variables: [{ name: 'location', value: 'garage', trust: 'untrusted' }]
+        }],
+        deviceTemplates: [{ name: 'Car', manifest, defaultTemplate: false }],
+        specs: []
+      },
+      global: { plugins: [i18n] }
+    } as never)
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    const derived = document.querySelector('[data-testid="device-runtime-variable-derived-location"]')
+    expect(derived?.textContent, 'a stored contradiction was displayed as truth').toContain('away')
+    expect(derived?.textContent).not.toContain('garage')
+    wrapper.unmount()
+  })
+
   it('omits the transitions section for a template that declares none', () => {
     const manifest: DeviceManifest = {
       Name: 'Air Conditioner',

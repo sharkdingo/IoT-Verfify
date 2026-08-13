@@ -1,7 +1,6 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
-import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
@@ -98,7 +97,6 @@ final class NusmvRequestValidator {
                 }
             }
             validateDeviceVariables(device.getVariables(), smv, prefix + ".variables", errors);
-            validateVariablesAgreeWithState(device, smv, prefix, errors);
             validateDevicePrivacies(device.getPrivacies(), smv, prefix + ".privacies", errors);
         }
     }
@@ -313,36 +311,6 @@ final class NusmvRequestValidator {
         }
     }
 
-    /**
-     * The same state/variable agreement the board write enforces, repeated here because a run can be
-     * submitted without going through board storage. A pair that contradicts itself would otherwise reach
-     * generation and produce a step 0 the transition relation forbids.
-     */
-    private static void validateVariablesAgreeWithState(DeviceVerificationDto device,
-                                                        DeviceSmvData smv,
-                                                        String prefix,
-                                                        Map<String, String> errors) {
-        if (device.getVariables() == null || smv == null || smv.getManifest() == null
-                || device.getState() == null || device.getState().isBlank()) {
-            return;
-        }
-        for (VariableStateDto variable : device.getVariables()) {
-            if (variable == null || variable.getName() == null || variable.getName().isBlank()
-                    || variable.getValue() == null || variable.getValue().isBlank()) {
-                continue;
-            }
-            String declared = DeviceManifestModes.stateDeclaredValue(
-                    smv.getManifest(), device.getState(), variable.getName());
-            if (declared == null) {
-                continue;
-            }
-            if (!declared.replace(" ", "").equals(variable.getValue().trim().replace(" ", ""))) {
-                errors.putIfAbsent(prefix + ".variables." + variable.getName(),
-                        "State '" + device.getState() + "' holds " + variable.getName() + " = " + declared
-                                + ", so it cannot start at '" + variable.getValue().trim() + "'.");
-            }
-        }
-    }
 
     private static void validateDeviceVariables(List<VariableStateDto> variables,
                                                 DeviceSmvData smv,

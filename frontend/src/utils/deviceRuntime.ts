@@ -136,8 +136,8 @@ export const templateVariableUsesNumericBounds = (variable: InternalVariable) =>
  * Rewrite every variable the given state constrains, in place.
  *
  * Each of the three runtime editors offers a state picker beside the variable inputs, so each could leave
- * a variable behind when the state changes — and the writers now refuse that pair. One function rather than
- * three watchers, because this is the same rule three times: a `Dynamics` value belongs to being in the
+ * a variable behind when the state changes, and the server would then canonicalise it to the state's value
+ * behind the user's back. One function rather than three watchers, because this is the same rule three times: a `Dynamics` value belongs to being in the
  * state, so the state is the half that decides. A variable the new state says nothing about is untouched;
  * under partial coverage it is a real instance choice.
  */
@@ -146,7 +146,9 @@ export const syncStateDerivedVariables = (
   template: DeviceTemplate | null | undefined,
   stateName: string | null | undefined
 ) => {
-  getTemplateInternalVariables(template).forEach(variable => {
+  // Locals only, like the editors that call this. A shared variable's value is pool authority, and writing
+  // one into the draft record could make the unsaved-changes check dirty on a field no save can carry.
+  getTemplateLocalVariables(template).forEach(variable => {
     const declared = stateDeclaredVariableValue(template, stateName, variable.Name)
     if (declared !== null) variables[variable.Name] = declared
   })
@@ -170,6 +172,8 @@ export const templateVariableIsStateDerived = (
 ): boolean => {
   const states = template?.manifest?.WorkingStates || []
   if (states.length === 0 || !variableName) return false
+  // Only a device-local variable can be the state's consequence; a shared value belongs to the pool.
+  if (!getTemplateLocalVariables(template).some(variable => variable.Name === variableName)) return false
   // A Transition assignment on the same variable disqualifies it. The generator emits transition branches
   // BEFORE the state branches in the same `case`, and first match wins, so a firing transition overrides
   // what the state declares — the variable is then genuinely driven by something other than the state, and

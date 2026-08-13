@@ -1410,6 +1410,67 @@ class BoardStorageServiceImplBatchTest {
         verify(nodeRepo).deleteByUserId(1L);
     }
 
+    /**
+     * A value the device's state determines is corrected on write, not rejected.
+     *
+     * <p>The value is derived — the generator gives {@code next(<device>.<var>)} a branch per working state,
+     * so a stored one survives only step 0 — which is how a Car came to be persisted in state {@code away}
+     * reporting {@code location = garage}. Refusing it instead would be worse than the defect: this
+     * validation runs over *every* stored node on ~19 write paths, so one such device would block adding a
+     * device, creating a rule, renaming and even deleting, and the repair path revalidates the whole board,
+     * so two of them could not be fixed at all. Canonicalising keeps every write working and leaves the
+     * model self-consistent.</p>
+     */
+    @Test
+    void addNodes_correctsALocalVariableTheStateDeterminesInsteadOfRejectingIt() {
+        DeviceNodeMapper realMapper = new DeviceNodeMapper();
+        BoardStorageServiceImpl serviceWithRealMapper = new BoardStorageServiceImpl(
+                nodeRepo, null, specRepo, ruleRepo, null, deviceTemplateRepo, null,
+                transactionTemplate, null, specificationMapper, ruleMapper, realMapper,
+                null, new DeviceTemplateMapper(), null, userRepository, editJournal);
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Car")
+                .modes(List.of("CarLocation"))
+                .initState("away")
+                .workingStates(List.of(
+                        DeviceTemplateDto.DeviceManifest.WorkingState.builder()
+                                .name("garage").trust("untrusted").privacy("private")
+                                .dynamics(List.of(DeviceTemplateDto.DeviceManifest.Dynamic.builder()
+                                        .variableName("location").value("garage").build()))
+                                .build(),
+                        DeviceTemplateDto.DeviceManifest.WorkingState.builder()
+                                .name("away").trust("untrusted").privacy("private")
+                                .dynamics(List.of(DeviceTemplateDto.DeviceManifest.Dynamic.builder()
+                                        .variableName("location").value("away").build()))
+                                .build()))
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("location").isInside(true).values(List.of("garage", "away"))
+                        .trust("untrusted").privacy("private").falsifiableWhenCompromised(true).build()))
+                .apis(List.of())
+                .build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L).name("Car").manifestJson(JsonUtils.toJson(manifest)).build();
+        DeviceNodeDto draft = boardNode("car_1", "Car", "My car");
+        draft.setState("away");
+        // The reported contradiction, submitted verbatim.
+        draft.setVariables(List.of(new VariableStateDto("location", "garage", "untrusted")));
+
+        when(nodeRepo.findByUserId(1L)).thenReturn(List.of());
+        when(deviceTemplateRepo.findByUserId(1L)).thenReturn(List.of(template));
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L)).thenReturn(List.of());
+        when(specRepo.findByUserId(1L)).thenReturn(List.of());
+        when(nodeRepo.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        DeviceNodeDto saved = serviceWithRealMapper.addNodes(1L, List.of(draft), List.of())
+                .getAffectedDevices().get(0);
+
+        assertEquals("away", saved.getState());
+        assertEquals("away", saved.getVariables().get(0).getValue(),
+                "the stored value must be the one the device's state declares");
+        // The trust label is still the user's; only the value is derived.
+        assertEquals("untrusted", saved.getVariables().get(0).getTrust());
+    }
+
     @Test
     void addNodes_canonicalizesRuntimeValuesBeforePersistence() {
         DeviceNodeMapper realMapper = new DeviceNodeMapper();

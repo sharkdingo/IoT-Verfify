@@ -180,13 +180,17 @@ const fillDeviceRuntimeFields = async (page: Page, prefix: 'single-device' | 'te
     await page.getByTestId(`${prefix}-state-privacy`).selectOption(runtime.currentStatePrivacy)
   }
   for (const variable of runtime.variables || []) {
+    // A variable every working state constrains has no value control: it is the state's consequence and is
+    // rendered read-only. Its trust label is still the user's, though, so skipping the whole entry left
+    // `trust` unset and the persisted node disagreed with what this helper was asked for.
     const control = page.getByTestId(`${prefix}-variable-${variable.name}`)
-    if (await control.count() === 0) continue
-    const tagName = await control.evaluate(element => element.tagName.toLowerCase())
-    if (tagName === 'select') {
-      await control.selectOption(variable.value)
-    } else {
-      await control.fill(variable.value)
+    if (await control.count() > 0) {
+      const tagName = await control.evaluate(element => element.tagName.toLowerCase())
+      if (tagName === 'select') {
+        await control.selectOption(variable.value)
+      } else {
+        await control.fill(variable.value)
+      }
     }
     const trustControl = page.getByTestId(`${prefix}-variable-trust-${variable.name}`)
     if (variable.trust && await trustControl.count() > 0) {

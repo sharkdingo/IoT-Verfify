@@ -610,8 +610,8 @@ const getTemplateInitState = (template: any) => {
 
 // Picking a state re-derives the variables it constrains, so this editor cannot submit a pair the
 // writers refuse. Same rule as the device dialog, through the same helper.
-watch(() => singleDeviceRuntime.state, (state, previous) => {
-  if (!state || previous === undefined) return
+watch(() => singleDeviceRuntime.state, state => {
+  if (!state) return
   syncStateDerivedVariables(singleDeviceRuntime.variables, selectedDeviceTemplate.value, state)
 })
 

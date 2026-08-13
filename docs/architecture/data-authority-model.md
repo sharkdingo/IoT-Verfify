@@ -131,9 +131,11 @@ working state declares a value for the variable, the `TRUE:` hold-current branch
 instance value survives only step 0 before the state overwrites it. Storing one is storing a derived
 fact, which is how a car came to be saved in state `away` reporting `location = garage`: a step 0 the
 model's own transition relation forbids, and the step every verification starts from. Such a variable is
-initialised from the starting state (`DeviceManifestModes.localInitialValue`), shown read-only in all
-three runtime editors, and a stored pair that disagrees is refused by both writer boundaries rather than
-silently corrected — the user chose both halves, so naming the conflict beats discarding one.
+initialised from the starting state (`DeviceManifestModes.localInitialValue`), and shown read-only in all
+three runtime editors. A pair that disagrees is **canonicalised to the state's value** at both writer
+boundaries rather than rejected: the value is derived, so correcting it is lossless, whereas refusing it
+would let one device stored before this rule existed block every unrelated write to the board — the
+failure shape `requireResolvedVariableSource` is deliberately scoped to avoid.
 
 Two exclusions keep that narrow, and both matter for custom templates:
 

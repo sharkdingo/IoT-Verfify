@@ -19,6 +19,23 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **Refusing a contradicting pair was worse than the defect; it is canonicalised instead.** The gate added
+  earlier ran inside the validation that re-checks *every stored node*, and ~19 write paths call it — so one
+  device saved by the old defect would have blocked adding a device, creating a rule, renaming, even
+  deleting, naming an unrelated device in the error. The repair path revalidates the whole board too, so two
+  such devices could not be fixed at all. `requireResolvedVariableSource` already carries the comment
+  explaining this shape ("or a legacy row would block this write too"); the rule was documented in the same
+  file I broke it in. Because the value is derived, correcting it is lossless: both writer boundaries now
+  rewrite it to the value the state declares, and the model-boundary factory does the same, so a
+  contradiction is unrepresentable at rest rather than guarded against. The device dialog re-derives on open
+  for the same reason — a legacy node would otherwise show `garage` beneath the label *set by the initial
+  state* while its state read `away`, the panel asserting something false, fixable only by toggling the
+  state away and back.
+  Also from that review: `syncStateDerivedVariables` was not scope-filtered, so a shared variable could
+  enter the draft record and make the unsaved-changes check dirty on a field no save can carry; and the
+  three watchers' `previous === undefined` guard was dead, since none is `immediate`. The E2E helper that
+  fills runtime fields skipped the whole entry when a value control was absent, which silently dropped the
+  still-editable **trust** label and made `authority-model-audit` fail on a field the change never touched.
 - **A variable the device's state determines is no longer stored, offered, or accepted as an instance
   choice.** Deriving the *default* correctly was not the root cause. The contradiction was representable:
   the same fact had two independent homes — the state, and a per-instance `variables[].value` — so a user

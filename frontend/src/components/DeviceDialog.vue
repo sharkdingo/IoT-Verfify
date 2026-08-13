@@ -312,8 +312,11 @@ const runtimeInternalVariables = computed(() =>
  * the state is the half that decides; a variable the new state says nothing about is left alone, since
  * that is a genuine instance choice rather than a consequence.
  */
-watch(() => runtimeDraft.value.state, (state, previous) => {
-  if (!state || previous === undefined) return
+// Fires on the initial load too, because the draft's state moves from `''` to the node's state — which is
+// what corrects a node stored before this rule existed, so the read-only field never displays a value its
+// own state contradicts.
+watch(() => runtimeDraft.value.state, state => {
+  if (!state) return
   syncStateDerivedVariables(runtimeDraft.value.variables, currentTemplate.value, state)
 })
 

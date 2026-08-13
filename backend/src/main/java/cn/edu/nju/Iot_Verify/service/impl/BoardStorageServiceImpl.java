@@ -847,7 +847,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         target.setState(trimToNull(runtime.getState()));
         target.setCurrentStateTrust(normalizeSecurityLabel(runtime.getCurrentStateTrust()));
         target.setCurrentStatePrivacy(normalizeSecurityLabel(runtime.getCurrentStatePrivacy()));
-        target.setVariables(canonicalizeVariables(runtime.getVariables(), manifest));
+        target.setVariables(canonicalizeVariables(runtime.getVariables(), manifest, target.getState()));
         target.setPrivacies(canonicalizePrivacies(runtime.getPrivacies(), manifest));
     }
 
@@ -855,7 +855,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         node.setState(trimToNull(node.getState()));
         node.setCurrentStateTrust(normalizeSecurityLabel(node.getCurrentStateTrust()));
         node.setCurrentStatePrivacy(normalizeSecurityLabel(node.getCurrentStatePrivacy()));
-        node.setVariables(canonicalizeVariables(node.getVariables(), manifest));
+        node.setVariables(canonicalizeVariables(node.getVariables(), manifest, node.getState()));
         node.setPrivacies(canonicalizePrivacies(node.getPrivacies(), manifest));
     }
 
@@ -864,7 +864,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     private List<VariableStateDto> canonicalizeVariables(
-            List<VariableStateDto> values, DeviceManifest manifest) {
+            List<VariableStateDto> values, DeviceManifest manifest, String state) {
         if (values == null) return null;
         return values.stream()
                 .map(value -> {
@@ -872,9 +872,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     String rawName = trimToNull(value.getName());
                     DeviceManifest.InternalVariable definition = internalVariable(manifest, rawName);
                     String name = definition != null ? definition.getName() : rawName;
+                    // A value the device's state determines is corrected here rather than refused. It is a
+                    // derived fact — the generator gives `next(<device>.<var>)` a branch per state, so a
+                    // stored value survives only step 0 — and refusing it in the shared revalidation would
+                    // let one legacy row block every unrelated write to the board, the failure shape
+                    // `requireResolvedVariableSource` is deliberately scoped to avoid. Canonicalising keeps
+                    // the write working and leaves the model self-consistent.
+                    String declared = DeviceManifestModes.stateDeclaredValue(manifest, state, name);
                     return new VariableStateDto(
                             name,
-                            trimToNull(value.getValue()),
+                            declared != null ? declared : trimToNull(value.getValue()),
                             normalizeSecurityLabel(value.getTrust()));
                 })
                 .toList();
@@ -2982,7 +2989,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 }
             }
             validateNodeVariables(errors, field + ".variables", node.getVariables(), manifest);
-            validateLocalVariablesAgreeWithState(errors, field, node, manifest);
             validateNodePrivacies(errors, field + ".privacies", node.getPrivacies(), manifest);
         }
     }
@@ -3337,48 +3343,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return templateManifests.get(templateName.trim().toLowerCase(Locale.ROOT));
     }
 
-    /**
-     * A device's state and its own local variables must describe one situation.
-     *
-     * <p>A WorkingState's {@code Dynamics} value constrains *being in* that state: the generator emits it
-     * as a branch of {@code next(<device>.<var>)} guarded by that state. So a node saved as state
-     * {@code away} with {@code location = garage} asks for a step 0 the model's own transition relation
-     * forbids — and the disagreement lasts exactly one step, which is the step every verification starts
-     * from. An {@code AG} property can be refuted, and an {@code EF} property proved, on a configuration
-     * the device cannot occupy.
-     *
-     * <p>Refused rather than silently corrected. The user chose both halves in the runtime panel, so
-     * overwriting one would discard an explicit choice without saying so; naming the conflict lets them
-     * decide which half they meant. Defaulting is where the two are reconciled automatically
-     * ({@code DeviceManifestModes.localInitialValue}); this gate only catches a pair a person built.</p>
-     */
-    private void validateLocalVariablesAgreeWithState(Map<String, String> errors,
-                                                     String field,
-                                                     DeviceNodeDto node,
-                                                     DeviceManifest manifest) {
-        if (node.getVariables() == null || !hasText(node.getState())) {
-            return;
-        }
-        for (VariableStateDto variable : node.getVariables()) {
-            if (variable == null || !hasText(variable.getName()) || !hasText(variable.getValue())) {
-                continue;
-            }
-            String declared = DeviceManifestModes.stateDeclaredValue(
-                    manifest, node.getState(), variable.getName());
-            if (declared == null) {
-                continue;
-            }
-            // Compared through the same canonicaliser enum membership uses, so this gate cannot disagree
-            // with `validateVariableValues` about whether two spellings are one value: a declared value may
-            // carry spaces (`fan only`) that the SMV identifier cannot.
-            if (!cleanEnumLiteral(declared).equals(cleanEnumLiteral(variable.getValue()))) {
-                errors.putIfAbsent(field + ".variables." + variable.getName(),
-                        "State '" + node.getState() + "' holds " + variable.getName() + " = " + declared
-                                + ", so it cannot start at '" + variable.getValue().trim()
-                                + "'. Change the state or the value so they agree.");
-            }
-        }
-    }
 
     private void validateNodeState(Map<String, String> errors,
                                    String field,

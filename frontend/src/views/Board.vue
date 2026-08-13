@@ -2031,8 +2031,8 @@ const templateInstanceRuntime = reactive(createDeviceRuntimeDraft())
 
 // Picking a state re-derives the variables it constrains, so this editor cannot submit a pair the
 // writers refuse. Same rule as the device dialog, through the same helper.
-watch(() => templateInstanceRuntime.state, (state, previous) => {
-  if (!state || previous === undefined) return
+watch(() => templateInstanceRuntime.state, state => {
+  if (!state) return
   syncStateDerivedVariables(templateInstanceRuntime.variables, templateInstanceDialogData.template, state)
 })
 

@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.model.ModelTokenSource;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -103,6 +104,16 @@ public class DeviceSmvDataFactory {
                 continue;
             }
             smv.setManifest(manifest);
+            // A value the device's state determines wins over whatever the request carried. It is a derived
+            // fact — the generator gives `next(<device>.<var>)` a branch per state, so a submitted value
+            // survives only step 0 — and a run must not be refused because a node stored before this rule
+            // existed still carries the old value. Board writes canonicalise the same way, so the two
+            // boundaries agree. Done here rather than at intake above, where the manifest is not yet loaded.
+            smv.getVariableValues().replaceAll((name, value) -> {
+                String declared = DeviceManifestModes.stateDeclaredValue(
+                        manifest, device.getState(), name);
+                return declared != null ? declared : value;
+            });
             if (!snapshotOnly) {
                 smv.setModelTokenSource(templateSourceCache.getOrDefault(
                         smv.getTemplateName(), ModelTokenSource.UNKNOWN));
