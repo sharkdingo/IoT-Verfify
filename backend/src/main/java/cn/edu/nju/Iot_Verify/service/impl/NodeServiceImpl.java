@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceCreationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeConfigDto;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
@@ -263,7 +264,7 @@ public class NodeServiceImpl implements NodeService {
             result.setCurrentStatePrivacy(requested != null ? requested.getCurrentStatePrivacy() : null);
         }
 
-        List<VariableStateDto> defaultVariables = defaultLocalVariables(manifest);
+        List<VariableStateDto> defaultVariables = defaultLocalVariables(manifest, state);
         if (requested != null && requested.getVariables() != null) {
             result.setVariables(mergeLocalVariables(
                     requested.getVariables(), defaultVariables, defaultsApplied));
@@ -322,18 +323,22 @@ public class NodeServiceImpl implements NodeService {
         return result;
     }
 
-    private List<VariableStateDto> defaultLocalVariables(DeviceManifest manifest) {
+    /**
+     * The starting values a newly created device persists for its device-local variables.
+     *
+     * <p>Derived from the state the device actually starts in, via {@code DeviceManifestModes}: a
+     * WorkingState's {@code Dynamics} value is a standing constraint on that variable, so defaulting it
+     * independently to the first enum literal persisted a node whose state and variable contradict each
+     * other — and this method runs on every ordinary creation, so it, not the generator, is what a user
+     * actually gets.</p>
+     */
+    private List<VariableStateDto> defaultLocalVariables(DeviceManifest manifest, String state) {
         if (manifest == null || manifest.getInternalVariables() == null) return List.of();
         List<VariableStateDto> result = new ArrayList<>();
         for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
             if (variable == null || !Boolean.TRUE.equals(variable.getIsInside())
                     || variable.getName() == null || variable.getName().isBlank()) continue;
-            String value = null;
-            if (variable.getValues() != null && !variable.getValues().isEmpty()) {
-                value = variable.getValues().get(0);
-            } else if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
-                value = String.valueOf(variable.getLowerBound());
-            }
+            String value = DeviceManifestModes.localInitialValue(manifest, variable, state);
             if (value != null) {
                 result.add(new VariableStateDto(variable.getName(), value, null));
             }

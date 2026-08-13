@@ -70,4 +70,71 @@ public final class DeviceManifestModes {
             states.add(state);
         }
     }
+
+    /**
+     * The value a device-local enum variable holds in {@code state}, if that state declares one.
+     *
+     * <p>A WorkingState's {@code Dynamics} entry is not an action but a standing constraint: the generator
+     * emits it as a branch of {@code next(<device>.<var>)} guarded by being in that state. So the state a
+     * device starts in already determines such a variable's initial value, and defaulting it independently
+     * to {@code Values[0]} produced a step-0 model that contradicts itself — {@code init(CarLocation) := away}
+     * beside {@code init(location) := garage}, on six bundled templates. This is the one place that
+     * derivation lives; every defaulter calls it rather than re-deriving.</p>
+     *
+     * <p>Enum only, deliberately. A numeric target declares {@code ChangeRate}, a rate that says nothing
+     * about the current value (schema {@code oneOf} makes the two exclusive), so there is nothing to derive
+     * and a numeric local keeps its lower-bound default. Returns {@code null} when the state declares no
+     * {@code Value} for the variable, which means "no opinion", not "empty".</p>
+     */
+    public static String stateDeclaredValue(DeviceManifest manifest, String stateName, String variableName) {
+        if (manifest == null || !hasText(stateName) || !hasText(variableName)
+                || manifest.getWorkingStates() == null) {
+            return null;
+        }
+        String wanted = stateName.trim();
+        for (DeviceManifest.WorkingState state : manifest.getWorkingStates()) {
+            if (state == null || state.getName() == null || state.getDynamics() == null) {
+                continue;
+            }
+            // Match the complete tuple: a multi-mode InitState like `heating;ready` names one WorkingState,
+            // and matching a single segment would pick an arbitrary sibling.
+            if (!wanted.equals(state.getName().trim())) {
+                continue;
+            }
+            for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
+                if (dynamic == null || !variableName.equals(dynamic.getVariableName())) {
+                    continue;
+                }
+                return hasText(dynamic.getValue()) ? dynamic.getValue().trim() : null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A device-local variable's initial value for a device starting in {@code stateName}: the value that
+     * state declares, else the documented template default (first enum literal, or the lower bound).
+     *
+     * <p>{@code stateName} is the device's own starting state, not necessarily the template's
+     * {@code InitState} — a user who sets a car's state to {@code garage} means its location to read
+     * {@code garage}. {@code FuzzModel} already resolves its initial state that way.</p>
+     */
+    public static String localInitialValue(DeviceManifest manifest,
+                                          DeviceManifest.InternalVariable variable,
+                                          String stateName) {
+        if (variable == null || variable.getName() == null) {
+            return null;
+        }
+        String declared = stateDeclaredValue(manifest, stateName, variable.getName());
+        if (declared != null) {
+            return declared;
+        }
+        if (variable.getValues() != null && !variable.getValues().isEmpty()) {
+            return variable.getValues().get(0);
+        }
+        if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
+            return String.valueOf(variable.getLowerBound());
+        }
+        return null;
+    }
 }

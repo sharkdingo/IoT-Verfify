@@ -311,8 +311,14 @@ privacy keys with values `public|private`. Template variables with `IsInside=fal
 are not saved on a device instance; they are board-level environment variables
 stored through `/api/board/environment`.
 
-All ordinary creation paths materialize the same device-local starting values: the
-template initial state and each local enum's first value or bounded number's lower bound.
+All ordinary creation paths materialize the same device-local starting values: the template initial
+state, and for each local variable the value that state declares in its `Dynamics` — falling back to the
+enum's first value or the bounded number's lower bound only when that state declares none. The state is
+what fixes the variable, because a `Dynamics` value is a standing constraint on being in that state, not
+an action. Defaulting the two independently produced a device whose own step 0 contradicted itself
+(`InitState: away` beside `location = garage`), on six bundled templates;
+`DeviceManifestModes.localInitialValue` is the single home for the derivation and
+`DeviceTemplateSchemaValidatorTest` pins it for every bundled manifest.
 Trust/privacy labels remain template-owned fallbacks unless the user or AI explicitly
 supplies an advanced instance override. A device-list JSON field that is omitted or
 `null` means "use the template default"; an explicit blank scalar or invalid value is

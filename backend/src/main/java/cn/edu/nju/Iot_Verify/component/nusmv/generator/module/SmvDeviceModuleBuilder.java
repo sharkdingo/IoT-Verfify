@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackActivation;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import lombok.extern.slf4j.Slf4j;
@@ -563,6 +564,15 @@ public class SmvDeviceModuleBuilder {
                 cleanValues.add(v.replace(" ", ""));
             }
             if (userValue == null) {
+                // The starting state already constrains this variable when it declares a Dynamics value,
+                // so taking `Values[0]` independently emitted a step-0 state the transition relation calls
+                // impossible. `DeviceManifestModes` owns the derivation; the literal is cleaned here because
+                // a declared value may contain spaces (`fan only`) while SMV identifiers may not.
+                String derived = DeviceManifestModes.stateDeclaredValue(
+                        smv.getManifest(), smv.getCurrentState(), var.getName());
+                if (derived != null) {
+                    return derived.replace(" ", "");
+                }
                 return cleanValues.get(0);
             }
             String cleanUser = userValue.replace(" ", "");

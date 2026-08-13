@@ -13,6 +13,7 @@ import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.RecommendationLimits;
@@ -683,7 +684,11 @@ public class RecommendScenarioTool extends AbstractAiTool {
         for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : localVariables.values()) {
             String key = variable.getName().toLowerCase(Locale.ROOT);
             if (seen.contains(key)) continue;
-            String value = defaultVariableValue(variable);
+            // A recommended device starts in its template's InitState, so a local variable must start at the
+            // value that state declares; the pool rule below is for shared values only.
+            String derived = DeviceManifestModes.localInitialValue(
+                    manifest, variable, manifest != null ? manifest.getInitState() : null);
+            String value = derived != null ? derived : "";
             if (value.isBlank()) continue;
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("name", variable.getName());
@@ -942,7 +947,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 Map<String, Object> appliedDefaults = new LinkedHashMap<>();
                 String value = row.has("value") && !row.path("value").isNull()
                         ? row.path("value").asText("")
-                        : defaultVariableValue(definition);
+                        : defaultSharedVariableValue(definition);
                 if (!row.has("value") || row.path("value").isNull()) {
                     appliedDefaults.put("value", value);
                 }
@@ -1027,7 +1032,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
     private Map<String, Object> defaultEnvironmentVariable(DeviceTemplateDto.DeviceManifest.InternalVariable variable, String name) {
         Map<String, Object> env = new LinkedHashMap<>();
         env.put("name", name);
-        env.put("value", defaultVariableValue(variable));
+        env.put("value", defaultSharedVariableValue(variable));
         env.put("trust", defaultTrust(variable == null ? null : normalizeTrust(variable.getTrust())));
         env.put("privacy", defaultPrivacy(variable == null ? null : normalizePrivacy(variable.getPrivacy())));
         return env;
@@ -2000,7 +2005,14 @@ public class RecommendScenarioTool extends AbstractAiTool {
         return template.getName();
     }
 
-    private String defaultVariableValue(DeviceTemplateDto.DeviceManifest.InternalVariable variable) {
+    /**
+     * The Environment Pool's default for a SHARED value: first enum literal, else the lower bound.
+     *
+     * <p>Deliberately not the local rule. A shared value's initial value is scenario authority owned by the
+     * pool, and several devices may write it, so no single device's starting state may dictate it. This
+     * method used to serve both scopes, which is how one label came to describe two rules.</p>
+     */
+    private String defaultSharedVariableValue(DeviceTemplateDto.DeviceManifest.InternalVariable variable) {
         if (variable == null) return "";
         if (variable.getValues() != null && !variable.getValues().isEmpty()) return String.valueOf(variable.getValues().get(0));
         // Both bounds, like every other defaulter (BoardStorageServiceImpl.defaultEnvironmentValue,

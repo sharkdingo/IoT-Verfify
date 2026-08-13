@@ -119,7 +119,11 @@ boolean.
 
 Evolution is scope-sensitive. A device-local variable follows its declared Transition
 assignment, WorkingState Dynamic, or numeric `NaturalChangeRate`; if none applies, it
-retains its current value. A local numeric rate follows the same interval convention as a
+retains its current value. Its **initial** value follows the same authority: when the state the device
+starts in declares a `Dynamics` value for it, that is the initial value, because the Dynamic constrains
+being in the state rather than entering it — so `init` and the state cannot disagree. Only when the
+starting state declares nothing does the template default (first enum literal, lower bound) apply. A
+local numeric rate follows the same interval convention as a
 shared numeric rate, combined with its active
 WorkingState Dynamic when one applies. The generator does not invent arbitrary local device changes.
 A shared numeric environment value follows its declared `NaturalChangeRate` plus all active device

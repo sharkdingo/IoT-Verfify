@@ -132,7 +132,41 @@ export const templateVariableUsesNumericBounds = (variable: InternalVariable) =>
   variable.LowerBound !== undefined && variable.LowerBound !== null
   && variable.UpperBound !== undefined && variable.UpperBound !== null
 
-export const getTemplateVariableDefaultValue = (variable: InternalVariable): string => {
+/**
+ * The value a working state declares for a variable, or `null` when it declares none.
+ *
+ * A `Dynamics` entry is a standing constraint — the model emits it as a branch of
+ * `next(<device>.<var>)` guarded by being in that state — so the state a device starts in already
+ * fixes such a variable's initial value. Enum only: a numeric target declares a `ChangeRate`, which
+ * says nothing about the current value. Mirrors `DeviceManifestModes.stateDeclaredValue`.
+ */
+export const stateDeclaredVariableValue = (
+  template: DeviceTemplate | null | undefined,
+  stateName: string | null | undefined,
+  variableName: string
+): string | null => {
+  const wanted = String(stateName ?? '').trim()
+  if (!wanted || !variableName) return null
+  // The complete tuple names one state: matching a single segment of `heating;ready` would pick a sibling.
+  const state = (template?.manifest?.WorkingStates || [])
+    .find(candidate => String(candidate?.Name ?? '').trim() === wanted)
+  const dynamic = (state?.Dynamics || []).find(entry => entry?.VariableName === variableName)
+  const value = dynamic?.Value
+  return value !== undefined && value !== null && String(value).trim() !== '' ? String(value).trim() : null
+}
+
+/**
+ * A variable's starting value. Pass the template and the device's starting state to get the value that
+ * state declares; without them this falls back to the documented template default, which is what the
+ * read-only placeholders want.
+ */
+export const getTemplateVariableDefaultValue = (
+  variable: InternalVariable,
+  template?: DeviceTemplate | null,
+  stateName?: string | null
+): string => {
+  const declared = stateDeclaredVariableValue(template, stateName, variable.Name)
+  if (declared !== null) return declared
   if (templateVariableHasEnumValues(variable)) return String(variable.Values![0])
   if (templateVariableUsesNumericBounds(variable)) return String(variable.LowerBound)
   return ''
@@ -152,7 +186,9 @@ export const resetDeviceRuntimeDraft = (
 
   getTemplateInternalVariables(template).forEach(variable => {
     const name = variable.Name
-    draft.variables[name] = getTemplateVariableDefaultValue(variable)
+    // Seeded from the state the draft actually starts in, so the dialog cannot offer a pair the server
+    // would store as a self-contradicting node (state `away` with `location = garage`).
+    draft.variables[name] = getTemplateVariableDefaultValue(variable, template, draft.state)
     draft.variableTrusts[name] = ''
     draft.privacies[name] = ''
   })

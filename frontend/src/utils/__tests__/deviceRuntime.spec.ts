@@ -9,6 +9,7 @@ import {
   getTemplateVariableDefaultValue,
   materializeDeviceRuntimeConfig,
   resetDeviceRuntimeDraft,
+  stateDeclaredVariableValue,
   templateVariableUsesNumericBounds,
   validateDeviceRuntimeConfig
 } from '../deviceRuntime'
@@ -332,5 +333,60 @@ describe('device runtime authority helpers', () => {
     expect(config?.currentStateTrust).toBe('maybe')
     expect(config?.variables?.find(variable => variable.name === 'presence')?.trust).toBe('unknown')
     expect(validateDeviceRuntimeConfig(thermostatTemplate, config, t)).toContain('app.deviceImportInvalidTrust')
+  })
+
+  /**
+   * The draft must not prefill a pair the server would store as a self-contradicting node.
+   *
+   * `Car` is the reported shape: `InitState: away`, whose WorkingState declares `location := away`, while
+   * `Values[0]` is `garage`. Seeding the two independently is what produced `init(CarLocation) := away`
+   * beside `init(location) := garage` in the generated model. The Thermostat fixture above cannot catch
+   * this — all its WorkingStates have empty `Dynamics`, so the derivation never engages.
+   */
+  const carTemplate: DeviceTemplate = {
+    id: 2,
+    name: 'Car',
+    manifest: {
+      Name: 'Car',
+      Description: '',
+      Modes: ['CarLocation'],
+      InitState: 'away',
+      InternalVariables: [
+        {
+          Name: 'location',
+          IsInside: true,
+          FalsifiableWhenCompromised: true,
+          Values: ['garage', 'away'],
+          Trust: 'untrusted',
+          Privacy: 'private'
+        }
+      ],
+      ImpactedVariables: [],
+      WorkingStates: [
+        { Name: 'garage', Description: '', Trust: 'untrusted', Privacy: 'private', Dynamics: [{ VariableName: 'location', Value: 'garage' }] },
+        { Name: 'away', Description: '', Trust: 'untrusted', Privacy: 'private', Dynamics: [{ VariableName: 'location', Value: 'away' }] }
+      ],
+      APIs: []
+    }
+  } as never
+
+  it('seeds a local variable from the state the draft starts in, not the first enum literal', () => {
+    const draft = createDeviceRuntimeDraft()
+
+    resetDeviceRuntimeDraft(draft, carTemplate)
+
+    expect(draft.state).toBe('away')
+    expect(draft.variables.location, 'the draft offered a state and value that contradict').toBe('away')
+    // The old rule, still correct where the starting state declares nothing for the variable.
+    expect(getTemplateVariableDefaultValue(carTemplate.manifest.InternalVariables![0])).toBe('garage')
+  })
+
+  it('reads the value a named state declares, and nothing when it declares none', () => {
+    expect(stateDeclaredVariableValue(carTemplate, 'garage', 'location')).toBe('garage')
+    expect(stateDeclaredVariableValue(carTemplate, 'away', 'location')).toBe('away')
+    expect(stateDeclaredVariableValue(carTemplate, 'away', 'missing')).toBeNull()
+    expect(stateDeclaredVariableValue(carTemplate, 'nosuchstate', 'location')).toBeNull()
+    // The Thermostat's states declare empty Dynamics, so they constrain nothing.
+    expect(stateDeclaredVariableValue(thermostatTemplate, 'auto', 'presence')).toBeNull()
   })
 })

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
@@ -93,20 +94,21 @@ public final class BoardSemanticFingerprint {
           .append('|').append(hasModes ? effectiveCurrentStatePrivacy(d, manifest) : "");
 
         // Variables — derive effective model values from manifest + explicit instance overrides.
-        sb.append("|vars[").append(variablesFingerprint(d.getVariables(), manifest)).append(']');
+        sb.append("|vars[").append(variablesFingerprint(d.getVariables(), manifest, d.getState())).append(']');
         // Privacies — manifest default plus explicit instance overrides.
         sb.append("|priv[").append(privaciesFingerprint(d.getPrivacies(), manifest)).append(']');
         return sb.toString();
     }
 
-    private static String variablesFingerprint(List<VariableStateDto> variables, DeviceManifest manifest) {
+    private static String variablesFingerprint(List<VariableStateDto> variables, DeviceManifest manifest,
+                                               String state) {
         Map<String, VariableFingerprintEntry> entries = new LinkedHashMap<>();
         if (manifest != null && manifest.getInternalVariables() != null) {
             for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
                 if (iv == null || iv.getName() == null) continue;
                 if (isEnvironmentVariable(iv)) continue;
                 entries.put(iv.getName(), new VariableFingerprintEntry(
-                        effectiveDefaultVariableValue(iv),
+                        effectiveDefaultVariableValue(iv, manifest, state),
                         normalizeTrust(iv.getTrust())));
             }
         }
@@ -292,24 +294,24 @@ public final class BoardSemanticFingerprint {
 
     /**
      * Effective value when the user did not provide an instance override.
-     * Mirrors generation:
+     * Mirrors generation, through the shared helper rather than by restating the rule:
      * - external/env variables have no init(a_x) unless the user supplies one;
-     * - internal enum variables init to the first enum literal;
-     * - internal numeric variables init to the lower bound;
+     * - an internal variable takes the value its starting state declares in Dynamics;
+     * - failing that, an enum takes its first literal and a bounded number its lower bound;
      * - bare variables keep NuSMV nondeterminism.
      */
-    private static String effectiveDefaultVariableValue(DeviceManifest.InternalVariable iv) {
+    private static String effectiveDefaultVariableValue(DeviceManifest.InternalVariable iv,
+                                                       DeviceManifest manifest,
+                                                       String state) {
         if (iv == null) return "";
         if (iv.getIsInside() == null || !iv.getIsInside()) {
             return "";
         }
-        if (iv.getValues() != null && !iv.getValues().isEmpty()) {
-            return cleanEnumLiteral(iv.getValues().get(0));
-        }
-        if (iv.getLowerBound() != null && iv.getUpperBound() != null) {
-            return String.valueOf(iv.getLowerBound());
-        }
-        return "";
+        // Same derivation as generation, through the one helper that owns it. Re-deriving here is what
+        // let this mirror drift: a fingerprint computed from `Values[0]` would describe a step-0 state the
+        // generated model does not have, and the drift check exists to catch exactly that kind of gap.
+        String derived = DeviceManifestModes.localInitialValue(manifest, iv, state);
+        return derived != null ? cleanEnumLiteral(derived) : "";
     }
 
     private static String defaultEnvironmentValue(DeviceManifest.InternalVariable iv) {

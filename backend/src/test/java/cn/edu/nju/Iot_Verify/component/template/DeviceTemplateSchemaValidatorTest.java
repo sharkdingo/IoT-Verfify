@@ -1532,4 +1532,71 @@ class DeviceTemplateSchemaValidatorTest {
         assertTrue(offenders.isEmpty(),
                 "a bundled device must not be placed already alerting:\n" + String.join("\n", offenders));
     }
+
+    /**
+     * A device's starting state and its local variables must describe the same situation.
+     *
+     * <p>Six bundled templates disagreed, because the state came from `InitState` and the variable from
+     * `Values[0]` — two independent sources, never compared. `Car` generated `init(CarLocation) := away`
+     * beside `init(location) := garage`: a step-0 state its own transition relation calls impossible, which
+     * makes an `AG` property refutable and an `EF` property provable on a configuration the device cannot
+     * occupy. Nothing caught it because nothing compared the two.
+     *
+     * <p>This asserts the invariant on the manifests, so a new or edited template cannot reintroduce it;
+     * `DeviceManifestModes.localInitialValue` is what makes the generated model satisfy it.
+     */
+    @Test
+    void everyBundledTemplateStartsItsLocalVariablesConsistentlyWithItsInitialState() throws Exception {
+        Path templateDir = Path.of("src/main/resources/deviceTemplate");
+        List<Path> templates;
+        try (Stream<Path> stream = Files.list(templateDir)) {
+            templates = stream.filter(p -> p.getFileName().toString().endsWith(".json")).sorted().toList();
+        }
+        assertFalse(templates.isEmpty(), "default templates should exist");
+
+        List<String> offenders = new ArrayList<>();
+        int checked = 0;
+        int reconciled = 0;
+        for (Path template : templates) {
+            DeviceManifest manifest = objectMapper.readValue(template.toFile(), DeviceManifest.class);
+            String initState = manifest.getInitState();
+            if (initState == null || initState.isBlank() || manifest.getInternalVariables() == null) continue;
+
+            for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
+                if (variable == null || !Boolean.TRUE.equals(variable.getIsInside())) continue;
+                String declared = DeviceManifestModes.stateDeclaredValue(
+                        manifest, initState, variable.getName());
+                if (declared == null) continue;
+                checked++;
+                // Compare against the value the OLD rule would have produced, read straight from the
+                // manifest. Asserting `localInitialValue` against `stateDeclaredValue` would be a tautology:
+                // both call the same helper, so it would pass even if the helper were wrong.
+                String independent = variable.getValues() != null && !variable.getValues().isEmpty()
+                        ? variable.getValues().get(0)
+                        : null;
+                String resolved = DeviceManifestModes.localInitialValue(manifest, variable, initState);
+                if (!declared.equals(resolved)) {
+                    offenders.add(template.getFileName() + ": " + variable.getName()
+                            + " starts at " + resolved + " while state \"" + initState + "\" declares " + declared);
+                }
+                if (independent != null && !independent.equals(resolved)) {
+                    // Not a failure: this is the six templates whose enum order disagrees with their initial
+                    // state, which is exactly what the derivation exists to reconcile. Recorded so the count
+                    // below cannot silently drop to zero and make this test vacuous.
+                    reconciled++;
+                }
+            }
+        }
+
+        // A scan that matches nothing asserts nothing.
+        assertTrue(checked > 0, "expected bundled templates whose initial state constrains a local variable");
+        // The invariant itself, reported first so a regression names the offending template, not a count.
+        assertTrue(offenders.isEmpty(),
+                "a device's starting state and its local variables must agree:\n" + String.join("\n", offenders));
+        // Six templates declare an enum whose first literal is not their initial state's value, so the
+        // derivation is doing real work. If this reaches zero the templates were reordered instead, and this
+        // test would pass while proving nothing.
+        assertTrue(reconciled > 0,
+                "expected at least one template whose enum order disagrees with its initial state");
+    }
 }

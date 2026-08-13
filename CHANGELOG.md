@@ -19,6 +19,29 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **A device's initial state and its own local variables contradicted each other, on six bundled
+  templates.** Reported from the UI: a Car showing initial state *away* with location *garage*. The
+  generated model really said both — `init(CarLocation) := away;` beside `init(location) := garage;` —
+  because the state came from `InitState` and the variable from `Values[0]`, two sources ten lines apart in
+  `NodeServiceImpl.effectiveRuntime` that were never compared. Step 1 looked like it healed, but that is
+  the guard reading the unprimed mode, i.e. a one-step lag, not a repair. Step 0 is where every
+  verification and simulation starts, so an `AG` property could be refuted, and an `EF` property *proved*,
+  on a configuration the device's own transition relation calls impossible.
+  A WorkingState's `Dynamics` value constrains *being in* that state, so the starting state already fixes
+  such a variable; deriving it independently was the defect. It now comes from the state the device
+  actually starts in — not the template's `InitState`, because a user who sets a car to `garage` means its
+  location to read `garage` — falling back to the old default only when that state declares nothing. Enum
+  only: a numeric target declares a `ChangeRate`, which says nothing about the current value, so Water
+  Heater's `waterTemperature` keeps its lower bound.
+  The same rule was copied to six sites; all now call one helper, `DeviceManifestModes.localInitialValue`.
+  That includes `BoardSemanticFingerprint`, whose javadoc claimed to "mirror generation" and would
+  otherwise have fingerprinted a step 0 the model no longer has, and `FuzzEngineTest`'s harness, which was
+  feeding the bounded explorer a start state NuSMV proves unreachable — the two engines would have
+  described different systems. `RecommendScenarioTool`'s defaulter served locals *and* the Environment Pool
+  through one method; that is now split, since the pool is scenario authority and no single device's state
+  may dictate a shared value. All four documented scene verdicts are unchanged (each sets its local
+  variables explicitly), and a new bundled-manifest guard names every offending template when the
+  derivation is removed.
 - **The same privacy value looked different in two adjacent tables, and one of them looked like plain
   text.** Each privacy cell was a three-way ternary whose middle branch was the empty string — and the
   two tables chose *opposite* values for it, so an unstyled label meant "public" in the variables table

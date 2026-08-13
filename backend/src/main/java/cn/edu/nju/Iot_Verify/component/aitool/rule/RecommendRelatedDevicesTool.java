@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.RecommendationAdjustmentItem;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationCapabilityView;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationFilterItem;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.RecommendationLimits;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -634,7 +635,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
         for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : localVariables.values()) {
             String key = variable.getName().toLowerCase(Locale.ROOT);
             if (seen.contains(key)) continue;
-            String value = defaultVariableValue(variable);
+            String value = defaultVariableValue(manifest, variable);
             if (value == null) continue;
             Map<String, Object> normalized = new LinkedHashMap<>();
             normalized.put("name", variable.getName());
@@ -694,16 +695,16 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
         return variables;
     }
 
-    private String defaultVariableValue(DeviceTemplateDto.DeviceManifest.InternalVariable variable) {
-        if (variable == null) return null;
-        if (variable.getValues() != null && !variable.getValues().isEmpty()) {
-            String value = variable.getValues().get(0);
-            return value == null || value.isBlank() ? null : value;
-        }
-        if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
-            return String.valueOf(variable.getLowerBound());
-        }
-        return null;
+    /**
+     * A recommended device is created in its template's InitState, so its local variables must start at the
+     * value that state declares — recommending the first enum literal instead produced a suggestion whose
+     * state and variable contradict each other. `DeviceManifestModes` owns the derivation.
+     */
+    private String defaultVariableValue(DeviceTemplateDto.DeviceManifest manifest,
+                                        DeviceTemplateDto.DeviceManifest.InternalVariable variable) {
+        String value = DeviceManifestModes.localInitialValue(
+                manifest, variable, manifest != null ? manifest.getInitState() : null);
+        return value == null || value.isBlank() ? null : value;
     }
 
     private String canonicalVariableValue(DeviceTemplateDto.DeviceManifest.InternalVariable variable, String rawValue) {

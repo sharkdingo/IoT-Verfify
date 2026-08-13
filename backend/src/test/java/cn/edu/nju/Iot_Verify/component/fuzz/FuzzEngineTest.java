@@ -13,6 +13,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvMainModuleBuild
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest.API;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest.Content;
+import cn.edu.nju.Iot_Verify.component.template.DeviceManifestModes;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
@@ -2310,7 +2311,13 @@ class FuzzEngineTest {
         for (DeviceManifest.InternalVariable variable : safe(manifest.getInternalVariables())) {
             String value = initialValue(variable.getValues(), variable.getLowerBound());
             if (Boolean.TRUE.equals(variable.getIsInside())) {
-                localValues.add(new VariableStateDto(variable.getName(), value, variable.getTrust()));
+                // FuzzModel refuses to default a local value, so this harness supplies one — and it must be
+                // the value the starting state declares, or the bounded explorer would start from a step-0
+                // state NuSMV proves unreachable, and the two engines would describe different systems.
+                String derived = DeviceManifestModes.localInitialValue(
+                        manifest, variable, manifest.getInitState());
+                localValues.add(new VariableStateDto(variable.getName(),
+                        derived != null ? derived : value, variable.getTrust()));
             } else {
                 environment.put(variable.getName(), new BoardEnvironmentVariableDto(
                         variable.getName(), value, variable.getTrust(), variable.getPrivacy()));
