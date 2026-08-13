@@ -15,11 +15,17 @@ export const updateEdgesForNode = (
     const moved = nodes.find(n => n.id === nodeId)
     if (!moved) return
 
+    // 构建节点查找映射，避免重复遍历
+    const nodeMap = new Map<string, DeviceNode>()
+    for (const node of nodes) {
+        nodeMap.set(node.id, node)
+    }
+
     edges.forEach(edge => {
         if (edge.from !== nodeId && edge.to !== nodeId) return
 
-        const fromNode = nodes.find(n => n.id === edge.from)
-        const toNode = nodes.find(n => n.id === edge.to)
+        const fromNode = nodeMap.get(edge.from)
+        const toNode = nodeMap.get(edge.to)
         if (!fromNode || !toNode) return
 
         // 特殊：自环

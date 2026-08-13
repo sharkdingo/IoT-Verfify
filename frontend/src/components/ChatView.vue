@@ -402,12 +402,22 @@ const progressEventStatus = (progress: StreamProgress) => {
   if (progress.stage === 'TASK_RESUMED') return t('app.chat.progressStatusResumed');
   return null;
 };
+/**
+ * Memoized execution trace totals calculation.
+ *
+ * This cache prevents redundant filtering when the same trace is queried multiple times
+ * (e.g., in the template rendering for successful/failed/unconfirmed counts).
+ */
+const executionTraceTotalsCache = new Map<StreamProgress[], { successful: number; failed: number; unconfirmed: number }>();
 const executionTraceTotals = (trace: StreamProgress[]) => {
+  const cached = executionTraceTotalsCache.get(trace);
+  if (cached) return cached;
+
   const latest = [...trace].reverse().find(progress =>
       progress.successfulSteps != null
       || progress.failedSteps != null
       || progress.unconfirmedSteps != null);
-  return {
+  const result = {
     successful: latest?.successfulSteps ?? trace.filter(progress =>
         progress.stage === 'TOOL_RESULT' && progress.outcome === 'USABLE').length,
     failed: latest?.failedSteps ?? trace.filter(progress =>
@@ -417,6 +427,9 @@ const executionTraceTotals = (trace: StreamProgress[]) => {
         && (progress.outcome === 'RESULT_UNAVAILABLE'
             || progress.outcome === 'CONFIRMATION_REQUIRED')).length
   };
+
+  executionTraceTotalsCache.set(trace, result);
+  return result;
 };
 const traceHasToolResults = (trace: StreamProgress[]) =>
     trace.some(progress => progress.stage === 'TOOL_RESULT');
@@ -522,8 +535,25 @@ const isSettlingAssistantMessage = (index: number) =>
     && Boolean(activeStreamSessionId.value)
     && activeStreamSessionId.value === currentSessionId.value
     && index === messages.value.length - 1;
-const messageExecutionTrace = (message: ChatMessage, index: number) =>
-    isActiveAssistantMessage(index) ? streamProgressEvents.value : (message.executionTrace ?? []);
+
+/**
+ * Per-message execution trace cache.
+ *
+ * Prevents redundant trace lookups when the same message is rendered multiple times
+ * in the template (e.g., for totals and detailed progress).
+ */
+const messageExecutionTraceCache = new Map<string, StreamProgress[]>();
+const messageExecutionTrace = (message: ChatMessage, index: number) => {
+  if (isActiveAssistantMessage(index)) return streamProgressEvents.value;
+
+  const cacheKey = `${message.id}-${index}`;
+  const cached = messageExecutionTraceCache.get(cacheKey);
+  if (cached) return cached;
+
+  const trace = message.executionTrace ?? [];
+  messageExecutionTraceCache.set(cacheKey, trace);
+  return trace;
+};
 const messageExecutionElapsed = (message: ChatMessage, index: number) =>
     isActiveAssistantMessage(index) ? streamElapsedSeconds.value : (message.executionElapsedSeconds ?? 0);
 /**
@@ -534,6 +564,15 @@ const messageExecutionElapsed = (message: ChatMessage, index: number) =>
  * remembered, because re-expanding what the user just closed is worse than hiding it.
  */
 const collapsedExecutionTraces = ref(new Set<string>());
+
+/**
+ * Clear performance caches when messages change.
+ */
+const clearPerformanceCaches = () => {
+  executionTraceTotalsCache.clear();
+  messageExecutionTraceCache.clear();
+  // processedContentCache is kept across sessions as message content is immutable
+};
 
 /**
  * Identity a collapse is remembered under.
@@ -571,6 +610,12 @@ const handleExecutionTraceScroll = (event: Event, active: boolean) => {
   });
 };
 watch(hasAnyAssistantWork, busy => chatStore.setStreaming(busy), { immediate: true });
+
+// Clear execution trace caches when streaming progress updates
+watch(streamProgressEvents, () => {
+  executionTraceTotalsCache.clear();
+}, { deep: true });
+
 const scrollRef = ref<HTMLElement | null>(null);
 const chatPanelRef = ref<HTMLElement | null>(null);
 const abortController = ref<AbortController | null>(null);
@@ -801,10 +846,44 @@ const clampExistingChatPosition = () => {
   }
 };
 
-const handleChatViewportResize = () => {
+/**
+ * Throttle utility for limiting function execution frequency.
+ *
+ * Returns a throttled version of the function that executes at most once per `delay` milliseconds.
+ */
+const throttle = <T extends (...args: any[]) => any>(fn: T, delay: number): T => {
+  let lastCall = 0;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  return ((...args: any[]) => {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastCall;
+
+    const execute = () => {
+      lastCall = Date.now();
+      fn(...args);
+    };
+
+    if (timeSinceLastCall >= delay) {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      execute();
+    } else {
+      if (timeoutId) clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        execute();
+        timeoutId = null;
+      }, delay - timeSinceLastCall);
+    }
+  }) as T;
+};
+
+const handleChatViewportResize = throttle(() => {
   stopPanelInteraction();
   clampExistingChatPosition();
-};
+}, 200);
 
 const handlePanelWindowBlur = () => stopPanelInteraction();
 
@@ -833,14 +912,24 @@ const getRawContentWithoutThinking = (content: string) => {
 };
 
 /**
- * 最终渲染内容的预处理
+ * 最终渲染内容的预处理（带 memoization）
+ *
+ * Cache prevents redundant string processing for the same content across renders.
  */
+const processedContentCache = new Map<string, string>();
 const getProcessedContent = (content: string) => {
   if (!content) return '';
+
+  const cached = processedContentCache.get(content);
+  if (cached !== undefined) return cached;
+
   // 1. 去除 Thinking 前缀
   let text = getRawContentWithoutThinking(content);
   // 2. 标准化 LaTeX
-  return convertLatexDelimiters(text);
+  const processed = convertLatexDelimiters(text);
+
+  processedContentCache.set(content, processed);
+  return processed;
 };
 
 const copyFullMessage = async (content: string) => {
@@ -1101,6 +1190,7 @@ const clearAuthoritativelyDeletedSession = (sessionId: string) => {
   historyNextBeforeId.value = null;
   pendingConfirmationKinds.value = [];
   pendingConfirmationLoadFailed.value = false;
+  clearPerformanceCaches();
 };
 
 const reportAuthoritativeSessionDeletion = (sessionId: string) => {
@@ -1433,6 +1523,7 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
   pendingConfirmationKinds.value = [];
   pendingConfirmationLoadFailed.value = false;
   historyLoadFailed.value = false;
+  clearPerformanceCaches();
   isLoadingHistory.value = true;
   const requestEpoch = ++historyRequestEpoch;
   const controller = new AbortController();
@@ -1662,6 +1753,7 @@ const resetChatForAuthSubjectChange = (previousAuthToken: string | null) => {
   // The fallback key is positional (`index:<n>`), so a collapse recorded for one account's last row
   // would apply to an unrelated message at the same index after the subject changes.
   collapsedExecutionTraces.value = new Set();
+  clearPerformanceCaches();
   inputValue.value = '';
   pendingConfirmationKinds.value = [];
   pendingConfirmationLoadFailed.value = false;
@@ -2637,7 +2729,7 @@ const scrollToBottom = (force = false) => {
               </button>
             </div>
 
-            <template v-for="(msg, index) in messages" :key="index">
+            <template v-for="(msg, index) in messages" :key="msg.id || msg.turnId || `msg-${index}`">
               <div :class="['msg-row', msg.role === 'user' ? 'user-row' : 'ai-row']">
                 <div class="avatar-container">
                   <UserOutlined v-if="msg.role === 'user'"/>

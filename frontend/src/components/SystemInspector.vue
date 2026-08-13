@@ -114,6 +114,41 @@ const sectionSearch = reactive<Record<InspectorSection, string>>({
   specs: ''
 })
 
+// 防抖的搜索查询，减少重新计算频率
+const debouncedSectionSearch = reactive<Record<InspectorSection, string>>({
+  devices: '',
+  rules: '',
+  specs: ''
+})
+
+let searchDebounceTimers: Record<InspectorSection, ReturnType<typeof setTimeout> | null> = {
+  devices: null,
+  rules: null,
+  specs: null
+}
+
+// 监听搜索输入并应用防抖
+watch(() => sectionSearch.devices, (newValue) => {
+  if (searchDebounceTimers.devices) clearTimeout(searchDebounceTimers.devices)
+  searchDebounceTimers.devices = setTimeout(() => {
+    debouncedSectionSearch.devices = newValue
+  }, 200)
+})
+
+watch(() => sectionSearch.rules, (newValue) => {
+  if (searchDebounceTimers.rules) clearTimeout(searchDebounceTimers.rules)
+  searchDebounceTimers.rules = setTimeout(() => {
+    debouncedSectionSearch.rules = newValue
+  }, 200)
+})
+
+watch(() => sectionSearch.specs, (newValue) => {
+  if (searchDebounceTimers.specs) clearTimeout(searchDebounceTimers.specs)
+  searchDebounceTimers.specs = setTimeout(() => {
+    debouncedSectionSearch.specs = newValue
+  }, 200)
+})
+
 const isInspectorSection = (value?: string): value is InspectorSection =>
   value === 'devices' || value === 'rules' || value === 'specs'
 
@@ -174,13 +209,7 @@ const activeSection = computed<InspectorSection>({
 const displayDevices = computed(() => {
   return props.devices
     .map(device => {
-      const template = props.deviceTemplates.find(candidate => {
-        const expected = String(device.templateName || '').trim().toLowerCase()
-        return expected && (
-          String(candidate.name || '').trim().toLowerCase() === expected
-          || String(candidate.manifest?.Name || '').trim().toLowerCase() === expected
-        )
-      })
+      const template = findTemplateForDevice(device)
       const hasStateMachine = hasModeledStateMachine(template?.manifest)
       const canonicalState = hasStateMachine
         ? resolveEffectiveNodeState(device.state, template?.manifest)
@@ -209,17 +238,22 @@ const matchesEntitySearch = (haystack: Array<unknown>, query: string) => {
 const normalizeLookupName = (value?: string | null) =>
   String(value || '').trim().toLowerCase()
 
-const templateMatchesDevice = (template: DeviceTemplate, device: DeviceNode) => {
-  const expected = normalizeLookupName(device.templateName)
-  return expected
-    && (
-      normalizeLookupName(template.name) === expected
-      || normalizeLookupName(template.manifest?.Name) === expected
-    )
-}
+// 创建模板索引以优化查找性能
+const templatesByName = computed(() => {
+  const map = new Map<string, DeviceTemplate>()
+  for (const template of props.deviceTemplates) {
+    const nameKey = normalizeLookupName(template.name)
+    if (nameKey) map.set(nameKey, template)
+    const manifestKey = normalizeLookupName(template.manifest?.Name)
+    if (manifestKey && manifestKey !== nameKey) map.set(manifestKey, template)
+  }
+  return map
+})
 
-const findTemplateForDevice = (device: DeviceNode) =>
-  props.deviceTemplates.find(template => templateMatchesDevice(template, device)) || null
+const findTemplateForDevice = (device: DeviceNode) => {
+  const key = normalizeLookupName(device.templateName)
+  return key ? (templatesByName.value.get(key) || null) : null
+}
 
 const isBundledTemplate = (template?: DeviceTemplate | null) =>
   template?.defaultTemplate === true
@@ -593,8 +627,17 @@ const getRelationLabel = (relation: string): string => {
 const hasConditionValue = (value: unknown) =>
   value !== null && value !== undefined && value !== ''
 
+// 创建设备索引以优化查找性能
+const devicesById = computed(() => {
+  const map = new Map<string, DeviceNode>()
+  for (const device of props.devices) {
+    map.set(device.id, device)
+  }
+  return map
+})
+
 const resolveDevice = (ref?: string) =>
-  props.devices.find(device => device.id === ref)
+  ref ? devicesById.value.get(ref) : undefined
 
 const isValueBasedRuleSource = (sourceType?: string) =>
   sourceType === 'variable' || sourceType === 'mode' || sourceType === 'state'
@@ -723,20 +766,20 @@ const filteredDevices = computed(() =>
   displayDevices.value.filter(device =>
     matchesEntitySearch(
       [device.id, device.name, device.type, device.state, device.canonicalState],
-      sectionSearch.devices
+      debouncedSectionSearch.devices
     )
   )
 )
 
 const filteredRules = computed(() =>
   displayRules.value.filter(rule =>
-    matchesEntitySearch([rule.id, rule.name, rule.description, rule.searchText], sectionSearch.rules)
+    matchesEntitySearch([rule.id, rule.name, rule.description, rule.searchText], debouncedSectionSearch.rules)
   )
 )
 
 const filteredSpecs = computed(() =>
   displaySpecs.value.filter(spec =>
-    matchesEntitySearch([spec.id, spec.name, spec.formula, spec.searchText], sectionSearch.specs)
+    matchesEntitySearch([spec.id, spec.name, spec.formula, spec.searchText], debouncedSectionSearch.specs)
   )
 )
 

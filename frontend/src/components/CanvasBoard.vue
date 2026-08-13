@@ -75,23 +75,6 @@ const isInternalVariableEdge = (edge: DeviceEdge): boolean => {
 }
 
 // Get particle color based on source device color (for edges)
-const getParticleColorByEdge = (edge: DeviceEdge): string => {
-  // 内部变量连线使用简单的灰色
-  if (isInternalVariableEdge(edge)) {
-    return 'var(--text-muted)'
-  }
-
-  const sourceNode = props.nodes.find(n => n.id === edge.from)
-  if (!sourceNode) return 'url(#grad-blue)' // fallback
-
-  const colorIndex = getNodeColorIndex(sourceNode.id)
-  const gradients = [
-    'url(#grad-blue)', 'url(#grad-green)', 'url(#grad-purple)', 'url(#grad-orange)',
-    'url(#grad-red)', 'url(#grad-teal)', 'url(#grad-pink)', 'url(#grad-yellow)'
-  ]
-  return gradients[colorIndex] || gradients[0]
-}
-
 const getParticleSize = (index: number): number => {
   const sizes = [3, 2, 2.5]
   return sizes[index % sizes.length]
@@ -109,30 +92,6 @@ const syncReducedMotionPreference = () => {
 
 const shouldRenderEdgeFlow = (edge: DeviceEdge) =>
   !prefersReducedMotion.value && shouldAnimateEdgeFlow(edge, props.edges, props.highlightedTrace)
-
-// Get arrow marker ID based on source device color
-const getArrowMarker = (edge: DeviceEdge): string => {
-  // 内部变量连线不显示箭头
-  if (edge.itemType === 'variable' && edge.relation === 'contains') {
-    return ''
-  }
-
-  const sourceNode = props.nodes.find(n => n.id === edge.from)
-  if (!sourceNode) return 'url(#arrow-blue)' // fallback
-
-  const colorIndex = getNodeColorIndex(sourceNode.id)
-  const markers = [
-    'url(#arrow-blue)', 'url(#arrow-green)', 'url(#arrow-purple)', 'url(#arrow-orange)',
-    'url(#arrow-red)', 'url(#arrow-teal)', 'url(#arrow-pink)', 'url(#arrow-yellow)'
-  ]
-  return markers[colorIndex] || markers[0]
-}
-
-// Get particle fill color (solid color) based on source device color
-const getParticleFillColor = (edge: DeviceEdge): string => {
-  const sourceNode = props.nodes.find(n => n.id === edge.from)
-  return sourceNode ? getNodeAccentColor(sourceNode.id) : 'var(--iot-node-accent-0)'
-}
 
 const fallbackDeviceSvg = `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
   <rect x="14" y="12" width="44" height="48" rx="10" fill="var(--border)" stroke="var(--text-muted)" stroke-width="3"/>
@@ -293,6 +252,43 @@ const canvasGridStyle = computed(() => {
     '--canvas-grid-offset-x': `${offsetX}px`,
     '--canvas-grid-offset-y': `${offsetY}px`
   }
+})
+
+// 缓存节点映射，避免在边渲染中重复查找
+const nodeMap = computed(() => {
+  const map = new Map<string, DeviceNode>()
+  for (const node of props.nodes) {
+    map.set(node.id, node)
+  }
+  return map
+})
+
+// 预计算所有边的调整后坐标，避免模板中重复计算
+const edgesWithAdjustedPoints = computed(() => {
+  return props.edges.map(edge => {
+    const fromNode = nodeMap.value.get(edge.from)
+    const toNode = nodeMap.value.get(edge.to)
+    const adjustedPoints = getAdjustedLinkPoints(fromNode, toNode, edge)
+
+    // 预计算边的样式属性，避免重复查找节点
+    const colorIndex = fromNode ? getNodeColorIndex(fromNode.id) : 0
+    const isInternal = isInternalVariableEdge(edge)
+
+    return {
+      edge,
+      fromNode,
+      toNode,
+      adjustedPoints,
+      // 预计算样式
+      particleColor: isInternal ? 'var(--text-muted)' :
+        ['url(#grad-blue)', 'url(#grad-green)', 'url(#grad-purple)', 'url(#grad-orange)',
+         'url(#grad-red)', 'url(#grad-teal)', 'url(#grad-pink)', 'url(#grad-yellow)'][colorIndex],
+      arrowMarker: isInternal ? '' :
+        ['url(#arrow-blue)', 'url(#arrow-green)', 'url(#arrow-purple)', 'url(#arrow-orange)',
+         'url(#arrow-red)', 'url(#arrow-teal)', 'url(#arrow-pink)', 'url(#arrow-yellow)'][colorIndex],
+      particleFillColor: fromNode ? getNodeAccentColor(fromNode.id) : 'var(--iot-node-accent-0)'
+    }
+  })
 })
 
 const getLatestTraceVariableValueForNode = (nodeId: string, variableName: string): string | null => {
@@ -522,6 +518,27 @@ const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
   window.addEventListener('pointercancel', onNodePointerCancel)
 }
 
+let edgeUpdateFrameId: number | null = null
+let edgeUpdatePending = false
+
+const scheduleEdgeUpdate = (nodeId: string) => {
+  if (edgeUpdatePending) return
+  edgeUpdatePending = true
+  edgeUpdateFrameId = requestAnimationFrame(() => {
+    updateEdgesForNode(nodeId, props.nodes, props.edges)
+    edgeUpdatePending = false
+    edgeUpdateFrameId = null
+  })
+}
+
+const cancelScheduledEdgeUpdate = () => {
+  if (edgeUpdateFrameId !== null) {
+    cancelAnimationFrame(edgeUpdateFrameId)
+    edgeUpdateFrameId = null
+    edgeUpdatePending = false
+  }
+}
+
 const onNodePointerMove = (e: PointerEvent) => {
   if (e.pointerId !== activeDragPointerId) return
   if (!activeDragMoved && activeDragStartPoint) {
@@ -535,15 +552,18 @@ const onNodePointerMove = (e: PointerEvent) => {
   const changed = updateNodeDrag(e, dragState, props.zoom)
   if (!changed || !dragState.node) return
 
-  // 节点位置变了，更新相关边几何
-  updateEdgesForNode(dragState.node.id, props.nodes, props.edges)
+  // 节点位置变了，使用 RAF 节流边更新以提升性能
+  scheduleEdgeUpdate(dragState.node.id)
 }
 
 const onNodePointerUp = (e: PointerEvent) => {
   if (e.pointerId !== activeDragPointerId) return
+  cancelScheduledEdgeUpdate()
   const movedEnough = activeDragMoved
   const moved = endNodeDrag(dragState)
   if (moved) {
+    // 拖拽结束立即同步更新边，确保最终位置准确
+    updateEdgesForNode(moved.id, props.nodes, props.edges)
     if (movedEnough) {
       emit('node-moved-or-resized', moved.id)
     } else {
@@ -555,6 +575,7 @@ const onNodePointerUp = (e: PointerEvent) => {
 
 const onNodePointerCancel = (e: PointerEvent) => {
   if (e.pointerId !== activeDragPointerId) return
+  cancelScheduledEdgeUpdate()
   const restored = cancelNodeDrag(dragState)
   if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
   releaseDragPointer()
@@ -1268,6 +1289,7 @@ const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
 
 onBeforeUnmount(() => {
   if (nodeAnimationResetTimer) clearTimeout(nodeAnimationResetTimer)
+  cancelScheduledEdgeUpdate()
   const restoredDrag = cancelNodeDrag(dragState)
   if (restoredDrag) updateEdgesForNode(restoredDrag.id, props.nodes, props.edges)
   releaseDragPointer()
@@ -1399,176 +1421,112 @@ onMounted(() => {
         </defs>
 
         <g
-            v-for="(edge, index) in edges"
-            :key="edge.id"
-            @pointerenter="setHoveredEdge(edge.id)"
+            v-for="edgeItem in edgesWithAdjustedPoints"
+            :key="edgeItem.edge.id"
+            @pointerenter="setHoveredEdge(edgeItem.edge.id)"
             @pointerleave="setHoveredEdge(null)"
         >
           <!-- Base lines removed - only showing particle effects -->
           <path
-              v-if="edge.from === edge.to"
+              v-if="edgeItem.edge.from === edgeItem.edge.to"
               class="edge-base-line"
-              :class="getEdgePlaybackClass(edge)"
-              :d="getSelfLoopPathD(edge)"
+              :class="getEdgePlaybackClass(edgeItem.edge)"
+              :d="getSelfLoopPathD(edgeItem.edge)"
               fill="none"
-              :stroke="getParticleColorByEdge(edge)"
-              :stroke-dasharray="isInternalVariableEdge(edge) ? '6,6' : ''"
-              :marker-end="getArrowMarker(edge)"
+              :stroke="edgeItem.particleColor"
+              :stroke-dasharray="isInternalVariableEdge(edgeItem.edge) ? '6,6' : ''"
+              :marker-end="edgeItem.arrowMarker"
           />
           <line
               v-else
               class="edge-base-line"
-              :class="getEdgePlaybackClass(edge)"
-              :x1="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).fromPoint.x"
-              :y1="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).fromPoint.y"
-              :x2="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).toPoint.x"
-              :y2="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).toPoint.y"
+              :class="getEdgePlaybackClass(edgeItem.edge)"
+              :x1="edgeItem.adjustedPoints.fromPoint.x"
+              :y1="edgeItem.adjustedPoints.fromPoint.y"
+              :x2="edgeItem.adjustedPoints.toPoint.x"
+              :y2="edgeItem.adjustedPoints.toPoint.y"
               fill="none"
-              :stroke="getParticleColorByEdge(edge)"
-              :stroke-dasharray="isInternalVariableEdge(edge) ? '6,6' : ''"
-              :marker-end="getArrowMarker(edge)"
+              :stroke="edgeItem.particleColor"
+              :stroke-dasharray="isInternalVariableEdge(edgeItem.edge) ? '6,6' : ''"
+              :marker-end="edgeItem.arrowMarker"
           />
 
           <path
-              v-if="edge.from === edge.to"
+              v-if="edgeItem.edge.from === edgeItem.edge.to"
               class="edge-hitarea"
-              :data-rule-id="edge.ruleId || undefined"
-              :d="getSelfLoopPathD(edge)"
+              :data-rule-id="edgeItem.edge.ruleId || undefined"
+              :d="getSelfLoopPathD(edgeItem.edge)"
               role="img"
               tabindex="0"
-              :aria-label="getFullEdgeLabel(edge)"
-              @pointerenter="setHoveredEdge(edge.id)"
+              :aria-label="getFullEdgeLabel(edgeItem.edge)"
+              @pointerenter="setHoveredEdge(edgeItem.edge.id)"
               @pointerleave="setHoveredEdge(null)"
-              @focus="focusedEdgeId = edge.id"
+              @focus="focusedEdgeId = edgeItem.edge.id"
               @blur="focusedEdgeId = null"
           />
           <line
               v-else
               class="edge-hitarea"
-              :data-rule-id="edge.ruleId || undefined"
+              :data-rule-id="edgeItem.edge.ruleId || undefined"
               role="img"
               tabindex="0"
-              :aria-label="getFullEdgeLabel(edge)"
-              :x1="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).fromPoint.x"
-              :y1="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).fromPoint.y"
-              :x2="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).toPoint.x"
-              :y2="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).toPoint.y"
-              @pointerenter="setHoveredEdge(edge.id)"
+              :aria-label="getFullEdgeLabel(edgeItem.edge)"
+              :x1="edgeItem.adjustedPoints.fromPoint.x"
+              :y1="edgeItem.adjustedPoints.fromPoint.y"
+              :x2="edgeItem.adjustedPoints.toPoint.x"
+              :y2="edgeItem.adjustedPoints.toPoint.y"
+              @pointerenter="setHoveredEdge(edgeItem.edge.id)"
               @pointerleave="setHoveredEdge(null)"
-              @focus="focusedEdgeId = edge.id"
+              @focus="focusedEdgeId = edgeItem.edge.id"
               @blur="focusedEdgeId = null"
           />
 
           <!-- During model playback, motion represents a backend-reported delivered automation. -->
           <path
-              v-if="edge.from === edge.to && shouldRenderEdgeFlow(edge)"
-              :key="`edge-flow-loop-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
+              v-if="edgeItem.edge.from === edgeItem.edge.to && shouldRenderEdgeFlow(edgeItem.edge)"
+              :key="`edge-flow-loop-${edgeItem.edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
-              :class="[getParticleOpacity(index), getEdgePlaybackClass(edge)]"
-              :d="getSelfLoopPathD(edge)"
+              :class="[getParticleOpacity(edgesWithAdjustedPoints.indexOf(edgeItem)), getEdgePlaybackClass(edgeItem.edge)]"
+              :d="getSelfLoopPathD(edgeItem.edge)"
               fill="none"
               filter="url(#glow)"
-              :stroke="getParticleColorByEdge(edge)"
+              :stroke="edgeItem.particleColor"
               stroke-width="2"
-              :stroke-dasharray="isInternalVariableEdge(edge) ? '5,5' : ''"
-              :marker-end="getArrowMarker(edge)"
+              :stroke-dasharray="isInternalVariableEdge(edgeItem.edge) ? '5,5' : ''"
+              :marker-end="edgeItem.arrowMarker"
           />
           <line
-              v-else-if="shouldRenderEdgeFlow(edge)"
-              :key="`edge-flow-line-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
+              v-else-if="shouldRenderEdgeFlow(edgeItem.edge)"
+              :key="`edge-flow-line-${edgeItem.edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
-              :class="[getParticleOpacity(index), getEdgePlaybackClass(edge)]"
-              :x1="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).fromPoint.x"
-              :y1="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).fromPoint.y"
-              :x2="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).toPoint.x"
-              :y2="getAdjustedLinkPoints(
-                props.nodes.find(n => n.id === edge.from),
-                props.nodes.find(n => n.id === edge.to),
-                edge
-              ).toPoint.y"
+              :class="[getParticleOpacity(edgesWithAdjustedPoints.indexOf(edgeItem)), getEdgePlaybackClass(edgeItem.edge)]"
+              :x1="edgeItem.adjustedPoints.fromPoint.x"
+              :y1="edgeItem.adjustedPoints.fromPoint.y"
+              :x2="edgeItem.adjustedPoints.toPoint.x"
+              :y2="edgeItem.adjustedPoints.toPoint.y"
               fill="none"
               filter="url(#glow)"
-              :stroke="getParticleColorByEdge(edge)"
+              :stroke="edgeItem.particleColor"
               stroke-width="2"
-              :stroke-dasharray="isInternalVariableEdge(edge) ? '5,5' : ''"
-              :marker-end="getArrowMarker(edge)"
+              :stroke-dasharray="isInternalVariableEdge(edgeItem.edge) ? '5,5' : ''"
+              :marker-end="edgeItem.arrowMarker"
           />
 
           <!-- A compromised or idle automation remains visible as a static edge. -->
           <circle
-              v-if="edge.from !== edge.to && shouldRenderEdgeFlow(edge)"
-              :key="`edge-flow-particle-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
+              v-if="edgeItem.edge.from !== edgeItem.edge.to && shouldRenderEdgeFlow(edgeItem.edge)"
+              :key="`edge-flow-particle-${edgeItem.edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="trace-flow-particle"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
-              :fill="getParticleFillColor(edge)"
+              :fill="edgeItem.particleFillColor"
               filter="url(#glow)"
-              :r="getParticleSize(index)"
+              :r="getParticleSize(edgesWithAdjustedPoints.indexOf(edgeItem))"
           >
             <animateMotion
                 :dur="TRACE_FLOW_DURATION"
-                :path="`M ${getAdjustedLinkPoints(
-                  props.nodes.find(n => n.id === edge.from),
-                  props.nodes.find(n => n.id === edge.to),
-                  edge
-                ).fromPoint.x} ${getAdjustedLinkPoints(
-                  props.nodes.find(n => n.id === edge.from),
-                  props.nodes.find(n => n.id === edge.to),
-                  edge
-                ).fromPoint.y} L ${getAdjustedLinkPoints(
-                  props.nodes.find(n => n.id === edge.from),
-                  props.nodes.find(n => n.id === edge.to),
-                  edge
-                ).toPoint.x} ${getAdjustedLinkPoints(
-                  props.nodes.find(n => n.id === edge.from),
-                  props.nodes.find(n => n.id === edge.to),
-                  edge
-                ).toPoint.y}`"
+                :path="`M ${edgeItem.adjustedPoints.fromPoint.x} ${edgeItem.adjustedPoints.fromPoint.y} L ${edgeItem.adjustedPoints.toPoint.x} ${edgeItem.adjustedPoints.toPoint.y}`"
                 repeatCount="1"
                 fill="freeze"
             />
@@ -1582,21 +1540,21 @@ onMounted(() => {
             />
           </circle>
           <g
-              v-if="shouldShowEdgeLabel(edge)"
+              v-if="shouldShowEdgeLabel(edgeItem.edge)"
               class="edge-label"
-              :transform="`translate(${getEdgeLabelPoint(edge).x} ${getEdgeLabelPoint(edge).y})`"
+              :transform="`translate(${getEdgeLabelPoint(edgeItem.edge).x} ${getEdgeLabelPoint(edgeItem.edge).y})`"
           >
-            <title>{{ getFullEdgeLabel(edge) }}</title>
+            <title>{{ getFullEdgeLabel(edgeItem.edge) }}</title>
             <rect
                 class="edge-label__bg"
-                :x="-getEdgeLabelWidth(edge) / 2"
+                :x="-getEdgeLabelWidth(edgeItem.edge) / 2"
                 y="-10"
-                :width="getEdgeLabelWidth(edge)"
+                :width="getEdgeLabelWidth(edgeItem.edge)"
                 height="20"
                 rx="10"
             />
             <text class="edge-label__text" text-anchor="middle" dominant-baseline="middle">
-              {{ getEdgeLabelText(edge) }}
+              {{ getEdgeLabelText(edgeItem.edge) }}
             </text>
           </g>
           <!-- For self-loops, we could add a different animation -->

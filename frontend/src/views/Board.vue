@@ -1690,9 +1690,18 @@ const ensureBoardDataReady = (keys: BoardDataKey[] = allBoardDataKeys): boolean 
   return false
 }
 
+// 创建节点索引以优化查找性能
+const nodesById = computed(() => {
+  const map = new Map<string, DeviceNode>()
+  for (const node of nodes.value) {
+    map.set(node.id, node)
+  }
+  return map
+})
+
 const resolveNodeRef = (refValue?: string | null): DeviceNode | undefined => {
   if (!refValue) return undefined
-  return nodes.value.find(n => n.id === refValue)
+  return nodesById.value.get(refValue)
 }
 
 const assertRulesHaveTriggers = (candidateRules: RuleForm[]): boolean => {
@@ -5142,7 +5151,7 @@ const retryBoardDataLoad = async () => {
   }
 }
 
-watch([nodes, rules], syncRuleDerivedEdges, { deep: true })
+watch([nodes, rules], syncRuleDerivedEdges)
 
 const applyLoadedBoardLayout = (layout: BoardLayoutDto | null, initialHydration: boolean) => {
   persistedWideLayout = layout ?? {
@@ -5313,6 +5322,13 @@ const canvasMapData = computed(() => {
   // Create node lookup map for easy access
   const nodeMap = new Map(dots.map(dot => [dot.id, dot]))
 
+  // 预计算双向边对，避免 O(edges²) 复杂度
+  const bidirectionalPairs = new Set<string>()
+  for (const edge of allEdges.value) {
+    const key = [edge.from, edge.to].sort().join('→')
+    bidirectionalPairs.add(key)
+  }
+
   // Generate lines for rule-derived visible edges.
   const lines = allEdges.value.flatMap((edge) => {
     const fromDot = nodeMap.get(edge.from)
@@ -5320,10 +5336,10 @@ const canvasMapData = computed(() => {
 
     if (!fromDot || !toDot) return []
 
-    // Check if bidirectional
-    const isBidirectional = allEdges.value.some(e =>
-      (e.from === edge.to && e.to === edge.from)
-    )
+    // Check if bidirectional using pre-computed Set
+    const pairKey = [edge.from, edge.to].sort().join('→')
+    const reversePairKey = [edge.to, edge.from].sort().join('→')
+    const isBidirectional = pairKey === reversePairKey ? false : bidirectionalPairs.has(pairKey)
 
     let offsetY = 0
 

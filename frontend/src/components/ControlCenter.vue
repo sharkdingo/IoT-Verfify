@@ -188,6 +188,26 @@ const importDeviceForm = reactive({
   text: ''
 })
 
+// Debounced import text for performance optimization (avoids re-parsing on every keystroke)
+const debouncedImportText = ref('')
+let importTextDebounceTimer: ReturnType<typeof setTimeout> | null = null
+const IMPORT_TEXT_DEBOUNCE_MS = 300
+
+watch(() => importDeviceForm.text, (newText) => {
+  if (importTextDebounceTimer) {
+    clearTimeout(importTextDebounceTimer)
+  }
+  importTextDebounceTimer = setTimeout(() => {
+    debouncedImportText.value = newText
+  }, IMPORT_TEXT_DEBOUNCE_MS)
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (importTextDebounceTimer) {
+    clearTimeout(importTextDebounceTimer)
+  }
+})
+
 const MAX_BATCH_DEVICE_COUNT = 50
 
 const normalizeName = (value: unknown) => String(value ?? '').trim()
@@ -625,10 +645,42 @@ const getTemplatePreviewSections = (template: any) => [
   { key: 'apis', label: t('app.deviceApis'), items: getTemplateList(template, 'APIs').map(item => formatTemplateModelToken(template, item)) }
 ]
 
+// Precomputed formatted values for v-for loops (optimization to avoid repeated function calls)
+const formattedSelectedWorkingStates = computed(() =>
+  selectedWorkingStates.value.map(state => ({
+    name: state.Name,
+    label: formatTemplateModelToken(selectedDeviceTemplate.value, state.Name)
+  }))
+)
+
+const formattedSelectedInternalVariables = computed(() =>
+  selectedInternalVariables.value.map(variable => ({
+    ...variable,
+    formattedName: formatTemplateModelToken(selectedDeviceTemplate.value, variable.Name),
+    formattedDefaultValue: formatTemplateModelToken(
+      selectedDeviceTemplate.value,
+      getTemplateVariableDefaultValue(variable, selectedDeviceTemplate.value, singleDeviceRuntime.state)
+    ),
+    formattedValues: variable.Values
+      ? variable.Values.map((val: unknown) => ({
+          raw: String(val),
+          formatted: formatTemplateModelToken(selectedDeviceTemplate.value, val)
+        }))
+      : []
+  }))
+)
+
 const activeTemplatePreview = computed(() => {
   const key = pinnedTemplatePreviewId.value
   if (key === null) return null
   return props.deviceTemplates.find((template: any) => getTemplateKey(template) === key) ?? null
+})
+
+// Precomputed template preview sections (optimization)
+const activeTemplatePreviewSections = computed(() => {
+  const template = activeTemplatePreview.value
+  if (!template) return []
+  return getTemplatePreviewSections(template)
 })
 
 const templatePreviewStyle = computed(() => {
@@ -744,7 +796,7 @@ const batchDevicePreview = computed(() => {
 })
 
 const parsedImportedDevices = computed<DeviceImportRow[]>(() => {
-  const text = importDeviceForm.text.trim()
+  const text = debouncedImportText.value.trim()
   if (!text) return []
 
   try {
@@ -1667,6 +1719,46 @@ const naturalLanguageRule = computed(() => {
       return t('app.specPreviewConfigureConditions')
   }
 })
+
+// Precomputed formatted condition data for v-for loops (optimization)
+const formattedAConditions = computed(() =>
+  specForm.aConditions.map(condition => ({
+    ...condition,
+    deviceLabel: getDeviceLabel(condition.deviceId),
+    propertyLabel: formatConditionPropertyLabel(condition),
+    formattedValue: formatConditionValue(condition.value, condition.deviceId),
+    variableSourceLabel: formatConditionVariableSourceLabel(condition),
+    relationLabel: getRelationLabel(condition.relation || '='),
+    isDeviceMissing: isSpecConditionDeviceMissing(condition.deviceId),
+    isVariableSourceUnresolved: isSpecConditionVariableSourceUnresolved(condition)
+  }))
+)
+
+const formattedIfConditions = computed(() =>
+  specForm.ifConditions.map(condition => ({
+    ...condition,
+    deviceLabel: getDeviceLabel(condition.deviceId),
+    propertyLabel: formatConditionPropertyLabel(condition),
+    formattedValue: formatConditionValue(condition.value, condition.deviceId),
+    variableSourceLabel: formatConditionVariableSourceLabel(condition),
+    relationLabel: getRelationLabel(condition.relation || '='),
+    isDeviceMissing: isSpecConditionDeviceMissing(condition.deviceId),
+    isVariableSourceUnresolved: isSpecConditionVariableSourceUnresolved(condition)
+  }))
+)
+
+const formattedThenConditions = computed(() =>
+  specForm.thenConditions.map(condition => ({
+    ...condition,
+    deviceLabel: getDeviceLabel(condition.deviceId),
+    propertyLabel: formatConditionPropertyLabel(condition),
+    formattedValue: formatConditionValue(condition.value, condition.deviceId),
+    variableSourceLabel: formatConditionVariableSourceLabel(condition),
+    relationLabel: getRelationLabel(condition.relation || '='),
+    isDeviceMissing: isSpecConditionDeviceMissing(condition.deviceId),
+    isVariableSourceUnresolved: isSpecConditionVariableSourceUnresolved(condition)
+  }))
+)
 
 // Handle template selection
 const handleTemplateChange = () => {
@@ -2636,7 +2728,7 @@ watch(() => props.readOnly, readOnly => {
                     data-testid="single-device-state"
                     class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-[color:var(--accent-border)] focus:ring-2 focus:ring-[color:var(--accent-border)]"
                   >
-                    <option v-for="state in selectedWorkingStates" :key="state.Name" :value="state.Name">{{ formatTemplateModelToken(selectedDeviceTemplate, state.Name) }}</option>
+                    <option v-for="state in formattedSelectedWorkingStates" :key="state.name" :value="state.name">{{ state.label }}</option>
                   </select>
                 </label>
 
@@ -2665,14 +2757,14 @@ watch(() => props.readOnly, readOnly => {
                 </label>
               </div>
 
-              <div v-if="selectedInternalVariables.length > 0" class="mt-3 space-y-2">
+              <div v-if="formattedSelectedInternalVariables.length > 0" class="mt-3 space-y-2">
                 <div
-                  v-for="variable in selectedInternalVariables"
+                  v-for="variable in formattedSelectedInternalVariables"
                   :key="variable.Name"
                   class="rounded-lg border border-slate-200 bg-slate-50/80 p-2"
                 >
                   <div class="mb-2 flex items-center justify-between gap-2">
-                    <span class="truncate text-[11px] font-bold text-slate-700" :title="formatTemplateModelToken(selectedDeviceTemplate, variable.Name)">{{ formatTemplateModelToken(selectedDeviceTemplate, variable.Name) }}</span>
+                    <span class="truncate text-[11px] font-bold text-slate-700" :title="variable.formattedName">{{ variable.formattedName }}</span>
                     <span v-if="templateVariableUsesNumericBounds(variable)" class="text-[length:var(--iot-font-min)] font-semibold text-slate-500">
                       {{ variableInputPlaceholder(variable) }}
                     </span>
@@ -2700,8 +2792,8 @@ watch(() => props.readOnly, readOnly => {
                         :data-testid="`single-device-variable-${variable.Name}`"
                         class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
                       >
-                        <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatTemplateModelToken(selectedDeviceTemplate, getTemplateVariableDefaultValue(variable, selectedDeviceTemplate, singleDeviceRuntime.state)) }) }}</option>
-                        <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatTemplateModelToken(selectedDeviceTemplate, value) }}</option>
+                        <option value="">{{ t('app.useTemplateDefaultWithValue', { value: variable.formattedDefaultValue }) }}</option>
+                        <option v-for="val in variable.formattedValues" :key="val.raw" :value="val.raw">{{ val.formatted }}</option>
                       </select>
                       <input
                         v-else
@@ -3343,7 +3435,7 @@ watch(() => props.readOnly, readOnly => {
                 </div>
                 <div class="space-y-1.5 max-h-36 iot-scroll-region pr-1">
                   <div
-                    v-for="(condition, index) in specForm.aConditions"
+                    v-for="(condition, index) in formattedAConditions"
                     :key="condition.id"
                     class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-[color:var(--danger-border)] shadow-sm hover:shadow-md transition-all"
                   >
@@ -3356,31 +3448,31 @@ watch(() => props.readOnly, readOnly => {
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
                         <span
                           class="text-[length:var(--iot-font-min)] font-medium truncate min-w-0"
-                          :class="isSpecConditionDeviceMissing(condition.deviceId)
+                          :class="condition.isDeviceMissing
  ? 'board-text-danger line-through'
  : 'text-slate-700'"
-                          :title="getDeviceLabel(condition.deviceId)"
+                          :title="condition.deviceLabel"
                         >
-                          {{ getDeviceLabel(condition.deviceId) }}
+                          {{ condition.deviceLabel }}
                         </span>
                         <span class="text-slate-500 flex-shrink-0">·</span>
-                        <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="condition.propertyLabel">{{ condition.propertyLabel }}</span>
                         <!-- Which of the two variable questions this row asks. A row with no
                              recorded choice is marked unresolved rather than shown as either. -->
                         <span
                           v-if="condition.targetType === 'variable'"
                           class="text-[length:var(--iot-font-min)] px-1 py-0.5 rounded flex-shrink-0 border"
-                          :class="isSpecConditionVariableSourceUnresolved(condition)
+                          :class="condition.isVariableSourceUnresolved
                             ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
                             : 'text-slate-600 bg-slate-100 border-slate-200'"
-                          :title="formatConditionVariableSourceLabel(condition) || ''"
+                          :title="condition.variableSourceLabel || ''"
                           data-testid="spec-condition-row-variable-source"
-                        >{{ formatConditionVariableSourceLabel(condition) }}</span>
+                        >{{ condition.variableSourceLabel }}</span>
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
-                          {{ getRelationLabel(condition.relation || '=') }}
+                          {{ condition.relationLabel }}
                         </span>
-                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
-                          {{ formatConditionValue(condition.value, condition.deviceId) }}
+                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="condition.formattedValue">
+                          {{ condition.formattedValue }}
                         </span>
                       </div>
                     </div>
@@ -3441,7 +3533,7 @@ watch(() => props.readOnly, readOnly => {
                 </div>
                 <div class="space-y-1.5 max-h-36 iot-scroll-region pr-1">
                   <div
-                    v-for="(condition, index) in specForm.ifConditions"
+                    v-for="(condition, index) in formattedIfConditions"
                     :key="condition.id"
                     class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-[color:var(--danger-border)] shadow-sm hover:shadow-md transition-all"
                   >
@@ -3454,31 +3546,31 @@ watch(() => props.readOnly, readOnly => {
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
                         <span
                           class="text-[length:var(--iot-font-min)] font-medium truncate min-w-0"
-                          :class="isSpecConditionDeviceMissing(condition.deviceId)
+                          :class="condition.isDeviceMissing
  ? 'board-text-danger line-through'
  : 'text-slate-700'"
-                          :title="getDeviceLabel(condition.deviceId)"
+                          :title="condition.deviceLabel"
                         >
-                          {{ getDeviceLabel(condition.deviceId) }}
+                          {{ condition.deviceLabel }}
                         </span>
                         <span class="text-slate-500 flex-shrink-0">·</span>
-                        <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <span class="text-[length:var(--iot-font-min)] board-text-danger font-medium truncate flex-shrink-0" :title="condition.propertyLabel">{{ condition.propertyLabel }}</span>
                         <!-- Which of the two variable questions this row asks. A row with no
                              recorded choice is marked unresolved rather than shown as either. -->
                         <span
                           v-if="condition.targetType === 'variable'"
                           class="text-[length:var(--iot-font-min)] px-1 py-0.5 rounded flex-shrink-0 border"
-                          :class="isSpecConditionVariableSourceUnresolved(condition)
+                          :class="condition.isVariableSourceUnresolved
                             ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
                             : 'text-slate-600 bg-slate-100 border-slate-200'"
-                          :title="formatConditionVariableSourceLabel(condition) || ''"
+                          :title="condition.variableSourceLabel || ''"
                           data-testid="spec-condition-row-variable-source"
-                        >{{ formatConditionVariableSourceLabel(condition) }}</span>
+                        >{{ condition.variableSourceLabel }}</span>
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
-                          {{ getRelationLabel(condition.relation || '=') }}
+                          {{ condition.relationLabel }}
                         </span>
-                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
-                          {{ formatConditionValue(condition.value, condition.deviceId) }}
+                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="condition.formattedValue">
+                          {{ condition.formattedValue }}
                         </span>
                       </div>
                     </div>
@@ -3539,7 +3631,7 @@ watch(() => props.readOnly, readOnly => {
                 </div>
                 <div class="space-y-1.5 max-h-36 iot-scroll-region pr-1">
                   <div
-                    v-for="(condition, index) in specForm.thenConditions"
+                    v-for="(condition, index) in formattedThenConditions"
                     :key="condition.id"
                     class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-[color:var(--warning-border)] shadow-sm hover:shadow-md transition-all"
                   >
@@ -3552,31 +3644,31 @@ watch(() => props.readOnly, readOnly => {
                       <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
                         <span
                           class="text-[length:var(--iot-font-min)] font-medium truncate min-w-0"
-                          :class="isSpecConditionDeviceMissing(condition.deviceId)
+                          :class="condition.isDeviceMissing
  ? 'board-text-danger line-through'
  : 'text-slate-700'"
-                          :title="getDeviceLabel(condition.deviceId)"
+                          :title="condition.deviceLabel"
                         >
-                          {{ getDeviceLabel(condition.deviceId) }}
+                          {{ condition.deviceLabel }}
                         </span>
                         <span class="text-slate-500 flex-shrink-0">·</span>
-                        <span class="text-[length:var(--iot-font-min)] board-text-warning font-medium truncate flex-shrink-0" :title="formatConditionPropertyLabel(condition)">{{ formatConditionPropertyLabel(condition) }}</span>
+                        <span class="text-[length:var(--iot-font-min)] board-text-warning font-medium truncate flex-shrink-0" :title="condition.propertyLabel">{{ condition.propertyLabel }}</span>
                         <!-- Which of the two variable questions this row asks. A row with no
                              recorded choice is marked unresolved rather than shown as either. -->
                         <span
                           v-if="condition.targetType === 'variable'"
                           class="text-[length:var(--iot-font-min)] px-1 py-0.5 rounded flex-shrink-0 border"
-                          :class="isSpecConditionVariableSourceUnresolved(condition)
+                          :class="condition.isVariableSourceUnresolved
                             ? 'board-chip-danger board-text-danger border-[color:var(--danger-border)]'
                             : 'text-slate-600 bg-slate-100 border-slate-200'"
-                          :title="formatConditionVariableSourceLabel(condition) || ''"
+                          :title="condition.variableSourceLabel || ''"
                           data-testid="spec-condition-row-variable-source"
-                        >{{ formatConditionVariableSourceLabel(condition) }}</span>
+                        >{{ condition.variableSourceLabel }}</span>
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
-                          {{ getRelationLabel(condition.relation || '=') }}
+                          {{ condition.relationLabel }}
                         </span>
-                        <span class="text-[length:var(--iot-font-min)] board-chip-warning board-text-warning px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--warning-border)] flex-shrink-0" :title="formatConditionValue(condition.value, condition.deviceId)">
-                          {{ formatConditionValue(condition.value, condition.deviceId) }}
+                        <span class="text-[length:var(--iot-font-min)] board-chip-warning board-text-warning px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--warning-border)] flex-shrink-0" :title="condition.formattedValue">
+                          {{ condition.formattedValue }}
                         </span>
                       </div>
                     </div>
@@ -4017,7 +4109,7 @@ watch(() => props.readOnly, readOnly => {
 
       <div class="template-preview__sections">
         <div
-          v-for="section in getTemplatePreviewSections(activeTemplatePreview)"
+          v-for="section in activeTemplatePreviewSections"
           :key="section.key"
           class="template-preview__section"
         >

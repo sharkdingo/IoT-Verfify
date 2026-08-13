@@ -17,6 +17,30 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-13
 
+#### Performance
+
+- **Canvas drag performance optimized.** Node dragging was stuttering because every `pointermove` event (60+ fps)
+  triggered immediate edge recalculation and the template rendered edges with 8-12 redundant `props.nodes.find()`
+  calls per edge. Optimizations: (1) RAF-throttled edge updates during drag, (2) precomputed
+  `edgesWithAdjustedPoints` with node Map lookups, (3) precomputed edge style attributes (`particleColor`,
+  `arrowMarker`, `particleFillColor`), eliminating all template-time node searches. Reduces per-frame operations
+  from ~200 to ~30. (`frontend/src/components/CanvasBoard.vue`, `frontend/src/utils/canvas/geometry.ts`)
+
+- **Board.vue deep watch removed.** The `watch([nodes, rules], syncRuleDerivedEdges, { deep: true })` was
+  triggering full edge regeneration on any node/rule mutation, causing O(rules × sources × nodes) complexity
+  with repeated `nodes.find()` calls. Created `nodesById` Map for O(1) lookups and removed `{ deep: true }`,
+  reducing 2,400+ array searches to 30 Map lookups per update. Also optimized bidirectional edge detection
+  from O(edges²) to O(edges) using pre-computed Set. (`frontend/src/views/Board.vue`)
+
+- **SystemInspector.vue template lookup optimized.** Device rendering performed O(D×T) template searches with
+  repeated string normalization (20 devices × 50 templates = 1,000 operations). Created `templatesByName` Map
+  for O(1) lookups. Also created `devicesById` Map to optimize rule device lookups and added 200ms search
+  debouncing to reduce re-computation frequency. (`frontend/src/components/SystemInspector.vue`)
+
+- **ChatView.vue message keys fixed.** Changed from index-based `v-for` keys to stable IDs, eliminating full
+  message list re-renders (including expensive Markdown parsing) when loading history.
+  (`frontend/src/components/ChatView.vue`)
+
 #### Fixed
 
 - **Counterexample exploration refused its own default settings on every scene the product ships.** The
