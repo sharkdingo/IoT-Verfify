@@ -686,8 +686,9 @@ public class RecommendScenarioTool extends AbstractAiTool {
             if (seen.contains(key)) continue;
             // A recommended device starts in its template's InitState, so a local variable must start at the
             // value that state declares; the pool rule below is for shared values only.
+            DeviceTemplateDto.DeviceManifest localManifest = template.getManifest();
             String derived = DeviceManifestModes.localInitialValue(
-                    manifest, variable, manifest != null ? manifest.getInitState() : null);
+                    localManifest, variable, localManifest != null ? localManifest.getInitState() : null);
             String value = derived != null ? derived : "";
             if (value.isBlank()) continue;
             Map<String, Object> item = new LinkedHashMap<>();

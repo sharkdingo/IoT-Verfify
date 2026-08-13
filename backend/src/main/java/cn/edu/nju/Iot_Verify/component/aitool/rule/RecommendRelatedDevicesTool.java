@@ -635,7 +635,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
         for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : localVariables.values()) {
             String key = variable.getName().toLowerCase(Locale.ROOT);
             if (seen.contains(key)) continue;
-            String value = defaultVariableValue(manifest, variable);
+            String value = defaultVariableValue(template.getManifest(), variable);
             if (value == null) continue;
             Map<String, Object> normalized = new LinkedHashMap<>();
             normalized.put("name", variable.getName());
