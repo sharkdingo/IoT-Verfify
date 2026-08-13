@@ -787,6 +787,26 @@ const apis = computed(() => {
 })
 
 /**
+ * Declared contents, the data a rule can carry from this device.
+ *
+ * `RuleBuilderDialog` offers these as a rule's `contentDevice`/`content`, and the model gives each one a
+ * `privacy_<name>` label that propagates to the command target — but no surface in the product showed
+ * which contents a device declares or how they are classified, so the sensitivity a rule inherits was
+ * unreadable before running a verification. Only two bundled templates declare any (Mobile Phone's
+ * `photo`, Ventilator's `content`), which is why the omission stayed invisible.
+ */
+const contents = computed(() => {
+  const m = manifest.value
+  if (!m || !Array.isArray(m.Contents)) return []
+  return m.Contents.map(content => ({
+    name: content.Name,
+    displayName: formatDeviceModelToken(content.Name),
+    description: content.Description || '',
+    privacy: content.Privacy
+  }))
+})
+
+/**
  * Device-declared transitions, the one part of the state machine no rule drives.
  *
  * Nothing rendered these, so a counterexample where a camera left `taking photo` on its own had no
@@ -972,8 +992,8 @@ const deviceSpecs = computed(() => {
 
               <!-- Basic Info -->
               <section data-testid="device-dialog-basic">
-                <div class="flex items-center gap-2 mb-4">
-                  <div class="w-1 h-5 bg-primary rounded-full"></div>
+                <div class="flex items-start gap-2 mb-4">
+                  <div class="w-1 h-7 shrink-0 bg-primary rounded-full"></div>
                   <div class="min-w-0">
                     <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceBasic') }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceBasicHint') }}</p>
@@ -1070,8 +1090,8 @@ const deviceSpecs = computed(() => {
               <!-- Instance runtime overrides -->
               <section v-if="hasRuntimeFields" data-testid="device-instance-runtime">
                 <div class="flex items-center justify-between gap-3 mb-4">
-                  <div class="flex items-center gap-2 min-w-0">
-                    <div class="w-1 h-5 bg-[color:var(--accent)] rounded-full"></div>
+                  <div class="flex items-start gap-2 min-w-0">
+                    <div class="w-1 h-7 shrink-0 bg-[color:var(--accent)] rounded-full"></div>
                     <div class="min-w-0">
                       <h2 class="text-lg font-semibold text-slate-800">{{ t('app.instanceRuntime') }}</h2>
                       <p class="text-xs text-slate-500 mt-0.5">{{ t('app.instanceRuntimeHint') }}</p>
@@ -1276,8 +1296,8 @@ const deviceSpecs = computed(() => {
 
               <!-- Variables -->
               <section v-if="variables.length" data-testid="device-dialog-variables">
-                <div class="flex items-center gap-2 mb-4">
-                  <div class="w-1 h-5 bg-primary rounded-full"></div>
+                <div class="flex items-start gap-2 mb-4">
+                  <div class="w-1 h-7 shrink-0 bg-primary rounded-full"></div>
                   <div class="min-w-0">
                     <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceVariables') }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceVariablesHint') }}</p>
@@ -1308,10 +1328,14 @@ const deviceSpecs = computed(() => {
                           </span>
                         </td>
                         <td class="px-4 py-3 text-sm text-slate-600">
+                          <!-- One privacy vocabulary for the whole dialog: `private` is the sensitive
+                               half and carries the warning role, `public` is neutral. The two tables used
+                               to disagree — each left the OPPOSITE value with an empty class, so an
+                               unstyled chip meant "public" here and "private" one table down. -->
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-                            :class="v.privacy === 'private' ? 'board-chip-info board-text-info' :
-                                    v.privacy === 'public' ? '' :
-                                    'bg-slate-100 text-slate-600'">
+                            :class="v.privacy === 'private' ? 'board-chip-warning board-text-warning' :
+                                    v.privacy === 'public' ? 'board-chip-neutral' :
+                                    'board-chip-neutral'">
                             {{ v.privacy ? t(`app.${v.privacy}`) : '-' }}
                           </span>
                         </td>
@@ -1352,8 +1376,8 @@ const deviceSpecs = computed(() => {
 
               <!-- States -->
               <section v-if="manifest" data-testid="device-dialog-states">
-                <div class="flex items-center gap-2 mb-4">
-                  <div class="w-1 h-5 bg-primary rounded-full"></div>
+                <div class="flex items-start gap-2 mb-4">
+                  <div class="w-1 h-7 shrink-0 bg-primary rounded-full"></div>
                   <div class="min-w-0">
                     <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceStates') }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceStatesHint') }}</p>
@@ -1385,10 +1409,9 @@ const deviceSpecs = computed(() => {
                           </span>
                         </td>
                         <td class="px-4 py-3 text-sm text-slate-600">
+                          <!-- Same vocabulary as the variables table above. -->
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-                            :class="s.privacy === 'public' ? 'board-chip-info board-text-info' : 
-                                    s.privacy === 'private' ? '' : 
-                                    'bg-slate-100 text-slate-600'">
+                            :class="s.privacy === 'private' ? 'board-chip-warning board-text-warning' : 'board-chip-neutral'">
                             {{ t(`app.${s.privacy}`) }}
                           </span>
                         </td>
@@ -1400,8 +1423,8 @@ const deviceSpecs = computed(() => {
 
               <!-- Transitions Section: the device-driven half of the state machine -->
               <section v-if="transitions.length > 0" data-testid="device-dialog-transitions" class="min-w-0">
-                <div class="flex items-center gap-2 mb-4">
-                  <div class="w-1 h-5 bg-primary rounded-full"></div>
+                <div class="flex items-start gap-2 mb-4">
+                  <div class="w-1 h-7 shrink-0 bg-primary rounded-full"></div>
                   <div class="min-w-0">
                     <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceTransitions') }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceTransitionsHint') }}</p>
@@ -1438,8 +1461,8 @@ const deviceSpecs = computed(() => {
 
               <!-- APIs Section -->
               <section v-if="apis.length > 0" data-testid="device-dialog-apis" class="min-w-0">
-                <div class="flex items-center gap-2 mb-4">
-                  <div class="w-1 h-5 bg-[color:var(--success)] rounded-full"></div>
+                <div class="flex items-start gap-2 mb-4">
+                  <div class="w-1 h-7 shrink-0 bg-[color:var(--success)] rounded-full"></div>
                   <div class="min-w-0">
                     <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceApisHint') }}</p>
@@ -1487,10 +1510,50 @@ const deviceSpecs = computed(() => {
                 </div>
               </section>
 
+              <!-- Contents Section: the data a rule can carry from this device -->
+              <section v-if="contents.length > 0" data-testid="device-dialog-contents" class="min-w-0">
+                <div class="flex items-start gap-2 mb-4">
+                  <div class="w-1 h-7 shrink-0 bg-[color:var(--success)] rounded-full"></div>
+                  <div class="min-w-0">
+                    <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceContents') }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceContentsHint') }}</p>
+                  </div>
+                </div>
+                <div class="iot-scroll-region-x border border-slate-200 rounded-xl shadow-sm">
+                  <table class="w-full text-left border-collapse">
+                    <thead>
+                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.description') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.privacy') }}</th>
+                      </tr>
+                    </thead>
+                    <tbody class="board-card divide-y divide-slate-100">
+                      <tr
+                        v-for="(content, idx) in contents"
+                        :key="idx"
+                        :data-testid="`device-dialog-content-${content.name}`"
+                        class="hover:board-chip-info transition-colors"
+                      >
+                        <td class="px-4 py-3 text-sm font-medium text-slate-700" :title="content.displayName">{{ content.displayName }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">{{ content.description || '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">
+                          <!-- Same privacy vocabulary as the variables and states tables. -->
+                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                            :class="content.privacy === 'private' ? 'board-chip-warning board-text-warning' : 'board-chip-neutral'">
+                            {{ content.privacy ? t(`app.${content.privacy}`) : '-' }}
+                          </span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
               <!-- Specifications Section -->
               <section v-if="manifest && deviceSpecs.length > 0" data-testid="device-dialog-specs" class="min-w-0">
-                <div class="flex items-center gap-2 mb-4">
-                  <div class="w-1 h-5 bg-[color:var(--danger)] rounded-full"></div>
+                <div class="flex items-start gap-2 mb-4">
+                  <div class="w-1 h-7 shrink-0 bg-[color:var(--danger)] rounded-full"></div>
                   <div class="min-w-0">
                     <h2 class="text-lg font-semibold text-slate-800">{{ t('app.specifications') }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceSpecsHint') }}</p>

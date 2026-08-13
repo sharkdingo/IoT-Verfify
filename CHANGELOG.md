@@ -17,6 +17,20 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-13
 
+#### Fixed
+
+- **The same privacy value looked different in two adjacent tables, and one of them looked like plain
+  text.** Each privacy cell was a three-way ternary whose middle branch was the empty string — and the
+  two tables chose *opposite* values for it, so an unstyled label meant "public" in the variables table
+  and "private" in the states table one screen-inch below. A user comparing them could only conclude the
+  chip carried meaning it did not. Both now use one vocabulary: `private` takes the warning role,
+  everything else is neutral, and the hardcoded `bg-slate-100 text-slate-600` fallbacks are gone (a
+  `board-chip-*` token follows the theme; a raw slate pair does not).
+- **The section accent bars stopped marking their sections once the headers grew a second line.** A bar
+  is `h-5` on an `items-center` row, which was right for a one-line header and wrong for title + hint: it
+  centred across the boundary and read as decoration beside the hint. All eight are now `h-7` — exactly
+  `text-lg`'s line height — on an `items-start` row, so each bar spans its title.
+
 #### Changed
 
 - **Every section of the device dialog now shares one header shape and explains itself.** The new
@@ -32,6 +46,12 @@ history into a technical spec. The spec content itself now lives under
 
 #### Added
 
+- **Device details now list the template's declared contents.** `Contents` was the second whole manifest
+  array with no surface anywhere: `RuleBuilderDialog` offers them as a rule's `contentDevice`/`content`,
+  and each one's `privacy_<name>` ORs into the command target's privacy condition — so attaching a private
+  photo to a rule silently marks that rule's target private, and nothing showed which contents a device
+  had or how they were classified until a verification ran. Only two bundled templates declare any
+  (Mobile Phone's `photo`, Ventilator's `content`), which is how it stayed invisible.
 - **Device details now list the template's state transitions.** A transition is the one part of the
   state machine no rule drives — it fires on its own once its trigger holds — and nothing in the product
   showed them, so a counterexample where a camera left `taking photo` by itself had no explanation

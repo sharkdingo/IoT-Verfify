@@ -1383,6 +1383,7 @@ describe('DeviceDialog template authority', () => {
         { Name: 'RFID', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'trusted', Privacy: 'private', Values: ['none', 'authorized'] }
       ],
       APIs: [{ Name: 'scan', StartState: '', Signal: true }],
+      Contents: [{ Name: 'badge photo', Privacy: 'private' }],
       Transitions: [
         {
           Name: 'reset',
@@ -1402,15 +1403,65 @@ describe('DeviceDialog template authority', () => {
       devices: [{ deviceId: 'transition-node', deviceLabel: 'Door RFID 1' }]
     }])
 
-    for (const section of ['basic', 'variables', 'states', 'transitions', 'apis', 'specs']) {
+    for (const section of ['basic', 'variables', 'states', 'transitions', 'apis', 'contents', 'specs']) {
       const host = document.querySelector(`[data-testid="device-dialog-${section}"]`)
       expect(host, `section ${section} is missing`).not.toBeNull()
-      const header = host!.querySelector('div.flex.items-center')
-      expect(header?.className, `section ${section} header spacing`).toContain('mb-4')
+      // Anchor on the accent bar: it identifies the header row unambiguously, where a class query
+      // for `.flex.items-center` also matched inner rows and passed for the wrong element.
+      const bar = host!.querySelector('div.w-1')
+      expect(bar?.className, `section ${section} accent bar`).toContain('h-7')
+      const header = bar!.parentElement!
+      expect(header.className, `section ${section} header spacing`).toContain('mb-4')
+      expect(header.className, `section ${section} header alignment`).toContain('items-start')
       expect(header!.querySelector('h2'), `section ${section} title`).not.toBeNull()
       // The hint is nested beside the title, not a sibling of the header block.
       const hint = header!.querySelector('h2 + p')
       expect(hint?.textContent?.trim(), `section ${section} hint`).toBeTruthy()
+    }
+    wrapper.unmount()
+  })
+
+  /**
+   * `Contents` was the second whole manifest array with no surface anywhere: `RuleBuilderDialog` offers
+   * these as a rule's `contentDevice`/`content` and the model propagates each one's `privacy_<name>` to
+   * the command target, so the sensitivity a rule inherits was unreadable until a run. Only two bundled
+   * templates declare any, which is how it stayed invisible.
+   *
+   * Also pins one privacy vocabulary across the dialog: `private` is the sensitive half and carries the
+   * warning role. The variables and states tables used to disagree — each left the OPPOSITE value with an
+   * empty class, so an unstyled chip meant "public" in one table and "private" in the next.
+   */
+  it('lists declared contents and marks private the same way everywhere', () => {
+    const manifest: DeviceManifest = {
+      Name: 'Mobile Phone',
+      Modes: ['State'],
+      InitState: 'on',
+      WorkingStates: [
+        { Name: 'on', Trust: 'trusted', Privacy: 'public' },
+        { Name: 'taking photo', Trust: 'trusted', Privacy: 'private' }
+      ],
+      InternalVariables: [
+        { Name: 'steps', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'trusted', Privacy: 'private', LowerBound: 0, UpperBound: 100 }
+      ],
+      APIs: [],
+      Contents: [{ Name: 'photo', Description: '', Privacy: 'private' }]
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Mobile Phone', 'on')
+
+    const row = document.querySelector('[data-testid="device-dialog-content-photo"]')
+    expect(row).not.toBeNull()
+    const cells = Array.from(row!.querySelectorAll('td'))
+    expect(cells[0].textContent?.trim()).toBe('photo')
+    const contentChip = cells[2].querySelector('span')
+    expect(contentChip?.textContent?.trim()).toBe('Private sensitivity label')
+    expect(contentChip?.className).toContain('board-chip-warning')
+
+    // The same value must look the same in every table: no empty-class branch anywhere.
+    const privateChips = Array.from(document.querySelectorAll('[data-testid="device-dialog"] span'))
+      .filter(node => node.textContent?.trim() === 'Private sensitivity label')
+    expect(privateChips.length).toBeGreaterThanOrEqual(3)
+    for (const chip of privateChips) {
+      expect(chip.className, 'a private label rendered with no chip styling').toContain('board-chip-warning')
     }
     wrapper.unmount()
   })
