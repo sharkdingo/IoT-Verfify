@@ -91,8 +91,12 @@ const syncReducedMotionPreference = () => {
   prefersReducedMotion.value = reducedMotionQuery?.matches === true
 }
 
+/**
+ * Check if edge flow animation should render (memoized accessor).
+ * Uses the same cache as getEdgePlaybackClass to avoid redundant calculations.
+ */
 const shouldRenderEdgeFlow = (edge: DeviceEdge) =>
-  !prefersReducedMotion.value && shouldAnimateEdgeFlow(edge, props.edges, props.highlightedTrace)
+  edgePlaybackStateCache.value.get(edge)?.shouldAnimate ?? false
 
 const fallbackDeviceSvg = `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
   <rect x="14" y="12" width="44" height="48" rx="10" fill="var(--border)" stroke="var(--text-muted)" stroke-width="3"/>
@@ -289,7 +293,7 @@ const nodeMap = computed(() => {
 
 // 预计算所有边的调整后坐标，避免模板中重复计算
 const edgesWithAdjustedPoints = computed(() => {
-  return props.edges.map(edge => {
+  return props.edges.map((edge, index) => {
     // During drag, use temporary position for the dragging node
     let fromNode = nodeMap.value.get(edge.from)
     let toNode = nodeMap.value.get(edge.to)
@@ -314,6 +318,7 @@ const edgesWithAdjustedPoints = computed(() => {
       fromNode: sourceNode,
       toNode: nodeMap.value.get(edge.to),
       adjustedPoints,
+      index, // Pre-computed index to avoid O(E) indexOf() in template
       // 预计算样式
       particleColor: isInternal ? 'var(--text-muted)' :
         ['url(#grad-blue)', 'url(#grad-green)', 'url(#grad-purple)', 'url(#grad-orange)',
@@ -378,16 +383,51 @@ const getPreviousTraceDeviceForNode = (nodeId: string): PlaybackTraceDevice | nu
   return getLatestTraceDeviceForNodeAtOrBefore(nodeId, selectedIndex - 1)
 }
 
-const getEdgePlaybackClass = (edge: DeviceEdge) => {
+/**
+ * Compute edge playback state for a single edge.
+ * This is the expensive operation that calls isEdgeActiveInTrace and isEdgeCompromisedInTrace.
+ * Use via `getEdgePlaybackClass()` which provides memoization.
+ */
+const computeEdgePlaybackState = (edge: DeviceEdge) => {
   const traceActive = isEdgeActiveInTrace(edge, props.edges, props.highlightedTrace)
   const linkCompromised = isEdgeCompromisedInTrace(edge, props.edges, props.highlightedTrace)
   const ruleFocused = Boolean(props.focusedRuleId && edge.ruleId === props.focusedRuleId)
+  const shouldAnimate = !prefersReducedMotion.value && shouldAnimateEdgeFlow(edge, props.edges, props.highlightedTrace)
+
   return {
-    'edge-line--active': traceActive,
-    'edge-line--compromised': linkCompromised,
-    'edge-line--focused': ruleFocused,
-    'edge-line--dimmed': isTraceActive.value && !traceActive && !linkCompromised && !ruleFocused
+    traceActive,
+    linkCompromised,
+    ruleFocused,
+    shouldAnimate,
+    classes: {
+      'edge-line--active': traceActive,
+      'edge-line--compromised': linkCompromised,
+      'edge-line--focused': ruleFocused,
+      'edge-line--dimmed': isTraceActive.value && !traceActive && !linkCompromised && !ruleFocused
+    }
   }
+}
+
+/**
+ * Memoized cache of edge playback state.
+ * Recalculates when edges, trace state, or trace selection changes.
+ * Eliminates redundant calls: the template calls getEdgePlaybackClass() and shouldRenderEdgeFlow()
+ * multiple times per edge, but this computed ensures we only calculate once per edge per render.
+ */
+const edgePlaybackStateCache = computed(() => {
+  const cache = new Map<DeviceEdge, ReturnType<typeof computeEdgePlaybackState>>()
+  for (const edge of props.edges) {
+    cache.set(edge, computeEdgePlaybackState(edge))
+  }
+  return cache
+})
+
+/**
+ * Get edge playback CSS classes (memoized accessor).
+ * Called multiple times per edge in the template but only computes once per render.
+ */
+const getEdgePlaybackClass = (edge: DeviceEdge) => {
+  return edgePlaybackStateCache.value.get(edge)?.classes ?? {}
 }
 
 // 判断是否有反例路径动画在进行
@@ -1257,11 +1297,32 @@ const getNodeSecurityBadges = (node: DeviceNode): SecurityBadge[] => {
   return nodeSecurityBadgesCache.value.get(node.id) ?? []
 }
 
+/**
+ * Memoized cache of trace device lookups.
+ * Pre-computes current and previous trace devices for all nodes.
+ * Eliminates redundant O(S) backward scans in watch callbacks and rendering.
+ */
+const traceDeviceCache = computed(() => {
+  const cache = new Map<string, {
+    current: ReturnType<typeof getLatestTraceDeviceForNode>
+    previous: ReturnType<typeof getPreviousTraceDeviceForNode>
+    changed: boolean
+  }>()
+
+  for (const node of props.nodes) {
+    const current = getLatestTraceDeviceForNode(node.id)
+    const previous = getPreviousTraceDeviceForNode(node.id)
+    const changed = Boolean(current && playbackDeviceChanged(current, previous))
+
+    cache.set(node.id, { current, previous, changed })
+  }
+
+  return cache
+})
+
 const isNodeTraceChanged = (node: DeviceNode) => {
   if (!isTraceActive.value) return false
-  const current = getLatestTraceDeviceForNode(node.id)
-  const previous = getPreviousTraceDeviceForNode(node.id)
-  return Boolean(current && playbackDeviceChanged(current, previous))
+  return traceDeviceCache.value.get(node.id)?.changed ?? false
 }
 
 const getNodeStateTitle = (node: DeviceNode) => {
@@ -1612,12 +1673,13 @@ onMounted(() => {
           />
 
           <!-- During model playback, motion represents a backend-reported delivered automation. -->
+          <!-- Key includes selectedStateIndex to remount and restart animation on each state transition -->
           <path
               v-if="edgeItem.edge.from === edgeItem.edge.to && shouldRenderEdgeFlow(edgeItem.edge)"
               :key="`edge-flow-loop-${edgeItem.edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
-              :class="[getParticleOpacity(edgesWithAdjustedPoints.indexOf(edgeItem)), getEdgePlaybackClass(edgeItem.edge)]"
+              :class="[getParticleOpacity(edgeItem.index), getEdgePlaybackClass(edgeItem.edge)]"
               :d="getSelfLoopPathD(edgeItem.edge)"
               fill="none"
               filter="url(#glow)"
@@ -1631,7 +1693,7 @@ onMounted(() => {
               :key="`edge-flow-line-${edgeItem.edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
-              :class="[getParticleOpacity(edgesWithAdjustedPoints.indexOf(edgeItem)), getEdgePlaybackClass(edgeItem.edge)]"
+              :class="[getParticleOpacity(edgeItem.index), getEdgePlaybackClass(edgeItem.edge)]"
               :x1="edgeItem.adjustedPoints.fromPoint.x"
               :y1="edgeItem.adjustedPoints.fromPoint.y"
               :x2="edgeItem.adjustedPoints.toPoint.x"
@@ -1645,6 +1707,7 @@ onMounted(() => {
           />
 
           <!-- A compromised or idle automation remains visible as a static edge. -->
+          <!-- Key includes selectedStateIndex to remount and restart animation on each state transition -->
           <circle
               v-if="edgeItem.edge.from !== edgeItem.edge.to && shouldRenderEdgeFlow(edgeItem.edge)"
               :key="`edge-flow-particle-${edgeItem.edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
@@ -1652,7 +1715,7 @@ onMounted(() => {
               :data-playback-state="props.highlightedTrace?.selectedStateIndex"
               :fill="edgeItem.particleFillColor"
               filter="url(#glow)"
-              :r="getParticleSize(edgesWithAdjustedPoints.indexOf(edgeItem))"
+              :r="getParticleSize(edgeItem.index)"
           >
             <animateMotion
                 :dur="TRACE_FLOW_DURATION"
