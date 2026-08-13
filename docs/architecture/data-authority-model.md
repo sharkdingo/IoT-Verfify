@@ -77,7 +77,7 @@ Backend DTO: `DeviceNodeDto`. Frontend type: `DeviceNode`.
 | `width` / `height` | Canvas UI | Integer node geometry; width `80..2000`, height `60..2000` | Canvas hit testing, edge geometry, minimap bounds |
 | `currentStateTrust` | Optional user/runtime override | Overrides trust for the current state; omitted means use `WorkingStates.Trust` | NuSMV trust modeling |
 | `currentStatePrivacy` | Optional user/runtime override | Overrides sensitivity for the current state; omitted means use `WorkingStates.Privacy` | NuSMV privacy modeling when enabled |
-| `variables[].name/value/trust` | User/runtime override | Device-local variable values and trust (`InternalVariables[].IsInside=true`) | NuSMV local variable init/trust, fix fingerprint |
+| `variables[].name/value/trust` | User/runtime override, **except a value the device's state determines** (see below) | Device-local variable values and trust (`InternalVariables[].IsInside=true`) | NuSMV local variable init/trust, fix fingerprint |
 | `privacies[].name/privacy` | User/runtime override | Device-local variable sensitivity keyed by literal template variable name | Privacy modeling and fix fingerprint |
 
 The public update boundary follows those ownership columns. Canvas geometry is a
@@ -124,6 +124,33 @@ or AI/tool request tries to place an `IsInside=false` variable into
 `DeviceNode.variables`/`privacies` or `DeviceVerificationDto.variables`/`privacies`, the
 backend rejects it instead of silently treating it as an environment value.
 
+They also exclude a device-local variable the device's **state** determines, for the same reason: it is
+not the user's fact to state. A `WorkingState`'s `Dynamics` value constrains *being in* that state, and
+the generator emits it as a branch of `next(<device>.<var>)` guarded by that state — so when **every**
+working state declares a value for the variable, the `TRUE:` hold-current branch is unreachable and any
+instance value survives only step 0 before the state overwrites it. Storing one is storing a derived
+fact, which is how a car came to be saved in state `away` reporting `location = garage`: a step 0 the
+model's own transition relation forbids, and the step every verification starts from. Such a variable is
+initialised from the starting state (`DeviceManifestModes.localInitialValue`), shown read-only in all
+three runtime editors, and a stored pair that disagrees is refused by both writer boundaries rather than
+silently corrected — the user chose both halves, so naming the conflict beats discarding one.
+
+Two exclusions keep that narrow, and both matter for custom templates:
+
+- **Partial coverage stays editable.** If some state declares no value for the variable, the hold-current
+  branch is live there and the instance value genuinely carries it. The gates are per-state and stay
+  silent wherever the state declares nothing.
+- **A `Transitions` assignment on the same variable disqualifies it.** Transition branches are emitted
+  *ahead* of the state branches in one `case`, and first match wins, so a firing transition overrides
+  what the state declares. That variable is not a function of its state, and locking it would refuse a
+  value the model legitimately produces.
+
+Nine bundled variables are state-determined today (`Car.location`, `Door RFID.RFID`, the three
+`contact` sensors, and the four job/operating states); none is partially covered, and the five numeric
+locals are untouched because a numeric target declares a `ChangeRate`, which says nothing about the
+current value. Spoofing a reading is still expressible — that is `FalsifiableWhenCompromised`, whose
+attack branch precedes the state branches — so read-only here removes no modelling power.
+
 ## Environment Pool
 
 Backend DTO: `BoardEnvironmentVariableDto`. Backend table:
@@ -141,8 +168,9 @@ Each verification, simulation, or bounded-exploration path starts from it; later
 do not write back to the pool. The expanded pool also shows the template-owned evolution:
 the required `NaturalChangeRate` for numeric shared values and each WorkingState device effect
 **on that shared value**. The pool groups effects by variable, so it can only show the shared ones;
-a `Dynamics` entry targeting a device-local variable — the only kind 9 of the 15 bundled templates
-that declare `Dynamics` have — is shown per state in the device dialog's States table instead. Two
+a `Dynamics` entry targeting a device-local variable — which is the only kind nine of the fifteen
+templates declaring `Dynamics` have, a different nine from the state-determined variables counted
+below — is shown per state in the device dialog's States table instead. Two
 surfaces, one split by question: the pool answers "what moves this shared value", the dialog answers
 "what does this state do".
 What that rate means is owned by

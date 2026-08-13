@@ -121,8 +121,17 @@ Evolution is scope-sensitive. A device-local variable follows its declared Trans
 assignment, WorkingState Dynamic, or numeric `NaturalChangeRate`; if none applies, it
 retains its current value. Its **initial** value follows the same authority: when the state the device
 starts in declares a `Dynamics` value for it, that is the initial value, because the Dynamic constrains
-being in the state rather than entering it — so `init` and the state cannot disagree. Only when the
-starting state declares nothing does the template default (first enum literal, lower bound) apply. A
+being in the state rather than entering it — so step 0 cannot contradict itself. Only when the starting
+state declares nothing does the template default (first enum literal, lower bound) apply, and a
+`Transitions` assignment on the same variable disqualifies the derivation, because transition branches
+precede the state branches in the same `case` and therefore override what the state declares.
+
+The guarantee is about step 0, not about every step. The state branches read the **unprimed** mode inside
+`next()`, so after a step in which the mode changes the variable still carries the value the previous
+state declared, for one step. When every working state declares a value the `TRUE:` hold-current branch
+is unreachable and no instance value can survive past step 0 — which is why such a value is not an
+instance field ([data-authority-model.md](data-authority-model.md#device-node)) — but the one-step lag is
+a separate property of the unprimed guard and is not removed by initialising step 0 correctly. A
 local numeric rate follows the same interval convention as a
 shared numeric rate, combined with its active
 WorkingState Dynamic when one applies. The generator does not invent arbitrary local device changes.

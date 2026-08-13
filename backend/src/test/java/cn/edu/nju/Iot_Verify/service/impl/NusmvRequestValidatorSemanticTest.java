@@ -771,6 +771,105 @@ class NusmvRequestValidatorSemanticTest {
         return condition;
     }
 
+    /**
+     * A run submitted directly must not carry a device whose state and variable describe different
+     * situations. The board write refuses the same pair; this boundary exists because a verification can be
+     * submitted without going through board storage, and generation would otherwise emit a step 0 the
+     * transition relation forbids.
+     */
+    @Test
+    void validateDeviceSemantics_rejectsAVariableThatContradictsTheDeviceState() {
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+        DeviceSmvData car = carSmv();
+
+        DeviceVerificationDto device = device("car_1", "Car");
+        device.setState("away");
+        device.setVariables(List.of(new VariableStateDto("location", "garage", null)));
+
+        NusmvRequestValidator.validateDeviceSemantics(List.of(device), Map.of("car_1", car), errors);
+
+        assertTrue(errors.containsKey("devices[0].variables.location"),
+                "a state/variable contradiction was accepted: " + errors);
+        assertTrue(errors.get("devices[0].variables.location").contains("away"),
+                "the message should name the state: " + errors.get("devices[0].variables.location"));
+    }
+
+    @Test
+    void validateDeviceSemantics_acceptsAVariableThatAgreesWithTheDeviceState() {
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+
+        DeviceVerificationDto device = device("car_1", "Car");
+        device.setState("away");
+        device.setVariables(List.of(new VariableStateDto("location", "away", null)));
+
+        NusmvRequestValidator.validateDeviceSemantics(List.of(device), Map.of("car_1", carSmv()), errors);
+
+        assertTrue(errors.isEmpty(), "an agreeing pair was rejected: " + errors);
+    }
+
+    /**
+     * A Transition assignment on the same variable means the state does not determine it: the generator
+     * emits transition branches ahead of the state branches in one `case`, so a firing transition wins.
+     * Refusing that pair would reject a value the model legitimately produces.
+     */
+    @Test
+    void validateDeviceSemantics_allowsAVariableADeclaredTransitionDrives() {
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+        DeviceSmvData car = carSmv();
+        DeviceManifest manifest = car.getManifest();
+        manifest.setTransitions(List.of(DeviceManifest.Transition.builder()
+                .name("towed")
+                .startState("garage")
+                .trigger(DeviceManifest.Trigger.builder()
+                        .attribute("CarLocation").relation("=").value("garage").build())
+                .assignments(List.of(DeviceManifest.Assignment.builder()
+                        .attribute("location").value("away").build()))
+                .build()));
+
+        DeviceVerificationDto device = device("car_1", "Car");
+        device.setState("away");
+        device.setVariables(List.of(new VariableStateDto("location", "garage", null)));
+
+        NusmvRequestValidator.validateDeviceSemantics(List.of(device), Map.of("car_1", car), errors);
+
+        assertTrue(errors.isEmpty(),
+                "a transition-driven variable must not be gated against its state: " + errors);
+    }
+
+    /** The reported shape: a state whose Dynamics constrains a local enum variable. */
+    private static DeviceSmvData carSmv() {
+        DeviceManifest.InternalVariable location = DeviceManifest.InternalVariable.builder()
+                .name("location")
+                .isInside(true)
+                .values(List.of("garage", "away"))
+                .build();
+        DeviceManifest manifest = DeviceManifest.builder()
+                .name("Car")
+                .modes(List.of("CarLocation"))
+                .initState("away")
+                .internalVariables(List.of(location))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("garage")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("location").value("garage").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder().name("away")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("location").value("away").build()))
+                                .build()))
+                .apis(List.of())
+                .build();
+
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setManifest(manifest);
+        smv.setVarName("car_1");
+        smv.setTemplateName("Car");
+        smv.setModes(List.of("CarLocation"));
+        smv.setModeStates(new LinkedHashMap<>(Map.of("CarLocation", List.of("garage", "away"))));
+        smv.setVariables(List.of(location));
+        return smv;
+    }
+
     private static DeviceSmvData smv() {
         DeviceManifest.InternalVariable variable = DeviceManifest.InternalVariable.builder()
                 .name("temperature")

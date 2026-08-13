@@ -10,6 +10,8 @@ import {
   materializeDeviceRuntimeConfig,
   resetDeviceRuntimeDraft,
   stateDeclaredVariableValue,
+  syncStateDerivedVariables,
+  templateVariableIsStateDerived,
   templateVariableUsesNumericBounds,
   validateDeviceRuntimeConfig
 } from '../deviceRuntime'
@@ -379,6 +381,62 @@ describe('device runtime authority helpers', () => {
     expect(draft.variables.location, 'the draft offered a state and value that contradict').toBe('away')
     // The old rule, still correct where the starting state declares nothing for the variable.
     expect(getTemplateVariableDefaultValue(carTemplate.manifest.InternalVariables![0])).toBe('garage')
+  })
+
+  /**
+   * FULL coverage is what makes a variable derived rather than an instance choice: the generated
+   * `next(<device>.<var>)` then has a branch for every state and its hold-current fallback is unreachable,
+   * so a value entered per instance survives only step 0. PARTIAL coverage must stay editable — in a state
+   * that declares nothing the fallback is live and the value really is the user's. No bundled template is
+   * partial, so this pins the distinction for custom ones.
+   */
+  it('treats a variable as state-derived only when every state constrains it', () => {
+    expect(templateVariableIsStateDerived(carTemplate, 'location')).toBe(true)
+    // The Thermostat's states declare empty Dynamics, so `presence` remains the user's to set.
+    expect(templateVariableIsStateDerived(thermostatTemplate, 'presence')).toBe(false)
+    expect(templateVariableIsStateDerived(carTemplate, 'missing')).toBe(false)
+    // A stateless sensor has no state to derive from.
+    expect(templateVariableIsStateDerived(statelessSensorTemplate, 'smoke')).toBe(false)
+
+    const partial = {
+      ...carTemplate,
+      manifest: {
+        ...carTemplate.manifest,
+        WorkingStates: [
+          carTemplate.manifest.WorkingStates![0],
+          { ...carTemplate.manifest.WorkingStates![1], Dynamics: [] }
+        ]
+      }
+    } as never
+    expect(templateVariableIsStateDerived(partial, 'location'), 'partial coverage must stay editable').toBe(false)
+
+    // A Transition assignment on the same variable means the state does NOT determine it: the generator
+    // emits transition branches ahead of the state branches in one `case`, so a firing transition wins.
+    // Locking the editor there would refuse a value the model legitimately produces.
+    const withTransition = {
+      ...carTemplate,
+      manifest: {
+        ...carTemplate.manifest,
+        Transitions: [{
+          Name: 'towed',
+          StartState: 'garage',
+          Trigger: { Attribute: 'CarLocation', Relation: '=', Value: 'garage' },
+          Assignments: [{ Attribute: 'location', Value: 'away' }]
+        }]
+      }
+    } as never
+    expect(templateVariableIsStateDerived(withTransition, 'location'),
+      "a transition-driven variable is not the state's consequence").toBe(false)
+  })
+
+  it('syncs only the variables the chosen state constrains', () => {
+    const variables: Record<string, string> = { location: 'garage', odometer: '42' }
+
+    syncStateDerivedVariables(variables, carTemplate, 'away')
+
+    expect(variables.location).toBe('away')
+    // `away` says nothing about the odometer, so an explicit instance value survives.
+    expect(variables.odometer).toBe('42')
   })
 
   it('reads the value a named state declares, and nothing when it declares none', () => {

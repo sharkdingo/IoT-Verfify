@@ -2982,6 +2982,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 }
             }
             validateNodeVariables(errors, field + ".variables", node.getVariables(), manifest);
+            validateLocalVariablesAgreeWithState(errors, field, node, manifest);
             validateNodePrivacies(errors, field + ".privacies", node.getPrivacies(), manifest);
         }
     }
@@ -3334,6 +3335,49 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return null;
         }
         return templateManifests.get(templateName.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * A device's state and its own local variables must describe one situation.
+     *
+     * <p>A WorkingState's {@code Dynamics} value constrains *being in* that state: the generator emits it
+     * as a branch of {@code next(<device>.<var>)} guarded by that state. So a node saved as state
+     * {@code away} with {@code location = garage} asks for a step 0 the model's own transition relation
+     * forbids — and the disagreement lasts exactly one step, which is the step every verification starts
+     * from. An {@code AG} property can be refuted, and an {@code EF} property proved, on a configuration
+     * the device cannot occupy.
+     *
+     * <p>Refused rather than silently corrected. The user chose both halves in the runtime panel, so
+     * overwriting one would discard an explicit choice without saying so; naming the conflict lets them
+     * decide which half they meant. Defaulting is where the two are reconciled automatically
+     * ({@code DeviceManifestModes.localInitialValue}); this gate only catches a pair a person built.</p>
+     */
+    private void validateLocalVariablesAgreeWithState(Map<String, String> errors,
+                                                     String field,
+                                                     DeviceNodeDto node,
+                                                     DeviceManifest manifest) {
+        if (node.getVariables() == null || !hasText(node.getState())) {
+            return;
+        }
+        for (VariableStateDto variable : node.getVariables()) {
+            if (variable == null || !hasText(variable.getName()) || !hasText(variable.getValue())) {
+                continue;
+            }
+            String declared = DeviceManifestModes.stateDeclaredValue(
+                    manifest, node.getState(), variable.getName());
+            if (declared == null) {
+                continue;
+            }
+            // Compared through the same canonicaliser enum membership uses, so this gate cannot disagree
+            // with `validateVariableValues` about whether two spellings are one value: a declared value may
+            // carry spaces (`fan only`) that the SMV identifier cannot.
+            if (!cleanEnumLiteral(declared).equals(cleanEnumLiteral(variable.getValue()))) {
+                errors.putIfAbsent(field + ".variables." + variable.getName(),
+                        "State '" + node.getState() + "' holds " + variable.getName() + " = " + declared
+                                + ", so it cannot start at '" + variable.getValue().trim()
+                                + "'. Change the state or the value so they agree.");
+            }
+        }
     }
 
     private void validateNodeState(Map<String, String> errors,

@@ -133,6 +133,57 @@ export const templateVariableUsesNumericBounds = (variable: InternalVariable) =>
   && variable.UpperBound !== undefined && variable.UpperBound !== null
 
 /**
+ * Rewrite every variable the given state constrains, in place.
+ *
+ * Each of the three runtime editors offers a state picker beside the variable inputs, so each could leave
+ * a variable behind when the state changes — and the writers now refuse that pair. One function rather than
+ * three watchers, because this is the same rule three times: a `Dynamics` value belongs to being in the
+ * state, so the state is the half that decides. A variable the new state says nothing about is untouched;
+ * under partial coverage it is a real instance choice.
+ */
+export const syncStateDerivedVariables = (
+  variables: Record<string, string>,
+  template: DeviceTemplate | null | undefined,
+  stateName: string | null | undefined
+) => {
+  getTemplateInternalVariables(template).forEach(variable => {
+    const declared = stateDeclaredVariableValue(template, stateName, variable.Name)
+    if (declared !== null) variables[variable.Name] = declared
+  })
+}
+
+/**
+ * Whether every working state declares a `Dynamics` value for this variable.
+ *
+ * When they all do, the variable is a function of the state: the generated `next(<device>.<var>)` has a
+ * branch for each state and its `TRUE:` hold-current fallback is unreachable, so an instance value can
+ * only survive step 0 before the state overwrites it. Storing one is storing a derived fact — which is
+ * exactly how a device came to be saved as state `away` with `location = garage`.
+ *
+ * Partial coverage is different and must stay editable: in a state that declares nothing, the fallback is
+ * live and the instance value genuinely carries the variable. No bundled template does this today, but a
+ * custom one may, so the distinction is drawn from the manifest rather than assumed.
+ */
+export const templateVariableIsStateDerived = (
+  template: DeviceTemplate | null | undefined,
+  variableName: string
+): boolean => {
+  const states = template?.manifest?.WorkingStates || []
+  if (states.length === 0 || !variableName) return false
+  // A Transition assignment on the same variable disqualifies it. The generator emits transition branches
+  // BEFORE the state branches in the same `case`, and first match wins, so a firing transition overrides
+  // what the state declares — the variable is then genuinely driven by something other than the state, and
+  // calling it derived would lock an editor for a value the model really does move independently.
+  const drivenByTransition = (template?.manifest?.Transitions || []).some(transition =>
+    (transition?.Assignments || []).some(assignment => assignment?.Attribute === variableName))
+  if (drivenByTransition) return false
+  return states.every(state =>
+    (state?.Dynamics || []).some(entry =>
+      entry?.VariableName === variableName
+      && entry?.Value !== undefined && entry?.Value !== null && String(entry.Value).trim() !== ''))
+}
+
+/**
  * The value a working state declares for a variable, or `null` when it declares none.
  *
  * A `Dynamics` entry is a standing constraint — the model emits it as a branch of

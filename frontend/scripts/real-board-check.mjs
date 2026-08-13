@@ -55,9 +55,23 @@ const valueFor = variable => {
 const localVariablesFor = manifest => (manifest.InternalVariables || [])
   .filter(variable => variable?.IsInside === true)
 
-const varsFor = manifest => localVariablesFor(manifest).map(variable => ({
+// A local variable a WorkingState constrains is that state's consequence, so the probe must submit the
+// value its own state declares — `Values[0]` submitted `thermostatOperatingState = cooling` beside state
+// `auto;auto`, which declares `idle`, and both writer boundaries now refuse that pair. Mirrors
+// `DeviceManifestModes.localInitialValue`; the environment path below keeps the pool's first-value rule.
+const stateDeclaredValue = (manifest, stateName, variableName) => {
+  const wanted = String(stateName ?? '').trim()
+  if (!wanted) return null
+  const state = (manifest.WorkingStates || [])
+    .find(candidate => String(candidate?.Name ?? '').trim() === wanted)
+  const dynamic = (state?.Dynamics || []).find(entry => entry?.VariableName === variableName)
+  const value = dynamic?.Value
+  return value !== undefined && value !== null && String(value).trim() !== '' ? String(value).trim() : null
+}
+
+const varsFor = (manifest, stateName) => localVariablesFor(manifest).map(variable => ({
   name: variable.Name,
-  value: valueFor(variable),
+  value: stateDeclaredValue(manifest, stateName, variable.Name) ?? valueFor(variable),
   trust: variable.Trust || 'trusted'
 }))
 
@@ -189,7 +203,7 @@ async function seedScenario() {
         currentStateTrust: stateDefinition?.Trust || 'trusted',
         currentStatePrivacy: stateDefinition?.Privacy || 'public'
       } : {}),
-      variables: varsFor(node.template.manifest),
+      variables: varsFor(node.template.manifest, node.state),
       privacies: privaciesFor(node.template.manifest)
     }
   })

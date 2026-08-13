@@ -19,6 +19,30 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **A variable the device's state determines is no longer stored, offered, or accepted as an instance
+  choice.** Deriving the *default* correctly was not the root cause. The contradiction was representable:
+  the same fact had two independent homes — the state, and a per-instance `variables[].value` — so a user
+  could still pick `away` in one dropdown and leave `garage` in the next, and every writer accepted it.
+  It is representable no longer, because for these variables the instance value was never meaningful:
+  when every working state declares a `Dynamics` value, the generated `next(<device>.<var>)` has a branch
+  per state and its `TRUE:` hold-current branch is unreachable, so a stored value survives exactly one
+  step — step 0, the step every verification and simulation begins from. That is why an `AG` property
+  could be refuted, and an `EF` property *proved*, on a configuration the device's own transition relation
+  forbids.
+  So such a variable is now read-only in all three runtime editors (shown as the state's consequence),
+  re-derived through one shared helper when the state changes, and refused by both writer boundaries if a
+  stored pair disagrees — refused rather than silently corrected, since the user chose both halves and
+  naming the conflict beats discarding one. The "use template default" hint in all three editors also
+  named `Values[0]` while the panel's own gate required the state's value; it now names the state's.
+  Two exclusions keep this narrow, and both were found by review rather than by me: **partial coverage
+  stays editable**, because in a state that declares nothing the hold branch is live and the value really
+  is the user's; and **a `Transitions` assignment on the same variable disqualifies it**, because
+  transition branches are emitted ahead of the state branches in one `case` and first match wins, so that
+  variable is genuinely driven by something other than its state. Nine bundled variables are
+  state-determined, none partially covered, and the five numeric locals are untouched. Spoofing a reading
+  is unaffected — that is `FalsifiableWhenCompromised`, whose attack branch precedes the state branches —
+  so no modelling power is lost. `frontend/scripts/real-board-check.mjs` held a fourth copy of the old
+  `Values[0]` rule and would have been rejected by the new gates; it now derives from the node's state.
 - **A device's initial state and its own local variables contradicted each other, on six bundled
   templates.** Reported from the UI: a Car showing initial state *away* with location *garage*. The
   generated model really said both — `init(CarLocation) := away;` beside `init(location) := garage;` —

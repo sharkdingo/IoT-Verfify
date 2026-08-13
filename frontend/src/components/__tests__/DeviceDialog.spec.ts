@@ -1604,6 +1604,56 @@ describe('DeviceDialog template authority', () => {
     wrapper.unmount()
   })
 
+  /**
+   * Reported: a Car showing initial state *away* with location *garage*, saveable as-is.
+   *
+   * Fixing the default was not enough — the panel offers both halves, so a user could still build the
+   * contradiction by hand. The writers now refuse that pair, which would have turned a plausible edit into
+   * an error message, so the panel keeps the pair consistent as it is edited: the state is the half that
+   * decides, because a `Dynamics` value is a property of being in that state. A variable the new state says
+   * nothing about is left alone, since that is a real instance choice rather than a consequence.
+   */
+  it('re-derives a state-constrained variable when the user picks another state', async () => {
+    const manifest: DeviceManifest = {
+      Name: 'Car',
+      Modes: ['CarLocation'],
+      InitState: 'away',
+      WorkingStates: [
+        { Name: 'garage', Trust: 'untrusted', Privacy: 'private', Dynamics: [{ VariableName: 'location', Value: 'garage' }] },
+        { Name: 'away', Trust: 'untrusted', Privacy: 'private', Dynamics: [{ VariableName: 'location', Value: 'away' }] }
+      ],
+      InternalVariables: [
+        { Name: 'location', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'untrusted', Privacy: 'private', Values: ['garage', 'away'] },
+        { Name: 'odometer', IsInside: true, FalsifiableWhenCompromised: false, Trust: 'untrusted', Privacy: 'private', LowerBound: 0, UpperBound: 100 }
+      ],
+      APIs: []
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Car', 'away')
+    await flushPromises()
+
+    const stateSelect = document.querySelector<HTMLSelectElement>('[data-testid="device-runtime-state"]')!
+    // Every state constrains `location`, so it is shown as the state's consequence, not offered as an input.
+    const derived = () => document.querySelector('[data-testid="device-runtime-variable-derived-location"]')
+    expect(document.querySelector('[data-testid="device-runtime-variable-location"]'),
+      'a state-derived variable must not be editable').toBeNull()
+    // Seeded consistently: `away` declares `location = away`, not the first enum literal `garage`.
+    expect(derived()?.textContent).toContain('away')
+
+    const odometer = document.querySelector<HTMLInputElement>('[data-testid="device-runtime-variable-odometer"]')!
+    odometer.value = '42'
+    odometer.dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    stateSelect.value = 'garage'
+    stateSelect.dispatchEvent(new Event('change'))
+    await flushPromises()
+
+    expect(derived()?.textContent, 'the state changed but its variable did not follow').toContain('garage')
+    // `garage` says nothing about the odometer, so an explicit instance value survives.
+    expect(document.querySelector<HTMLInputElement>('[data-testid="device-runtime-variable-odometer"]')!.value).toBe('42')
+    wrapper.unmount()
+  })
+
   it('omits the transitions section for a template that declares none', () => {
     const manifest: DeviceManifest = {
       Name: 'Air Conditioner',

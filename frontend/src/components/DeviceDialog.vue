@@ -22,6 +22,8 @@ import {
   createDeviceRuntimeDraft,
   getTemplateLocalVariables,
   getTemplateVariableDefaultValue,
+  syncStateDerivedVariables,
+  templateVariableIsStateDerived,
   getTemplateWorkingStates,
   resetDeviceRuntimeDraft,
   templateVariableHasEnumValues,
@@ -300,6 +302,20 @@ const runtimeWorkingStates = computed(() =>
 const runtimeInternalVariables = computed(() =>
   getTemplateLocalVariables(currentTemplate.value)
 )
+
+/**
+ * Picking a state re-derives the variables that state constrains.
+ *
+ * Seeding the draft consistently is not enough: the panel offers both halves, so a user could set the
+ * state to `away` and leave `location = garage` — a pair the writers now refuse, which would have meant
+ * an error message instead of a working save. A `Dynamics` value is a property of being in the state, so
+ * the state is the half that decides; a variable the new state says nothing about is left alone, since
+ * that is a genuine instance choice rather than a consequence.
+ */
+watch(() => runtimeDraft.value.state, (state, previous) => {
+  if (!state || previous === undefined) return
+  syncStateDerivedVariables(runtimeDraft.value.variables, currentTemplate.value, state)
+})
 
 const runtimeStateTemplateDefaults = computed(() => {
   const state = runtimeWorkingStates.value.find(item => item.Name === runtimeDraft.value.state)
@@ -1227,13 +1243,33 @@ const deviceSpecs = computed(() => {
                       <div class="grid grid-cols-1 gap-2">
                         <label class="min-w-0">
                           <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.variableValue') }}</span>
+                          <!--
+                            A variable every working state constrains is not an instance choice: the model
+                            gives `next()` a branch per state and its hold-current fallback is unreachable,
+                            so a value entered here would be overwritten one step later. Offering it is what
+                            let a Car be saved as state `away` with `location = garage`. Shown as the state's
+                            consequence instead — and only for FULL coverage, because under partial coverage
+                            the fallback is live and the value really is the user's.
+                          -->
+                          <div
+                            v-if="templateVariableIsStateDerived(currentTemplate, variable.Name)"
+                            :data-testid="`device-runtime-variable-derived-${variable.Name}`"
+                            class="flex min-w-0 items-center gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2"
+                          >
+                            <span class="min-w-0 break-words text-sm font-medium text-slate-700">
+                              {{ formatDeviceModelToken(runtimeDraft.variables[variable.Name]) }}
+                            </span>
+                            <span class="shrink-0 text-[length:var(--iot-font-min)] text-slate-500">
+                              {{ t('app.variableFollowsState') }}
+                            </span>
+                          </div>
                           <select
-                            v-if="templateVariableHasEnumValues(variable)"
+                            v-else-if="templateVariableHasEnumValues(variable)"
                             v-model="runtimeDraft.variables[variable.Name]"
                             :data-testid="`device-runtime-variable-${variable.Name}`"
                             class="board-card w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700"
                           >
-                            <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatDeviceModelToken(getTemplateVariableDefaultValue(variable)) }) }}</option>
+                            <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatDeviceModelToken(getTemplateVariableDefaultValue(variable, currentTemplate, runtimeDraft.state)) }) }}</option>
                             <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatDeviceModelToken(value) }}</option>
                           </select>
                           <input

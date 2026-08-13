@@ -766,6 +766,8 @@ import {
   getTemplateLocalVariables,
   getTemplateEnvironmentVariables,
   getTemplateVariableDefaultValue,
+  templateVariableIsStateDerived,
+  syncStateDerivedVariables,
   getTemplateWorkingStates,
   resetDeviceRuntimeDraft,
   templateVariableHasEnumValues,
@@ -2026,6 +2028,13 @@ const templateInstanceDialogData = reactive({
 })
 
 const templateInstanceRuntime = reactive(createDeviceRuntimeDraft())
+
+// Picking a state re-derives the variables it constrains, so this editor cannot submit a pair the
+// writers refuse. Same rule as the device dialog, through the same helper.
+watch(() => templateInstanceRuntime.state, (state, previous) => {
+  if (!state || previous === undefined) return
+  syncStateDerivedVariables(templateInstanceRuntime.variables, templateInstanceDialogData.template, state)
+})
 
 const templateInstanceWorkingStates = computed(() =>
   getTemplateWorkingStates(templateInstanceDialogData.template)
@@ -13830,13 +13839,25 @@ const counterexampleTraceHelpText = computed(() => {
               <div class="grid grid-cols-[minmax(0,1fr)_5.8rem_5.8rem] gap-2 max-[520px]:grid-cols-1">
                 <label class="min-w-0">
                   <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500 dark:text-slate-500">{{ t('app.variableValue') }}</span>
+                  <!-- The state's consequence, not an instance choice: see
+                       `templateVariableIsStateDerived`. -->
+                  <div
+                    v-if="templateVariableIsStateDerived(templateInstanceDialogData.template, variable.Name)"
+                    :data-testid="`template-instance-variable-derived-${variable.Name}`"
+                    class="flex min-w-0 items-center gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900"
+                  >
+                    <span class="min-w-0 break-words text-xs font-medium text-slate-700 dark:text-slate-100">
+                      {{ formatTemplateModelToken(templateInstanceDialogData.template, templateInstanceRuntime.variables[variable.Name]) }}
+                    </span>
+                    <span class="shrink-0 text-[length:var(--iot-font-min)] text-slate-500">{{ t('app.variableFollowsState') }}</span>
+                  </div>
                   <select
-                    v-if="templateVariableHasEnumValues(variable)"
+                    v-else-if="templateVariableHasEnumValues(variable)"
                     v-model="templateInstanceRuntime.variables[variable.Name]"
                     :data-testid="`template-instance-variable-${variable.Name}`"
                     class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
-                    <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatTemplateModelToken(templateInstanceDialogData.template, getTemplateVariableDefaultValue(variable)) }) }}</option>
+                    <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatTemplateModelToken(templateInstanceDialogData.template, getTemplateVariableDefaultValue(variable, templateInstanceDialogData.template, templateInstanceRuntime.state)) }) }}</option>
                     <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatTemplateModelToken(templateInstanceDialogData.template, value) }}</option>
                   </select>
                   <input

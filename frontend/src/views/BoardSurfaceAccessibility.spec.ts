@@ -71,8 +71,10 @@ describe('Board surface accessibility contracts', () => {
       boardSource.indexOf('v-if="templateInstanceDialogVisible"'),
       boardSource.indexOf('<!-- Left Sidebar - Control Center -->')
     )
+    // The hint now names the value the CHOSEN STATE declares, not the first enum literal: for a variable
+    // every state constrains those differ, and showing `Values[0]` advertised a value the writers reject.
     expect(templateDialog).toContain(
-      'formatTemplateModelToken(templateInstanceDialogData.template, getTemplateVariableDefaultValue(variable))'
+      'getTemplateVariableDefaultValue(variable, templateInstanceDialogData.template, templateInstanceRuntime.state)'
     )
   })
 

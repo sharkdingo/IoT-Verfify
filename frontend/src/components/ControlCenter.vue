@@ -25,6 +25,8 @@ import {
   getTemplateEnvironmentVariables,
   getTemplateLocalVariables,
   getTemplateVariableDefaultValue,
+  templateVariableIsStateDerived,
+  syncStateDerivedVariables,
   getTemplateWorkingStates,
   materializeDeviceRuntimeConfig,
   resetDeviceRuntimeDraft,
@@ -605,6 +607,13 @@ const getTemplateInitState = (template: any) => {
   const initState = template?.manifest?.InitState
   return initState ? formatTemplateModelToken(template, initState) : t('app.none')
 }
+
+// Picking a state re-derives the variables it constrains, so this editor cannot submit a pair the
+// writers refuse. Same rule as the device dialog, through the same helper.
+watch(() => singleDeviceRuntime.state, (state, previous) => {
+  if (!state || previous === undefined) return
+  syncStateDerivedVariables(singleDeviceRuntime.variables, selectedDeviceTemplate.value, state)
+})
 
 const getTemplateTransitionCount = (template: any) =>
   Array.isArray(template?.manifest?.Transitions) ? template.manifest.Transitions.length : 0
@@ -2672,13 +2681,26 @@ watch(() => props.readOnly, readOnly => {
                   <div class="grid grid-cols-[minmax(0,1fr)_5.8rem_5.8rem] gap-2">
                     <label class="min-w-0">
                       <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.variableValue') }}</span>
+                      <!-- A variable every state constrains is the state's consequence, not an instance
+                           choice: see `templateVariableIsStateDerived`. Editing it here would be discarded
+                           one step into the model, and the writers refuse a pair that disagrees. -->
+                      <div
+                        v-if="templateVariableIsStateDerived(selectedDeviceTemplate, variable.Name)"
+                        :data-testid="`single-device-variable-derived-${variable.Name}`"
+                        class="flex min-w-0 items-center gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-2 py-1.5"
+                      >
+                        <span class="min-w-0 break-words text-xs font-medium text-slate-700">
+                          {{ formatTemplateModelToken(selectedDeviceTemplate, singleDeviceRuntime.variables[variable.Name]) }}
+                        </span>
+                        <span class="shrink-0 text-[length:var(--iot-font-min)] text-slate-500">{{ t('app.variableFollowsState') }}</span>
+                      </div>
                       <select
-                        v-if="templateVariableHasEnumValues(variable)"
+                        v-else-if="templateVariableHasEnumValues(variable)"
                         v-model="singleDeviceRuntime.variables[variable.Name]"
                         :data-testid="`single-device-variable-${variable.Name}`"
                         class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
                       >
-                        <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatTemplateModelToken(selectedDeviceTemplate, getTemplateVariableDefaultValue(variable)) }) }}</option>
+                        <option value="">{{ t('app.useTemplateDefaultWithValue', { value: formatTemplateModelToken(selectedDeviceTemplate, getTemplateVariableDefaultValue(variable, selectedDeviceTemplate, singleDeviceRuntime.state)) }) }}</option>
                         <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ formatTemplateModelToken(selectedDeviceTemplate, value) }}</option>
                       </select>
                       <input

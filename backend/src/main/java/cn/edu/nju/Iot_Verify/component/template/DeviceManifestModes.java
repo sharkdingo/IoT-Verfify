@@ -91,6 +91,15 @@ public final class DeviceManifestModes {
                 || manifest.getWorkingStates() == null) {
             return null;
         }
+        // A Transition assignment on the same variable means the state does not determine it: the generator
+        // emits transition branches ahead of the state branches in one `case`, and first match wins, so a
+        // firing transition overrides the state's Dynamics. Treating such a variable as state-determined
+        // would default it wrongly and make the writer gates refuse a pair the transition legitimately
+        // produces. No bundled template does this — Clock's only assignment targets a shared variable — so
+        // this guards custom templates.
+        if (isDrivenByTransition(manifest, variableName)) {
+            return null;
+        }
         String wanted = stateName.trim();
         for (DeviceManifest.WorkingState state : manifest.getWorkingStates()) {
             if (state == null || state.getName() == null || state.getDynamics() == null) {
@@ -109,6 +118,25 @@ public final class DeviceManifestModes {
             }
         }
         return null;
+    }
+
+
+    /** Whether a Transition assignment targets this variable, making it more than the state's consequence. */
+    private static boolean isDrivenByTransition(DeviceManifest manifest, String variableName) {
+        if (manifest.getTransitions() == null) {
+            return false;
+        }
+        for (DeviceManifest.Transition transition : manifest.getTransitions()) {
+            if (transition == null || transition.getAssignments() == null) {
+                continue;
+            }
+            for (DeviceManifest.Assignment assignment : transition.getAssignments()) {
+                if (assignment != null && variableName.equals(assignment.getAttribute())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
