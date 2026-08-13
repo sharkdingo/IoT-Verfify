@@ -1084,7 +1084,7 @@ const nodeRuntimeBadgesCache = computed(() => {
  * Called 6 times per node in the template but only computes once per render.
  */
 const getNodeRuntimeBadges = (node: DeviceNode) => {
-  return nodeRuntimeBadgesCache.value.get(node.id)!
+  return nodeRuntimeBadgesCache.value.get(node.id) ?? { badges: [], hiddenVariableCount: 0 }
 }
 
 /**
