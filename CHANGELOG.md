@@ -23,9 +23,12 @@ history into a technical spec. The spec content itself now lives under
   text.** Each privacy cell was a three-way ternary whose middle branch was the empty string — and the
   two tables chose *opposite* values for it, so an unstyled label meant "public" in the variables table
   and "private" in the states table one screen-inch below. A user comparing them could only conclude the
-  chip carried meaning it did not. Both now use one vocabulary: `private` takes the warning role,
-  everything else is neutral, and the hardcoded `bg-slate-100 text-slate-600` fallbacks are gone (a
-  `board-chip-*` token follows the theme; a raw slate pair does not).
+  chip carried meaning it did not. Both now use one vocabulary: `private` takes `info` — a classification,
+  not a hazard, which is the role `SimulationTimeline` settled on after two reviews read amber as implying
+  a security defect in an ordinary trace — and everything else is neutral. The two privacy cells' hardcoded
+  `bg-slate-100 text-slate-600` fallbacks are gone with them (a `board-chip-*` token follows the theme; a
+  raw slate pair needs the dialog's `!important` dark repair). The trust and falsifiability cells still
+  carry that pair and are left for a separate pass.
 - **The section accent bars stopped marking their sections once the headers grew a second line.** A bar
   is `h-5` on an `items-center` row, which was right for a one-line header and wrong for title + hint: it
   centred across the boundary and read as decoration beside the hint. All eight are now `h-7` — exactly
@@ -46,12 +49,25 @@ history into a technical spec. The spec content itself now lives under
 
 #### Added
 
-- **Device details now list the template's declared contents.** `Contents` was the second whole manifest
-  array with no surface anywhere: `RuleBuilderDialog` offers them as a rule's `contentDevice`/`content`,
-  and each one's `privacy_<name>` ORs into the command target's privacy condition — so attaching a private
-  photo to a rule silently marks that rule's target private, and nothing showed which contents a device
-  had or how they were classified until a verification ran. Only two bundled templates declare any
-  (Mobile Phone's `photo`, Ventilator's `content`), which is how it stayed invisible.
+- **The States table now shows what each state does, not only how it is labelled.** `Dynamics` was the
+  third invisible manifest field, and the largest: 15 bundled templates declare 81 entries. Trust and
+  privacy describe a state's *labels*; `Dynamics` is the variable value the state holds while it is active.
+  The Environment Pool shows these grouped by variable and therefore only for shared values — 9 of the 15
+  templates target a device-local variable exclusively (Oven's `ovenJobState`, Washer's `washerJobState`,
+  Car's `location`, …), so those had no surface at all, and an earlier version of the States hint wrongly
+  sent the reader to the pool for them.
+  Worded as a standing constraint rather than an action: the generator emits a `Value` as a branch of
+  `next(<device>.<var>)` guarded by *being in that state*, so "holds X" is what it means, where "set to X"
+  read as something the state does at a moment — which is what an API does. That also stopped Car's
+  `garage → holds garage` looking like a redundant instruction: it is the reported-value mirror, the
+  falsifiable reading a rule sees, distinct from the true state it mirrors.
+- **Device details now list the template's declared contents.** No surface showed a device's contents *as
+  a property of the device*: `RuleBuilderDialog` names them with their sensitivity while you pick one for a
+  rule, and the canvas badge aggregates the private ones, but neither answers "what does this device
+  declare, and how is it classified" before you start authoring. That matters because each content's
+  `privacy_<name>` ORs into the command target's privacy condition when the rule fires, so attaching a
+  private photo marks that target private. Only two bundled templates declare any (Mobile Phone's `photo`,
+  Ventilator's `content`), which is how the gap stayed invisible.
 - **Device details now list the template's state transitions.** A transition is the one part of the
   state machine no rule drives — it fires on its own once its trigger holds — and nothing in the product
   showed them, so a counterexample where a camera left `taking photo` by itself had no explanation

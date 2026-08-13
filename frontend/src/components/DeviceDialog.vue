@@ -14,6 +14,7 @@ import { formatBuiltInModelToken } from '@/utils/modelTokenDisplay'
 import { resolveEffectiveNodeState } from '@/utils/canvas/nodeState'
 import { confirmDestructive } from '@/utils/feedback'
 import { deviceIconFor } from '@/utils/deviceIcon'
+import { normalizeModelRelation } from '@/utils/modelRequest'
 import {
   PRIVACY_OPTIONS,
   TRUST_OPTIONS,
@@ -764,7 +765,22 @@ const states = computed(() => {
     displayName: formatStateForDisplay(s.Name, t('app.null')),
     description: s.Description,
     trust: s.Trust,
-    privacy: s.Privacy
+    privacy: s.Privacy,
+    // A standing constraint, not an action: the generator emits a Dynamics `Value` as a branch of
+    // `next(<device>.<var>)` guarded by *being in this state* (`car_1.CarLocation=garage: garage;`), so it
+    // means "while this state holds, the variable holds that value". "Set to" read as a moment's action —
+    // what an API does — and made Car's `garage → set to garage` look like a redundant instruction rather
+    // than the reported-reading mirror it is. Own keys, not the pool's `environmentValueEffect`: there a
+    // device writes a scene-shared quantity, which is closer to an action.
+    //
+    // Blank, not `!== undefined`: the backend's XOR treats a blank `ChangeRate` as absent
+    // (`DeviceTemplateDto.Dynamic.isValidDynamic`), so `""` must fall through to `Value`.
+    effects: (s.Dynamics || []).map(dynamic => ({
+      variable: formatDeviceModelToken(dynamic.VariableName),
+      effect: String(dynamic.ChangeRate ?? '').trim() !== ''
+        ? t('app.stateHoldsRate', { rate: dynamic.ChangeRate })
+        : t('app.stateHoldsValue', { value: formatDeviceModelToken(dynamic.Value) })
+    }))
   }))
 })
 
@@ -841,7 +857,11 @@ const transitions = computed(() => {
 const formatTrigger = (trigger: any): string => {
   if (!trigger) return t('app.userRole')
   if (typeof trigger !== 'object') return t('app.userRole')
-  const relation = String(trigger.Relation || '=').trim().toLowerCase()
+  // Normalize first: the schema also admits `EQ`/`NEQ`/`GT`/`GTE`/`LT`/`LTE`/`==`, which
+  // `SmvRelationUtils` folds to symbols server-side. Without this the map missed them and a template
+  // written with `GTE` printed the raw token instead of "at least" — the same three-renderings-of-one-
+  // operator problem the note in `SystemInspector.getRelationLabel` records.
+  const relation = (normalizeModelRelation(trigger.Relation) ?? String(trigger.Relation || '=')).trim().toLowerCase()
   const relationLabels: Record<string, string> = {
     '=': t('app.relationEquals'),
     '!=': t('app.relationNotEquals'),
@@ -1328,14 +1348,15 @@ const deviceSpecs = computed(() => {
                           </span>
                         </td>
                         <td class="px-4 py-3 text-sm text-slate-600">
-                          <!-- One privacy vocabulary for the whole dialog: `private` is the sensitive
-                               half and carries the warning role, `public` is neutral. The two tables used
-                               to disagree — each left the OPPOSITE value with an empty class, so an
-                               unstyled chip meant "public" here and "private" one table down. -->
+                          <!-- One privacy vocabulary for the whole dialog, and `info` rather than
+                               `warning`: a privacy label is a classification, not a hazard. The amber was
+                               tried and rejected in `SimulationTimeline` ("Provenance, not a hazard"), where
+                               two reviews read it as implying a security defect in an ordinary trace. The two
+                               tables here used to disagree instead — each left the OPPOSITE value with an
+                               empty class, so an unstyled chip meant "public" here and "private" one table
+                               down. `attacked` keeps `danger`, because a compromise genuinely is one. -->
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-                            :class="v.privacy === 'private' ? 'board-chip-warning board-text-warning' :
-                                    v.privacy === 'public' ? 'board-chip-neutral' :
-                                    'board-chip-neutral'">
+                            :class="v.privacy === 'private' ? 'board-chip-info board-text-info' : 'board-chip-neutral'">
                             {{ v.privacy ? t(`app.${v.privacy}`) : '-' }}
                           </span>
                         </td>
@@ -1391,11 +1412,12 @@ const deviceSpecs = computed(() => {
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.description') }}</th>
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.trust') }}</th>
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.privacy') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.stateVariableHold') }}</th>
                       </tr>
                     </thead>
                     <tbody class="board-card divide-y divide-slate-100">
                       <tr v-if="states.length === 0">
-                        <td class="px-4 py-8 text-center text-slate-500 text-sm italic" colspan="4">
+                        <td class="px-4 py-8 text-center text-slate-500 text-sm italic" colspan="5">
                           {{ t('app.noData') }}
                         </td>
                       </tr>
@@ -1411,8 +1433,16 @@ const deviceSpecs = computed(() => {
                         <td class="px-4 py-3 text-sm text-slate-600">
                           <!-- Same vocabulary as the variables table above. -->
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-                            :class="s.privacy === 'private' ? 'board-chip-warning board-text-warning' : 'board-chip-neutral'">
+                            :class="s.privacy === 'private' ? 'board-chip-info board-text-info' : 'board-chip-neutral'">
                             {{ t(`app.${s.privacy}`) }}
+                          </span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-slate-600" :data-testid="`device-dialog-state-effects-${s.name}`">
+                          <span v-if="s.effects.length === 0">-</span>
+                          <span v-else class="flex flex-col gap-0.5">
+                            <span v-for="(effect, effectIdx) in s.effects" :key="effectIdx" class="break-words">
+                              {{ effect.variable }}: {{ effect.effect }}
+                            </span>
                           </span>
                         </td>
                       </tr>
@@ -1540,7 +1570,7 @@ const deviceSpecs = computed(() => {
                         <td class="px-4 py-3 text-sm text-slate-600">
                           <!-- Same privacy vocabulary as the variables and states tables. -->
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-                            :class="content.privacy === 'private' ? 'board-chip-warning board-text-warning' : 'board-chip-neutral'">
+                            :class="content.privacy === 'private' ? 'board-chip-info board-text-info' : 'board-chip-neutral'">
                             {{ content.privacy ? t(`app.${content.privacy}`) : '-' }}
                           </span>
                         </td>

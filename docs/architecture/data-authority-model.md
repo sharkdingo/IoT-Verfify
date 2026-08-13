@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-31. Source: board/fuzz DTOs and services,
+Verified against code on 2026-08-13. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -139,7 +139,12 @@ Backend DTO: `BoardEnvironmentVariableDto`. Backend table:
 The frontend labels `value` as the **model initial value**, not the current physical value.
 Each verification, simulation, or bounded-exploration path starts from it; later trace states
 do not write back to the pool. The expanded pool also shows the template-owned evolution:
-the required `NaturalChangeRate` for numeric shared values and each WorkingState device effect.
+the required `NaturalChangeRate` for numeric shared values and each WorkingState device effect
+**on that shared value**. The pool groups effects by variable, so it can only show the shared ones;
+a `Dynamics` entry targeting a device-local variable — the only kind 9 of the 15 bundled templates
+that declare `Dynamics` have — is shown per state in the device dialog's States table instead. Two
+surfaces, one split by question: the pool answers "what moves this shared value", the dialog answers
+"what does this state do".
 What that rate means is owned by
 [shared-value-semantics.md](shared-value-semantics.md#5-natural-evolution); its attribution to
 MEDIC §3.1 by [theory-sources.md](theory-sources.md).

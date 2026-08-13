@@ -5,7 +5,7 @@ colour roles, type scale, depth, CSS precedence, and replay. These are **rules, 
 when code and this document disagree, one of them is a bug. Keep them short; they exist to stop the
 same argument being re-litigated per PR, and each carries the measurement that settled it.
 
-Verified against code on 2026-08-12. Source: `frontend/src/styles/`, `frontend/src/composables/`,
+Verified against code on 2026-08-13. Source: `frontend/src/styles/`, `frontend/src/composables/`,
 `frontend/src/utils/feedback.ts`, and the spec files each rule names.
 
 ## 1. What belongs in the URL
@@ -419,6 +419,41 @@ light theme; `dark:text-slate-400` is correct on a dark card, where the same val
 
 Pinned by `styles/__tests__/neutralTextContrast.spec.ts` and
 `styles/__tests__/semanticColourOwnership.spec.ts`.
+
+### A domain value maps to one role, product-wide — and an empty class is not a role
+
+Two failures that the token rules above do not cover, because both were about *which* role a value earns
+rather than how a role is spelled.
+
+- **A classification is not a hazard.** `private` and `untrusted` are provenance facts — `nusmv-model.md`
+  is explicit that "`untrusted` does not mean the device is selected as compromised" — so they take
+  `info`, and `attacked` keeps `danger` because a selected compromise genuinely is one. Amber was tried
+  twice and rejected twice: two desktop reviews of an ordinary simulation read it as implying a security
+  defect ("颜色和措辞像警告"), recorded at `SimulationTimeline.vue`'s privacy chip and again in
+  `PlaybackChangePopover`. Reintroducing `warning` for `private` in one surface makes the product
+  disagree with itself about whether an ordinary phone photo is a problem.
+- **Neutral is the honest default; a role has to be earned** (`board.css`). An empty-string class branch
+  is a defect, not a neutral: it renders a chip-shaped element with no chip, so the same value reads as
+  two different things depending on which table it lands in. The device dialog had exactly that in two
+  tables that chose *opposite* values for the empty branch, so an unstyled label meant "public" in one
+  and "private" in the next. Use `board-chip-neutral` when a value carries no status.
+
+A test that pins this should assert the chips for one value share *the same* class, not that they carry a
+particular one — hardcoding the role cements it locally and lets it drift from the rest of the product.
+
+### A section header inside a dialog is one shape
+
+Peer sections in a dialog body use: a `w-1 h-7 shrink-0` accent bar, then a `min-w-0` wrapper holding the
+`<h2>` and a `text-xs` hint at `mt-0.5`, on a `flex items-start gap-2 mb-4` row. Two things this fixes.
+`h-7` is `text-lg`'s exact line box, so the bar spans the title; a fixed `h-5` bar on an `items-center`
+row was correct while headers were one line and became decoration beside the hint once they were two.
+And every peer section carries a hint, because explaining one of six implies the other five are
+self-evident — the device dialog's variables, states, APIs and specifications tables each encode a
+non-obvious ownership or capability rule that nothing on screen stated.
+
+Pinned by `components/__tests__/DeviceDialog.spec.ts`, which walks every section and asserts the shape;
+the bar is the anchor, because a class query for the header row also matched inner rows and passed for
+the wrong element.
 
 ## 7. Text size: the floor is not the target, and headings need a tier
 

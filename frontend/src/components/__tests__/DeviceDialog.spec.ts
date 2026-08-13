@@ -1346,7 +1346,7 @@ describe('DeviceDialog template authority', () => {
       Modes: [],
       WorkingStates: [],
       InternalVariables: [
-        { Name: 'time', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'trusted', Privacy: 'public', LowerBound: 0, UpperBound: 23 }
+        { Name: 'time', IsInside: false, Reads: true, FalsifiableWhenCompromised: true, Trust: 'trusted', Privacy: 'public', LowerBound: 0, UpperBound: 23, NaturalChangeRate: '1' }
       ],
       APIs: [],
       Transitions: [
@@ -1383,7 +1383,7 @@ describe('DeviceDialog template authority', () => {
         { Name: 'RFID', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'trusted', Privacy: 'private', Values: ['none', 'authorized'] }
       ],
       APIs: [{ Name: 'scan', StartState: '', Signal: true }],
-      Contents: [{ Name: 'badge photo', Privacy: 'private' }],
+      Contents: [{ Name: 'badgePhoto', Privacy: 'private' }],
       Transitions: [
         {
           Name: 'reset',
@@ -1427,9 +1427,11 @@ describe('DeviceDialog template authority', () => {
    * the command target, so the sensitivity a rule inherits was unreadable until a run. Only two bundled
    * templates declare any, which is how it stayed invisible.
    *
-   * Also pins one privacy vocabulary across the dialog: `private` is the sensitive half and carries the
-   * warning role. The variables and states tables used to disagree — each left the OPPOSITE value with an
-   * empty class, so an unstyled chip meant "public" in one table and "private" in the next.
+   * Also pins one privacy vocabulary across the dialog. The tables used to disagree — each left the
+   * OPPOSITE value with an empty class, so an unstyled chip meant "public" in one table and "private" in
+   * the next. The assertion is that every private chip carries the SAME class, not that it carries a
+   * particular one: hardcoding the role would cement it here and let it drift from the rest of the
+   * product, which is how `warning` (a hazard) briefly displaced `info` (a classification).
    */
   it('lists declared contents and marks private the same way everywhere', () => {
     const manifest: DeviceManifest = {
@@ -1454,15 +1456,103 @@ describe('DeviceDialog template authority', () => {
     expect(cells[0].textContent?.trim()).toBe('photo')
     const contentChip = cells[2].querySelector('span')
     expect(contentChip?.textContent?.trim()).toBe('Private sensitivity label')
-    expect(contentChip?.className).toContain('board-chip-warning')
 
-    // The same value must look the same in every table: no empty-class branch anywhere.
+    // Exactly three: the variable, the state and the content. A floor (`>= 3`) would still pass if one
+    // stopped rendering, because a chip that is not emitted is invisible to the filter that finds them.
     const privateChips = Array.from(document.querySelectorAll('[data-testid="device-dialog"] span'))
       .filter(node => node.textContent?.trim() === 'Private sensitivity label')
-    expect(privateChips.length).toBeGreaterThanOrEqual(3)
-    for (const chip of privateChips) {
-      expect(chip.className, 'a private label rendered with no chip styling').toContain('board-chip-warning')
-    }
+    expect(privateChips.length, 'a private label stopped rendering').toBe(3)
+
+    // Same value, same appearance — asserted as sameness rather than against a fixed role, so the guard
+    // survives a deliberate role change and still catches one table drifting from another.
+    const classes = new Set(privateChips.map(chip => chip.className.trim()))
+    expect(classes.size, `private chips disagree: ${[...classes].join(' | ')}`).toBe(1)
+    expect([...classes][0], 'a private label rendered with no chip styling').toMatch(/board-chip-/)
+    wrapper.unmount()
+  })
+
+  /**
+   * `Dynamics` is what a state DOES, as opposed to how it is labelled, and it was rendered nowhere for a
+   * device-local target. The Environment Pool groups these by variable, so it can only ever show shared
+   * ones — and 9 of the 15 bundled templates that declare Dynamics target a local variable exclusively
+   * (Oven's `ovenJobState`, Washer's `washerJobState`, …), so for those the effect had no surface at all.
+   * That is why the states hint must not send the reader to the pool for this.
+   */
+  it('shows what each state does, including a device-local target', () => {
+    const manifest: DeviceManifest = {
+      // Mode names, state tuples and the Dynamics target all match `deviceTemplate/Oven.json`, so the
+      // fixture exercises the real multi-mode shape rather than an invented one.
+      Name: 'Oven',
+      Modes: ['OvenMode', 'MachineState'],
+      InitState: 'heating;ready',
+      WorkingStates: [
+        {
+          Name: 'heating;running',
+          Trust: 'trusted',
+          Privacy: 'public',
+          Dynamics: [{ VariableName: 'ovenJobState', Value: 'cooking' }]
+        },
+        { Name: 'heating;ready', Trust: 'trusted', Privacy: 'public' }
+      ],
+      InternalVariables: [
+        { Name: 'ovenJobState', IsInside: true, FalsifiableWhenCompromised: false, Trust: 'trusted', Privacy: 'public', Values: ['ready', 'cooking'] }
+      ],
+      APIs: []
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Oven', 'heating;running')
+
+    const withEffect = document.querySelector('[data-testid="device-dialog-state-effects-heating;running"]')
+    expect(withEffect?.textContent?.trim()).toBe('ovenJobState: holds cooking')
+    // A state that declares no Dynamics reads as "-", not as an empty cell.
+    const withoutEffect = document.querySelector('[data-testid="device-dialog-state-effects-heating;ready"]')
+    expect(withoutEffect?.textContent?.trim()).toBe('-')
+    wrapper.unmount()
+  })
+
+  /**
+   * Two shapes no bundled template produces, so nothing else would catch a regression here.
+   *
+   * A blank `ChangeRate` is *absent* to the backend — `DeviceTemplateDto.Dynamic.isValidDynamic` tests
+   * `!= null && !isBlank()` — so it must fall through to `Value` instead of rendering "rate  per step".
+   * And a trigger `Relation` may arrive as `GTE`, which `SmvRelationUtils` folds to `>=` server-side;
+   * rendering the raw token would give one operator two spellings in one product.
+   */
+  it('treats a blank change rate as absent and localizes an aliased trigger relation', () => {
+    const manifest: DeviceManifest = {
+      Name: 'Probe',
+      Modes: ['ProbeMode'],
+      InitState: 'idle',
+      WorkingStates: [
+        {
+          Name: 'idle',
+          Trust: 'trusted',
+          Privacy: 'public',
+          Dynamics: [{ VariableName: 'level', ChangeRate: '   ', Value: 'high' }]
+        }
+      ],
+      InternalVariables: [
+        { Name: 'level', IsInside: true, FalsifiableWhenCompromised: false, Trust: 'trusted', Privacy: 'public', Values: ['high', 'low'] }
+      ],
+      APIs: [],
+      Transitions: [
+        {
+          Name: 'escalate',
+          StartState: 'idle',
+          EndState: 'idle',
+          Trigger: { Attribute: 'level', Relation: 'GTE', Value: 'high' }
+        }
+      ]
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Probe')
+
+    // Falls through to Value rather than printing an empty rate.
+    expect(document.querySelector('[data-testid="device-dialog-state-effects-idle"]')?.textContent?.trim())
+      .toBe('level: holds high')
+
+    const row = document.querySelector('[data-testid="device-dialog-transition-escalate"]')
+    const trigger = Array.from(row!.querySelectorAll('td'))[3].textContent?.trim()
+    expect(trigger).toBe('level Greater or equal high')
+    expect(trigger).not.toContain('GTE')
     wrapper.unmount()
   })
 
