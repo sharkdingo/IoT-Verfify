@@ -17,7 +17,18 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-13
 
+#### Fixed
+
+- **Scene generator emitted non-canonical state-determined variables.** The RFID access demo's `rfid_1` device carried an instance `variables` field for `RFID`, but that variable is state-determined (the `authorized` state declares a `Dynamics` value). Per the 39a1a94 contract, state-determined variables must not appear as instance fields — the runtime derives them from the device state. The backend's `canonicalizeVariables` corrects legacy mismatches on import (so the scene was still loadable), but the generator should emit canonical scenes from the start. Removed the `variables` field from the generator's `rfid_1` definition and regenerated `default-rfid-access-scene.json`. (`scripts/generate-default-template-scenes.mjs`, `docs/examples/default-rfid-access-scene.json`)
+
 #### Performance
+
+- **Node drag now bypasses Vue reactivity during movement.** Previously, every `pointermove` event (60+ fps) directly
+  modified `node.position.x/y`, triggering Vue's reactivity system and forcing Board.vue's 155 computed properties to
+  re-evaluate, including expensive operations like `boardAttackSurface` (O(rules + nodes)) and `canvasMapData` 
+  (O(nodes + edges)). Now uses a temporary non-reactive position during drag, only committing to the reactive object
+  on drag end. This eliminates ~155 computed evaluations per frame, dramatically reducing stutter during node dragging.
+  (`frontend/src/utils/canvas/nodeDrag.ts`, `frontend/src/components/CanvasBoard.vue`)
 
 - **Canvas drag performance optimized.** Node dragging was stuttering because every `pointermove` event (60+ fps)
   triggered immediate edge recalculation and the template rendered edges with 8-12 redundant `props.nodes.find()`

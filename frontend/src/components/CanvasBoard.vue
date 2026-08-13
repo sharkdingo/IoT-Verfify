@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DeviceNode } from '../types/node'
@@ -41,7 +41,8 @@ import {
   beginNodeDrag,
   cancelNodeDrag,
   updateNodeDrag,
-  endNodeDrag
+  endNodeDrag,
+  getNodeDragPosition
 } from '../utils/canvas/nodeDrag'
 
 import {
@@ -266,18 +267,29 @@ const nodeMap = computed(() => {
 // 预计算所有边的调整后坐标，避免模板中重复计算
 const edgesWithAdjustedPoints = computed(() => {
   return props.edges.map(edge => {
-    const fromNode = nodeMap.value.get(edge.from)
-    const toNode = nodeMap.value.get(edge.to)
+    // During drag, use temporary position for the dragging node
+    let fromNode = nodeMap.value.get(edge.from)
+    let toNode = nodeMap.value.get(edge.to)
+
+    // Create temporary node objects with drag positions if nodes are being dragged
+    if (fromNode && nodeDragState.node === fromNode && nodeDragState.tempPosition) {
+      fromNode = { ...fromNode, position: nodeDragState.tempPosition }
+    }
+    if (toNode && nodeDragState.node === toNode && nodeDragState.tempPosition) {
+      toNode = { ...toNode, position: nodeDragState.tempPosition }
+    }
+
     const adjustedPoints = getAdjustedLinkPoints(fromNode, toNode, edge)
 
     // 预计算边的样式属性，避免重复查找节点
-    const colorIndex = fromNode ? getNodeColorIndex(fromNode.id) : 0
+    const sourceNode = nodeMap.value.get(edge.from)
+    const colorIndex = sourceNode ? getNodeColorIndex(sourceNode.id) : 0
     const isInternal = isInternalVariableEdge(edge)
 
     return {
       edge,
-      fromNode,
-      toNode,
+      fromNode: sourceNode,
+      toNode: nodeMap.value.get(edge.to),
       adjustedPoints,
       // 预计算样式
       particleColor: isInternal ? 'var(--text-muted)' :
@@ -286,7 +298,7 @@ const edgesWithAdjustedPoints = computed(() => {
       arrowMarker: isInternal ? '' :
         ['url(#arrow-blue)', 'url(#arrow-green)', 'url(#arrow-purple)', 'url(#arrow-orange)',
          'url(#arrow-red)', 'url(#arrow-teal)', 'url(#arrow-pink)', 'url(#arrow-yellow)'][colorIndex],
-      particleFillColor: fromNode ? getNodeAccentColor(fromNode.id) : 'var(--iot-node-accent-0)'
+      particleFillColor: sourceNode ? getNodeAccentColor(sourceNode.id) : 'var(--iot-node-accent-0)'
     }
   })
 })
@@ -443,7 +455,7 @@ const emit = defineEmits<{
 
 /* ====== 节点拖拽状态 ====== */
 
-const dragState = createNodeDragState()
+const nodeDragState = reactive(createNodeDragState())
 let activeDragPointerId: number | null = null
 let activeDragTarget: HTMLElement | null = null
 let activeDragNodeId: string | null = null
@@ -479,7 +491,7 @@ const releaseDragPointer = () => {
 
 const onNodeLostPointerCapture = (e: PointerEvent) => {
   if (e.pointerId !== activeDragPointerId) return
-  const restored = cancelNodeDrag(dragState)
+  const restored = cancelNodeDrag(nodeDragState)
   if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
   releaseDragPointer()
 }
@@ -499,7 +511,7 @@ const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
     return
   }
   // 只处理节点自身拖拽，不影响画布平移（事件在模板里用了 .stop）
-  beginNodeDrag(e, node, dragState)
+  beginNodeDrag(e, node, nodeDragState)
   activeDragPointerId = e.pointerId
   activeDragTarget = e.currentTarget as HTMLElement
   activeDragNodeId = node.id
@@ -549,18 +561,18 @@ const onNodePointerMove = (e: PointerEvent) => {
     if (distance < NODE_DRAG_THRESHOLD_PX) return
     activeDragMoved = true
   }
-  const changed = updateNodeDrag(e, dragState, props.zoom)
-  if (!changed || !dragState.node) return
+  const changed = updateNodeDrag(e, nodeDragState, props.zoom)
+  if (!changed || !nodeDragState.node) return
 
   // 节点位置变了，使用 RAF 节流边更新以提升性能
-  scheduleEdgeUpdate(dragState.node.id)
+  scheduleEdgeUpdate(nodeDragState.node.id)
 }
 
 const onNodePointerUp = (e: PointerEvent) => {
   if (e.pointerId !== activeDragPointerId) return
   cancelScheduledEdgeUpdate()
   const movedEnough = activeDragMoved
-  const moved = endNodeDrag(dragState)
+  const moved = endNodeDrag(nodeDragState)
   if (moved) {
     // 拖拽结束立即同步更新边，确保最终位置准确
     updateEdgesForNode(moved.id, props.nodes, props.edges)
@@ -576,7 +588,7 @@ const onNodePointerUp = (e: PointerEvent) => {
 const onNodePointerCancel = (e: PointerEvent) => {
   if (e.pointerId !== activeDragPointerId) return
   cancelScheduledEdgeUpdate()
-  const restored = cancelNodeDrag(dragState)
+  const restored = cancelNodeDrag(nodeDragState)
   if (restored) updateEdgesForNode(restored.id, props.nodes, props.edges)
   releaseDragPointer()
 }
@@ -673,7 +685,7 @@ watch(
   () => props.interactionLocked,
   locked => {
     if (!locked) return
-    const restoredDrag = cancelNodeDrag(dragState)
+    const restoredDrag = cancelNodeDrag(nodeDragState)
     if (restoredDrag) updateEdgesForNode(restoredDrag.id, props.nodes, props.edges)
     releaseDragPointer()
     const restoredResize = cancelNodeResize(resizeState)
@@ -825,6 +837,15 @@ const getNodeResizeHandleGeometry = (node: DeviceNode) => {
     // Negative because each handle is positioned by its outer edge: the more negative, the farther out it sits.
     '--resize-hit-offset': `${-(POINTER_RESIZE_TARGET_SIZE_PX - inwardPx) / zoom}px`
   }
+}
+
+/**
+ * Get the visual rendering position of a node.
+ * During drag, returns the temporary position; otherwise returns the committed position.
+ * This prevents triggering Vue reactivity on every pointermove event.
+ */
+const getNodeRenderPosition = (node: DeviceNode) => {
+  return getNodeDragPosition(node, nodeDragState)
 }
 
 /**
@@ -1290,7 +1311,7 @@ const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
 onBeforeUnmount(() => {
   if (nodeAnimationResetTimer) clearTimeout(nodeAnimationResetTimer)
   cancelScheduledEdgeUpdate()
-  const restoredDrag = cancelNodeDrag(dragState)
+  const restoredDrag = cancelNodeDrag(nodeDragState)
   if (restoredDrag) updateEdgesForNode(restoredDrag.id, props.nodes, props.edges)
   releaseDragPointer()
   const restored = cancelNodeResize(resizeState)
@@ -1575,8 +1596,8 @@ onMounted(() => {
           :title="getNodeTitle(node)"
           :class="[getNodeVisualTierClass(node), { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
           :style="{
-          left: node.position.x + 'px',
-          top: node.position.y + 'px',
+          left: getNodeRenderPosition(node).x + 'px',
+          top: getNodeRenderPosition(node).y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
           '--canvas-zoom': props.zoom,
