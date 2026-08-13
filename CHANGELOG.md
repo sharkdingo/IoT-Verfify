@@ -17,6 +17,34 @@ history into a technical spec. The spec content itself now lives under
 
 ### 2026-08-13
 
+#### Changed
+
+- **Every section of the device dialog now shares one header shape and explains itself.** The new
+  transitions table arrived with its hint as a sibling paragraph and a tighter header margin, which made
+  it visibly the odd one out next to States and APIs — and giving only that section an explanation
+  implied the other five were self-evident, which they are not: nothing said that a variable's row is
+  owned by the Environment Pool when it is shared but by the instance when it is local, that state
+  labels are per-state and propagate, that only an API badged *Automation trigger* can be a rule's IF
+  source, or that the specifications listed are the board's rather than the template's. All six now use
+  the header shape the instance-runtime panel already established (bar, title, nested hint), and three
+  sections that had no `data-testid` gained one. A structural test pins the shape and the presence of
+  every hint, because a screenshot cannot fail a build.
+
+#### Added
+
+- **Device details now list the template's state transitions.** A transition is the one part of the
+  state machine no rule drives — it fires on its own once its trigger holds — and nothing in the product
+  showed them, so a counterexample where a camera left `taking photo` by itself had no explanation
+  anywhere, while `FixResultDialog` was already telling the reader the violation "may be caused by
+  device transitions". Ten bundled templates declare transitions. The read-only table gives name, start
+  state, end state, trigger and effect, reusing the APIs table's state and trigger formatters so one
+  relation cannot render two ways. Two cases it states rather than implies: an absent `EndState` is not
+  an empty target but *no state change* with the assignment still applying (`Clock.reset`), and within a
+  step a rule command overrides a transition, because the generator emits rule branches ahead of
+  transition branches in the same `case`. Every listed row is genuinely in the model —
+  `SmvModelValidator` refuses a transition with no trigger, one that changes nothing, or one whose
+  trigger names an unreadable attribute — so the table cannot advertise dropped behaviour.
+
 #### Fixed
 
 - **Regenerating the default scenes corrupted the RFID one into an unimportable file.** `Door RFID`

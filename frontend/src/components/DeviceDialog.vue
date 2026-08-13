@@ -786,6 +786,37 @@ const apis = computed(() => {
   }))
 })
 
+/**
+ * Device-declared transitions, the one part of the state machine no rule drives.
+ *
+ * Nothing rendered these, so a counterexample where a camera left `taking photo` on its own had no
+ * explanation anywhere in the product — while `FixResultDialog` was already telling the reader the
+ * violation "may be caused by device transitions".
+ *
+ * `EndState` is optional and its absence is not an empty state: the transition still fires and its
+ * assignment still applies, so it reuses the APIs' `noStateChange` wording rather than rendering a
+ * blank. `Clock.reset` is the bundled case (time=23 → time:=0, no state change).
+ *
+ * Every row here is really in the model, so the table cannot advertise behaviour that was dropped:
+ * `SmvModelValidator.validateTriggerAttributes` refuses a transition with no `Trigger` ("its
+ * autonomous effect has no modeled cause"), one that changes neither state nor a variable, and one
+ * whose trigger names an attribute the device cannot read.
+ */
+const transitions = computed(() => {
+  const m = manifest.value
+  if (!m || !Array.isArray(m.Transitions)) return []
+  return m.Transitions.map(transition => ({
+    name: transition.Name,
+    displayName: formatDeviceModelToken(transition.Name),
+    startStateLabel: formatStateForDisplay(transition.StartState, t('app.anyState')),
+    endStateLabel: formatStateForDisplay(transition.EndState, t('app.noStateChange')),
+    trigger: formatTrigger(transition.Trigger),
+    effect: (transition.Assignments || [])
+      .map(assignment => `${formatDeviceModelToken(assignment.Attribute)} := ${formatDeviceModelToken(assignment.Value)}`)
+      .join(', ')
+  }))
+})
+
 // Trigger is an object { Attribute, Relation, Value }; render it as readable text.
 const formatTrigger = (trigger: any): string => {
   if (!trigger) return t('app.userRole')
@@ -940,10 +971,13 @@ const deviceSpecs = computed(() => {
               </div>
 
               <!-- Basic Info -->
-              <section>
+              <section data-testid="device-dialog-basic">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceBasic') }}</h2>
+                  <div class="min-w-0">
+                    <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceBasic') }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceBasicHint') }}</p>
+                  </div>
                 </div>
                 
                 <!-- 基本信息表格 -->
@@ -1241,10 +1275,13 @@ const deviceSpecs = computed(() => {
               </section>
 
               <!-- Variables -->
-              <section v-if="variables.length">
+              <section v-if="variables.length" data-testid="device-dialog-variables">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceVariables') }}</h2>
+                  <div class="min-w-0">
+                    <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceVariables') }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceVariablesHint') }}</p>
+                  </div>
                 </div>
                 <div class="iot-scroll-region-x border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
@@ -1317,7 +1354,10 @@ const deviceSpecs = computed(() => {
               <section v-if="manifest" data-testid="device-dialog-states">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceStates') }}</h2>
+                  <div class="min-w-0">
+                    <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceStates') }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceStatesHint') }}</p>
+                  </div>
                 </div>
                 <div class="iot-scroll-region-x border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
@@ -1358,11 +1398,52 @@ const deviceSpecs = computed(() => {
                 </div>
               </section>
 
+              <!-- Transitions Section: the device-driven half of the state machine -->
+              <section v-if="transitions.length > 0" data-testid="device-dialog-transitions" class="min-w-0">
+                <div class="flex items-center gap-2 mb-4">
+                  <div class="w-1 h-5 bg-primary rounded-full"></div>
+                  <div class="min-w-0">
+                    <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceTransitions') }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceTransitionsHint') }}</p>
+                  </div>
+                </div>
+                <div class="iot-scroll-region-x border border-slate-200 rounded-xl shadow-sm">
+                  <table class="w-full text-left border-collapse">
+                    <thead>
+                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.startState') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.endState') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.trigger') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.transitionEffect') }}</th>
+                      </tr>
+                    </thead>
+                    <tbody class="board-card divide-y divide-slate-100">
+                      <tr
+                        v-for="(tr, idx) in transitions"
+                        :key="idx"
+                        :data-testid="`device-dialog-transition-${tr.name}`"
+                        class="hover:board-chip-info transition-colors"
+                      >
+                        <td class="px-4 py-3 text-sm font-medium text-slate-700" :title="tr.displayName">{{ tr.displayName }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">{{ tr.startStateLabel }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">{{ tr.endStateLabel }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">{{ tr.trigger }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">{{ tr.effect || '-' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
               <!-- APIs Section -->
               <section v-if="apis.length > 0" data-testid="device-dialog-apis" class="min-w-0">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-[color:var(--success)] rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') }}</h2>
+                  <div class="min-w-0">
+                    <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceApisHint') }}</p>
+                  </div>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div
@@ -1407,10 +1488,13 @@ const deviceSpecs = computed(() => {
               </section>
 
               <!-- Specifications Section -->
-              <section v-if="manifest && deviceSpecs.length > 0" class="min-w-0">
+              <section v-if="manifest && deviceSpecs.length > 0" data-testid="device-dialog-specs" class="min-w-0">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-[color:var(--danger)] rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.specifications') }}</h2>
+                  <div class="min-w-0">
+                    <h2 class="text-lg font-semibold text-slate-800">{{ t('app.specifications') }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">{{ t('app.deviceSpecsHint') }}</p>
+                  </div>
                 </div>
                   <div v-if="deviceSpecs.length === 0" class="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center">
                   <span class="material-icons-round text-slate-500 text-4xl mb-2 block">verified</span>

@@ -1264,4 +1264,171 @@ describe('DeviceDialog template authority', () => {
     expect(confirm).toHaveBeenCalledOnce()
     wrapper.unmount()
   })
+
+  /**
+   * A transition is the one part of the state machine no rule drives, and nothing rendered them: a
+   * counterexample where a camera left `taking photo` by itself had no explanation in the product,
+   * while `FixResultDialog` already told the reader the violation "may be caused by device
+   * transitions". Ten bundled templates declare transitions.
+   */
+  const mountWithManifest = (
+    manifest: DeviceManifest,
+    name: string,
+    state = 'idle',
+    specs: unknown[] = []
+  ) => mount(DeviceDialog, {
+    attachTo: document.body,
+    props: {
+      visible: true,
+      deviceName: name,
+      description: '',
+      label: `${name} 1`,
+      nodeId: 'transition-node',
+      manifest,
+      nodes: [{
+        id: 'transition-node',
+        templateName: name,
+        label: `${name} 1`,
+        position: { x: 0, y: 0 },
+        state,
+        width: 176,
+        height: 128
+      }],
+      deviceTemplates: [{ name, manifest, defaultTemplate: false }],
+      specs
+    },
+    global: { plugins: [i18n] }
+  } as never)
+
+  it('lists each device-declared transition with its start, end and trigger', () => {
+    // The `Door RFID` shape: two transitions falling back to one shared state.
+    const manifest: DeviceManifest = {
+      Name: 'Door RFID',
+      Modes: ['ScanState'],
+      InitState: 'idle',
+      WorkingStates: [
+        { Name: 'idle', Trust: 'trusted', Privacy: 'public' },
+        { Name: 'authorized', Trust: 'trusted', Privacy: 'private' }
+      ],
+      InternalVariables: [],
+      APIs: [],
+      Transitions: [
+        {
+          Name: 'reset from authorized',
+          StartState: 'authorized',
+          EndState: 'idle',
+          Trigger: { Attribute: 'ScanState', Relation: '=', Value: 'authorized' }
+        }
+      ]
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Door RFID')
+
+    const row = document.querySelector('[data-testid="device-dialog-transition-reset from authorized"]')
+    expect(row).not.toBeNull()
+    const cells = Array.from(row!.querySelectorAll('td')).map(cell => cell.textContent?.trim())
+    expect(cells[1]).toBe('authorized')
+    expect(cells[2]).toBe('idle')
+    expect(cells[3]).toContain('ScanState')
+    // A trigger renders its relation as words, the same way the APIs table does.
+    expect(cells[3]).toBe('ScanState Equals authorized')
+    wrapper.unmount()
+  })
+
+  /**
+   * `EndState` is optional, and its absence is NOT an empty state: the transition still fires and its
+   * assignment still applies (`device-template-schema.json` note 10). Rendering a blank would read as
+   * "moves to no state". `Clock.reset` is the bundled case, and it is also modeless — so this section
+   * cannot live behind the runtime panel's mode gate.
+   */
+  it('shows an assignment-only transition as no state change rather than a blank target', () => {
+    const manifest: DeviceManifest = {
+      Name: 'Clock',
+      Modes: [],
+      WorkingStates: [],
+      InternalVariables: [
+        { Name: 'time', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'trusted', Privacy: 'public', LowerBound: 0, UpperBound: 23 }
+      ],
+      APIs: [],
+      Transitions: [
+        {
+          Name: 'reset',
+          Trigger: { Attribute: 'time', Relation: '=', Value: '23' },
+          Assignments: [{ Attribute: 'time', Value: '0' }]
+        }
+      ]
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Clock', 'Working')
+
+    const row = document.querySelector('[data-testid="device-dialog-transition-reset"]')
+    expect(row).not.toBeNull()
+    const cells = Array.from(row!.querySelectorAll('td')).map(cell => cell.textContent?.trim())
+    expect(cells[2]).toBe('No state change')
+    expect(cells[4]).toBe('time := 0')
+    wrapper.unmount()
+  })
+
+  /**
+   * The four template sections are peers, so they get one header shape: accent bar, `<h2>`, and a hint
+   * nested beside the title. Adding transitions with a sibling `<p>` and `mb-1` made it visibly the odd
+   * one out, and giving only that section an explanation made the other three look undocumented rather
+   * than self-evident. Asserted structurally because a screenshot cannot fail a build.
+   */
+  it('gives every template section the same header shape and an explanation', () => {
+    const manifest: DeviceManifest = {
+      Name: 'Door RFID',
+      Modes: ['ScanState'],
+      InitState: 'idle',
+      WorkingStates: [{ Name: 'idle', Trust: 'trusted', Privacy: 'public' }],
+      InternalVariables: [
+        { Name: 'RFID', IsInside: true, FalsifiableWhenCompromised: true, Trust: 'trusted', Privacy: 'private', Values: ['none', 'authorized'] }
+      ],
+      APIs: [{ Name: 'scan', StartState: '', Signal: true }],
+      Transitions: [
+        {
+          Name: 'reset',
+          StartState: 'idle',
+          EndState: 'idle',
+          Trigger: { Attribute: 'ScanState', Relation: '=', Value: 'idle' }
+        }
+      ]
+    } as never
+    // One specification referencing this device, so the specs section renders too.
+    const wrapper = mountWithManifest(manifest, 'Door RFID', 'idle', [{
+      id: 'spec-1',
+      templateId: '3',
+      aConditions: [{ deviceId: 'transition-node', deviceLabel: 'Door RFID 1', targetType: 'state', key: 'ScanState', relation: '=', value: 'idle' }],
+      ifConditions: [],
+      thenConditions: [],
+      devices: [{ deviceId: 'transition-node', deviceLabel: 'Door RFID 1' }]
+    }])
+
+    for (const section of ['basic', 'variables', 'states', 'transitions', 'apis', 'specs']) {
+      const host = document.querySelector(`[data-testid="device-dialog-${section}"]`)
+      expect(host, `section ${section} is missing`).not.toBeNull()
+      const header = host!.querySelector('div.flex.items-center')
+      expect(header?.className, `section ${section} header spacing`).toContain('mb-4')
+      expect(header!.querySelector('h2'), `section ${section} title`).not.toBeNull()
+      // The hint is nested beside the title, not a sibling of the header block.
+      const hint = header!.querySelector('h2 + p')
+      expect(hint?.textContent?.trim(), `section ${section} hint`).toBeTruthy()
+    }
+    wrapper.unmount()
+  })
+
+  it('omits the transitions section for a template that declares none', () => {
+    const manifest: DeviceManifest = {
+      Name: 'Air Conditioner',
+      Modes: ['HvacMode'],
+      InitState: 'auto',
+      WorkingStates: [{ Name: 'auto', Trust: 'trusted', Privacy: 'public' }],
+      InternalVariables: [],
+      APIs: [],
+      Transitions: []
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Air Conditioner', 'auto')
+
+    expect(document.querySelector('[data-testid="device-dialog-states"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="device-dialog-transitions"]')).toBeNull()
+    wrapper.unmount()
+  })
 })
