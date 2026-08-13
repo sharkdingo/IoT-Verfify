@@ -111,9 +111,24 @@ import java.util.stream.Collectors;
 public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implements FuzzService {
 
     private static final long CANCELLATION_DB_POLL_NANOS = 250_000_000L;
+    // Wall-clock ceiling for one search, independent of the workload guard. The guard bounds the *nominal*
+    // budget, but its calibration is per-step timing measured on one machine: a slower host, a contended
+    // worker pool, or a board whose real per-step cost exceeds the estimate can all overrun it. Without this,
+    // an admitted run had no upper bound on duration at all — TASK_LEASE_DURATION is a liveness heartbeat
+    // that renews, not a deadline. Chosen at 5x the ~60s a maximal admitted run measured, so it never fires
+    // on a correctly-estimated search and only catches the cases the static estimate got wrong.
+    private static final Duration MAX_SEARCH_WALL_CLOCK = Duration.ofMinutes(5);
     private static final Duration TASK_LEASE_DURATION = Duration.ofMinutes(2);
     private static final long LEASE_MAINTENANCE_SECONDS = 10L;
-    private static final long MAX_EFFECTIVE_WORK = 12_500_000L;
+    // Calibrated against measured throughput rather than chosen. Forced BUDGET_EXHAUSTED runs over the
+    // docs/examples scenes (BOARD_SNAPSHOT, one dev box, single-threaded) cost ~119-137 us per state step on
+    // the cheapest scene and ~159-168 us on the most expensive. Admissible steps are LIMIT / complexity, and
+    // those scenes measure 62-85 units in this mode, so a maximal run lands near a minute at either end.
+    // The previous 12,500,000 was *identical* to the raw budget ceiling (5000 x 50 x 50), so the complexity
+    // factor had no headroom to trim and consumed the whole budget instead: every shipped example scene
+    // refused the product's own default settings, for searches measured at about 16 seconds.
+    // No separate wall-clock deadline exists, so this guard is also what bounds a run's duration.
+    private static final long MAX_EFFECTIVE_WORK = 30_000_000L;
     private static final long MAX_MODEL_STRUCTURE_UNITS = 10_000L;
     private static final int MAX_FUZZ_COLLECTION_ITEMS = 1_000;
     private static final long MAX_MODEL_INPUT_SNAPSHOT_BYTES = 8L * 1024 * 1024;
@@ -295,8 +310,11 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 "pathLength", "Path length must be between 1 and 50");
         int populationSize = requireRange(request.getPopulationSize(), 1, 50,
                 "populationSize", "Population size must be between 1 and 50");
+        FuzzExplorationMode explorationMode = request.getExplorationMode() == null
+                ? FuzzExplorationMode.BOARD_SNAPSHOT
+                : request.getExplorationMode();
         ModelInputSnapshot snapshot = boardDataConverter.getModelInputSnapshot(userId);
-        long modelComplexity = modelComplexityUnits(snapshot);
+        long modelComplexity = modelComplexityUnits(snapshot, explorationMode);
         serializeFrozenSnapshot(snapshot, "board");
         long workload = effectiveWorkload(
                 maxIterations, pathLength, populationSize, modelComplexity);
@@ -304,10 +322,13 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 .maxIterations(maxIterations)
                 .pathLength(pathLength)
                 .populationSize(populationSize)
+                .explorationMode(explorationMode)
                 .modelComplexityUnits(modelComplexity)
                 .estimatedWorkload(workload)
                 .workloadLimit(MAX_EFFECTIVE_WORK)
                 .accepted(workload <= MAX_EFFECTIVE_WORK)
+                .maxAcceptedIterations(maxAcceptedIterations(
+                        pathLength, populationSize, modelComplexity))
                 .build();
     }
 
@@ -516,7 +537,12 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             FuzzEngineResult result = fuzzEngine.run(
                     engineInput,
                     (percent, message) -> reportEngineProgress(taskId, percent, message),
-                    cancelled);
+                    cancelled,
+                    // Monotonic clock, not the database clock: this bounds how long *this* worker computes,
+                    // which is a local concern, and a wall-clock jump must not shorten or extend a search.
+                    // Kept separate from `cancelled` so the engine settles it as a bounded budget rather than
+                    // as a user cancellation — see FuzzEngine.run's javadoc.
+                    deadlineSignal(System.nanoTime(), MAX_SEARCH_WALL_CLOCK));
 
             if (cancelled.getAsBoolean() || result != null
                     && result.outcome() == FuzzEngineOutcome.CANCELLED) {
@@ -590,6 +616,20 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         } catch (RuntimeException e) {
             log.warn("Could not persist progress for fuzz task {}", taskId, e);
         }
+    }
+
+    /**
+     * A predicate that becomes true once {@code budget} has elapsed since {@code startedAtNanos}.
+     *
+     * <p>Compares {@link System#nanoTime()} <em>differences</em>, so a system-clock adjustment during a
+     * search cannot shorten or extend it. The difference form is also what keeps a large origin from
+     * overflowing into a permanent "not expired", which an absolute {@code origin + budget} deadline would;
+     * it is not unconditionally overflow-proof, but {@code startedAtNanos} always comes from
+     * {@code nanoTime()} moments earlier on this worker, so the pathological origin cannot arise.</p>
+     */
+    BooleanSupplier deadlineSignal(long startedAtNanos, Duration budget) {
+        long budgetNanos = budget.toNanos();
+        return () -> System.nanoTime() - startedAtNanos >= budgetNanos;
     }
 
     BooleanSupplier cancellationSignal(Long taskId) {
@@ -961,15 +1001,17 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 "pathLength", "Path length must be at least 1");
         int populationSize = requirePositive(request.getPopulationSize(),
                 "populationSize", "Population size must be at least 1");
-        long searchWork;
+        // Overflow guard on the raw step count, kept ahead of the per-field range checks on purpose so an
+        // absurd combination is reported against the request as a whole rather than against whichever single
+        // field happens to be examined first (pinned by submit_rejectsOverflowingSearchBudgetBeforeReadingTheBoard).
+        // It deliberately no longer compares against MAX_EFFECTIVE_WORK: that constant now bounds the
+        // complexity-weighted workload, and using one value for both left the complexity factor no headroom
+        // to trim — it consumed the entire budget, so every realistic board was refused at its own default.
+        // Only whether it overflows matters here, so the product itself is unused.
         try {
-            searchWork = Math.multiplyExact(
+            Math.multiplyExact(
                     Math.multiplyExact((long) maxIterations, pathLength), populationSize);
         } catch (ArithmeticException e) {
-            throw new ValidationException("request",
-                    "Iteration, path length, and population budgets are too large in combination");
-        }
-        if (searchWork > MAX_EFFECTIVE_WORK) {
             throw new ValidationException("request",
                     "Iteration, path length, and population budgets are too large in combination");
         }
@@ -1086,15 +1128,52 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     private void validateEffectiveWorkload(
             NormalizedRequest request,
             ModelInputSnapshot snapshot) {
+        long modelComplexity = modelComplexityUnits(snapshot, request.explorationMode());
         long effectiveWork = effectiveWorkload(
                 request.maxIterations(),
                 request.pathLength(),
                 request.populationSize(),
-                modelComplexityUnits(snapshot));
+                modelComplexity);
         if (effectiveWork > MAX_EFFECTIVE_WORK) {
+            // The message carries the multiplier and the computed ceiling because the three numbers the
+            // caller chose cannot explain the rejection on their own: a caller seeing only the limit has no
+            // way to know the Board contributed a factor, and an AI caller has nothing to correct with.
+            int admissibleIterations = maxAcceptedIterations(
+                    request.pathLength(), request.populationSize(), modelComplexity);
             throw new ValidationException("request",
-                    "Counterexample search workload exceeds the 12500000 evaluation limit");
+                    "Counterexample search workload " + effectiveWork + " exceeds the "
+                            + MAX_EFFECTIVE_WORK + " evaluation limit: "
+                            + request.maxIterations() + " iterations x " + request.pathLength()
+                            + " path length x " + request.populationSize()
+                            + " candidate paths x " + Math.max(1L, modelComplexity)
+                            + " board complexity. "
+                            + (admissibleIterations > 0
+                                    ? "At this path length and population size, at most "
+                                            + admissibleIterations + " iterations are admissible."
+                                    : "Even one iteration exceeds the limit at this path length and "
+                                            + "population size; reduce one of those instead."));
         }
+    }
+
+    /**
+     * Largest admissible {@code maxIterations} for the other three factors, clamped to its field range.
+     *
+     * <p>Returns 0 when even a single iteration exceeds the limit, which tells the client the path length or
+     * population size has to come down instead — a distinction "lower something" cannot convey.</p>
+     */
+    private int maxAcceptedIterations(int pathLength, int populationSize, long modelComplexity) {
+        long perIteration;
+        try {
+            perIteration = Math.multiplyExact(
+                    Math.multiplyExact((long) pathLength, populationSize),
+                    Math.max(1L, modelComplexity));
+        } catch (ArithmeticException exception) {
+            return 0;
+        }
+        if (perIteration <= 0L) {
+            return 0;
+        }
+        return (int) Math.max(0L, Math.min(5_000L, MAX_EFFECTIVE_WORK / perIteration));
     }
 
     private long effectiveWorkload(
@@ -1112,7 +1191,17 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         }
     }
 
+    /**
+     * Validates the frozen snapshot's structure and returns its cost for the default exploration mode.
+     *
+     * <p>Callers that only need the validation keep using this; the workload paths pass the mode so a
+     * {@code BOARD_SNAPSHOT} run is not charged for the paper monitor's predecessor walk.</p>
+     */
     long modelComplexityUnits(ModelInputSnapshot snapshot) {
+        return modelComplexityUnits(snapshot, FuzzExplorationMode.BOARD_SNAPSHOT);
+    }
+
+    long modelComplexityUnits(ModelInputSnapshot snapshot, FuzzExplorationMode explorationMode) {
         if (snapshot == null) {
             throw new ValidationException("request", "Frozen Board snapshot is missing");
         }
@@ -1147,7 +1236,9 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                         "Frozen Board device references a missing template manifest");
             }
             counter.addCollection("deviceVariables", device.getVariables());
-            counter.addCollection("devicePrivacies", device.getPrivacies());
+            // Bounded but not charged: FuzzModel never reads privacies (it writes empty lists at
+            // FuzzModel.java:1471 and :1499), so this cannot contribute per-step work.
+            counter.boundOnly("devicePrivacies", device.getPrivacies());
             addManifestComplexity(counter, manifest);
             modeTransitionUnits = addOperationalUnits(
                     modeTransitionUnits,
@@ -1202,9 +1293,15 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     orderedRuleArbitrationUnits,
                     multiplyOperationalUnits(targetRuleCount, targetRuleCount));
         }
-        long predecessorRuleUnits = multiplyOperationalUnits(
-                specificationConditionUnits,
-                addOperationalUnits(ruleCount, ruleConditionUnits));
+        // Paper mode only. `previousConditions` is reached solely through
+        // PaperMonitorFsm.distanceToViolation, which only FuzzModel.evaluatePaper calls, so a BOARD_SNAPSHOT
+        // run performs none of this work — and it was the largest term for every shipped example scene,
+        // which is why the default mode's estimate bore almost no relation to what it executes.
+        long predecessorRuleUnits = explorationMode == FuzzExplorationMode.PAPER_COMPATIBLE
+                ? multiplyOperationalUnits(
+                        specificationConditionUnits,
+                        addOperationalUnits(ruleCount, ruleConditionUnits))
+                : 0L;
         long operationalUnits = counter.total();
         operationalUnits = addOperationalUnits(operationalUnits, environmentDeviceUnits);
         operationalUnits = addOperationalUnits(operationalUnits, modeTransitionUnits);
@@ -1263,31 +1360,58 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         return values == null ? List.of() : values;
     }
 
+    /**
+     * Bounds every counted collection and, separately, accumulates the ones the engine actually reads.
+     *
+     * <p>The two jobs are deliberately distinct. Every collection must be bounded, because the whole frozen
+     * snapshot is persisted regardless of what the search touches. But a collection the engine never reads
+     * must not inflate the cost estimate — {@code devicePrivacies} did, and {@code FuzzModel} only ever
+     * writes empty privacy lists. Folding both jobs into one counter meant the only way to stop charging a
+     * field was to stop bounding it, trading a cost defect for a missing persistence guard.</p>
+     */
     private static final class StructureCounter {
-        private long total;
+        private long bounded;
+        private long charged;
 
+        /** Bounds and charges: the engine's per-step work scales with this collection. */
         private void addCollection(String field, Collection<?> values) {
+            charged = sum(charged, bound(field, values), field);
+        }
+
+        /** Bounds only: persisted and size-limited, but never read by the search. */
+        private void boundOnly(String field, Collection<?> values) {
+            bound(field, values);
+        }
+
+        private int bound(String field, Collection<?> values) {
             int size = values == null ? 0 : values.size();
             if (size > MAX_FUZZ_COLLECTION_ITEMS) {
                 throw new ValidationException("request",
                         field + " exceeds the counterexample-search collection limit of "
                                 + MAX_FUZZ_COLLECTION_ITEMS);
             }
+            bounded = sum(bounded, size, field);
+            return size;
+        }
+
+        private long sum(long running, int size, String field) {
+            long updated;
             try {
-                total = Math.addExact(total, size);
+                updated = Math.addExact(running, size);
             } catch (ArithmeticException e) {
                 throw new ValidationException(
                         "request", "Counterexample-search model structure is too large");
             }
-            if (total > MAX_MODEL_STRUCTURE_UNITS) {
+            if (updated > MAX_MODEL_STRUCTURE_UNITS) {
                 throw new ValidationException("request",
                         "Counterexample-search model structure exceeds the "
                                 + MAX_MODEL_STRUCTURE_UNITS + " unit limit");
             }
+            return updated;
         }
 
         private long total() {
-            return total;
+            return charged;
         }
     }
 

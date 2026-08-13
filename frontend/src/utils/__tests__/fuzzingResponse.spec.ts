@@ -204,13 +204,20 @@ describe('fuzzing response contracts', () => {
   })
 
   it('requires workload acceptance to agree with the backend estimate and requested budget', () => {
-    const request = { maxIterations: 1300, pathLength: 4, populationSize: 50 }
+    const request = {
+      maxIterations: 1300,
+      pathLength: 4,
+      populationSize: 50,
+      explorationMode: 'BOARD_SNAPSHOT' as const
+    }
     const preview = {
       ...request,
       modelComplexityUnits: 49,
       estimatedWorkload: 12_740_000,
       workloadLimit: 12_500_000,
-      accepted: false
+      accepted: false,
+      // 12,500,000 / (4 x 50 x 49) = 1,275, below the requested 1,300 — consistent with accepted: false.
+      maxAcceptedIterations: 1_275
     }
 
     expect(validateFuzzWorkloadPreview(preview, request)).toEqual(preview)
@@ -219,12 +226,26 @@ describe('fuzzing response contracts', () => {
     expect(() => validateFuzzWorkloadPreview(preview, { ...request, pathLength: 5 }))
       .toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
 
+    // Complexity is mode-dependent, so a preview from the other mode describes a different estimate.
+    expect(() => validateFuzzWorkloadPreview(
+      preview, { ...request, explorationMode: 'PAPER_COMPATIBLE' as const }))
+      .toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+
+    // The remedy must not contradict the verdict it sits beside.
+    expect(() => validateFuzzWorkloadPreview(
+      { ...preview, maxAcceptedIterations: 5_000 }, request))
+      .toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+    expect(() => validateFuzzWorkloadPreview(
+      { ...preview, accepted: true, maxAcceptedIterations: 0 }, request))
+      .toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
+
     expect(validateFuzzWorkloadPreview({
       ...request,
       modelComplexityUnits: 0,
       estimatedWorkload: request.maxIterations * request.pathLength * request.populationSize,
       workloadLimit: 12_500_000,
-      accepted: true
+      accepted: true,
+      maxAcceptedIterations: 5_000
     }, request).modelComplexityUnits).toBe(0)
 
     expect(() => validateFuzzWorkloadPreview({
@@ -232,13 +253,19 @@ describe('fuzzing response contracts', () => {
       estimatedWorkload: preview.estimatedWorkload - 1
     }, request)).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
 
-    const unsafeRequest = { maxIterations: 2, pathLength: 1, populationSize: 1 }
+    const unsafeRequest = {
+      maxIterations: 2,
+      pathLength: 1,
+      populationSize: 1,
+      explorationMode: 'BOARD_SNAPSHOT' as const
+    }
     expect(() => validateFuzzWorkloadPreview({
       ...unsafeRequest,
       modelComplexityUnits: Number.MAX_SAFE_INTEGER,
       estimatedWorkload: Number.MAX_SAFE_INTEGER,
       workloadLimit: Number.MAX_SAFE_INTEGER,
-      accepted: true
+      accepted: true,
+      maxAcceptedIterations: 5_000
     }, unsafeRequest)).toThrowError(expect.objectContaining({ code: FUZZ_RESPONSE_INCOMPLETE_CODE }))
   })
 

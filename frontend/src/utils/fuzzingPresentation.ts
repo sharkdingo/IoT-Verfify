@@ -10,7 +10,11 @@ export const fuzzingLimitationKey = (code: string): string => {
     PAPER_DISCRETE_ENVIRONMENT_DIRECT_VALUE_EXTENSION: 'app.fuzzLimitationPaperDiscreteEnvironmentExtension',
     NUSMV_REMAINS_PROOF_AUTHORITY: 'app.fuzzLimitationNuSmvProofAuthority',
     PAPER_PREDECESSOR_STATE_OUTPUTS_THREE_LEVELS_ONLY: 'app.fuzzLimitationPaperPredecessorOutputsThreeLevels',
-    PAPER_MULTI_TARGET_PRODUCT_EXTENSION: 'app.fuzzLimitationPaperMultiTargetExtension'
+    PAPER_MULTI_TARGET_PRODUCT_EXTENSION: 'app.fuzzLimitationPaperMultiTargetExtension',
+    // Added by the engine only when the wall-clock budget, not the iteration budget, ended the search. It is
+    // conditional rather than always present, so it changes what the run's coverage means and must be
+    // localized rather than falling through to the generic unknown-code copy.
+    TIME_BUDGET_EXHAUSTED: 'app.fuzzLimitationTimeBudgetExhausted'
   }
   return keys[code] || 'app.fuzzLimitationUnknown'
 }

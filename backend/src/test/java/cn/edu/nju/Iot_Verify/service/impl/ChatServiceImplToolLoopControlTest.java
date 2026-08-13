@@ -638,12 +638,19 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(planning.contains("Decompose first"));
         assertTrue(planning.contains("Reason from the observed board"));
         assertTrue(planning.contains("name the alternative you did not"));
-        assertTrue(planning.contains("Check yourself before concluding"));
+        // Not "before concluding": the planning round returns tool calls, so their results do not exist
+        // yet in it. The self-check is only performable against an earlier round's results, and asking for
+        // it "before concluding" invited the model to predict one — which the next bullet forbids.
+        assertTrue(planning.contains("Check yourself."));
+        assertTrue(planning.contains("Do not predict a result you have not received yet."));
         assertTrue(planning.contains("audit-friendly explanation, not private hidden chain-of-thought"));
         assertTrue(planning.contains("Use recommend_scenario only"));
         assertTrue(planning.contains("call apply_scenario with confirmed=false"));
         assertTrue(planning.contains("call apply_fix with confirmed=false"));
-        assertTrue(planning.contains("Never route fuzz findings"));
+        // One owner now: the catalog's trailing paragraph stated this a second time, and its unique clause
+        // (budget exhaustion is not proof) was merged here rather than deleted with it.
+        assertTrue(planning.contains("never route a fuzz finding into either tool"));
+        assertTrue(planning.contains("describe budget exhaustion as proof"));
         assertTrue(planning.contains("do not delete or recreate devices individually"));
         assertTrue(planning.contains("Do not call"));
         assertTrue(planning.contains("add_device, manage_rule, or manage_spec"));

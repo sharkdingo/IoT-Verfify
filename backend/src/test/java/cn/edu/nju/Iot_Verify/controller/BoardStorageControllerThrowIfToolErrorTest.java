@@ -210,14 +210,14 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "reasonCode":"apiEventSyntaxNormalized","reason":"Equivalent event syntax normalized",
                  "label":"Alert on motion","appliedValues":{"sourceApi":"motion"}}],
                  "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
-                 "recommendations":[{"category":"security","name":"Alert on motion",
+                 "recommendations":[{"name":"Alert on motion",
                  "conditions":[{"deviceId":"device_1",
                  "deviceLabel":"Hall sensor","deviceName":"Hall sensor","attribute":"motion",
                  "targetType":"api"}],"command":{"deviceId":"device_2",
                  "deviceLabel":"Alarm","deviceName":"Alarm","action":"turn_on"}}]}
                 """);
 
-        var response = controller.recommendRules(1L, 5, "all", "en", "", "request-123").getData();
+        var response = controller.recommendRules(1L, 5, "en", "", "request-123").getData();
 
         assertEquals(1, response.getAdjustedCount());
         assertEquals("apiEventSyntaxNormalized", response.getAdjustedItems().get(0).getReasonCode());
@@ -230,12 +230,12 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "validatedCount":1,"filteredCount":0,"filteredItems":[],
                  "adjustedCount":0,"adjustedItems":[],
                  "rawCandidateCount":2,"inspectedCount":1,"truncatedCount":0,
-                 "recommendations":[{"category":"security","name":"Alert on motion",
+                 "recommendations":[{"name":"Alert on motion",
                  "conditions":[],"command":{}}]}
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendRules(1L, 5, "all", "en", "", "request-123"));
+                () -> controller.recommendRules(1L, 5, "en", "", "request-123"));
     }
 
     @Test
@@ -251,7 +251,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendRules(1L, 5, "all", "en", "", "request-123"));
+                () -> controller.recommendRules(1L, 5, "en", "", "request-123"));
     }
 
     @Test
@@ -261,12 +261,12 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "validatedCount":1,"filteredCount":0,"filteredItems":[],
                  "adjustedCount":0,"adjustedItems":[],
                  "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
-                 "recommendations":[{"category":"security","name":"Alert on motion",
+                 "recommendations":[{"name":"Alert on motion",
                  "conditions":[],"command":{},"unmodeledEffect":"open door"}]}
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendRules(1L, 5, "all", "en", "", "request-123"));
+                () -> controller.recommendRules(1L, 5, "en", "", "request-123"));
     }
 
     @Test
@@ -306,7 +306,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertDoesNotThrow(() -> controller.recommendSpecs(
-                1L, 5, "all", "en", "", "request-123"));
+                1L, 5, "en", "", "request-123"));
     }
 
     @Test
@@ -320,7 +320,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendSpecs(1L, 5, "all", "en", "", "request-123"));
+                () -> controller.recommendSpecs(1L, 5, "en", "", "request-123"));
     }
 
     @Test

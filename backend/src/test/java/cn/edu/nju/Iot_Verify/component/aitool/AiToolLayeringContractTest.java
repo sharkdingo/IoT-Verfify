@@ -183,4 +183,64 @@ class AiToolLayeringContractTest {
         assertTrue(offenders.isEmpty(),
                 "a tool described a mode it does not accept: " + offenders);
     }
+
+    /**
+     * A prompt's language instruction may only name fields the model actually authors.
+     *
+     * <p>Three of the four recommendation tools told the model to write {@code message} in the requested language.
+     * {@code message} is backend copy — every occurrence is {@code result.put("message", recommendationMessage(
+     * language, key, count))} over a hardcoded switch — so the model has none to translate. Worse, the rule and
+     * specification tools validate candidates with a strict {@code hasOnlyFields} allowlist, so a model that obeyed
+     * the instruction and emitted {@code message} had its whole candidate filtered as {@code unknownCandidateField}.
+     * The specification tool also named {@code reason}, which is that tool's field for nothing — its candidates
+     * carry {@code rationale}. The scenario tool, which names only real fields, is what the other three drifted from.
+     *
+     * <p>Source-level because the defect is prose inside a correct-compiling string, and the existing per-tool tests
+     * assert only the {@code "输出语言: 简体中文"} prefix — they pass whatever field list follows it.
+     */
+    @Test
+    @DisplayName("a language instruction names only fields the model authors, never backend-generated copy")
+    void languageInstructionsNameOnlyModelAuthoredFields() throws IOException {
+        // Backend-owned response keys. A prompt asking the model to localize one of these is asking for a field it
+        // does not produce, and on the strict-allowlist tools it costs the user the whole candidate.
+        List<String> backendOwned = List.of("message", "filteredItems", "adjustedItems", "count");
+
+        List<String> offenders = new ArrayList<>();
+        int inspected = 0;
+        for (Path source : toolSources()) {
+            String text = Files.readString(source, StandardCharsets.UTF_8);
+            int at = text.indexOf("languageInstruction(String language)");
+            if (at < 0) continue;
+            inspected += 1;
+            /*
+             * Only the instruction's own string literals, not a fixed-size window.
+             * A 700-character window ran past the method's closing brace into the neighbouring
+             * `message(String language, String key, ...)` helper, so every tool falsely reported naming
+             * `count` and `message` — a guard whose failures are all false positives gets deleted, not fixed.
+             */
+            int end = text.indexOf(System.lineSeparator() + "    }", at);
+            if (end < 0) end = text.indexOf("\n    }", at);
+            assertTrue(end > at, source.getFileName() + ": could not find the end of languageInstruction");
+            String method = text.substring(at, end);
+            List<String> instructions = new ArrayList<>();
+            Matcher literals = Pattern.compile("return\\s+\"([^\"]*)\"").matcher(method);
+            while (literals.find()) instructions.add(literals.group(1));
+            assertTrue(instructions.size() >= 2,
+                    source.getFileName() + ": expected both locale branches of languageInstruction, found "
+                            + instructions.size() + " — the literal scan is broken, so a pass proves nothing");
+            String instruction = String.join(" | ", instructions);
+            for (String field : backendOwned) {
+                if (instruction.contains(field)) {
+                    offenders.add(source.getFileName() + " asks the model to write the backend-owned '" + field + "'");
+                }
+            }
+        }
+
+        // Coverage floor, matching the sibling checks in this file.
+        assertTrue(inspected >= 4,
+                "expected at least 4 tools with a languageInstruction, inspected " + inspected
+                        + " — the scan is probably broken, so an empty offender list proves nothing");
+        assertEquals(List.of(), offenders,
+                "a prompt named a field the model cannot author: " + offenders);
+    }
 }

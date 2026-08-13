@@ -767,9 +767,9 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
 
     private String languageInstruction(String language) {
         if ("zh-CN".equals(language)) {
-            return "- 输出语言: 简体中文。description、reason、message 等自然语言字段必须使用简体中文。";
+            return "- 输出语言: 简体中文。description、reason、intendedUse、suggestedPlacement 必须使用简体中文。";
         }
-        return "- Output language: English. Use English for every natural-language field such as description, reason, and message.";
+        return "- Output language: English. Use English for description, reason, intendedUse, and suggestedPlacement.";
     }
 
     private String recommendationMessage(String language, String key, int count) {

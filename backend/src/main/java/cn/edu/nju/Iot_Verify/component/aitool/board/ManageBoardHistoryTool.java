@@ -55,7 +55,7 @@ public class ManageBoardHistoryTool extends AbstractAiTool {
         properties.put("impactToken", Map.of("type", "string",
                 "description", "For confirmed action=clear only. Copy the opaque token from the latest preview."));
         return LlmToolSpec.of(getName(),
-                "Read server-authoritative undo/redo availability, undo or redo one Board edit, or preview/confirm clearing unusable edit history without changing the Board. Use undo, redo, or clear only when the user explicitly asks; conflicts are rejected instead of overwriting newer work.",
+                "Read server-authoritative undo/redo availability, undo or redo one Board edit, or preview/confirm clearing the undo/redo edit history without changing the Board. Use undo, redo, or clear only when the user explicitly asks; conflicts are rejected instead of overwriting newer work.",
                 new FunctionParameterSchema("object", properties, List.of("action")));
     }
 

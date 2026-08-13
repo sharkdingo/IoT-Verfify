@@ -84,10 +84,13 @@ export interface FuzzWorkloadPreview {
   maxIterations: number
   pathLength: number
   populationSize: number
+  explorationMode: FuzzingExplorationMode
   modelComplexityUnits: number
   estimatedWorkload: number
   workloadLimit: number
   accepted: boolean
+  /** Largest `maxIterations` this board admits at the previewed path length and population size. */
+  maxAcceptedIterations: number
 }
 
 export type FuzzingOutcome = 'FOUND_VIOLATION' | 'BUDGET_EXHAUSTED' | 'INCONCLUSIVE'

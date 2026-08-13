@@ -15,6 +15,7 @@ const i18n = createI18n({
       app: {
         fuzzSearch: 'Counterexample Search',
         fuzzSearchSubtitle: 'Search for candidate paths',
+        fuzzBudgetProductHint: 'Total work = iteration budget × path length × candidate paths × board complexity.',
         fuzzExplorationMode: 'Exploration initial state',
         fuzzModeBoard: 'Board snapshot',
         fuzzModePaper: 'Random state and events',
@@ -66,7 +67,7 @@ const i18n = createI18n({
         fuzzAdvancedSettingsHint: 'Advanced search controls.',
         taskInitializing: 'Initializing',
         fuzzTaskId: 'Task #{id}',
-        fuzzWorkloadPreview: 'Workload {workload} / {limit}',
+        fuzzWorkloadPreview: 'Workload {workload} / {limit} ({iterations} × {path} × {population} × {complexity} board complexity)',
         fuzzWorkloadLoading: 'Confirming available budget',
         retry: 'Retry',
         fuzzBudgetProgress: 'Budget progress',
@@ -182,12 +183,64 @@ describe('FuzzingPanel', () => {
     expect(wrapper.get('[data-testid="fuzz-path-length"]').attributes('max')).toBe('50')
     expect(wrapper.get('[data-testid="fuzz-population-size"]').attributes('max')).toBe('50')
     expect(wrapper.text()).toContain('Combined workload exceeds the limit.')
+    // The rejection names "candidate paths per iteration" as a remedy, and that input lives inside the
+    // Advanced settings disclosure. A blocked user must be able to see the control they are told to change.
+    expect(wrapper.get('details').attributes('open')).toBeDefined()
     expect(wrapper.get('[data-testid="run-fuzzing"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('input[type="checkbox"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('input[type="checkbox"]').attributes('title')).toBe('Keep at least one target specification selected.')
 
     await wrapper.get('[data-testid="run-fuzzing"]').trigger('click')
     expect(wrapper.emitted('submit')).toBeUndefined()
+  })
+
+  it('shows the board complexity factor and never calls a rejected workload confirmed', async () => {
+    const preview = {
+      maxIterations: 500,
+      pathLength: 20,
+      populationSize: 10,
+      explorationMode: 'BOARD_SNAPSHOT' as const,
+      modelComplexityUnits: 151,
+      estimatedWorkload: 15_100_000,
+      workloadLimit: 30_000_000,
+      accepted: true,
+      maxAcceptedIterations: 993
+    }
+    const wrapper = mount(FuzzingPanel, {
+      props: {
+        form: {
+          explorationMode: 'BOARD_SNAPSHOT',
+          targetSpecIds: [],
+          maxIterations: 500,
+          pathLength: 20,
+          populationSize: 10,
+          seed: null
+        },
+        specifications: [specification],
+        running: false,
+        progress: 0,
+        status: 'Initializing',
+        taskId: null,
+        cancelling: false,
+        workload: preview.estimatedWorkload,
+        workloadLimit: preview.workloadLimit,
+        workloadPreview: preview
+      },
+      global: { plugins: [i18n] }
+    })
+
+    // The multiplier has to be on screen: without it the three visible knobs multiply to 100,000 while
+    // the reported workload is 15,100,000, and the arithmetic cannot be reconciled by the reader.
+    expect(wrapper.text()).toContain('151')
+
+    // Before the error, the "confirmed against the current Board" estimate is present...
+    expect(wrapper.text()).toContain('board complexity)')
+
+    // ...and it must disappear once a rejection is showing, rather than sitting under it saying the same
+    // number was confirmed. Asserting on the estimate's own wording, so this fails if the line survives.
+    await wrapper.setProps({ configurationError: 'Workload is above the limit.' })
+    expect(wrapper.text()).toContain('Workload is above the limit.')
+    expect(wrapper.text()).not.toContain('board complexity)')
   })
 
   it('does not offer a misleading select-all action above the target limit', () => {

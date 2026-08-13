@@ -253,13 +253,22 @@ ordered as a causal sequence: non-decreasing steps, with
 initialization restricted to step `0`. These invariants are enforced before persistence,
 when reading full/history data, and in the frontend response boundary.
 
-The API bounds each dimension and applies a combined workload guard that includes the
-effective target-specification count; the exact validation contract lives in
-[the API document](../api/fuzzing.md#submit-and-task-lifecycle). The engine performs no
+The API bounds each dimension and applies a combined workload guard over the search budget
+and the frozen Board's model complexity. It carries **no** target-specification factor: the
+target count is bounded separately (at most 100) and never enters the workload product, even
+though every iteration evaluates every still-unresolved target. The exact validation contract
+lives in [the API document](../api/fuzzing.md#submit-and-task-lifecycle). The engine performs no
 unbounded search.
 It checks the cancellation marker and worker interrupt between population members, while
 forming each path, and before completion persistence. Progress is execution feedback, not
 coverage.
+
+A wall-clock ceiling is checked at the same points, because the workload guard bounds the *nominal*
+budget from per-step timing measured on one machine and a slower host or a worse-than-estimated board
+can still overrun it. A search the clock ends settles as an ordinary bounded outcome plus the
+`TIME_BUDGET_EXHAUSTED` limitation — never as a cancellation, which is the user's own action and
+persists no result. Findings already located remain valid. The ceiling and its rationale are in
+[the API document](../api/fuzzing.md#submit-and-task-lifecycle).
 
 ## Supported finite semantics
 

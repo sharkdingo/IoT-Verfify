@@ -41,10 +41,8 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
     private static final double TEMPERATURE = 0.7;
     private static final int MAX_TOKENS = 4000;
     private static final Set<String> ALLOWED_TEMPLATE_IDS = Set.of("1", "2", "3", "4", "5", "6", "7");
-    private static final Set<String> ALLOWED_CATEGORIES =
-            Set.of("all", "safety", "response", "consistency", "privacy");
     private static final Set<String> RECOMMENDATION_FIELDS =
-            Set.of("category", "rationale", "templateId", "templateLabel",
+            Set.of("rationale", "templateId", "templateLabel",
                     "aConditions", "ifConditions", "thenConditions");
     private static final Set<String> CONDITION_FIELDS =
             Set.of("deviceId", "deviceLabel", "targetType", "key", "propertyScope", "variableSource",
@@ -79,24 +77,25 @@ value/trust/privacy 是用户当前覆盖后的共享值。
   - values: 该模式可取值（如 ["sleep", "away", "home"]）
 - **apiSignals**: 可用于规约条件的 signal API（Signal=true），targetType="api" 时只能使用这些 API
 - **propertyTargets**: 可用于 targetType="trust" 或 "privacy" 的目标。每项给出 propertyScope 与 key；state 表示该模式当前活动状态的标签，variable 表示变量标签
+  注意：variable 范围的标签是传播来源，不是传播目标。模型只在设备被入侵且该变量 FalsifiableWhenCompromised=true 时把 trust 改为 untrusted，privacy 变量标签从不改变。因此对 variable 标签写 Always/Never 规约往往恒真或恒假、不携带信息。要检查控制来源，请对 propertyScope=state 的标签写规约，或使用模板 7
 - **states**: 设备的工作状态可能值列表（如 ["auto", "cool", "dry", "off", "heat", "fanOnly"]）
 
 ## 重要约束：如何正确引用设备属性
-1. **引用变量**：使用 variables 中的变量名作为 key，如：
-   - targetType: "variable", key: "temperature", relation: ">=", value: 25
-   - targetType: "variable", key: "humidity", relation: ">=", value: 70
-   - targetType: "variable", key: "contact", relation: "=", value: "open"
+1. **引用变量**：使用 variables 中的变量名作为 key，并且必须给出 variableSource，如：
+   - targetType: "variable", key: "temperature", variableSource: "environment", relation: ">=", value: "25"
+   - targetType: "variable", key: "humidity", variableSource: "reported", relation: ">=", value: "70"
+   - targetType: "variable", key: "contact", variableSource: "reported", relation: "=", value: "open"
 
 2. **引用工作状态**：使用 targetType: "state"。key 固定使用 "state"，value 使用 states 列表中的状态值，如：
    - 如果要检查空调是否开启，应该用：
      targetType: "state", key: "state", relation: "!=", value: "off"
-   - 如果设备模板暴露了更具体的状态变量，也可以用 targetType: "variable" 引用该变量
+   - 如果设备模板暴露了更具体的状态变量，也可以用 targetType: "variable" 引用该变量（同样必须给出 variableSource）
 
 3. **引用模式**：使用 targetType: "mode"。key 必须使用 modes 中的模式名称，value 必须来自该模式的 values，如：
    - targetType: "mode", key: "Mode", relation: "=", value: "sleep"
    - targetType: "mode", key: "MachineState", relation: "!=", value: "off"
 
-4. **引用 API 信号**：使用 targetType: "api"。key 必须来自 apiSignals，value 可使用 "TRUE" 或 "FALSE"；如果省略 relation/value，系统按 "= TRUE" 处理
+4. **引用 API 信号**：使用 targetType: "api"。key 必须来自 apiSignals，value 可使用 "TRUE" 或 "FALSE"（模板 7 除外，见下文只能用 "= TRUE"）；如果省略 relation/value，系统按 "= TRUE" 处理
 
 5. **引用 trust/privacy**：propertyScope 与 key 必须成对来自 propertyTargets；propertyScope="state" 时 key 是模式名并检查该模式当前活动状态的标签，propertyScope="variable" 时 key 是变量名。trust value 只能为 "trusted" 或 "untrusted"，privacy value 只能为 "public" 或 "private"
 
@@ -104,7 +103,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
 
 7. **禁止使用 currentState 作为 key**，因为它不是设备模板中定义的属性名
 
-8. variable 条件必须给出 variableSource=environment|reported。environment 只能用于 capabilities 中 deviceLocal=false 的变量；deviceLocal=true 的只能用 reported。（不要依赖变量描述文字判断：模板作者填写了 Description 时会覆盖派生描述。）
+8. variable 条件必须给出 variableSource=environment|reported。environment 只能用于 capabilities 中 deviceLocal=false 且 reads=true 的变量；deviceLocal=true 或 reads=false（只影响、不观测）的变量只能用 reported。（不要依赖变量描述文字判断：模板作者填写了 Description 时会覆盖派生描述。）
 9. 确保 targetType 和 key/value/propertyScope 的组合在设备的 variables、modes、apiSignals、propertyTargets 或 states 中确实存在；api 条件省略 value 时等价于 TRUE
 
 ## 输出要求
@@ -116,65 +115,48 @@ value/trust/privacy 是用户当前覆盖后的共享值。
     {
       "rationale": "解释为什么建议检查这条规约；仅用于推荐说明，不是规约字段",
       "templateId": "规约模板ID（必填，只能是 1|2|3|4|5|6|7）",
-      "aConditions": [
-        {
-          "deviceId": "设备 id（必须来自设备列表的 deviceId 字段）",
-          "deviceLabel": "设备 label（仅用于展示）",
-          "targetType": "state|mode|variable|api|trust|privacy",
-          "key": "状态/模式/变量/API名称或 propertyTargets 中的 key",
-          "propertyScope": "仅 trust/privacy 必填，必须与 propertyTargets 一致：state|variable",
-          "variableSource": "仅 targetType=variable 必填：environment 表示家中实际值（要求 capabilities 中该变量的 deviceLocal 为 false），reported 表示该设备上报值；设备被入侵时两者不同，没有默认值",
-          "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 可省略，默认 =",
-          "value": "期望值（api 可省略，默认 TRUE）"
-        }
-      ],
-      "ifConditions": [
-        {
-          "deviceId": "设备 id（必须来自设备列表的 deviceId 字段）",
-          "deviceLabel": "设备 label（仅用于展示）",
-          "targetType": "state|mode|variable|api|trust|privacy",
-          "key": "状态/模式/变量/API名称或 propertyTargets 中的 key",
-          "propertyScope": "仅 trust/privacy 必填，必须与 propertyTargets 一致：state|variable",
-          "variableSource": "仅 targetType=variable 必填：environment 表示家中实际值（要求 capabilities 中该变量的 deviceLocal 为 false），reported 表示该设备上报值；设备被入侵时两者不同，没有默认值",
-          "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 可省略，默认 =",
-          "value": "期望值（api 可省略，默认 TRUE）"
-        }
-      ],
-      "thenConditions": [
-        {
-          "deviceId": "设备 id（必须来自设备列表的 deviceId 字段）",
-          "deviceLabel": "设备 label（仅用于展示）",
-          "targetType": "state|mode|variable|api|trust|privacy",
-          "key": "状态/模式/变量/API名称或 propertyTargets 中的 key",
-          "propertyScope": "仅 trust/privacy 必填，必须与 propertyTargets 一致：state|variable",
-          "variableSource": "仅 targetType=variable 必填：environment 表示家中实际值（要求 capabilities 中该变量的 deviceLocal 为 false），reported 表示该设备上报值；设备被入侵时两者不同，没有默认值",
-          "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 可省略，默认 =",
-          "value": "期望值（api 可省略，默认 TRUE）"
-        }
-      ]
+      "aConditions": [ <Condition>, ... ],
+      "ifConditions": [ <Condition>, ... ],
+      "thenConditions": [ <Condition>, ... ]
     }
   ]
 }
 ```
 
-注意：不要使用 "currentState" 作为 key。工作状态优先使用 targetType: "state" 且 key 固定为 "state"；具体模式值优先使用 targetType: "mode"，key 必须来自设备 modes 列表；内部变量使用 targetType: "variable"，key 必须来自设备 variables 列表；API 条件只能使用 apiSignals，relation/value 省略时按 "= TRUE" 处理；trust/privacy 条件必须使用 propertyTargets 的 propertyScope+key。不要对 state、mode、api、trust、privacy 使用 >、<、>=、<=。
+按模板形状只填写对应的条件数组，其余数组完全省略。<Condition> 的字段定义（三个数组共用同一形状）：
+
+```json
+{
+    "deviceId": "设备 id（必须来自设备列表的 deviceId 字段）",
+    "deviceLabel": "设备 label（仅用于展示）",
+    "targetType": "state|mode|variable|api|trust|privacy",
+    "key": "状态/模式/变量/API名称或 propertyTargets 中的 key",
+    "propertyScope": "仅 trust/privacy 必填且必须与 propertyTargets 一致（state|variable）；其他 targetType 必须完全省略该字段",
+    "variableSource": "仅 targetType=variable 必填，其他 targetType 必须完全省略：environment 表示家中实际值（要求 capabilities 中该变量 deviceLocal=false 且 reads=true），reported 表示该设备上报值；设备被入侵时两者不同，没有默认值",
+    "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 可省略，默认 =",
+    "value": "期望值（api 可省略，默认 TRUE）"
+  }
+```
+
 
 ## 规约模板类型
 %s
 
-## 推荐策略
-1. **安全类**: 燃气泄漏、烟雾检测、门窗异常等安全相关规约
-2. **响应类**: 设备联动的正确性验证
-3. **一致性类**: 设备状态一致性验证
-4. **隐私类**: 敏感数据隐私保护验证
-
 ## 重要约束
+- 在模板语义允许的范围内覆盖不同关注点（安全、联动响应、状态一致性、隐私），不要对同一设备重复同一模板
+- 只有模板 1、3、4 能被有界反例探索检查；模板 2、5、6 需要活性推理，模板 7 需要信任标签传播，探索接口会把它们报为不适用。它们仍可由 NuSMV 正式验证，不要因此回避，但也不要声称探索能覆盖它们
 - 模板形状必须严格匹配：1/2/3/7 只使用 aConditions；4/5/6 只使用 ifConditions + thenConditions
-- 模板 7 会为 A 条件自动关联 MEDIC 控制来源标签：不得在 A 中直接写 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。它检查受保护事件是否带有不可信控制来源标签，不是认证或通用完整性检查。隐私泄露应使用模板 3，把“公开动作/状态发生”和对应 privacy=private 一起放入 aConditions
-- aConditions、ifConditions、thenConditions 中的 targetType、key/value 必须引用该设备实际存在的 states、modes、variables 或 APIs
+- 模板 7 会为 A 条件自动关联 MEDIC 控制来源标签：不得在 A 中直接写 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。它检查受保护事件是否带有不可信控制来源标签，不是认证或通用完整性检查。模板 7 的 api 条件只能引用 capabilities 中 EndState 非空的 signal API，且该设备必须声明 Modes/WorkingStates，否则该规约无法解析控制来源标签而被跳过（不会进入 NuSMV）。隐私泄露应使用模板 3，把“公开动作/状态发生”和对应 privacy=private 一起放入 aConditions
+- aConditions、ifConditions、thenConditions 中的 targetType、key/value 必须引用该设备实际存在的 states、modes、variables 或 APIs（key 与枚举值按大小写不敏感匹配并去除首尾空格，不必纠结大小写）
 - 同一个 A、IF 或 THEN 数组内的全部条件是合取关系，必须在模板声明的合法状态和变量定义域中存在共同满足值
 - state、mode、api、trust、privacy 以及枚举变量只能使用 =、!=、in、not in；数值变量可使用 =、!=、in、not in，并额外支持 >、<、>=、<=
 - 禁止使用 "currentState" 作为 key，它不是有效的属性名
+- 条件对象中禁止出现 side 字段；归属由所在的 aConditions/ifConditions/thenConditions 数组决定
+- value 永远是字符串，不是数组；relation 为 in / not in 时把多个取值写成一个英文逗号分隔的字符串（例："cool,heat"）
+- 数值变量的 value 必须是该变量 range 区间内的整数（不带单位、不带小数）；枚举变量的 value 必须是其 values 列表中的某一项（大小写与首尾空格会被规范化）
+- NaturalChangeRate 是对 v' - v 的约束，不是候选清单：区间内每个整数都可能发生，区间外的都不可能。0 表示没有独立自然变化；区间不含 0 时该变量每步都会变化（再与设备效应合并并裁剪到声明域）
+- 条件组不仅要在定义域内相容，还必须能从设备当前状态与变量值出发，经 capabilities 的 Transitions 与已声明 API 到达。只有"设备本地（deviceLocal=true）、当前值已知、且 NaturalChangeRate 为 0"的变量才会被判不可达；会自然变化的变量与共享环境变量都不受此限制；共享环境变量的任何已声明取值在第一步都可达，不要因当前 Environment Pool 的读数而回避（例如烟雾当前读数为 clear 时，仍应推荐"检测到烟雾就报警"）
+- 只输出上述 JSON 骨架中的字段。自行发明的字段（如 priority、severity）会导致整条推荐被丢弃；不要为了"补全"而添加骨架里没有的键。按模板形状省略不适用的条件数组是正确做法，不是缺字段
 - 每条推荐必须包含合法 templateId，且 templateId 必须严格枚举为 "1" 到 "7"
 - 按与用户目标和设备能力的匹配程度从高到低排列，并在 rationale 中解释建议依据；不要输出不存在于验证模型中的 priority
 - 不要推荐与现有规约重复的规约
@@ -205,12 +187,6 @@ value/trust/privacy 是用户当前覆盖后的共享值。
         props.put("maxRecommendations", Map.of(
                 "type", "integer",
                 "description", "Maximum number of specification recommendations to return (1-10). Default 5."
-        ));
-
-        props.put("category", Map.of(
-                "type", "string",
-                "enum", List.of("all", "safety", "response", "consistency", "privacy"),
-                "description", "Filter recommendations by category: all, safety, response, consistency, privacy. Default all."
         ));
 
         props.put("language", Map.of(
@@ -245,10 +221,9 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             }
 
             requireOnlyFields(args, "$", Set.of(
-                    "maxRecommendations", "category", "language", "userRequirement"));
+                    "maxRecommendations", "language", "userRequirement"));
 
             int maxRecommendations = intArgInRange(args, "maxRecommendations", 5, 1, 10);
-            String category = optionalEnumArg(args, "category", "all", ALLOWED_CATEGORIES);
             String language = languageArg(args, "language");
             String userRequirement = optionalTextArg(
                     args, "userRequirement", "", RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH);
@@ -260,8 +235,8 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             List<BoardEnvironmentVariableDto> environmentVariables =
                     safeList(boardStorageService.getEnvironmentVariables(userId));
 
-            log.debug("Specification recommendation request: userId={}, devices={}, max={}, category={}",
-                    userId, devices.size(), maxRecommendations, category);
+            log.debug("Specification recommendation request: userId={}, devices={}, max={}",
+                    userId, devices.size(), maxRecommendations);
 
             if (devices.isEmpty()) {
                 log.warn("No devices found on board for user {}", userId);
@@ -287,8 +262,8 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             List<SpecificationDto> existingSpecs =
                     safeList(boardStorageService.getSpecs(userId));
 
-            log.info("Generating AI-based specification recommendations for user {}: {} devices, max {} recommendations, category: {}",
-                    userId, devices.size(), maxRecommendations, category);
+            log.info("Generating AI-based specification recommendations for user {}: {} devices, max {} recommendations",
+                    userId, devices.size(), maxRecommendations);
 
             // 构建现有规则和规约的简要信息
             String existingRulesInfo = buildExistingRulesInfo(existingRules);
@@ -302,7 +277,6 @@ value/trust/privacy 是用户当前覆盖后的共享值。
                     existingRulesInfo,
                     existingSpecsInfo,
                     maxRecommendations,
-                    category,
                     language,
                     userRequirement
             );
@@ -345,12 +319,11 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             String existingRulesInfo,
             String existingSpecsInfo,
             int maxRecommendations,
-            String category,
             String language,
             String userRequirement) {
 
         String deviceInfoJson = buildDeviceInfoJson(devices, templates, environmentVariables);
-        String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, existingSpecsInfo, maxRecommendations, category, language, userRequirement);
+        String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, existingSpecsInfo, maxRecommendations, language, userRequirement);
 
         log.info("Calling LLM for specification recommendations...");
         String content = promptCompletionService.completeRecommendation(
@@ -369,7 +342,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
      * 构建用户提示词
      */
     private String buildUserPrompt(String deviceInfoJson, String existingRulesInfo, String existingSpecsInfo,
-                                   int maxRecommendations, String category, String language, String userRequirement) {
+                                   int maxRecommendations, String language, String userRequirement) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("请根据以下设备信息生成智能规约推荐。\n\n");
 
@@ -393,10 +366,6 @@ value/trust/privacy 是用户当前覆盖后的共享值。
         prompt.append("- 最大推荐数量: ").append(maxRecommendations).append("\n");
         prompt.append(languageInstruction(language)).append("\n");
 
-        if (!"all".equals(category)) {
-            prompt.append("- 分类筛选: ").append(category).append("\n");
-        }
-
         if (userRequirement != null && !userRequirement.isBlank()) {
             prompt.append("- 用户需求场景: ").append(userRequirement).append("\n");
             prompt.append("- 优先推荐能验证该场景安全性、响应性、一致性或隐私性的规约；若当前设备/规则不足，不要编造条件。\n");
@@ -409,9 +378,9 @@ value/trust/privacy 是用户当前覆盖后的共享值。
 
     private String languageInstruction(String language) {
         if ("zh-CN".equals(language)) {
-            return "- 输出语言: 简体中文。rationale、reason、message 等自然语言字段必须使用简体中文。";
+            return "- 输出语言: 简体中文。rationale 必须使用简体中文。";
         }
-        return "- Output language: English. Use English for every natural-language field such as rationale, reason, and message.";
+        return "- Output language: English. Use English for the rationale.";
     }
 
     private String recommendationMessage(String language, String key, int count) {
@@ -684,7 +653,12 @@ value/trust/privacy 是用户当前覆盖后的共享值。
 
                 try {
                     Map<String, Object> recommendation = objectMapper.convertValue(rec, Map.class);
+                    // Both keys are shapes the model volunteers unprompted and neither has a
+                    // verification meaning, so they are stripped rather than allowed to fail the
+                    // candidate: rejecting a `category` the prompt no longer even mentions would
+                    // discard specifications that passed every capability and semantic check.
                     recommendation.remove("confidence");
+                    recommendation.remove("category");
 
                     // 验证并过滤推荐
                     RecommendationValidation validation = validateRecommendation(

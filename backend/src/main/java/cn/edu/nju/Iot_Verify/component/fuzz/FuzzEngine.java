@@ -33,17 +33,40 @@ public final class FuzzEngine {
     private static final long SAFE_SEED_MODULUS = MAX_SAFE_SEED + 1L;
     static final int RANDOM_RESTART_INTERVAL = 20;
     static final int PAPER_SOLVER_LEVELS = 3;
+    /** Disclosed when the wall-clock budget, rather than the iteration budget, ended the search. */
+    public static final String TIME_BUDGET_EXHAUSTED_LIMITATION = "TIME_BUDGET_EXHAUSTED";
 
     public FuzzEngineResult run(
             FuzzEngineInput input,
             FuzzProgressListener progress,
             BooleanSupplier cancelled) {
+        return run(input, progress, cancelled, () -> false);
+    }
+
+    /**
+     * Runs the bounded search, stopping early if {@code deadlineExceeded} reports the time budget is spent.
+     *
+     * <p>A deadline is deliberately <em>not</em> routed through {@code cancelled}: the caller treats a
+     * cancellation signal as a user-initiated cancel and settles the task as {@code CANCELLED}, which would
+     * report a timeout as something the user did. A spent deadline instead ends the search the same way a
+     * spent iteration budget does — {@code BUDGET_EXHAUSTED}, already contracted as "not found within this
+     * bounded search" and never as safety — and adds {@link #TIME_BUDGET_EXHAUSTED_LIMITATION} so the reason
+     * is disclosed rather than indistinguishable from an ordinary exhausted budget. Findings already located
+     * are kept and still reported, because a candidate counterexample does not become less real when the
+     * clock runs out.</p>
+     */
+    public FuzzEngineResult run(
+            FuzzEngineInput input,
+            FuzzProgressListener progress,
+            BooleanSupplier cancelled,
+            BooleanSupplier deadlineExceeded) {
         long startedAt = System.nanoTime();
         validateInput(input);
         FuzzEngineConfig config = input.config();
         long effectiveSeed = effectiveSeed(config.seed());
         SplittableRandom random = new SplittableRandom(effectiveSeed);
         BooleanSupplier cancellation = cancelled == null ? () -> false : cancelled;
+        BooleanSupplier deadline = deadlineExceeded == null ? () -> false : deadlineExceeded;
         ProgressReporter progressReporter = new ProgressReporter(progress);
         List<String> limitations = new ArrayList<>(
                 FuzzLimitationContract.requiredCodes(config.explorationMode()));
@@ -102,6 +125,7 @@ public final class FuzzEngine {
                     effectiveSeed,
                     progressReporter,
                     cancellation,
+                    deadline,
                     eligible,
                     eligibility,
                     limitations,
@@ -116,10 +140,17 @@ public final class FuzzEngine {
         long generatedPaths = 0;
         int completedIterations = 0;
         boolean wasCancelled = false;
+        boolean outOfTime = false;
 
         for (int iteration = 0; iteration < config.maxIterations(); iteration++) {
             if (cancellation.getAsBoolean()) {
                 wasCancelled = true;
+                break;
+            }
+            // Checked at the same points as cancellation, so a long path cannot outrun the deadline by more
+            // than one path. Never conflated with cancellation: see the run() javadoc.
+            if (deadline.getAsBoolean()) {
+                outOfTime = true;
                 break;
             }
 
@@ -127,6 +158,10 @@ public final class FuzzEngine {
             for (Genome genome : population) {
                 if (cancellation.getAsBoolean()) {
                     wasCancelled = true;
+                    break;
+                }
+                if (deadline.getAsBoolean()) {
+                    outOfTime = true;
                     break;
                 }
 
@@ -181,7 +216,7 @@ public final class FuzzEngine {
                     ? 100
                     : Math.min(100, (int) (((long) completedIterations * 100L) / config.maxIterations()));
             progressReporter.report(percent, "Completed fuzz iteration " + completedIterations);
-            if (wasCancelled || findings.size() == eligible.size()) {
+            if (wasCancelled || outOfTime || findings.size() == eligible.size()) {
                 break;
             }
             List<CandidateScore> parents = eligible.stream()
@@ -205,8 +240,16 @@ public final class FuzzEngine {
         } else {
             outcome = FuzzEngineOutcome.BUDGET_EXHAUSTED;
         }
+        // Disclosed whenever the clock ended the search, including when findings were already located: the
+        // run stopped short of the requested budget either way, so a reader must not take its coverage for
+        // what was asked. Cancellation persists no result, so the code cannot mislead there.
+        if (outOfTime && !wasCancelled) {
+            limitations.add(TIME_BUDGET_EXHAUSTED_LIMITATION);
+        }
         if (!wasCancelled) {
-            progressReporter.report(100, findings.isEmpty() ? "Search budget exhausted" : "Fuzz findings ready");
+            progressReporter.report(100, outOfTime
+                    ? "Time budget exhausted"
+                    : findings.isEmpty() ? "Search budget exhausted" : "Fuzz findings ready");
         }
         return result(
                 outcome,
@@ -226,6 +269,7 @@ public final class FuzzEngine {
             long effectiveSeed,
             ProgressReporter progressReporter,
             BooleanSupplier cancellation,
+            BooleanSupplier deadline,
             List<SpecificationDto> eligible,
             List<FuzzSpecEligibility> eligibility,
             List<String> limitations,
@@ -237,10 +281,15 @@ public final class FuzzEngine {
         long generatedPaths = 0;
         int completedIterations = 0;
         boolean wasCancelled = false;
+        boolean outOfTime = false;
 
         for (int iteration = 0; iteration < config.maxIterations(); iteration++) {
             if (cancellation.getAsBoolean()) {
                 wasCancelled = true;
+                break;
+            }
+            if (deadline.getAsBoolean()) {
+                outOfTime = true;
                 break;
             }
             Map<String, PaperCandidateScore> generationBest = new LinkedHashMap<>();
@@ -248,6 +297,10 @@ public final class FuzzEngine {
             for (PaperSeed seed : population) {
                 if (cancellation.getAsBoolean()) {
                     wasCancelled = true;
+                    break;
+                }
+                if (deadline.getAsBoolean()) {
+                    outOfTime = true;
                     break;
                 }
                 List<SpecificationDto> unresolvedSpecifications = eligible.stream()
@@ -301,7 +354,7 @@ public final class FuzzEngine {
                     100,
                     (int) (((long) completedIterations * 100L) / config.maxIterations()));
             progressReporter.report(percent, "Completed paper-compatible fuzz iteration " + completedIterations);
-            if (wasCancelled || findings.size() == eligible.size()) {
+            if (wasCancelled || outOfTime || findings.size() == eligible.size()) {
                 break;
             }
 
@@ -336,12 +389,17 @@ public final class FuzzEngine {
         } else {
             outcome = FuzzEngineOutcome.BUDGET_EXHAUSTED;
         }
+        if (outOfTime && !wasCancelled) {
+            limitations.add(TIME_BUDGET_EXHAUSTED_LIMITATION);
+        }
         if (!wasCancelled) {
             progressReporter.report(
                     100,
-                    findings.isEmpty()
-                            ? "Paper-compatible search budget exhausted"
-                            : "Paper-compatible fuzz findings ready");
+                    outOfTime
+                            ? "Paper-compatible time budget exhausted"
+                            : findings.isEmpty()
+                                    ? "Paper-compatible search budget exhausted"
+                                    : "Paper-compatible fuzz findings ready");
         }
         return result(
                 outcome,
@@ -546,11 +604,50 @@ public final class FuzzEngine {
             int selected = random.nextInt(mutableIndexes.size());
             int geneIndex = mutableIndexes.remove(selected);
             int bound = parent.mutableChoiceBounds().get(geneIndex);
-            int currentChoice = (int) Math.floorMod(genes[geneIndex], (long) bound);
-            int offset = 1 + random.nextInt(bound - 1);
-            genes[geneIndex] = (currentChoice + offset) % bound;
+            genes[geneIndex] = mutatedGene(genes[geneIndex], bound, random);
         }
         return new Genome(genes);
+    }
+
+    /**
+     * Moves a gene to a different choice at {@code bound} while preserving its magnitude.
+     *
+     * <p>A gene is a <em>residue</em>, not a choice index: {@code GeneCursor.choose} decodes
+     * {@code floorMod(gene, bound)}, and {@code bound} is {@code candidates.size()}, which differs for the
+     * same gene index between trajectories because {@code nextCandidates} clamps and dedups at a domain edge
+     * (measured on {@code [0,10]} with {@code NaturalChangeRate [-1,1]}: bound 2 at either edge, 3 in the
+     * interior). Storing the small index instead destroyed the residues for every larger bound — a gene
+     * mutated while its slot showed 2 candidates could never select index 2 once the slot showed 3, measured
+     * as a hard zero in that bucket over 300k samples, and a fixed point, because a bound-2 mutation then
+     * orbits {@code {0,1}} forever. The lineage drifted toward the lowest-delta end of every clamped slot,
+     * which is the wrong bias for a specification only violable near its upper bound.</p>
+     *
+     * <p>Rebuilding from the gene's own multiple of {@code bound} — rather than {@code gene + offset}, which
+     * wraps to a wrong residue near {@code Long.MAX_VALUE} — keeps the magnitude. Both steps of that rebuild
+     * can leave the long range at the extremes, and each is corrected by shifting one whole {@code bound},
+     * which cannot change the decoded choice; see the inline notes. Requires {@code bound >= 2};
+     * {@code GeneCursor} only records bounds above 1, which is what keeps {@code nextInt(bound - 1)} legal.</p>
+     */
+    static long mutatedGene(long gene, int bound, SplittableRandom random) {
+        if (bound < 2) {
+            throw new IllegalArgumentException("a mutable choice needs at least two candidates");
+        }
+        int currentChoice = (int) Math.floorMod(gene, (long) bound);
+        int offset = 1 + random.nextInt(bound - 1);
+        int nextChoice = (currentChoice + offset) % bound;
+        // Both arithmetic steps can leave the long range at the extremes, and each is corrected by moving one
+        // whole `bound` — which preserves the residue, so the decoded choice is unaffected either way.
+        //   - `gene - currentChoice` underflows at gene = Long.MIN_VALUE with an odd bound (floorMod is
+        //     non-negative, so this subtracts). Detected by the result exceeding `gene`.
+        //   - `base + nextChoice` overflows at gene = Long.MAX_VALUE when raising to a higher choice, landing
+        //     on Long.MIN_VALUE, which decodes back to the *original* choice — a mutation that silently does
+        //     nothing. Detected by the result falling below `base`.
+        long base = gene - currentChoice;
+        if (base > gene) {
+            base += bound;
+        }
+        long raised = base + nextChoice;
+        return raised < base ? raised - bound : raised;
     }
 
     private static FuzzEngineResult result(

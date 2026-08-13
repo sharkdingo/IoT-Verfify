@@ -161,8 +161,20 @@ they diverge. Verified conforming:
   specification's own conditions (`FixStrategyUtils`), not invented.
 - **HAFuzz distance-guided search** — the explorer keeps the minimum-distance seed per round and
   persists both the requested and effective seed, so a finding is replayable. Its per-level weight
-  is Algorithm 1 line 25's `2^(l_up-l) / (2^l_up - 1)`; the reference artifact obtains the same
-  denominator by summing the powers used by all levels.
+  is Algorithm 1 line 25's `2^(l_up-l) / (2^l_up - 1)`, and the composition
+  `combinedDistance = Dist_graph - Dist_cond` is line 30 literally (the artifact's
+  `DistMeasurement.java:152` returns `nodeDist - condDist`). The weights sum to exactly 1.0 in
+  IEEE-754 for every level count in `[1, 30]`.
+
+  **The level count is this project's choice, not the paper's or the artifact's.**
+  `PAPER_SOLVER_LEVELS = 3` (`FuzzEngine`) instantiates a formula the paper leaves as the parameter
+  `l_up` (§3.4.1, line 23) and never fixes; the reference artifact sets `DETECTION_LAYER_NUM = 1`
+  (`DistMeasurement.java:25`), whose `powerMap` denominator is therefore `2^0 = 1`, not `7`. At one
+  level the weight degenerates to `1`, so the artifact never descends a predecessor chain at all and
+  the three-level descent is an extension *beyond* it. This paragraph previously claimed the artifact
+  "obtains the same denominator by summing the powers used by all levels", which is false as written
+  and is the kind of claim `TheorySourceConformanceTest` cannot catch: it greps the two `Math.scalb`
+  substrings and so pins the formula's shape while leaving its instantiation unchecked.
 - **FSM thesis ch.4 repair loop** — the ¬ρ search proposes candidate values and `forwardVerify`
   re-checks each against the real specification; a rejected candidate is added to the exclusion
   invariants rather than retried. `forwardVerify` also refuses to confirm a fix whose regenerated

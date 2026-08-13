@@ -53,17 +53,21 @@ same-count content change is persisted-data corruption, not a compatible history
 This read-only preflight calculates the exact workload guard for the current server
 Board without creating a task or writing history. Its request contains the three bounded
 integer budget fields `maxIterations`, `pathLength`, and `populationSize`, with the same
-ranges and defaults as `FuzzRequestDto`.
+ranges and defaults as `FuzzRequestDto`, plus `explorationMode` (default `BOARD_SNAPSHOT`).
+The mode is required because model complexity depends on it; a preview computed for the other mode
+would report an estimate submission disagrees with.
 
 The response is `FuzzWorkloadPreviewDto`:
 
 | Field | Type | Meaning |
 | :--- | :--- | :--- |
 | `maxIterations` / `pathLength` / `populationSize` | integer | Echoed validated budget, allowing clients to reject a stale response |
-| `modelComplexityUnits` | non-negative integer | Conservative operational complexity calculated from the current server Board using the same method as submission; zero is valid for a structurally empty Board, and populated Boards include bounded structure counts and key cross-product loop costs |
+| `explorationMode` | enum | Echoed mode the complexity was computed for |
+| `modelComplexityUnits` | non-negative integer | Conservative operational complexity calculated from the current server Board using the same method and mode as submission; zero is valid for a structurally empty Board, and populated Boards include bounded structure counts and key cross-product loop costs |
 | `estimatedWorkload` | integer | Exact product of the three budget fields and `max(1, modelComplexityUnits)` |
-| `workloadLimit` | integer | Current server ceiling, `12,500,000` |
+| `workloadLimit` | integer | Current server ceiling, `30,000,000` |
 | `accepted` | boolean | Whether `estimatedWorkload <= workloadLimit` |
+| `maxAcceptedIterations` | integer | Largest `maxIterations` this Board admits at the previewed path length and population size, clamped to `0..5000`. `0` means even one iteration exceeds the limit, so the path length or population size must come down instead — a remedy naming only the iteration budget cannot express |
 
 The client must invalidate this response when the Board or any budget field changes and
 must not submit while a replacement preview is pending or failed. Submission still
@@ -137,7 +141,7 @@ Request body: `FuzzRequestDto`.
 | `explorationMode` | enum | no | `BOARD_SNAPSHOT` | `BOARD_SNAPSHOT` or `PAPER_COMPATIBLE`; the exact uppercase enum value is persisted with the task and completed run |
 | `paperDomainFingerprint` | string | paper mode only | none | Required for `PAPER_COMPATIBLE`: the 64-character lowercase SHA-256 value returned by the current paper-domain preview. It is rejected for `BOARD_SNAPSHOT` and is not persisted as run configuration |
 | `targetSpecIds` | `string[]` | no | `[]` | Empty means all captured specifications; otherwise 1-100 unique, non-blank IDs of at most 100 characters, all present in the snapshot |
-| `maxIterations` | integer | no | `1000` | `1..5000` |
+| `maxIterations` | integer | no | `200` | `1..5000`. With the default path length and population size this is 40,000 step-slots, which every scene in `docs/examples/` admits in both modes with headroom |
 | `pathLength` | integer | no | `20` | `1..50` captured states per generated path |
 | `populationSize` | integer | no | `10` | `1..50` paths evaluated per full iteration |
 | `seed` | integer | no | generated | `0..9007199254740991`; this JavaScript-safe range preserves exact browser round trips |
@@ -153,16 +157,51 @@ impacted variables, working states and dynamics, transitions and assignments, an
 APIs. Manifest structure is counted once per device instance because each instance is
 parsed and simulated independently.
 
-Every counted collection is limited to 1,000 items for exploration, the summed model
-structure is limited to 10,000 additive units. The workload complexity then adds the
-critical cross-product costs performed by the engine: environment domains across devices,
-device modes across transitions and APIs, ordered arbitration among rules targeting the
-same device, and specification predecessor conditions across rules and their conditions.
-`modelComplexityUnits` can therefore exceed 10,000 even when every additive structure
-limit passes. The combined work guard requires
-`maxIterations * pathLength * populationSize * max(1, modelComplexityUnits)
-<= 12,500,000`. All additions and multiplications are checked for overflow and fail
-closed. The complete frozen input snapshot is also limited to 8 MiB of UTF-8 JSON at both
+Every counted collection is limited to 1,000 items for exploration, and the summed model
+structure is limited to 10,000 additive units. **Bounding and charging are separate:** every
+collection is bounded, because the whole frozen snapshot is persisted regardless of what the search
+reads, but a collection the engine never reads does not enter the cost estimate. Device privacies are
+bounded only — `FuzzModel` writes empty privacy lists and never reads them.
+
+The workload complexity then adds the cross-product costs the engine actually performs: environment
+domains across devices, device modes across transitions and APIs, and ordered arbitration among rules
+targeting the same device. `modelComplexityUnits` can therefore exceed 10,000 even when every additive
+structure limit passes.
+
+**Complexity is mode-dependent.** `PAPER_COMPATIBLE` additionally pays for the monitor's predecessor
+walk (specification conditions across rules and their conditions), because only `evaluatePaper` reaches
+`PaperMonitorFsm.distanceToViolation`. A `BOARD_SNAPSHOT` run performs none of that work and is no
+longer charged for it — it previously was, and it was the largest term for every scene in
+`docs/examples/`, so the default mode's estimate bore little relation to what it executed. Both
+preview and submit therefore need the mode, which is why
+`POST /api/fuzz/workload/preview` takes `explorationMode` and echoes it back.
+
+The combined work guard requires
+`maxIterations * pathLength * populationSize * max(1, modelComplexityUnits) <= 30,000,000`.
+All additions and multiplications are checked for overflow and fail closed. The raw
+`maxIterations * pathLength * populationSize` product is separately checked for overflow only: its
+ceiling is the product of the three per-field maxima, so it cannot reject anything the field ranges
+admit. Those two checks previously shared one constant, which left the complexity factor no headroom
+to trim — it consumed the entire budget instead, and every shipped example scene refused the
+product's own default settings for searches measured at about 16 seconds.
+
+The limit is calibrated against measured throughput rather than chosen: a worst-case
+`BUDGET_EXHAUSTED` run costs roughly 120-170 µs per state step, and admissible steps are
+`limit / complexity`, which puts a maximal run near a minute.
+
+**A running search also has a hard wall-clock ceiling of five minutes**, independent of that guard.
+The guard bounds the *nominal* budget, but its calibration is per-step timing measured on one machine —
+a slower host, a contended worker pool, or a board whose real per-step cost exceeds the estimate can
+all overrun it, and the renewable two-minute task lease is a liveness heartbeat rather than a deadline.
+The ceiling sits at roughly 5x a maximal admitted run, so it never fires on a correctly-estimated
+search and only catches the cases the static estimate got wrong.
+
+A search the clock ends is **not** reported as cancelled: cancellation is the user's own action and
+persists no result, so labelling a timeout that way would misattribute it. It settles exactly as a spent
+iteration budget does — `BUDGET_EXHAUSTED`, or `FOUND_VIOLATION` if candidates were already located,
+which stay valid — and adds the conditional limitation code `TIME_BUDGET_EXHAUSTED` so the reason is
+disclosed instead of being indistinguishable from a completed budget. Its `iterations` count reports what
+actually ran, which will be short of the requested `maxIterations`. The complete frozen input snapshot is also limited to 8 MiB of UTF-8 JSON at both
 preflight endpoints and submission because it is persisted independently of target selection.
 Explicit target IDs therefore cannot
 bypass structural or persistence limits on the captured Board. A Board with more than
@@ -404,8 +443,12 @@ See [fuzzing-flow.md](../architecture/fuzzing-flow.md) for the exact boundary.
 
 Each ineligible item is `{ specId, specificationLabel, reasonCode, reason }`.
 `reasonCode` is a stable category and is one of `UNSUPPORTED_TEMPLATE`,
-`TRUST_PRIVACY_UNSUPPORTED`, `ATTACK_CONCEPT_UNSUPPORTED`,
-`CONTENT_COMMAND_UNSUPPORTED`, `MODEL_INVALID`, or `INVALID_SPECIFICATION`.
+`TRUST_PRIVACY_UNSUPPORTED`, `REPORTED_READING_UNSUPPORTED`,
+`CONTENT_COMMAND_UNSUPPORTED`, `MODEL_INVALID`, or `INVALID_SPECIFICATION` —
+the exact set `FuzzEngine` emits (`MODEL_INVALID` plus the six eligibility reasons).
+`REPORTED_READING_UNSUPPORTED` covers a `variable` condition reading a *reported* value: the
+explorer keeps one value per shared reading and models no compromised device, so it cannot separate
+"what this device said" from "what the home held".
 `reason` is an English technical diagnostic and is not ordinary localized UI copy.
 The ordinary result dialog does not render this raw diagnostic; it uses the stable
 `reasonCode` for localized guidance. The raw `reason` remains available to authenticated
@@ -422,6 +465,13 @@ reports `PAPER_EVENT_FSM_DISTANCE_ENABLED`, `PAPER_RANDOM_INITIAL_STATE_ENABLED`
 `NUSMV_REMAINS_PROOF_AUTHORITY`. These codes describe both enabled semantics and
 important interpretation boundaries. Clients localize them and use a generic localized
 fallback for future unknown codes.
+
+Two further codes are conditional rather than always present. `UNKNOWN_TARGET_SPEC_IDS_IGNORED`
+is added when `targetSpecIds` named an ID absent from the frozen snapshot. The submit endpoint
+rejects unknown IDs outright, so this only surfaces on a path that reaches the engine with a stale
+selection; the run continues against the IDs that did resolve. `TIME_BUDGET_EXHAUSTED` is added when the
+wall-clock ceiling ended the search before its iteration budget was spent, so the run covered less than
+was requested — see the workload section above.
 
 ## Findings
 

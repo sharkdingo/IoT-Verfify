@@ -38,10 +38,8 @@ public class RecommendRulesTool extends AbstractAiTool {
 
     private static final double TEMPERATURE = 0.7;
     private static final int MAX_TOKENS = 4000;
-    private static final Set<String> ALLOWED_CATEGORIES =
-            Set.of("all", "security", "energy_saving", "comfort", "automation");
     private static final Set<String> RECOMMENDATION_FIELDS =
-            Set.of("category", "name", "reason", "conditions", "command", "requiresUserInput");
+            Set.of("name", "reason", "conditions", "command", "requiresUserInput");
     private static final Set<String> CONDITION_FIELDS =
             Set.of("deviceId", "deviceLabel", "deviceName", "attribute", "targetType", "relation", "value");
     private static final Set<String> COMMAND_FIELDS =
@@ -68,7 +66,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 {
   "recommendations": [
     {
-      "category": "security|energy_saving|comfort|automation",
       "name": "将作为画布规则名称保存的简洁自然语言名称",
       "reason": "为什么该规则适合用户目标和当前设备能力的简洁说明",
       "conditions": [
@@ -77,7 +74,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
           "deviceName": "设备显示名称（来自设备列表的 label 字段，仅用于展示）",
           "attribute": "触发属性（必须是该设备实际存在的变量、模式名、signal API 名，或 state）",
           "targetType": "api|variable|mode|state",
-          "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 必须省略",
+          "relation": "所有值条件可用 =|!=|in|not in；数值变量额外可用 >|<|>=|<=；api 请省略（写 = TRUE 也接受）",
           "value": "触发值（仅 targetType 为 variable/mode/state 时填写）"
         }
       ],
@@ -93,16 +90,14 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 }
 ```
 
-## 推荐策略
-1. **安全类**: 燃气泄漏、烟雾检测、门窗异常等安全相关联动
-2. **节能类**: 无人时自动关闭灯光、设备等
-3. **舒适类**: 根据温度、湿度、光照自动调节环境
-4. **自动化类**: 人体感应、门磁触发等日常自动化场景
+## 值得覆盖的场景（仅供发想，输出中没有分类字段）
+优先考虑安全联动（燃气泄漏、烟雾、门窗异常）、节能（无人时关闭灯光与设备）、
+舒适（按温湿度与光照调节环境）以及日常自动化（人体感应、门磁触发）。
 
 ## 重要约束
 - conditions中的deviceId必须使用设备列表中的 deviceId；deviceName 只用于展示
 - conditions中的targetType必须明确为 api、variable、mode 或 state
-- conditions 中 targetType="api" 时，attribute 只能使用设备列表里的 apiSignals（Signal=true 的 API），不能使用普通动作 API，且必须省略 relation 和 value
+- conditions 中 targetType="api" 时，attribute 只能使用设备列表里的 apiSignals（Signal=true 的 API），不能使用普通动作 API。relation/value 请直接省略；写成语义等价的 relation="=" 且 value="TRUE" 也会被接受并规范化（记入 adjustedItems），但只写一半、写 FALSE 或用其他关系符会让整条推荐被丢弃
 - conditions 中 targetType="variable"、"mode" 或 "state" 时，必须填写 relation 和 value
 - conditions 中 targetType="mode" 或 "state" 只能使用 =、!=、in、not in；枚举变量也只能使用 =、!=、in、not in；数值变量可使用 =、!=、in、not in，并额外支持 >、<、>=、<=
 - conditions中的attribute必须是该设备实际存在的 signal API 名、变量名、模式名，或固定的 state；模式值必须来自该模式 values，state 值必须来自工作状态
@@ -110,7 +105,12 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 - 同一条规则的所有 conditions 必须能在模板声明的状态/变量定义域中同时成立；如果 command API 声明了非空 StartState，目标设备条件还必须与该前置状态兼容
 - contentDevice 与 content 必须同时为 null，或同时填写；content 必须来自该内容设备的 contents 列表，且目标 API 必须声明 acceptsContent=true。只在动作确实携带该内容并需要分析隐私标签传播时填写
 - 按与用户目标和设备能力的匹配程度从高到低排列；name 是应用后实际保存的规则名称，不要输出不存在于规则模型中的 priority
-- reason 必须用用户要求的语言说明推荐依据，并引用实际设备能力或用户需求，不能只重复 name
+- reason 必须用用户要求的语言说明推荐依据，并引用实际设备能力或用户需求，不能只重复 name，且不超过 1000 个字符
+- value 永远是字符串，不是数组；relation 为 in / not in 时把多个取值写成一个英文逗号分隔的字符串（例："cool,heat"）
+- 数值变量的 value 必须是该变量 range 区间内的整数（不带单位、不带小数）；枚举变量的 value 必须是其 values 列表中的某一项（大小写与首尾空格会被规范化）
+- NaturalChangeRate 是对 v' - v 的约束，不是候选清单：区间内每个整数都可能发生，区间外的都不可能。0 表示没有独立自然变化；区间不含 0 时该变量每步都会变化（再与设备效应合并并裁剪到声明域）
+- 条件组不仅要在定义域内相容，还必须能从设备当前状态与变量值出发，经 capabilities 的 Transitions 与已声明 API 到达。只有"设备本地（deviceLocal=true）、当前值已知、且 NaturalChangeRate 为 0"的变量才会被判不可达；会自然变化的变量与共享环境变量都不受此限制；共享环境变量的任何已声明取值在第一步都可达，不要因当前 Environment Pool 的读数而回避（例如烟雾当前读数为 clear 时，仍应推荐"检测到烟雾就报警"）。命令 API 的 StartState 同样必须可达
+- 只输出上述 JSON 骨架中的字段。自行发明的字段（如 priority、severity）会导致整条推荐被丢弃；不要为了"补全"而添加骨架里没有的键。省略某个骨架字段本身不会被判错——按各字段的规则决定填或不填即可
 - 不要推荐与现有规则重复的规则
 - 如果设备信息不足，返回空的recommendations数组
 """;
@@ -137,12 +137,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
         props.put("maxRecommendations", Map.of(
                 "type", "integer",
                 "description", "Maximum number of rule recommendations to return (1-10). Default 5."
-        ));
-
-        props.put("category", Map.of(
-                "type", "string",
-                "enum", List.of("all", "security", "energy_saving", "comfort", "automation"),
-                "description", "Filter recommendations by category: all, security, energy_saving, comfort, automation. Default all."
         ));
 
         props.put("language", Map.of(
@@ -178,10 +172,9 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             }
 
             requireOnlyFields(args, "$", Set.of(
-                    "maxRecommendations", "category", "language", "userRequirement"));
+                    "maxRecommendations", "language", "userRequirement"));
 
             int maxRecommendations = intArgInRange(args, "maxRecommendations", 5, 1, 10);
-            String category = optionalEnumArg(args, "category", "all", ALLOWED_CATEGORIES);
             String language = languageArg(args, "language");
             String userRequirement = optionalTextArg(
                     args, "userRequirement", "", RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH);
@@ -193,8 +186,8 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             List<BoardEnvironmentVariableDto> environmentVariables =
                     safeList(boardStorageService.getEnvironmentVariables(userId));
 
-            log.debug("Rule recommendation request: userId={}, devices={}, max={}, category={}",
-                    userId, devices.size(), maxRecommendations, category);
+            log.debug("Rule recommendation request: userId={}, devices={}, max={}",
+                    userId, devices.size(), maxRecommendations);
 
             if (devices.isEmpty()) {
                 log.warn("No devices found on board for user {}", userId);
@@ -218,8 +211,8 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             List<cn.edu.nju.Iot_Verify.dto.rule.RuleDto> existingRules =
                     safeList(boardStorageService.getRules(userId));
 
-            log.info("Generating AI-based rule recommendations for user {}: {} devices, max {} recommendations, category: {}",
-                    userId, devices.size(), maxRecommendations, category);
+            log.info("Generating AI-based rule recommendations for user {}: {} devices, max {} recommendations",
+                    userId, devices.size(), maxRecommendations);
 
             // 构建现有规则的简要信息
             String existingRulesInfo = buildExistingRulesInfo(existingRules);
@@ -231,7 +224,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                     environmentVariables,
                     existingRulesInfo,
                     maxRecommendations,
-                    category,
                     language,
                     userRequirement
             );
@@ -244,7 +236,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                     devices,
                     BoardSemanticValidator.recommendationContext(nodes, templates, environmentVariables),
                     maxRecommendations,
-                    category,
                     language);
 
             log.debug("Rule recommendation result length: {} chars", result.length());
@@ -274,12 +265,11 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             List<BoardEnvironmentVariableDto> environmentVariables,
             String existingRulesInfo,
             int maxRecommendations,
-            String category,
             String language,
             String userRequirement) {
 
         String deviceInfoJson = buildDeviceInfoJson(devices, templates, environmentVariables);
-        String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, maxRecommendations, category, language, userRequirement);
+        String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, maxRecommendations, language, userRequirement);
 
         log.info("Calling LLM for rule recommendations...");
         String content = promptCompletionService.completeRecommendation(
@@ -297,7 +287,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
     /**
      * 构建用户提示词
      */
-    private String buildUserPrompt(String deviceInfoJson, String existingRulesInfo, int maxRecommendations, String category, String language, String userRequirement) {
+    private String buildUserPrompt(String deviceInfoJson, String existingRulesInfo, int maxRecommendations, String language, String userRequirement) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("请根据以下设备信息生成智能自动化规则推荐。\n\n");
 
@@ -315,10 +305,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
         prompt.append("- 最大推荐数量: ").append(maxRecommendations).append("\n");
         prompt.append(languageInstruction(language)).append("\n");
 
-        if (!"all".equals(category)) {
-            prompt.append("- 分类筛选: ").append(category).append("\n");
-        }
-
         if (userRequirement != null && !userRequirement.isBlank()) {
             prompt.append("- 用户需求场景: ").append(userRequirement).append("\n");
             prompt.append("- 优先推荐能服务该场景的规则；若设备能力不足，不要编造设备、变量或 API。\n");
@@ -331,9 +317,9 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 
     private String languageInstruction(String language) {
         if ("zh-CN".equals(language)) {
-            return "- 输出语言: 简体中文。name、reason、message 等自然语言字段必须使用简体中文。";
+            return "- 输出语言: 简体中文。name 与 reason 必须使用简体中文。";
         }
-        return "- Output language: English. Use English for every natural-language field such as name, reason, and message.";
+        return "- Output language: English. Use English for name and reason.";
     }
 
     private String recommendationMessage(String language, String key, int count) {
@@ -503,7 +489,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                                    List<DeviceInfoHelper.DeviceInfo> devices,
                                    BoardSemanticValidator.BoardContext semanticContext,
                                    int maxRecommendations,
-                                   String requestedCategory,
                                    String language) {
         try {
             // 清理 AI 返回的内容，去除 Markdown 代码块标记
@@ -549,11 +534,16 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 
                 try {
                     Map<String, Object> recommendation = objectMapper.convertValue(rec, Map.class);
+                    // Both keys are shapes the model volunteers unprompted and neither has a
+                    // verification meaning, so they are stripped rather than allowed to fail the
+                    // candidate: rejecting a `category` the prompt no longer even mentions would
+                    // discard rules that passed every capability and semantic check.
                     recommendation.remove("confidence");
+                    recommendation.remove("category");
 
                     // 验证并过滤推荐
                     RecommendationValidation validation = validateRecommendation(
-                            recommendation, deviceMap, semanticContext, requestedCategory,
+                            recommendation, deviceMap, semanticContext,
                             language, inspected);
                     if (validation.valid()) {
                         recommendation.remove("requiresUserInput");
@@ -611,7 +601,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
     private RecommendationValidation validateRecommendation(Map<String, Object> recommendation,
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap,
             BoardSemanticValidator.BoardContext semanticContext,
-            String requestedCategory,
             String language,
             int recommendationIndex) {
 
@@ -625,18 +614,10 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             return invalid("missingRuleName", language);
         }
         recommendation.put("name", name);
-        String category = asTrimmedString(recommendation.get("category"));
-        if (category != null && (!ALLOWED_CATEGORIES.contains(category) || "all".equals(category))) {
-            return invalid("invalidCategory", language);
-        }
-        if (!"all".equals(requestedCategory) && !requestedCategory.equals(category)) {
-            return invalid("categoryMismatch", language);
-        }
         String reason = asTrimmedString(recommendation.get("reason"));
         if (reason != null && reason.length() > 1000) {
             return invalid("invalidRuleReason", language);
         }
-        if (category != null) recommendation.put("category", category);
         if (reason != null) recommendation.put("reason", reason);
         if (!recommendation.containsKey("conditions") || !recommendation.containsKey("command")) {
             return invalid("missingRuleFields", language);
@@ -844,12 +825,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             case "invalidRuleReason" -> zh
                     ? "面向用户的推荐理由超过 1000 个字符。"
                     : "The user-facing recommendation reason exceeds 1000 characters.";
-            case "invalidCategory" -> zh
-                    ? "候选规则缺少有效分类。"
-                    : "The rule candidate does not have a valid category.";
-            case "categoryMismatch" -> zh
-                    ? "候选规则不属于用户当前选择的推荐分类。"
-                    : "The rule candidate does not match the recommendation category selected by the user.";
             case "emptyConditionsOrCommand" -> zh
                     ? "触发条件为空或执行动作为空。"
                     : "The trigger conditions are empty or the command is missing.";

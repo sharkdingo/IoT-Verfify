@@ -54,7 +54,7 @@ public class FuzzModelAsyncTool extends AbstractAiTool {
                 "description", "Optional. Specification IDs (from list_specs) to target. Omit to search every eligible specification. Ineligible specs are reported back, not silently dropped."));
         props.put("maxIterations", Map.of(
                 "type", "integer",
-                "description", "Search budget in iterations, 1-5000 (default 1000). Budget exhaustion never proves a specification holds."));
+                "description", "Search budget in iterations, 1-5000 (default 200). A larger budget can be refused: the admission guard multiplies this by path length, population size, and the Board's model complexity. Budget exhaustion never proves a specification holds."));
         props.put("pathLength", Map.of(
                 "type", "integer",
                 "description", "Bounded exploration depth per candidate path, 1-50 (default 20)."));
@@ -86,7 +86,11 @@ public class FuzzModelAsyncTool extends AbstractAiTool {
             FuzzRequestDto request = FuzzRequestDto.builder()
                     .explorationMode(FuzzExplorationMode.BOARD_SNAPSHOT)
                     .targetSpecIds(parseTargetSpecIds(args))
-                    .maxIterations(intArgInRange(args, "maxIterations", 1000, 1, 5000))
+                    // 200, matching FuzzRequestDto. At 1000 this tool's default product was 200,000, which
+                    // every scene in docs/examples refused — so "run bounded exploration" failed with a
+                    // VALIDATION_ERROR on every shipped scene, and the rejection carried the ceiling without
+                    // the Board's complexity, leaving the model nothing to correct with.
+                    .maxIterations(intArgInRange(args, "maxIterations", 200, 1, 5000))
                     .pathLength(intArgInRange(args, "pathLength", 20, 1, 50))
                     .populationSize(intArgInRange(args, "populationSize", 10, 1, 50))
                     .seed(parseSeed(args))

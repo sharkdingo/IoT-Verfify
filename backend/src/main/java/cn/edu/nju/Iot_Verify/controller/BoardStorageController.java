@@ -377,7 +377,6 @@ public class BoardStorageController {
      * 获取规则推荐
      * @param userId 用户ID
      * @param maxRecommendations 最大推荐数量
-     * @param category 分类筛选
      * @return 规则推荐列表
      */
     @PostMapping("/rules/recommend")
@@ -385,12 +384,12 @@ public class BoardStorageController {
             @CurrentUser Long userId,
             @NotNull @Valid @RequestBody StandaloneRecommendationRequestDto requestBody) {
         return recommendRules(userId,
-                requestBody.getMaxRecommendations(), requestBody.getCategory(), requestBody.getLanguage(),
+                requestBody.getMaxRecommendations(), requestBody.getLanguage(),
                 requestBody.getUserRequirement(), requestBody.getRequestId());
     }
 
     Result<RecommendationResponseDto<RuleRecommendationDto>> recommendRules(
-            Long userId, Integer maxRecommendations, String category, String language,
+            Long userId, Integer maxRecommendations, String language,
             String userRequirement, String requestId) {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
@@ -399,7 +398,6 @@ public class BoardStorageController {
                     userId, requestId, InteractiveOperationStage.PREPARING_CONTEXT);
             String args = objectMapper.writeValueAsString(Map.of(
                     "maxRecommendations", maxRecommendations,
-                    "category", category,
                     "language", language,
                     "userRequirement", userRequirement));
             interactiveAiExecutionService.markStage(
@@ -496,7 +494,6 @@ public class BoardStorageController {
      * 获取规约推荐
      * @param userId 用户ID
      * @param maxRecommendations 最大推荐数量
-     * @param category 分类筛选
      * @return 规约推荐列表
      */
     @PostMapping("/specs/recommend")
@@ -504,12 +501,12 @@ public class BoardStorageController {
             @CurrentUser Long userId,
             @NotNull @Valid @RequestBody StandaloneRecommendationRequestDto requestBody) {
         return recommendSpecs(userId,
-                requestBody.getMaxRecommendations(), requestBody.getCategory(), requestBody.getLanguage(),
+                requestBody.getMaxRecommendations(), requestBody.getLanguage(),
                 requestBody.getUserRequirement(), requestBody.getRequestId());
     }
 
     Result<RecommendationResponseDto<SpecificationRecommendationDto>> recommendSpecs(
-            Long userId, Integer maxRecommendations, String category, String language,
+            Long userId, Integer maxRecommendations, String language,
             String userRequirement, String requestId) {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
@@ -518,7 +515,6 @@ public class BoardStorageController {
                     userId, requestId, InteractiveOperationStage.PREPARING_CONTEXT);
             String args = objectMapper.writeValueAsString(Map.of(
                     "maxRecommendations", maxRecommendations,
-                    "category", category,
                     "language", language,
                     "userRequirement", userRequirement));
             interactiveAiExecutionService.markStage(

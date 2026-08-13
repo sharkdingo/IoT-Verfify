@@ -1870,8 +1870,21 @@ final class FuzzModel {
         return values == null ? 0 : values.size();
     }
 
+    // A non-finite distance means no violation could be *observed* on this path, so the specification
+    // offers no guidance. It must stay POSITIVE_INFINITY rather than collapsing to 1.0, because the engine
+    // breeds the *minimum*-distance candidate (FuzzEngine.nextPopulation): a finite 1.0 outranked genuinely
+    // informative candidates and took the parent slot. Template 4's own distance is
+    // (1 - antecedentSatisfaction) + consequentFalsification, so it spans [0, 2] — a real, measured 1.5 lost
+    // to a candidate carrying no information at all.
+    // The reachable case is template 4 at pathLength 1 — `step + 1 < states.size()` never holds, so the
+    // scoring loop below never runs and the seed value survives. (The paper monitors cannot reach it:
+    // PaperStructuredMonitorFactory always wires ACTIVE -> VIOLATION directly, and shortestDistanceToViolation
+    // is a BFS over transitions that ignores guard satisfiability, so it is never empty — measured 1 hop for
+    // templates 1/3 and 2 for template 4.) NaN needs no separate branch: it is not finite either, and no
+    // arithmetic path here can produce it (every divisor is `Math.max(1.0, ...)`, so there is no 0/0).
+    // The value never leaves the engine, so no serialization boundary depends on it being finite.
     private static double finiteDistance(double distance) {
-        return Double.isFinite(distance) ? Math.max(0.0, distance) : 1.0;
+        return Double.isFinite(distance) ? Math.max(0.0, distance) : Double.POSITIVE_INFINITY;
     }
 
     private static String firstText(String first, String second) {

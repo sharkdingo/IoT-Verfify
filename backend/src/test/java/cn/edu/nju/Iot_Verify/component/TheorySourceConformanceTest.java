@@ -97,6 +97,30 @@ class TheorySourceConformanceTest {
     }
 
     @Test
+    @DisplayName("the solver level count is documented as this project's own choice, not the paper's")
+    void solverLevelCountIsDocumentedAsAProjectChoice() throws IOException {
+        // The gap this closes: the weight test above greps two `Math.scalb` substrings, so it pins the
+        // formula's *shape* and passes for any l_up. The doc used to assert the reference artifact shared
+        // this denominator, which is false — the artifact's DETECTION_LAYER_NUM is 1, giving denominator
+        // 2^0 = 1 rather than 7. Whatever level count the code carries, the theory doc has to name it and
+        // own it, or the next reader inherits a conformance claim the paper does not support.
+        String engine = source("component", "fuzz", "FuzzEngine.java");
+        Matcher declaration = Pattern
+                .compile("PAPER_SOLVER_LEVELS\\s*=\\s*(\\d+)")
+                .matcher(engine);
+        assertTrue(declaration.find(), "PAPER_SOLVER_LEVELS is no longer declared in FuzzEngine");
+        String levels = declaration.group(1);
+
+        String theory = Files.readString(DOC, StandardCharsets.UTF_8);
+        assertTrue(theory.contains("PAPER_SOLVER_LEVELS = " + levels),
+                "theory-sources.md does not name the current solver level count (" + levels
+                        + "); a level change must update the paragraph that explains whose choice it is");
+        assertTrue(theory.contains("DETECTION_LAYER_NUM = 1"),
+                "theory-sources.md no longer records that the reference artifact uses one level, which is "
+                        + "the fact that makes our level count an extension rather than conformance");
+    }
+
+    @Test
     @DisplayName("every SMV identifier the theory doc names exists in SmvConstants")
     void documentedSmvIdentifiersExist() throws IOException {
         // The defect this catches, found in Pass 32: the doc described MEDIC's attack model using the paper's own

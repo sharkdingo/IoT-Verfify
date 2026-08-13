@@ -562,11 +562,6 @@ import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
 import { subscribeBoardInvalidation } from '@/utils/boardInvalidation'
 import { ACTION_DOCK_RAIL_PX, BOARD_FLOATING_GAP_CSS, COLLAPSED_PANEL_RAIL_PX } from '@/constants/boardLayout'
-import {
-  formatRecommendationCategory,
-  RULE_RECOMMENDATION_CATEGORY_OPTIONS,
-  SPEC_RECOMMENDATION_CATEGORY_OPTIONS
-} from './board/recommendationCategory'
 import { authApi } from '@/api/auth'
 // Icons
 
@@ -741,6 +736,9 @@ import {
   hasValidFuzzingBudget,
   isFuzzingPreviewCurrent,
   FUZZ_PATH_LENGTH_MAX,
+  FUZZ_DEFAULT_MAX_ITERATIONS,
+  FUZZ_DEFAULT_PATH_LENGTH,
+  FUZZ_DEFAULT_POPULATION_SIZE,
   getFuzzingConfigurationIssue,
   isKnownFuzzingSpecificationSupported
 } from '@/utils/fuzzingConfig'
@@ -6355,13 +6353,11 @@ const showRecommendationPanel = ref(false)
 const ruleRecommendationRequested = ref(false)
 const ruleRecommendationFilters = reactive({
   maxRecommendations: 5,
-  category: 'all',
   userRequirement: ''
 })
 const ruleRecommendationAbortController = ref<AbortController | null>(null)
 const ruleRecommendationRequestId = ref<string | null>(null)
 let ruleRecommendationRequestEpoch = 0
-const ruleRecommendationCategories = RULE_RECOMMENDATION_CATEGORY_OPTIONS
 
 const validateRecommendationCount = (value: unknown, field = t('app.maxRecommendationsField')): number =>
   optionalIntegerInRange(value, field, 5, 1, 10)
@@ -7062,7 +7058,6 @@ const fetchRuleRecommendations = async () => {
         signal: controller.signal
       },
       validatedMaxRecommendations,
-      ruleRecommendationFilters.category,
       locale.value,
       ruleRecommendationFilters.userRequirement
     )
@@ -7158,11 +7153,9 @@ const specRecommendationRequestId = ref<string | null>(null)
 const specRecommendationRequested = ref(false)
 const specRecommendationFilters = reactive({
   maxRecommendations: 5,
-  category: 'all',
   userRequirement: ''
 })
 let specRecommendationRequestEpoch = 0
-const specRecommendationCategories = SPEC_RECOMMENDATION_CATEGORY_OPTIONS
 
 // ==== Coupled Scenario Recommendation Logic ====
 const showScenarioRecommendationPanel = ref(false)
@@ -7422,7 +7415,6 @@ const fetchSpecRecommendations = async () => {
         signal: controller.signal
       },
       validatedMaxRecommendations,
-      specRecommendationFilters.category,
       locale.value,
       specRecommendationFilters.userRequirement
     )
@@ -8249,9 +8241,13 @@ const fuzzingForm = reactive<{
   explorationMode: 'BOARD_SNAPSHOT',
   targetSelectionMode: 'ALL',
   targetSpecIds: [],
-  maxIterations: 500,
-  pathLength: 20,
-  populationSize: 10,
+  // 200 x 20 x 10 = 40,000, matching FuzzRequestDto's default. At 500 this product was 100,000, which the
+  // away-mode example scene refused outright and the rest only barely cleared — the shipped default could
+  // not run the scene the demo guide is written around. Named constants so the form and the reset path
+  // cannot drift apart from each other.
+  maxIterations: FUZZ_DEFAULT_MAX_ITERATIONS,
+  pathLength: FUZZ_DEFAULT_PATH_LENGTH,
+  populationSize: FUZZ_DEFAULT_POPULATION_SIZE,
   seed: null
 })
 const fuzzingWatchedTask = ref<FuzzingTaskSummary | null>(null)
@@ -8571,11 +8567,14 @@ const paperDomainSemanticKey = computed(() => JSON.stringify({
   specifications: specifications.value
 }))
 
+// explorationMode belongs in the key because model complexity depends on it: switching modes changes
+// the estimate, so a preview taken in the other mode must not be reused as current.
 const fuzzingWorkloadSemanticKey = computed(() => JSON.stringify({
   board: paperDomainSemanticKey.value,
   maxIterations: fuzzingForm.maxIterations,
   pathLength: fuzzingForm.pathLength,
-  populationSize: fuzzingForm.populationSize
+  populationSize: fuzzingForm.populationSize,
+  explorationMode: fuzzingForm.explorationMode
 }))
 
 
@@ -8638,10 +8637,21 @@ const fuzzingWorkloadConfigurationError = computed(() => {
   const preview = fuzzingWorkloadReady.value ? fuzzingWorkloadPreview.value : null
   if (!preview?.accepted) {
     if (!preview) return ''
-    return t('app.fuzzWorkloadExceeded', {
+    // The board's own complexity multiplier is named, because without it the numbers on screen cannot
+    // explain the rejection: the three visible knobs multiply to a fraction of the reported workload.
+    // `maxAcceptedIterations === 0` means no iteration count fits, so the remedy is a different field.
+    const detail = {
       workload: preview.estimatedWorkload.toLocaleString(),
-      limit: preview.workloadLimit.toLocaleString()
-    })
+      limit: preview.workloadLimit.toLocaleString(),
+      iterations: preview.maxIterations.toLocaleString(),
+      path: preview.pathLength.toLocaleString(),
+      population: preview.populationSize.toLocaleString(),
+      complexity: Math.max(1, preview.modelComplexityUnits).toLocaleString(),
+      maxIterations: preview.maxAcceptedIterations.toLocaleString()
+    }
+    return preview.maxAcceptedIterations > 0
+      ? t('app.fuzzWorkloadExceeded', detail)
+      : t('app.fuzzWorkloadExceededFloor', detail)
   }
   return ''
 })
@@ -8728,7 +8738,8 @@ const refreshFuzzingWorkloadPreview = async () => {
   const request = {
     maxIterations: fuzzingForm.maxIterations,
     pathLength: fuzzingForm.pathLength,
-    populationSize: fuzzingForm.populationSize
+    populationSize: fuzzingForm.populationSize,
+    explorationMode: fuzzingForm.explorationMode
   }
   const requestedSemanticKey = fuzzingWorkloadSemanticKey.value
   const requestEpoch = ++fuzzingWorkloadPreviewEpoch
@@ -14658,6 +14669,7 @@ const counterexampleTraceHelpText = computed(() => {
       :configuration-error="effectiveFuzzingConfigurationError"
       :workload="fuzzingWorkload"
       :workload-limit="fuzzingWorkloadLimit"
+      :workload-preview="fuzzingWorkloadReady ? fuzzingWorkloadPreview : null"
       :workload-ready="fuzzingWorkloadReady"
       :workload-loading="fuzzingWorkloadPreviewLoading"
       :workload-error="fuzzingWorkloadPreviewError"
@@ -15520,23 +15532,7 @@ const counterexampleTraceHelpText = computed(() => {
 
       <!-- Recommendation Content -->
       <div class="iot-scroll-region p-3 space-y-3 max-h-[500px]">
-        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border board-border-subtle bg-white p-2">
-          <label class="text-xs font-medium text-slate-600">
-            {{ t('app.category') }}
-            <select
-              v-model="ruleRecommendationFilters.category"
-              :disabled="isRecommendingRules"
-              class="board-card mt-1 min-h-11 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
-            >
-              <option
-                v-for="option in ruleRecommendationCategories"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ t(option.labelKey) }}
-              </option>
-            </select>
-          </label>
+        <div class="rounded-lg border board-border-subtle bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.count') }}
             <input
@@ -15712,13 +15708,11 @@ const counterexampleTraceHelpText = computed(() => {
 
             <!-- Reason -->
             <div class="px-3 pb-2">
-              <p v-if="rec.reason" class="text-xs leading-5 text-slate-700 break-words">
-                {{ rec.reason }}
-              </p>
-              <p class="mt-1 text-xs text-slate-500 break-words">
-                {{ rec.category
-                  ? t('app.categoryWithValue', { value: formatRecommendationCategory(rec.category, key => t(key)) })
-                  : t('app.aiGeneratedAutomationRule') }}
+              <!-- Same path as the device, specification and scenario cards: a model-authored reason is
+                   not contractually in the UI locale, so a reason that does not match it is replaced by
+                   the localized provenance line rather than shown as the block's only text. -->
+              <p class="text-xs leading-5 text-slate-700 break-words">
+                {{ localizedRecommendationText(rec.reason, t('app.aiGeneratedAutomationRule')) }}
               </p>
             </div>
 
@@ -16132,23 +16126,7 @@ const counterexampleTraceHelpText = computed(() => {
 
       <!-- Recommendation Content -->
       <div class="iot-scroll-region p-3 space-y-3 max-h-[500px]">
-        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border board-border-subtle bg-white p-2">
-          <label class="text-xs font-medium text-slate-600">
-            {{ t('app.category') }}
-            <select
-              v-model="specRecommendationFilters.category"
-              :disabled="isRecommendingSpecs"
-              class="board-card mt-1 min-h-11 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] disabled:bg-slate-100"
-            >
-              <option
-                v-for="option in specRecommendationCategories"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ t(option.labelKey) }}
-              </option>
-            </select>
-          </label>
+        <div class="rounded-lg border board-border-subtle bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
             {{ t('app.count') }}
             <input

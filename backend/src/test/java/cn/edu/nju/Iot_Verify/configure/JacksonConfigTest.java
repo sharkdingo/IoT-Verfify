@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixApplyRequestDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.StandaloneRecommendationRequestDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,15 @@ class JacksonConfigTest {
                 "{\"preferredRanges\":{\"r0_c0\":{\"lower\":1,\"upper\":10}}}", FixRequestDto.class));
         assertThrows(UnrecognizedPropertyException.class, () -> objectMapper.readValue(
                 "{\"strategy\":\"parameter\",\"preferredRanges\":{}}", FixApplyRequestDto.class));
+    }
+
+    @Test
+    void recommendationRequestsRejectTheRemovedCategoryFieldInsteadOfIgnoringIt() {
+        // A category no longer exists anywhere in the recommendation contract. A client still sending one
+        // is out of date about what steers a recommendation, so it must fail rather than appear honoured.
+        assertThrows(UnrecognizedPropertyException.class, () -> objectMapper.readValue(
+                "{\"requestId\":\"request-123\",\"maxRecommendations\":5,\"category\":\"security\"}",
+                StandaloneRecommendationRequestDto.class));
     }
 
     @Test

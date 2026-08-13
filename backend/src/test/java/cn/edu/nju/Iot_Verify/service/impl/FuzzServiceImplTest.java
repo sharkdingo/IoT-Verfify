@@ -270,6 +270,48 @@ class FuzzServiceImplTest {
     }
 
     @Test
+    // The invariant that broke silently: the shipped default budget must be admissible on an ordinary
+    // household Board. It was not — every scene in docs/examples refused the product's own defaults, and the
+    // AI tool's identical default failed on all six, because the complexity ceiling equalled the raw budget
+    // ceiling and left the multiplier no headroom. The scenes measure 62-85 units in BOARD_SNAPSHOT and
+    // 90-151 in PAPER_COMPATIBLE, so 200 is pinned against the worst of those with the margin stated.
+    void deadlineSignalFiresOnlyAfterItsBudgetElapses() {
+        // Elapsed-difference comparison rather than an absolute `origin + budget` deadline, which would
+        // overflow for a large origin and then read as "never expired". The difference form is not immune
+        // either — it underflows for an origin within one budget of Long.MAX_VALUE — but that origin is not
+        // reachable here: it comes from System.nanoTime() moments earlier in the same worker.
+        assertFalse(service.deadlineSignal(System.nanoTime(), Duration.ofMinutes(5)).getAsBoolean(),
+                "a freshly started search must not already be out of time");
+        assertTrue(service.deadlineSignal(
+                System.nanoTime() - Duration.ofMinutes(6).toNanos(), Duration.ofMinutes(5)).getAsBoolean(),
+                "a search started six minutes ago must be past a five-minute budget");
+        // Independent of the wall clock, which is the property that matters: a system-clock adjustment during
+        // a search must not shorten or extend it. Both readings come from the same monotonic source.
+        assertFalse(service.deadlineSignal(System.nanoTime(), Duration.ofDays(1L)).getAsBoolean());
+    }
+
+    @Test
+    void theDefaultBudgetIsAdmissibleAcrossTheShippedSceneComplexityRange() {
+        FuzzRequestDto defaults = FuzzRequestDto.builder().build();
+        long defaultProduct = (long) defaults.getMaxIterations()
+                * defaults.getPathLength() * defaults.getPopulationSize();
+
+        assertEquals(40_000L, defaultProduct,
+                "the default budget product changed; re-check it against the scene complexity range");
+        for (long complexity : new long[]{62L, 85L, 90L, 151L}) {
+            assertTrue(defaultProduct * complexity <= 30_000_000L,
+                    "the default budget is inadmissible at complexity " + complexity
+                            + ", which a shipped example scene actually measures");
+        }
+        // Headroom, so an ordinary Board a little larger than the examples still runs at the defaults.
+        assertTrue(defaultProduct * 151L * 4 <= 30_000_000L,
+                "the default budget leaves less than 4x headroom over the most complex shipped scene");
+        // And the preview default must describe the same request submission would build.
+        assertEquals(defaults.getMaxIterations(),
+                FuzzWorkloadPreviewRequestDto.builder().build().getMaxIterations());
+    }
+
+    @Test
     void previewWorkloadUsesTheSameFrozenModelComplexityAsSubmission() {
         ModelInputSnapshot snapshot = snapshot(List.of(specification("spec-1")));
         when(boardDataConverter.getModelInputSnapshot(7L)).thenReturn(snapshot);
@@ -283,8 +325,11 @@ class FuzzServiceImplTest {
 
         assertEquals(1L, result.getModelComplexityUnits());
         assertEquals(1_000L, result.getEstimatedWorkload());
-        assertEquals(12_500_000L, result.getWorkloadLimit());
+        assertEquals(30_000_000L, result.getWorkloadLimit());
         assertTrue(result.isAccepted());
+        assertEquals(FuzzExplorationMode.BOARD_SNAPSHOT, result.getExplorationMode());
+        // 30,000,000 / (5 path length x 2 population x complexity 1), clamped to the field maximum.
+        assertEquals(5_000, result.getMaxAcceptedIterations());
         verify(boardDataConverter).getModelInputSnapshot(7L);
         verifyNoInteractions(taskRepository, findingRepository, transactionTemplate, fuzzTaskExecutor);
     }
@@ -316,15 +361,20 @@ class FuzzServiceImplTest {
 
         FuzzWorkloadPreviewDto result = service.previewWorkload(7L, request);
 
+        // The maximal raw budget (5000 x 50 x 50 = 12,500,000) at complexity 1 now leaves headroom, which is
+        // the point of separating the two ceilings: growing the Board is what consumes it.
         assertEquals(12_500_000L, result.getEstimatedWorkload());
         assertTrue(result.isAccepted());
 
-        SpecificationDto second = specification("spec-2");
-        ModelInputSnapshot largerSnapshot = snapshot(List.of(specification("spec-1"), second));
+        ModelInputSnapshot largerSnapshot = snapshot(List.of(
+                specification("spec-1"), specification("spec-2"), specification("spec-3")));
         when(boardDataConverter.getModelInputSnapshot(7L)).thenReturn(largerSnapshot);
         result = service.previewWorkload(7L, request);
-        assertEquals(25_000_000L, result.getEstimatedWorkload());
+        assertEquals(37_500_000L, result.getEstimatedWorkload());
         assertFalse(result.isAccepted());
+        // Rejected, and the client is told what would fit instead of being left to guess:
+        // 30,000,000 / (50 path length x 50 population x complexity 3) = 4,000.
+        assertEquals(4_000, result.getMaxAcceptedIterations());
     }
 
     @Test
@@ -736,7 +786,7 @@ class FuzzServiceImplTest {
         CountDownLatch engineStarted = new CountDownLatch(1);
         CountDownLatch letEngineStop = new CountDownLatch(1);
         when(fuzzEngine.run(any(FuzzEngineInput.class), any(FuzzProgressListener.class),
-                any(BooleanSupplier.class))).thenAnswer(invocation -> {
+                any(BooleanSupplier.class), any(BooleanSupplier.class))).thenAnswer(invocation -> {
                     engineStarted.countDown();
                     boolean released = false;
                     while (!released) {
@@ -774,7 +824,12 @@ class FuzzServiceImplTest {
     }
 
     @Test
-    void submit_rejectsCombinedWorkloadBeforeReadingTheBoard() {
+    // An out-of-range field is rejected on that field, before the Board is read. This used to assert a
+    // "request"-keyed error because a combined raw-product check ran first — but that check compared
+    // maxIterations x pathLength x populationSize against a ceiling equal to the product of the three field
+    // maxima, so it could never reject anything the range checks admit. It was removed as dead code, and
+    // this test now pins the behaviour that actually decides the case.
+    void submit_rejectsAnOutOfRangeBudgetFieldBeforeReadingTheBoard() {
         FuzzRequestDto request = validRequest();
         request.setMaxIterations(5_000);
         request.setPathLength(50);
@@ -784,7 +839,7 @@ class FuzzServiceImplTest {
                 ValidationException.class, () -> service.submit(7L, request));
 
         assertEquals(422, error.getCode());
-        assertTrue(error.getErrors().containsKey("request"));
+        assertTrue(error.getErrors().containsKey("populationSize"));
         verifyNoInteractions(boardDataConverter, taskRepository, fuzzTaskExecutor);
     }
 
@@ -850,14 +905,20 @@ class FuzzServiceImplTest {
     }
 
     @Test
-    void submit_includesEffectiveTargetCountInWorkloadLimit() {
+    // Named for what it checks: each captured specification adds one *additive* structure unit, so five
+    // specs make complexity 5 and 5000 x 50 x 25 x 5 = 31,250,000 exceeds the 30,000,000 limit while the
+    // same budget at complexity 4 (30,000,000 * 4/5 = 25,000,000) would be admitted. There is no
+    // target-count factor in effectiveWorkload — the previous name ("includesEffectiveTargetCount")
+    // asserted one, and a reader trusting it would look for a multiplication that does not exist.
+    void submit_countsEachCapturedSpecificationInWorkloadLimit() {
         ModelInputSnapshot snapshot = snapshot(List.of(
-                specification("spec-1"), specification("spec-2")));
+                specification("spec-1"), specification("spec-2"), specification("spec-3"),
+                specification("spec-4"), specification("spec-5")));
         when(boardDataConverter.getModelInputSnapshot(7L)).thenReturn(snapshot);
         FuzzRequestDto request = validRequest();
         request.setMaxIterations(5_000);
         request.setPathLength(50);
-        request.setPopulationSize(26);
+        request.setPopulationSize(25);
 
         ValidationException error = assertThrows(
                 ValidationException.class, () -> service.submit(7L, request));
@@ -935,11 +996,17 @@ class FuzzServiceImplTest {
                 List.of(), List.of(device), List.of(), List.of(rule), List.of(specification),
                 Map.of("Complex", manifest));
         when(boardDataConverter.getModelInputSnapshot(7L)).thenReturn(snapshot);
+        // Budget stated explicitly rather than left to validRequest(): this test is about template and
+        // condition structure reaching the guard, so it must not pass or fail on a default-value change.
+        FuzzRequestDto request = validRequest();
+        request.setMaxIterations(5_000);
+        request.setPathLength(50);
+        request.setPopulationSize(50);
 
         ValidationException error = assertThrows(
-                ValidationException.class, () -> service.submit(7L, validRequest()));
+                ValidationException.class, () -> service.submit(7L, request));
 
-        assertTrue(error.getErrors().get("request").contains("12500000"));
+        assertTrue(error.getErrors().get("request").contains("30000000"));
         verify(taskRepository, never()).save(any());
         verifyNoInteractions(transactionTemplate, fuzzTaskExecutor);
     }
@@ -984,16 +1051,21 @@ class FuzzServiceImplTest {
                 List.of(specification("spec-1")), Map.of("CrossProduct", manifest));
         when(boardDataConverter.getModelInputSnapshot(7L)).thenReturn(snapshot);
         FuzzWorkloadPreviewRequestDto previewRequest = FuzzWorkloadPreviewRequestDto.builder()
-                .maxIterations(200)
+                .maxIterations(500)
                 .pathLength(4)
                 .populationSize(10)
                 .build();
 
         FuzzWorkloadPreviewDto preview = service.previewWorkload(7L, previewRequest);
 
+        // 1,641 is dominated by the 20 environment values x 20 devices cross-product, which is a real
+        // per-step loop (FuzzModel.nextState scans every device inside the per-environment loop), so this
+        // Board legitimately costs far more per step than a household scene.
         assertEquals(1_641L, preview.getModelComplexityUnits());
-        assertEquals(13_128_000L, preview.getEstimatedWorkload());
+        assertEquals(32_820_000L, preview.getEstimatedWorkload());
         assertFalse(preview.isAccepted());
+        // 30,000,000 / (4 x 10 x 1,641) = 457 iterations would fit.
+        assertEquals(457, preview.getMaxAcceptedIterations());
 
         FuzzRequestDto submitRequest = validRequest();
         submitRequest.setMaxIterations(previewRequest.getMaxIterations());
@@ -1002,7 +1074,12 @@ class FuzzServiceImplTest {
         ValidationException error = assertThrows(
                 ValidationException.class, () -> service.submit(7L, submitRequest));
 
-        assertTrue(error.getErrors().get("request").contains("12500000"));
+        // The rejection names the limit, the Board's own multiplier, and what would fit — the three budget
+        // numbers the caller chose cannot explain the refusal on their own.
+        String message = error.getErrors().get("request");
+        assertTrue(message.contains("30000000"), message);
+        assertTrue(message.contains("1641"), message);
+        assertTrue(message.contains("457"), message);
         verifyNoInteractions(transactionTemplate, fuzzTaskExecutor);
     }
 
@@ -1044,11 +1121,19 @@ class FuzzServiceImplTest {
                         .toList(),
                 rules, List.of(specification), Map.of("CrossProduct", manifest));
 
-        // 71, not 83: shared values were counted twice per device, once as a separate
+        // Not 83: shared values were counted twice per device, once as a separate
         // "templateEnvironmentDomains" collection and once as templateImpactedVariables. With one
         // declaration array there is one collection to count, so the estimate stops inflating a
         // scene's cost purely because a value was declared in two places.
-        assertEquals(71L, service.modelComplexityUnits(snapshot));
+        //
+        // The two modes differ by exactly the rule-predecessor term (18 units here): only evaluatePaper
+        // reaches PaperMonitorFsm.distanceToViolation, so a BOARD_SNAPSHOT run performs none of that walk.
+        // Charging it in both modes was the largest single term for every scene in docs/examples.
+        assertEquals(53L, service.modelComplexityUnits(snapshot));
+        assertEquals(53L, service.modelComplexityUnits(
+                snapshot, FuzzExplorationMode.BOARD_SNAPSHOT));
+        assertEquals(71L, service.modelComplexityUnits(
+                snapshot, FuzzExplorationMode.PAPER_COMPATIBLE));
     }
 
     @Test
@@ -1884,11 +1969,14 @@ class FuzzServiceImplTest {
                 .thenReturn(1);
 
         AtomicReference<FuzzEngineInput> workerInput = new AtomicReference<>();
-        when(fuzzEngine.run(any(FuzzEngineInput.class), any(FuzzProgressListener.class), any(BooleanSupplier.class)))
+        when(fuzzEngine.run(any(FuzzEngineInput.class), any(FuzzProgressListener.class),
+                any(BooleanSupplier.class), any(BooleanSupplier.class)))
                 .thenAnswer(invocation -> {
                     workerInput.set(invocation.getArgument(0));
                     BooleanSupplier cancelled = invocation.getArgument(2);
                     assertFalse(cancelled.getAsBoolean());
+                    // A fresh run must not start already out of time.
+                    assertFalse(((BooleanSupplier) invocation.getArgument(3)).getAsBoolean());
                     TraceStateDto state = TraceStateDto.builder()
                             .stateIndex(0)
                             .devices(List.of())
@@ -1932,7 +2020,8 @@ class FuzzServiceImplTest {
         assertEquals("ENVIRONMENT_RATE", persistedEvents.get(0).getKind());
         assertEquals("SEED_EVENT", persistedEvents.get(0).getSource());
         verify(boardDataConverter).getModelInputSnapshot(7L);
-        verify(fuzzEngine).run(any(FuzzEngineInput.class), any(FuzzProgressListener.class), any(BooleanSupplier.class));
+        verify(fuzzEngine).run(any(FuzzEngineInput.class), any(FuzzProgressListener.class),
+                any(BooleanSupplier.class), any(BooleanSupplier.class));
     }
 
     private FuzzRequestDto validRequest() {

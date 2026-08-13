@@ -30,7 +30,6 @@ export interface RecommendationAdjustmentItem {
 
 /** One LLM-proposed automation rule, before the user applies it to the board. */
 export interface RuleRecommendation {
-  category?: string
   /** Exact user-facing rule name persisted when the candidate is applied. */
   name: string
   /** Advisory explanation shown before applying; not persisted as rule semantics. */
@@ -82,7 +81,6 @@ export interface DeviceRecommendation {
 
 /** One LLM-proposed specification, carrying the structured conditions that get persisted. */
 export interface SpecificationRecommendation {
-  category?: string
   /** Advisory explanation; applying persists only templateId and structured conditions. */
   rationale: string
   templateId: string

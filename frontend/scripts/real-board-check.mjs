@@ -1577,7 +1577,7 @@ async function runUiChecks(seed) {
   await page.locator('[data-testid="open-rule-recommendations"]').click()
   await page.waitForSelector('[data-testid="rule-recommendation-panel"]', { timeout: 5000 })
   const zhRulePanelText = await page.locator('[data-testid="rule-recommendation-panel"]').innerText()
-  soft(zhRulePanelText.includes('类别') && zhRulePanelText.includes('数量'), 'Chinese recommendation panel missing localized filter labels')
+  soft(zhRulePanelText.includes('数量'), 'Chinese recommendation panel missing localized control labels')
   soft(!/\bCategory\b|\bCount\b|\bRefresh\b/.test(zhRulePanelText), 'Chinese recommendation panel still contains English control labels')
   await page.screenshot({ path: path.join(outDir, 'rule-recommendations-zh-light.png'), fullPage: true })
   await closeIfVisible('[data-testid="rule-recommendation-panel"]', '[data-testid="close-rule-recommendations"]')

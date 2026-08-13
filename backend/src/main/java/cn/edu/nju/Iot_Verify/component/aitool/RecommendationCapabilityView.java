@@ -95,6 +95,12 @@ public final class RecommendationCapabilityView {
         // Emitting null here left a shared variable matching neither branch of the rule the prompt states
         // about this field, with no instruction covering it.
         result.put("deviceLocal", Boolean.TRUE.equals(variable.getIsInside()));
+        // Whether this device observes the shared value, which is what decides if a condition may use
+        // variableSource=environment: the generator emits no `device.name := a_name` mirror for an
+        // affect-only declaration, so such a condition is refused at spec-build time. Declared only for a
+        // shared variable (`isValidReadCapability`), so a device-local one reports null and the
+        // deviceLocal flag above already answers the question.
+        result.put("reads", variable.getReads());
         result.put("falsifiableWhenCompromised", variable.getFalsifiableWhenCompromised());
         result.put("trust", variable.getTrust());
         result.put("privacy", variable.getPrivacy());

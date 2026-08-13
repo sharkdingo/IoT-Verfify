@@ -2834,13 +2834,12 @@ export default {
     recommendSpecifications: async (
         options: OwnedRecommendationPostOptions,
         maxRecommendations: number = 5,
-        category: string = 'all',
         language: string = 'en',
         userRequirement: string = ''
     ): Promise<RecommendationResponse<SpecificationRecommendation>> => {
         const requestId = options.requestId || crypto.randomUUID()
         const response = await api.post('/board/specs/recommend', {
-            maxRecommendations, category, language, userRequirement, requestId
+            maxRecommendations, language, userRequirement, requestId
         }, {
             signal: options.signal,
             ...SERVER_BOUNDED_REQUEST,

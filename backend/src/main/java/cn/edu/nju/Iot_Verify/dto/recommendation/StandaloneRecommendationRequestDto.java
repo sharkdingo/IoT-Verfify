@@ -19,10 +19,6 @@ public class StandaloneRecommendationRequestDto {
     @NotNull(message = "maxRecommendations is required when specified")
     private Integer maxRecommendations = 5;
 
-    @NotNull(message = "category cannot be null")
-    @Size(max = 100, message = "Category must be at most 100 characters")
-    private String category = "all";
-
     @NotNull(message = "language cannot be null")
     @Size(max = 20, message = "Language must be at most 20 characters")
     private String language = "en";

@@ -287,7 +287,11 @@ class RecommendScenarioToolTest {
                 argThat(system -> system.contains("不要声称它安全、完整、已验证或已应用")
                         && system.contains("itemType=api 时")
                         && system.contains("必须省略 relation 和 value")
-                        && system.contains("不要把规约中 API 条件的 = TRUE 写法套到规则 API 事件源")
+                        // The prompt must not forbid the `= TRUE` spelling outright: normalizeRuleSources
+                        // accepts it, strips it, and reports `apiEventSyntaxNormalized`. It states the
+                        // preference and names the shapes that really are fatal.
+                        && system.contains("会被规范化并记入 adjustedItems")
+                        && system.contains("写 FALSE 或用其他关系符会让整条规则被丢弃")
                         && system.contains("\"itemType\": \"api\"")),
                 argThat(prompt -> prompt.contains("尚未形式化验证")
                         && prompt.contains("不会自动应用")

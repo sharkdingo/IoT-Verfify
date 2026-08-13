@@ -19,6 +19,182 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **Counterexample exploration refused its own default settings on every scene the product ships.** The
+  admission guard multiplies the search budget by the frozen Board's model complexity and compared the result
+  against `MAX_EFFECTIVE_WORK`, but that constant was *identical* to the raw budget ceiling — the three
+  per-field maxima multiply to exactly 12,500,000 — so the complexity factor had no headroom to trim and
+  consumed the whole budget instead. Measured through the real converter, the six scenes in `docs/examples/`
+  cost 90–151 units, which left 0.7–1.1% of the nominal budget: all six rejected the documented default
+  (1000 × 20 × 10), the shipped UI default (500 × 20 × 10) was refused by the away-mode scene the demo guide
+  is written around, and `fuzz_model_async` failed with a `VALIDATION_ERROR` on every scene, so "run bounded
+  exploration" through the assistant could not succeed at all. Benchmarked at 119–168 µs per state step, the
+  budget being refused was a 16-second search.
+
+  Four things were wrong, in both directions:
+
+  - **The default mode paid for work it never performs.** `predecessorRuleUnits` prices the paper monitor's
+    predecessor walk, reachable only through `evaluatePaper`, yet it was charged unconditionally — and it was
+    the single largest term for all six scenes. Complexity is now mode-dependent, which drops
+    `BOARD_SNAPSHOT` to 62–85 units (`PAPER_COMPATIBLE` reproduces the old values exactly). Both
+    `POST /api/fuzz/workload/preview` and submission therefore take `explorationMode`; a preview computed for
+    the other mode would report an estimate submission disagrees with.
+  - **A collection the engine never reads inflated the estimate.** `devicePrivacies` was charged although
+    `FuzzModel` only ever writes empty privacy lists. Bounding and charging are now separate concerns, so the
+    persistence limit on that field is kept while its cost is not — previously the only way to stop charging a
+    field was to stop bounding it.
+  - **The two ceilings are now two constants.** `MAX_EFFECTIVE_WORK` is 30,000,000, calibrated so a maximal
+    run lands near a minute at either end of the measured complexity range. The raw
+    `maxIterations × pathLength × populationSize` product keeps its own overflow guard — which stays ahead of
+    the per-field range checks so an absurd combination is reported against the request rather than one
+    arbitrary field — but no longer shares the weighted ceiling's constant.
+  - **The default budget is now pinned against the shipped scenes.** `maxIterations` defaults to `200`
+    (40,000 step-slots) in `FuzzRequestDto`, the preview request, `fuzz_model_async` and its schema
+    description, and the Board form, with a test asserting the default remains admissible across the measured
+    62–151 range. That invariant broke silently before because nothing checked it.
+
+- **Mutation was shrinking the search space instead of exploring it.** A gene is a *residue*, not a choice
+  index — `GeneCursor.choose` decodes `floorMod(gene, bound)` — but `mutatedCopy` wrote the decoded index
+  back, collapsing a full-range `long` into `[0, bound)`. The same gene index sees different bounds on
+  different trajectories, because `nextCandidates` clamps and dedups at a domain edge (measured on `[0,10]`
+  with `NaturalChangeRate [-1,1]`: 2 candidates at either edge, 3 in the interior), while
+  `mutableChoiceBounds` only records the bound from the one observed path. So a gene mutated while its slot
+  showed 2 candidates could never afterwards select index 2 once the slot showed 3 — measured as a hard zero
+  in that bucket over 300k samples, and a fixed point, since a bound-2 mutation then orbits `{0,1}` forever.
+  The effect was monotone and directional: each lineage drifted toward the lowest-delta end of every clamped
+  slot, which is precisely the wrong bias for a specification only violable near its *upper* bound. The
+  mutation now rewrites the gene's residue while keeping its magnitude, so every candidate stays reachable.
+  Two overflow edges are covered by tests: `gene + offset` wraps to a wrong residue near `Long.MAX_VALUE`,
+  and even the `floorDiv` form wraps there when the new choice exceeds the old one, silently producing a
+  mutation that changes nothing.
+
+- **A specification that could not be evaluated at all competed as a search parent.** `FuzzModel`'s distance
+  score clamped a non-finite distance to `1.0`, and the engine breeds the *minimum*-distance candidate, so an
+  unscorable target outranked a genuinely close one scoring in `[0, 1]`. Reachable for a template 4
+  specification at `pathLength` 1, where no successor state exists and the scoring loop never runs. Such a
+  distance is now `POSITIVE_INFINITY`, which loses every comparison — correct, because the specification
+  offers no guidance. (The paper monitors cannot reach this: `PaperStructuredMonitorFactory` always wires
+  `ACTIVE -> VIOLATION` directly and the BFS ignores guard satisfiability, measured at 1 hop for templates 1/3
+  and 2 for template 4.)
+
+- **The scenario prompt never stated the reachability rule its own validator enforces.** `RecommendScenarioTool`
+  reports `unreachableRuleConditions`, `ruleCommandPrestateUnreachable` and `unreachableSpecConditionGroup`, but
+  the words 可达 / Transitions / NaturalChangeRate appeared nowhere in its prompt — the rule and specification
+  prompts each gained that paragraph while this one was missed, so a scene candidate could still be discarded
+  for a constraint the model was never given. The new guard did not catch it because the table mapped all three
+  reachability codes to the *satisfiability* sentences, which are a different check with a different remedy: the
+  table looked total while the gap stayed open, which is the exact failure its own comment says it exists to
+  prevent. Two further rows keyed on bare enum alternations (`trusted|untrusted`, `public|private`) that occur
+  three times each in that prompt, so deleting the environment-variable line they describe left them passing on
+  the device-level occurrences; both are now anchored to that line. The per-tool reason-code floor was pinned at
+  the current count, which would have reported a legitimate removal of a rejection path as "the scan is broken" —
+  it now asserts what it means (the scan found something) and leaves coverage to the aggregate floor.
+
+- **Several prompt rules were stricter than the code, which costs recommendations invisibly.** Drift had been
+  audited in one direction only — rules the validators enforce but the prompt never stated. The opposite
+  direction produces no test failure and no error: nothing is wrongly accepted, the model simply declines
+  candidates the backend would have taken. Corrected: the rule prompt flatly forbade writing an API event as
+  `= TRUE`, which `validateRecommendation` in fact accepts, normalizes and reports as
+  `apiEventSyntaxNormalized` — the tool's own adjustment copy already said so, so the prompt contradicted a
+  message the same file emits. The blanket "any extra field discards the candidate" now names invented fields
+  instead, because several allowlisted keys (`deviceLabel` as a tolerated alias; `contentPrivacy`,
+  `contentDeviceLabel` and `templateLabel` written by the backend after validation) are harmless, and the
+  blanket wording also read as pressure to fill in every skeleton field — for a specification, omitting the
+  condition arrays the template does not use is the correct answer, not a missing field. Key and enum-value
+  matching is `equalsIgnoreCase` plus trim throughout, so "逐字" (verbatim) was replaced everywhere it appeared
+  except the one place it is true: the similarity tool's `ruleRef` is an exact map lookup. And the
+  reachability filter is narrower than stated — it skips any variable whose value is unknown *or* whose
+  `NaturalChangeRate` is non-zero, so a drifting reading is always reachable and only a static device-local
+  value can be judged dead.
+
+- **Prompt/code drift is now mechanically detectable.** `AiPromptContractTest` adds four source-level guards, each
+  justified by an incident it was replayed against: a reason code with no prompt warning (checked in both
+  directions against the tool's own reason switch, so a deleted warning line and a new unwarned rejection both
+  fail), a prompt skeleton that does not parse as JSON once placeholders are substituted, a prompt literal that
+  disagrees with its Java constant, and the confirmation prompt's kinds against the `ConfirmationKind` enum.
+  Three candidate guards were prototyped and deliberately not built: comparing every prompt alternation against a
+  Java `Set` produces junk matches (`in / not in` yields `in|not`), legitimate partial alternations, and two
+  prompts spelling their enums as Chinese prose, so it would need the hand-maintained exception table it was
+  meant to replace; the skeleton-field ⇔ allowlist check gave five false positives out of five on a clean tree,
+  because several allowlisted fields are written by the backend after validation; and a shared single source of
+  truth for constraint text would turn ~80 reason codes into a third parallel table while flattening prompt
+  sections whose order is deliberate. The first version of the enum guard scanned the whole source file rather
+  than the prompt text, so the enum declaration satisfied its own assertion and deleting a kind from the prompt
+  still passed — caught by replaying that mutation, which is why every check here carries a coverage floor.
+
+- **The prompts described the verification model in ways that could earn a confident verdict about the wrong
+  question.** The specification prompt offered every variable as a trust/privacy *target*, but a variable label
+  is a propagation source: `SmvMainModuleBuilder.appendVariablePropertyTransitions` emits
+  `next(trust_v) := trust_v` for every variable except an attack-path `FalsifiableWhenCompromised` one, and
+  privacy labels never get a live branch at all. So "the humidity reading must always be trusted" returned
+  SATISFIED for a question the model cannot answer — the label was initialised that way and nothing can move
+  it. The prompt now says so and points at `propertyScope=state` or template 7 instead. Template 7's formula
+  was stated as a per-condition pairing when `buildSafetyBody` conjoins the A terms and **disjoins** the
+  source labels across them, so a two-condition property fires when either source is untrusted — a violation
+  trace a user would read as being about the other condition. `variableSource=environment` was gated on
+  `deviceLocal=false` alone, while the generator also requires `Reads=true` and refuses an affect-only shared
+  declaration outright; the capability view did not even expose `reads`, so the model was held to a rule using
+  a field it never received. It is exposed now, and both prompts state both halves. The visible-reply prompt
+  treated `SATISFIED` + `modelComplete=true` as a complete pass with no vacuity caveat, although a verified fix
+  can make an implication template's antecedent unreachable — measured in `theory-sources.md` on a shipped
+  example scene, where a template-5 Response property passes while carrying no information; the prompt now
+  distinguishes implication templates from prohibition templates, where an unreachable condition is the
+  property succeeding. Also closed: `NaturalChangeRate` is a constraint on `v' - v` where every integer in the
+  interval can happen and none outside it can (both the omit-interior and add-a-stutter failure modes have
+  shipped before), the reachability filter narrows only `deviceLocal=true` locals so a shared value's declared
+  readings must not be self-censored against the current pool value, template 7 silently skips a device with no
+  Modes/WorkingStates, only templates 1/3/4 are eligible for bounded exploration, and an attack run reaching a
+  state the clean run proves impossible is faithful shadowed-rule promotion rather than a modeling bug.
+
+- **The AI prompts told the model rules the validators do not enforce, and hid rules they do.** A systematic
+  pass over all seven prompts against their own validators. The one that could fail outright: the
+  similarity prompt's skeleton put `0.0-1.0` and `true或false`
+  where the parser hard-requires a JSON number and booleans, so a model copying the shape guaranteed a 502 for
+  the whole call. The scenario prompt's scene skeleton also advertised `version: 4` while the codec, the importer
+  and the docs are all v5 — v5 exists precisely because a v4 file cannot carry the `variableSource` the same
+  prompt demands, so the skeleton contradicted its own constraint. That one could not fail a request (the tool
+  overwrites the field unconditionally), but it taught the model the wrong contract in the prompt whose whole
+  subject is the portable shape. Rules the model was being filtered for but never told: that `in`/`not in` values are one
+  comma-separated string rather than a JSON array (an array stringifies to `[open, closed]` and both halves
+  then fail enum matching), that numeric values must be plain integers inside the declared range, that a
+  condition group must be *reachable* and not merely domain-consistent, that any extra field discards the whole
+  candidate, that a specification condition may not carry `side`, and that template 7's api condition needs a
+  non-blank `EndState`. Rules stated more strictly than the code: the scenario prompt forbade the `= TRUE`
+  api-event spelling that `normalizeRuleSources` in fact accepts, strips and reports as
+  `apiEventSyntaxNormalized`. Claims the input cannot support: the similarity prompt demanded the model match
+  real manifest names, but that tool sends no manifest, and it described an empty-rule-list case the tool
+  short-circuits before the model ever runs. Both `## 推荐策略` taxonomies were left over from the removed
+  category field — four numbered "类" in a prompt whose output has no taxonomy field read as an instruction to
+  classify, and the specification one was a second, vaguer home for what `## 规约模板类型` already owns.
+  Examples that violated their own prompt's constraints (variable conditions with no `variableSource`, bare
+  numeric values in a string field) now match it. Separately, the chat planner's two-turn list omitted
+  `reset_default_templates` — a confirmation-gated operation with its own `ConfirmationKind` that also
+  reconciles the Environment Pool and clears edit history — and it never told the model to set the `language`
+  argument, which defaults to `en` and decides the language of candidate names, reasons and filter
+  explanations, so a Chinese-speaking user got English candidates under a Chinese reply. Three planner
+  guidelines that duplicated the visible-reply prompt's job were removed: they pulled against the planning
+  round's own rule that its text is reasoning, not narration. "Clearing unusable edit history" described a
+  precondition no code checks — the tool's schema, the prompt and `docs/api/ai-tools.md` all said it, and the
+  journal's only special case is an empty one.
+
+- **Three recommendation prompts asked the model to translate a field the backend writes.** The rule, specification
+  and device tools all instructed it to use the requested language for "message" — but every `message` is backend
+  copy from a hardcoded `recommendationMessage(language, key, count)` switch, so there was none to translate. On the
+  rule and specification tools the instruction was actively harmful: they validate candidates against a strict
+  `hasOnlyFields` allowlist, so a model that complied and emitted `message` had its entire candidate filtered as
+  `unknownCandidateField`. The specification prompt also named `reason`, which is not one of its fields either — its
+  candidates carry `rationale`. Each instruction now names only that tool's own model-authored fields, matching the
+  scenario tool the other three had drifted from, and `AiToolLayeringContractTest` fails if a language instruction
+  names a backend-owned key again — the per-tool tests only asserted the instruction's locale prefix, so they passed
+  whatever field list followed it.
+
+- **A rule recommendation's explanation is now localized like the other three panels'.** The rule card printed
+  the model's `reason` verbatim while the device, specification and scenario cards all route theirs through
+  `localizedRecommendationText`, which substitutes a translated line when the model's free text is not in the
+  active UI locale — these fields carry no localization contract. So a Chinese-locale user could be shown an
+  English-only explanation with nothing translated beside it. Four hand-maintained copies of one card, three of
+  them right: the parity spec that already pins their Generate-button states now pins this call too, because a
+  screenshot is what caught it and a screenshot cannot fail a build.
+
 - **Refusing a contradicting pair was worse than the defect; it is canonicalised instead.** The gate added
   earlier ran inside the validation that re-checks *every stored node*, and ~19 write paths call it — so one
   device saved by the old defect would have blocked adding a device, creating a rule, renaming, even
@@ -98,7 +274,37 @@ history into a technical spec. The spec content itself now lives under
   centred across the boundary and read as decoration beside the hint. All eight are now `h-7` — exactly
   `text-lg`'s line height — on an `items-start` row, so each bar spans its title.
 
+#### Added
+
+- **A running counterexample search now has a wall-clock ceiling (5 minutes).** The workload guard bounds the
+  *nominal* budget, but its calibration is per-step timing measured on one machine — a slower host, a
+  contended worker pool, or a board whose real per-step cost exceeds the estimate could all overrun it, and
+  the renewable two-minute task lease is a liveness heartbeat rather than a deadline. So an admitted run
+  previously had no upper bound on its duration at all. The ceiling sits at roughly 5x a maximal admitted run,
+  so it never fires on a correctly-estimated search and only catches what the static estimate got wrong.
+
+  **A timeout is deliberately not a cancellation.** The worker settles a cancellation signal as `CANCELLED`
+  and persists no result, so routing a deadline through it would report a timeout as something the user did
+  and discard the work. A spent deadline instead ends the search the way a spent iteration budget does —
+  `BUDGET_EXHAUSTED`, already contracted as "not found within this bounded search" and never as safety, or
+  `FOUND_VIOLATION` when candidates were already located, which stay valid — and adds the conditional
+  limitation code `TIME_BUDGET_EXHAUSTED` so the reason is disclosed rather than indistinguishable from a
+  completed budget. `iterations` reports what actually ran. Both search modes check it at the same points they
+  already check cancellation, so a long path cannot outrun it by more than one path, and the check uses
+  monotonic `nanoTime` differences so a system-clock adjustment cannot shorten or extend a search.
+
 #### Changed
+
+- **A rejected exploration budget now explains itself and names what would fit.** The estimate showed
+  `15,100,000 / 12,500,000` while every knob on screen multiplied to 100,000: the board's complexity
+  multiplier was fetched, parsed, and never rendered. The preview now returns `maxAcceptedIterations` — the
+  largest admissible iteration count at the chosen path length and population size, or `0` when even one
+  iteration is too many, which means a different field has to change — and both the panel and the backend
+  rejection message state all four factors plus that ceiling. The response validator cross-checks the ceiling
+  against `accepted` in both directions so the remedy cannot contradict the verdict beside it. Two smaller
+  fixes on the same surface: the "confirmed against the current Board" line no longer renders underneath a
+  rejection of the same number, and Advanced settings force open on a workload error because the remedy names
+  "candidate paths per iteration", which lives inside that disclosure.
 
 - **Every section of the device dialog now shares one header shape and explains itself.** The new
   transitions table arrived with its hint as a sibling paragraph and a tighter header margin, which made
@@ -159,6 +365,25 @@ history into a technical spec. The spec content itself now lives under
   `SmvModelValidator` refuses a transition with no trigger, one that changes nothing, or one whose
   trigger names an unreadable attribute — so the table cannot advertise dropped behaviour.
 
+#### Removed
+
+- **The rule and specification recommendation categories are gone — the field, the two dropdowns, and
+  the enum on both sides.** A category was never part of the verification model: it was a model-authored
+  label that was dropped when a candidate was applied, so it reached neither the canvas nor NuSMV.
+  On the specification side it was pure dead weight — the generated JSON schema never asked for one, the
+  validator never read one, and the candidate card never rendered one, so the four buckets (safety, response,
+  consistency, privacy) duplicated, less precisely, the classification `templateId` already carries
+  formally. On the rule side it actively cost the user recommendations: an explicitly selected category
+  made the backend discard, as `categoryMismatch`, any candidate whose self-assigned label differed —
+  so a correct security rule the model happened to label `automation` was thrown away over the label
+  alone, before its conditions were ever checked, and a whole response could be emptied that way.
+  Both request dropdowns were a prompt-only hint besides. `userRequirement` (2,000 characters) already
+  expresses intent strictly better than four fixed buckets, and it is now the only steering input.
+  The request argument is now rejected rather than silently ignored, while a `category` the model still
+  volunteers is stripped from the candidate exactly as `confidence` already was — dropping an otherwise
+  valid recommendation over a label with no verification meaning would have reproduced the defect this
+  change removes.
+
 #### Fixed
 
 - **Regenerating the default scenes corrupted the RFID one into an unimportable file.** `Door RFID`
@@ -192,6 +417,16 @@ history into a technical spec. The spec content itself now lives under
   explicit `null` bound as a declared domain, are now aliases of the owner.
 
 #### Documentation
+
+- Corrected four claims the code contradicts. `fuzzing-flow.md` said the workload guard "includes the
+  effective target-specification count" — no such factor exists, and a test name asserted the same thing.
+  `theory-sources.md` said the HAFuzz reference artifact "obtains the same denominator by summing the powers
+  used by all levels"; the artifact sets `DETECTION_LAYER_NUM = 1`, so its denominator is 1 rather than 7, and
+  `PAPER_SOLVER_LEVELS = 3` is this project's extension rather than paper conformance — `TheorySourceConformanceTest`
+  greps only the two `Math.scalb` substrings, so it pinned the formula's shape while leaving its instantiation
+  unchecked, and now fails if the level count changes without the doc following. `api/fuzzing.md` documented a
+  `reasonCode` (`ATTACK_CONCEPT_UNSUPPORTED`) no backend site emits while omitting the one it does
+  (`REPORTED_READING_UNSUPPORTED`), and never mentioned `UNKNOWN_TARGET_SPEC_IDS_IGNORED`.
 
 - **Recorded the scope of a shared value's security label, which was enforced but never argued.** The
   Environment Pool is the only writer of a shared value's trust/privacy, so all devices declaring the

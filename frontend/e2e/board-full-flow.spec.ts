@@ -1207,7 +1207,9 @@ test.describe('board full-stack NuSMV user flow', () => {
     const detailedRuleRequirement =
       `night safety for an elderly resident ${'with explicit context '.repeat(30)}`.trim()
     expect(detailedRuleRequirement.length).toBeGreaterThan(500)
-    await rulePanel.locator('select').selectOption('security')
+    // A rule category was a model-authored label with no verification meaning, so the panel
+    // offers no category control and the request must not carry one.
+    await expect(rulePanel.locator('select')).toHaveCount(0)
     await rulePanel.locator('input[type="number"]').fill('3')
     await rulePanel.locator('textarea').fill(detailedRuleRequirement)
     const ruleResponsePromise = page.waitForResponse(response => {
@@ -1217,7 +1219,7 @@ test.describe('board full-stack NuSMV user flow', () => {
       const body = response.request().postDataJSON() as Record<string, unknown> | null
       return body !== null
         && body.maxRecommendations === 3
-        && body.category === 'security'
+        && !('category' in body)
         && body.userRequirement === detailedRuleRequirement
     })
     await page.getByTestId('generate-rule-recommendations').click()
@@ -1234,7 +1236,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     await page.waitForTimeout(500)
     expect(recommendationRequests.filter(url => new URL(url).pathname === '/api/board/specs/recommend')).toHaveLength(0)
 
-    await specPanel.locator('select').selectOption('privacy')
+    await expect(specPanel.locator('select')).toHaveCount(0)
     await specPanel.locator('input[type="number"]').fill('2')
     await specPanel.locator('textarea').fill('privacy guard when motion is detected at night')
     const specResponsePromise = page.waitForResponse(response => {
@@ -1244,7 +1246,7 @@ test.describe('board full-stack NuSMV user flow', () => {
       const body = response.request().postDataJSON() as Record<string, unknown> | null
       return body !== null
         && body.maxRecommendations === 2
-        && body.category === 'privacy'
+        && !('category' in body)
         && body.userRequirement === 'privacy guard when motion is detected at night'
     })
     await page.getByTestId('generate-spec-recommendations').click()
@@ -1292,7 +1294,6 @@ test.describe('board full-stack NuSMV user flow', () => {
             inspectedCount: 1,
             truncatedCount: 0,
             recommendations: [{
-              category: 'security',
               name: 'Camera activity starts the alarm',
               conditions: [{
                 deviceId: camera.id,
@@ -1355,7 +1356,6 @@ test.describe('board full-stack NuSMV user flow', () => {
             inspectedCount: 1,
             truncatedCount: 0,
             recommendations: [{
-              category: 'security',
               name: reconciledRuleName,
               conditions: [{
                 deviceId: camera.id,

@@ -41,9 +41,11 @@ export default {
       pathLength
     ),
 
+  // explorationMode is part of the request because model complexity depends on it: a preview taken for
+  // the other mode would report an estimate submission disagrees with.
   previewWorkload: async (request: Pick<
     FuzzingRequest,
-    'maxIterations' | 'pathLength' | 'populationSize'
+    'maxIterations' | 'pathLength' | 'populationSize' | 'explorationMode'
   >): Promise<FuzzWorkloadPreview> =>
     validateFuzzWorkloadPreview(
       unpack<unknown>(await api.post('/fuzz/workload/preview', request)),

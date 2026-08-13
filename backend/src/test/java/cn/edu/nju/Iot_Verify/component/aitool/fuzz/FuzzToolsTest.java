@@ -96,7 +96,14 @@ class FuzzToolsTest {
         ArgumentCaptor<FuzzRequestDto> captor = ArgumentCaptor.forClass(FuzzRequestDto.class);
         verify(fuzzService).submit(eq(1L), captor.capture());
         assertEquals(FuzzExplorationMode.BOARD_SNAPSHOT, captor.getValue().getExplorationMode());
-        assertEquals(1000, captor.getValue().getMaxIterations());
+        // Must equal FuzzRequestDto's own default, not a second number: at 1000 this tool's default budget
+        // product was 200,000, which every scene in docs/examples refused, so "run bounded exploration"
+        // through the assistant failed with a VALIDATION_ERROR on every shipped scene.
+        assertEquals(200, captor.getValue().getMaxIterations());
+        assertEquals(FuzzRequestDto.builder().build().getMaxIterations(),
+                captor.getValue().getMaxIterations());
+        assertEquals(20, captor.getValue().getPathLength());
+        assertEquals(10, captor.getValue().getPopulationSize());
     }
 
     @Test

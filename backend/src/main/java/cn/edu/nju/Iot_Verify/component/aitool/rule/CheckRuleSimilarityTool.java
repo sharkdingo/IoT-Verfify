@@ -49,14 +49,19 @@ public class CheckRuleSimilarityTool extends AbstractAiTool {
 
 ```json
 {
-  "isSimilar": true或false,
-  "isDuplicate": true或false,
-  "mostSimilarWith": "最相似的现有规则 ruleRef（如果有）",
-  "duplicateWith": "重复的现有规则 ruleRef（如果有）",
-  "similarity": 0.0-1.0,
+  "isSimilar": false,
+  "isDuplicate": false,
+  "mostSimilarWith": "candidate-1",
+  "duplicateWith": null,
+  "similarity": 0.42,
   "reason": "判断理由"
 }
 ```
+
+字段取值：isSimilar 与 isDuplicate 必须是 JSON 布尔值，similarity 必须是 0 到 1 之间的 JSON 数字
+（不要写成 "0.0-1.0" 这样的字符串或区间，否则整次调用失败）。mostSimilarWith 与 duplicateWith
+必须逐字复制输入中某条现有规则的 ruleRef（形如 candidate-1）；没有对应规则时填 null。
+similarity 达到 0.8 及以上会强制转人工复核。
 
 ## 相似性判定标准
 1. **完全重复**: 触发条件和执行动作完全相同，isDuplicate=true
@@ -65,13 +70,12 @@ public class CheckRuleSimilarityTool extends AbstractAiTool {
 4. **低相似**: 触发条件或执行动作有明显不同，isSimilar=false
 
 ## 重要约束
-- 必须准确匹配设备的实际变量名、模式名、状态名和API名称
+- 只能引用输入 JSON 中出现的设备名、属性名与动作名；这里没有设备模板，不要引入输入之外的名称
 - 必须区分 targetType=api、variable、mode、state；api 条件没有 relation/value
 - 如果发现重复，duplicateWith 必须是输入中的重复规则 ruleRef
 - 如果 isDuplicate=true，isSimilar 也必须为 true
 - 如果只是相似但不重复，mostSimilarWith 必须是输入中的最相似规则 ruleRef，duplicateWith 可以为 null
 - 考虑规则的语义相似性，不仅是字面匹配
-- 如果没有现有规则，返回 isSimilar=false 且 isDuplicate=false
 """;
 
     public CheckRuleSimilarityTool(BoardStorageService boardStorageService,

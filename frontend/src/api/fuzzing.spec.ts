@@ -72,12 +72,19 @@ describe('fuzzing API', () => {
       maxIterations: 1300,
       pathLength: 4,
       populationSize: 50,
+      explorationMode: 'BOARD_SNAPSHOT',
       modelComplexityUnits: 49,
       estimatedWorkload: 12_740_000,
       workloadLimit: 12_500_000,
-      accepted: false
+      accepted: false,
+      maxAcceptedIterations: 1_275
     }))
-    const request = { maxIterations: 1300, pathLength: 4, populationSize: 50 }
+    const request = {
+      maxIterations: 1300,
+      pathLength: 4,
+      populationSize: 50,
+      explorationMode: 'BOARD_SNAPSHOT' as const
+    }
 
     await expect(fuzzingApi.previewWorkload(request)).resolves.toMatchObject({
       modelComplexityUnits: 49,

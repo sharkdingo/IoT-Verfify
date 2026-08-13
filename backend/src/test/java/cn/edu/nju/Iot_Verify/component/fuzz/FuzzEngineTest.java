@@ -36,6 +36,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SplittableRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -836,6 +837,25 @@ class FuzzEngineTest {
     }
 
     @Test
+    void anUnobservableSpecificationNeverOutranksAScoredOneAsAParent() {
+        // A template 4 specification needs a successor state, so at pathLength 1 it cannot be scored at
+        // all. That must not make it look *close*: FuzzEngine.nextPopulation breeds the minimum-distance
+        // candidate, and while this returned a finite 1.0 an unscorable specification outranked a genuinely
+        // close one and took the parent slot, steering the search with a specification carrying no signal.
+        SpecificationDto immediate = immediateSpecification("immediate-unobservable");
+        FuzzModel model = FuzzModel.from(localOnlySnapshot(List.of(immediate)));
+        FuzzModel.Simulation singleState = model.simulate(new long[0], 1);
+        assertEquals(1, singleState.states().size(), "pathLength 1 must yield only the initial state");
+
+        FuzzModel.SpecEvaluation evaluation = model.evaluate(immediate, singleState);
+
+        assertEquals(-1, evaluation.violationStep(), "no violation is observable without a successor state");
+        assertTrue(Double.isInfinite(evaluation.distance()),
+                "an unobservable specification scored " + evaluation.distance()
+                        + ", which competes for the parent slot against real candidates");
+    }
+
+    @Test
     void paperApiPredecessorsHandleNegativePolarityAndRequireAStateChange() {
         SpecificationDto apiMustStayFalse = specificationForDevice(
                 "api-must-stay-false", "1", "signal_1", "api", "turnedOn", "=", "FALSE");
@@ -1359,6 +1379,115 @@ class FuzzEngineTest {
         assertTrue(FuzzEngine.isRandomRestartSlot(20, 1, 0));
         assertFalse(FuzzEngine.isRandomRestartSlot(21, 1, 0));
         assertEquals(19L, FuzzEngine.parentOrdinalForSlot(21, 1, 0));
+    }
+
+    @Test
+    void aMutatedGeneStillReachesEveryChoiceWhenItsSlotLaterOffersMore() {
+        // A gene is a residue, not a choice index: GeneCursor decodes floorMod(gene, bound), and the same
+        // gene index sees different bounds on different trajectories because nextCandidates clamps and dedups
+        // at a domain edge. Mutation used to store the small index, which destroyed the residues for every
+        // larger bound — a gene mutated while its slot showed 2 candidates could then never select index 2
+        // once the slot showed 3, and a bound-2 mutation orbited {0,1} permanently.
+        //
+        // Pinned as a property of the arithmetic, because that is where the loss happened. Mutating at the
+        // narrow bound must leave the gene able to decode to every choice at the wider bound.
+        int narrowBound = 2;
+        int widerBound = 3;
+        Set<Integer> reachableAtWiderBound = new LinkedHashSet<>();
+        for (long seed = 0; seed < 400; seed++) {
+            long gene = new SplittableRandom(seed).nextLong();
+            for (int step = 0; step < 8; step++) {
+                gene = FuzzEngine.mutatedGene(gene, narrowBound, new SplittableRandom(seed + step));
+                // The mutation must still be correct at the bound it was applied for.
+                assertTrue(Math.floorMod(gene, (long) narrowBound) < narrowBound);
+                reachableAtWiderBound.add((int) Math.floorMod(gene, (long) widerBound));
+            }
+        }
+
+        assertEquals(Set.of(0, 1, 2), reachableAtWiderBound,
+                "a repeatedly mutated gene lost the residues for a wider bound, so the search can no "
+                        + "longer reach every candidate at that slot");
+    }
+
+    @Test
+    void anExhaustedTimeBudgetEndsTheSearchAsBoundedRatherThanCancelled() {
+        // A deadline is not a cancellation. Routing it through `cancelled` would make the service settle the
+        // task as CANCELLED — reporting a timeout as something the user did, and persisting no result. It
+        // ends the search the way a spent iteration budget does, and discloses why.
+        SpecificationDto unviolable = specification("always-off", "1", stateCondition("off"));
+        BoardDataConverter.ModelInputSnapshot snapshot = snapshot(
+                List.of(unviolable), List.of(), switchManifest());
+
+        FuzzEngineResult result = engine.run(
+                new FuzzEngineInput(snapshot, new FuzzEngineConfig(List.of(), 500, 5, 4, 11L)),
+                null,
+                () -> false,
+                () -> true);
+
+        assertEquals(FuzzEngineOutcome.BUDGET_EXHAUSTED, result.outcome());
+        assertTrue(result.limitations().contains(FuzzEngine.TIME_BUDGET_EXHAUSTED_LIMITATION),
+                "a run the clock ended must disclose it, or it is indistinguishable from a full search");
+        // Stopped before the requested budget, and says so truthfully rather than claiming the full run.
+        assertTrue(result.iterations() < 500,
+                "iterations " + result.iterations() + " should be short of the requested budget");
+    }
+
+    @Test
+    void anUnexpiredTimeBudgetAddsNoLimitationAndRunsTheFullSearch() {
+        // The mirror case: the disclosure must not appear on an ordinary run, or it stops meaning anything.
+        SpecificationDto unviolable = specification("always-off", "1", stateCondition("off"));
+        BoardDataConverter.ModelInputSnapshot snapshot = snapshot(
+                List.of(unviolable), List.of(), switchManifest());
+
+        FuzzEngineResult result = engine.run(
+                new FuzzEngineInput(snapshot, new FuzzEngineConfig(List.of(), 3, 5, 2, 11L)),
+                null,
+                () -> false,
+                () -> false);
+
+        assertEquals(FuzzEngineOutcome.BUDGET_EXHAUSTED, result.outcome());
+        assertFalse(result.limitations().contains(FuzzEngine.TIME_BUDGET_EXHAUSTED_LIMITATION));
+        assertEquals(3, result.iterations());
+    }
+
+    @Test
+    void aCancelledRunIsNeverRelabelledAsATimeout() {
+        // Both signals true at once: cancellation is the user's own decision and must win, because the
+        // service persists no result for it. A timeout label here would claim a completed bounded search.
+        SpecificationDto unviolable = specification("always-off", "1", stateCondition("off"));
+        BoardDataConverter.ModelInputSnapshot snapshot = snapshot(
+                List.of(unviolable), List.of(), switchManifest());
+
+        FuzzEngineResult result = engine.run(
+                new FuzzEngineInput(snapshot, new FuzzEngineConfig(List.of(), 50, 5, 4, 11L)),
+                null,
+                () -> true,
+                () -> true);
+
+        assertEquals(FuzzEngineOutcome.CANCELLED, result.outcome());
+        assertFalse(result.limitations().contains(FuzzEngine.TIME_BUDGET_EXHAUSTED_LIMITATION));
+    }
+
+    @Test
+    void aMutatedGeneSurvivesTheSignedLongBoundaryWithoutWrapping() {
+        // Both halves of the residue rebuild can leave the long range: `gene - currentChoice` underflows at
+        // Long.MIN_VALUE with an odd bound (floorMod is non-negative, so it subtracts), and `base + nextChoice`
+        // overflows at Long.MAX_VALUE when raising to a higher choice — landing on Long.MIN_VALUE, which
+        // decodes back to the original choice, i.e. a mutation that silently does nothing. Every extreme is
+        // covered here rather than a sampled few, because each bound parity hits a different branch.
+        for (long gene : new long[]{
+                Long.MAX_VALUE, Long.MAX_VALUE - 1, Long.MAX_VALUE - 2,
+                Long.MIN_VALUE, Long.MIN_VALUE + 1, Long.MIN_VALUE + 2, 0L, -1L}) {
+            for (int bound = 2; bound <= 8; bound++) {
+                long mutated = FuzzEngine.mutatedGene(gene, bound, new SplittableRandom(7L));
+                int before = (int) Math.floorMod(gene, (long) bound);
+                int after = (int) Math.floorMod(mutated, (long) bound);
+                assertTrue(after >= 0 && after < bound,
+                        "gene " + gene + " at bound " + bound + " decoded to " + after);
+                assertNotEquals(before, after,
+                        "mutation left the choice unchanged at gene " + gene + ", bound " + bound);
+            }
+        }
     }
 
     @Test

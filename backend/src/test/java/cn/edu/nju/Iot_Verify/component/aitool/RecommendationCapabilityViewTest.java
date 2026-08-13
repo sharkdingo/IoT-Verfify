@@ -133,4 +133,42 @@ class RecommendationCapabilityViewTest {
                 "an omitted IsInside means shared, so deviceLocal must be false rather than null");
         assertEquals(Boolean.TRUE, ((Map<?, ?>) variables.get(1)).get("deviceLocal"));
     }
+
+    @Test
+    void reads_isExposedBecauseTheEnvironmentSourceRuleDependsOnIt() {
+        /*
+         * `variableSource=environment` is legal only for a shared variable this device actually observes:
+         * the generator emits no `device.name := a_name` mirror for an affect-only declaration, so
+         * SmvSpecificationBuilder refuses the condition at build time. The prompt states that rule, but this
+         * view used to emit only `deviceLocal`, so the model was being held to a constraint using a field it
+         * never received — and the scenario path does not check `reads` at all, which makes the prompt the
+         * only thing standing between the model and a scene that fails during model generation.
+         */
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Sensor")
+                .internalVariables(List.of(
+                        DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                .name("observedShared")
+                                .isInside(false)
+                                .reads(true)
+                                .lowerBound(0)
+                                .upperBound(100)
+                                .build(),
+                        DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                                .name("affectOnlyShared")
+                                .isInside(false)
+                                .reads(false)
+                                .lowerBound(0)
+                                .upperBound(100)
+                                .build()))
+                .build();
+
+        List<?> variables = (List<?>) RecommendationCapabilityView.fromManifest(manifest).get("variables");
+
+        assertEquals(Boolean.TRUE, ((Map<?, ?>) variables.get(0)).get("reads"),
+                "a shared variable this device reads must be distinguishable from an affect-only one");
+        assertEquals(Boolean.FALSE, ((Map<?, ?>) variables.get(1)).get("reads"),
+                "an affect-only shared variable must be visible as reads=false, or the model cannot tell "
+                        + "that variableSource=environment is illegal for it");
+    }
 }

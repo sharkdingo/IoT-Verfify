@@ -94,7 +94,6 @@ const eligibilityReasonKeys: Record<string, string> = {
   UNSUPPORTED_TEMPLATE: 'app.fuzzEligibilityUnsupportedTemplate',
   TRUST_PRIVACY_UNSUPPORTED: 'app.fuzzEligibilityTrustPrivacyUnsupported',
   REPORTED_READING_UNSUPPORTED: 'app.fuzzEligibilityReportedReadingUnsupported',
-  ATTACK_CONCEPT_UNSUPPORTED: 'app.fuzzEligibilityAttackUnsupported',
   CONTENT_COMMAND_UNSUPPORTED: 'app.fuzzEligibilityContentCommandUnsupported',
   MODEL_INVALID: 'app.fuzzEligibilityModelInvalid',
   INVALID_SPECIFICATION: 'app.fuzzEligibilityInvalidSpecification'

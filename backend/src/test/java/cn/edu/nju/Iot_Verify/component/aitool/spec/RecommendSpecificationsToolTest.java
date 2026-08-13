@@ -169,6 +169,39 @@ class RecommendSpecificationsToolTest {
     }
 
     @Test
+    void execute_stripsVolunteeredCategoryInsteadOfDiscardingTheCandidate() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "category": "safety",
+                              "rationale": "Sleep mode should never be active",
+                              "templateId": "3",
+                              "aConditions": [
+                                {"deviceId":"node-home-mode","deviceLabel":"Home Mode","targetType":"mode","key":"Mode","relation":"=","value":"sleep"}
+                              ],
+                              "ifConditions": [],
+                              "thenConditions": []
+                            }
+                          ]
+                        }
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        // A specification's classification is templateId; a volunteered category is a label with no
+        // verification meaning, so it is stripped rather than allowed to discard a valid candidate.
+        assertEquals(1, json.path("validatedCount").asInt());
+        assertEquals(0, json.path("filteredCount").asInt());
+        assertTrue(json.path("recommendations").get(0).path("category").isMissingNode(),
+                "a volunteered category must not reach the recommendation DTO");
+    }
+
+    @Test
     void execute_acceptsModeConditionWithCanonicalDeviceId() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
@@ -455,8 +488,20 @@ class RecommendSpecificationsToolTest {
     }
 
     @Test
+    void execute_rejectsRemovedCategoryArgumentInsteadOfIgnoringIt() throws Exception {
+        // The two tools keep separate hand-maintained argument allowlists, so the rule tool's
+        // equivalent case does not cover this one.
+        JsonNode json = objectMapper.readTree(tool.execute("{\"category\":\"safety\"}"));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals(400, json.path("status").asInt());
+        verify(deviceInfoHelper, never()).getDevicesWithTemplateInfo(1L);
+        verify(promptCompletionService, never()).complete(anyString(), anyString(), anyDouble(), anyInt());
+    }
+
+    @Test
     void execute_rejectsOutOfRangeCountBeforePrompting() throws Exception {
-        String result = tool.execute("{\"maxRecommendations\":999,\"category\":\"nonsense\"}");
+        String result = tool.execute("{\"maxRecommendations\":999}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());

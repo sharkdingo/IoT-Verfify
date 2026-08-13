@@ -78,8 +78,9 @@ public class RecommendScenarioTool extends AbstractAiTool {
 - trust 是 MEDIC 控制来源标签：多条件规则只要至少一个实际触发来源可信，目标仍可信；只有全部来源不可信才失去可信控制。不要把它解释成认证或通用数据完整性。
 - 规则和规约必须引用同一个 devices 列表里的设备实例 id。
 - 每条规则的触发条件必须可同时满足，并与目标 API 的非空 StartState 兼容；每个规约的 A、IF、THEN 条件数组也必须各自可同时满足。
+- 条件组除了可同时满足，还必须能从设备当前状态与变量值出发，经 capabilities 的 Transitions 与已声明 API 到达；命令 API 的 StartState 同样必须可达。只有"设备本地（deviceLocal=true）、当前值已知、且 NaturalChangeRate 为 0"的变量才会被判不可达；会自然变化的变量与共享环境变量都不受此限制，不要因当前 Environment Pool 的读数而回避（例如烟雾当前读数为 clear 时，仍应写出"检测到烟雾就报警"）。
 - 规则只能调用模板里真实存在的 API；规则触发条件只能使用 signal API、变量、模式或 state。
-- 规则 sources 有两种互斥结构：itemType=api 时 fromApi 必须是 Signal=true 的可观察 API，并且必须省略 relation 和 value；itemType=variable|mode|state 时必须给出 relation 和 value。不要把规约中 API 条件的 = TRUE 写法套到规则 API 事件源。
+- 规则 sources 有两种互斥结构：itemType=api 时 fromApi 必须是 Signal=true 的可观察 API，并且必须省略 relation 和 value；itemType=variable|mode|state 时必须给出 relation 和 value。规则 API 事件源请直接省略 relation/value；写成等价的 "=" + "TRUE" 会被规范化并记入 adjustedItems，但只写一半、写 FALSE 或用其他关系符会让整条规则被丢弃。
 - 规约条件只能使用 state、mode、variable、api、trust、privacy。trust/privacy 必须带 propertyScope=state|variable；variable 条件必须带 variableSource=environment|reported，二者在设备被攻陷时含义不同，不得省略；state 范围的 key 是模式名，variable 范围的 key 是变量名。
 - devices[].variables/privacies 只允许模板中 IsInside=true 的本地变量；共享环境量必须放在 environmentVariables。无法确定初始值或标签时应省略，不得猜测模板范围外的值。
 - devices[].id 只是本次回答内供规则/规约关联设备的临时别名，后端会统一改写；不要把它当作用户名称或永久技术 ID。
@@ -95,14 +96,14 @@ public class RecommendScenarioTool extends AbstractAiTool {
   "rationale": "为什么这个场景能支撑验证",
   "scene": {
     "schema": "iot-verify.board-scene",
-    "version": 4,
+    "version": 5,
     "devices": [
       {
         "id": "response_local_alias",
         "templateName": "必须来自模板列表",
         "label": "用户可读名称",
         "position": {"x": 0, "y": 0},
-        "state": "仅有状态机模板填写；必须是 InitState 或 WorkingStates 中的值",
+        "state": "仅有状态机模板填写；必须是该模板 WorkingStates 中的某个状态（大小写与首尾空格会被规范化）",
         "currentStateTrust": "可选，trusted|untrusted；表示初始状态触发自动化时的控制来源标签，不是认证、通用完整性或概率",
         "currentStatePrivacy": "可选，public|private；表示初始状态的数据敏感性标签，不是访问控制",
         "variables": [
@@ -148,7 +149,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
 - contentDevice 与 content 必须同时为 null，或同时填写。content 必须来自对应设备模板的 Contents，且目标 API 必须声明 AcceptsContent=true；仅在动作携带该内容且需要分析敏感性标签传播时使用。该标签不表示系统复制了真实数据或实施了访问控制。
 - templateId 3 也用于隐私泄露：把公开动作/状态与对应 privacy=private 一起放进 aConditions。
 - templateId 7 的 aConditions 不得直接使用 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。
-- 每个 condition: {deviceId, targetType, key, propertyScope?, variableSource?, relation?, value?}。propertyScope 仅 trust/privacy 必填；variableSource 仅 targetType=variable 必填，取 environment（家中实际值，要求该变量是共享声明 IsInside=false）或 reported（该设备上报值）；非 API 条件必须给出 relation/value，API 条件可省略二者并按 = TRUE 处理；不要输出内部 id、side、deviceLabel、templateLabel、formula、Mode_state 生成键或 devices 缓存。
+- 每个 condition: {deviceId, targetType, key, propertyScope?, variableSource?, relation?, value?}。propertyScope 仅 trust/privacy 必填；variableSource 仅 targetType=variable 必填，取 environment（家中实际值，要求该变量是共享声明且该设备读取它，即 capabilities 中 deviceLocal=false 且 reads=true；reads=false 的只影响不观测变量只能用 reported，否则整个场景在生成模型时失败）或 reported（该设备上报值）；非 API 条件必须给出 relation/value，API 条件可省略二者并按 = TRUE 处理；不要输出内部 id、side、deviceLabel、templateLabel、formula、Mode_state 生成键或 devices 缓存。
 """).formatted(SpecificationTemplateSemantics.chinesePromptReference());
 
     private final PromptCompletionService promptCompletionService;

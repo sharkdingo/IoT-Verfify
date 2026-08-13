@@ -48,7 +48,6 @@ export interface RecommendRulesResponse {
 export const recommendRules = async (
   options: OwnedRecommendationPostOptions,
   maxRecommendations: number = 5,
-  category: string = 'all',
   language: string = 'en',
   userRequirement: string = ''
 ): Promise<RecommendRulesResponse> => {
@@ -62,7 +61,7 @@ export const recommendRules = async (
 
   try {
     const response = await api.post<any>('/board/rules/recommend', {
-      maxRecommendations, category, language, userRequirement, requestId
+      maxRecommendations, language, userRequirement, requestId
     }, {
       signal: signal || ownedController!.signal,
       timeout: 0,

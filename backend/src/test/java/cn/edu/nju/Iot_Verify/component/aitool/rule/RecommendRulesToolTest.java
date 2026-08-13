@@ -164,7 +164,7 @@ class RecommendRulesToolTest {
     }
 
     @Test
-    void execute_filtersCandidatesOutsideTheExplicitRequestedCategory() throws Exception {
+    void execute_stripsVolunteeredCategoryInsteadOfDiscardingTheCandidate() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
@@ -183,15 +183,15 @@ class RecommendRulesToolTest {
                         }
                         """);
 
-        JsonNode unfiltered = objectMapper.readTree(tool.execute("{\"category\":\"all\"}"));
-        JsonNode result = objectMapper.readTree(tool.execute("{\"category\":\"security\"}"));
+        JsonNode result = objectMapper.readTree(tool.execute("{}"));
 
-        assertEquals(1, unfiltered.path("validatedCount").asInt(),
-                "the fixture must be valid before the requested-category filter is applied");
-        assertEquals(0, result.path("validatedCount").asInt());
-        assertEquals(1, result.path("filteredCount").asInt());
-        assertEquals("categoryMismatch",
-                result.path("filteredItems").get(0).path("reasonCode").asText());
+        // The prompt no longer mentions a category, but a model may still volunteer one out of habit.
+        // Discarding an otherwise valid rule over a label with no verification meaning would repeat the
+        // defect the removed requested-category filter caused, so the key is stripped like "confidence".
+        assertEquals(1, result.path("validatedCount").asInt());
+        assertEquals(0, result.path("filteredCount").asInt());
+        assertTrue(result.path("recommendations").get(0).path("category").isMissingNode(),
+                "a volunteered category must not reach the recommendation DTO");
     }
 
     @Test
@@ -492,7 +492,7 @@ class RecommendRulesToolTest {
 
     @Test
     void execute_rejectsOutOfRangeCountBeforePrompting() throws Exception {
-        String result = tool.execute("{\"maxRecommendations\":999,\"category\":\"nonsense\"}");
+        String result = tool.execute("{\"maxRecommendations\":999}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
@@ -503,11 +503,11 @@ class RecommendRulesToolTest {
     }
 
     @Test
-    void execute_rejectsUnsupportedCategoryInsteadOfSilentlyUsingAll() throws Exception {
-        JsonNode json = objectMapper.readTree(tool.execute("{\"category\":\"nonsense\"}"));
+    void execute_rejectsRemovedCategoryArgumentInsteadOfIgnoringIt() throws Exception {
+        JsonNode json = objectMapper.readTree(tool.execute("{\"category\":\"security\"}"));
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
-        assertTrue(json.path("error").asText().startsWith("category must be one of: "));
+        assertEquals(400, json.path("status").asInt());
         verify(deviceInfoHelper, never()).getDevicesWithTemplateInfo(anyLong());
         verify(promptCompletionService, never()).complete(anyString(), anyString(), anyDouble(), anyInt());
     }

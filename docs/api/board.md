@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-31. Source:
+Verified against code on 2026-08-13. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -987,8 +987,8 @@ request bodies, query parameters, status paths, and cancellation paths.
 
 | Method | Path | Query / Body | Notes |
 | :--- | :--- | :--- | :--- |
-| POST | `/api/board/rules/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
-| POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (`all`, `safety`, `response`, `consistency`, or `privacy`; default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
+| POST | `/api/board/rules/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
+| POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
 | POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
 | POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: required integer `minDevices`, `minRules`, `minSpecs`, `maxDevices`, `maxRules`, and `maxSpecs` in `1..10` (each minimum no greater than its maximum), plus optional `language` and `userRequirement` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, a deterministic post-validation `rationale`, echoed `objectiveTargets`, objective completeness, validation counters, structural readiness, semantic warnings, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
 | GET | `/api/board/recommendations/{requestId}` | Reads the authenticated user's matching active or just-finished request | Returns `InteractiveOperationStatusDto`; terminal status is retained briefly for the final polling tick, while unknown requests return 404 |
@@ -1026,9 +1026,9 @@ conflict freedom.
 > candidates, distinct from candidates that the backend inspected and rejected.
 > The backend localizes its own fallback/success messages according to `language`; the
 > LLM prompt also instructs generated natural-language fields such as `name`, `rationale`, and
-> `reason` to use that language. Omitted/blank filters use their documented defaults, but
-> an unsupported language/category, non-string requirement, or `userRequirement` longer
-> than 2,000 trimmed characters returns `400`; no explicit filter is silently downgraded or
+> `reason` to use that language. Omitted/blank parameters use their documented defaults, but
+> an unsupported language, non-string requirement, or `userRequirement` longer
+> than 2,000 trimmed characters returns `400`; no explicit parameter is silently downgraded or
 > truncated before prompting.
 > A standalone rule API event normally omits `relation` and `value`. The semantically
 > equivalent AI spelling `{ relation: "=", value: "TRUE" }` is kept, normalized to the
@@ -1051,8 +1051,7 @@ conflict freedom.
 > The Board validates every kept candidate before display/application and fails closed if
 > this exact shape is violated; it does not invent a relation or coerce a scalar locally.
 >
-> Rule candidates contain required `name`, `conditions`, and `command`, plus optional
-> advisory `category`. `name` is not
+> Rule candidates contain required `name`, `conditions`, and `command`. `name` is not
 > advisory copy: it is the exact user-facing rule name persisted when Apply succeeds.
 > Candidates are returned in relevance order and do not contain a `priority` field;
 > applying one appends it to the end of the current execution order and never silently
@@ -1116,7 +1115,7 @@ conflict freedom.
 > minSpecs }`), `objectiveStatus=COMPLETE|PARTIAL`, and ordered `objectiveIssues[]`
 > (`{ code, message }`). The controller requires the echoed targets to match the submitted
 > minimums, and both the controller and frontend recompute status from the canonical scene.
-> A missing category produces `NO_DEVICES`, `NO_AUTOMATION_RULES`, or `NO_SPECIFICATIONS`;
+> A missing item kind produces `NO_DEVICES`, `NO_AUTOMATION_RULES`, or `NO_SPECIFICATIONS`;
 > a positive count below its explicit minimum produces `INSUFFICIENT_DEVICES`,
 > `INSUFFICIENT_AUTOMATION_RULES`, or `INSUFFICIENT_SPECIFICATIONS`. `COMPLETE` means only
 > that all three explicit count targets were reached; it is not a claim that the rest of the

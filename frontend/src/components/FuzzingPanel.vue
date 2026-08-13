@@ -5,6 +5,7 @@ import type { Specification } from '@/types/spec'
 import type {
   FuzzingExplorationMode,
   FuzzPaperDomainPreview,
+  FuzzWorkloadPreview,
   FuzzingTaskSummary
 } from '@/types/fuzzing'
 import { isValidFuzzPaperDomainFingerprint } from '@/types/fuzzing'
@@ -51,6 +52,8 @@ const props = withDefaults(defineProps<{
   workloadReady?: boolean
   workloadLoading?: boolean
   workloadError?: string | null
+  /** Full preview, so the estimate can show every factor including the board's complexity multiplier. */
+  workloadPreview?: FuzzWorkloadPreview | null
   paperDomainPreview?: FuzzPaperDomainPreview | null
   paperDomainLoading?: boolean
   paperDomainError?: string | null
@@ -651,7 +654,24 @@ const frozenTargetScope = computed(() => {
         </label>
       </div>
 
-      <details v-if="!frozenTask" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" :open="running ? true : undefined">
+      <!-- The one thing the field labels cannot convey: these budgets multiply, and a larger board shrinks
+           all of them. Without it the ranges read as independent and a rejection looks arbitrary. -->
+      <p
+        v-if="!frozenTask"
+        id="fuzz-budget-help"
+        class="text-[length:var(--iot-font-min)] leading-4 text-slate-500"
+      >
+        {{ t('app.fuzzBudgetProductHint') }}
+      </p>
+
+      <!-- Forced open on a configuration error as well as while running: the workload rejection names
+           "candidate paths per iteration" as a remedy, and that field lives in here. Telling a blocked user
+           to lower a control they cannot see is a dead end. -->
+      <details
+        v-if="!frozenTask"
+        class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+        :open="running || configurationError ? true : undefined"
+      >
         <summary class="flex min-h-11 cursor-pointer items-center justify-between text-xs font-bold text-slate-700">
           <span class="inline-flex items-center gap-1.5"><span class="material-symbols-outlined text-sm board-text-progress" aria-hidden="true">tune</span>{{ t('app.fuzzAdvancedSettings') }}</span>
           <span class="material-symbols-outlined text-sm text-slate-400" aria-hidden="true">expand_more</span>
@@ -727,8 +747,21 @@ const frozenTargetScope = computed(() => {
         </button>
       </div>
 
-      <p v-else-if="!frozenTask && Number.isFinite(workload)" class="text-[length:var(--iot-font-min)] leading-4 text-slate-500">
-        {{ t('app.fuzzWorkloadPreview', { workload: formatNumber(Number(workload)), limit: formatNumber(Number(workloadLimit || 0)) }) }}
+      <!-- Suppressed while a configuration error is showing: this line says the workload was "confirmed
+           against the current Board", which read as approval directly under a rejection of the same
+           number. The warning block above owns the rejected case and states every factor itself. -->
+      <p
+        v-else-if="!frozenTask && !configurationError && workloadPreview && Number.isFinite(workload)"
+        class="text-[length:var(--iot-font-min)] leading-4 text-slate-500"
+      >
+        {{ t('app.fuzzWorkloadPreview', {
+          workload: formatNumber(Number(workload)),
+          limit: formatNumber(Number(workloadLimit || 0)),
+          iterations: formatNumber(workloadPreview.maxIterations),
+          path: formatNumber(workloadPreview.pathLength),
+          population: formatNumber(workloadPreview.populationSize),
+          complexity: formatNumber(Math.max(1, workloadPreview.modelComplexityUnits))
+        }) }}
       </p>
 
       <div v-if="running" class="rounded-lg border board-border-subtle board-card--muted px-3 py-2" aria-live="polite" aria-atomic="true">

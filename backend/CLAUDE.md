@@ -150,6 +150,13 @@ the 53 AI tools are mapped in
 - **Fuzz findings are not formal traces.** The bounded explorer supports only its
   documented finite safety subset, and budget exhaustion is never satisfaction. Keep
   `fuzz_finding` separate from NuSMV `trace`; direct automatic fix remains formal-only.
+  **A timeout is not a cancellation.** The search has two independent stop signals, and they settle
+  differently on purpose: cancellation is the user's own action and persists no result, so a wall-clock
+  deadline must never be routed through the cancellation supplier — the worker would report a timeout as
+  something the user did. A spent deadline ends the search as an ordinary bounded outcome plus the
+  `TIME_BUDGET_EXHAUSTED` limitation, keeping any findings already located. The admission guard bounds the
+  *nominal* budget from per-step timing measured on one machine; the deadline is what catches a board or a
+  host the estimate got wrong, and the renewable task lease is a liveness heartbeat, not a timeout.
 - **Use papers as evidence, not as an implicit product override.** The modeling, fix, and exploration
   semantics draw from published algorithms ([../docs/architecture/theory-sources.md](../docs/architecture/theory-sources.md)),
   but deliberate abstractions must follow the documented product contract. Numeric environment

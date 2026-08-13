@@ -8,7 +8,6 @@ import java.util.List;
 @Data
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class RuleRecommendationDto {
-    private String category;
     /** User-facing rule name that is persisted when the recommendation is applied. */
     private String name;
     /** Advisory explanation shown before applying; it is not persisted as rule semantics. */

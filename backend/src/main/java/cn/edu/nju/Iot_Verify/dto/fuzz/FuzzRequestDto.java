@@ -37,11 +37,14 @@ public class FuzzRequestDto {
             @Size(max = 100, message = "Target specification ID must be at most 100 characters") String>
             targetSpecIds = new ArrayList<>();
 
+    // 200 rather than 1000: with pathLength 20 and populationSize 10 this is 40,000 step-slots, which the
+    // whole docs/examples complexity range admits with headroom. At 1000 the default product was 200,000 and
+    // every shipped example scene rejected it, so the documented default was one no scene could run.
     @NotNull(message = "Maximum iterations cannot be null")
     @Min(value = 1, message = "Maximum iterations must be at least 1")
     @Max(value = 5_000, message = "Maximum iterations must be at most 5000")
     @Builder.Default
-    private Integer maxIterations = 1_000;
+    private Integer maxIterations = 200;
 
     @NotNull(message = "Path length cannot be null")
     @Min(value = 1, message = "Path length must be at least 1")

@@ -135,6 +135,11 @@ export interface FuzzingBudget {
   populationSize: number
 }
 
+/** The default budget product, kept aligned with the backend `FuzzRequestDto` default. */
+export const FUZZ_DEFAULT_MAX_ITERATIONS = 200
+export const FUZZ_DEFAULT_PATH_LENGTH = 20
+export const FUZZ_DEFAULT_POPULATION_SIZE = 10
+
 /** A preview the server returned, tagged with the board semantics it was computed against. */
 export interface FuzzingPreviewState<T extends FuzzingBudget> {
   preview: T | null

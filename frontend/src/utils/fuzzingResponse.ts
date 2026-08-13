@@ -688,7 +688,10 @@ export const validateFuzzingFindingList = (value: unknown): FuzzingFinding[] => 
 
 export const validateFuzzWorkloadPreview = (
   value: unknown,
-  expected: Pick<FuzzWorkloadPreview, 'maxIterations' | 'pathLength' | 'populationSize'>
+  expected: Pick<
+    FuzzWorkloadPreview,
+    'maxIterations' | 'pathLength' | 'populationSize' | 'explorationMode'
+  >
 ): FuzzWorkloadPreview => {
   const context = 'Counterexample-search workload preview'
   const preview = record(value, context)
@@ -698,10 +701,18 @@ export const validateFuzzWorkloadPreview = (
   const modelComplexityUnits = integer(preview.modelComplexityUnits, 'modelComplexityUnits', context, 0)
   const estimatedWorkload = integer(preview.estimatedWorkload, 'estimatedWorkload', context, 1)
   const workloadLimit = integer(preview.workloadLimit, 'workloadLimit', context, 1)
+  const maxAcceptedIterations = integer(
+    preview.maxAcceptedIterations, 'maxAcceptedIterations', context, 0)
   if (maxIterations !== expected.maxIterations
     || pathLength !== expected.pathLength
     || populationSize !== expected.populationSize) {
     throw new FuzzResponseContractError(context, 'budget fields must match the requested preview')
+  }
+  // Complexity is mode-dependent, so a preview computed for the other mode describes a different
+  // estimate than submission would apply. Checked here rather than trusted because it arrived.
+  if (preview.explorationMode !== expected.explorationMode) {
+    throw new FuzzResponseContractError(
+      context, 'explorationMode must match the requested preview')
   }
   const expectedWorkload = safeIntegerProduct(
     [maxIterations, pathLength, populationSize, Math.max(1, modelComplexityUnits)],
@@ -718,14 +729,27 @@ export const validateFuzzWorkloadPreview = (
     || preview.accepted !== (estimatedWorkload <= workloadLimit)) {
     throw new FuzzResponseContractError(context, 'accepted must agree with the workload limit')
   }
+  // The ceiling must agree with acceptance in both directions: a rejected budget cannot claim the
+  // requested iteration count still fits, and an accepted one cannot report a ceiling below it. A
+  // one-way check would let the remedy contradict the verdict it is displayed beside.
+  if (maxAcceptedIterations > 0 && preview.accepted !== (maxIterations <= maxAcceptedIterations)) {
+    throw new FuzzResponseContractError(
+      context, 'maxAcceptedIterations must agree with accepted')
+  }
+  if (maxAcceptedIterations === 0 && preview.accepted) {
+    throw new FuzzResponseContractError(
+      context, 'an accepted budget cannot report a zero iteration ceiling')
+  }
   return {
     maxIterations,
     pathLength,
     populationSize,
+    explorationMode: expected.explorationMode,
     modelComplexityUnits,
     estimatedWorkload,
     workloadLimit,
-    accepted: preview.accepted
+    accepted: preview.accepted,
+    maxAcceptedIterations
   }
 }
 
