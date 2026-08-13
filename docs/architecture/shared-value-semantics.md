@@ -132,7 +132,11 @@ clause per `IsInside` value) and `DeviceTemplateNuSmvValidator`, which restates 
 template author can act on rather than as a schema path.
 
 The user-facing panel derives its label from the same flag: an affect-only declaration is shown as
-*affects*, never as *reads*, because the generator emits no read mirror for it.
+*affects*, never as *reads*, because the generator emits no read mirror for it. The device dialog's
+variables table marks the same declaration explicitly, because "environment variable" alone left a reader
+unable to see why one template's `temperature` is offered as a rule condition and another's is refused —
+and because the compromise-behaviour column has to say *label*, not *reading*, for a value the device never
+reports (§4's falsification gate gives it no value to falsify).
 
 **Condition-source eligibility is gated five times, once per writer boundary**, because a rule can
 reach storage by three routes and each was independently permissive:

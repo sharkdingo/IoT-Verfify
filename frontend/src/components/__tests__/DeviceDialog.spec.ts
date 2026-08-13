@@ -1556,6 +1556,54 @@ describe('DeviceDialog template authority', () => {
     wrapper.unmount()
   })
 
+  /**
+   * `Reads: false` is a capability the table used to hide: both an affect-only and a read-capable shared
+   * variable rendered as plain "environment variable", so nothing explained why `temperature` is
+   * selectable as a rule condition on a Thermostat and not on an Air Conditioner. `affectsEnvironment`
+   * cannot stand in for it — a read-capable variable may also affect, so that badge shows in both cases.
+   *
+   * The falsifiability cell needed the same split. Its two labels both speak about a *reading*, and the
+   * value-falsification branch in `SmvMainModuleBuilder` requires `Reads !== false`, so for an affect-only
+   * declaration the flag cannot move a value; it only forces `trust_<name>` untrusted. All seven bundled
+   * affect-only declarations are `false`, so the old wording was true by luck.
+   */
+  it('marks an affect-only shared variable and scopes what compromise can falsify', () => {
+    // The real Air Conditioner shape: temperature is IsInside=false, Reads=false, and impacted.
+    const manifest: DeviceManifest = {
+      Name: 'Air Conditioner',
+      Modes: ['HvacMode'],
+      InitState: 'auto',
+      WorkingStates: [{ Name: 'auto', Trust: 'trusted', Privacy: 'public' }],
+      ImpactedVariables: ['temperature'],
+      InternalVariables: [
+        {
+          Name: 'temperature',
+          IsInside: false,
+          Reads: false,
+          FalsifiableWhenCompromised: true,
+          Trust: 'untrusted',
+          Privacy: 'public',
+          LowerBound: 0,
+          UpperBound: 100,
+          NaturalChangeRate: '[-1, 1]'
+        }
+      ],
+      APIs: []
+    } as never
+    const wrapper = mountWithManifest(manifest, 'Air Conditioner', 'auto')
+
+    const badge = document.querySelector('[data-testid="device-dialog-variable-affect-only-temperature"]')
+    expect(badge, 'an affect-only declaration is not distinguished').not.toBeNull()
+    expect(badge!.textContent?.trim()).toBe('Affects only, does not read')
+
+    // Even with the flag true, the cell must not claim a falsified *reading* for a value never read.
+    // The cell text carries the icon ligature too, as the neighbouring chips do, so match on content.
+    const falsifiable = document.querySelector('[data-testid="device-dialog-variable-falsifiable-temperature"]')
+    expect(falsifiable?.textContent).toContain('Label only under attack')
+    expect(falsifiable?.textContent).not.toContain('Reading may be falsified')
+    wrapper.unmount()
+  })
+
   it('omits the transitions section for a template that declares none', () => {
     const manifest: DeviceManifest = {
       Name: 'Air Conditioner',

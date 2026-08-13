@@ -49,6 +49,20 @@ history into a technical spec. The spec content itself now lives under
 
 #### Added
 
+- **The variables table now distinguishes a shared variable the device only *writes*.** `IsInside` was
+  already visible (environment vs internal), but `Reads: false` was not, so an affect-only declaration and
+  a read-capable one both read as plain "environment variable" — and nothing explained why `temperature` is
+  selectable as a rule condition on a Thermostat and refused on an Air Conditioner. That refusal is real and
+  enforced at three backend boundaries: no read mirror, not a rule/spec condition source, not a transition
+  trigger attribute. The existing *affects environment* badge cannot stand in for it, because a read-capable
+  variable may also affect (Thermostat's does), so it appears in both cases. Seven rows across five bundled
+  templates are now marked, and the variables hint states the consequence rather than the flag.
+- **The compromise-behaviour column claimed a falsified *reading* for values the device never reads.** Both
+  its labels talk about a reading, but `SmvMainModuleBuilder`'s value-falsification branch requires
+  `Reads !== false`; for an affect-only declaration the flag can only force `trust_<name>` untrusted, since
+  that loop has no read gate. All seven bundled affect-only declarations are `false`, so the old wording was
+  true by luck — a custom template setting it `true` would have promised a falsifiable reading for a value
+  with no read mirror at all. Those rows now say the label is what compromise moves.
 - **The States table now shows what each state does, not only how it is labelled.** `Dynamics` was the
   third invisible manifest field, and the largest: 15 bundled templates declare 81 entries. Trust and
   privacy describe a state's *labels*; `Dynamics` is the variable value the state holds while it is active.

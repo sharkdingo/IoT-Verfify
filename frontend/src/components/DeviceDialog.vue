@@ -723,6 +723,13 @@ const variables = computed(() => {
         falsifiableWhenCompromised: iv.FalsifiableWhenCompromised === true,
         type: isEnvironment ? t('app.environmentVariable') : t('app.internalVariable'),
         isInternal: !isEnvironment,
+        // `Reads: false` is a capability, not a formatting detail: an affect-only declaration supplies the
+        // domain and an effect but gets no read mirror, so it is refused as a rule/spec condition source
+        // and as a transition trigger. Without this the table said "environment variable" for both, and a
+        // user could not tell why `temperature` is selectable on a Thermostat and not on an Air Conditioner.
+        // `affectsEnvironment` does not answer it — a read-capable variable can also affect (Thermostat's
+        // does), so that badge appears in both cases.
+        affectOnly: isEnvironment && iv.Reads === false,
         affectsEnvironment: impactedSet.has(iv.Name)
       })
     })
@@ -1360,11 +1367,26 @@ const deviceSpecs = computed(() => {
                             {{ v.privacy ? t(`app.${v.privacy}`) : '-' }}
                           </span>
                         </td>
-                        <td class="px-4 py-3 text-sm text-slate-600">
+                        <td class="px-4 py-3 text-sm text-slate-600" :data-testid="`device-dialog-variable-falsifiable-${v.name}`">
+                          <!-- Both branches speak about a *reading*, so neither is honest for an affect-only
+                               declaration: the value-falsification branch in `SmvMainModuleBuilder` requires
+                               `Reads !== false`, so the flag cannot move a value this device never reports.
+                               It does still force `trust_<name>` to untrusted under attack (that loop has no
+                               Reads gate), which is why this says the label rather than nothing. Every
+                               bundled affect-only declaration is `false` today, so the old wording was true
+                               by luck — a custom template setting it `true` claimed a falsified reading for
+                               a value with no read mirror at all. -->
                           <span
-                            v-if="v.falsifiableWhenCompromised !== null"
+                            v-if="v.affectOnly"
+                            class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium board-chip-neutral"
+                          >
+                            <span class="material-symbols-outlined text-sm" aria-hidden="true">label</span>
+                            {{ v.falsifiableWhenCompromised ? t('app.labelOnlyFalsified') : t('app.notFalsifiedByAttackModel') }}
+                          </span>
+                          <span
+                            v-else-if="v.falsifiableWhenCompromised !== null"
                             class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium"
-                            :class="v.falsifiableWhenCompromised ? 'board-chip-warning board-text-warning' : 'bg-slate-100 text-slate-600'"
+                            :class="v.falsifiableWhenCompromised ? 'board-chip-warning board-text-warning' : 'board-chip-neutral'"
                           >
                             <span class="material-symbols-outlined text-sm" aria-hidden="true">
                               {{ v.falsifiableWhenCompromised ? 'data_alert' : 'verified_user' }}
@@ -1386,6 +1408,14 @@ const deviceSpecs = computed(() => {
                             class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium board-chip-info board-text-info"
                           >
                             {{ t('app.affectsEnvironmentShort') }}
+                          </span>
+                          <span
+                            v-if="v.affectOnly"
+                            :data-testid="`device-dialog-variable-affect-only-${v.name}`"
+                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium board-chip-neutral"
+                            :title="t('app.affectOnlyVariableHint')"
+                          >
+                            {{ t('app.affectOnlyVariable') }}
                           </span>
                           </div>
                         </td>
