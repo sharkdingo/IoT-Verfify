@@ -111,7 +111,8 @@ const handleImageError = (event: Event) => {
 }
 
 // Check the user-facing compromise state returned by the trace API.
-const isDeviceAttacked = (nodeId: string): boolean => {
+// This is the expensive computation that walks trace states backward.
+const computeIsDeviceAttacked = (nodeId: string): boolean => {
   if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) {
     return false
   }
@@ -128,6 +129,28 @@ const isDeviceAttacked = (nodeId: string): boolean => {
   }
 
   return false
+}
+
+/**
+ * Memoized cache of attack state per node.
+ * Recalculates when trace states or trace selection changes.
+ * Eliminates redundant O(S×D) scans: the template calls isDeviceAttacked() 4 times per node,
+ * but this computed ensures we only scan once per node per render.
+ */
+const deviceAttackedCache = computed(() => {
+  const cache = new Map<string, boolean>()
+  for (const node of props.nodes) {
+    cache.set(node.id, computeIsDeviceAttacked(node.id))
+  }
+  return cache
+})
+
+/**
+ * Get whether a device is attacked (memoized accessor).
+ * Called 4 times per node in the template but only computes once per render.
+ */
+const isDeviceAttacked = (nodeId: string): boolean => {
+  return deviceAttackedCache.value.get(nodeId) ?? false
 }
 
 // 获取节点的当前状态
@@ -700,11 +723,43 @@ const getSelfLoopPathD = (edge: DeviceEdge) => {
   return getSelfLoopD(edge, props.nodes)
 }
 
-// Check if there are bidirectional edges between two nodes
+/**
+ * Pre-computed set of bidirectional edge pairs.
+ * Avoids O(E) search per edge, reducing edgesWithAdjustedPoints from O(E²) to O(E).
+ */
+const bidirectionalEdgePairs = computed(() => {
+  const pairs = new Set<string>()
+  const edgeMap = new Map<string, Set<string>>()
+
+  // Build adjacency map: from → Set(to)
+  for (const edge of props.edges) {
+    if (!edgeMap.has(edge.from)) {
+      edgeMap.set(edge.from, new Set())
+    }
+    edgeMap.get(edge.from)!.add(edge.to)
+  }
+
+  // Find bidirectional pairs
+  for (const edge of props.edges) {
+    const hasReverse = edgeMap.get(edge.to)?.has(edge.from)
+    if (hasReverse) {
+      // Use canonical key (lexicographically sorted) to represent the pair
+      const key = edge.from < edge.to
+        ? `${edge.from}→${edge.to}`
+        : `${edge.to}→${edge.from}`
+      pairs.add(key)
+    }
+  }
+
+  return pairs
+})
+
+// Check if there are bidirectional edges between two nodes (now O(1) lookup)
 const hasBidirectionalEdges = (fromId: string, toId: string): boolean => {
-  const forwardEdge = props.edges.some(e => e.from === fromId && e.to === toId)
-  const backwardEdge = props.edges.some(e => e.from === toId && e.to === fromId)
-  return forwardEdge && backwardEdge
+  const key = fromId < toId
+    ? `${fromId}→${toId}`
+    : `${toId}→${fromId}`
+  return bidirectionalEdgePairs.value.has(key)
 }
 
 // Get adjusted link points for bidirectional edges
@@ -878,7 +933,12 @@ const canShowAllPointerResizeHandles = (node: DeviceNode) =>
   node.width * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
   && node.height * props.zoom >= POINTER_RESIZE_ALL_HANDLES_SIZE_PX
 
-const getNodeRuntimeBadges = (node: DeviceNode) => {
+/**
+ * Compute runtime badges for a single node.
+ * This is the expensive operation that walks trace states and builds badge data.
+ * Use via `getNodeRuntimeBadges()` which provides memoization.
+ */
+const computeNodeRuntimeBadges = (node: DeviceNode) => {
   const traceDevice = isTraceActive.value ? getLatestTraceDeviceForNode(node.id) : null
   const configuredVariables = node.variables || []
   const traceOnlyVariables = (traceDevice?.variables || [])
@@ -966,6 +1026,28 @@ const getNodeRuntimeBadges = (node: DeviceNode) => {
 }
 
 /**
+ * Memoized cache of runtime badges per node.
+ * Recalculates when nodes, trace state, or trace selection changes.
+ * Eliminates redundant calls: the template calls getNodeRuntimeBadges() 6 times per node,
+ * but this computed ensures we only calculate once per node per render.
+ */
+const nodeRuntimeBadgesCache = computed(() => {
+  const cache = new Map<string, ReturnType<typeof computeNodeRuntimeBadges>>()
+  for (const node of props.nodes) {
+    cache.set(node.id, computeNodeRuntimeBadges(node))
+  }
+  return cache
+})
+
+/**
+ * Get runtime badges for a node (memoized accessor).
+ * Called 6 times per node in the template but only computes once per render.
+ */
+const getNodeRuntimeBadges = (node: DeviceNode) => {
+  return nodeRuntimeBadgesCache.value.get(node.id)!
+}
+
+/**
  * The variables the node is holding back, by name.
  *
  * The `+N` chip states the count; this states which, so the fact is never unavailable — only unprinted at 64px.
@@ -993,7 +1075,12 @@ const getHiddenVariableNames = (node: DeviceNode): string => {
  */
 type SecurityBadge = { kind: 'trust' | 'privacy'; label: string; shortLabel: string; title: string }
 
-const getNodeSecurityBadges = (node: DeviceNode): SecurityBadge[] => {
+/**
+ * Compute security badges for a single node.
+ * This is the expensive operation that walks template manifests and builds badge data.
+ * Use via `getNodeSecurityBadges()` which provides memoization.
+ */
+const computeNodeSecurityBadges = (node: DeviceNode): SecurityBadge[] => {
   if (isTraceActive.value) {
     const traceDevice = getLatestTraceDeviceForNode(node.id)
     if (!traceDevice) return []
@@ -1146,6 +1233,28 @@ const getNodeSecurityBadges = (node: DeviceNode): SecurityBadge[] => {
     })
   }
   return badges
+}
+
+/**
+ * Memoized cache of security badges per node.
+ * Recalculates when nodes, trace state, or node configuration changes.
+ * Eliminates redundant calls: the template calls getNodeSecurityBadges() 3 times per node,
+ * but this computed ensures we only calculate once per node per render.
+ */
+const nodeSecurityBadgesCache = computed(() => {
+  const cache = new Map<string, SecurityBadge[]>()
+  for (const node of props.nodes) {
+    cache.set(node.id, computeNodeSecurityBadges(node))
+  }
+  return cache
+})
+
+/**
+ * Get security badges for a node (memoized accessor).
+ * Called 3 times per node in the template but only computes once per render.
+ */
+const getNodeSecurityBadges = (node: DeviceNode): SecurityBadge[] => {
+  return nodeSecurityBadgesCache.value.get(node.id) ?? []
 }
 
 const isNodeTraceChanged = (node: DeviceNode) => {
