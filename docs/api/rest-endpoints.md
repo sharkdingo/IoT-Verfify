@@ -93,7 +93,6 @@ Verified against code on 2026-07-31.
 | DELETE | `/api/verify/runs/{id}` | Delete a verification result and all linked counterexamples | `docs/api/verification.md` |
 | GET | `/api/verify/traces` | List verification traces | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}` | Trace detail | `docs/api/verification.md` |
-| GET | `/api/verify/traces/{id}/smv` | Download the SMV model file for this trace (plain text attachment) | `docs/api/verification.md` |
 | DELETE | `/api/verify/traces/{id}` | Delete trace | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}/fault-rules` | Counterexample rule involvement with source-model completeness and limitations | `docs/api/verification.md` |
 | POST | `/api/verify/traces/{id}/fix` | Generate signed fix suggestions | `docs/api/verification.md` |

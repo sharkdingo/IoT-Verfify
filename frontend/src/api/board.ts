@@ -2793,12 +2793,19 @@ export default {
     },
 
     // ==== 验证 Trace（反例） ====
-    // 获取用户所有验证 Trace
-    getVerificationTraces: async (): Promise<PersistedTrace[]> => {
-        return validateVerificationTraceList(
-            unpack<unknown>(await api.get('/verify/traces'))
-        );
-    },
+    /*
+     * No `getVerificationTraces` (`GET /verify/traces`) and no `deleteVerificationTrace`
+     * (`DELETE /verify/traces/{id}`) client method.
+     *
+     * Both endpoints are alive and exercised — the unfiltered list by ten E2E call sites, the delete by
+     * the assistant's `DeleteTraceTool` — but no client code called either method. The UI never wants
+     * every counterexample the account has ever produced: it loads them per run
+     * (`getVerificationRunTraces`) or per task (`getTaskTraces`), because a counterexample is only
+     * meaningful under the run whose model produced it. Deleting one is likewise a run-level action
+     * (`deleteVerificationRun` removes a run and its evidence together).
+     *
+     * Restoring either method would mean re-answering that question, not just re-adding a wrapper.
+     */
     // 获取某个验证任务产生的反例 Trace（按 task 维度过滤，避免拿到旧任务/并发任务的反例）
     getTaskTraces: async (taskId: number): Promise<PersistedTrace[]> => {
         return validateVerificationTraceList(
@@ -2811,10 +2818,6 @@ export default {
         return validateVerificationTrace(
             unpack<unknown>(await api.get(`/verify/traces/${id}`))
         );
-    },
-    // 删除 Trace
-    deleteVerificationTrace: async (id: number): Promise<void> => {
-        return unpack<void>(await api.delete(`/verify/traces/${id}`));
     },
 
     /*

@@ -295,30 +295,22 @@ class TraceMapperTest {
     }
 
     /**
-     * The model-presence flag must be carried, and both arms must be asserted.
+     * A counterexample summary must not carry the run's model, in any form.
      *
-     * A single false-case test would pass even if the mapper dropped the field entirely:
-     * {@code Boolean.TRUE.equals(null)} is {@code false}, and an unstubbed Mockito projection returns
-     * {@code null}. That is exactly the shape of a test that cannot fail, so the true case is what
-     * gives this coverage its value — the whole feature shipped unreachable because a flag like this
-     * one was absent from the response and nothing asserted on it.
+     * <p>Two fields lived here and were removed: the model text itself (a byte-identical duplicate of
+     * the owning run's, N+1 copies for N violations) and a {@code hasSmvModel} flag that gated a
+     * per-counterexample download button which no longer exists. This asserts the summary stays
+     * model-free rather than re-acquiring either — the pull is real, because "this trace's model"
+     * reads like a reasonable thing for a trace DTO to expose.
      */
     @Test
-    void summaryProjectionCarriesStoredModelPresence() {
-        TraceSummaryProjection projection = validSummaryProjection(10L);
-        when(projection.getHasSmvModel()).thenReturn(true);
+    void summaryCarriesNoModelOfItsOwn() {
+        var summary = mapper.toSummaryDto(validSummaryProjection(10L));
 
-        assertEquals(Boolean.TRUE, mapper.toSummaryDto(projection).getHasSmvModel());
-    }
-
-    @Test
-    void summaryProjectionReportsAbsentModelAsFalseRatherThanNull() {
-        // Null-safe on purpose: a client reading `undefined` would render neither an enabled nor a
-        // disabled control, which is how an absent model became indistinguishable from a broken build.
-        TraceSummaryProjection projection = validSummaryProjection(11L);
-        when(projection.getHasSmvModel()).thenReturn(null);
-
-        assertEquals(Boolean.FALSE, mapper.toSummaryDto(projection).getHasSmvModel());
+        for (var method : summary.getClass().getMethods()) {
+            assertFalse(method.getName().toLowerCase().contains("smvmodel"),
+                    "a counterexample summary must not expose the run's model: " + method.getName());
+        }
     }
 
     @Test
@@ -356,35 +348,28 @@ class TraceMapperTest {
     }
 
     /**
-     * The model the run checked has to survive both directions, because
-     * {@code GET /api/verify/traces/{id}/smv} answers 404 when a trace holds no model, so a mapper
-     * that silently drops the field is indistinguishable from a trace that genuinely never had one —
-     * and it made the endpoint fail on every trace ever written.
-     */
-    private static final String SMV_MODEL = "MODULE main\n-- 客厅温度规则\nVAR x : boolean;\n";
-
-    @Test
-    void toDto_readsBackTheCheckedSmvModel() {
-        TracePo po = baseTrace(null);
-        po.setSmvModelContent(SMV_MODEL);
-
-        assertEquals(SMV_MODEL, mapper.toDto(po).getSmvModelContent(),
-                "toDto must read the stored model back, or the download cannot serve it");
-    }
-
-    /**
-     * Separate from the read direction on purpose: asserting both in one test let the read
-     * assertion fail first and hide which direction was actually broken.
+     * A trace carries no model in either direction.
+     *
+     * <p>Two tests used to pin the opposite — that {@code toDto} read `smv_model_content` back and
+     * {@code toEntity} persisted it — because the trace-keyed download endpoint needed it. Both the
+     * endpoint and the column are gone: one model is generated per run, the run row owns it, and
+     * copying it per counterexample stored the same bytes N+1 times for N violations while the stated
+     * justification (evidence surviving its run's deletion) was contradicted by
+     * {@code deleteRunInternal}, which deletes traces and run together.
+     *
+     * <p>Asserted reflectively over both directions, so re-adding the field to the PO or the DTO fails
+     * here rather than silently restoring the duplication.
      */
     @Test
-    void toEntity_persistsTheCheckedSmvModel() {
-        TraceDto dto = new TraceDto();
-        dto.setVerificationTaskId(9L);
-        dto.setViolatedSpecId("s0");
-        dto.setSmvModelContent(SMV_MODEL);
-
-        assertEquals(SMV_MODEL, mapper.toEntity(dto).getSmvModelContent(),
-                "toEntity must persist the model, or the column is NULL on every trace");
+    void neitherTraceDirectionCarriesTheRunsModel() {
+        for (var method : TraceDto.class.getMethods()) {
+            assertFalse(method.getName().toLowerCase().contains("smvmodel"),
+                    "TraceDto must not carry the run's model: " + method.getName());
+        }
+        for (var method : TracePo.class.getMethods()) {
+            assertFalse(method.getName().toLowerCase().contains("smvmodel"),
+                    "TracePo must not store a per-trace copy of the run's model: " + method.getName());
+        }
     }
 
     private TraceSummaryProjection validSummaryProjection(Long id) {

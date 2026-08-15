@@ -274,18 +274,43 @@ const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary) => {
   return run.modelSnapshot.modelFingerprint !== current.modelFingerprint
 }
 
-const runScopeHasBoardDrift = (
+/**
+ * How a verification or simulation history row compares to the current canvas — three-valued, because
+ * this comparison cannot answer "unchanged".
+ *
+ * It compares five integers. Every semantic edit that keeps them equal is invisible to it: inverting a
+ * rule's relation operator, changing an environment variable's value, moving a specification's
+ * threshold, swapping one device's template for another. (A device *rename* is deliberately not drift
+ * anywhere in this product — `FuzzModelFingerprint.PRESENTATION_FIELDS` strips `deviceLabel`, and
+ * `FuzzServiceImplTest` asserts a rename leaves the fingerprint equal.)
+ *
+ * It used to return a boolean, and the template read `false` as "no warning" — which a reader takes as
+ * an affirmative "this verdict still describes my canvas". That is the one thing the product is careful
+ * never to claim: `runBoardNotCompared` says the result applies only to its snapshot, the open result
+ * withdraws its Fix action when the board changes, and the comment on `fuzzRunHasBoardDrift` above
+ * states the rule that an un-comparable state must read as drift rather than as a match. This predicate
+ * was the one place violating it.
+ *
+ * Why not a real fingerprint, like fuzz has: `modelFingerprint` is fuzz-only *by contract*, not by
+ * omission. `PersistedModelContextIntegrity` (backend, ~line 500) rejects a verification or simulation
+ * snapshot whose `modelFingerprint` is non-null, so populating it would make every existing row
+ * unreadable. Closing the gap properly is a persisted-format decision, not a frontend one.
+ */
+type RunScopeComparison = 'COUNTS_CHANGED' | 'COUNTS_ONLY_MATCH' | 'NOT_COMPARED'
+
+const runScopeComparison = (
   run: AvailableVerificationRunSummary | AvailableSimulationTraceSummary,
   includeSpecifications: boolean
-) => {
+): RunScopeComparison => {
   const current = props.currentBoardScope
-  if (!current) return false
+  if (!current) return 'NOT_COMPARED'
   const snapshot = run.modelSnapshot
-  return snapshot.deviceCount !== current.deviceCount
+  const countsDiffer = snapshot.deviceCount !== current.deviceCount
     || snapshot.ruleCount !== current.ruleCount
     || snapshot.environmentVariableCount !== current.environmentVariableCount
     || snapshot.deviceTemplateCount !== current.deviceTemplateCount
     || (includeSpecifications && snapshot.specificationCount !== current.specificationCount)
+  return countsDiffer ? 'COUNTS_CHANGED' : 'COUNTS_ONLY_MATCH'
 }
 
 const resultErrorEntries = computed(() => {
@@ -842,11 +867,23 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
               </div>
 
               <p
-                v-if="runScopeHasBoardDrift(item.run, true)"
+                v-if="runScopeComparison(item.run, true) === 'COUNTS_CHANGED'"
                 class="mt-2 rounded-md board-surface-warning px-2 py-1.5 text-[11px] font-semibold leading-4 board-text-warning"
                 data-testid="verification-history-board-drift"
               >
                 {{ t('app.historicalRunBoardScopeChanged') }}
+              </p>
+              <!--
+                Matching counts are not a match. Stated quietly (muted, not a warning) because it is a
+                limit of the comparison rather than a problem with the run — but stated, because the
+                previous silence read as "this verdict still describes your canvas".
+              -->
+              <p
+                v-else-if="runScopeComparison(item.run, true) === 'COUNTS_ONLY_MATCH'"
+                class="mt-2 text-[11px] leading-4 text-slate-500"
+                data-testid="verification-history-scope-counts-only"
+              >
+                {{ t('app.historicalRunScopeCountsOnly') }}
               </p>
 
               <ul v-if="generationIssuesFor(item.run).length" class="mt-2 space-y-1.5">
@@ -1130,11 +1167,19 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 </div>
               </div>
               <p
-                v-if="runScopeHasBoardDrift(item.run, false)"
+                v-if="runScopeComparison(item.run, false) === 'COUNTS_CHANGED'"
                 class="mt-2 rounded-md board-surface-warning px-2 py-1.5 text-[11px] font-semibold leading-4 board-text-warning"
                 data-testid="simulation-history-board-drift"
               >
                 {{ t('app.historicalRunBoardScopeChanged') }}
+              </p>
+              <!-- `false` for specifications: a trajectory checks none, so a spec edit is not drift for it. -->
+              <p
+                v-else-if="runScopeComparison(item.run, false) === 'COUNTS_ONLY_MATCH'"
+                class="mt-2 text-[11px] leading-4 text-slate-500"
+                data-testid="simulation-history-scope-counts-only"
+              >
+                {{ t('app.historicalRunScopeCountsOnly') }}
               </p>
               <ul v-if="generationIssuesFor(item.run).length" class="mt-2 space-y-1.5">
                 <li

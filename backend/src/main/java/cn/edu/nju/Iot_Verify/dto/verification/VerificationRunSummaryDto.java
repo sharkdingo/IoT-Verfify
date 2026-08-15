@@ -51,7 +51,14 @@ public class VerificationRunSummaryDto {
      * model is tens of thousands of characters and this is a list response.
      *
      * <p>Keyed on the run because all of its counterexamples share one model, and a run where every
-     * specification holds has no counterexample to key on. Null on an unavailable record.
+     * specification holds has no counterexample to key on at all. This is the flag behind the history
+     * panel's single per-run download.
+     *
+     * <p>Boxed rather than primitive because this DTO has an unavailable arm: when persisted data fails
+     * integrity checks the row becomes a placeholder with {@code dataAvailable=false}, and nothing about
+     * its model can be asserted — which is a different claim from "no model". {@code JsonInclude(NON_NULL)}
+     * then omits the field, and the client reads it only on the available arm. A primitive would make a
+     * damaged row report "no model" as fact.
      */
     private Boolean hasSmvModel;
 

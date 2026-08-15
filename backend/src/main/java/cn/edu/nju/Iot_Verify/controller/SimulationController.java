@@ -116,9 +116,13 @@ public class SimulationController {
     /**
      * Download the exact SMV model executed for this saved trajectory.
      *
-     * <p>Mirrors {@code VerificationController#downloadTraceSmvModel}, including why an absent model
-     * is {@code 404} rather than {@code 500}: a trajectory saved before the model was persisted has
-     * none, and that is a fact about the record, not a fault in the server.
+     * <p>Keyed on the trace id, and that is not the asymmetry it looks like: a simulation trajectory *is*
+     * its own run, so this id is the run id. Verification is the case where one run owns many traces, and
+     * there the model is addressed only by run — its trace-keyed download was removed as a duplicate.
+     *
+     * <p>An absent model is {@code 404} rather than {@code 500}: a trajectory saved before the model was
+     * persisted has none, and that is a fact about the record, not a fault in the server. Never an empty
+     * attachment either — a zero-byte {@code .smv} would be mistaken for the executed model.
      */
     @GetMapping(value = "/traces/{id}/smv", produces = "text/plain;charset=UTF-8")
     public org.springframework.http.ResponseEntity<String> downloadSimulationTraceSmvModel(

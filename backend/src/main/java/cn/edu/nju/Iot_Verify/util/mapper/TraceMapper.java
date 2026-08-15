@@ -58,8 +58,6 @@ public class TraceMapper {
                         tracePo.getGenerationIssuesJson(), ModelGenerationIssueDto.class)));
         dto.setModelComplete((tracePo.getDisabledRuleCount() == null || tracePo.getDisabledRuleCount() == 0)
                 && (tracePo.getSkippedSpecCount() == null || tracePo.getSkippedSpecCount() == 0));
-        // Read back for GET /api/verify/traces/{id}/smv; see the write side in `toEntity`.
-        dto.setSmvModelContent(tracePo.getSmvModelContent());
         dto.setCreatedAt(tracePo.getCreatedAt());
 
         applyPersistedModelContext(dto, context);
@@ -114,9 +112,7 @@ public class TraceMapper {
         po.setDisabledRuleCount(traceDto.getDisabledRuleCount());
         po.setSkippedSpecCount(traceDto.getSkippedSpecCount());
         po.setGenerationIssuesJson(JsonUtils.toJsonOrEmpty(traceDto.getGenerationIssues()));
-        // The model the run checked, set on the DTO at counterexample construction. Dropping it here
-        // left `smv_model_content` NULL on every verification trace ever written.
-        po.setSmvModelContent(traceDto.getSmvModelContent());
+        // No model copied onto the trace: the run row owns the one model it checked. See `TracePo`.
         po.setCreatedAt(traceDto.getCreatedAt());
 
         if (traceDto.getStates() != null && !traceDto.getStates().isEmpty()) {
@@ -150,8 +146,6 @@ public class TraceMapper {
                 .violatedSpec(violatedSpec)
                 .stateCount(requiredStateCount(projection.getId(), projection.getStateCount()))
                 .createdAt(projection.getCreatedAt())
-                // Presence only; the model is fetched through /api/verify/traces/{id}/smv.
-                .hasSmvModel(Boolean.TRUE.equals(projection.getHasSmvModel()))
                 .dataAvailable(true)
                 .build();
     }

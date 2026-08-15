@@ -58,6 +58,27 @@
     backdrop-filter: blur(6px);
 }
 
+/* Clickability, once per surface rather than once per button class.
+ *
+ * `<button>` has no pointer cursor by default in any browser, so every control needs it declared.
+ * `.iot-dialog__close` and `.iot-dialog-btn` each set their own, which covers a dialog built purely
+ * from those primitives — and silently misses any other button inside one. Measured on the
+ * verification result dialog: **2 of 13 enabled controls rendered `cursor: default`** (the
+ * per-counterexample "Fix Rules" and "View"), because both are bespoke inline-styled buttons rather
+ * than `iot-dialog-btn`.
+ *
+ * A dialog overlay is a sibling of `.iot-board`, so `board.css`'s board-wide rule cannot reach here
+ * either — the same structural gap that left the replay bars uncovered. Scoping this to the overlay
+ * makes the affordance a property of "being inside a dialog", which is what a reader assumes.
+ *
+ * `:not(:disabled)` is load-bearing: a disabled control keeps `default` (or its own
+ * `cursor: not-allowed`), because a pointer on it promises an interaction that will not happen. */
+.iot-dialog-overlay button:not(:disabled),
+.iot-dialog-overlay [role='button']:not([aria-disabled='true']),
+.iot-dialog-overlay summary {
+    cursor: pointer;
+}
+
 /* A nested surface (a fix dialog raised from a verification result) sits above its parent but keeps
    the same scrim: re-tinting would double the darkening and read as a bug. */
 .iot-dialog-overlay--nested {

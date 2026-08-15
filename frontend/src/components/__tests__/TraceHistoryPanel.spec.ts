@@ -72,6 +72,16 @@ const i18n = createI18n({
         fuzzInconclusive: 'Search inconclusive',
         fuzzRunCounts: '{iterations} iterations, {paths} paths, {elapsed}s',
         fuzzBoardScopeChanged: 'Current Board scope changed.',
+        // Real copy, for the reason recorded above: a stub that omits a key makes `t()` echo the key,
+        // and an assertion on the raw key passes against untranslated output. Both drift notices are
+        // here so a test can distinguish "the board changed" from "only the counts were compared".
+        historicalRunBoardScopeChanged:
+          'The current Board differs from this run scope. Replay temporarily shows the historical scene '
+          + 'without replacing the live Board; this conclusion does not apply to the live Board.',
+        historicalRunScopeCountsOnly:
+          'This run has the same number of devices, rules, specifications and environment variables as '
+          + 'the current Board, but their contents were not compared. Re-run to conclude anything about '
+          + 'the live Board.',
         fuzzNoViolationWithinBudget: 'No violation was found within this budget. This is not a safety proof.',
         fuzzFindingsCount: '{count} candidate findings',
         fuzzFirstViolationStep: 'First violation: step {step}',
@@ -408,6 +418,93 @@ describe('TraceHistoryPanel two-layer semantics', () => {
 
     // The rows must no longer read identically.
     expect(new Set([plain.text(), attacked.text(), exact.text()]).size).toBe(3)
+    wrapper.unmount()
+  })
+
+  /*
+   * A history row may not claim "unchanged" by staying silent.
+   *
+   * The row compares five integers against the current canvas. Inverting a rule's relation operator,
+   * changing an environment variable's value or moving a specification's threshold leaves all five equal
+   * — and the row previously rendered nothing at all, which a reader takes as "this verdict still
+   * describes my canvas". That is the one claim this product never makes: `runBoardNotCompared` says a
+   * result applies only to its snapshot, an open verdict withdraws its Fix action when the board
+   * changes, and the fuzz predicate beside this one is explicitly written so an un-comparable state
+   * reads as drift rather than as a match.
+   *
+   * A real fingerprint is not available here: `modelFingerprint` is fuzz-only by *contract* — the
+   * backend's `PersistedModelContextIntegrity` rejects a verification or simulation snapshot that
+   * carries one — so the honest fix is to say what was and was not compared.
+   */
+  const runWithSnapshot = (
+    id: number,
+    modelSnapshot: ReturnType<typeof snapshot>
+  ): VerificationRunSummary => ({
+    id,
+    initiator: 'USER',
+    createdAt: '2026-07-13T10:00:00',
+    startedAt: '2026-07-13T10:00:00',
+    completedAt: '2026-07-13T10:00:02',
+    isAttack: false,
+    attackBudget: 0,
+    enablePrivacy: false,
+    modelSemantics: semantics,
+    modelSnapshot,
+    outcome: 'SATISFIED',
+    modelComplete: true,
+    violatedSpecCount: 0,
+    counterexampleCount: 0,
+    disabledRuleCount: 0,
+    skippedSpecCount: 0,
+    generationIssues: [],
+    dataAvailable: true,
+    counterexamples: []
+  })
+
+  const currentScopeMatching = {
+    deviceCount: 4,
+    ruleCount: 3,
+    specificationCount: 2,
+    environmentVariableCount: 0,
+    deviceTemplateCount: 4,
+    modelFingerprint: null
+  }
+
+  it('says the contents were not compared when only the counts match', () => {
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'results',
+        verificationRuns: [runWithSnapshot(60, snapshot(2))],
+        currentBoardScope: currentScopeMatching
+      },
+      global: { plugins: [i18n] }
+    })
+
+    // Not the drift warning — the counts genuinely match, so claiming a change would be false too.
+    expect(wrapper.find('[data-testid="verification-history-board-drift"]').exists()).toBe(false)
+    const notice = wrapper.get('[data-testid="verification-history-scope-counts-only"]')
+    expect(notice.text()).toContain('contents were not compared')
+    expect(notice.text()).toContain('Re-run')
+    wrapper.unmount()
+  })
+
+  it('still warns about drift, and only that, when a count differs', () => {
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'results',
+        // One more rule on the canvas than the run was given.
+        verificationRuns: [runWithSnapshot(61, { ...snapshot(2), ruleCount: 2 })],
+        currentBoardScope: currentScopeMatching
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.get('[data-testid="verification-history-board-drift"]').text())
+      .toContain('differs from this run scope')
+    // The two notices are mutually exclusive; showing both would say "changed" and "matches" at once.
+    expect(wrapper.find('[data-testid="verification-history-scope-counts-only"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

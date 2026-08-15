@@ -71,11 +71,11 @@ export interface VerificationResult {
   disabledRuleCount: number;
   skippedSpecCount: number;
   generationIssues: ModelGenerationIssue[];
-  /**
-   * Run id for the SMV-model download, filled from `historyPersistence.runId` — the result itself is
-   * not addressable until it has been persisted, so a preview-only run offers no download.
+  /*
+   * No `runIdForSmv`. It was declared here and never assigned or read — its doc comment claimed it was
+   * "filled from historyPersistence.runId", and nothing filled it. The download handlers read
+   * `historyPersistence.runId` directly, which is the single source for "is this run addressable".
    */
-  runIdForSmv?: number;
   /** See `VerificationRun.hasSmvModel`. */
   hasSmvModel?: boolean;
 }
@@ -126,7 +126,9 @@ export interface AvailableTraceSummary {
   stateCount: number
   createdAt: string
   dataAvailable: true
-  hasSmvModel?: boolean
+  // No `hasSmvModel`: the model is addressed by run, so the flag lives on the run summary this
+  // counterexample is nested under. It was briefly declared here to gate a per-counterexample
+  // download that no longer exists, and the backend no longer sends it.
 }
 
 export interface UnavailableTraceSummary {

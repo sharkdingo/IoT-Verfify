@@ -79,9 +79,23 @@ public class TracePo {
     @Column(name = "generation_issues_json", columnDefinition = "TEXT")
     private String generationIssuesJson;
 
-    /** The exact SMV model NuSMV checked for this counterexample. */
-    @Column(name = "smv_model_content", columnDefinition = "TEXT")
-    private String smvModelContent;
+    /*
+     * No per-trace copy of the SMV model.
+     *
+     * There was a `smv_model_content TEXT` column here, holding a byte-identical duplicate of the model
+     * on the owning `verification_task` row: one model string is generated per run and was written to
+     * the run and to each of its traces, so a run with three violated specifications stored it four
+     * times. Measured on a development database before removal: 30 trace rows carrying 345 KB of
+     * duplicated model text, growing with every run.
+     *
+     * The duplication was justified by "a counterexample must stay self-contained after its run is
+     * deleted", which the code contradicts — `VerificationServiceImpl.deleteRunInternal` deletes every
+     * trace and then the run in one transaction, so a trace cannot outlive its run. The trace-keyed
+     * download endpoint it fed is gone too.
+     *
+     * `ddl-auto: update` never drops a column, so an existing database keeps `smv_model_content` as
+     * dead storage until dropped by hand. It is nullable and unread, so leaving it is harmless.
+     */
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

@@ -9,16 +9,32 @@
 
 /* ========== 可点击性：一条规则覆盖所有启用的按钮 ==========
  *
- * Tailwind 的 preflight 把 `button` 重置为 `cursor: default`，所以只有显式声明 pointer 的组件才有指针光标。
+ * 机制:`<button>` 在任何浏览器里都**没有**默认的指针光标，所以每个控件都要显式声明。
+ * （此处原先写的是"Tailwind 的 preflight 把 button 重置为 cursor: default"——**这是错的**:实测
+ * `node_modules/tailwindcss/preflight.css`(v4.1.18) 全文只有一处 `cursor`，且是第 379 行的注释。
+ * Tailwind v4 只是**去掉了** v3 额外加的 `button { cursor: pointer }`，并没有加 `default`。
+ * 症状相同但归因不同，而错误的归因会让下一个人去找不存在的 reset。)
  * 实测:整块画板 182 个启用按钮中 **77 个是 default** —— 包括 Control Center 的整条标签条与面板折叠按钮。
  * 它们都有 hover 反馈，所以并非不可发现；但光标与外观互相矛盾，而光标是指针用户判断"这个能点"的最快信号，
  * 且在画布类工具里代价更高:读者默认大部分表面是惰性的。
  *
  * 逐组件补 pointer 已经漏了 77 处，所以规则放在这里 —— 一个来源，而非分散的 opt-in。
  * `:not(:disabled)` 是关键:禁用控件应保留 default，否则会承诺一个不会发生的交互。
+ *
+ * **回放条必须单独列出，因为它不是 `.iot-board` 的后代。** 两个 timeline host 是 `.iot-board` 的**兄弟**
+ * 节点（`position: fixed`，挂在 `.app-main` 下），所以 `.iot-board button` 选择器根本选不到它们。实测:
+ * 反例回放条 12 个启用控件中 **10 个是 default** —— 播放、关闭、查看反例详情、上一个/下一个状态、两个
+ * 状态芯片、两个帮助按钮。这正是用户报告的"按钮能点但光标不变"。
+ *
+ * 这与 `--board-floating-gap` 读不到的根因完全相同（见本文件 1456 行附近的注释）:同一个兄弟节点结构，
+ * 第二次以另一种形式咬人。凡是给 `.iot-board` 加的规则，都要问一句"回放条要不要"。
+ * 对话框不在此列 —— `styles/dialog.css` 自己声明了 `cursor`，实测 0 个漏网。
  */
 .iot-board button:not(:disabled),
-.iot-board [role='button']:not([aria-disabled='true']) {
+.iot-board [role='button']:not([aria-disabled='true']),
+.board-timeline-host button:not(:disabled),
+.board-timeline-host [role='button']:not([aria-disabled='true']),
+.board-timeline-host summary {
     cursor: pointer;
 }
 
@@ -2782,7 +2798,6 @@
     border-radius: var(--iot-radius-action);
     display: grid;
     grid-template-rows: 1fr;
-    cursor: grab;
     /* A node floats above the canvas: the floating step, plus its own hairline. The lift was a literal
        `0 .75rem 1.8rem rgba(15,23,42,.12)` that stayed light-theme on a near-black canvas; the hairline is
        kept because it is a node edge, not elevation, and it already derives from `--text`. */
@@ -2828,7 +2843,28 @@
     box-shadow: var(--shadow-elevated), 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent) inset;
 }
 
-.iot-board .device-node:active {
+/* ========== 节点光标：拖拽物，不是按钮 ==========
+ *
+ * 设备节点是画布上唯一可拖拽的对象，静止时应显示 `grab`、按下时 `grabbing`。
+ * 但节点标记是 `<div class="device-node" role="button" :aria-disabled="…">`，于是上方那条可点击性规则
+ * `.iot-board [role='button']:not([aria-disabled='true'])` —— 特异度 (0,3,0) —— 压过了原先写在
+ * `.iot-board .device-node` (0,2,0) 里的 `grab`。**结果正好反了**:未锁定（可拖）的节点显示 `pointer`，
+ * 而锁定（不可拖）的节点因为被 `:not()` 排除反而保留了 `grab`。用探针实测确认:unlocked=pointer,
+ * locked=grab。样式表里没有 `@layer`，所以书写顺序救不了它。
+ *
+ * 修法是把静止态提到同样的 (0,3,0) 并显式区分两种状态，而不是去削弱那条可点击性规则 ——
+ * `Board.vue` 有 `<summary role="button">` 依赖它。
+ */
+.iot-board .device-node[role='button']:not([aria-disabled='true']) {
+    cursor: grab;
+}
+
+/* 锁定态（回放只读、场景替换中、数据未就绪）不可拖动，光标不应承诺拖拽。 */
+.iot-board .device-node[role='button'][aria-disabled='true'] {
+    cursor: default;
+}
+
+.iot-board .device-node[role='button']:not([aria-disabled='true']):active {
     cursor: grabbing;
 }
 

@@ -23,16 +23,14 @@ public class TraceSummaryDto {
     private Integer stateCount;
     private LocalDateTime createdAt;
 
-    /**
-     * Whether this counterexample's run still holds the SMV model it checked, gating
-     * {@code GET /api/verify/traces/{id}/smv}. Presence only — the model itself runs to tens of
-     * thousands of characters and would dominate a history list.
+    /*
+     * No `hasSmvModel` here.
      *
-     * <p>The history panel already gated its per-counterexample download on this, but the field was
-     * never populated here, so the button never appeared. Null on an unavailable record, where nothing
-     * about the model can be asserted.
+     * It was added to gate a per-counterexample download button, and that button was removed in the same
+     * change set once the model was recognised as run-level — leaving a field that was queried, mapped,
+     * serialized, and read by nothing. The run summary beside it (`VerificationRunSummaryDto`) carries
+     * the flag the history panel's single per-run download actually reads.
      */
-    private Boolean hasSmvModel;
 
     @Builder.Default
     private Boolean dataAvailable = true;

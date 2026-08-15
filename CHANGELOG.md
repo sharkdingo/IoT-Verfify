@@ -15,6 +15,77 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-16 (later)
+
+#### Removed
+
+- **`GET /api/verify/traces/{id}/smv` and the `trace.smv_model_content` column.** The endpoint could only
+  ever answer a byte-identical copy of the run's model: one model string is generated per run and was
+  written to the run row *and* to every trace of that run, so a run with three violated specifications
+  stored and served the same bytes from four addresses — 345 KB of duplication across 30 trace rows on a
+  development database, growing with every run. Its documented justification, that a counterexample stays
+  self-contained after its run is deleted, was contradicted by `deleteRunInternal`, which deletes every
+  trace and then the run in one transaction. Nothing called it: no client method, no test, no script. The
+  run-keyed endpoint strictly dominates it and is the only one that works for a run where every
+  specification holds. `TraceDto.hasSmvModel`, `TraceSummaryDto.hasSmvModel` (queried, mapped, serialized
+  and read by nothing) and the frontend's `AvailableTraceSummary.hasSmvModel` went with it.
+  `ddl-auto: update` never drops a column, so an existing database keeps `smv_model_content` as dead
+  nullable storage until dropped by hand.
+
+- **35 orphaned i18n keys, and two dead `boardApi` client methods.** Each key was translated twice and
+  rendered nowhere; six of them (`keyMetrics`, `specificationResults`, `traceSummary`,
+  `verificationContext`, `specResultsSummary`, `viewTrace`) were added and abandoned in one refactor. The
+  bundle→source direction now has a guard, which is why they accumulated: the existing check only
+  verified that a key a source file *names* resolves. `getVerificationTraces` and
+  `deleteVerificationTrace` had no callers of any kind — both endpoints stay, exercised by E2E and by the
+  assistant's `DeleteTraceTool` respectively. Also removed: a never-assigned `runIdForSmv` type field and
+  two over-broad `export` keywords on internal validators.
+
+#### Fixed
+
+- **Interactive controls in both replay bars had no pointer cursor.** Measured on the counterexample bar:
+  10 of 12 enabled controls rendered `cursor: default` — play, close, run details, previous/next state,
+  both state chips, both help buttons. `board.css` carries one clickability rule added precisely so
+  per-component opt-in could not miss anything, and it missed both replay bars entirely, because they are
+  `position: fixed` **siblings** of `.iot-board` rather than descendants. This is the same structural fact
+  that stops `--board-floating-gap` resolving inside them: one DOM relationship, two unrelated-looking
+  bugs. Two further surfaces were uncovered for the same reason and are now fixed at the surface level:
+  any button inside a dialog overlay that is not built from `iot-dialog-btn` (measured: 2 of 13 in the
+  verification result dialog), and the teleported template-preview close button.
+
+- **The device node's drag affordance was inverted.** A node is `<div role="button" aria-disabled>`, so
+  `.iot-board [role='button']:not([aria-disabled='true'])` at specificity (0,3,0) outranked
+  `.iot-board .device-node { cursor: grab }` at (0,2,0). Verified with an injected probe: an **unlocked**
+  node showed `pointer` and a **locked** one showed `grab` — the one draggable object on the canvas
+  invited a click, and a node locked by read-only playback invited a drag that cannot happen.
+
+- **A saved trajectory's model download vanished when the same run was reopened from history.**
+  `lastSimulationResult` has three writers and the history-replay one dropped `hasSmvModel` and
+  `historyPersistence`, so whether the artifact was offered depended on *which UI path opened the run*
+  rather than on the run. The same trajectory offered its model right after executing and then claimed
+  "SMV model not available (may be a record saved before model persistence was enabled)" after a reload —
+  specific enough to be believed, so a user would not retry, while the model sat on disk.
+
+- **Model-generation warnings rendered as `[object Object]` in the counterexample dialog.** The only
+  `{{ issue }}` interpolation in the codebase; the five other renderers of that array all destructure it
+  and localize the reason code. The block said "N of your rules were not modeled" — the statement that the
+  verdict beside it is weaker than it looks — and rendered as garbage. It and the incomplete-model warning
+  also sat outside both labelled sections of that dialog, which is why the run-vs-evidence split missed
+  them; both are now inside the run-context section where they belong.
+
+- **A verification or simulation history row silently claimed the canvas was unchanged.** Its drift check
+  compares five integers, so inverting a rule's relation operator, changing an environment variable's
+  value or moving a specification's threshold left every count equal — and the row rendered *nothing*,
+  which reads as "this verdict still describes my canvas". That is the one claim this product never makes
+  elsewhere. The verdict is now three-valued and states what was compared. A real fingerprint is not
+  available here by contract, not by omission: `PersistedModelContextIntegrity` *rejects* a
+  `modelFingerprint` on a verification or simulation snapshot, so populating it would make existing rows
+  unreadable. The doc said "currently omit it", implying an unfinished feature, and now says so correctly.
+
+- **`docs/examples/elderly-care-comprehensive-scene.json` is now tracked.** It is generated, and it is
+  byte-identical to generator output (all five shipped scenes reproduce exactly), so a fresh clone no
+  longer has a broken reference from the docs and from `VerifyCorrectedScene`.
+
 ### 2026-08-16
 
 #### Changed

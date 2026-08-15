@@ -71,4 +71,64 @@ describe('literal i18n calls', () => {
     expect(scanned, 'no namespaced key literals were scanned at all').toBeGreaterThan(500)
     expect(missing, `Key literals with no translation:\n${missing.join('\n')}`).toEqual([])
   })
+
+  /*
+   * The reverse direction: every key defined is a key something claims.
+   *
+   * The two assertions above check "a key a source file names must resolve", which is the direction that
+   * prevents a raw `app.something` reaching a user. Nothing checked the other way, and **35 orphaned keys
+   * had accumulated** — including a family of four (`runBoardInput*Short`) and six added and abandoned in
+   * a single refactor (`keyMetrics`, `specificationResults`, `traceSummary`, `verificationContext`,
+   * `specResultsSummary`, `viewTrace`). Each was translated twice and rendered nowhere, so a reader
+   * looking for the string that produces a label finds a plausible unused one.
+   *
+   * Dynamically built keys are the reason this direction is harder, and they are handled by construction
+   * rather than by an allowlist: any template literal of the form `namespace.prefix${…}` contributes its
+   * prefix, and every key under a contributed prefix counts as claimed. The bare `app.${…}` form is
+   * narrowed to the four trust/privacy values its call sites can actually produce — verified at
+   * `CanvasBoard.vue` and `ControlCenter.vue`, whose interpolations are typed to closed four-value sets.
+   * Widening that to "any app key" would make this test unable to fail.
+   */
+  it('are all claimed by some source file', () => {
+    /*
+     * `e2e/` counts as a claimant, and that is not padding. An E2E spec addresses the product the way a
+     * user does — several assert on rendered sentences (`'Move earlier'`, `'Replace in full'`) rather
+     * than on keys — so a key used only by an E2E selector would look orphaned to a `src/`-only scan and
+     * be deleted, breaking the suite in a way no unit test could see. Scanning only `src/` was a real gap
+     * in the sweep that removed 35 keys; it happened to hit nothing, which is luck, not a method.
+     */
+    const corpus = [
+      ...sourceFiles(join(process.cwd(), 'src')).filter(file => !file.endsWith('i18n.ts')),
+      ...sourceFiles(join(process.cwd(), 'e2e'))
+    ]
+      .map(file => readFileSync(file, 'utf8'))
+      .join('\n')
+
+    // Prefixes of dynamically constructed keys, e.g. `app.taskProgressStage_${stage}`.
+    const dynamicPrefixes = [...corpus.matchAll(/[`'"]([A-Za-z][A-Za-z0-9_.]*?)\$\{/g)]
+      .map(match => match[1])
+      .filter(prefix => prefix.includes('.') && prefix !== 'app.')
+    // `t(`app.${trust}`)` / `t(`app.${privacy}`)`: closed domains, so exactly these four.
+    const bareDynamic = new Set(['app.trusted', 'app.untrusted', 'app.private', 'app.public'])
+
+    const leafKeys = (value: unknown, path: string[] = []): string[] =>
+      value !== null && typeof value === 'object'
+        ? Object.entries(value as Record<string, unknown>)
+          .flatMap(([key, child]) => leafKeys(child, [...path, key]))
+        : [path.join('.')]
+
+    const defined = leafKeys(
+      (i18n.global.messages.value as Record<string, unknown>)['zh-CN'])
+    expect(defined.length, 'the bundle should have been walked').toBeGreaterThan(1000)
+
+    const orphans = defined.filter(key =>
+      !corpus.includes(key)
+      && !bareDynamic.has(key)
+      && !dynamicPrefixes.some(prefix => key.startsWith(prefix))
+      // A lookup table may map data to a leaf and build the key from it; the bare leaf appearing as a
+      // quoted string elsewhere is weak evidence of that, so it is tolerated rather than reported.
+      && !new RegExp(`['"\`]${key.split('.').pop()}['"\`]`).test(corpus))
+
+    expect(orphans, `i18n keys defined but claimed by nothing:\n${orphans.join('\n')}`).toEqual([])
+  })
 })

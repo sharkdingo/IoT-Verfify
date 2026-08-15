@@ -296,40 +296,31 @@ public class VerificationController {
         return ranges;
     }
 
-    /**
-     * Download the exact SMV model checked by the run that produced this counterexample.
+    /*
+     * There is deliberately no trace-keyed SMV download.
      *
-     * <p>A trace without a stored model is a real state, not a server defect: every trace written
-     * before the model was persisted has none, and no migration can invent one. So this answers
-     * {@code 404} — the model resource does not exist for this trace — rather than {@code 500},
-     * which blamed the server for the absence and told the user nothing they could act on. Clients
-     * decide whether to offer the download from {@code hasSmvModel} on the trace, so a 404 here
-     * means a stale client or a direct call, not a broken run.
+     * `GET /api/verify/traces/{id}/smv` existed and was removed, because it could only ever return a
+     * byte-identical copy of what `runs/{id}/smv` returns. One model string is generated per run and
+     * written to the run row and to every trace of that run, so a run with three violated
+     * specifications answered the same bytes from four addresses. Its stated justification — that a
+     * counterexample stays self-contained after its run is deleted — was false: `deleteRunInternal`
+     * deletes every trace and then the run in one transaction, so a trace cannot outlive its run.
+     * Nothing called it: no client method, no test, no script.
      *
-     * <p>Never an empty attachment: a zero-byte {@code .smv} would be mistaken for the checked model.
+     * The run-keyed endpoint strictly dominates it, and is the only one that works for a run where
+     * every specification holds, which has no counterexample to key on.
      */
-    @GetMapping(value = "/traces/{id}/smv", produces = "text/plain;charset=UTF-8")
-    public org.springframework.http.ResponseEntity<String> downloadTraceSmvModel(
-            @CurrentUser Long userId,
-            @PathVariable @Positive Long id) {
-        TraceDto trace = verificationService.getTrace(userId, id);
-
-        if (!trace.hasSmvModel()) {
-            throw new ResourceNotFoundException("SMV model for verification trace", id);
-        }
-
-        return smvAttachment(trace.getSmvModelContent(), "verification-trace-" + id + ".smv");
-    }
 
     /**
-     * Download the exact SMV model a run checked, keyed on the run rather than on a counterexample.
+     * Download the exact SMV model a run checked. The only SMV download for verification.
      *
-     * <p>All of a run's counterexamples share one model, and a run where every specification holds has
-     * no counterexample at all — so the trace-keyed download left the model of a *passing* run
-     * unreachable, which is the case where a reader most wants to confirm what was actually proved.
+     * <p>All of a run's counterexamples share one model, and a run where every specification holds has no
+     * counterexample at all — so keying the download on a counterexample left the model of a *passing*
+     * run unreachable, which is the case where a reader most wants to confirm what was actually proved.
      *
-     * <p>{@code 404} when the run stores no model; see {@code downloadTraceSmvModel} for why that is a
-     * state rather than a defect.
+     * <p>{@code 404} when the run stores no model: runs recorded before the model was persisted have
+     * none, and no migration can invent one, so absence is a state rather than a server defect. Never an
+     * empty attachment — a zero-byte {@code .smv} would be mistaken for the checked model.
      */
     @GetMapping(value = "/runs/{id}/smv", produces = "text/plain;charset=UTF-8")
     public org.springframework.http.ResponseEntity<String> downloadRunSmvModel(

@@ -117,6 +117,41 @@ describe('run artifact placement', () => {
     }
   })
 
+  it('carries the artifact fields on every path that builds a simulation result', () => {
+    /*
+     * Whether the download is offered must depend on the run, not on which UI path opened it.
+     *
+     * `lastSimulationResult` has three writers — sync save, async poll, and history replay — and the
+     * history one dropped `hasSmvModel` and `historyPersistence`. So the same trajectory offered the
+     * model right after executing and then claimed "SMV model not available (may be a record saved
+     * before model persistence was enabled)" after a refresh and History → Replay → Run details. The
+     * message is specific enough to be believed, so a user would not retry, while the model sat on disk.
+     *
+     * Neither existing check could see it: the assertion above only proves the availability computed
+     * exists, and `e2e/smv-model-download.spec.ts` exercises a freshly executed run. This asserts the
+     * shape at every construction site instead — the same defect class as the original bug, where a
+     * field the backend sent was dropped by one builder among several.
+     */
+    /*
+     * Anchored on `playbackScene: trace.playbackScene`, the line every one of these builders ends its
+     * trace-derived fields with, rather than on `const result = {`. The three sit at different nesting
+     * depths and only one is a `const` declaration, so a syntax-shaped match found 1 of 3 — a check
+     * that would have passed the very defect it exists to catch.
+     */
+    const anchors = [...board.matchAll(/playbackScene:\s*trace\.playbackScene/g)].map(m => m.index ?? 0)
+    expect(anchors.length, 'the sync, async and history simulation builders').toBeGreaterThanOrEqual(3)
+
+    for (const [index, at] of anchors.entries()) {
+      // The object literal's remaining fields: from the anchor to the closing brace of the literal.
+      const tail = board.slice(at, at + 1400)
+      const body = tail.slice(0, tail.search(/\n\s{0,10}\}/) + 1)
+      expect(body, `simulation result builder #${index + 1} must carry the model-presence flag`)
+        .toContain('hasSmvModel')
+      expect(body, `builder #${index + 1} must carry the record that supplies the download id`)
+        .toContain('historyPersistence')
+    }
+  })
+
   it('resolves the run id in a handler rather than asserting it non-null in the template', () => {
     // `downloadVerificationRunSmv(verificationResult.historyPersistence!.runId!)` typechecked only
     // because the same button carried `:disabled="!verificationRunSmvAvailable"`. The assertion's

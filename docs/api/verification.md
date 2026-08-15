@@ -311,7 +311,7 @@ for replay or repair only with a clear partial-evidence qualifier.
 | `counterexampleCount` | `Integer` | Persisted traces whose history-summary metadata validates; damaged summary placeholders are excluded and the count may be lower than `violatedSpecCount` or `counterexamples.length` |
 | `disabledRuleCount` / `skippedSpecCount` | `Integer` | Model omissions |
 | `generationIssues` | `ModelGenerationIssueDto[]` | Itemized omission explanations |
-| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count, timestamp, and `hasSmvModel` (reported but not surfaced as a download — the model is run-level); the history query does not read the full states or frozen request, and damaged summary fields remain as `dataAvailable=false` placeholders |
+| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count and timestamp — no model flag, because the model is run-level and this run's own `hasSmvModel` answers for all of them; the history query does not read the full states or frozen request, and damaged summary fields remain as `dataAvailable=false` placeholders |
 | `hasSmvModel` | `Boolean` | Whether the run still holds the model it checked, gating the per-run download; see [Downloading the SMV model](#downloading-the-smv-model--three-endpoints-one-model-per-run) |
 | `dataAvailable` | `Boolean` | `true` when the persisted summary fields decoded successfully; full state and frozen-request integrity is checked when detail is opened |
 | `unavailableReasonCode` | `String` | Present for an unavailable row; currently `PERSISTED_SEMANTIC_DATA_INVALID` |
@@ -461,7 +461,7 @@ tasks, task summaries, and persisted trace detail/summary DTOs.
 | `environmentVariableCount` | `int` | Effective board environment entries after required defaults were merged |
 | `deviceTemplateCount` | `int` | Distinct referenced template manifests captured for the run |
 | `templatesFrozen` | `boolean` | Always `true`; generation reused the captured manifests and did not reload mutable definitions |
-| `modelFingerprint` | `String` | Optional canonical semantic fingerprint. Counterexample-exploration runs populate it for exact current-Board drift checks; verification and simulation currently omit it |
+| `modelFingerprint` | `String` | Canonical semantic fingerprint, **exploration-only by contract**. Counterexample-exploration runs populate it for exact current-Board drift checks. On a verification or simulation snapshot it must be `null`: `PersistedModelContextIntegrity` *rejects* a non-null value as a persisted-integrity violation, so this is an enforced invariant rather than an unfinished feature, and populating it would make existing rows unreadable |
 | `environmentProvenance` | `EnvironmentValueProvenanceDto[]` | Per-shared-value evolution rules frozen for this run, so a stored trace stays explainable after the Board changes. Empty when the run had no shared values. See [`EnvironmentValueProvenanceDto`](#environmentvalueprovenancedto) |
 
 `modelSnapshot` is scope metadata, not a claim that the current Board still matches.
@@ -469,6 +469,17 @@ The Board compares current modelable input with an in-memory submission signatur
 for runs submitted in the same browser tab. It labels changed input explicitly; after a
 reload or when opening historical results, it says the current Board was not compared
 and limits the conclusion to this snapshot.
+
+**A history row can only compare counts, and says so.** With no fingerprint available for verification
+and simulation, a run history row compares device, rule, specification, environment-variable and
+template *counts* against the current canvas. Every semantic edit that preserves those counts is
+invisible to it — inverting a rule's relation operator, changing an environment variable's value, moving
+a specification's threshold, swapping one device's template. (A device rename is deliberately not drift
+anywhere in this product: the exploration fingerprint strips `deviceLabel` as presentation.) So the row
+renders three distinct states, never a bare absence: the drift warning when a count differs, an explicit
+"counts match, contents not compared" notice when they agree, and nothing only when there is no current
+scope to compare against. Rendering nothing for the middle case asserted that the verdict still
+described the canvas, which is the one claim this product never makes.
 
 ### `EnvironmentValueProvenanceDto`
 
@@ -514,8 +525,9 @@ generation, so a `COMPOSED` discrete value is one whose writers agree.
 - `GET /api/verify/traces` → `TraceDto[]`
 - `GET /api/verify/traces/{id}` → `TraceDto`
 - `DELETE /api/verify/traces/{id}` → `null` (404 `ResourceNotFoundException` if absent)
-- `GET /api/verify/traces/{id}/smv` → SMV model file (plain text attachment); for a whole run's model
-  use `GET /api/verify/runs/{id}/smv`, which also covers runs with no counterexample
+
+There is no trace-keyed SMV download. A run checks one model and every counterexample under it came
+out of that model, so the model is addressed by run: `GET /api/verify/runs/{id}/smv`.
 
 The full `GET /api/verify/traces` collection preserves newest-first ordering after loading
 owned rows. Its database query is deliberately unordered so MySQL does not include complete
@@ -1021,35 +1033,41 @@ For the algorithm (strategies, forward verification), see
 [../architecture/auto-fix.md](../architecture/auto-fix.md). This
 section is the API contract only.
 
-### Downloading the SMV model — three endpoints, one model per run
+### Downloading the SMV model — one model per run, addressed by run
 
-A verification run checks exactly one model, and all of its counterexamples come from that model.
-The model is therefore owned by the **run**, and the per-counterexample copy exists only so a
-counterexample stays self-contained after its run is deleted.
+A verification run checks exactly one model, and every counterexample it produced came out of that
+model. The model is therefore owned by the **run**, and there are exactly two download endpoints —
+one per run kind, because a simulation trajectory *is* its own run.
 
 | Endpoint | Returns | Filename |
 | :--- | :--- | :--- |
 | `GET /api/verify/runs/{id}/smv` | The model a verification run checked | `verification-run-{id}.smv` |
-| `GET /api/verify/traces/{id}/smv` | The model behind one counterexample | `verification-trace-{id}.smv` |
 | `GET /api/simulate/traces/{id}/smv` | The model executed for one trajectory | `simulation-trace-{id}.smv` |
 
-Prefer the run-keyed endpoint for a verification result. It is the only one that works when every
-specification holds: such a run produces no counterexample, so there is no trace id to address —
-and that is the case where a reader most wants to confirm what was actually proved.
+**A trace-keyed download used to exist and was removed** (`GET /api/verify/traces/{id}/smv`, along with
+the `trace.smv_model_content` column and `TraceDto.hasSmvModel`). It could only ever answer a
+byte-identical copy of the run's model: one model string was generated per run and written to the run
+row *and* to each of its traces, so a run with three violated specifications stored and served the same
+bytes from four addresses — measured at 345 KB of duplication across 30 trace rows on a development
+database, growing with every run.
 
-**The UI offers only the run-keyed download.** The model is a scene-level artifact — one per run — so a
-per-counterexample control handed out the same file once per counterexample under a name implying one
-model each, and put a scene-level artifact behind a per-evidence surface. The web client therefore
-calls `/runs/{id}/smv` (and `/simulate/traces/{id}/smv`, where the trajectory *is* the run) and has no
-client method for `/verify/traces/{id}/smv`. The trace-keyed endpoint stays supported for API
-consumers that hold a trace id and nothing else; whether to retire it is an open contract decision.
-Frontend placement rules are pinned by `frontend/src/views/board/runArtifactPlacement.spec.ts`.
+Its documented justification was that a counterexample must stay self-contained after its run is
+deleted. The code contradicts that: `VerificationServiceImpl.deleteRunInternal` deletes every trace and
+then the run in one transaction, so a trace cannot outlive its run. Nothing called it — no client
+method, no test, no script — and the run-keyed endpoint strictly dominates it, being the only one that
+works for a run where every specification holds and there is no counterexample to key on.
 
-**Response** (all three): `text/plain;charset=UTF-8`, `Content-Disposition: attachment`. The
+`ddl-auto: update` never drops a column, so an existing database keeps `trace.smv_model_content` as
+dead storage until dropped by hand. It is nullable and unread, so leaving it is harmless.
+
+Frontend placement rules are pinned by `frontend/src/views/board/runArtifactPlacement.spec.ts`; that a
+counterexample carries no model in either mapping direction is pinned by `TraceMapperTest`.
+
+**Response** (both): `text/plain;charset=UTF-8`, `Content-Disposition: attachment`. The
 filename is emitted as a plain ASCII `filename` parameter; passing a charset would make Spring
 encode it as an RFC 2047 encoded-word, which clients save literally.
 
-**Errors** (all three):
+**Errors** (both):
 - `404 ResourceNotFoundException` — the record does not exist, belongs to another user, or stores
   no model. A run or trace recorded before the model was persisted has none, and no migration can
   invent one, so absence is a state rather than a server fault. Never an empty attachment: a
@@ -1067,8 +1085,6 @@ user can act on.
 | `VerificationTaskDto` | Same dialog, after an async run completes | mapped from the task row |
 | `VerificationRunDto` | Same dialog, for a run reopened from history | mapped from the run row |
 | `VerificationRunSummaryDto` | Per-run button in the history panel | `CASE WHEN … <> ''` in the run-summary query |
-| `TraceSummaryDto` | *No UI download* — kept for API consumers holding only a trace id | `CASE WHEN … <> ''` in the trace-summary query |
-| `TraceDto` | *No UI download* — the counterexample dialog links to its owning run instead | derived getter over `smvModelContent` |
 | `SimulationResultDto` | Simulation result dialog | derived getter over `smvModelContent` |
 | `SimulationTraceDto` | Replay of a saved trajectory | derived getter over `smvModelContent` |
 | `SimulationTraceSummaryDto` | Per-trajectory button in the history panel | `CASE WHEN … <> ''` in the trace-summary query |

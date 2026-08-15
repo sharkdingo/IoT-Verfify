@@ -622,7 +622,10 @@ export const validateVerificationTask = (value: unknown): VerificationTask => {
   return task as VerificationTask
 }
 
-export const validateVerificationTaskSummary = (value: unknown): VerificationTaskSummary => {
+// Not exported: the list validator below is the module's public surface, and this is its element step.
+// An exported symbol with no importer reads as public API and invites a second entry point past the
+// list-level checks.
+const validateVerificationTaskSummary = (value: unknown): VerificationTaskSummary => {
   const context = 'Verification task summary'
   const task = validateTaskBase(value, context)
   if (task.modelSnapshot.specificationCount < 1) {
@@ -875,7 +878,8 @@ const validateSimulationTaskShape = (
 export const validateSimulationTask = (value: unknown): SimulationTask =>
   validateSimulationTaskShape(value, 'Simulation task', true) as SimulationTask
 
-export const validateSimulationTaskSummary = (value: unknown): SimulationTaskSummary =>
+// Not exported, for the same reason as `validateVerificationTaskSummary` above.
+const validateSimulationTaskSummary = (value: unknown): SimulationTaskSummary =>
   validateSimulationTaskShape(value, 'Simulation task summary', false) as SimulationTaskSummary
 
 export const validateSimulationTaskSummaryList = (value: unknown): SimulationTaskSummary[] => {

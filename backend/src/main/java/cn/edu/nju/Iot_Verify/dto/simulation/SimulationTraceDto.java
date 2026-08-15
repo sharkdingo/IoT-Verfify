@@ -67,8 +67,14 @@ public class SimulationTraceDto {
     private String smvModelContent;
 
     /**
-     * Whether this trajectory has a stored model, so the client can offer the download only when it
-     * can succeed. Same reasoning as {@code TraceDto#hasSmvModel}.
+     * Whether this trajectory has a stored model, so the client can offer the download only when it can
+     * succeed. The content itself is {@code @JsonIgnore} (tens of thousands of characters), which without
+     * this flag left the client unable to tell a trajectory that carries a model from one that does not —
+     * so it gated the button on the id, showed it for every record, and any trajectory saved before the
+     * model was persisted produced a failed download with no explanation.
+     *
+     * <p>A trajectory is its own run, which is why this exists here and has no verification-trace
+     * counterpart: there, one run owns many counterexamples and the flag lives on the run.
      */
     @JsonProperty("hasSmvModel")
     public boolean hasSmvModel() {

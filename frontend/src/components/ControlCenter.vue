@@ -4927,6 +4927,11 @@ details > summary::-webkit-details-marker {
   border-radius: var(--iot-radius-action);
   background: var(--template-preview-control-bg);
   color: var(--template-preview-muted);
+  /* Declared per-element, unlike the board and dialog rules, because this popover is
+     `<Teleport to="body">`: it is inside neither `.iot-board`, `.board-timeline-host`, nor
+     `.iot-dialog-overlay`, so the only ancestor a scoped rule could use is `body` — the blanket
+     selector this codebase deliberately avoids. */
+  cursor: pointer;
 }
 
 .template-preview__close:hover {

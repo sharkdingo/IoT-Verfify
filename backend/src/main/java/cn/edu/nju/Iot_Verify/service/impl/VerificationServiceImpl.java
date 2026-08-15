@@ -1759,7 +1759,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                         .checkedExpression(scr.getSpecExpression())
                         .states(states)
                         .requestJson(requestJson)
-                        .smvModelContent(smvModelContent)
+                        // No `.smvModelContent(...)`: the run row this trace belongs to holds the one
+                        // model that was checked, and copying it per counterexample stored the same
+                        // bytes N+1 times for N violations. See `TracePo`.
                         .createdAt(LocalDateTime.now())
                         .build();
                 traces.add(trace);

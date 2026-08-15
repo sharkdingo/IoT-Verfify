@@ -73,18 +73,34 @@ class SmvModelPresenceSerializationTest {
         assertFalse(serialize(new SimulationResultDto()).get("hasSmvModel").asBoolean());
     }
 
+    /**
+     * A saved simulation trajectory reports presence, because the trajectory *is* its own run and its
+     * own download is keyed on this id.
+     */
     @Test
-    void persistedTraceDtosReportModelPresenceWithoutTheModel() throws Exception {
-        TraceDto trace = new TraceDto();
-        trace.setSmvModelContent("MODULE main\n");
-        JsonNode traceJson = serialize(trace);
-        assertTrue(traceJson.get("hasSmvModel").asBoolean());
-        assertFalse(traceJson.has("smvModelContent"));
-
+    void simulationTraceReportsModelPresenceWithoutTheModel() throws Exception {
         SimulationTraceDto trajectory = new SimulationTraceDto();
         trajectory.setSmvModelContent("MODULE main\n");
-        JsonNode trajectoryJson = serialize(trajectory);
-        assertTrue(trajectoryJson.get("hasSmvModel").asBoolean());
-        assertFalse(trajectoryJson.has("smvModelContent"));
+
+        JsonNode json = serialize(trajectory);
+        assertTrue(json.get("hasSmvModel").asBoolean());
+        assertFalse(json.has("smvModelContent"));
+    }
+
+    /**
+     * A verification counterexample reports neither — the asymmetry with simulation above is the point.
+     *
+     * <p>A verification run owns many counterexamples and one model, so the model is addressed by run.
+     * `TraceDto` carried both a copy of the model and a presence flag to serve a trace-keyed endpoint;
+     * all three are gone. A future reader adding "just the flag, for symmetry with SimulationTraceDto"
+     * would be reintroducing the level confusion this removal fixed.
+     */
+    @Test
+    void verificationTraceReportsNoModelAtAll() throws Exception {
+        JsonNode json = serialize(new TraceDto());
+
+        assertFalse(json.has("hasSmvModel"),
+                "a counterexample is not the level the model is addressed at");
+        assertFalse(json.has("smvModelContent"));
     }
 }

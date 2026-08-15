@@ -6540,9 +6540,16 @@ const activeSimulationSubmission = ref<RunSubmission<SimulationRequest> | null>(
 /** A run result as held by the board: the server payload plus the locally-attached submission. */
 type VerificationResultView = VerificationResult & { localRunSubmission?: RunSubmission<VerificationRequest> }
 /**
- * A simulation result as held by the board. `historyPersistence` describes the save outcome of a
- * FRESH run, so a saved trace reopened from history legitimately has none -- the board never
- * reads it off this ref, and modelling it optional avoids a cast at that entry point.
+ * A simulation result as held by the board.
+ *
+ * `historyPersistence` stays optional because a preview-only run genuinely has none: it is the save
+ * outcome, and an unsaved run was never saved.
+ *
+ * This comment used to add "the board never reads it off this ref", which was the false premise behind a
+ * real defect. The board *does* read it — `simulationRunSmvAvailable` and
+ * `downloadCurrentSimulationRunSmv` both take the download's run id from it — so the history-replay
+ * builder dropping the field made the same trajectory offer its model right after executing and refuse
+ * it after a reload. Optional means "may be absent on a preview", not "never consulted".
  */
 type SimulationResultView =
   Omit<SimulationResult, 'historyPersistence'>
@@ -10807,7 +10814,16 @@ const selectAndPlaySimulationTrace = async (
       enablePrivacy: trace.enablePrivacy === true,
       modelSemantics: trace.modelSemantics,
       modelSnapshot: trace.modelSnapshot,
-      playbackScene: trace.playbackScene
+      playbackScene: trace.playbackScene,
+      // The third writer of `lastSimulationResult`, and it dropped these two while the sync and async
+      // paths carried them — so whether the run-details dialog offered the model download depended on
+      // *which UI path opened the run*, not on the run. The same trajectory offered the download right
+      // after executing and then claimed "model not available (may be a record saved before model
+      // persistence was enabled)" after a refresh and History → Replay → Run details. That message is
+      // specific enough to be believed, so the user would not retry — while the model sat on disk and
+      // `GET /api/simulate/traces/{id}/smv` would have served it.
+      hasSmvModel: trace.hasSmvModel,
+      historyPersistence: trace.historyPersistence
     }
 
     closeHistoryPanel(false)
@@ -18420,34 +18436,51 @@ const counterexampleTraceHelpText = computed(() => {
               </span>
             </div>
           </div>
-        </section>
 
-        <!-- Incomplete Model Warning -->
-        <div
-          v-if="!traceDetailsView.modelComplete"
-          class="rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
-        >
-          <div class="font-bold mb-1">{{ t('app.incompleteModelWarning') }}</div>
-          <div class="text-xs">
-            {{ t('app.incompleteModelHint', {
-              rules: traceDetailsView.disabledRuleCount || 0,
-              specs: traceDetailsView.skippedSpecCount || 0
-            }) }}
+          <!--
+            Model omissions belong to the run, so they sit inside the run-context section rather than
+            floating between it and the technical details. Both blocks below describe what the generator
+            left out of the model this counterexample came from — identical for every counterexample of
+            the run — and being outside the section is why they escaped the run-vs-evidence split.
+          -->
+          <div
+            v-if="!traceDetailsView.modelComplete"
+            class="mt-3 rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
+          >
+            <div class="font-bold mb-1">{{ t('app.incompleteModelWarning') }}</div>
+            <div class="text-xs">
+              {{ t('app.incompleteModelHint', {
+                rules: traceDetailsView.disabledRuleCount || 0,
+                specs: traceDetailsView.skippedSpecCount || 0
+              }) }}
+            </div>
           </div>
-        </div>
 
-        <!-- Generation Issues -->
-        <div
-          v-if="traceDetailsView.generationIssues && traceDetailsView.generationIssues.length > 0"
-          class="rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
-        >
-          <div class="font-bold mb-1">{{ t('app.generationWarnings') }}</div>
-          <ul class="list-disc list-inside space-y-0.5 text-xs">
-            <li v-for="(issue, idx) in traceDetailsView.generationIssues" :key="idx">
-              {{ issue }}
-            </li>
-          </ul>
-        </div>
+          <div
+            v-if="traceDetailsView.generationIssues && traceDetailsView.generationIssues.length > 0"
+            class="mt-3 rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
+            data-testid="counterexample-generation-issues"
+          >
+            <div class="font-bold mb-1">{{ t('app.generationWarnings') }}</div>
+            <!--
+              `issue` is a ModelGenerationIssue object, not a string. This rendered `{{ issue }}`, so
+              every entry showed `[object Object]` — the one such site in the codebase; the other five
+              renderers of this same array all destructure it and localize the reason code. The itemLabel
+              names what was left out and the reasonCode says why, which is the whole content of the
+              warning.
+            -->
+            <ul class="space-y-1.5 text-xs">
+              <li
+                v-for="(issue, idx) in traceDetailsView.generationIssues"
+                :key="`${issue.issueType}-${issue.itemLabel}-${idx}`"
+                class="border-l-2 board-border-subtle pl-3"
+              >
+                <div class="font-bold">{{ issue.itemLabel }}</div>
+                <div class="mt-0.5 leading-5">{{ t(generationIssueReasonKey(issue)) }}</div>
+              </li>
+            </ul>
+          </div>
+        </section>
 
         <!-- Technical Details (collapsible) -->
         <details class="group border-t border-slate-200 pt-3">
