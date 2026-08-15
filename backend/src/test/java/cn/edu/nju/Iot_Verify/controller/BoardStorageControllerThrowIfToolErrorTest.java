@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRulesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.RecommendScenarioTool;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.component.board.BoardBatchRequestParser;
+import cn.edu.nju.Iot_Verify.component.board.PortableSceneRequestParser;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.BadGatewayException;
@@ -55,6 +56,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
     @Mock private RecommendScenarioTool recommendScenarioTool;
     @Mock private DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     @Mock private BoardBatchRequestParser boardBatchRequestParser;
+    @Mock private PortableSceneRequestParser portableSceneRequestParser;
     @Mock private InteractiveAiExecutionService interactiveAiExecutionService;
 
     private BoardStorageController controller;
@@ -70,7 +72,8 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 boardService, recommendRulesTool, recommendRelatedDevicesTool,
                 checkDuplicateRuleTool, checkRuleSimilarityTool,
                 recommendSpecificationsTool, recommendScenarioTool, objectMapper,
-                deviceTemplateSchemaValidator, boardBatchRequestParser, interactiveAiExecutionService);
+                deviceTemplateSchemaValidator, boardBatchRequestParser, portableSceneRequestParser,
+                interactiveAiExecutionService);
         lenient().when(interactiveAiExecutionService.execute(
                         anyLong(), anyString(), org.mockito.ArgumentMatchers.<Callable<Object>>any()))
                 .thenAnswer(invocation -> invocation.<Callable<Object>>getArgument(2).call());

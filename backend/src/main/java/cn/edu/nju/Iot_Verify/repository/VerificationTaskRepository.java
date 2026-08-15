@@ -65,8 +65,34 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     List<VerificationTaskSummaryProjection> findSummaryByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
             Long userId, VerificationTaskPo.TaskStatus status, List<Long> excludedIds);
 
-    List<VerificationRunSummaryProjection> findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
-            Long userId, VerificationTaskPo.TaskStatus status, Pageable pageable);
+    /**
+     * Completed runs for the history list.
+     *
+     * <p>Spelled as an explicit query rather than a derived one because {@code hasSmvModel} is not an
+     * entity property: it is {@code smvModelContent} tested for content, computed in SQL so a history
+     * page never loads tens of thousands of characters per row to decide whether one download button
+     * can succeed. Every other alias here matches the projection getter it feeds.
+     */
+    @Query("SELECT t.id AS id, t.initiator AS initiator, t.status AS status, "
+         + "t.createdAt AS createdAt, t.startedAt AS startedAt, t.completedAt AS completedAt, "
+         + "t.processingTimeMs AS processingTimeMs, t.isAttack AS isAttack, "
+         + "t.attackBudget AS attackBudget, "
+         + "t.modeledDeviceAttackPointCount AS modeledDeviceAttackPointCount, "
+         + "t.modeledFalsifiableReadingDeviceCount AS modeledFalsifiableReadingDeviceCount, "
+         + "t.modeledAutomationLinkAttackPointCount AS modeledAutomationLinkAttackPointCount, "
+         + "t.enablePrivacy AS enablePrivacy, t.modelSnapshotJson AS modelSnapshotJson, "
+         + "t.modelSemanticsJson AS modelSemanticsJson, t.outcome AS outcome, "
+         + "t.violatedSpecCount AS violatedSpecCount, t.disabledRuleCount AS disabledRuleCount, "
+         + "t.skippedSpecCount AS skippedSpecCount, "
+         + "t.generationIssuesJson AS generationIssuesJson, "
+         + "CASE WHEN t.smvModelContent IS NOT NULL AND t.smvModelContent <> '' "
+         + "THEN TRUE ELSE FALSE END AS hasSmvModel "
+         + "FROM VerificationTaskPo t WHERE t.userId = :userId AND t.status = :status "
+         + "ORDER BY t.completedAt DESC, t.id DESC")
+    List<VerificationRunSummaryProjection> findCompletedRunSummaries(
+            @Param("userId") Long userId,
+            @Param("status") VerificationTaskPo.TaskStatus status,
+            Pageable pageable);
 
     /**
      * 根据ID和用户ID查询任务
@@ -103,6 +129,7 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
          + "t.disabledRuleCount = :disabledRuleCount, t.skippedSpecCount = :skippedSpecCount, "
          + "t.specResultsJson = :specResultsJson, t.checkLogsJson = :checkLogsJson, "
          + "t.generationIssuesJson = :generationIssuesJson, t.nusmvOutput = :nusmvOutput, "
+         + "t.smvModelContent = :smvModelContent, "
          + "t.errorMessage = :errorMessage, t.processingTimeMs = :processingTimeMs, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status = :runningStatus "
@@ -118,6 +145,7 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
                               @Param("checkLogsJson") String checkLogsJson,
                               @Param("generationIssuesJson") String generationIssuesJson,
                               @Param("nusmvOutput") String nusmvOutput,
+                              @Param("smvModelContent") String smvModelContent,
                               @Param("errorMessage") String errorMessage,
                               @Param("processingTimeMs") Long processingTimeMs,
                               @Param("runningStatus") VerificationTaskPo.TaskStatus runningStatus,

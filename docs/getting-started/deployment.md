@@ -83,6 +83,11 @@ server {
     }
 
     # Portable scenes may include self-contained template snapshots and embedded icons.
+    location = /api/board/scene {
+        client_max_body_size 64m;
+        proxy_pass http://localhost:8080;
+    }
+
     location = /api/board/batch {
         client_max_body_size 64m;
         proxy_pass http://localhost:8080;

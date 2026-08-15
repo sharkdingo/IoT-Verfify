@@ -326,6 +326,13 @@ export const playbackDeviceChangeDetails = (
       currentValue: playbackValue(current.state)
     })
   }
+  // `mode` holds state-machine NAMES, not values — `SmvTraceParser` sets `state` to the mode *values*
+  // (joined with `;` for a multi-mode device) and `mode` to the matching names. The name set comes from
+  // the frozen manifest, so within one trace this row is effectively unreachable: any real mode change
+  // moves `state`, which the row above already reports and the canvas pill's title already shows.
+  //
+  // Kept rather than deleted because it is the honest comparison for the field, and an audit read the
+  // canvas as "silently dropping mode changes" on the assumption that mode carried values. It does not.
   if ((previous.mode || '') !== (current.mode || '')) {
     details.push({
       kind: 'mode',
@@ -334,8 +341,20 @@ export const playbackDeviceChangeDetails = (
     })
   }
 
-  const previousVariables = new Map((previous.variables || []).map(variable => [variable.name, variable.value]))
-  const currentVariables = new Map((current.variables || []).map(variable => [variable.name, variable.value]))
+  // `observed !== false`, for the reason recorded above `playbackDeviceSummaryParts` and applied by
+  // `computeNodeRuntimeBadges` on the canvas: a device that never had a reading to report is omitted,
+  // not rendered as `N/A`, because `N/A` claims a reading was expected and went missing.
+  //
+  // This diff was the one reader of the three that did not filter, and the flag can flip between
+  // states — the parser creates a row before its value is parsed, and `mergeVariables` only re-applies
+  // observability when a value arrives. So a reading that never existed surfaced here as
+  // `illuminance: 20 -> N/A`, a change row for a change that did not happen, while the canvas
+  // correctly drew nothing and the pool strip showed the true value.
+  const observedVariables = (device: PlaybackDevice) =>
+    (device.variables || []).filter(variable => variable.observed !== false)
+
+  const previousVariables = new Map(observedVariables(previous).map(variable => [variable.name, variable.value]))
+  const currentVariables = new Map(observedVariables(current).map(variable => [variable.name, variable.value]))
   const variableNames = new Set([...previousVariables.keys(), ...currentVariables.keys()])
   variableNames.forEach(name => {
     const before = playbackValue(previousVariables.get(name))

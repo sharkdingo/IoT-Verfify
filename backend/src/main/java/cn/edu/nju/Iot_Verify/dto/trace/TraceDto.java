@@ -112,6 +112,24 @@ public class TraceDto {
     /** Exact device layout and rules shown while replaying this historical evidence. */
     private ModelPlaybackSceneDto playbackScene;
 
+    /** Model source for the download endpoint; too large for the ordinary trace response. */
+    @JsonIgnore
+    private String smvModelContent;
+
+    /**
+     * Whether this trace has a stored model, so the client can offer the download only when it can
+     * succeed.
+     *
+     * <p>The content itself stays out of the response, which left the client with no way to tell a
+     * trace that carries a model from one that does not — so it gated the download button on the
+     * trace id instead, showed it for every trace, and any trace written before the model was
+     * persisted produced a failed download with no way for the user to know why.
+     */
+    @JsonProperty("hasSmvModel")
+    public boolean hasSmvModel() {
+        return smvModelContent != null && !smvModelContent.isBlank();
+    }
+
     /**
      * 创建时间
      */

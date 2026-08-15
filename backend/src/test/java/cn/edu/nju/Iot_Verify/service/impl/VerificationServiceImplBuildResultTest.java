@@ -201,7 +201,7 @@ class VerificationServiceImplBuildResultTest {
                 "buildVerificationResult",
                 NusmvResult.class, List.class, List.class, List.class,
                 Long.class, Long.class, List.class, Map.class, Map.class, String.class,
-                List.class, List.class, int.class, int.class);
+                List.class, List.class, int.class, int.class, String.class);
         buildVerificationResult.setAccessible(true);
     }
 
@@ -346,7 +346,7 @@ class VerificationServiceImplBuildResultTest {
                                          List<String> checkLogs) throws Exception {
         return (VerificationResultDto) buildVerificationResult.invoke(
                 service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), Map.of(), null,
-                emittedSpecsFor(specs), List.of(), 0, 0);
+                emittedSpecsFor(specs), List.of(), 0, 0, null);
     }
 
     private VerificationResultDto invoke(NusmvResult result,
@@ -367,7 +367,7 @@ class VerificationServiceImplBuildResultTest {
                                          int skippedSpecCount) throws Exception {
         return (VerificationResultDto) buildVerificationResult.invoke(
                 service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), Map.of(), null,
-                emittedSpecs, generationIssues, disabledRuleCount, skippedSpecCount);
+                emittedSpecs, generationIssues, disabledRuleCount, skippedSpecCount, null);
     }
 
     private List<SmvGenerationContext.EmittedSpec> emittedSpecsFor(List<SpecificationDto> specs) {
@@ -1319,7 +1319,7 @@ class VerificationServiceImplBuildResultTest {
         when(good.getId()).thenReturn(21L);
         when(corrupt.getId()).thenReturn(22L);
         when(corrupt.getCreatedAt()).thenReturn(LocalDateTime.now());
-        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+        when(taskRepository.findCompletedRunSummaries(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
                 .thenReturn(List.of(good, corrupt));
         when(traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(
@@ -1343,7 +1343,7 @@ class VerificationServiceImplBuildResultTest {
     void runHistory_doesNotMislabelProgrammingErrorsAsPersistedDataDamage() {
         VerificationRunSummaryProjection run = mock(VerificationRunSummaryProjection.class);
         when(run.getId()).thenReturn(23L);
-        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+        when(taskRepository.findCompletedRunSummaries(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
                 .thenReturn(List.of(run));
         when(traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(
@@ -1361,7 +1361,7 @@ class VerificationServiceImplBuildResultTest {
         when(run.getId()).thenReturn(31L);
         when(corruptTrace.getId()).thenReturn(41L);
         when(corruptTrace.getVerificationTaskId()).thenReturn(31L);
-        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+        when(taskRepository.findCompletedRunSummaries(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
                 .thenReturn(List.of(run));
         when(traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(
@@ -1500,14 +1500,14 @@ class VerificationServiceImplBuildResultTest {
         AsyncTaskAdmissionConfig admissionConfig = new AsyncTaskAdmissionConfig();
         admissionConfig.getVerification().setMaxStoredTasksPerUser(137);
         VerificationServiceImpl configuredService = serviceWithAdmissionConfig(admissionConfig);
-        when(taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+        when(taskRepository.findCompletedRunSummaries(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(Pageable.class)))
                 .thenReturn(List.of());
 
         assertTrue(configuredService.getRuns(1L).isEmpty());
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(taskRepository).findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+        verify(taskRepository).findCompletedRunSummaries(
                 eq(1L), eq(VerificationTaskPo.TaskStatus.COMPLETED), pageable.capture());
         assertEquals(0, pageable.getValue().getPageNumber());
         assertEquals(137, pageable.getValue().getPageSize());
@@ -1549,7 +1549,9 @@ class VerificationServiceImplBuildResultTest {
         verify(taskRepository).completeTaskIfRunning(
                 eq(9L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(),
                 eq(VerificationOutcome.VIOLATED), eq(1), eq(0), eq(0),
-                any(), any(), any(), any(), any(), any(), any(),
+                // specResultsJson, checkLogsJson, generationIssuesJson, nusmvOutput, smvModelContent,
+                // errorMessage, processingTimeMs
+                any(), any(), any(), any(), any(), any(), any(), any(),
                 anyString(), any(LocalDateTime.class));
     }
 
@@ -1745,13 +1747,15 @@ class VerificationServiceImplBuildResultTest {
         // Atomic UPDATE returns 0 — task was already cancelled in DB
         when(taskRepository.completeTaskIfRunning(
                 eq(70L), any(), any(), any(VerificationOutcome.class), anyInt(),
-                anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any(),
+                // …specResultsJson through processingTimeMs, now including smvModelContent
+                anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any(), any(),
                 anyString(), any(LocalDateTime.class)))
                 .thenReturn(0);
 
         Method completeTask = VerificationServiceImpl.class.getDeclaredMethod(
                 "completeTask", VerificationTaskPo.class, VerificationOutcome.class, int.class,
-                List.class, List.class, String.class, List.class, int.class, int.class);
+                List.class, List.class, String.class, List.class, int.class, int.class,
+                String.class);
         completeTask.setAccessible(true);
         completeTask.invoke(service, task, VerificationOutcome.SATISFIED, 0,
                 List.of(SpecResultDto.builder()
@@ -1763,7 +1767,7 @@ class VerificationServiceImplBuildResultTest {
                         .outcome(VerificationOutcome.SATISFIED)
                         .expression("expr")
                         .build()),
-                List.of("done"), "", List.of(), 1, 2);
+                List.of("done"), "", List.of(), 1, 2, "MODULE main");
 
         // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
         verify(taskRepository).completeTaskIfRunning(
@@ -1773,7 +1777,10 @@ class VerificationServiceImplBuildResultTest {
                         + "\"formulaPreview\":\"CTL AG(\\\"Hall sensor\\\".state = \\\"active\\\")\","
                         + "\"formulaKind\":\"CTL\",\"outcome\":\"SATISFIED\","
                         + "\"expression\":\"expr\"}]"),
-                any(), eq("[]"), any(), any(), any(), any(),
+                // checkLogsJson, generationIssuesJson, nusmvOutput, then the model, then errorMessage,
+                // processingTimeMs, runningStatus. The model slot sits between nusmvOutput and
+                // errorMessage, so it is inserted here rather than appended.
+                any(), eq("[]"), any(), eq("MODULE main"), any(), any(), any(),
                 anyString(), any(LocalDateTime.class));
         // save() should NOT be called — atomic UPDATE replaces it
         assertFalse(wasTaskSaveCalled());
@@ -1801,7 +1808,9 @@ class VerificationServiceImplBuildResultTest {
         when(taskRepository.completeTaskIfRunning(
                 eq(72L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(LocalDateTime.class),
                 eq(VerificationOutcome.VIOLATED), eq(1), eq(0), eq(0),
-                any(), any(), any(), any(), isNull(), any(),
+                // The `isNull()` pins errorMessage, so the model matcher goes BEFORE it: appending
+                // instead would silently move that assertion onto the model slot.
+                any(), any(), any(), any(), any(), isNull(), any(),
                 eq(VerificationTaskPo.TaskStatus.RUNNING),
                 anyString(), any(LocalDateTime.class))).thenReturn(0);
 
@@ -1809,11 +1818,11 @@ class VerificationServiceImplBuildResultTest {
                 "completeTaskAndSaveTraces",
                 VerificationTaskPo.class, List.class, Long.class, Long.class,
                 VerificationOutcome.class, int.class, List.class, List.class, String.class, List.class,
-                int.class, int.class);
+                int.class, int.class, String.class);
         method.setAccessible(true);
         Boolean completed = (Boolean) method.invoke(txService, task, List.of(trace), 1L, 72L,
                 VerificationOutcome.VIOLATED, 1, List.of(), new ArrayList<>(List.of("done")), "",
-                List.<ModelGenerationIssueDto>of(), 0, 0);
+                List.<ModelGenerationIssueDto>of(), 0, 0, "MODULE main");
 
         assertFalse(completed);
         assertTrue(lastTransactionStatus.isRollbackOnly());

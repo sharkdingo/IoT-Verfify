@@ -1,6 +1,7 @@
 // src/api/board.ts - Board API（自动解包Result<T>）
 import api from './http';
 import { PRIVACY_VALUE_SET, TRUST_VALUE_SET } from '@/utils/deviceRuntime';
+import { saveBlobResponseAsFile } from '@/utils/attachmentDownload';
 
 // 引入类型
 import type {
@@ -245,6 +246,15 @@ export interface BoardSemanticSnapshot {
     rules: RuleForm[]
     specifications: Specification[]
     deviceTemplates: DeviceTemplate[]
+}
+
+/** Authoritative board state after a confirmed full-scene replacement (import or clear). */
+export interface BoardSceneReplacementResult {
+    nodes: DeviceNode[]
+    environmentVariables: ModelEnvironmentVariable[]
+    rules: RuleForm[]
+    specs: Specification[]
+    createdTemplates: DeviceTemplate[]
 }
 
 const fromBackendRuleDto = (rule: BackendRuleDto): RuleForm => ({
@@ -2588,38 +2598,52 @@ export default {
     },
 
     /**
-     * Explicit atomic replacement of all four board semantic collections. The impact token must
-     * come from the preview shown to the user; omitted collections are never interpreted as patches.
+     * Imports a portable scene, atomically replacing the whole board.
+     *
+     * The validated file is sent verbatim: the server owns the portable → internal mapping, so this
+     * client does not restate how portable rules and specifications become write DTOs. That mapping
+     * used to be duplicated here and in the backend's chat-apply path, and the two could disagree on
+     * any field — the same dropped field failed three times before both copies agreed.
      */
-    saveBoardBatch: async (batch: {
+    importScene: async (request: {
         impactToken: string,
-        nodes: DeviceNode[],
-        environmentVariables: ModelEnvironmentVariable[],
-        rules: RuleForm[],
-        specs: Specification[],
-        templateSnapshots: DeviceTemplate[]
-    }): Promise<{
-        nodes: DeviceNode[],
-        environmentVariables: ModelEnvironmentVariable[],
-        rules: RuleForm[],
-        specs: Specification[],
-        createdTemplates: DeviceTemplate[]
-    }> => {
-        if (!batch.impactToken.trim()) {
-            throw new Error('Scene replacement requires a confirmed impact token')
+        scene: PortableSceneFile
+    }): Promise<BoardSceneReplacementResult> => {
+        if (!request.impactToken.trim()) {
+            throw new Error('Scene import requires a confirmed impact token')
         }
-        // A scene replacement is rejected as a whole if any rule has no trigger source.
-        batch.rules.forEach((rule, index) => assertRuleHasTrigger(rule, index));
-        const payload = {
-            impactToken: batch.impactToken,
-            nodes: batch.nodes,
-            environmentVariables: batch.environmentVariables,
-            rules: batch.rules.map(toBackendRuleDto),
-            specs: batch.specs.map(toBackendSpecificationWriteDto),
-            templateSnapshots: batch.templateSnapshots
-        };
         const saved = validateBoardBatchResult(
-            unpack<unknown>(await api.post('/board/batch', payload))
+            unpack<unknown>(await api.post('/board/scene', {
+                impactToken: request.impactToken,
+                scene: request.scene
+            }))
+        );
+        return {
+            ...saved,
+            rules: saved.rules.map(fromBackendRuleDto)
+        };
+    },
+
+    /**
+     * Clears the board atomically: every semantic collection is replaced with an empty one.
+     *
+     * Separate from {@link importScene} because a clear has no portable file behind it — it commits
+     * empty internal collections directly, so routing it through the scene format would mean
+     * inventing an empty scene document for a command that never had one.
+     */
+    clearBoardScene: async (impactToken: string): Promise<BoardSceneReplacementResult> => {
+        if (!impactToken.trim()) {
+            throw new Error('Scene clear requires a confirmed impact token')
+        }
+        const saved = validateBoardBatchResult(
+            unpack<unknown>(await api.post('/board/batch', {
+                impactToken,
+                nodes: [],
+                environmentVariables: [],
+                rules: [],
+                specs: [],
+                templateSnapshots: []
+            }))
         );
         return {
             ...saved,
@@ -2791,6 +2815,29 @@ export default {
     // 删除 Trace
     deleteVerificationTrace: async (id: number): Promise<void> => {
         return unpack<void>(await api.delete(`/verify/traces/${id}`));
+    },
+
+    /*
+     * There is deliberately no trace-keyed SMV download here.
+     *
+     * `GET /api/verify/traces/{id}/smv` still exists server-side, but the model is one per *run* — the
+     * run-keyed download below is the only one the UI offers, and it is also the only one reachable
+     * for a run where every specification held (no counterexample to key on). Removing the endpoint
+     * is an API-contract change and needs its own decision.
+     */
+
+    /**
+     * 下载整次验证运行的 SMV 模型文件
+     *
+     * Keyed on the run, not a counterexample: one model per run, and a run where every specification
+     * holds has no counterexample to address it by.
+     */
+    downloadRunSmvModel: async (runId: number): Promise<void> => {
+        const response = await api.get(`/verify/runs/${runId}/smv`, {
+            responseType: 'blob',
+            headers: { 'Accept': 'text/plain' }
+        });
+        saveBlobResponseAsFile(response, `verification-run-${runId}.smv`);
     },
 
     // ==== 异步验证 ====

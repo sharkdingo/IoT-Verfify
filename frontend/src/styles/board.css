@@ -3000,6 +3000,45 @@
                 0 0 14px color-mix(in srgb, var(--danger-fill) 48%, transparent);
 }
 
+/*
+ * "The specification fails here", on the surface the viewer is actually watching.
+ *
+ * The rail already marked the violating step with a ring and an 11px label, but during playback the eye
+ * is on the canvas, and arriving at that step changed nothing there — autoplay simply stopped on the last
+ * state. The run's whole purpose reached its point in silence.
+ *
+ * Deliberately NOT a dialog: it would cover the canvas being watched, demand a dismissal, and duplicate
+ * the counterexample dialog that is already one click away. This repo removed a toast over that same
+ * dialog for the same reason.
+ *
+ * Two layers, because they answer different questions. The ring is persistent state — "you are standing
+ * on the violating step" — and survives scrubbing back and forth. The flash is the arrival event, and is
+ * short so it cannot be mistaken for ongoing status. `--danger-fill` is the non-text indicator token,
+ * measured at 4.41:1 light / 3.70:1 dark against the 3:1 that WCAG 1.4.11 asks of it.
+ *
+ * Layered over `device-attacked` rather than replacing it: a compromised device can also be the one the
+ * violated property is about, and collapsing the two would hide the attack that explains the violation.
+ */
+.iot-board .device-node.device-at-violation {
+    z-index: 14;
+    outline: 3px solid var(--danger-fill);
+    outline-offset: 3px;
+    animation: violationArrival 620ms ease-out 1;
+}
+
+@keyframes violationArrival {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger-fill) 65%, transparent);
+    }
+    60% {
+        box-shadow: 0 0 0 14px color-mix(in srgb, var(--danger-fill) 0%, transparent),
+                    0 0 26px color-mix(in srgb, var(--danger-fill) 55%, transparent);
+    }
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger-fill) 0%, transparent);
+    }
+}
+
 @keyframes traceChangedPulse {
     0% {
         opacity: 0;
@@ -3055,6 +3094,10 @@
     .iot-board .device-node.trace-change-pulse::after,
     .iot-board .device-node.trace-change-pulse .device-node-content,
     .iot-board .device-node.device-attacked::before,
+    /* The arrival flash goes; the `outline` ring on the same class stays, because it is the statement
+       "this is the violating step" rather than decoration, and reduced motion must not remove
+       information. */
+    .iot-board .device-node.device-at-violation,
     .iot-board .animate-ping,
     .iot-board .animate-pulse,
     .iot-board .fade-in {

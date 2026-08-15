@@ -165,7 +165,8 @@ class FuzzRepositoryTest {
         assertEquals(0, verificationTaskRepository.completeTaskIfRunning(
                 verification.getId(), VerificationTaskPo.TaskStatus.COMPLETED, now,
                 VerificationOutcome.SATISFIED, 0, 0, 0,
-                "[]", "[]", "[]", "", null, 1L,
+                // nusmvOutput, smvModelContent, errorMessage, processingTimeMs
+                "[]", "[]", "[]", "", "MODULE main", null, 1L,
                 VerificationTaskPo.TaskStatus.RUNNING,
                 "expired-verification-worker", now));
         assertEquals(0, verificationTaskRepository.failTaskIfActive(

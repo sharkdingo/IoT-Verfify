@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.RecommendationAdjustmentItem;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationCapabilityView;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationFilterItem;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.SpecificationTemplateSemantics;
+import cn.edu.nju.Iot_Verify.component.board.PortableSceneFormat;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
@@ -57,8 +58,8 @@ import java.util.Set;
 @Component
 public class RecommendScenarioTool extends AbstractAiTool {
 
-    private static final String SCENE_SCHEMA = "iot-verify.board-scene";
-    private static final int SCENE_VERSION = 5;
+    private static final String SCENE_SCHEMA = PortableSceneFormat.SCHEMA;
+    private static final int SCENE_VERSION = PortableSceneFormat.VERSION;
     private static final int DEFAULT_NODE_WIDTH = 176;
     private static final int DEFAULT_NODE_HEIGHT = 128;
     private static final double TEMPERATURE = 0.7;

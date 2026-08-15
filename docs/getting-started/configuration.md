@@ -56,7 +56,7 @@ so a serialized response can be submitted unchanged.
 | :--- | :--- | :--- |
 | `SERVER_PORT` | `8080` | Backend HTTP port |
 | `IOT_VERIFY_MAX_REQUEST_BYTES` | `4194304` | Maximum JSON request-body size in bytes (4 MiB). Declared and chunked oversized requests return `413` before JSON binding. The body-buffering filter runs after Spring Security, so unauthorized protected requests are rejected before allocating the maximum body. The production reverse proxy should enforce the same or a stricter limit. |
-| `IOT_VERIFY_MAX_SCENE_REQUEST_BYTES` | `67108864` | Dedicated maximum for authenticated `POST /api/board/batch` scene replacement (64 MiB), allowing self-contained template snapshots and embedded icons to round-trip. All other JSON endpoints retain `IOT_VERIFY_MAX_REQUEST_BYTES`. The browser applies the same 64 MiB scene-file boundary. |
+| `IOT_VERIFY_MAX_SCENE_REQUEST_BYTES` | `67108864` | Dedicated maximum for the authenticated full-scene commands `POST /api/board/scene` and `POST /api/board/batch` (64 MiB), allowing self-contained template snapshots and embedded icons to round-trip. All other JSON endpoints retain `IOT_VERIFY_MAX_REQUEST_BYTES`. The browser applies the same 64 MiB scene-file boundary. |
 
 `server.error.include-message` and `include-binding-errors` are fixed to `never` to
 prevent the Spring `/error` endpoint from leaking internal exception detail.

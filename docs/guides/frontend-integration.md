@@ -265,8 +265,9 @@ Its methods return already-unwrapped values. Non-exhaustive:
   device ids, required identity/position/size, state required only for state-machine
   templates, state forbidden for stateless templates, required rule target command fields
   (`toId`/`toApi`), supported relation operators, specification template condition-side
-  shape, and rule/spec device references in the browser, then sends the
-  standard JSON template snapshots and complete board collections to `/board/batch`.
+  shape, and rule/spec device references in the browser, then uploads the validated portable
+  file itself to `/board/scene` — the server owns the mapping onto the write contract, so the
+  browser sends no internal rule/specification shapes.
   Before showing the destructive confirmation it calls `/board/replacement-preview` and
   displays the authoritative current server counts. The confirmed request carries that
   opaque `impactToken`; a `BOARD_REPLACEMENT_STALE` 409 means nothing was replaced, so

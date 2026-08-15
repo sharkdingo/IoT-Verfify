@@ -709,8 +709,9 @@ const expectTimelineNavigationAndContext = async (
   // suffix convention, and the panel is the step *values*, not the timeline's own details.
   const stateDetails = page.getByTestId(`${prefix}-step-values`)
   await expect(stateDetails).toBeVisible({ timeout: 30_000 })
-  // Only simulation-step-values is a <details> element with a clickable <summary>.
-  // trace-step-values is a plain <div> (always visible, no toggle).
+  // Only simulation-step-values is a <details> element with a clickable <summary>: it holds the device
+  // and environment tables, which are too tall to leave open on this overlay. trace-step-values is a
+  // plain <div>, because it carries only the cause row.
   if (prefix === 'simulation' && !await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
     await stateDetails.locator(':scope > summary').click({ force: true })
   }
@@ -768,6 +769,25 @@ const expectTimelineNavigationAndContext = async (
   await expect.poll(async () => timeline.getAttribute('data-selected-state-index'), {
     timeout: 5_000
   }).toBe('1')
+
+  /*
+   * Which automation produced this state must not sit behind a disclosure, on either rail.
+   *
+   * Stated as containment rather than visibility, because this helper clicks the simulation summary
+   * open further up: after that, `toBeVisible` cannot tell "outside the disclosure" from "inside it and
+   * expanded", so it would pass for the very regression it is meant to catch. `toContainText` is weaker
+   * still — a closed `<details>` keeps its content in the DOM. Containment holds whatever the
+   * expansion state, and it is the actual requirement: the cause is chrome-free, the value tables are
+   * not. Asserted past the initial state because neither rail renders a cause for state 0.
+   */
+  const causeRow = page.getByTestId(`${prefix}-timeline-triggered-rules`)
+  await expect(causeRow).toBeVisible({ timeout: 10_000 })
+  // Not "outside step-values": on the counterexample rail the cause lives inside `trace-step-values`,
+  // which is a plain <div>. The requirement is that no ancestor is a disclosure at all.
+  await expect(
+    await causeRow.evaluate(element => element.closest('details') !== null),
+    'the cause of the selected step must not sit behind a disclosure'
+  ).toBe(false)
 
   await expect.poll(async () => page.locator('.edge-line--active').count(), {
     timeout: 5_000

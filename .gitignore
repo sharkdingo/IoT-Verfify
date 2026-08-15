@@ -146,6 +146,13 @@ dump.rdb
 # ======================= Docker =============================
 docker-compose.override.yml
 
+# ============ Agent scratch output (never a deliverable) =====
+# Playwright-MCP writes a page snapshot and any downloaded attachment per browser step while an agent
+# drives the UI. Twenty-four accumulated in one debugging session. `.remember/` is an external tool's
+# live state (it self-ignores with `*`), listed here so `git add -A` cannot sweep it in either.
+.playwright-mcp/
+.remember/
+
 # ================= Local audit workspace =====================
 # Probe scripts, screenshots and the ledger for the UI/UX + cross-layer audit. Every file in here is a
 # measurement artifact, not a deliverable: they hardcode localhost, register throwaway accounts, and are

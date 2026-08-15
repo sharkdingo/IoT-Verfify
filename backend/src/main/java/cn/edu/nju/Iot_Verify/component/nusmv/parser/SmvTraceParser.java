@@ -38,6 +38,13 @@ public class SmvTraceParser {
             Pattern.compile("^\\s*(?:->\\s*)?State[:\\s]\\s*\\d+\\.(\\d+)(?:\\s*<-|:)?\\s*(\\w+)?");
     private static final Pattern STATE_LINE_PATTERN =
             Pattern.compile("^\\s*(?:->\\s*)?State[:\\s]\\s*\\d+\\.(\\d+)");
+    /**
+     * NuSMV's lasso marker, printed on its own line immediately before the state that begins the cycle.
+     * A liveness counterexample (negated template 5/6 — {@code EG}/{@code GF}) is an infinite path, so this
+     * line carries the violation itself and must survive into the trace. See TraceStateDto#loopStart.
+     */
+    private static final Pattern LOOP_START_PATTERN =
+            Pattern.compile("^\\s*--\\s*Loop starts here\\s*$");
     private static final Pattern VAR_PATTERN =
             Pattern.compile("(\\w+)\\.(\\w+)\\s*=\\s*(\\S+)");
     private static final Pattern ENV_VAR_PATTERN =
@@ -67,10 +74,17 @@ public class SmvTraceParser {
         Map<Integer, Boolean> ruleExecutionValues = new HashMap<>();
         Map<Integer, Boolean> automationLinkAttackValues = new HashMap<>();
         TraceStateDto previousCompleteState = null;
+        boolean nextStateStartsLoop = false;
+        TraceStateDto loopStartState = null;
 
         for (String line : lines) {
             line = line.trim();
             if (line.isEmpty()) {
+                continue;
+            }
+
+            if (LOOP_START_PATTERN.matcher(line).matches()) {
+                nextStateStartsLoop = true;
                 continue;
             }
 
@@ -91,6 +105,11 @@ public class SmvTraceParser {
                 currentState.setDevices(new ArrayList<>());
                 currentState.setTriggeredRules(new ArrayList<>());
                 currentState.setCompromisedAutomationLinks(new ArrayList<>());
+                if (nextStateStartsLoop) {
+                    currentState.setLoopStart(true);
+                    loopStartState = currentState;
+                    nextStateStartsLoop = false;
+                }
 
                 Matcher stateNameMatcher = STATE_PATTERN.matcher(line);
                 if (stateNameMatcher.find() && stateNameMatcher.group(2) != null) {
@@ -117,7 +136,31 @@ public class SmvTraceParser {
             finalizeCompromisedAutomationLinks(currentState, automationLinkAttackValues, rules);
             states.add(currentState);
         }
+        markLoopBackState(states, loopStartState);
         return states;
+    }
+
+    /**
+     * Marks the trailing state that closes a lasso counterexample.
+     *
+     * <p>NuSMV terminates an infinite path by re-printing its loop-entry state, and its delta encoding gives
+     * that repeat no variable lines at all, so the merge in {@code materializeCompleteState} reproduces the
+     * previous state exactly. Playback then shows a final step in which nothing moves — which is what a
+     * viewer reads as a broken animation rather than as "the cycle repeats from here forever".
+     *
+     * <p>Only the last state is considered, and only when a loop marker was seen and the state it points at
+     * is not itself that last state: a single-state cycle prints one state carrying both roles, and flagging
+     * it as its own return would claim a step the trace does not contain.
+     */
+    private void markLoopBackState(List<TraceStateDto> states, TraceStateDto loopStartState) {
+        if (loopStartState == null || states.size() < 2) {
+            return;
+        }
+        TraceStateDto last = states.get(states.size() - 1);
+        if (last == loopStartState) {
+            return;
+        }
+        last.setLoopBack(true);
     }
 
     private void parseLineVariables(TraceStateDto currentState,

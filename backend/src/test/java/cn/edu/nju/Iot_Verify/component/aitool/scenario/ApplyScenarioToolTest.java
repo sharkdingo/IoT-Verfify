@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.scenario;
 
+import cn.edu.nju.Iot_Verify.component.board.PortableSceneBatchMapper;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
 import cn.edu.nju.Iot_Verify.exception.BoardReplacementStaleException;
@@ -30,7 +31,7 @@ import static org.mockito.Mockito.when;
 class ApplyScenarioToolTest {
 
     @Mock
-    private ScenarioDraftBatchMapper batchMapper;
+    private PortableSceneBatchMapper batchMapper;
     @Mock
     private BoardStorageService boardStorageService;
 
@@ -69,7 +70,7 @@ class ApplyScenarioToolTest {
 
         BoardBatchDto request = new BoardBatchDto();
         BoardBatchDto saved = savedBatch();
-        when(batchMapper.toBatch(any(), eq("board-v1"))).thenReturn(request);
+        when(batchMapper.toBatch(any(), eq("board-v1"), eq("chat_scene_spec_"))).thenReturn(request);
         when(boardStorageService.saveBoardBatch(1L, request)).thenReturn(saved);
         UserContextHolder.setSceneReplacementConfirmed(true);
 
@@ -92,7 +93,7 @@ class ApplyScenarioToolTest {
 
         BoardBatchDto firstRequest = new BoardBatchDto();
         firstRequest.setImpactToken("board-v1");
-        when(batchMapper.toBatch(any(), eq("board-v1"))).thenReturn(firstRequest);
+        when(batchMapper.toBatch(any(), eq("board-v1"), eq("chat_scene_spec_"))).thenReturn(firstRequest);
         when(boardStorageService.saveBoardBatch(1L, firstRequest))
                 .thenThrow(new BoardReplacementStaleException(freshPreview));
         UserContextHolder.setSceneReplacementConfirmed(true);
@@ -105,7 +106,7 @@ class ApplyScenarioToolTest {
 
         BoardBatchDto secondRequest = new BoardBatchDto();
         secondRequest.setImpactToken("board-v2");
-        when(batchMapper.toBatch(any(), eq("board-v2"))).thenReturn(secondRequest);
+        when(batchMapper.toBatch(any(), eq("board-v2"), eq("chat_scene_spec_"))).thenReturn(secondRequest);
         doReturn(savedBatch()).when(boardStorageService).saveBoardBatch(1L, secondRequest);
 
         JsonNode applied = objectMapper.readTree(tool.execute("{\"confirmed\":true}"));

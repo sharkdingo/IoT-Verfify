@@ -1929,7 +1929,10 @@ const buildVerificationResultFromTask = (task: VerificationTask, traces: Trace[]
     modelSnapshot: completedTask.modelSnapshot,
     historyPersistence: { status: 'SAVED', runId: completedTask.id },
     modelComplete: completedTask.modelComplete,
-    nusmvOutput: completedTask.nusmvOutput
+    nusmvOutput: completedTask.nusmvOutput,
+    // Same reason as in buildVerificationResultFromRun: a completed async task *is* the run, and its
+    // response carries the flag the download button is gated on.
+    hasSmvModel: completedTask.hasSmvModel
   }
 }
 
@@ -1948,7 +1951,10 @@ const buildVerificationResultFromRun = (run: VerificationRun, traces: Trace[] = 
   modelSnapshot: run.modelSnapshot,
   historyPersistence: { status: 'SAVED', runId: run.id },
   modelComplete: run.modelComplete,
-  nusmvOutput: run.nusmvOutput
+  nusmvOutput: run.nusmvOutput,
+  // Carried through, or the result dialog's SMV download cannot render for a run reopened from
+  // history: the backend sends the flag and dropping it here made the feature look absent.
+  hasSmvModel: run.hasSmvModel
 })
 
 const isVerificationModelComplete = (
@@ -1990,7 +1996,12 @@ const getVerificationFailureMessage = (result: any): string => {
     : t('app.verificationFailedNoSpecResults')
 }
 
-const notifyVerificationOutcome = (result: any) => {
+const notifyVerificationOutcome = (result: any, options?: { presenting?: boolean }) => {
+  // Suppress the toast when the dialog is already presenting the verdict
+  if (options && options.presenting) {
+    return
+  }
+
   const counts = getGenerationWarningCounts(result)
   const verificationOutcome = getVerificationOutcome(result)
   const modelComplete = isVerificationModelComplete(result, verificationOutcome)
@@ -4740,36 +4751,275 @@ const triggerSceneImport = () => {
 const getSceneErrorMessage = (error: any) => {
   const rawMessage = String(error?.response?.data?.message || error?.message || '')
   const message = localizedErrorMessage(error, t('app.sceneImportFailed'), locale.value)
+
+  // If there's no response, return the generic message
   if (!error?.response) return message
+
+  // For structured validation errors with multiple fields, return the raw message
+  // as it will be handled by showSceneImportError
+  const errors = error?.response?.data?.data?.errors
+  if (errors && typeof errors === 'object' && Object.keys(errors).length > 0) {
+    return rawMessage || message
+  }
+
+  // For single field errors, try to extract and format the field path
   const field = rawMessage.match(/\b(?:templates|devices|nodes|environmentVariables|rules|specs)\[\d+](?:\.[A-Za-z0-9_]+)*/)?.[0]
-  if (!field) return message
+  if (!field) return rawMessage || message
   return `${formatSceneValidationCoordinate(field, t)}: ${t('app.sceneImportValidationItemInvalid')}`
 }
 
 const showSceneImportError = async (error: any) => {
+  const status = error?.response?.status
+  const message = error?.response?.data?.message || error?.message || ''
+
+  // Handle 409 Conflict - Template mismatch
+  if (status === 409) {
+    const templateMatch = message.match(/template.*:\s*(.+)$/i)
+    const templateName = templateMatch ? templateMatch[1] : t('app.unknown')
+
+    await acknowledge({
+      title: t('app.sceneImportConflictTitle'),
+      tone: 'error',
+      message: h('div', { class: 'space-y-3 text-left' }, [
+        h('p', { class: 'text-sm', style: { color: 'var(--text)' } },
+          t('app.sceneImportTemplateMismatch', { name: templateName })),
+        h('div', { class: 'mt-3 p-3 rounded', style: { backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border)' } }, [
+          h('div', { class: 'text-sm font-semibold mb-2', style: { color: 'var(--text)' } }, t('app.suggestions')),
+          h('ul', { class: 'text-sm space-y-1 list-disc list-inside', style: { color: 'var(--text-muted)' } }, [
+            h('li', t('app.sceneImportSuggestion1')),
+            h('li', t('app.sceneImportSuggestion2'))
+          ])
+        ]),
+        h('details', { class: 'mt-3 text-xs', style: { color: 'var(--text-muted)' } }, [
+          h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+          h('div', { class: 'mt-1 whitespace-pre-wrap break-words font-mono' }, message)
+        ])
+      ]),
+      confirmText: t('app.confirm')
+    })
+    return
+  }
+
+  // Handle 400 Bad Request - Scene format/reference errors
+  if (status === 400) {
+    // Unsupported scene version
+    if (message.includes('Unsupported scene file')) {
+      const versionMatch = message.match(/version (\d+).*version\s+(\d+|null)/s)
+      const expectedVersion = versionMatch ? versionMatch[1] : t('app.unknown')
+      const receivedVersion = versionMatch ? (versionMatch[2] === 'null' ? t('app.none') : versionMatch[2]) : t('app.unknown')
+
+      await acknowledge({
+        title: t('app.sceneImportVersionMismatch'),
+        tone: 'error',
+        message: h('div', { class: 'space-y-3 text-left' }, [
+          h('p', { class: 'text-sm', style: { color: 'var(--text)' } },
+            t('app.sceneImportVersionMismatchDesc')),
+          h('div', { class: 'mt-2 p-3 rounded', style: { backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border)' } }, [
+            h('div', { class: 'text-sm space-y-1', style: { color: 'var(--text-muted)' } }, [
+              h('div', [h('span', { class: 'font-semibold' }, t('app.expectedVersion') + ': '), expectedVersion]),
+              h('div', [h('span', { class: 'font-semibold' }, t('app.receivedVersion') + ': '), receivedVersion])
+            ])
+          ]),
+          h('p', { class: 'mt-3 text-sm', style: { color: 'var(--text-muted)' } },
+            t('app.sceneImportVersionMismatchSolution')),
+          h('details', { class: 'mt-3 text-xs', style: { color: 'var(--text-muted)' } }, [
+            h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+            h('div', { class: 'mt-1 whitespace-pre-wrap break-words font-mono' }, message)
+          ])
+        ]),
+        confirmText: t('app.confirm')
+      })
+      return
+    }
+
+    // Missing required collection
+    if (message.includes('scene is missing its') || message.includes('scene is missing')) {
+      const fieldMatch = message.match(/missing its (\w+)|missing (\w+)/)
+      const field = fieldMatch ? (fieldMatch[1] || fieldMatch[2]) : t('app.unknown')
+      const fieldName = field === 'devices' ? t('app.devices') :
+                        field === 'templates' ? t('app.templates') :
+                        field === 'environmentVariables' ? t('app.environmentVariables') :
+                        field === 'rules' ? t('app.rules') :
+                        field === 'specs' ? t('app.specifications') : field
+
+      await acknowledge({
+        title: t('app.sceneImportIncompleteTitle'),
+        tone: 'error',
+        message: h('div', { class: 'space-y-3 text-left' }, [
+          h('p', { class: 'text-sm', style: { color: 'var(--text)' } },
+            t('app.sceneImportMissingCollection', { collection: fieldName })),
+          h('p', { class: 'mt-2 text-sm', style: { color: 'var(--text-muted)' } },
+            t('app.sceneImportMissingCollectionFix')),
+          h('details', { class: 'mt-3 text-xs', style: { color: 'var(--text-muted)' } }, [
+            h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+            h('div', { class: 'mt-1 whitespace-pre-wrap break-words font-mono' }, message)
+          ])
+        ]),
+        confirmText: t('app.confirm')
+      })
+      return
+    }
+
+    // Conflicting template snapshots
+    if (message.includes('conflicting template snapshots')) {
+      const templateMatch = message.match(/snapshots for '([^']+)'/)
+      const templateName = templateMatch ? templateMatch[1] : t('app.unknown')
+
+      await acknowledge({
+        title: t('app.sceneImportConflictTitle'),
+        tone: 'error',
+        message: h('div', { class: 'space-y-3 text-left' }, [
+          h('p', { class: 'text-sm', style: { color: 'var(--text)' } },
+            t('app.sceneImportDuplicateTemplate', { name: templateName })),
+          h('p', { class: 'mt-2 text-sm', style: { color: 'var(--text-muted)' } },
+            t('app.sceneImportDuplicateTemplateFix')),
+          h('details', { class: 'mt-3 text-xs', style: { color: 'var(--text-muted)' } }, [
+            h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+            h('div', { class: 'mt-1 whitespace-pre-wrap break-words font-mono' }, message)
+          ])
+        ]),
+        confirmText: t('app.confirm')
+      })
+      return
+    }
+
+    // Template reference errors
+    if (message.includes('Scene references device template') && message.includes('without a matching template snapshot')) {
+      const templateMatch = message.match(/template\s+'([^']+)'/)
+      const templateName = templateMatch ? templateMatch[1] : t('app.unknown')
+
+      await acknowledge({
+        title: t('app.sceneImportIncompleteTitle'),
+        tone: 'error',
+        message: h('div', { class: 'space-y-3 text-left' }, [
+          h('p', { class: 'text-sm', style: { color: 'var(--text)' } },
+            t('app.sceneImportMissingTemplateSnapshot', { name: templateName })),
+          h('div', { class: 'mt-3 p-3 rounded', style: { backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border)' } }, [
+            h('div', { class: 'text-sm font-semibold mb-2', style: { color: 'var(--text)' } }, t('app.suggestions')),
+            h('ul', { class: 'text-sm space-y-1 list-disc list-inside', style: { color: 'var(--text-muted)' } }, [
+              h('li', t('app.sceneImportSuggestion3')),
+              h('li', t('app.sceneImportSuggestion4'))
+            ])
+          ]),
+          h('details', { class: 'mt-3 text-xs', style: { color: 'var(--text-muted)' } }, [
+            h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+            h('div', { class: 'mt-1 whitespace-pre-wrap break-words font-mono' }, message)
+          ])
+        ]),
+        confirmText: t('app.confirm')
+      })
+      return
+    }
+
+    // Unreferenced template snapshot
+    if (message.includes('unreferenced template snapshot')) {
+      const templateMatch = message.match(/snapshot:\s*(.+)$/)
+      const templateName = templateMatch ? templateMatch[1] : t('app.unknown')
+
+      await acknowledge({
+        title: t('app.sceneImportWarningTitle'),
+        tone: 'warning',
+        message: h('div', { class: 'space-y-3 text-left' }, [
+          h('p', { class: 'text-sm', style: { color: 'var(--text)' } },
+            t('app.sceneImportUnreferencedTemplate', { name: templateName })),
+          h('p', { class: 'text-sm', style: { color: 'var(--text-muted)' } },
+            t('app.sceneImportUnreferencedTemplateExplanation')),
+          h('details', { class: 'mt-3 text-xs', style: { color: 'var(--text-muted)' } }, [
+            h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+            h('div', { class: 'mt-1 whitespace-pre-wrap break-words font-mono' }, message)
+          ])
+        ]),
+        confirmText: t('app.confirm')
+      })
+      return
+    }
+
+    // Template name mismatch
+    if (message.includes('must exactly match manifest.Name')) {
+      const matches = message.match(/name\s+'([^']+)'.*manifest\.Name\s+'([^']+)'/)
+      const snapshotName = matches ? matches[1] : ''
+      const manifestName = matches ? matches[2] : ''
+
+      await acknowledge({
+        title: t('app.sceneImportInconsistentTitle'),
+        tone: 'error',
+        message: h('div', { class: 'space-y-3 text-left' }, [
+          h('p', { class: 'text-sm', style: { color: 'var(--text)' } },
+            t('app.sceneImportTemplateNameMismatchTitle')),
+          h('div', { class: 'mt-2 p-3 rounded', style: { backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border)' } }, [
+            h('div', { class: 'text-xs font-mono space-y-1', style: { color: 'var(--text-muted)' } }, [
+              h('div', [h('span', { class: 'font-semibold' }, 'template.name: '), snapshotName]),
+              h('div', [h('span', { class: 'font-semibold' }, 'manifest.Name: '), manifestName])
+            ])
+          ]),
+          h('p', { class: 'mt-3 text-sm', style: { color: 'var(--text-muted)' } },
+            t('app.sceneImportTemplateNameMismatchFix')),
+          h('details', { class: 'mt-3 text-xs', style: { color: 'var(--text-muted)' } }, [
+            h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+            h('div', { class: 'mt-1 whitespace-pre-wrap break-words font-mono' }, message)
+          ])
+        ]),
+        confirmText: t('app.confirm')
+      })
+      return
+    }
+  }
+
+  // Handle 422 Validation errors with structured field errors
   const entries = getStructuredValidationErrors(error)
   if (entries.length === 0) {
     notifyError(getSceneErrorMessage(error))
     return
   }
+
+  // Group validation errors by type
+  const envVarErrors = entries.filter(([field]) => field.startsWith('environmentVariables'))
+  const otherErrors = entries.filter(([field]) => !field.startsWith('environmentVariables'))
+
   await acknowledge({
     title: t('app.sceneImportValidationTitle'),
     tone: 'error',
     message: h('div', { class: 'space-y-3 text-left' }, [
         h('p', { class: 'text-sm', style: { color: 'var(--text-muted)' } },
           t('app.sceneImportValidationSummary', { count: entries.length })),
-        ...entries.map(([field, reason]) => h('div', { class: 'border-l-2 border-[color:var(--danger-border)] pl-3' }, [
-          h('div', { class: 'text-sm font-semibold', style: { color: 'var(--text)' } },
-            formatSceneValidationCoordinate(field, t)),
-          h('div', { class: 'mt-0.5 text-sm', style: { color: 'var(--text-muted)' } },
-            t('app.sceneImportValidationItemInvalid')),
-          h('details', { class: 'mt-1 text-xs', style: { color: 'var(--text-muted)' } }, [
-            h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
-            h('code', { class: 'mt-1 block break-all text-xs', style: { color: 'var(--text-muted)' } }, field),
-            h('div', { class: 'mt-1 whitespace-pre-wrap break-words' }, reason)
+
+        // Environment variable errors section
+        ...(envVarErrors.length > 0 ? [
+          h('div', { class: 'mt-4' }, [
+            h('div', { class: 'text-sm font-semibold mb-2', style: { color: 'var(--text)' } },
+              t('app.environmentVariableErrors', { count: envVarErrors.length })),
+            ...envVarErrors.map(([field, reason]) => h('div', { class: 'border-l-2 border-[color:var(--danger-border)] pl-3 mb-2' }, [
+              h('div', { class: 'text-sm font-semibold', style: { color: 'var(--text)' } },
+                formatSceneValidationCoordinate(field, t)),
+              h('div', { class: 'mt-0.5 text-sm', style: { color: 'var(--text-muted)' } },
+                reason),
+              h('details', { class: 'mt-1 text-xs', style: { color: 'var(--text-muted)' } }, [
+                h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+                h('code', { class: 'mt-1 block break-all text-xs', style: { color: 'var(--text-muted)' } }, field)
+              ])
+            ]))
           ])
-        ]))
-    ])
+        ] : []),
+
+        // Other errors section
+        ...(otherErrors.length > 0 ? [
+          h('div', { class: 'mt-4' }, [
+            h('div', { class: 'text-sm font-semibold mb-2', style: { color: 'var(--text)' } },
+              t('app.otherValidationErrors', { count: otherErrors.length })),
+            ...otherErrors.map(([field, reason]) => h('div', { class: 'border-l-2 border-[color:var(--danger-border)] pl-3 mb-2' }, [
+              h('div', { class: 'text-sm font-semibold', style: { color: 'var(--text)' } },
+                formatSceneValidationCoordinate(field, t)),
+              h('div', { class: 'mt-0.5 text-sm', style: { color: 'var(--text-muted)' } },
+                reason),
+              h('details', { class: 'mt-1 text-xs', style: { color: 'var(--text-muted)' } }, [
+                h('summary', { class: 'cursor-pointer font-semibold' }, t('app.technicalDetails')),
+                h('code', { class: 'mt-1 block break-all text-xs', style: { color: 'var(--text-muted)' } }, field)
+              ])
+            ]))
+          ])
+        ] : [])
+    ]),
+    confirmText: t('app.confirm')
   })
 }
 
@@ -4816,7 +5066,7 @@ const currentBoardMatchesScene = (scene: BoardSceneModel): boolean => {
 }
 
 const savedBatchMatchesScene = (
-  saved: Awaited<ReturnType<typeof boardApi.saveBoardBatch>>,
+  saved: Awaited<ReturnType<typeof boardApi.importScene>>,
   scene: BoardSceneModel
 ): boolean => {
   try {
@@ -4896,15 +5146,11 @@ const importScene = async (
     if (!isAdmitted()) return false
 
     return await enqueueBoardMutation(async () => {
-      let saved: Awaited<ReturnType<typeof boardApi.saveBoardBatch>>
+      let saved: Awaited<ReturnType<typeof boardApi.importScene>>
       try {
-        saved = await boardApi.saveBoardBatch({
+        saved = await boardApi.importScene({
           impactToken: replacementPreview.impactToken,
-          nodes: scene.devices,
-          environmentVariables: scene.environmentVariables,
-          rules: scene.rules,
-          specs: scene.specs,
-          templateSnapshots: scene.templates
+          scene: canonicalizeSceneFile(scene)
         })
         if (!savedBatchMatchesScene(saved, scene)) {
           throw new Error('Scene replacement response did not match the requested semantic scene')
@@ -5012,14 +5258,7 @@ const clearScene = async () => {
 
     await enqueueBoardMutation(async () => {
       try {
-        const saved = await boardApi.saveBoardBatch({
-          impactToken: replacementPreview.impactToken,
-          nodes: [],
-          environmentVariables: [],
-          rules: [],
-          specs: [],
-          templateSnapshots: []
-        })
+        const saved = await boardApi.clearBoardScene(replacementPreview.impactToken)
         if (saved.nodes.length > 0 || saved.environmentVariables.length > 0
           || saved.rules.length > 0 || saved.specs.length > 0) {
           throw new Error('Scene clear response still contained board items')
@@ -10494,6 +10733,51 @@ const openFixForVerificationTrace = (trace: { id: number; violatedSpecId?: strin
   openFixDialog(trace.id, trace.violatedSpecId)
 }
 
+/**
+ * Download the SMV model for a verification run.
+ *
+ * All counterexamples from one run share the same model, and a run where every spec holds has
+ * no counterexample to key the download on — so the run-keyed endpoint makes the model of a
+ * *passing* run downloadable, which is the case where confirming what was proved matters most.
+ */
+const downloadVerificationRunSmv = async (runId: number) => {
+  try {
+    await boardApi.downloadRunSmvModel(runId)
+  } catch (error) {
+    const status = (error as any)?.response?.status
+    if (status === 404) {
+      notifyBlocked(t('app.smvModelNotAvailable'))
+    } else {
+      notifyError(t('app.smvDownloadFailed'))
+    }
+  }
+}
+
+/**
+ * Download the SMV model a simulation trajectory ran.
+ *
+ * Call sites pass `historyPersistence.runId`, which looks like a mismatch against the `traceId`
+ * parameter and is not: a simulation trajectory *is* its own run, so the backend sets
+ * `historyPersistence.runId` to the saved trace id, and `validateSimulationShape` rejects a response
+ * where the two disagree. Verification is the case where they differ — a run owns many traces — which
+ * is why only that side has a separate run-keyed endpoint.
+ *
+ * 404 handling covers trajectories persisted before the model was stored; that is a fact about the
+ * record, not a fault, so it is reported as blocked rather than as an error.
+ */
+const downloadSimulationTraceSmv = async (traceId: number) => {
+  try {
+    await simulationApi.downloadSimulationSmvModel(traceId)
+  } catch (error) {
+    const status = (error as any)?.response?.status
+    if (status === 404) {
+      notifyBlocked(t('app.smvModelNotAvailable'))
+    } else {
+      notifyError(t('app.smvDownloadFailed'))
+    }
+  }
+}
+
 const selectAndPlaySimulationTrace = async (
   traceId: number,
   deepLinkLoad?: DeepLinkLoadContext
@@ -11664,11 +11948,57 @@ const activePlaybackKind = computed<'simulation' | 'counterexample' | 'fuzzing' 
   return null
 })
 
+/**
+ * Wrapped trace passed to the canvas, with violation information gated by playback kind.
+ *
+ * Prevents counterexample violation emphasis from leaking into simulation replay:
+ * `savedTraces` has three writers and no reset, and `currentTrace` prefers it
+ * unconditionally — so a counterexample opened earlier stays selected while a
+ * simulation replays through the same `highlightedTrace`, and the canvas would
+ * outline that counterexample's devices on a run that violated nothing.
+ */
+const canvasHighlightedTrace = computed(() => {
+  if (!highlightedTrace.value) return null
+
+  const isViolationPlayback =
+    activePlaybackKind.value === 'counterexample' ||
+    activePlaybackKind.value === 'fuzzing'
+
+  // Derived from the violated specification's own conditions. It previously read
+  // `violatedSpec.boundDeviceIds`, a field `Specification` does not have, so this was always `[]` and
+  // the canvas fell back to emphasising *every* device in the state — the scoping this computed exists
+  // to provide never took effect. `devices` is the accumulated per-spec reference list when present;
+  // the conditions are the authority behind it, so both are read and de-duplicated.
+  const violationDeviceIds = isViolationPlayback
+    ? [...new Set([
+        ...(currentTrace.value?.violatedSpec?.devices || []).map(device => device.deviceId),
+        ...[
+          currentTrace.value?.violatedSpec?.aConditions,
+          currentTrace.value?.violatedSpec?.ifConditions,
+          currentTrace.value?.violatedSpec?.thenConditions
+        ].flatMap(conditions => (conditions || []).map(condition => condition.deviceId))
+      ].filter((deviceId): deviceId is string => !!deviceId))]
+    : []
+
+  return {
+    ...highlightedTrace.value,
+    violationStateIndex: isViolationPlayback
+      ? counterexampleViolationStep.value
+      : undefined,
+    violationStateIndexes: isViolationPlayback
+      ? counterexampleViolationSteps.value
+      : [],
+    violationDeviceIds
+  }
+})
+
 type ActivePlaybackState = {
   devices?: TraceDevice[]
   envVariables?: TraceVariable[]
   triggeredRules?: TraceTriggeredRule[]
   compromisedAutomationLinks?: TraceTriggeredRule[]
+  loopStart?: boolean
+  loopBack?: boolean
 }
 
 const activePlaybackStates = computed<ActivePlaybackState[]>(() => {
@@ -11764,6 +12094,77 @@ const showPlaybackChangePopover = computed(() =>
   activePlaybackChangeKey.value !== null
   && playbackChangesDismissedKey.value !== activePlaybackChangeKey.value
 )
+
+// ============================================================================
+// Loop handling for infinite counterexamples (liveness violations)
+// ============================================================================
+
+/**
+ * Liveness properties (templateId 2, 5, 6) are refuted by infinite paths (lasso counterexamples).
+ *
+ * Template semantics (from docs/architecture/spec-templates.md):
+ * - Template 2 (Eventually/AF): A eventually holds on all paths
+ * - Template 5 (Response/AG(IF->AF(THEN))): After IF, THEN eventually holds
+ * - Template 6 (Persistence/G(IF->FG(THEN))): After IF, THEN holds persistently
+ *
+ * Safety properties (1, 3, 4, 7) are refuted by finite paths, so a loop marker there
+ * means NuSMV terminated with a cycle but the fault is still a single state.
+ */
+const LIVENESS_TEMPLATES = new Set(['2', '5', '6'])
+
+/**
+ * Whether the current trace is a liveness violation (infinite counterexample).
+ *
+ * Used to determine the wording of the loop-back explanation: for liveness, the cycle
+ * *is* the violation (the required state is never reached); for safety with a loop,
+ * the fault is a single state and the loop is incidental.
+ */
+const activePlaybackIsLivenessViolation = computed(() => {
+  const trace = highlightedTrace.value
+  if (!trace?.violatedSpec?.templateId) return false
+  return LIVENESS_TEMPLATES.has(String(trace.violatedSpec.templateId))
+})
+
+/**
+ * 1-based state numbers of the repeating cycle [start, end], or null if no loop.
+ *
+ * NuSMV marks lasso counterexamples with "-- Loop starts here" before the loop-entry state,
+ * then terminates by repeating that state with no variable changes. The backend parser sets
+ * `loopStart: true` on the entry state and `loopBack: true` on the final repeat state.
+ *
+ * This range is shown in the PlaybackChangePopover on the loop-back step to explain why
+ * nothing changes: "This step returns to state N, repeating states N–M forever."
+ */
+const activePlaybackLoopRange = computed<{ start: number; end: number } | null>(() => {
+  const states = activePlaybackStates.value
+  if (states.length === 0) return null
+
+  // Find the loop start state (marked by backend parser)
+  const loopStartIndex = states.findIndex(s => s.loopStart === true)
+  if (loopStartIndex === -1) return null
+
+  // Find the loop back state (the final state that repeats the loop entry)
+  const loopBackIndex = states.findIndex(s => s.loopBack === true)
+  if (loopBackIndex === -1) return null
+
+  // Convert to 1-based state numbers for display
+  return {
+    start: loopStartIndex + 1,
+    end: loopBackIndex + 1
+  }
+})
+
+/**
+ * Whether the current playback step is the loop-back state.
+ *
+ * When true, the PlaybackChangePopover shows a loop explanation instead of the generic
+ * "no observable changes" message, because the absence of changes is the state's meaning:
+ * it's the identical repeat that closes the cycle.
+ */
+const activePlaybackIsLoopBackState = computed(() => {
+  const currentState = activePlaybackStates.value[activePlaybackStateIndex.value]
+  return currentState?.loopBack === true
+})
 
 const dismissPlaybackChanges = () => {
   playbackChangesDismissedKey.value = activePlaybackChangeKey.value
@@ -11976,6 +12377,22 @@ const goToState = (index: number) => {
   }
 }
 
+const selectPreviousTraceState = () => {
+  goToState(traceAnimationState.value.selectedStateIndex - 1)
+}
+
+const selectNextTraceState = () => {
+  goToState(traceAnimationState.value.selectedStateIndex + 1)
+}
+
+const selectedTraceStateNumber = computed({
+  get: () => traceAnimationState.value.selectedStateIndex + 1,
+  set: (value: number) => {
+    if (!Number.isFinite(value)) return
+    goToState(Math.trunc(value) - 1)
+  }
+})
+
 // Timeline rail interaction logic (pointer scrubbing, keyboard navigation, button scrolling)
 const traceRail = useTimelineRail({
   totalStates,
@@ -12003,8 +12420,38 @@ const traceRail = useTimelineRail({
  * would be wrong. `docs/architecture/fuzzing-flow.md` states the same boundary for the finite engine, and
  * `undefined` here simply means no step is claimed — which is honest, not a gap.
  */
-const LAST_STATE_VIOLATION_TEMPLATES = new Set(['1', '2', '3', '7'])
+const LAST_STATE_VIOLATION_TEMPLATES = new Set(['1', '3', '7'])
 
+/**
+ * Loop range [start, end] for the current counterexample trace, or null if no loop.
+ * Indices are 0-based. Used to compute violation steps for liveness templates.
+ */
+const counterexampleLoopRange = computed<{ start: number; end: number } | null>(() => {
+  const trace = currentTrace.value
+  if (!trace?.states) return null
+
+  // Find the last loop marker (in case of multiple markers in one trace)
+  let start = -1
+  for (let index = trace.states.length - 1; index >= 0; index--) {
+    const state = trace.states[index]
+    if (state?.loopStart === true) {
+      start = index
+      break
+    }
+  }
+  if (start === -1) return null
+
+  // Find the loop-back state
+  const end = trace.states.findIndex(state => state?.loopBack === true)
+  if (end === -1) return null
+
+  return { start, end }
+})
+
+/**
+ * Single violation step index for safety counterexamples, or undefined for liveness.
+ * Used to mark one step on the rail and emphasize devices on the canvas.
+ */
 const counterexampleViolationStep = computed<number | undefined>(() => {
   // An exploration finding reports its own step; that is authoritative and takes precedence.
   if (activeFuzzingFinding.value?.firstViolationStep !== undefined) {
@@ -12012,9 +12459,57 @@ const counterexampleViolationStep = computed<number | undefined>(() => {
   }
   const trace = currentTrace.value
   const templateId = trace?.violatedSpec?.templateId
-  if (!trace || !templateId || !LAST_STATE_VIOLATION_TEMPLATES.has(String(templateId))) return undefined
-  const count = trace.states?.length || 0
-  return count > 0 ? count - 1 : undefined
+  if (!trace || !templateId) return undefined
+
+  // Liveness templates do not mark a single violation step; the entire cycle is the fault.
+  if (LIVENESS_TEMPLATES.has(String(templateId))) {
+    return undefined
+  }
+
+  // Safety templates: the last state is the violation step.
+  if (LAST_STATE_VIOLATION_TEMPLATES.has(String(templateId))) {
+    const count = trace.states?.length || 0
+    return count > 0 ? count - 1 : undefined
+  }
+
+  return undefined
+})
+
+/**
+ * All violation step indices for liveness counterexamples (the entire cycle), or
+ * an array containing the single violation step for safety templates.
+ * Used by the canvas to emphasize devices across multiple states.
+ */
+const counterexampleViolationSteps = computed<number[]>(() => {
+  const trace = currentTrace.value
+  const templateId = trace?.violatedSpec?.templateId
+  if (!trace || !templateId) return []
+
+  // Exploration finding: single step
+  if (activeFuzzingFinding.value?.firstViolationStep !== undefined) {
+    return [activeFuzzingFinding.value.firstViolationStep]
+  }
+
+  // Liveness templates: mark every step in the cycle
+  if (LIVENESS_TEMPLATES.has(String(templateId))) {
+    const range = counterexampleLoopRange.value
+    if (!range) return []
+
+    // Return all indices from start to end (inclusive)
+    const steps: number[] = []
+    for (let i = range.start; i <= range.end; i++) {
+      steps.push(i)
+    }
+    return steps
+  }
+
+  // Safety templates: single last state
+  if (LAST_STATE_VIOLATION_TEMPLATES.has(String(templateId))) {
+    const count = trace.states?.length || 0
+    return count > 0 ? [count - 1] : []
+  }
+
+  return []
 })
 
 const getTraceStateAriaLabel = (index: number) => {
@@ -12267,7 +12762,7 @@ const handleVerify = async (): Promise<boolean> => {
           : t('app.verificationHistorySaveFailed'))
       void loadVerificationRuns(false)
     }
-    notifyVerificationOutcome(verificationResult.value)
+    notifyVerificationOutcome(verificationResult.value, { presenting: true })
     return true
 
   } catch (error: any) {
@@ -12611,7 +13106,10 @@ const handleSimulate = async (simConfig: {
           enablePrivacy: trace.enablePrivacy === true,
           modelSemantics: trace.modelSemantics,
           modelSnapshot: trace.modelSnapshot,
-          playbackScene: trace.playbackScene
+          playbackScene: trace.playbackScene,
+          // The saved trajectory's own answer about the model, which is what gates the download.
+          hasSmvModel: trace.hasSmvModel,
+          historyPersistence: trace.historyPersistence
         }
       } else {
         result = await simulationApi.simulate(req)
@@ -12820,7 +13318,7 @@ const pollAsyncVerification = async (
       if (options.presentResult || showVerificationPanel.value) {
         verificationResult.value = result
         verificationResultStale.value = false
-        notifyVerificationOutcome(verificationResult.value)
+        notifyVerificationOutcome(verificationResult.value, { presenting: true })
         showVerificationPanel.value = false
       } else {
         notifyVerificationOutcome(result)
@@ -12907,7 +13405,11 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
           enablePrivacy: trace.enablePrivacy === true,
           modelSemantics: trace.modelSemantics,
           modelSnapshot: trace.modelSnapshot,
-          playbackScene: trace.playbackScene
+          playbackScene: trace.playbackScene,
+          // As in the sync path: the flag the download button reads, plus the persistence record that
+          // supplies the run id it downloads by.
+          hasSmvModel: trace.hasSmvModel,
+          historyPersistence: trace.historyPersistence
         }
       }
       upsertSimulationTaskSummary({ ...task, progress: 100 })
@@ -13039,6 +13541,45 @@ const {
   dismissSimulationResultDialog,
   () => document.querySelector<HTMLElement>('[data-testid="open-simulation-panel"]')
 )
+
+// ==== Trace Details Dialog ====
+const traceDetailsView = ref<Trace | null>(null)
+const showTraceDetailsDialog = computed(() => !!traceDetailsView.value)
+
+const openVerificationTraceDetails = () => {
+  if (!currentTrace.value) {
+    notifyInfo(t('app.noTraceDetailsAvailable'))
+    return
+  }
+  traceDetailsView.value = currentTrace.value
+}
+
+const dismissTraceDetailsDialog = () => {
+  traceDetailsView.value = null
+}
+
+/**
+ * Escalate from one counterexample to the run that produced it.
+ *
+ * Declared below `openRunTarget` in source order but only called from a click handler, so the
+ * hoisted-const reference is resolved by then. Goes through the deep-link opener rather than
+ * assigning `verificationResult` from a retained ref: a counterexample can be opened straight from
+ * history with no run loaded, and the URL is the single authority for which run is on screen.
+ */
+const openOwningVerificationRun = (runId: number) => {
+  dismissTraceDetailsDialog()
+  void openRunTarget({ kind: 'verification', runId })
+}
+
+const {
+  setDialogRef: setTraceDetailsDialogRef,
+  handleModalKeydown: handleTraceDetailsDialogKeydown
+} = useModalAccessibility(
+  showTraceDetailsDialog,
+  dismissTraceDetailsDialog,
+  () => document.querySelector<HTMLElement>('[data-testid="trace-timeline-run-details"]')
+)
+
 /* ===== Deep-linkable run surfaces =====
  * The URL is the single authority for "which run result is open"; board state mirrors it
  * one-way. Openers navigate instead of assigning state directly, so back/forward, refresh,
@@ -13245,6 +13786,43 @@ const showCanvasEmptyState = computed(() =>
 const verificationGenerationWarningCounts = computed(() => getGenerationWarningCounts(verificationResult.value))
 const verificationGenerationIssues = computed(() => getGenerationIssues(verificationResult.value))
 const verificationCheckLogs = computed(() => verificationResult.value?.checkLogs || [])
+
+/**
+ * Whether this run's checked model can actually be downloaded.
+ *
+ * Two independent conditions, and the control is disabled-with-reason rather than hidden when either
+ * fails: a preview-only run is not addressable (no persisted run id), and a run persisted before the
+ * model was stored holds none. Gating on the id alone offered a download that 404s; hiding the button
+ * instead of disabling it is what made the whole feature look absent.
+ */
+const verificationRunSmvAvailable = computed(() =>
+  verificationResult.value?.hasSmvModel === true
+  && typeof verificationResult.value?.historyPersistence?.runId === 'number')
+
+/** The same two conditions for a simulation trajectory; see `verificationRunSmvAvailable`. */
+const simulationRunSmvAvailable = computed(() =>
+  simulationResult.value?.hasSmvModel === true
+  && typeof simulationResult.value?.historyPersistence?.runId === 'number')
+
+/*
+ * The two artifact buttons read their id here rather than asserting it non-null in the template.
+ *
+ * `historyPersistence!.runId!` typechecked only because the button carries `:disabled` bound to the
+ * matching availability computed — the assertion's safety lived in a different attribute, so removing
+ * or renaming the guard would leave a silent `undefined` in the request path. These read the ref and
+ * return, which is checkable on its own.
+ */
+const downloadCurrentVerificationRunSmv = () => {
+  const runId = verificationResult.value?.historyPersistence?.runId
+  if (typeof runId !== 'number') return
+  void downloadVerificationRunSmv(runId)
+}
+
+const downloadCurrentSimulationRunSmv = () => {
+  const runId = simulationResult.value?.historyPersistence?.runId
+  if (typeof runId !== 'number') return
+  void downloadSimulationTraceSmv(runId)
+}
 // Rule extracted to `board/verdictVariableSource.ts` so it is unit-testable; this only resolves the id
 // against the current specifications and translates.
 const verdictVariableSourceLabels = (specId: string | undefined): string[] =>
@@ -14182,7 +14760,7 @@ const counterexampleTraceHelpText = computed(() => {
           :get-node-effective-state="getNodeEffectiveState"
           :format-node-model-token="formatNodeModelToken"
           :format-playback-model-token="formatPlaybackModelToken"
-          :highlighted-trace="highlightedTrace"
+          :highlighted-trace="canvasHighlightedTrace"
           :focused-node-id="focusedNodeId"
           :focused-rule-id="focusedRuleId"
           :interaction-locked="isCanvasInteractionLocked"
@@ -14264,6 +14842,9 @@ const counterexampleTraceHelpText = computed(() => {
         :bundled-device-ids="bundledPlaybackDeviceIds"
         :bundled-environment-names="bundledPlaybackEnvironmentNames"
         :first-violation-state-number="firstFuzzingViolationStateNumber"
+        :is-loop-back-state="activePlaybackIsLoopBackState"
+        :loop-range="activePlaybackLoopRange"
+        :is-liveness-violation="activePlaybackIsLivenessViolation"
         @dismiss="dismissPlaybackChanges"
         @move="movePlaybackChanges"
       />
@@ -14395,7 +14976,7 @@ const counterexampleTraceHelpText = computed(() => {
               :disabled="traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
               :aria-label="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
               :aria-pressed="showVerificationPanel || traceAnimationState.visible"
-              class="board-tool-button board-tool-button--primary transition-colors"
+              class="board-tool-button board-tool-button--evidence transition-colors"
             >
               <span v-if="isVerifying" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
               <span v-else class="material-symbols-outlined" aria-hidden="true">fact_check</span>
@@ -14587,10 +15168,12 @@ const counterexampleTraceHelpText = computed(() => {
       @dismiss-simulation-task="dismissSimulationTask"
       @open-verification-run="openVerificationRunFromHistory"
       @delete-verification-run="deleteVerificationRun"
+      @download-verification-run-smv="downloadVerificationRunSmv"
       @view-verification-trace="openVerificationTraceFromHistory"
       @fix-verification-trace="openFixForVerificationTrace"
       @view-simulation-run="openSimulationRunFromHistory"
       @delete-simulation-run="deleteSimulationRun"
+      @download-simulation-trace-smv="downloadSimulationTraceSmv"
       @open-fuzzing-run="openFuzzingRunFromHistory"
       @delete-fuzzing-run="deleteFuzzingRun"
       @view-fuzzing-finding="openFuzzingFindingFromHistory"
@@ -17152,6 +17735,50 @@ const counterexampleTraceHelpText = computed(() => {
           <p class="mt-3 text-xs leading-5 text-slate-600">{{ t('app.simulationTimelineIsPrimaryView') }}</p>
         </section>
 
+        <!--
+          The executed model, as a named scene-level artifact — the simulation counterpart of the
+          verification dialog's section, kept structurally identical so the two dialogs teach one
+          shape. It was a footer `--secondary` button here too.
+        -->
+        <section
+          v-if="simulationResult.modelSnapshot"
+          aria-labelledby="simulation-run-artifact-title"
+          data-testid="simulation-run-artifact"
+        >
+          <h4 id="simulation-run-artifact-title" class="mb-2 text-sm font-bold text-slate-800">
+            {{ t('app.runArtifact') }}
+          </h4>
+          <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-semibold text-slate-700">{{ t('app.smvModelArtifactTitle') }}</p>
+              <p class="mt-0.5 text-xs leading-5 text-slate-500">
+                {{ t('app.smvModelArtifactScope', {
+                  devices: simulationResult.modelSnapshot.deviceCount,
+                  rules: simulationResult.modelSnapshot.ruleCount,
+                  specs: simulationResult.modelSnapshot.specificationCount
+                }) }}
+              </p>
+              <p
+                v-if="!simulationRunSmvAvailable"
+                class="mt-1 text-xs leading-5 board-text-warning"
+                data-testid="simulation-result-smv-unavailable"
+              >
+                {{ t('app.smvModelNotAvailable') }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="iot-dialog-btn iot-dialog-btn--primary shrink-0"
+              data-testid="simulation-result-download-smv"
+              :disabled="!simulationRunSmvAvailable"
+              @click="downloadCurrentSimulationRunSmv()"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">download</span>
+              {{ t('app.downloadSmvModel') }}
+            </button>
+          </div>
+        </section>
+
         <details class="group border-t border-slate-200 pt-3" data-testid="simulation-state-snapshots">
           <summary class="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-slate-700 hover:text-slate-900">
             <span class="inline-flex items-center gap-2">
@@ -17204,18 +17831,6 @@ const counterexampleTraceHelpText = computed(() => {
           </div>
         </details>
 
-        <details class="group border-t border-slate-200 pt-3">
-          <summary class="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-slate-700 hover:text-slate-900">
-            <span class="inline-flex items-center gap-2">
-              <span class="material-symbols-outlined text-lg text-slate-500" aria-hidden="true">code</span>
-              {{ t('app.showNusmvDiagnosticOutput') }}
-            </span>
-            <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
-          </summary>
-          <div class="iot-scroll-region mt-2 max-h-56 rounded-lg bg-slate-950 p-3">
-            <pre class="whitespace-pre-wrap font-mono text-xs leading-5 text-slate-500">{{ simulationResult.nusmvOutput || t('app.noOutput') }}</pre>
-          </div>
-        </details>
       </div>
 
       <footer class="iot-dialog__footer">
@@ -17226,16 +17841,21 @@ const counterexampleTraceHelpText = computed(() => {
         >
           {{ t('app.close') }}
         </button>
+        <!--
+          The timeline is the point of a simulation run, and this dialog is where the run lands. The
+          button was dropped while `handleSimulationTimelineAction` stayed behind unused, leaving the
+          state-by-state playback reachable only by reopening the run from history.
+        -->
         <button
           v-if="simulationResult && simulationResult.states && simulationResult.states.length > 0"
           type="button"
           :disabled="traceAnimationState.visible"
           class="iot-dialog-btn iot-dialog-btn--primary"
+          data-testid="simulation-result-view-timeline"
           @click="handleSimulationTimelineAction"
         >
           <span class="material-symbols-outlined" aria-hidden="true">play_circle</span>
           {{ simulationAnimationState.visible ? t('app.returnToTimeline') : t('app.viewTimeline') }}
-          <span v-if="traceAnimationState.visible" class="text-xs">({{ t('app.active') }})</span>
         </button>
       </footer>
     </div>
@@ -17294,6 +17914,7 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <div v-else-if="verificationResult" class="space-y-4">
+          <!-- Stale Warning -->
           <div
             v-if="verificationResultStale"
             data-testid="verification-result-stale-banner"
@@ -17303,130 +17924,203 @@ const counterexampleTraceHelpText = computed(() => {
             <span class="material-symbols-outlined text-base" aria-hidden="true">history</span>
             <span>{{ t('app.verificationResultStaleReverify') }}</span>
           </div>
-          <!-- Status Card -->
-          <div class="p-5 rounded-xl" :class="verificationResultStatus.cardClass">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl flex items-center justify-center" :class="verificationResultStatus.iconBgClass">
-                <span class="material-symbols-outlined" :class="verificationResultStatus.iconTextClass">
-                  {{ verificationResultStatus.icon }}
-                </span>
+
+          <!--
+            The count grid. Its heading is `sr-only`: the dialog title already says "Verification
+            Result" two lines above, and the three column labels name what the numbers are, so a
+            visible "Verification Summary" between them was a third statement of the same thing. The
+            heading stays in the accessibility tree because `aria-labelledby` needs a target.
+          -->
+          <section aria-labelledby="verification-summary-title">
+            <h4 id="verification-summary-title" class="sr-only">{{ t('app.verificationSummary') }}</h4>
+            <div class="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200">
+              <div class="board-card p-4">
+                <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.satisfied') }}</div>
+                <div class="mt-1 text-2xl font-bold board-text-success">{{ verificationSpecResultSummary.satisfied }}</div>
               </div>
-              <div>
-                <span class="text-lg font-bold" :class="verificationResultStatus.titleClass">
-                  {{ verificationResultStatus.title }}
-                </span>
-                <p class="text-sm" :class="verificationResultStatus.detailClass">
-                  {{ verificationResultStatus.detail }}
-                </p>
+              <div class="board-card p-4">
+                <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.violated') }}</div>
+                <div class="mt-1 text-2xl font-bold board-text-danger">{{ verificationSpecResultSummary.violated }}</div>
+              </div>
+              <div class="board-card p-4">
+                <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">{{ t('app.inconclusive') }}</div>
+                <div class="mt-1 text-2xl font-bold board-text-warning">{{ verificationSpecResultSummary.inconclusive }}</div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="board-card p-4 rounded-xl border border-slate-200" data-testid="verification-model-snapshot">
-            <div class="flex items-start gap-2">
-              <span class="material-symbols-outlined text-lg text-slate-600" aria-hidden="true">inventory_2</span>
-              <div class="min-w-0">
-                <h4 class="text-sm font-bold text-slate-700">{{ t('app.modelRunSnapshotTitle') }}</h4>
-                <p class="mt-1 text-xs leading-5 text-slate-600">
-                  {{ t('app.modelRunSnapshotSummary', {
-                    time: formatRunTimestamp(verificationResult.modelSnapshot.capturedAt),
+          <!--
+            The checked model, as a named scene-level artifact.
+
+            It belongs to the *run*, not to any counterexample: one model is checked, and every
+            counterexample the run produced came out of that same model. It used to sit in the
+            counterexample-details dialog, which implied one model per counterexample and put a
+            scene-level artifact behind a per-evidence surface. It was also a footer
+            `--secondary` button, i.e. styled as an afterthought next to Close, which is how users
+            failed to find it at all.
+
+            Stated with what the model covers, so the reader knows what they are downloading before
+            they click, and disabled-with-reason rather than hidden when the run stores no model —
+            a control that silently vanishes reads as a missing feature.
+          -->
+          <section
+            v-if="verificationResult.modelSnapshot"
+            aria-labelledby="verification-run-artifact-title"
+            data-testid="verification-run-artifact"
+          >
+            <h4 id="verification-run-artifact-title" class="mb-2 text-sm font-bold text-slate-700">
+              {{ t('app.runArtifact') }}
+            </h4>
+            <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-semibold text-slate-700">{{ t('app.smvModelArtifactTitle') }}</p>
+                <p class="mt-0.5 text-xs leading-5 text-slate-500">
+                  {{ t('app.smvModelArtifactScope', {
                     devices: verificationResult.modelSnapshot.deviceCount,
                     rules: verificationResult.modelSnapshot.ruleCount,
-                    specs: verificationResult.modelSnapshot.specificationCount,
-                    variables: verificationResult.modelSnapshot.environmentVariableCount,
-                    templates: verificationResult.modelSnapshot.deviceTemplateCount
+                    specs: verificationResult.modelSnapshot.specificationCount
                   }) }}
+                  <!-- Verification only: this is what makes the artifact run-level rather than
+                       per-counterexample, and a simulation has no counterexamples to say it about. -->
+                  {{ t('app.smvModelArtifactSharedByCounterexamples') }}
                 </p>
-                <p class="mt-1 text-xs leading-5 text-slate-600">{{ t('app.modelRunSnapshotScope') }}</p>
-              </div>
-            </div>
-            <div
-              class="mt-3 rounded-md border px-3 py-2 text-xs font-semibold leading-5"
-              :class="verificationBoardComparison === 'UNCHANGED'
-                ? 'board-border-subtle board-chip-success board-text-success'
-                : verificationBoardComparison === 'CHANGED'
-                  ? 'board-surface-warning board-text-warning'
-                  : 'border-slate-200 bg-slate-50 text-slate-700'"
-              data-testid="verification-board-comparison"
-            >
-              {{ verificationBoardComparison === 'UNCHANGED'
-                ? t('app.runBoardInputUnchanged')
-                : verificationBoardComparison === 'CHANGED'
-                  ? t('app.runBoardInputChanged')
-                  : verificationBoardComparison === 'UNAVAILABLE'
-                    ? t('app.runBoardComparisonUnavailable')
-                    : t('app.runBoardNotCompared') }}
-            </div>
-          </div>
-
-          <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.modelAssumptions') }}</h4>
-            <div
-              v-if="!verificationModelSemanticsConsistent"
-              class="mb-2 rounded board-surface-warning px-2 py-1.5 text-xs font-semibold board-text-warning"
-            >
-              {{ t('app.modelSemanticsUnavailable') }}
-            </div>
-            <div class="space-y-2 text-xs leading-5 text-slate-600">
-              <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base board-text-info">landscape</span>
-                <span>{{ t('app.environmentEvolutionIncluded') }}</span>
-              </div>
-              <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base board-text-success">verified_user</span>
-                <span>{{ t('app.trustPropagationIncluded') }}</span>
-              </div>
-              <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base board-text-info">sync_alt</span>
-                <span>{{ t('app.labelPropagationScopeSummary') }}</span>
-              </div>
-              <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base" :class="verificationResult.isAttack ? 'board-text-danger' : 'text-slate-500'">security</span>
-                <span>
-                  {{ verificationResult.isAttack
-                    ? attackSelectionSummary(
-                        verificationResult.modelSemantics,
-                        verificationResult.attackBudget,
-                        true)
-                    : t('app.verificationNoAttackCoverage') }}
-                </span>
-              </div>
-              <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
-                <span class="material-symbols-outlined text-base" :class="verificationResult.enablePrivacy ? 'board-text-info' : 'text-slate-500'">shield_lock</span>
-                <span>
-                  {{ verificationResult.enablePrivacy
-                    ? t('app.privacyPropagationIncluded')
-                    : t('app.privacyPropagationNotIncluded') }}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="verificationSpecResultSummary.total > 0" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <div class="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h4 class="text-sm font-bold text-slate-700">{{ t('app.specResults') }}</h4>
-                <p class="text-xs text-slate-500 mt-1">
-                  {{ t('app.specResultsSummary', {
-                    total: verificationSpecResultSummary.total,
-                    satisfied: verificationSpecResultSummary.satisfied,
-                    violated: verificationSpecResultSummary.violated,
-                    inconclusive: verificationSpecResultSummary.inconclusive
-                  }) }}
+                <p
+                  v-if="!verificationRunSmvAvailable"
+                  class="mt-1 text-xs leading-5 board-text-warning"
+                  data-testid="verification-result-smv-unavailable"
+                >
+                  {{ t('app.smvModelNotAvailable') }}
                 </p>
               </div>
-              <span
-                class="material-symbols-outlined text-lg"
-                :class="verificationSpecResultSummary.violated > 0
-                  ? 'board-text-danger'
-                  : verificationSpecResultSummary.inconclusive > 0 ? 'board-text-warning' : 'board-text-success'"
+              <button
+                type="button"
+                class="iot-dialog-btn iot-dialog-btn--primary shrink-0"
+                data-testid="verification-result-download-smv"
+                :disabled="!verificationRunSmvAvailable"
+                @click="downloadCurrentVerificationRunSmv()"
               >
-                {{ verificationSpecResultSummary.violated > 0
-                  ? 'rule'
-                  : verificationSpecResultSummary.inconclusive > 0 ? 'help' : 'verified' }}
-              </span>
+                <span class="material-symbols-outlined" aria-hidden="true">download</span>
+                {{ t('app.downloadSmvModel') }}
+              </button>
             </div>
-            <div class="iot-scroll-region space-y-2 max-h-72 pr-1">
+          </section>
+
+          <!--
+            Counterexamples, promoted above the per-specification verdicts: this is the evidence the
+            reader acts on, and the verdict list is the reference behind it.
+
+            One list, not two. This section and a second, near-identical one below the run context both
+            rendered `verificationResult.traces`, so every violation appeared twice with two different
+            replay handlers — and the promoted copy passed the *array index* to
+            `selectAndPlayVerificationTrace`, which takes a trace id, so its "view" button fetched
+            trace 0, 1, 2… The surviving list keeps `selectAndPlayTrace(index)`, which indexes
+            `verificationResult.traces` directly, and the `data-testid`s the E2E flow addresses.
+          -->
+          <section v-if="verificationResult?.traces?.length" aria-labelledby="violations-title">
+            <h4 id="violations-title" class="text-sm font-bold text-slate-700 mb-2">
+              {{ getVerificationOutcome(verificationResult) === 'VIOLATED'
+                ? t('app.violationsTitle')
+                : t('app.inconclusiveEvidenceTitle') }} ({{ verificationResult.traces.length }})
+            </h4>
+            <p
+              v-if="getVerificationOutcome(verificationResult) === 'INCONCLUSIVE'"
+              class="mb-2 rounded-md board-surface-warning px-3 py-2 text-xs leading-5 board-text-warning"
+            >
+              {{ t('app.inconclusiveEvidenceSummary', { counterexamples: verificationResult.traces.length }) }}
+            </p>
+            <div class="space-y-2">
+              <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded-lg p-3">
+                <div class="flex items-center justify-between mb-1">
+                  <div
+                    class="text-xs font-bold"
+                    :class="getVerificationOutcome(verificationResult) === 'VIOLATED'
+                      ? 'board-text-danger'
+                      : 'board-text-warning'"
+                  >{{ t('app.violationNumber', { index: Number(i) + 1 }) }}</div>
+                  <div class="flex gap-1">
+                    <button
+                      v-if="canFixVerificationResultTrace(trace)"
+                      type="button"
+                      data-testid="verification-trace-fix"
+                      class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-white transition-colors"
+                      :class="simulationAnimationState.visible
+                        ? 'bg-slate-300 cursor-not-allowed'
+                        : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'"
+                      :disabled="simulationAnimationState.visible"
+                      @click="openFixForVerificationResultTrace(trace)"
+                    >
+                      <!-- aria-hidden, or the ligature text joins the accessible name: this button
+                           announced as "build Fix Rules" and its sibling as "play_arrow View", which
+                           is what a name-based query (or a screen reader) actually receives. -->
+                      <span class="material-symbols-outlined text-xs" aria-hidden="true">build</span>
+                      {{ t('app.fixRules') }}
+                    </button>
+                    <button
+                      type="button"
+                      @click="selectAndPlayTrace(Number(i))"
+                      :disabled="simulationAnimationState.visible"
+                      :class="[
+                        'px-2 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1',
+                        simulationAnimationState.visible
+                          ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                          : 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)] text-white'
+                      ]"
+                    >
+                      <span class="material-symbols-outlined text-xs" aria-hidden="true">play_arrow</span>
+                      {{ t('app.view') }}
+                      <span v-if="simulationAnimationState.visible" class="text-[length:var(--iot-font-min)]">({{ t('app.active') }})</span>
+                    </button>
+                  </div>
+                </div>
+                <!-- Why Fix is withheld. Without this the button simply vanished, which reads as a bug. -->
+                <p
+                  v-if="!canFixVerificationResultTrace(trace)"
+                  data-testid="verification-trace-fix-unavailable"
+                  class="mb-2 rounded-md board-surface-warning px-2 py-1.5 text-xs leading-5 board-text-warning"
+                >
+                  {{ verificationResultStale
+                    ? t('app.verificationResultStaleReverify')
+                    : t(verificationResult.historyPersistence.status === 'OUTCOME_UNKNOWN'
+                      ? 'app.verificationTracePersistenceUnknownFixUnavailable'
+                      : 'app.verificationTraceNotPersistedFixUnavailable') }}
+                </p>
+                <div class="text-xs text-slate-600">
+                  <span class="font-medium">{{ getTraceSpecDisplayTitle(trace) }}</span>
+                  <span class="text-slate-500"> · {{ t('app.statesCount', { count: trace.states?.length || 0 }) }}</span>
+                </div>
+                <details v-if="trace.violatedSpecId" class="mt-1 text-[11px] text-slate-500">
+                  <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
+                  <div class="mt-1 grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]">
+                    <span class="font-medium">{{ t('app.specificationTechnicalId') }}</span>
+                    <code class="break-all rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-700">{{ trace.violatedSpecId }}</code>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </section>
+
+          <!--
+            Per-specification verdicts, collapsible. Also previously rendered twice — once here and once
+            as an always-open `app.specResults` card below the run context, whose header restated the
+            satisfied/violated/inconclusive counts that the summary grid at the top already shows. The
+            copy that survived is this one (collapsed detail, one heading), carrying the fields the other
+            had and this lacked: the variable-source chips that distinguish two specs sharing a template
+            label, the labelled formula block, and the per-row technical disclosure.
+          -->
+          <details
+            v-if="verificationSpecResultSummary.total > 0"
+            class="group border-t border-slate-200 pt-3"
+            open
+            data-testid="spec-results-section"
+          >
+            <summary class="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-slate-700 hover:text-slate-900">
+              <span class="inline-flex items-center gap-2">
+                <span class="material-symbols-outlined text-lg text-slate-500" aria-hidden="true">rule</span>
+                {{ t('app.specResults') }} ({{ verificationSpecResultSummary.total }})
+              </span>
+              <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
+            </summary>
+            <div class="iot-scroll-region mt-3 space-y-2 max-h-72 pr-1" data-testid="spec-results-list">
               <div
                 v-for="(result, index) in verificationSpecResultSummary.results"
                 :key="`${result.specId}-${index}`"
@@ -17478,7 +18172,92 @@ const counterexampleTraceHelpText = computed(() => {
                 </div>
               </div>
             </div>
-          </div>
+          </details>
+
+          <!-- Run Context (Collapsible, merged) -->
+          <details class="group border-t border-slate-200 pt-3" data-testid="run-context-section">
+            <summary class="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-slate-700 hover:text-slate-900">
+              <span class="inline-flex items-center gap-2">
+                <span class="material-symbols-outlined text-lg text-slate-500" aria-hidden="true">inventory_2</span>
+                {{ t('app.runContext') }}
+              </span>
+              <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
+            </summary>
+            <div class="mt-3 space-y-3">
+              <!-- Model Snapshot -->
+              <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <h5 class="text-xs font-bold text-slate-700 mb-2">{{ t('app.modelRunSnapshotTitle') }}</h5>
+                <p class="text-xs text-slate-600 mb-2">
+                  {{ t('app.modelRunSnapshotSummary', {
+                    time: formatRunTimestamp(verificationResult.modelSnapshot.capturedAt),
+                    devices: verificationResult.modelSnapshot.deviceCount,
+                    rules: verificationResult.modelSnapshot.ruleCount,
+                    specs: verificationResult.modelSnapshot.specificationCount,
+                    variables: verificationResult.modelSnapshot.environmentVariableCount,
+                    templates: verificationResult.modelSnapshot.deviceTemplateCount
+                  }) }}
+                </p>
+                <div
+                  class="mt-2 rounded-md border px-3 py-2 text-xs font-semibold leading-5"
+                  :class="verificationBoardComparison === 'UNCHANGED'
+                    ? 'board-border-subtle board-chip-success board-text-success'
+                    : verificationBoardComparison === 'CHANGED'
+                      ? 'board-surface-warning board-text-warning'
+                      : 'border-slate-200 bg-slate-50 text-slate-700'"
+                  data-testid="verification-board-comparison"
+                >
+                  {{ verificationBoardComparison === 'UNCHANGED'
+                    ? t('app.runBoardInputUnchanged')
+                    : verificationBoardComparison === 'CHANGED'
+                      ? t('app.runBoardInputChanged')
+                      : verificationBoardComparison === 'UNAVAILABLE'
+                        ? t('app.runBoardComparisonUnavailable')
+                        : t('app.runBoardNotCompared') }}
+                </div>
+              </div>
+
+              <!-- Model Assumptions -->
+              <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <h5 class="text-xs font-bold text-slate-700 mb-2">{{ t('app.modelAssumptions') }}</h5>
+                <div
+                  v-if="!verificationModelSemanticsConsistent"
+                  class="mb-2 rounded board-surface-warning px-2 py-1.5 text-xs font-semibold board-text-warning"
+                >
+                  {{ t('app.modelSemanticsUnavailable') }}
+                </div>
+                <div class="space-y-2 text-xs leading-5 text-slate-600">
+                  <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
+                    <span class="material-symbols-outlined text-base board-text-info">landscape</span>
+                    <span>{{ t('app.environmentEvolutionIncluded') }}</span>
+                  </div>
+                  <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
+                    <span class="material-symbols-outlined text-base board-text-success">verified_user</span>
+                    <span>{{ t('app.trustPropagationIncluded') }}</span>
+                  </div>
+                  <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
+                    <span class="material-symbols-outlined text-base board-text-info">sync_alt</span>
+                    <span>{{ t('app.labelPropagationScopeSummary') }}</span>
+                  </div>
+                  <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
+                    <span class="material-symbols-outlined text-base" :class="verificationResult.isAttack ? 'board-text-danger' : 'text-slate-500'">security</span>
+                    <span>
+                      {{ verificationResult.isAttack
+                        ? attackSelectionSummary(verificationResult.modelSemantics, verificationResult.attackBudget, true)
+                        : t('app.verificationNoAttackCoverage') }}
+                    </span>
+                  </div>
+                  <div v-if="verificationModelSemanticsConsistent" class="flex items-start gap-2">
+                    <span class="material-symbols-outlined text-base" :class="verificationResult.enablePrivacy ? 'board-text-info' : 'text-slate-500'">shield_lock</span>
+                    <span>
+                      {{ verificationResult.enablePrivacy
+                        ? t('app.privacyPropagationIncluded')
+                        : t('app.privacyPropagationNotIncluded') }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </details>
 
           <div v-if="verificationGenerationWarningCounts.total > 0" class="p-4 rounded-xl board-chip-warning border board-border-subtle board-text-warning">
             <div class="flex items-start gap-3">
@@ -17528,99 +18307,203 @@ const counterexampleTraceHelpText = computed(() => {
               </li>
             </ol>
           </div>
-
-          <details v-if="verificationResult.nusmvOutput" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <summary class="text-sm font-bold text-slate-700 cursor-pointer hover:text-slate-900">
-              {{ t('app.showNusmvDiagnosticOutput') }}
-            </summary>
-            <div class="iot-scroll-region mt-3 bg-slate-900 rounded-lg p-3 max-h-40">
-              <!-- slate-300 on the slate-900 terminal block, not slate-500: this ground is dark in *both*
-                   themes (it is a console, deliberately), so the ink has to be light. slate-500 measured
-                   3.74 here — dark-on-dark. slate-300 is 12.0. -->
-              <pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{{ verificationResult.nusmvOutput || t('app.noOutput') }}</pre>
-            </div>
-          </details>
         </div>
 
-        <div v-if="verificationResult?.traces?.length">
-          <h4 class="text-sm font-bold text-slate-700 mb-2">
-            {{ getVerificationOutcome(verificationResult) === 'VIOLATED'
-              ? t('app.violationsTitle')
-              : t('app.inconclusiveEvidenceTitle') }} ({{ verificationResult.traces.length }})
-          </h4>
-          <p
-            v-if="getVerificationOutcome(verificationResult) === 'INCONCLUSIVE'"
-            class="mb-2 rounded-md board-surface-warning px-3 py-2 text-xs leading-5 board-text-warning"
-          >
-            {{ t('app.inconclusiveEvidenceSummary', { counterexamples: verificationResult.traces.length }) }}
+      </div>
+
+      <footer v-if="verificationResult" class="iot-dialog__footer">
+        <button
+          type="button"
+          class="iot-dialog-btn iot-dialog-btn--ghost"
+          @click="dismissResultDialog"
+        >
+          {{ t('app.close') }}
+        </button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Trace Details Dialog -->
+  <div
+    v-if="showTraceDetailsDialog && traceDetailsView"
+    data-testid="trace-details-dialog"
+    class="iot-dialog-overlay"
+    @click="dismissTraceDetailsDialog"
+    @keydown="handleTraceDetailsDialogKeydown"
+  >
+    <div
+      :ref="setTraceDetailsDialogRef"
+      class="iot-dialog iot-dialog--md board-result-dialog-surface"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="trace-details-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
+      <header class="iot-dialog__header">
+        <div class="iot-dialog__icon">
+          <span class="material-symbols-outlined" aria-hidden="true">error</span>
+        </div>
+        <div class="iot-dialog__heading">
+          <h3 id="trace-details-dialog-title" class="iot-dialog__title">{{ t('app.counterexampleDetails') }}</h3>
+          <p class="iot-dialog__subtitle">
+            {{ traceDetailsView.states?.length || 0 }}{{ t('app.states') }} ·
+            {{ traceDetailsView.modelComplete ? t('app.completeModel') : t('app.incompleteModel') }}
           </p>
-          <div class="space-y-2">
-            <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-3">
-              <div class="flex items-center justify-between mb-1">
-                <div
-                  class="text-xs font-bold"
-                  :class="getVerificationOutcome(verificationResult) === 'VIOLATED'
-                    ? 'board-text-danger'
-                    : 'board-text-warning'"
-                >{{ t('app.violationNumber', { index: Number(i) + 1 }) }}</div>
-                <div class="flex gap-1">
-                  <button
-                    v-if="canFixVerificationResultTrace(trace)"
-                    @click="openFixForVerificationResultTrace(trace)"
-                    data-testid="verification-trace-fix"
-                    class="px-2 py-1 bg-[color:var(--accent-fill)] text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
-                    :disabled="simulationAnimationState.visible"
-                    :class="simulationAnimationState.visible ? 'bg-slate-300 cursor-not-allowed' : ''"
-                  >
-                    <span class="material-symbols-outlined text-xs">build</span>
-                    {{ t('app.fixRules') }}
-                  </button>
-                  <button
-                    @click="selectAndPlayTrace(Number(i))"
-                    :disabled="simulationAnimationState.visible"
-                    :class="[
-                      'px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1',
-                      simulationAnimationState.visible 
-                        ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
-                        : 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)] text-white'
-                    ]"
-                  >
-                    <span class="material-symbols-outlined text-xs">play_arrow</span>
-                    {{ t('app.viewTrace') }}
-                    <span v-if="simulationAnimationState.visible" class="text-[length:var(--iot-font-min)]">({{ t('app.active') }})</span>
-                  </button>
-                </div>
-              </div>
-              <p
-                v-if="!canFixVerificationResultTrace(trace)"
-                data-testid="verification-trace-fix-unavailable"
-                class="mb-2 rounded-md board-surface-warning px-2 py-1.5 text-xs leading-5 board-text-warning"
+        </div>
+
+        <button
+          type="button"
+          class="iot-dialog__close"
+          :aria-label="t('app.close')"
+          @click="dismissTraceDetailsDialog"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">close</span>
+        </button>
+      </header>
+
+      <!--
+        Two kinds of fact, named as such.
+
+        Everything here used to read as one flat list of "counterexample properties", but only the
+        violated specification and the state count are about *this* counterexample. The attack and
+        privacy chips, and model completeness, describe the run — identical across every
+        counterexample it produced — and a reader comparing two counterexamples had no way to know
+        which differences were possible. The frozen per-trace copy stays (a counterexample must
+        survive its run being deleted); what changes is that it is labelled as run context, with the
+        scene-level artifact and the full verdict list one click away in the footer.
+      -->
+      <div class="iot-dialog__body iot-scroll-region space-y-4">
+        <section aria-labelledby="trace-evidence-title" data-testid="counterexample-evidence">
+          <h4 id="trace-evidence-title" class="mb-2 text-sm font-bold text-slate-700">
+            {{ t('app.counterexampleEvidenceHeading') }}
+          </h4>
+          <div class="rounded-lg border border-slate-200 p-4 bg-white">
+            <p class="text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">
+              {{ t('app.violatedSpecification') }}
+            </p>
+            <div class="mt-1 text-base font-semibold text-slate-900">
+              {{ traceDetailsView.violatedSpec?.templateLabel || traceDetailsView.violatedSpec?.formula || t('app.unknownSpecification') }}
+            </div>
+            <p class="mt-3 text-xs text-slate-600">
+              <span class="font-medium">{{ t('app.statesInTrace') }}:</span>
+              {{ t('app.statesCount', { count: traceDetailsView.states?.length || 0 }) }}
+            </p>
+          </div>
+        </section>
+
+        <section aria-labelledby="trace-run-context-title" data-testid="counterexample-run-context">
+          <h4 id="trace-run-context-title" class="mb-2 text-sm font-bold text-slate-700">
+            {{ t('app.counterexampleRunContextHeading') }}
+          </h4>
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div class="flex flex-wrap gap-1.5">
+              <span v-if="traceDetailsView.isAttack" class="rounded-full board-chip-warning px-2 py-1 text-[11px] font-semibold board-text-warning">
+                {{ attackSelectionSummary(traceDetailsView.modelSemantics, traceDetailsView.attackBudget) }}
+              </span>
+              <span v-else class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                {{ t('app.traceVisualization.noAttackModelShort') }}
+              </span>
+              <span v-if="traceDetailsView.enablePrivacy" class="rounded-full board-chip-info px-2 py-1 text-[11px] font-semibold board-text-info">
+                {{ t('app.traceVisualization.privacyPropagationEnabled') }}
+              </span>
+              <span v-else class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                {{ t('app.traceVisualization.privacyPropagationNotModeled') }}
+              </span>
+              <span
+                class="rounded-full px-2 py-1 text-[11px] font-semibold"
+                :class="traceDetailsView.modelComplete
+                  ? 'board-chip-success board-text-success'
+                  : 'board-chip-warning board-text-warning'"
               >
-                {{ verificationResultStale
-                  ? t('app.verificationResultStaleReverify')
-                  : t(verificationResult.historyPersistence.status === 'OUTCOME_UNKNOWN'
-                    ? 'app.verificationTracePersistenceUnknownFixUnavailable'
-                    : 'app.verificationTraceNotPersistedFixUnavailable') }}
-              </p>
-              <div class="text-xs font-bold text-slate-600 mb-1">
-                {{ t('app.traceVisualization.violatedSpecification') }}: {{ getTraceSpecDisplayTitle(trace) }}
-              </div>
-              <details v-if="trace.violatedSpecId" class="mt-1 text-[11px] text-slate-500">
-                <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
-                <div class="mt-1 grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]">
-                  <span class="font-medium">{{ t('app.specificationTechnicalId') }}</span>
-                  <code class="break-all rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-700">{{ trace.violatedSpecId }}</code>
-                </div>
-              </details>
-              <div class="text-xs text-slate-500 mt-1">
-                {{ t('app.statesCount', { count: trace.states?.length || 0 }) }}
+                {{ traceDetailsView.modelComplete ? t('app.completeModel') : t('app.incompleteModel') }}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Incomplete Model Warning -->
+        <div
+          v-if="!traceDetailsView.modelComplete"
+          class="rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
+        >
+          <div class="font-bold mb-1">{{ t('app.incompleteModelWarning') }}</div>
+          <div class="text-xs">
+            {{ t('app.incompleteModelHint', {
+              rules: traceDetailsView.disabledRuleCount || 0,
+              specs: traceDetailsView.skippedSpecCount || 0
+            }) }}
+          </div>
+        </div>
+
+        <!-- Generation Issues -->
+        <div
+          v-if="traceDetailsView.generationIssues && traceDetailsView.generationIssues.length > 0"
+          class="rounded-lg board-surface-warning px-4 py-3 text-sm board-text-warning"
+        >
+          <div class="font-bold mb-1">{{ t('app.generationWarnings') }}</div>
+          <ul class="list-disc list-inside space-y-0.5 text-xs">
+            <li v-for="(issue, idx) in traceDetailsView.generationIssues" :key="idx">
+              {{ issue }}
+            </li>
+          </ul>
+        </div>
+
+        <!-- Technical Details (collapsible) -->
+        <details class="group border-t border-slate-200 pt-3">
+          <summary class="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-slate-700 hover:text-slate-900">
+            <span class="inline-flex items-center gap-2">
+              <span class="material-symbols-outlined text-lg text-slate-500" aria-hidden="true">code</span>
+              {{ t('app.technicalDetails') }}
+            </span>
+            <span class="material-symbols-outlined transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
+          </summary>
+
+          <div class="mt-3 space-y-3">
+            <!-- Checked Expression -->
+            <div>
+              <h5 class="text-xs font-bold uppercase text-slate-500 mb-1">{{ t('app.checkedExpression') }}</h5>
+              <pre class="rounded-lg bg-slate-950 p-3 text-xs font-mono text-slate-300 whitespace-pre-wrap">{{ traceDetailsView.checkedExpression || t('app.notAvailable') }}</pre>
+            </div>
+
+            <!-- Metadata -->
+            <div v-if="traceDetailsView.createdAt || traceDetailsView.id || traceDetailsView.verificationTaskId">
+              <h5 class="text-xs font-bold uppercase text-slate-500 mb-1">{{ t('app.metadata') }}</h5>
+              <div class="text-xs text-slate-600 space-y-0.5">
+                <div v-if="traceDetailsView.createdAt"><span class="font-medium">{{ t('app.traceCreatedAt') }}:</span> {{ formatRunTimestamp(traceDetailsView.createdAt) }}</div>
+                <div v-if="traceDetailsView.id"><span class="font-medium">{{ t('app.traceId') }}:</span> {{ traceDetailsView.id }}</div>
+                <div v-if="traceDetailsView.verificationTaskId"><span class="font-medium">{{ t('app.verificationTaskId') }}:</span> {{ traceDetailsView.verificationTaskId }}</div>
               </div>
             </div>
           </div>
-        </div>
+        </details>
       </div>
 
-      
+      <footer class="iot-dialog__footer">
+        <button
+          type="button"
+          class="iot-dialog-btn iot-dialog-btn--ghost"
+          @click="dismissTraceDetailsDialog"
+        >
+          {{ t('app.close') }}
+        </button>
+        <!--
+          Escalation to the owning run, where the scene-level facts and the model download now live.
+          This replaced a "Download SMV model" button: the model is one per run, so offering it here
+          implied one per counterexample. Navigating by `verificationTaskId` rather than restoring a
+          retained result, so it works for a trace opened straight from history with no run loaded.
+        -->
+        <button
+          v-if="traceDetailsView.verificationTaskId"
+          type="button"
+          class="iot-dialog-btn iot-dialog-btn--secondary"
+          data-testid="counterexample-open-owning-run"
+          @click="openOwningVerificationRun(traceDetailsView.verificationTaskId)"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">fact_check</span>
+          {{ t('app.counterexampleOwningRun') }}
+        </button>
+      </footer>
     </div>
   </div>
 
@@ -17775,8 +18658,8 @@ const counterexampleTraceHelpText = computed(() => {
               :disabled="totalStates <= 1"
               class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 disabled:cursor-not-allowed"
               :aria-label="traceAnimationState.isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play')"
-              :class="traceAnimationState.isPlaying 
-                ? 'bg-[color:var(--danger-fill)] text-white' 
+              :class="traceAnimationState.isPlaying
+                ? 'bg-[color:var(--accent-fill)] text-white'
                 : totalStates <= 1
                   ? 'bg-slate-100 text-slate-500'
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
@@ -17784,15 +18667,40 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ traceAnimationState.isPlaying ? 'pause' : 'play_arrow' }}</span>
               {{ traceAnimationState.isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play') }}
             </button>
+            <HintTooltip v-if="playbackChangesDismissedKey !== null" :content="t('app.showStepChanges')">
+              <button
+                type="button"
+                data-testid="trace-timeline-restore-changes"
+                class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                :aria-label="t('app.showStepChanges')"
+                @click="resetPlaybackChanges"
+              >
+                <span class="material-symbols-outlined text-base" aria-hidden="true">difference</span>
+                <span class="hidden sm:inline">{{ t('app.stepChanges') }}</span>
+              </button>
+            </HintTooltip>
+            <HintTooltip v-if="!activeFuzzingFinding && currentTrace.verificationTaskId" :content="t('app.viewCounterexampleDetails')">
+              <button
+                type="button"
+                @click="openVerificationTraceDetails()"
+                data-testid="trace-timeline-run-details"
+                class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                :aria-label="t('app.viewCounterexampleDetails')"
+              >
+                <span class="material-symbols-outlined text-base" aria-hidden="true">description</span>
+                <span class="hidden sm:inline">{{ t('app.runDetails') }}</span>
+              </button>
+            </HintTooltip>
             <HintTooltip :content="t('app.close')">
               <button
                 type="button"
                 @click="closeTraceAnimation"
                 data-testid="trace-timeline-close"
-                class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+                class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
                 :aria-label="t('app.close')"
               >
-                <span class="material-symbols-outlined text-slate-500" aria-hidden="true">close</span>
+                <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
+                <span>{{ t('app.close') }}</span>
               </button>
             </HintTooltip>
           </div>
@@ -17818,112 +18726,59 @@ const counterexampleTraceHelpText = computed(() => {
         </div>
 
         <!--
-          The cause of the selected state, as one row rather than a disclosure around a card.
-          `trace-step-values` keeps its name: it shares no prefix with the `trace-timeline-state-{i}`
-          step buttons, which is why it was renamed here in the first place.
-
-          It was a `<details open>` wrapping a bordered card. Both wrappers were chrome around a single
-          line of chips -- a summary row, a border, a background and two paddings -- on the surface where
-          vertical space is scarcest, and a disclosure that is open by default and holds one line is a
-          click that changes nothing. What earns the height is the content: which automation produced this
-          state. That stays unconditionally visible, so nothing moved behind an interaction.
-
-          DEVICE values are deliberately absent; the canvas nodes are their authority and render them more
-          richly (previous value, changed tint, trust and privacy pills). Environment values are NOT covered
-          by that authority — a canvas node shows what its device reported, never the shared pool value — so
-          the pool is rendered here instead.
-        -->
-        <div
-          class="mb-2 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1"
-          data-testid="trace-step-values"
-        >
-          <span class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
-            {{ traceAnimationState.selectedStateIndex === 0
-              ? t('app.traceVisualization.initialModelState')
-              : t('app.traceVisualization.rulesAppliedToReachState') }}
-          </span>
-          <!--
-            The shared pool's own values, as absolutes. The canvas nodes render each device's *reported*
-            reading, and the change popover lists only environment values that CHANGED — so in the case this
-            whole distinction exists for (the home holds 20, a compromised sensor reports 40) the pool value
-            is stable, produces no change row, and appeared nowhere. The counterexample could not show the
-            divergence it was proving. Absolute, always, beside the reported readings.
-          -->
-          <span
-            v-if="activePlaybackEnvironmentVariables.length > 0"
-            class="flex min-w-0 flex-wrap items-center gap-1.5"
-            data-testid="trace-step-environment-values"
-          >
-            <span class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
-              {{ t('app.environmentPool') }}
-            </span>
-            <span
-              v-for="variable in activePlaybackEnvironmentVariables"
-              :key="variable.name"
-              class="rounded border border-[color:var(--board-border)] bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-[color:var(--board-text)] dark:bg-slate-800"
-            >{{ variable.name }} = {{ formatPlaybackEnvironmentModelToken(variable.name, variable.value) }}</span>
-          </span>
-          <span
-            v-if="traceAnimationState.selectedStateIndex > 0 && currentTraceTriggeredRules.length > 0"
-            class="flex min-w-0 flex-wrap items-center gap-1.5"
-            data-testid="trace-timeline-triggered-rules"
-          >
-            <span
-              v-for="(rule, index) in currentTraceTriggeredRules"
-              :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-              class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
-              :class="traceTriggeredRuleExistsOnBoard(rule)
-                ? 'board-border-subtle board-chip-success board-text-success'
-                : 'board-surface-warning board-text-warning'"
-              :title="traceTriggeredRuleExistsOnBoard(rule) ? undefined : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
-            >
-              <span class="max-w-[14rem] truncate">{{ traceTriggeredRuleLabel(rule, Number(index)) }}</span>
-              <span v-if="!traceTriggeredRuleExistsOnBoard(rule)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
-            </span>
-          </span>
-          <span
-            v-else-if="traceAnimationState.selectedStateIndex > 0"
-            class="text-[11px] text-slate-500"
-            data-testid="trace-timeline-triggered-rules"
-          >{{ t('app.traceVisualization.noRulesApplied') }}</span>
-        </div>
-
-        <div
-          v-if="currentTraceCompromisedAutomationLinks.length > 0"
-          class="board-surface-danger mb-3 rounded-lg px-3 py-2"
-          data-testid="trace-timeline-compromised-links"
-        >
-          <div class="text-[length:var(--iot-font-min)] font-bold uppercase board-text-danger">
-            {{ t('app.traceVisualization.compromisedAutomationLinks') }}
-          </div>
-          <div class="mt-1.5 flex flex-wrap gap-1.5">
-            <span
-              v-for="(rule, index) in currentTraceCompromisedAutomationLinks"
-              :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-              class="inline-flex max-w-full items-center gap-1 rounded-full border board-border-subtle bg-white px-2 py-1 text-[length:var(--iot-font-min)] font-semibold board-text-danger"
-              :title="traceTriggeredRuleExistsOnBoard(rule) ? t('app.traceVisualization.compromisedAutomationLinkHint') : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
-            >
-              <span class="material-symbols-outlined text-[12px]" aria-hidden="true">link_off</span>
-              <span class="max-w-[14rem] truncate">{{ traceTriggeredRuleLabel(rule, Number(index)) }}</span>
-              <span v-if="!traceTriggeredRuleExistsOnBoard(rule)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
-            </span>
-          </div>
-        </div>
-
-        <!--
-          One scrub control: the rail.
-
-          There were two, stacked two rows apart, both full-width, both horizontal, both mapping x to the
-          same state index, both drawn in the danger hue — an `<input type="range">` labelled "jump to
-          state" and this rail. That is what read as a double timeline for a single sequence. They were
-          kept apart on the argument that the rail shows *shape* while the slider *scrubs*, but that only
-          held while the rail seeked on press alone: `scrubTraceStateFromPointer` now captures the pointer
-          and follows a drag, so the rail does both, and the slider had nothing left that was its own.
+          Step controls and the rail are different modalities, so they coexist: buttons move +/-1, the
+          number input jumps exactly, the rail below shows position and scrubs. The range slider that used
+          to sit between them was a second full-width x-axis over the same index as the rail -- that pair
+          is what read as two timelines for one sequence, so the slider is gone and the rail took over the
+          drag it uniquely provided (`scrubTraceStateFromPointer`).
 
           The rail is the one that cannot be replaced, because only it can show where the violation sits
           relative to where you are.
         -->
-        <div class="iot-scroll-region-x py-2">
+        <section class="border-b border-slate-200 pb-2" :aria-label="t('app.traceVisualization.stateSequence')">
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                :disabled="traceAnimationState.selectedStateIndex <= 0"
+                :aria-label="t('app.traceVisualization.previousState')"
+                @click="selectPreviousTraceState"
+              >
+                <span class="material-symbols-outlined text-lg" aria-hidden="true">chevron_left</span>
+              </button>
+              <label class="board-card flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-600">
+                <span>{{ t('app.traceVisualization.stateLabel') }}</span>
+                <input
+                  v-model.number="selectedTraceStateNumber"
+                  data-testid="trace-timeline-step-input"
+                  type="number"
+                  :min="1"
+                  :max="Math.max(totalStates, 1)"
+                  :disabled="totalStates <= 0"
+                  class="w-10 bg-transparent text-center font-bold text-slate-800 outline-none"
+                  :aria-label="t('app.traceVisualization.jumpToState')"
+                >
+                <span class="text-slate-500">/ {{ totalStates }}</span>
+              </label>
+              <button
+                type="button"
+                class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                :disabled="traceAnimationState.selectedStateIndex >= totalStates - 1"
+                :aria-label="t('app.traceVisualization.nextState')"
+                @click="selectNextTraceState"
+              >
+                <span class="material-symbols-outlined text-lg" aria-hidden="true">chevron_right</span>
+              </button>
+            </div>
+            <span class="text-[length:var(--iot-font-min)] font-semibold text-slate-500">
+              {{ traceAnimationState.selectedStateIndex === 0
+                ? t('app.traceVisualization.initialModelState')
+                : t('app.traceVisualization.transitionNumber', { index: traceAnimationState.selectedStateIndex }) }}
+            </span>
+          </div>
+
+        <div class="iot-scroll-region-x mt-1 py-1">
           <div
             class="relative h-14 touch-none"
             data-testid="trace-timeline-track"
@@ -17935,15 +18790,15 @@ const counterexampleTraceHelpText = computed(() => {
             <!-- Progress line background -->
             <div class="absolute top-1/2 left-2 right-2 h-3 bg-slate-200 rounded -translate-y-1/2"></div>
             <!-- Red progress bar - from start to current node -->
-            <div 
+            <div
               v-if="traceAnimationState.selectedStateIndex > 0 && totalStates > 1"
               class="absolute top-1/2 h-3 bg-[color:var(--danger)] rounded transition-all duration-300 -translate-y-1/2"
-              :style="{ 
+              :style="{
                 left: '8px',
                 width: `calc((100% - 16px) * ${traceAnimationState.selectedStateIndex / (totalStates - 1)})`
               }"
             ></div>
-            
+
             <!-- State nodes -->
             <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
               <!-- The `v-for` belongs on the wrapper: `index` comes from the loop, so a tooltip hoisted above it
@@ -18009,6 +18864,117 @@ const counterexampleTraceHelpText = computed(() => {
             </div>
           </div>
         </div>
+      </section>
+
+        <!--
+          The cause of the selected state, as one row rather than a disclosure around a card.
+          `trace-step-values` keeps its name: it shares no prefix with the `trace-timeline-state-{i}`
+          step buttons, which is why it was renamed here in the first place.
+
+          It was a `<details open>` wrapping a bordered card. Both wrappers were chrome around a single
+          line of chips -- a summary row, a border, a background and two paddings -- on the surface where
+          vertical space is scarcest, and a disclosure that is open by default and holds one line is a
+          click that changes nothing. What earns the height is the content: which automation produced this
+          state. That stays unconditionally visible, so nothing moved behind an interaction.
+
+          DEVICE values are deliberately absent; the canvas nodes are their authority and render them more
+          richly (previous value, changed tint, trust and privacy pills). Environment values are NOT covered
+          by that authority — a canvas node shows what its device reported, never the shared pool value — so
+          the pool is rendered here instead.
+        -->
+        <!--
+          The cause of the selected state stays unconditionally visible; the value tables below do not.
+
+          Matching SimulationTimeline's split: triggered rules (the cause) are chrome-free and always
+          visible, while environment values and compromised links keep their disclosure. Device values
+          are deliberately absent here — the canvas nodes are their authority.
+        -->
+        <section class="mb-2 border-b border-slate-200 pb-2" data-testid="trace-step-values">
+          <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
+            {{ traceAnimationState.selectedStateIndex === 0
+              ? t('app.traceVisualization.initialModelState')
+              : t('app.traceVisualization.rulesAppliedToReachState') }}
+          </div>
+          <div
+            v-if="traceAnimationState.selectedStateIndex > 0 && currentTraceTriggeredRules.length > 0"
+            class="mt-1.5 flex flex-wrap gap-1.5"
+            data-testid="trace-timeline-triggered-rules"
+          >
+            <span
+              v-for="(rule, index) in currentTraceTriggeredRules"
+              :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
+              class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
+              :class="traceTriggeredRuleExistsOnBoard(rule)
+                ? 'board-border-subtle board-chip-success board-text-success'
+                : 'board-surface-warning board-text-warning'"
+              :title="traceTriggeredRuleExistsOnBoard(rule) ? undefined : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
+            >
+              <span class="max-w-[14rem] truncate">{{ traceTriggeredRuleLabel(rule, Number(index)) }}</span>
+              <span v-if="!traceTriggeredRuleExistsOnBoard(rule)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
+            </span>
+          </div>
+          <p v-else-if="traceAnimationState.selectedStateIndex > 0" class="mt-1 text-[11px] text-slate-500">
+            {{ t('app.traceVisualization.noRulesApplied') }}
+          </p>
+        </section>
+
+        <details class="group mb-2 pt-2" data-testid="trace-step-environment-details">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
+            <span class="inline-flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
+              {{ t('app.traceVisualization.stateDetails') }}
+            </span>
+            <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
+          </summary>
+          <div class="mt-1.5 border-t border-slate-200">
+            <section
+              v-if="currentTraceCompromisedAutomationLinks.length > 0"
+              class="board-surface-danger border-b px-2 py-2"
+              data-testid="trace-timeline-compromised-links"
+            >
+              <div class="text-[length:var(--iot-font-min)] font-bold uppercase board-text-danger">
+                {{ t('app.traceVisualization.compromisedAutomationLinks') }}
+              </div>
+              <div class="mt-1.5 flex flex-wrap gap-1.5">
+                <span
+                  v-for="(rule, index) in currentTraceCompromisedAutomationLinks"
+                  :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
+                  class="inline-flex max-w-full items-center gap-1 rounded-full border board-border-subtle bg-white px-2 py-1 text-[length:var(--iot-font-min)] font-semibold board-text-danger"
+                  :title="traceTriggeredRuleExistsOnBoard(rule) ? t('app.traceVisualization.compromisedAutomationLinkHint') : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
+                >
+                  <span class="material-symbols-outlined text-[12px]" aria-hidden="true">link_off</span>
+                  <span class="max-w-[14rem] truncate">{{ traceTriggeredRuleLabel(rule, Number(index)) }}</span>
+                  <span v-if="!traceTriggeredRuleExistsOnBoard(rule)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
+                </span>
+              </div>
+            </section>
+
+            <!--
+              The shared pool's own values, as absolutes. The canvas nodes render each device's *reported*
+              reading, and the change popover lists only environment values that CHANGED — so in the case this
+              whole distinction exists for (the home holds 20, a compromised sensor reports 40) the pool value
+              is stable, produces no change row, and appeared nowhere. The counterexample could not show the
+              divergence it was proving. Absolute, always, beside the reported readings.
+            -->
+            <section
+              v-if="activePlaybackEnvironmentVariables.length > 0"
+              class="border-b border-slate-200 py-2"
+              data-testid="trace-step-environment-values"
+            >
+              <div class="mb-1.5 inline-flex items-center gap-1 text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
+                <span class="material-symbols-outlined text-[13px]" aria-hidden="true">public</span>
+                {{ t('app.environmentPool') }}
+              </div>
+              <div class="flex flex-wrap gap-1.5">
+                <span
+                  v-for="variable in activePlaybackEnvironmentVariables"
+                  :key="variable.name"
+                  class="rounded border border-[color:var(--board-border)] bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-[color:var(--board-text)] dark:bg-slate-800"
+                >{{ variable.name }} = {{ formatPlaybackEnvironmentModelToken(variable.name, variable.value) }}</span>
+              </div>
+            </section>
+          </div>
+        </details>
       </div>
     </div>
   </div>
@@ -18032,10 +18998,12 @@ const counterexampleTraceHelpText = computed(() => {
     :current-device-ids="currentBoardDeviceIds"
     :format-device-model-token="formatPlaybackDeviceModelToken"
     :format-environment-model-token="formatPlaybackEnvironmentModelToken"
+    :change-panel-visible="showPlaybackChangePopover"
     :style="boardShellStyle"
     @update:visible="handleSimulationTimelineClose"
     @highlight-state="handleHighlightTrace"
     @open-run-details="openSimulationRunDetails"
+    @restore-change-panel="resetPlaybackChanges"
   />
 
   <!-- Keep the request owner mounted so hidden admission-unknown searches remain cancellable. -->

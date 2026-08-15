@@ -287,9 +287,32 @@ const edgeMatchesFrozenRule = (
   allEdges: DeviceEdge[],
   frozenRule: FrozenRuleIdentity
 ): boolean => {
-  if (!edge.ruleId || frozenRule.ruleId == null || !Number.isSafeInteger(edge.ruleIndex)) {
-    return false
+  if (!Number.isSafeInteger(edge.ruleIndex)) return false
+
+  /*
+   * An id-less rule matches on position instead.
+   *
+   * `TraceTriggeredRuleDto.ruleId` is documented nullable — "stable persisted rule identity **when the
+   * submitted rule had one**" — and `playbackScene.ts:30` sets the edge's `ruleId` to `undefined` for
+   * the same rules. So both sides lose the id together, and requiring it meant no edge ever lit for
+   * such a rule: the chip named a rule the canvas ignored, while the on-screen explanation
+   * (`playbackTriggeredRuleWithoutCurrentEdge`) blamed board drift — which is false, because the frozen
+   * scene does contain that rule.
+   *
+   * Position is sound here, not a guess: `ruleIndex` on both sides is an index into the same submitted
+   * rule list. The backend field is "zero-based position in the immutable rule list submitted for this
+   * run", and the scene's rules come from `ModelPlaybackSceneSnapshot.copyRules`, which `.map`s that
+   * list one-to-one and never filters — so index i denotes the same rule on both sides.
+   *
+   * Only used when BOTH ids are absent. A present-but-different id still means "not this rule", and an
+   * id on one side only means the two snapshots disagree about identity, where matching on position
+   * would be a coincidence rather than evidence.
+   */
+  if (edge.ruleId == null && frozenRule.ruleId == null) {
+    return edge.ruleIndex === frozenRule.ruleIndex
   }
+
+  if (!edge.ruleId || frozenRule.ruleId == null) return false
   if (String(edge.ruleId) !== String(frozenRule.ruleId)) return false
 
   const currentIndexes = new Set<number>()

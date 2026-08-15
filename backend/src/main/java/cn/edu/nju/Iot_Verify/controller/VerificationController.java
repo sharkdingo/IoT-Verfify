@@ -20,6 +20,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
@@ -293,5 +294,66 @@ public class VerificationController {
             ranges.put(targetId, selection.toPreferredRange());
         }
         return ranges;
+    }
+
+    /**
+     * Download the exact SMV model checked by the run that produced this counterexample.
+     *
+     * <p>A trace without a stored model is a real state, not a server defect: every trace written
+     * before the model was persisted has none, and no migration can invent one. So this answers
+     * {@code 404} — the model resource does not exist for this trace — rather than {@code 500},
+     * which blamed the server for the absence and told the user nothing they could act on. Clients
+     * decide whether to offer the download from {@code hasSmvModel} on the trace, so a 404 here
+     * means a stale client or a direct call, not a broken run.
+     *
+     * <p>Never an empty attachment: a zero-byte {@code .smv} would be mistaken for the checked model.
+     */
+    @GetMapping(value = "/traces/{id}/smv", produces = "text/plain;charset=UTF-8")
+    public org.springframework.http.ResponseEntity<String> downloadTraceSmvModel(
+            @CurrentUser Long userId,
+            @PathVariable @Positive Long id) {
+        TraceDto trace = verificationService.getTrace(userId, id);
+
+        if (!trace.hasSmvModel()) {
+            throw new ResourceNotFoundException("SMV model for verification trace", id);
+        }
+
+        return smvAttachment(trace.getSmvModelContent(), "verification-trace-" + id + ".smv");
+    }
+
+    /**
+     * Download the exact SMV model a run checked, keyed on the run rather than on a counterexample.
+     *
+     * <p>All of a run's counterexamples share one model, and a run where every specification holds has
+     * no counterexample at all — so the trace-keyed download left the model of a *passing* run
+     * unreachable, which is the case where a reader most wants to confirm what was actually proved.
+     *
+     * <p>{@code 404} when the run stores no model; see {@code downloadTraceSmvModel} for why that is a
+     * state rather than a defect.
+     */
+    @GetMapping(value = "/runs/{id}/smv", produces = "text/plain;charset=UTF-8")
+    public org.springframework.http.ResponseEntity<String> downloadRunSmvModel(
+            @CurrentUser Long userId,
+            @PathVariable @Positive Long id) {
+        String model = verificationService.getRunSmvModel(userId, id);
+        if (model == null || model.isBlank()) {
+            throw new ResourceNotFoundException("SMV model for verification run", id);
+        }
+        return smvAttachment(model, "verification-run-" + id + ".smv");
+    }
+
+    private org.springframework.http.ResponseEntity<String> smvAttachment(String smvModelContent,
+                                                                         String filename) {
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.TEXT_PLAIN);
+        // No charset overload: these filenames are `verification-trace-<id>.smv`, pure ASCII. Passing
+        // UTF-8 made Spring emit the legacy `filename` param as an RFC 2047 encoded-word
+        // (`=?UTF-8?Q?verification-trace-7.smv?=`), which a client that reads that param rather than
+        // `filename*` would save literally. Observed in a browser download before this change.
+        headers.setContentDisposition(
+                org.springframework.http.ContentDisposition.attachment()
+                        .filename(filename)
+                        .build());
+        return org.springframework.http.ResponseEntity.ok().headers(headers).body(smvModelContent);
     }
 }

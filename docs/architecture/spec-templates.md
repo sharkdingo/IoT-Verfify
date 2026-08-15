@@ -46,8 +46,12 @@ configuration:
 
 ### Counterexample search (negated forms)
 
-To find a counterexample, the builder also emits the negation of each formula (this is
-what actually runs). For reference, the negated forms in
+**A verification run checks the positive formulas above, not these.** `SmvGenerator` emits the
+negation only when a `ParameterizationConfig` is supplied, which is the automatic-fix search
+(ActFeedback §5) asking whether a candidate repair still admits `¬ρ`; an ordinary run takes the
+`else` branch and NuSMV reports its own counterexample for the positive form. This matters when
+reasoning about where a violation sits in a trace: the shape you get is NuSMV's counterexample to
+`AG …`/`AF …`, not a witness path for the negation. For reference, the negated forms in
 `generateNegatedCtlSpec` / `generateNegatedLtlSpec`:
 
 | id | Negated formula |

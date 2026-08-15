@@ -49,6 +49,13 @@ public class SimulationTraceSummaryDto {
 
     private LocalDateTime createdAt;
 
+    /**
+     * Whether this trajectory still holds the SMV model it ran, gating
+     * {@code GET /api/simulate/traces/{id}/smv}. Presence only — the model is tens of thousands of
+     * characters and this is a list response. Null on an unavailable record.
+     */
+    private Boolean hasSmvModel;
+
     @Builder.Default
     private Boolean dataAvailable = true;
 

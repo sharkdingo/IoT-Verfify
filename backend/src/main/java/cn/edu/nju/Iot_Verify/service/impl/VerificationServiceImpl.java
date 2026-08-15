@@ -400,6 +400,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         String requestJson = buildRequestSnapshot(request);
         String templateSnapshotsJson = buildTemplateSnapshotsJson(
                 templateManifests, resolvedDeviceSmvMap);
+        String smvModelContent = null;
 
         try {
             checkLogs.add("Generating NuSMV model...");
@@ -418,6 +419,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             }
             checkLogs.add("Model generated: " + smvFile.getName());
             saveRequestJson(smvFile, requestJson);
+
+            // Read SMV content for persistence before NuSMV execution
+            smvModelContent = readSmvModelContent(smvFile);
 
             checkLogs.add("Executing NuSMV verification...");
             NusmvResult result = nusmvExecutor.execute(smvFile);
@@ -438,7 +442,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap,
                     templateManifests,
                     requestJson, genResult.emittedSpecs(), genResult.generationIssues(),
-                    genResult.disabledRuleCount(), genResult.skippedSpecCount());
+                    genResult.disabledRuleCount(), genResult.skippedSpecCount(), smvModelContent);
             applyRunContext(finalResult, request.resolvedAttackScenario(), enablePrivacy,
                     attackSurface, modelSnapshot, templateSnapshotsJson, request);
             return finalResult;
@@ -1089,6 +1093,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             checkLogs.add("Model generated: " + smvFile.getName());
             saveRequestJson(smvFile, requestJson);
 
+            // Read SMV model content for persistence
+            String smvModelContent = readSmvModelContent(smvFile);
 
             updateTaskProgress(taskId, 50, TaskProgressStage.EXECUTING_MODEL_CHECKER);
             checkLogs.add("Executing NuSMV verification...");
@@ -1111,7 +1117,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     result, input.devices(), input.rules(), input.specs(), userId, taskId, checkLogs, deviceSmvMap,
                     input.templateManifests(), requestJson,
                     genResult.emittedSpecs(), genResult.generationIssues(),
-                    genResult.disabledRuleCount(), genResult.skippedSpecCount());
+                    genResult.disabledRuleCount(), genResult.skippedSpecCount(), smvModelContent);
             applyRunContext(finalResult, input.attackScenario(), input.enablePrivacy(),
                     input.attackSurface(), input.modelSnapshot(), templateSnapshotsJson, input.request());
 
@@ -1123,7 +1129,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     countViolatedSpecs(finalResult.getSpecResults(), finalResult.getTraces()),
                     finalResult.getSpecResults(), finalResult.getCheckLogs(), truncateOutput(result.getOutput()),
                     finalResult.getGenerationIssues(),
-                    finalResult.getDisabledRuleCount(), finalResult.getSkippedSpecCount());
+                    finalResult.getDisabledRuleCount(), finalResult.getSkippedSpecCount(),
+                    finalResult.getSmvModelContent());
             if (!completed && !isCompletionCancelled(taskId)) {
                 failTask(task, "RESULT_PERSISTENCE_FAILED: Verification finished, but its result could not be saved.");
             }
@@ -1236,7 +1243,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     @Transactional(readOnly = true)
     public List<VerificationRunSummaryDto> getRuns(Long userId) {
         List<VerificationRunSummaryProjection> runs =
-                taskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                taskRepository.findCompletedRunSummaries(
                         userId, VerificationTaskPo.TaskStatus.COMPLETED,
                         PageRequest.of(0, taskAdmissionLimits.getMaxStoredTasksPerUser()));
         if (runs.isEmpty()) return List.of();
@@ -1376,6 +1383,13 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 + " " + evidenceKind + " rows; preview the deletion again before confirming");
     }
 
+    @Override
+    public String getRunSmvModel(Long userId, Long runId) {
+        // Same ownership and completeness gate as every other run read, so one user cannot fetch
+        // another's model and an in-flight run cannot expose a half-written one.
+        return getCompletedRun(userId, runId).getSmvModelContent();
+    }
+
     private VerificationTaskPo getCompletedRun(Long userId, Long runId) {
         VerificationTaskPo run = taskRepository.findByIdAndUserId(runId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("VerificationRun", runId));
@@ -1488,7 +1502,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                                           List<SmvGenerationContext.EmittedSpec> emittedSpecs,
                                                           List<ModelGenerationIssueDto> generationIssues,
                                                           int disabledRuleCount,
-                                                          int skippedSpecCount) {
+                                                          int skippedSpecCount,
+                                                          String smvModelContent) {
         List<SpecResultDto> specResults = new ArrayList<>();
         List<TraceDto> traces = new ArrayList<>();
         List<SpecCheckResult> rawSpecCheckResults = result.getSpecResults();
@@ -1509,7 +1524,11 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     .disabledRuleCount(disabledRuleCount)
                     .skippedSpecCount(skippedSpecCount)
                     .generationIssues(generationIssues)
-                    .nusmvOutput(truncateOutput(result.getOutput())).build();
+                    .nusmvOutput(truncateOutput(result.getOutput()))
+                    // An inconclusive run still checked a model, and that model is what explains why
+                    // nothing was emitted — so it is worth keeping, not only kept on the success path.
+                    .smvModelContent(smvModelContent)
+                    .build();
         }
 
         // Fail-closed: mark unsafe when per-spec results cannot be reliably parsed.
@@ -1541,7 +1560,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 if (scr != null) {
                     appendParsedSpecResult(specResults, traces, specIdx, scr, emittedSpec,
                             userId, taskId, checkLogs, deviceSmvMap, rules, requestJson,
-                            formulaPreviewContext);
+                            formulaPreviewContext, smvModelContent);
                 } else {
                     specResults.add(toSpecResult(
                             emittedSpec, VerificationOutcome.INCONCLUSIVE, null, formulaPreviewContext));
@@ -1559,7 +1578,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 for (SpecCheckResult scr : specCheckResults) {
                     appendParsedSpecResult(specResults, traces, specIdx, scr, effectiveSpecs.get(specIdx),
                             userId, taskId, checkLogs, deviceSmvMap, rules, requestJson,
-                            formulaPreviewContext);
+                            formulaPreviewContext, smvModelContent);
                     specIdx++;
                 }
             }
@@ -1597,6 +1616,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 .skippedSpecCount(skippedSpecCount)
                 .generationIssues(generationIssues)
                 .nusmvOutput(truncateOutput(result.getOutput()))
+                // Also on the result, not only on each trace: a run with no violated specification has no
+                // trace to carry it, and that run's model still has to be storable and downloadable.
+                .smvModelContent(smvModelContent)
                 .build();
     }
 
@@ -1714,7 +1736,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                         Map<String, DeviceSmvData> deviceSmvMap,
                                         List<RuleDto> rules,
                                         String requestJson,
-                                        SpecificationFormulaPreview.Context formulaPreviewContext) {
+                                        SpecificationFormulaPreview.Context formulaPreviewContext,
+                                        String smvModelContent) {
         specResults.add(toSpecResult(
                 emittedSpec,
                 scr.isPassed() ? VerificationOutcome.SATISFIED : VerificationOutcome.VIOLATED,
@@ -1736,6 +1759,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                         .checkedExpression(scr.getSpecExpression())
                         .states(states)
                         .requestJson(requestJson)
+                        .smvModelContent(smvModelContent)
                         .createdAt(LocalDateTime.now())
                         .build();
                 traces.add(trace);
@@ -1832,7 +1856,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private boolean completeTask(VerificationTaskPo task, VerificationOutcome outcome, int violatedSpecCount,
                                  List<SpecResultDto> specResults, List<String> checkLogs, String nusmvOutput,
                                  List<ModelGenerationIssueDto> generationIssues,
-                                 int disabledRuleCount, int skippedSpecCount) {
+                                 int disabledRuleCount, int skippedSpecCount,
+                                 String smvModelContent) {
         try {
             taskRepository.findByIdForUpdate(task.getId());
             LocalDateTime completedAt = databaseNow();
@@ -1848,6 +1873,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     disabledRuleCount, skippedSpecCount,
                     specResultsJson,
                     checkLogsJson, generationIssuesJson, truncateOutput(nusmvOutput),
+                    smvModelContent,
                     null, processingTimeMs,
                     VerificationTaskPo.TaskStatus.RUNNING,
                     workerId, completedAt);
@@ -1941,6 +1967,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     .checkLogsJson(serializeCheckLogs(persistedCheckLogs))
                     .generationIssuesJson(JsonUtils.toJsonOrEmpty(result.getGenerationIssues()))
                     .nusmvOutput(truncateOutput(result.getNusmvOutput()))
+                    .smvModelContent(result.getSmvModelContent())
                     .progress(100)
                     .build();
             VerificationTaskPo savedRun = taskRepository.save(Objects.requireNonNull(run));
@@ -1989,7 +2016,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                               String nusmvOutput,
                                               List<ModelGenerationIssueDto> generationIssues,
                                               int disabledRuleCount,
-                                              int skippedSpecCount) {
+                                              int skippedSpecCount,
+                                              String smvModelContent) {
         if (!userRepository.existsById(userId)) {
             log.info("User {} no longer exists, skipping verification task completion/persistence", userId);
             return false;
@@ -2001,7 +2029,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         if (traces == null || traces.isEmpty()) {
             if (transactionTemplate == null) {
                 return completeTask(task, outcome, violatedSpecCount, specResults, checkLogs, nusmvOutput,
-                        generationIssues, disabledRuleCount, skippedSpecCount);
+                        generationIssues, disabledRuleCount, skippedSpecCount, smvModelContent);
             }
             return Boolean.TRUE.equals(transactionTemplate.execute(status -> {
                 if (!lockActiveUserForTracePersistence(userId)) {
@@ -2015,7 +2043,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     return false;
                 }
                 return completeTask(task, outcome, violatedSpecCount, specResults, checkLogs, nusmvOutput,
-                        generationIssues, disabledRuleCount, skippedSpecCount);
+                        generationIssues, disabledRuleCount, skippedSpecCount, smvModelContent);
             }));
         }
         if (transactionTemplate == null) {
@@ -2041,7 +2069,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 return false;
             }
             boolean completed = completeTask(task, outcome, violatedSpecCount, specResults, checkLogs, nusmvOutput,
-                    generationIssues, disabledRuleCount, skippedSpecCount);
+                    generationIssues, disabledRuleCount, skippedSpecCount, smvModelContent);
             if (!completed) {
                 status.setRollbackOnly();
             }

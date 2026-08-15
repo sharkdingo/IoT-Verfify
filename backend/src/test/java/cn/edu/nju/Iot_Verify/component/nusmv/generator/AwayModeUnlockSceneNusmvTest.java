@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator;
 
+import cn.edu.nju.Iot_Verify.component.board.PortableSceneTestImport;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.RuleFixer;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.localize.FaultLocalizer;
@@ -25,7 +26,6 @@ import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
-import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
@@ -532,70 +532,14 @@ class AwayModeUnlockSceneNusmvTest {
     }
 
     private List<RuleDto> readRules(JsonNode scene) {
-        List<RuleDto> rules = new ArrayList<>();
-        int index = 0;
-        for (JsonNode row : scene.path("rules")) {
-            List<RuleDto.Condition> conditions = new ArrayList<>();
-            for (JsonNode source : row.path("sources")) {
-                conditions.add(RuleDto.Condition.builder()
-                        .deviceName(source.path("fromId").asText())
-                        .attribute(source.path("fromApi").asText())
-                        .targetType(source.path("itemType").asText())
-                        .relation(textOrNull(source, "relation"))
-                        .value(textOrNull(source, "value"))
-                        .build());
-            }
-            RuleDto.Command command = RuleDto.Command.builder()
-                    .deviceName(row.path("toId").asText())
-                    .action(row.path("toApi").asText())
-                    .build();
-            rules.add(RuleDto.builder().id((long) ++index)
-                    .ruleString(row.path("name").asText())
-                    .conditions(conditions).command(command).build());
-        }
-        return rules;
+        return PortableSceneTestImport.importRules(scene);
     }
 
     private List<SpecificationDto> readSpecs(
             JsonNode scene, List<DeviceVerificationDto> devices, String idPrefix) {
         Map<String, String> labelsById = devices.stream().collect(java.util.stream.Collectors.toMap(
                 DeviceVerificationDto::getVarName, DeviceVerificationDto::getDeviceLabel));
-        List<SpecificationDto> specs = new ArrayList<>();
-        int index = 0;
-        for (JsonNode row : scene.path("specs")) {
-            SpecificationDto spec = new SpecificationDto();
-            spec.setId(idPrefix + "-spec-" + (index + 1));
-            spec.setTemplateId(row.path("templateId").asText());
-            spec.setTemplateLabel("Scene specification " + (index + 1));
-            spec.setAConditions(readSpecConditions(row.path("aConditions"), "a", labelsById));
-            spec.setIfConditions(readSpecConditions(row.path("ifConditions"), "if", labelsById));
-            spec.setThenConditions(readSpecConditions(row.path("thenConditions"), "then", labelsById));
-            spec.setDevices(List.of());
-            specs.add(spec);
-            index++;
-        }
-        return specs;
-    }
-
-    private List<SpecConditionDto> readSpecConditions(
-            JsonNode rows, String side, Map<String, String> labelsById) {
-        List<SpecConditionDto> conditions = new ArrayList<>();
-        int index = 0;
-        for (JsonNode row : rows) {
-            SpecConditionDto condition = new SpecConditionDto();
-            condition.setId(side + "-" + ++index);
-            condition.setSide(side);
-            condition.setDeviceId(row.path("deviceId").asText());
-            condition.setDeviceLabel(labelsById.get(condition.getDeviceId()));
-            condition.setTargetType(row.path("targetType").asText());
-            condition.setKey(row.path("key").asText());
-            condition.setPropertyScope(textOrNull(row, "propertyScope"));
-            condition.setVariableSource(textOrNull(row, "variableSource"));
-            condition.setRelation(row.path("relation").asText());
-            condition.setValue(row.path("value").asText());
-            conditions.add(condition);
-        }
-        return conditions;
+        return PortableSceneTestImport.importSpecs(scene, idPrefix, labelsById);
     }
 
     private List<VariableStateDto> readVariables(JsonNode rows) {

@@ -71,6 +71,13 @@ export interface VerificationResult {
   disabledRuleCount: number;
   skippedSpecCount: number;
   generationIssues: ModelGenerationIssue[];
+  /**
+   * Run id for the SMV-model download, filled from `historyPersistence.runId` — the result itself is
+   * not addressable until it has been persisted, so a preview-only run offers no download.
+   */
+  runIdForSmv?: number;
+  /** See `VerificationRun.hasSmvModel`. */
+  hasSmvModel?: boolean;
 }
 
 export interface TraceEvidence {
@@ -100,6 +107,13 @@ export interface ImmediateTrace extends TraceEvidence {
 export interface PersistedTrace extends TraceEvidence {
   id: number;
   verificationTaskId: number;
+  /**
+   * Whether the backend still holds the SMV model this run checked. The content itself is never sent
+   * (it runs to tens of thousands of characters), so this is the only way to know whether the download
+   * can succeed — a trace persisted before the model was stored has none, and offering the button
+   * anyway produced a failed download the user could not explain.
+   */
+  hasSmvModel?: boolean;
 }
 
 export type Trace = ImmediateTrace | PersistedTrace;
@@ -112,6 +126,7 @@ export interface AvailableTraceSummary {
   stateCount: number
   createdAt: string
   dataAvailable: true
+  hasSmvModel?: boolean
 }
 
 export interface UnavailableTraceSummary {
@@ -133,6 +148,12 @@ export interface TraceState {
   trustPrivacies?: TraceTrustPrivacy[]; // state-level trust/privacy entries (backend List<TraceTrustPrivacyDto>)
   envVariables?: TraceVariable[];       // board environment variables using user-facing names (e.g. temperature)
   globalVariables?: TraceVariable[];    // NuSMV runtime/global variables, e.g. attack count
+  // This state begins the repeating cycle of an infinite counterexample. A liveness property (templates 2,
+  // 5, 6) is refuted by a lasso path, not a finite prefix, so the cycle *is* the violation.
+  loopStart?: boolean;
+  // This state closes the cycle by repeating `loopStart`. NuSMV prints the repeat with no variable lines, so
+  // it materializes identical to its predecessor and plays back as a step where nothing changes.
+  loopBack?: boolean;
 }
 
 export interface TraceTriggeredRule {
@@ -199,6 +220,12 @@ export interface VerificationTask {
   generationIssues?: ModelGenerationIssue[];
   specResults?: SpecResult[];
   nusmvOutput?: string;
+  /**
+   * Whether this run still holds its SMV model. A completed async task *is* the run, so this is the
+   * flag the polling client reads to decide whether to offer the download — see
+   * `VerificationRun.hasSmvModel`.
+   */
+  hasSmvModel?: boolean;
   errorMessage?: string;
 }
 
@@ -248,6 +275,7 @@ export interface AvailableVerificationRunSummary {
   generationIssues: ModelGenerationIssue[]
   counterexamples: TraceSummary[]
   dataAvailable: true
+  hasSmvModel?: boolean
 }
 
 export interface UnavailableVerificationRunSummary {
@@ -269,4 +297,11 @@ export interface VerificationRun extends Omit<AvailableVerificationRunSummary, '
   specResults: SpecResult[]
   checkLogs: string[]
   nusmvOutput: string
+  /**
+   * Whether the backend still holds this run's SMV model, gating
+   * `GET /api/verify/runs/{id}/smv`. Keyed on the run because all of its counterexamples share one
+   * model — and because a run where every specification holds has no counterexample to key on, which
+   * is exactly when a reader wants to confirm what was proved.
+   */
+  hasSmvModel?: boolean
 }

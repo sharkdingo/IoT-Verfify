@@ -18,6 +18,22 @@ export default defineConfig({
   expect: {
     timeout: 5_000
   },
+  /**
+   * One, matching the full-suite contract in `.github/scripts/run-e2e.sh` — Playwright otherwise
+   * defaults to half the logical cores, which is what a local run silently got.
+   *
+   * CI passes `--workers` explicitly on every path (1 for the complete run, 2 for the risk-routed
+   * subsets), and a CLI flag overrides this, so it changes CI not at all. What it fixes is that a bare
+   * local `npx playwright test` took half the logical cores — 14 on the 28-thread machine this was
+   * measured on — against one backend, one MySQL and one NuSMV. Measured consequence: a rule-builder
+   * save whose `check-duplicate` pre-check errored under that load left a confirm overlay open and
+   * failed a spec that passes when serialized — indistinguishable from a product regression, and it
+   * cost a full investigation.
+   *
+   * Use `--workers=2` for a narrow subset, as CI does. Raising it for wall-clock time is what this
+   * default exists to prevent.
+   */
+  workers: 1,
   use: {
     baseURL,
     screenshot: 'only-on-failure',

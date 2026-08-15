@@ -293,4 +293,39 @@ describe('FuzzingResultDialog', () => {
     wrapper.unmount()
     opener.remove()
   })
+
+  /**
+   * `dataAvailable === false` marks a finding whose own detail load the server rejected as corrupt.
+   * `TraceHistoryPanel` disables both of its actions for exactly this, and this dialog binds the same
+   * run object — so omitting the check left a finding greyed out in history still fully armed here.
+   * Replay merely re-failed; "verify formally" was worse, because that handoff is seeded from the
+   * summary without re-fetching the finding, so it proceeded on evidence already known bad.
+   */
+  it('disarms both actions for a finding whose evidence the server rejected', async () => {
+    const unavailable = {
+      ...run,
+      findings: [{ ...run.findings[0], dataAvailable: false }]
+    }
+
+    const wrapper = mount(FuzzingResultDialog, {
+      props: { visible: true, run: unavailable as typeof run },
+      global: { plugins: [i18n] }
+    })
+
+    const findingId = run.findings[0].id
+    expect(wrapper.get(`[data-testid="replay-fuzzing-finding-${findingId}"]`).attributes('disabled'))
+      .toBeDefined()
+    expect(wrapper.get(`[data-testid="verify-fuzzing-finding-${findingId}"]`).attributes('disabled'))
+      .toBeDefined()
+
+    // A usable finding keeps both, or the guard above would be indistinguishable from disabling always.
+    const usable = mount(FuzzingResultDialog, {
+      props: { visible: true, run },
+      global: { plugins: [i18n] }
+    })
+    expect(usable.get(`[data-testid="replay-fuzzing-finding-${findingId}"]`).attributes('disabled'))
+      .toBeUndefined()
+    expect(usable.get(`[data-testid="verify-fuzzing-finding-${findingId}"]`).attributes('disabled'))
+      .toBeUndefined()
+  })
 })

@@ -76,6 +76,16 @@ public interface VerificationService {
 
     VerificationRunDto getRun(Long userId, Long runId);
 
+    /**
+     * The exact SMV model this run checked, or {@code null} if the run holds none.
+     *
+     * <p>Read straight off the run rather than through {@link #getRun}, whose DTO deliberately omits the
+     * content. Returning {@code null} rather than throwing keeps the "no model stored" case a fact the
+     * caller decides how to report — a run recorded before the model was persisted has none, and that
+     * is not a failure.
+     */
+    String getRunSmvModel(Long userId, Long runId);
+
     /** Exact persisted-row impact for an AI deletion preview, without parsing run evidence. */
     RunDeletionImpactDto getRunDeletionImpact(Long userId, Long runId);
 

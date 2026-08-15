@@ -82,6 +82,10 @@ public class SimulationTracePo {
     @Column(name = "modeled_automation_link_attack_point_count")
     private Integer modeledAutomationLinkAttackPointCount;
 
+    /** The exact SMV model NuSMV executed for this trajectory. */
+    @Column(name = "smv_model_content", columnDefinition = "TEXT")
+    private String smvModelContent;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

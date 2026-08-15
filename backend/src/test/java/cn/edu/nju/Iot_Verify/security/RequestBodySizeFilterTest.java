@@ -4,6 +4,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.security.SecurityProperties;
 import org.springframework.core.annotation.Order;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -67,11 +69,17 @@ class RequestBodySizeFilterTest {
         assertArrayEquals(body, observed.get());
     }
 
-    @Test
-    void sceneReplacementUsesItsDedicatedLargerLimit() throws Exception {
+    /**
+     * Both full-scene commands, not just the older one. A scene carries its self-contained template
+     * snapshots and embedded icons, so leaving the import endpoint on the ordinary limit would reject
+     * a file the exporter considers valid.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/board/batch", "/api/board/scene"})
+    void sceneCommandsUseTheirDedicatedLargerLimit(String path) throws Exception {
         byte[] body = new byte[2048];
         MockHttpServletRequest request = jsonRequest(body);
-        request.setRequestURI("/api/board/batch");
+        request.setRequestURI(path);
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicBoolean chainCalled = new AtomicBoolean();
 

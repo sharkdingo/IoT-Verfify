@@ -33,6 +33,8 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
         implements AsyncTaskExecutionControl {
 
     protected static final int MAX_OUTPUT_LENGTH = 10_000;
+    /** MySQL {@code TEXT} holds 65,535 bytes; the rest is headroom for the row itself. */
+    static final int MAX_SMV_MODEL_BYTES = 65_000;
     private static final String OUTPUT_TRUNCATION_MARKER =
             "\n... (diagnostic output truncated to 10000 characters for storage/display)";
     private static final String DIAGNOSTIC_LOSS_MESSAGE =
@@ -156,6 +158,57 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
         if (output == null) return null;
         return output.length() > MAX_OUTPUT_LENGTH
                 ? output.substring(0, MAX_OUTPUT_LENGTH) + OUTPUT_TRUNCATION_MARKER : output;
+    }
+
+    /**
+     * Read the generated SMV model so the run can persist the exact model it checked.
+     *
+     * <p>Bounded in <em>bytes</em>, not characters: the column is MySQL {@code TEXT} (65,535 bytes)
+     * and the model embeds user-authored rule text as comments, which is routinely non-ASCII here.
+     * A character-based cap therefore passes models three times over the column bound, and MySQL
+     * rejects the insert — losing the whole run result, not just its model. The marker is included
+     * in the budget and truncation lands on a character boundary, so the file stays decodable.
+     *
+     * @param smvFile Generated SMV model file
+     * @return File content, or null if read fails
+     */
+    protected String readSmvModelContent(java.io.File smvFile) {
+        if (smvFile == null || !smvFile.exists()) {
+            log.warn("SMV file does not exist or is null");
+            return null;
+        }
+
+        try {
+            String content = java.nio.file.Files.readString(smvFile.toPath(), java.nio.charset.StandardCharsets.UTF_8);
+            return truncateSmvModelContent(content);
+        } catch (java.io.IOException e) {
+            log.error("Failed to read SMV file: {}", smvFile.getAbsolutePath(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Cap the model at {@link #MAX_SMV_MODEL_BYTES} UTF-8 bytes, appending a marker naming the
+     * original size so a truncated download cannot pass as the complete model.
+     */
+    static String truncateSmvModelContent(String content) {
+        byte[] utf8 = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (utf8.length <= MAX_SMV_MODEL_BYTES) {
+            return content;
+        }
+
+        String marker = "\n\n-- [TRUNCATED: Original size " + utf8.length + " bytes]";
+        int budget = MAX_SMV_MODEL_BYTES - marker.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+
+        // Cut on a character boundary: CharsetEncoder stops at the last whole character that fits,
+        // so the stored text never ends in half of a multi-byte sequence.
+        java.nio.CharBuffer in = java.nio.CharBuffer.wrap(content);
+        java.nio.ByteBuffer out = java.nio.ByteBuffer.allocate(budget);
+        java.nio.charset.StandardCharsets.UTF_8.newEncoder().encode(in, out, true);
+        String head = content.substring(0, in.position());
+
+        log.warn("SMV model content truncated: {} bytes -> {} bytes", utf8.length, MAX_SMV_MODEL_BYTES);
+        return head + marker;
     }
 
     // ── 可提取且保留状态机差异钩子的方法 ──────────────────────────────

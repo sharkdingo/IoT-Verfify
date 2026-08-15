@@ -97,6 +97,17 @@ public class VerificationTaskDto {
     private String nusmvOutput;
 
     /**
+     * Whether this run still holds the SMV model it checked, gating
+     * {@code GET /api/verify/runs/{id}/smv}.
+     *
+     * <p>Present here as well as on {@code VerificationRunDto} because a completed asynchronous task
+     * <em>is</em> the run, and the task response is what a client reads when polling finishes — so
+     * omitting it left the client unable to tell whether the download could succeed on the path most
+     * runs take. Runs recorded before the model was stored report {@code false}.
+     */
+    private boolean hasSmvModel;
+
+    /**
      * 错误消息
      */
     private String errorMessage;

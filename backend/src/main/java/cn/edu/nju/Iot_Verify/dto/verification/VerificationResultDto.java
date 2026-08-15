@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Data;
@@ -80,4 +81,24 @@ public class VerificationResultDto {
      * 原始 NuSMV 输出
      */
     private String nusmvOutput;
+
+    /**
+     * The exact model that was checked, carried from generation to persistence so the run row can store
+     * it. Never serialized to a client: it runs to tens of thousands of characters, and a client fetches
+     * it through {@code GET /api/verify/runs/{id}/smv} instead.
+     *
+     * <p>Previously this reached only the counterexample traces, which left a run where every
+     * specification holds — the case with no traces at all — with its model stored nowhere.
+     */
+    @JsonIgnore
+    private String smvModelContent;
+
+    /**
+     * Whether a model was captured for this run, so a client can offer the download immediately after a
+     * synchronous run rather than waiting to reload it from history.
+     */
+    @JsonProperty("hasSmvModel")
+    public boolean hasSmvModel() {
+        return smvModelContent != null && !smvModelContent.isBlank();
+    }
 }

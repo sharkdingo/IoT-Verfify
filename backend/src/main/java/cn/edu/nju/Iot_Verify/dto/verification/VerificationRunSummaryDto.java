@@ -44,6 +44,17 @@ public class VerificationRunSummaryDto {
     private Integer disabledRuleCount;
     private Integer skippedSpecCount;
     private List<ModelGenerationIssueDto> generationIssues;
+
+    /**
+     * Whether this run still holds the SMV model it checked, gating
+     * {@code GET /api/verify/runs/{id}/smv}. Presence only, as on {@code VerificationRunDto} — the
+     * model is tens of thousands of characters and this is a list response.
+     *
+     * <p>Keyed on the run because all of its counterexamples share one model, and a run where every
+     * specification holds has no counterexample to key on. Null on an unavailable record.
+     */
+    private Boolean hasSmvModel;
+
     @Builder.Default
     private List<TraceSummaryDto> counterexamples = List.of();
     @Builder.Default

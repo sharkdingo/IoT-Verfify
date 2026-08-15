@@ -294,6 +294,33 @@ class TraceMapperTest {
         assertEquals(4L, summary.getVerificationTaskId());
     }
 
+    /**
+     * The model-presence flag must be carried, and both arms must be asserted.
+     *
+     * A single false-case test would pass even if the mapper dropped the field entirely:
+     * {@code Boolean.TRUE.equals(null)} is {@code false}, and an unstubbed Mockito projection returns
+     * {@code null}. That is exactly the shape of a test that cannot fail, so the true case is what
+     * gives this coverage its value — the whole feature shipped unreachable because a flag like this
+     * one was absent from the response and nothing asserted on it.
+     */
+    @Test
+    void summaryProjectionCarriesStoredModelPresence() {
+        TraceSummaryProjection projection = validSummaryProjection(10L);
+        when(projection.getHasSmvModel()).thenReturn(true);
+
+        assertEquals(Boolean.TRUE, mapper.toSummaryDto(projection).getHasSmvModel());
+    }
+
+    @Test
+    void summaryProjectionReportsAbsentModelAsFalseRatherThanNull() {
+        // Null-safe on purpose: a client reading `undefined` would render neither an enabled nor a
+        // disabled control, which is how an absent model became indistinguishable from a broken build.
+        TraceSummaryProjection projection = validSummaryProjection(11L);
+        when(projection.getHasSmvModel()).thenReturn(null);
+
+        assertEquals(Boolean.FALSE, mapper.toSummaryDto(projection).getHasSmvModel());
+    }
+
     @Test
     void summaryProjectionRejectsMissingStateCount() {
         TraceSummaryProjection projection = validSummaryProjection(9L);
@@ -326,6 +353,38 @@ class TraceMapperTest {
 
         assertEquals("modelSemanticsJson", assertThrows(
                 PersistedDataIntegrityException.class, () -> mapper.toDto(po)).getField());
+    }
+
+    /**
+     * The model the run checked has to survive both directions, because
+     * {@code GET /api/verify/traces/{id}/smv} answers 404 when a trace holds no model, so a mapper
+     * that silently drops the field is indistinguishable from a trace that genuinely never had one —
+     * and it made the endpoint fail on every trace ever written.
+     */
+    private static final String SMV_MODEL = "MODULE main\n-- 客厅温度规则\nVAR x : boolean;\n";
+
+    @Test
+    void toDto_readsBackTheCheckedSmvModel() {
+        TracePo po = baseTrace(null);
+        po.setSmvModelContent(SMV_MODEL);
+
+        assertEquals(SMV_MODEL, mapper.toDto(po).getSmvModelContent(),
+                "toDto must read the stored model back, or the download cannot serve it");
+    }
+
+    /**
+     * Separate from the read direction on purpose: asserting both in one test let the read
+     * assertion fail first and hide which direction was actually broken.
+     */
+    @Test
+    void toEntity_persistsTheCheckedSmvModel() {
+        TraceDto dto = new TraceDto();
+        dto.setVerificationTaskId(9L);
+        dto.setViolatedSpecId("s0");
+        dto.setSmvModelContent(SMV_MODEL);
+
+        assertEquals(SMV_MODEL, mapper.toEntity(dto).getSmvModelContent(),
+                "toEntity must persist the model, or the column is NULL on every trace");
     }
 
     private TraceSummaryProjection validSummaryProjection(Long id) {

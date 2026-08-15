@@ -27,6 +27,20 @@ const props = withDefaults(defineProps<{
   firstViolationStateNumber?: number
   bundledDeviceIds?: string[]
   bundledEnvironmentNames?: string[]
+  /**
+   * This state closes an infinite counterexample by repeating the loop entry, so having no observable change
+   * is the state's meaning rather than an absence of information. Without saying so the panel reports
+   * "no observable changes" on the final step of a liveness violation, which reads as a broken animation.
+   */
+  isLoopBackState?: boolean
+  /** 1-based state numbers of the repeating cycle, for the sentence explaining the loop. */
+  loopRange?: { start: number; end: number } | null
+  /**
+   * The violated property is a liveness claim, so the cycle IS the violation and the sentence may say the
+   * required state is never reached. False for a safety counterexample that merely ends on a cycle — NuSMV
+   * reports a loop for those too, and there the fault is a single state, so that claim would be wrong.
+   */
+  isLivenessViolation?: boolean
 }>(), {
   bundledDeviceIds: () => [],
   bundledEnvironmentNames: () => []
@@ -68,6 +82,22 @@ const isFirstViolationState = computed(() =>
   props.kind === 'fuzzing' && props.firstViolationStateNumber === props.stateNumber)
 const hasObservableChanges = computed(() =>
   props.changes.length > 0 || props.environmentChanges.length > 0)
+
+/**
+ * What to say on the state that closes the path into a cycle.
+ *
+ * Two different facts, so two sentences. For a liveness property the repetition *is* the violation, so it
+ * names the state that is never reached. For a safety property NuSMV may still report a loop — measured on
+ * both a CTL `AX` and an LTL `G(p)` counterexample — but there the fault is a single state, so the sentence
+ * stays factual about the repetition and claims nothing about what the specification requires.
+ */
+const loopBackSentence = computed(() => {
+  const range = props.loopRange
+  if (!range) return t('app.traceLoopRepeats')
+  return props.isLivenessViolation
+    ? t('app.traceLoopExplanation', { start: range.start, end: range.end })
+    : t('app.traceLoopRepeatsDetail', { start: range.start })
+})
 const playbackSummary = computed(() => {
   if (isInitialState.value) {
     return t('app.traceVisualization.playbackInitialStateSummary')
@@ -372,6 +402,16 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
           data-testid="playback-change-initial-state"
         >
           {{ t('app.traceVisualization.playbackInitialStateNoPrevious') }}
+        </div>
+
+        <!-- Ordered before the generic empty state on purpose: on a loop-back step "no observable changes" is
+             the symptom, and the repetition is the explanation the viewer needs. -->
+        <div
+          v-else-if="isLoopBackState"
+          class="rounded-lg border px-2.5 py-2 text-[length:var(--iot-font-min)] leading-4 board-chip-warning board-text-warning"
+          data-testid="playback-change-loop-back"
+        >
+          {{ loopBackSentence }}
         </div>
 
         <div

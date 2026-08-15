@@ -311,7 +311,8 @@ for replay or repair only with a clear partial-evidence qualifier.
 | `counterexampleCount` | `Integer` | Persisted traces whose history-summary metadata validates; damaged summary placeholders are excluded and the count may be lower than `violatedSpecCount` or `counterexamples.length` |
 | `disabledRuleCount` / `skippedSpecCount` | `Integer` | Model omissions |
 | `generationIssues` | `ModelGenerationIssueDto[]` | Itemized omission explanations |
-| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count, and timestamp; the history query does not read the full states or frozen request, and damaged summary fields remain as `dataAvailable=false` placeholders |
+| `counterexamples` | `TraceSummaryDto[]` | Lightweight nested evidence with id, violated-specification snapshot, state count, timestamp, and `hasSmvModel` (reported but not surfaced as a download — the model is run-level); the history query does not read the full states or frozen request, and damaged summary fields remain as `dataAvailable=false` placeholders |
+| `hasSmvModel` | `Boolean` | Whether the run still holds the model it checked, gating the per-run download; see [Downloading the SMV model](#downloading-the-smv-model--three-endpoints-one-model-per-run) |
 | `dataAvailable` | `Boolean` | `true` when the persisted summary fields decoded successfully; full state and frozen-request integrity is checked when detail is opened |
 | `unavailableReasonCode` | `String` | Present for an unavailable row; currently `PERSISTED_SEMANTIC_DATA_INVALID` |
 
@@ -513,6 +514,8 @@ generation, so a `COMPOSED` discrete value is one whose writers agree.
 - `GET /api/verify/traces` → `TraceDto[]`
 - `GET /api/verify/traces/{id}` → `TraceDto`
 - `DELETE /api/verify/traces/{id}` → `null` (404 `ResourceNotFoundException` if absent)
+- `GET /api/verify/traces/{id}/smv` → SMV model file (plain text attachment); for a whole run's model
+  use `GET /api/verify/runs/{id}/smv`, which also covers runs with no counterexample
 
 The full `GET /api/verify/traces` collection preserves newest-first ordering after loading
 owned rows. Its database query is deliberately unordered so MySQL does not include complete
@@ -765,7 +768,11 @@ recorded as skipped generation warnings rather than being silently accepted.
 `TraceStateDto`: `{ stateIndex, devices: TraceDeviceDto[],
 triggeredRules: TraceTriggeredRuleDto[], compromisedAutomationLinks: TraceTriggeredRuleDto[],
 trustPrivacies: TraceTrustPrivacyDto[], envVariables: TraceVariableDto[],
-globalVariables: TraceVariableDto[] }`.
+globalVariables: TraceVariableDto[], loopStart?: boolean, loopBack?: boolean }`.
+`loopStart` / `loopBack` mark the repeating cycle of an infinite (liveness) counterexample and are
+absent for every finite path — see
+[verification-flow.md](../architecture/verification-flow.md#parser-boundaries) for why the closing
+state carries no observable change of its own.
 Formal verification and simulation state arrays are strictly one-based and contiguous:
 the first `stateIndex` is `1`, and each following item increments by exactly one. Empty,
 zero-based, duplicate, or gapped persisted trajectories are rejected as unavailable.
@@ -858,7 +865,7 @@ with that option silently disabled.
 modelSemantics, modelSnapshot, modelComplete, disabledRuleCount,
 generationIssues: ModelGenerationIssueDto[], states: TraceStateDto[], playbackScene,
 steps,
-requestedSteps, nusmvOutput, logs: String[], historyPersistence }`.
+requestedSteps, nusmvOutput, logs: String[], historyPersistence, hasSmvModel }`.
 
 Plain `POST /api/simulate` is a preview and returns
 `historyPersistence.status=NOT_REQUESTED`; no history row is expected.
@@ -972,7 +979,7 @@ failure rather than normalized into an apparently valid polling response.
 - `GET /api/simulate/traces` → every retained `SimulationTraceSummaryDto` item, up to
   the configured `SIMULATION_MAX_STORED_TASKS_PER_USER` bound, `{ id, initiator, requestedSteps,
   steps, modelComplete, disabledRuleCount, generationIssues, isAttack, attackBudget,
-  enablePrivacy, modelSnapshot, createdAt, dataAvailable,
+  enablePrivacy, modelSnapshot, createdAt, hasSmvModel, dataAvailable,
   unavailableReasonCode? }` (summary, no states)
 - `GET /api/simulate/traces/{id}` → `SimulationTraceDto` (full states)
 - `DELETE /api/simulate/traces/{id}` → `null`; also removes any completed background
@@ -1013,6 +1020,74 @@ quota details; a concurrent fill detected only during persistence reports a know
 For the algorithm (strategies, forward verification), see
 [../architecture/auto-fix.md](../architecture/auto-fix.md). This
 section is the API contract only.
+
+### Downloading the SMV model — three endpoints, one model per run
+
+A verification run checks exactly one model, and all of its counterexamples come from that model.
+The model is therefore owned by the **run**, and the per-counterexample copy exists only so a
+counterexample stays self-contained after its run is deleted.
+
+| Endpoint | Returns | Filename |
+| :--- | :--- | :--- |
+| `GET /api/verify/runs/{id}/smv` | The model a verification run checked | `verification-run-{id}.smv` |
+| `GET /api/verify/traces/{id}/smv` | The model behind one counterexample | `verification-trace-{id}.smv` |
+| `GET /api/simulate/traces/{id}/smv` | The model executed for one trajectory | `simulation-trace-{id}.smv` |
+
+Prefer the run-keyed endpoint for a verification result. It is the only one that works when every
+specification holds: such a run produces no counterexample, so there is no trace id to address —
+and that is the case where a reader most wants to confirm what was actually proved.
+
+**The UI offers only the run-keyed download.** The model is a scene-level artifact — one per run — so a
+per-counterexample control handed out the same file once per counterexample under a name implying one
+model each, and put a scene-level artifact behind a per-evidence surface. The web client therefore
+calls `/runs/{id}/smv` (and `/simulate/traces/{id}/smv`, where the trajectory *is* the run) and has no
+client method for `/verify/traces/{id}/smv`. The trace-keyed endpoint stays supported for API
+consumers that hold a trace id and nothing else; whether to retire it is an open contract decision.
+Frontend placement rules are pinned by `frontend/src/views/board/runArtifactPlacement.spec.ts`.
+
+**Response** (all three): `text/plain;charset=UTF-8`, `Content-Disposition: attachment`. The
+filename is emitted as a plain ASCII `filename` parameter; passing a charset would make Spring
+encode it as an RFC 2047 encoded-word, which clients save literally.
+
+**Errors** (all three):
+- `404 ResourceNotFoundException` — the record does not exist, belongs to another user, or stores
+  no model. A run or trace recorded before the model was persisted has none, and no migration can
+  invent one, so absence is a state rather than a server fault. Never an empty attachment: a
+  zero-byte `.smv` would be mistaken for the checked model.
+
+**Clients decide from the response, not by guessing.** Every DTO a download can be offered from
+carries a `hasSmvModel` boolean; the content itself is `@JsonIgnore` because it runs to tens of
+thousands of characters. Offer the download only when that flag is true — gating on the record's id
+instead shows the control for records that have no model, and the click then fails with nothing the
+user can act on.
+
+| DTO | Surface it gates | How it is produced |
+| :--- | :--- | :--- |
+| `VerificationResultDto` | Verification result dialog, straight after a sync run | derived getter over `smvModelContent` |
+| `VerificationTaskDto` | Same dialog, after an async run completes | mapped from the task row |
+| `VerificationRunDto` | Same dialog, for a run reopened from history | mapped from the run row |
+| `VerificationRunSummaryDto` | Per-run button in the history panel | `CASE WHEN … <> ''` in the run-summary query |
+| `TraceSummaryDto` | *No UI download* — kept for API consumers holding only a trace id | `CASE WHEN … <> ''` in the trace-summary query |
+| `TraceDto` | *No UI download* — the counterexample dialog links to its owning run instead | derived getter over `smvModelContent` |
+| `SimulationResultDto` | Simulation result dialog | derived getter over `smvModelContent` |
+| `SimulationTraceDto` | Replay of a saved trajectory | derived getter over `smvModelContent` |
+| `SimulationTraceSummaryDto` | Per-trajectory button in the history panel | `CASE WHEN … <> ''` in the trace-summary query |
+
+The summary rows compute the flag in SQL rather than selecting `smvModelContent`, so a history page
+never loads tens of thousands of characters per row to decide whether one button can succeed. This is
+why `VerificationTaskRepository.findCompletedRunSummaries` is an explicit `@Query` instead of a
+derived one: `hasSmvModel` is not an entity property, so a closed projection cannot name it without
+the query aliasing it.
+
+A DTO that omits the flag disables the feature silently — the client's `v-if` reads `undefined`, the
+button never renders, and nothing reports an error. Adding a download surface therefore means
+checking that its DTO is in the table above.
+
+The stored model is capped at 65,000 UTF-8 bytes — the unit the `TEXT` column is bounded in,
+which matters because the model embeds user-authored rule text as comments and is routinely
+non-ASCII — and carries an explicit `-- [TRUNCATED: Original size N bytes]` marker when the
+generated model was larger, so a truncated download can never be mistaken for a complete one.
+Truncation lands on a character boundary, so the downloaded file always decodes.
 
 ### `GET /api/verify/traces/{id}/fault-rules` — fault localization
 

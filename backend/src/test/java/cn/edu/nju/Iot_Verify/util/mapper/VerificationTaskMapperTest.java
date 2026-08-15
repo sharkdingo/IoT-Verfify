@@ -258,6 +258,15 @@ class VerificationTaskMapperTest {
         assertEquals(0, summary.getCounterexampleCount());
         assertEquals(RunInitiator.USER, summary.getInitiator());
         assertEquals(VerificationOutcome.VIOLATED, summary.getOutcome());
+
+        // The run-keyed model-presence flag, both arms. This is the one the history panel's per-run
+        // download reads; the whole feature was unreachable because such a flag was absent from the
+        // response and no test asserted on it. `Boolean.TRUE.equals(null)` is `false`, so the false
+        // case alone would pass against a mapper that dropped the field.
+        assertEquals(Boolean.FALSE, summary.getHasSmvModel(),
+                "an unstubbed projection reports no stored model, never null");
+        when(projection.getHasSmvModel()).thenReturn(true);
+        assertEquals(Boolean.TRUE, mapper.toRunSummaryDto(projection, 0).getHasSmvModel());
     }
 
     @Test

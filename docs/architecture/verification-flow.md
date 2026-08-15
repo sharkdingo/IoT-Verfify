@@ -200,6 +200,7 @@ complete user-facing snapshots. A representative API state is:
   "globalVariables": [
     { "name": "compromisedPointCount", "value": "2" }
   ],
+  "loopStart": true,
   "devices": [
     {
       "deviceId": "hall_sensor",
@@ -227,6 +228,30 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
   value means unchanged, not unknown.
 - Formal and simulation snapshots start at `stateIndex=1` and remain exactly contiguous;
   persisted detail reads fail closed on a missing, duplicate, zero, or gap.
+- **A liveness counterexample is an infinite path, and its loop is the violation.** Templates 2, 5,
+  and 6 assert liveness (`AF` / `AG(IF → AF THEN)` / LTL `G(IF → FG THEN)`), so NuSMV refutes them with
+  a lasso: a finite prefix followed by a cycle that repeats forever without ever reaching the required
+  state. The parser captures NuSMV's own `-- Loop starts here` marker as `loopStart: true`, and flags the
+  trailing state that closes the cycle as `loopBack: true`. Both are absent for a finite path, which is
+  every simulation and fuzz trace.
+
+  **The marker is not by itself evidence of a liveness violation, and clients must not treat it as such.**
+  It describes the witness path NuSMV happened to find, not the property. Measured on NuSMV 2.7.1: a CTL
+  `AG(motion → AX light)` counterexample (template 4) and an LTL `G(p)` counterexample both carry the
+  marker, and the LTL trace carried it **twice**. So whether the cycle *is* the fault follows from the
+  template, which the client knows; only templates 2, 5, and 6 may claim their cycle. Where several
+  markers appear, the **last** one begins the cycle — that is what `loopBack` is computed against.
+  Two positions the marker can take that a reader will not guess: it precedes the state it names, so
+  when the loop entry is the *initial* state it precedes the first state line as well (`NusmvExecutor`
+  retains it there rather than starting extraction at the first state), and CTL `AG`/`AG !` traces never
+  carry it at all.
+
+  The closing state is why this needs a field rather than an inference: NuSMV re-prints the loop entry
+  carrying *no* variable lines, so the delta merge above reproduces its predecessor exactly. Without
+  the flag the final step of a liveness violation plays back as one where nothing changes, and the
+  per-step change panel reports "no observable changes" — an accurate diff of the state, and a
+  complete misreading of the trace. Clients mark the whole cycle rather than one step, because no
+  single state is at fault.
 - Each device and environment variable carries frozen `BUNDLED`, `CUSTOM`, or `UNKNOWN`
   token provenance. Mixed environment providers and parser-global values are `UNKNOWN`;
   absent provenance makes the persisted trajectory invalid.

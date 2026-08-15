@@ -185,7 +185,7 @@ class AiPromptContractTest {
         Matcher declaration = Pattern.compile(
                 "static final (?:int|String)\\s+([A-Z][A-Z0-9_]*)\\s*=\\s*([^;]+);").matcher(text);
         while (declaration.find()) {
-            constants.put(declaration.group(1), unquote(declaration.group(2).trim()));
+            constants.put(declaration.group(1), resolveConstant(declaration.group(2).trim()));
         }
 
         List<String> offenders = new ArrayList<>();
@@ -218,6 +218,46 @@ class AiPromptContractTest {
                         + pairs + " — the skeleton or the put() idiom changed, so a pass proves nothing");
         assertEquals(List.of(), offenders,
                 "a prompt advertises an envelope value the backend does not write: " + offenders);
+    }
+
+    /**
+     * The literal a constant's initializer ultimately denotes, following one hop through another class.
+     *
+     * <p>Reading only the initializer text was enough while every constant was its own literal, but that
+     * made the check hostile to deduplication: pointing {@code SCENE_SCHEMA} at the format's single
+     * owner ({@code PortableSceneFormat.SCHEMA}) made this read the *expression* as the expected value
+     * and report the prompt as wrong when nothing about it had changed. Loosening the comparison would
+     * have been the wrong repair — the guard's whole job is to compare against what the backend writes —
+     * so it resolves the reference instead. A reference it cannot resolve is returned unchanged, which
+     * still fails loudly rather than passing vacuously.</p>
+     */
+    private static String resolveConstant(String initializer) {
+        Matcher reference = Pattern.compile("^([A-Z][A-Za-z0-9_]*)\\.([A-Z][A-Z0-9_]*)$")
+                .matcher(initializer.trim());
+        if (!reference.find()) {
+            return unquote(initializer);
+        }
+        try {
+            String owner = findSource(reference.group(1));
+            Matcher declared = Pattern.compile(
+                            "static final (?:int|String)\\s+" + Pattern.quote(reference.group(2))
+                                    + "\\s*=\\s*([^;]+);")
+                    .matcher(owner);
+            return declared.find() ? unquote(declared.group(1).trim()) : initializer.trim();
+        } catch (IOException | IllegalArgumentException exception) {
+            return initializer.trim();
+        }
+    }
+
+    /** Locates a class's source anywhere under {@code src/main/java} by simple name. */
+    private static String findSource(String simpleName) throws IOException {
+        try (var paths = Files.walk(Path.of("src", "main", "java"))) {
+            Path source = paths
+                    .filter(path -> path.getFileName().toString().equals(simpleName + ".java"))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("no source for " + simpleName));
+            return Files.readString(source);
+        }
     }
 
     private static String unquote(String literal) {

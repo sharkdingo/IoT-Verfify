@@ -48,4 +48,10 @@ public interface VerificationRunSummaryProjection {
     Integer getSkippedSpecCount();
 
     String getGenerationIssuesJson();
+
+    /**
+     * Whether {@code smvModelContent} is non-empty, computed in SQL by
+     * {@code VerificationTaskRepository#findCompletedRunSummaries} rather than selected as the column.
+     */
+    Boolean getHasSmvModel();
 }

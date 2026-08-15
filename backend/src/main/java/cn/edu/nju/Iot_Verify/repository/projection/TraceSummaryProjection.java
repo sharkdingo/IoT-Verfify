@@ -15,5 +15,12 @@ public interface TraceSummaryProjection {
 
     Integer getStateCount();
 
+    /**
+     * Whether {@code smvModelContent} is non-empty, computed in SQL. Selected as a flag rather than as
+     * the column so a history list never loads tens of thousands of characters per row just to decide
+     * whether a download button can succeed.
+     */
+    Boolean getHasSmvModel();
+
     LocalDateTime getCreatedAt();
 }

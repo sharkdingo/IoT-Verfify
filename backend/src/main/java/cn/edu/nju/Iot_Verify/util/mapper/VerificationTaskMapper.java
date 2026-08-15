@@ -62,6 +62,9 @@ public class VerificationTaskMapper {
                 .specResults(readSpecResults(po))
                 .checkLogs(checkLogs)
                 .nusmvOutput(po.getNusmvOutput())
+                // Presence only, as on the run DTO: a completed async task is the run, and its response
+                // is what the polling client reads to decide whether to offer the model download.
+                .hasSmvModel(po.getSmvModelContent() != null && !po.getSmvModelContent().isBlank())
                 .errorMessage(po.getErrorMessage())
                 .progress(po.getProgress())
                 .progressStage(po.getProgressStage())
@@ -177,6 +180,8 @@ public class VerificationTaskMapper {
                         "verification run", projection.getId(), "generationIssuesJson",
                         () -> JsonUtils.fromJsonList(
                                 projection.getGenerationIssuesJson(), ModelGenerationIssueDto.class)))
+                // Presence only, as on toRunDto; the model is fetched through /api/verify/runs/{id}/smv.
+                .hasSmvModel(Boolean.TRUE.equals(projection.getHasSmvModel()))
                 .dataAvailable(true)
                 .build();
     }
@@ -219,6 +224,9 @@ public class VerificationTaskMapper {
                 .specResults(readSpecResults(po))
                 .checkLogs(checkLogs)
                 .nusmvOutput(po.getNusmvOutput())
+                // Presence only. The model itself is tens of thousands of characters, so it is fetched
+                // through its own endpoint rather than inflating every run-detail response.
+                .hasSmvModel(po.getSmvModelContent() != null && !po.getSmvModelContent().isBlank())
                 .build();
     }
 

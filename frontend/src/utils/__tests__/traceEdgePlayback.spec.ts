@@ -120,11 +120,49 @@ describe('trace edge playback', () => {
     expect(isEdgeActiveInTrace(second, [first, second], trace)).toBe(false)
   })
 
-  it('does not bind an id-less historical rule to the current board by list position', () => {
+  it('does not match when only one side has a rule id, because the snapshots disagree on identity', () => {
+    // The edge carries `rule-1` while the trace's rule carries none. Matching these on position would
+    // be a coincidence rather than evidence — the two snapshots do not agree about what identifies a
+    // rule, so neither id nor index is trustworthy across them.
     const edge = apiEdge()
     const trace = {
       selectedStateIndex: 0,
       states: [{ triggeredRules: [{ ruleIndex: 0, ruleId: null, ruleLabel: 'No id' }], devices: [] }]
+    }
+
+    expect(isEdgeActiveInTrace(edge, [edge], trace)).toBe(false)
+  })
+
+  /*
+   * When BOTH sides lack an id, position is the only identity available — and here it is sound.
+   *
+   * `TraceTriggeredRuleDto.ruleId` is nullable ("when the submitted rule had one") and
+   * `playbackScene.ts` sets the edge's `ruleId` to `undefined` for those same rules, so the two lose it
+   * together. Requiring an id then meant no edge ever lit: the rail named a rule the canvas ignored,
+   * and the UI blamed board drift, which was false.
+   *
+   * This does not reintroduce what the id-only rule forbade. That rule's recorded reason is "ambiguous
+   * or id-less evidence is left unhighlighted instead of guessing from a *current list position*" — the
+   * hazard is the live board, whose rules may have been reordered since the run. During playback
+   * `allEdges` resolves to the frozen scene (`Board.vue:1641`), and both callers require
+   * `highlightedTrace`, which only exists while replaying. So both indices index the one submitted rule
+   * list, which `ModelPlaybackSceneSnapshot.copyRules` maps one-to-one and never filters.
+   */
+  it('matches an id-less rule by frozen list position when neither side has an id', () => {
+    const edge = apiEdge({ ruleId: undefined, ruleIndex: 2 })
+    const trace = {
+      selectedStateIndex: 0,
+      states: [{ triggeredRules: [{ ruleIndex: 2, ruleId: null, ruleLabel: 'Unnamed rule' }], devices: [] }]
+    }
+
+    expect(isEdgeActiveInTrace(edge, [edge], trace)).toBe(true)
+  })
+
+  it('does not match an id-less rule at a different frozen position', () => {
+    const edge = apiEdge({ ruleId: undefined, ruleIndex: 2 })
+    const trace = {
+      selectedStateIndex: 0,
+      states: [{ triggeredRules: [{ ruleIndex: 5, ruleId: null, ruleLabel: 'Other rule' }], devices: [] }]
     }
 
     expect(isEdgeActiveInTrace(edge, [edge], trace)).toBe(false)

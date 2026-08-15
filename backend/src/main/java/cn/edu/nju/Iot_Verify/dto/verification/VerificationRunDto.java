@@ -46,4 +46,14 @@ public class VerificationRunDto {
     private List<SpecResultDto> specResults;
     private List<String> checkLogs;
     private String nusmvOutput;
+
+    /**
+     * Whether this run still holds the SMV model it checked, so a client can offer
+     * {@code GET /api/verify/runs/{id}/smv} only when it can succeed.
+     *
+     * <p>Keyed on the run rather than on a counterexample because all of a run's counterexamples share
+     * one model, and a run where every specification holds has no counterexample to key on at all.
+     * Runs recorded before the model was stored report {@code false}.
+     */
+    private boolean hasSmvModel;
 }

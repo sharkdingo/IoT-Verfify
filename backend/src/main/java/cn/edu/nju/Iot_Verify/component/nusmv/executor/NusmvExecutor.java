@@ -47,6 +47,11 @@ public class NusmvExecutor {
             "-- specification (.+?) is true", Pattern.CASE_INSENSITIVE);
     private static final Pattern SPEC_FALSE_PATTERN = Pattern.compile(
             "-- specification (.+?) is false", Pattern.CASE_INSENSITIVE);
+    /**
+     * NuSMV's lasso marker. Must match {@code SmvTraceParser.LOOP_START_PATTERN}, which consumes it:
+     * extraction only decides whether the line survives into the trace text, never what it means.
+     */
+    private static final Pattern LOOP_MARKER = Pattern.compile("^\\s*--\\s*Loop starts here\\s*$");
 
     private volatile Semaphore executionSemaphore;
 
@@ -695,10 +700,25 @@ public class NusmvExecutor {
         }
         StringBuilder trace = new StringBuilder();
         boolean inStates = false;
+        String pendingLoopMarker = null;
         for (String line : block.split("\n")) {
             String trimmed = line.trim();
+            // The lasso marker precedes the state that begins the cycle, and when that state is the *initial*
+            // one it therefore precedes the first state line too — verified on NuSMV 2.7.1, where `AF x` over
+            // a model that never sets `x` prints "-- Loop starts here" above "-> State: 1.1 <-". Held back
+            // rather than appended immediately, so it is only kept when a state actually follows: the trace
+            // handed to SmvTraceParser must start at a state line, and a marker with no trace behind it would
+            // make an empty block look non-empty.
+            if (!inStates && LOOP_MARKER.matcher(trimmed).matches()) {
+                pendingLoopMarker = line;
+                continue;
+            }
             // 兼容 NuSMV 2.7.1 格式 "-> State: 1.1 <-" 和旧格式 "State 1.1:"
             if (trimmed.startsWith("-> State:") || trimmed.startsWith("State ") || inStates) {
+                if (!inStates && pendingLoopMarker != null) {
+                    trace.append(pendingLoopMarker).append("\n");
+                    pendingLoopMarker = null;
+                }
                 inStates = true;
                 trace.append(line).append("\n");
             }

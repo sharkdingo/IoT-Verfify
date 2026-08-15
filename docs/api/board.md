@@ -22,9 +22,13 @@ omitted item is not deleted. Each mutation is serialized under the user's board 
 lock and returns both the affected item(s) and the authoritative post-mutation snapshot,
 so a stale client can replace its local collection without issuing a hidden full-list save.
 
-`POST /api/board/batch` is the only external full-scene replacement command. The Board
-uses it only after an authoritative `GET /api/board/replacement-preview` and explicit
-user confirmation for scene import or scene clear. All four semantic collections and the
+Two endpoints replace the whole scene, and both require an authoritative
+`GET /api/board/replacement-preview` plus explicit user confirmation first.
+`POST /api/board/scene` takes a portable scene file verbatim and is what scene import uses;
+the server owns the portable → internal mapping, so no client restates how portable rules and
+specifications become write DTOs. `POST /api/board/batch` takes the internal collections
+directly and is what scene clear uses, having no portable file behind it. All four semantic
+collections and the
 exact template-snapshot dependency set are required complete desired collections; omitted
 or `null` collections are rejected rather than interpreted as hidden partial preservation.
 The replacement commits or rolls back as one transaction. Its preview also reports the
@@ -61,7 +65,8 @@ after confirmation, the request still returns `409` and writes nothing.
 | GET | `/api/board/edits/clear-preview` | → `BoardEditHistoryClearPreviewDto` | Return the current entry count, availability, and opaque impact token that must be shown/bound to an explicit history-clear confirmation |
 | POST | `/api/board/edits/clear` | `BoardEditHistoryClearRequestDto` → `BoardUndoResultDto` (`applied: false`, `HISTORY_CLEARED`, empty collections, both availability flags false) | Explicitly discard unusable undo/redo history without changing any Board collection. The SHA-256 `impactToken` from the preview is required; if any entry is added, undone, redone, changed, or removed before submit, stale confirmation returns `409` and preserves all history |
 | GET | `/api/board/replacement-preview` | → `BoardReplacementPreviewDto` | Return the opaque impact token plus authoritative current scene counts and `editHistoryEntryCount` that must be shown before a full scene replacement/clear |
-| POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Explicit atomic full-scene replacement** of complete `nodes` + `environmentVariables` + `rules` + `specs` plus exact `templateSnapshots`; requires the still-current preview `impactToken` |
+| POST | `/api/board/scene` | `{ impactToken, scene }` → `BoardBatchDto` | **Portable scene import.** `scene` is an exported file verbatim; its `schema`/`version` must match this build. The server maps portable rules/specifications onto the write contract, so clients send no internal shapes. Requires the still-current preview `impactToken`, kept outside `scene` because it is never portable semantics |
+| POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Explicit atomic full-scene replacement** of complete `nodes` + `environmentVariables` + `rules` + `specs` plus exact `templateSnapshots`; requires the still-current preview `impactToken`. Used directly for scene clear; portable files go through `/api/board/scene` |
 | GET | `/api/board/layout` | → `BoardLayoutDto` | Panel/canvas layout |
 | POST | `/api/board/layout` | `BoardLayoutDto` → `BoardLayoutDto` | |
 
@@ -450,7 +455,7 @@ labels). Every shared environment variable required by a referenced template app
 exactly once with explicit `value`, `trust`, and `privacy`. Export
 canonicalizes ordering and relations; import rejects unsupported versions, unknown
 device references, incomplete environment/template snapshots, and internal/derived fields before
-calling the atomic batch endpoint. Version 5 requires `variableSource` on every `variable`
+uploading the file to `POST /api/board/scene`, which re-checks schema/version server-side. Version 5 requires `variableSource` on every `variable`
 specification condition and rejects it on every other target type; a version-4 file cannot supply
 it and guessing one would change what its specifications assert, so those files are rejected by the
 version check rather than half-read. Consequently a valid exported file can be imported

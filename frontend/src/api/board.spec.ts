@@ -14,6 +14,7 @@ import http from './http'
 import boardApi, { BOARD_RESPONSE_INCOMPLETE_CODE } from './board'
 import { FIX_RESPONSE_INCOMPLETE_CODE } from '@/utils/fixResponse'
 import type { DeviceNode } from '@/types/node'
+import type { PortableSceneFile } from '@/types/scene'
 import type { Specification } from '@/types/spec'
 
 const resultEnvelope = (data: unknown) => ({ data: { data } })
@@ -27,6 +28,54 @@ const device: DeviceNode = {
   width: 176,
   height: 128
 }
+
+/**
+ * Carries a populated rule and specification on purpose. An all-empty scene makes the "sent
+ * verbatim" assertion unfalsifiable: any client-side remapping of rules or specs would still
+ * produce empty collections, so the test would pass against the very defect it exists to catch.
+ */
+const portableScene = (): PortableSceneFile => ({
+  schema: 'iot-verify.board-scene',
+  version: 5,
+  templates: [{ name: 'Sensor', manifest: { Name: 'Sensor' } as never }],
+  devices: [{
+    id: 'device_1',
+    templateName: 'Sensor',
+    label: 'Hall sensor',
+    position: { x: 10, y: 20 },
+    state: 'Working',
+    width: 176,
+    height: 128
+  }],
+  environmentVariables: [
+    { name: 'motion', value: 'idle', trust: 'trusted', privacy: 'public' }
+  ],
+  rules: [{
+    name: 'Alert on motion',
+    sources: [{
+      fromId: 'device_1',
+      fromApi: 'motion',
+      itemType: 'variable',
+      relation: '=',
+      value: 'detected'
+    }],
+    toId: 'device_1',
+    toApi: 'alert'
+  }],
+  specs: [{
+    templateId: '1',
+    aConditions: [{
+      deviceId: 'device_1',
+      targetType: 'variable',
+      key: 'motion',
+      variableSource: 'reported',
+      relation: '=',
+      value: 'detected'
+    }],
+    ifConditions: [],
+    thenConditions: []
+  }]
+})
 
 const completeDeviceCreation = () => ({
   operation: 'created',
@@ -784,13 +833,9 @@ describe('board mutation response contracts', () => {
       specs: []
     }))
 
-    await expect(boardApi.saveBoardBatch({
+    await expect(boardApi.importScene({
       impactToken: 'confirmed-board-impact',
-      nodes: [device],
-      environmentVariables: [],
-      rules: [],
-      specs: [],
-      templateSnapshots: []
+      scene: portableScene()
     })).rejects.toMatchObject({
       code: BOARD_RESPONSE_INCOMPLETE_CODE
     })
@@ -811,7 +856,27 @@ describe('board mutation response contracts', () => {
     expect(vi.mocked(http.get)).toHaveBeenCalledWith('/board/replacement-preview')
   })
 
-  it('sends a full scene and its confirmed impact token without null-preserve semantics', async () => {
+  it('sends the portable scene verbatim beside its confirmed impact token', async () => {
+    vi.mocked(http.post).mockResolvedValue(resultEnvelope({
+      nodes: [],
+      environmentVariables: [],
+      rules: [],
+      specs: [],
+      createdTemplates: []
+    }))
+    const scene = portableScene()
+
+    await boardApi.importScene({ impactToken: 'current-board-impact', scene })
+
+    // The file is not remapped client-side: the server owns portable -> internal, so a field this
+    // client does not know about still reaches admission instead of being silently dropped.
+    expect(vi.mocked(http.post)).toHaveBeenCalledWith('/board/scene', {
+      impactToken: 'current-board-impact',
+      scene
+    })
+  })
+
+  it('clears the board with empty collections rather than an invented empty scene', async () => {
     vi.mocked(http.post).mockResolvedValue(resultEnvelope({
       nodes: [],
       environmentVariables: [],
@@ -820,14 +885,7 @@ describe('board mutation response contracts', () => {
       createdTemplates: []
     }))
 
-    await boardApi.saveBoardBatch({
-      impactToken: 'current-board-impact',
-      nodes: [],
-      environmentVariables: [],
-      rules: [],
-      specs: [],
-      templateSnapshots: []
-    })
+    await boardApi.clearBoardScene('current-board-impact')
 
     expect(vi.mocked(http.post)).toHaveBeenCalledWith('/board/batch', {
       impactToken: 'current-board-impact',
@@ -837,6 +895,13 @@ describe('board mutation response contracts', () => {
       specs: [],
       templateSnapshots: []
     })
+  })
+
+  it('refuses to import or clear without a confirmed impact token', async () => {
+    await expect(boardApi.importScene({ impactToken: '  ', scene: portableScene() }))
+      .rejects.toThrow(/impact token/)
+    await expect(boardApi.clearBoardScene('  ')).rejects.toThrow(/impact token/)
+    expect(vi.mocked(http.post)).not.toHaveBeenCalled()
   })
 
   it('sends only structured specification semantics and not display caches', async () => {

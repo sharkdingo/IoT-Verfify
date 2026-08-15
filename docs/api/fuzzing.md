@@ -19,6 +19,12 @@ is not a NuSMV counterexample. `BUDGET_EXHAUSTED` means only that this run found
 violation within its finite budget; it never proves the Board safe or a specification
 satisfied. Run formal verification before using the automatic-fix workflow.
 
+**There is deliberately no SMV-model download here.** Verification and simulation each offer one
+(`docs/api/verification.md`), and their absence on this path is not an oversight to be corrected for
+symmetry: `FuzzEngine` explores the Board snapshot directly and never calls `SmvGenerator` or NuSMV,
+so no SMV model exists for a fuzz run to serve. Adding one would mean generating a model the run
+never checked — which would misrepresent candidate evidence as a formal artifact.
+
 The implementation is a clean-room Java 17 integration inspired by HAFuzz's
 seed -> trace -> monitor -> distance-guided mutation loop. `BOARD_SNAPSHOT` keeps the
 product-oriented Board explorer as the default, while `PAPER_COMPATIBLE` selects a

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.scenario;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.board.PortableSceneBatchMapper;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -24,12 +25,15 @@ import java.util.Set;
 @Component
 public class ApplyScenarioTool extends AbstractAiTool {
 
+    /** Provenance prefix for specification ids minted from a chat-generated draft. */
+    private static final String CHAT_SPEC_ID_PREFIX = "chat_scene_spec_";
+
     private final AiScenarioDraftStore draftStore;
-    private final ScenarioDraftBatchMapper batchMapper;
+    private final PortableSceneBatchMapper batchMapper;
     private final BoardStorageService boardStorageService;
 
     public ApplyScenarioTool(AiScenarioDraftStore draftStore,
-                             ScenarioDraftBatchMapper batchMapper,
+                             PortableSceneBatchMapper batchMapper,
                              BoardStorageService boardStorageService,
                              ObjectMapper objectMapper) {
         super(objectMapper);
@@ -82,7 +86,7 @@ public class ApplyScenarioTool extends AbstractAiTool {
             }
 
             BoardBatchDto batch = batchMapper.toBatch(
-                    pending.scene(), pending.preview().getImpactToken());
+                    pending.scene(), pending.preview().getImpactToken(), CHAT_SPEC_ID_PREFIX);
             BoardBatchDto saved = boardStorageService.saveBoardBatch(userId, batch);
             draftStore.completeApplication(userId, sessionId);
 

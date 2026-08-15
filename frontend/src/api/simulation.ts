@@ -1,5 +1,6 @@
 // src/api/simulation.ts - Simulation API
 import api from './http'
+import { saveBlobResponseAsFile } from '@/utils/attachmentDownload'
 import type {
   SimulationRequest,
   SimulationResult,
@@ -103,5 +104,14 @@ export default {
   // 删除模拟记录
   deleteSimulation: async (id: number): Promise<void> => {
     return unpack<void>(await api.delete(`/simulate/traces/${id}`))
+  },
+
+  // 下载本次模拟执行的 SMV 模型文件
+  downloadSimulationSmvModel: async (id: number): Promise<void> => {
+    const response = await api.get(`/simulate/traces/${id}/smv`, {
+      responseType: 'blob',
+      headers: { Accept: 'text/plain' }
+    })
+    saveBlobResponseAsFile(response, `simulation-trace-${id}.smv`)
   }
 }

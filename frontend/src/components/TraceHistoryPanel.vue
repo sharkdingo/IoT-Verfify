@@ -96,10 +96,12 @@ const emit = defineEmits<{
   (e: 'reopen-task-settings', kind: TaskKind): void
   (e: 'open-verification-run', id: number): void
   (e: 'delete-verification-run', run: VerificationRunSummary): void
+  (e: 'download-verification-run-smv', id: number): void
   (e: 'view-verification-trace', id: number): void
   (e: 'fix-verification-trace', trace: TraceSummary): void
   (e: 'view-simulation-run', id: number): void
   (e: 'delete-simulation-run', run: SimulationTraceSummary): void
+  (e: 'download-simulation-trace-smv', id: number): void
   (e: 'open-fuzzing-run', id: number): void
   (e: 'delete-fuzzing-run', run: FuzzingRunSummary): void
   (e: 'view-fuzzing-finding', id: number, runId: number): void
@@ -252,6 +254,20 @@ const fuzzingModeDescription = (mode: FuzzingExplorationMode) => t(
     : 'app.fuzzModeBoardDescription'
 )
 
+/**
+ * Drift, where an un-comparable fingerprint counts as drift rather than as a match.
+ *
+ * The bare `!==` carries that: a persisted fuzz run always has a 64-hex fingerprint (`FuzzMapper`
+ * rejects a snapshot without one), so an absent or nulled current fingerprint compares unequal and the
+ * row warns. `Board.vue`'s copy relies on the same property, and
+ * `TraceHistoryPanel.spec.ts`'s "does not claim a fingerprinted run is unchanged when the current
+ * fingerprint is unavailable" pins it — that case reaches here with a scope object that carries counts
+ * but no fingerprint.
+ *
+ * Do not add a three-valued `UNAVAILABLE` branch here on the theory that unknown deserves its own
+ * notice: the only unknown states reachable are already reported as drift, which is the conservative
+ * answer, and splitting them turned that guarded behaviour into silence.
+ */
 const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary) => {
   const current = props.currentBoardScope
   if (!current) return false
@@ -794,6 +810,24 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   >
                     {{ t('app.openResult') }}
                   </button>
+                  <!--
+                    Hidden when the run holds no model, unlike the result dialogs, which disable the
+                    control and state the reason. The difference is deliberate: this is a dense list of
+                    every retained run, so a disabled button plus an explanation on each row would
+                    repeat the same notice many times over. The dialog is a single run the user opened
+                    on purpose, and there the absence needs saying — the whole feature read as missing
+                    while nothing explained why no button appeared.
+                  -->
+                  <button
+                    v-if="item.run.hasSmvModel"
+                    type="button"
+                    :data-testid="`download-verification-run-smv-${item.run.id}`"
+                    class="min-h-11 rounded board-chip-info px-2 py-1 text-xs font-medium board-text-info hover:bg-[color:var(--info-surface)] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="actionLocked"
+                    @click="emit('download-verification-run-smv', item.run.id)"
+                  >
+                    {{ t('app.downloadSmvModel') }}
+                  </button>
                   <button
                     type="button"
                     :data-testid="`delete-verification-run-${item.run.id}`"
@@ -826,8 +860,21 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 </li>
               </ul>
 
+              <!--
+                Gated on the run having evidence to describe, NOT on the trace list being non-empty.
+
+                It used to require `tracesForRun(item.run).length`, which hid the whole block in exactly
+                the case its own inner warning exists to explain: a run can count a specification as
+                violated and produce no replayable counterexample at all — `VerificationServiceImpl`
+                logs "violated (no counterexample)" for an unparseable one, and skips the trace when the
+                parsed state list comes back empty. That left "3 violations" on screen with nothing
+                saying why none of them could be replayed, and the sentence written for it
+                (`counterexampleCount < violatedSpecCount`, true at zero) could never render.
+              -->
               <div
-                v-if="tracesForRun(item.run).length"
+                v-if="tracesForRun(item.run).length
+                  || item.run.violatedSpecCount > 0
+                  || item.run.counterexampleCount > 0"
                 class="mt-3 rounded-lg border p-2.5"
                 :class="item.run.outcome === 'VIOLATED'
                   ? 'board-surface-danger'
@@ -882,6 +929,13 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       >
                         {{ t('app.replay') }}
                       </button>
+                      <!--
+                        No per-counterexample SMV download here. One model is checked per run and every
+                        counterexample under it came from that model, so a button on each row offered
+                        the same file N times under a name implying N different models. The run row
+                        above carries it once (`download-verification-run-smv-<runId>`), which is also
+                        the only copy that exists for a run where every specification held.
+                      -->
                       <button
                         type="button"
                         :data-testid="`fix-verification-trace-${trace.id}`"
@@ -1052,6 +1106,16 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                     @click="emit('view-simulation-run', item.run.id)"
                   >
                     {{ t('app.replay') }}
+                  </button>
+                  <button
+                    v-if="item.run.hasSmvModel"
+                    type="button"
+                    :data-testid="`download-simulation-trace-smv-${item.run.id}`"
+                    class="min-h-11 rounded board-chip-info px-2 py-1 text-xs font-medium board-text-info hover:bg-[color:var(--info-surface)] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="actionLocked"
+                    @click="emit('download-simulation-trace-smv', item.run.id)"
+                  >
+                    {{ t('app.downloadSmvModel') }}
                   </button>
                   <button
                     type="button"

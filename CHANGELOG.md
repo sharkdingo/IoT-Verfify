@@ -15,11 +15,507 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-16
+
+#### Changed
+
+- **The SMV model download moved to where the model actually belongs, and became a visible action.**
+  The model is a scene-level artifact: one is generated per run, and every counterexample that run
+  produced came out of that same model. It was offered per counterexample — in the
+  counterexample-details dialog and on every trace row in run history — which handed out the same file
+  once per counterexample under a name implying one model each, and put a scene-level artifact behind a
+  per-evidence surface. It was also a footer `--secondary` button beside Close in both result dialogs,
+  i.e. styled as an afterthought, which is how it stayed unfound even after it started rendering.
+
+  Both result dialogs now carry an `Artifact from this run` section in the dialog body, with the model
+  named and its scope stated from the run's own frozen snapshot (device, rule and specification
+  counts), so a reader knows what they are downloading before clicking. The control is `--primary`, and
+  when a run stores no model it is **disabled with the reason shown** rather than hidden — a control
+  that silently vanishes is indistinguishable from a missing feature, which is exactly how this read
+  while the backing flag was never sent. The counterexample dialog links to its owning verification
+  run instead, and the per-trace download is gone from history (the run row keeps the single copy,
+  which is also the only one that exists for a run where every specification held).
+
+  `GET /api/verify/traces/{id}/smv` remains supported for API consumers holding only a trace id, but
+  the web client no longer calls it and its client method is deleted. Placement is pinned by
+  `runArtifactPlacement.spec.ts`, and `e2e/smv-model-download.spec.ts` now covers the download
+  end to end — that clicking delivers a NuSMV model of the submitted scene, which nothing verified
+  before.
+
+- **The counterexample-details dialog now separates the counterexample from the run that produced
+  it.** Its contents read as one flat list of "counterexample properties", but only the violated
+  specification and the state count describe that counterexample; the attack and privacy chips and
+  model completeness describe the run and are identical across every counterexample it produced. A
+  reader comparing two counterexamples had no way to tell which differences were even possible. The
+  frozen per-trace copy of that context stays — a counterexample must survive its run being deleted —
+  but it is now labelled as run context, under a heading that says it repeats.
+
+### 2026-08-15
+
+#### Fixed
+
+- **The SMV model download was unreachable from every surface that offered it.** Four buttons —
+  verification result dialog, simulation result dialog, and both per-record buttons in the run-history
+  panel — were each gated on a `hasSmvModel` flag that the backend never sent for that response.
+  `SimulationResultDto` had no such property at all; `VerificationRunSummaryDto`, `TraceSummaryDto` and
+  `SimulationTraceSummaryDto` declared none, so the history rows could not answer either. The
+  frontend then dropped the one flag the backend *did* send: the builders that construct a result from
+  a history run and from a completed async task both omitted it. Every gate read `undefined`, no
+  button rendered, and nothing reported an error — the feature looked absent rather than broken.
+
+  All three summary DTOs now carry the flag, computed in SQL (`CASE WHEN smvModelContent IS NOT
+  NULL AND <> ''`) so a history page never loads tens of thousands of characters per row to decide
+  whether one button can succeed. `SimulationResultDto` gained the derived getter its verification
+  counterpart already had, and the four frontend builders carry the flag through. The
+  counterexample-details dialog reached from the replay bar gained the download it never had, which is
+  the surface where a reader is actually looking at the model's evidence.
+  `VerificationTaskRepository.findCompletedRunSummaries` replaces the derived
+  `findByUserIdAndStatusOrderByCompletedAtDescIdDesc`, because a closed projection cannot name a
+  computed column that no entity property backs. Which DTO gates which surface is now a table in
+  [docs/api/verification.md](docs/api/verification.md).
+
+- **The verification result dialog rendered its counterexamples and its per-specification verdicts
+  twice each.** A consolidation pass added a promoted counterexample list and a collapsible
+  spec-results section without removing the originals further down the dialog, so a run with three
+  violations showed six entries under two different headings, and every verdict appeared in both an
+  always-open card and a collapsed one. The card also restated the satisfied/violated/inconclusive
+  counts that the summary grid states at the top of the same dialog.
+
+  One list each now. The promoted copy of the counterexample list called
+  `selectAndPlayVerificationTrace(index)` — that function takes a trace **id**, so its "view" button
+  requested traces 0, 1, 2 — and it carried none of the `data-testid`s the E2E flow addresses, nor the
+  notice explaining why "Fix" is withheld on a stale result. The surviving list keeps the working
+  handler and both. The spec-results list keeps the collapsible wrapper and regained the fields the
+  new copy had dropped: the variable-source chips that distinguish two specifications sharing a
+  template label, the labelled formula block, and the per-row technical disclosure.
+
+- **Untranslated `app.*` keys were rendered to the user in the verification and counterexample
+  dialogs.** `app.modelSnapshot`, `app.modelGenerationIssues` and `app.createdAt` were never defined,
+  so the dialogs displayed the raw key strings. The first two now use the existing owners
+  (`app.modelRunSnapshotTitle`, `app.generationWarnings`) and the third has a new `app.traceCreatedAt`.
+  Twelve duplicate keys added alongside them are gone: each shadowed an existing definition, `technicalDetails`
+  silently changed an unrelated dialog's label, and `sceneImportTemplateNameMismatch` collided with the
+  import validator's parameterised message, leaving `{name}` placeholders unresolved in the dialog
+  heading (now `sceneImportTemplateNameMismatchTitle`). The dead
+  `viewTimelineForSequence` hint — defined, never rendered — was removed with them.
+
+- **Counterexample emphasis on the canvas was never scoped to the violated specification.** It read
+  `violatedSpec.boundDeviceIds`, a field `Specification` does not declare, so the list was permanently
+  empty and the documented "all devices in the state" fallback ran on every violation. The subject
+  devices are now derived from the specification's own `devices` list and its A/IF/THEN condition
+  `deviceId`s. The guard that covered this asserted the fabricated field by name, so it had pinned the
+  defect in place.
+
+- **The simulation result dialog lost its "view timeline" button** while
+  `handleSimulationTimelineAction` stayed behind unused, leaving state-by-state playback of a run
+  reachable only by reopening it from history. Restored. Eight `acknowledge()` calls in the scene-import
+  dialogs passed `okText`, which is not an option on that helper (`confirmText` is), so those buttons
+  silently fell back to the generic label.
+
+### 2026-08-14
+
+#### Changed
+
+- **Scene import is now a single server-owned contract: `POST /api/board/scene` takes an exported
+  scene file verbatim.** The portable format and the internal board write DTOs are deliberately
+  different — the file carries no database ids, no derived caches, and no `impactToken`, which is what
+  makes an export re-importable and portable between accounts. But the *conversion* between them had
+  been written by hand three times: in the frontend's `api/board.ts` for file import, in the backend's
+  `ScenarioDraftBatchMapper` for chat-applied drafts, and a third time inside the scene NuSMV tests.
+  Nothing tied the copies together, so the same scene could be admitted differently depending on which
+  button the user pressed, and the `variableSource` field was dropped by each copy independently —
+  three separate user-visible failures (a 502 on a whole recommendation response, and two rejections
+  naming a field the scene actually carried) before all three agreed.
+
+  There is now one converter, `PortableSceneBatchMapper`, shared by the new endpoint and
+  `apply_scenario`. Clients upload the validated file and no longer restate the mapping.
+  `POST /api/board/batch` remains the lower-level command for scene clear, which has no portable file
+  behind it. The schema id and version, previously written out at four independent sites — including
+  one left at 4 while the producer emitted 5, which rejected every generated scenario as
+  "unsupported" — now come from `PortableSceneFormat`, and a cross-stack contract test pins the Java
+  and TypeScript declarations against each other so a field added to one side cannot be silently
+  dropped by the other. Both full-scene endpoints share the dedicated 64 MiB body limit.
+
+  The two scene NuSMV tests previously hand-built rules and specifications from the scene JSON, so they
+  verified "this file, parsed the way the test author understood it, generates correct SMV" rather than
+  "this file, imported, generates correct SMV" — a scene could pass the suite and be refused by the
+  real endpoint. They now import through the product's own path, and the six shipped scenes in
+  `docs/examples/` regression-test admission as well as generation.
+
+#### Fixed
+
+- **An infinite ("eventual response") counterexample now shows its loop instead of a frozen final step.**
+  Templates 2, 5, and 6 assert liveness, so NuSMV refutes them with a lasso path — a prefix plus a cycle
+  that repeats forever without ever reaching the required state — and it terminates that path by
+  re-printing the loop entry with *no* variable lines. The `-- Loop starts here` marker was discarded in
+  two places: `NusmvExecutor` began copying the trace at the first state line, dropping any marker printed
+  above it, and `SmvTraceParser` had no notion of the marker at all. So the closing state materialized
+  identical to its predecessor and played back as a step where nothing moved, with the change panel
+  reporting "no observable changes": an accurate diff of the state, and a complete misreading of the
+  trace. Compounding it, template 5 was absent from the set of templates whose violation step is known, so
+  a "the front door never re-locks while nobody is home" violation marked no step on the rail and
+  emphasised no device on the canvas either — the run's whole point arrived in silence. Measured on a real
+  board (5 states, cycle from index 3, closing state byte-identical to its predecessor).
+
+  `TraceStateDto` now carries `loopStart` / `loopBack`; the canvas emphasises every state of the cycle
+  rather than one step, because no single state is at fault; the rail rings the cycle and labels its
+  return edge; and the change panel explains the repetition where it previously reported an empty diff.
+  Whether the cycle counts as the violation is decided by the **template**, not by the marker's presence:
+  NuSMV also prints it for safety counterexamples (verified on a CTL `AX` trace and an LTL `G(p)` trace,
+  the latter carrying it twice), so keying off the marker alone marked a cycle for a safety violation and
+  re-admitted template 4 — the one template that must deliberately claim no step. Template 2 likewise
+  left the last-state set, which cannot describe a liveness fault. Where several markers appear the last
+  one begins the cycle, matching how `loopBack` is derived.
+  (`backend/.../executor/NusmvExecutor.java`, `backend/.../parser/SmvTraceParser.java`,
+  `backend/.../dto/trace/TraceStateDto.java`, `frontend/src/views/Board.vue`,
+  `frontend/src/components/CanvasBoard.vue`, `frontend/src/components/PlaybackChangePopover.vue`,
+  `frontend/src/types/verify.ts`, `docs/architecture/verification-flow.md`,
+  `docs/architecture/spec-templates.md`, `docs/api/verification.md`)
+
+- **A simulation replay no longer marks violation steps borrowed from a counterexample.** `savedTraces` is
+  never cleared, and `currentTrace` prefers it unconditionally, so a counterexample opened earlier in the
+  session stayed selected while a simulation replayed through the same `highlightedTrace`. The canvas then
+  outlined the old counterexample's bound devices mid-simulation, on a run that violated nothing. The
+  canvas emphasis is now gated on the active playback kind. (`frontend/src/views/Board.vue`)
+
+- **The counterexample dialog no longer repeats its own entry point, and returns to the playback.** Its
+  footer carried "Run details" — the exact label of the replay-bar button that opens it — and that action
+  navigated *away* to the verification result. So the one primary action echoed the control the user had
+  just pressed and led further from the trace they were watching. The simulation run-details dialog is
+  the model: its footer returns to the timeline it came from. This now does the same, which is honest
+  because opening the dialog never touches `traceAnimationState.visible` — the timeline stays mounted
+  underneath. Escalating to the owning run moved into the body, labelled "Verification Result" after its
+  destination. Verified in a real browser: the footer returns to the timeline and the dialog closes.
+  (`frontend/src/views/Board.vue`, `frontend/src/views/board/counterexampleDetailsDialog.spec.ts`)
+
+- **A violated run with no replayable counterexample now says so.** History gated its whole evidence
+  block on the trace list being non-empty, which hid it in precisely the case its own inner warning
+  exists to explain: a run can count a specification as violated and produce no replayable
+  counterexample — `VerificationServiceImpl` logs "violated (no counterexample)" when NuSMV returns
+  none, and skips the trace when the parsed state list is empty. So the row showed "2 violations" with
+  nothing explaining why none could be replayed, while the sentence written for it
+  (`counterexampleCount < violatedSpecCount`, true at zero) sat inside the hidden block. The block is
+  now gated on the run having evidence to describe. (`frontend/src/components/TraceHistoryPanel.vue`,
+  `frontend/src/components/__tests__/TraceHistoryPanel.spec.ts`)
+
+- **A verification verdict is announced once, not twice at the same moment.** `showResultDialog` derives
+  from `verificationResult`, so every path that set the result opened the dialog and then toasted the
+  same fact over it — measured in a browser as a toast reading "Found 1 specification violation(s)"
+  covering a dialog subtitled "Found 1 violation(s)". `utils/feedback.ts` states the rule ("a success
+  whose result is already visible on screen gets no toast at all") and `presentFuzzingRun` already
+  applied it, dismissing transient notices so they cannot cover the result's title or primary actions;
+  verification was the path that had not been given the same treatment. The toast still fires when
+  nothing on screen carries the verdict — an async run finishing while the user is elsewhere — so the
+  suppression is per-call-site rather than a removal, and the separate persistence-failure notice is
+  untouched, since a save that did not happen is not something the verdict dialog states. Attention on a
+  violation is unchanged and was measured: the dialog still auto-opens in danger tone with 8
+  danger-toned elements and the violation count. (`frontend/src/views/Board.vue`,
+  `frontend/src/views/board/verdictAnnouncedOnce.spec.ts`)
+
+- **The counterexample dialog reports skipped specifications, not just disabled rules.** Its
+  incomplete-model sentence named only `disabledRuleCount`, while both sibling verification surfaces —
+  the result dialog and the replay bar — name both counts. Since a trace's `modelComplete` is false when
+  *either* count is non-zero, a run that skipped specifications but disabled no rules rendered as "0
+  rule(s) were disabled", and a reader arriving from the replay bar saw a smaller omission set than the
+  bar they came from. The wording keeps its caveat about what a reduced-model counterexample does and
+  does not establish. (`frontend/src/views/Board.vue`, `frontend/src/assets/i18n.ts`)
+
+- **A change row no longer claims a reading that never existed.** `playbackDeviceChangeDetails` built its
+  variable diff without filtering `observed`, while both sibling readers — the rail's summary and the
+  canvas badges — filter it, for a reason recorded beside one of them: an unobserved row is omitted
+  rather than shown as `N/A`, because `N/A` claims a reading was expected and went missing. The flag can
+  flip between states, so the change popover reported transitions like `illuminance: 20 -> N/A` for a
+  device that never had that reading, while the canvas correctly drew nothing.
+  (`frontend/src/utils/traceView.ts`)
+
+- **An id-less rule now highlights its edge instead of silently highlighting nothing.**
+  `TraceTriggeredRuleDto.ruleId` is nullable, and the frozen scene sets the edge's `ruleId` to
+  `undefined` for those same rules — so both sides lose the id together, and requiring it meant no edge
+  ever lit: the rail named a rule the canvas ignored, while the on-screen explanation blamed board
+  drift, which was false. When *both* ids are absent the match falls back to position, which is sound
+  here and not a guess: during playback the edges come from the frozen scene, both indices index the one
+  submitted rule list, and `copyRules` maps it one-to-one without filtering. A present-but-different id
+  still means "not this rule", and an id on one side only still refuses to match — that combination
+  means the two snapshots disagree about identity, where position would be coincidence. This does not
+  reopen what the id-only rule forbade, whose recorded concern was guessing from a *current* list
+  position on a board that may have been reordered since the run.
+  (`frontend/src/utils/traceEdgePlayback.ts`, `frontend/src/utils/__tests__/traceEdgePlayback.spec.ts`)
+
+- **A fuzz replay cannot present a NuSMV artifact.** The counterexample rail's checked-expression
+  disclosure was the one absent-field read there with no `activeFuzzingFinding` gate, where all five
+  sibling chips have one. It was safe only because the synthesized fuzz trace happens to set
+  `checkedExpression: ''`, which is falsy — safety by accident, and giving that placeholder any
+  non-empty value would have shown a checked expression for a run that never invoked NuSMV.
+  (`frontend/src/views/Board.vue`)
+
+- **The SMV download works, and is offered only when it can.** Three defects made it fail in every
+  case a user could reach. `TraceMapper.toEntity` never copied the model, so `smv_model_content` was
+  `NULL` on every verification trace ever written; neither mapper read it back, so both controllers saw
+  a blank model and returned `500`. And the button was gated on the record's **id** — which every
+  persisted run has — rather than on whether a model exists, so it appeared for records that had none
+  and the click failed with a bare "download failed". The responses now carry a derived `hasSmvModel`
+  and the buttons require it. Verified end to end in a browser against a rebuilt database: the model
+  persists (9182 bytes for the RFID demo), the button renders, and the file downloads with
+  `MODULE main` intact.
+  (`backend/.../util/mapper/TraceMapper.java`, `.../SimulationTraceMapper.java`,
+  `.../dto/trace/TraceDto.java`, `.../dto/simulation/SimulationTraceDto.java`,
+  `frontend/src/views/Board.vue`, `frontend/src/types/verify.ts`, `frontend/src/types/simulation.ts`)
+
+- **Device import no longer creates the payload you just replaced.** The import preview is debounced by
+  300ms to avoid re-parsing on every keystroke, and everything downstream of the box — the preview list,
+  the validity count, the Create button's label — is derived from that lagging copy. The button,
+  however, was gated on the *count* alone, so for 300ms after new content arrived it was enabled and
+  armed with the previous payload: paste or choose a second file, click inside the window, and the
+  earlier one was imported instead. Reproduced deterministically in E2E, where a CSV import produced
+  duplicate JSON devices (`import_phone_1` / `import_alarm_1`) and the CSV's own devices never arrived.
+  The gate now also requires the preview to match the current text, which covers typing, paste, file
+  selection and any entry point added later; the file path additionally flushes the debounce, since a
+  file selection is one discrete event rather than a keystroke. Fixing only that path left the paste
+  window open — measured, as the E2E failure moved one assertion further along. Present since the
+  2026-08-13 frontend performance pass that introduced the debounce.
+  (`frontend/src/components/ControlCenter.vue`,
+  `frontend/src/components/__tests__/ControlCenterImportFreshness.spec.ts`)
+
+- **An exploration finding the server rejected can no longer be replayed or handed to the verifier.**
+  `dataAvailable === false` marks a finding whose own detail load was rejected as corrupt.
+  `TraceHistoryPanel` disables both of its actions for exactly that, and the exploration result dialog
+  binds the same run object — but omitted the check, so a finding greyed out in history stayed fully
+  armed in the dialog. Replay merely re-failed; "verify formally" was worse, because that handoff is
+  seeded from the summary without re-fetching the finding, so it proceeded on evidence the server had
+  already refused. The marker exists only on the summary arm of the finding union, so the guard narrows
+  with `'dataAvailable' in finding` rather than casting the union away.
+  (`frontend/src/components/FuzzingResultDialog.vue`,
+  `frontend/src/components/__tests__/FuzzingResultDialog.spec.ts`)
+
+- **An absent model reports `404`, not `500`.** A run recorded before the model was stored has none,
+  and no migration can invent one — so absence is a fact about the record, not a server fault. `500`
+  blamed the server and told the user nothing actionable.
+  (`backend/.../controller/VerificationController.java`, `.../SimulationController.java`)
+
+- **Downloaded files keep their `.smv` name.** Both endpoints passed UTF-8 to
+  `ContentDisposition.filename(...)`, which makes Spring emit the legacy parameter as an RFC 2047
+  encoded-word — observed in a real browser download as
+  `filename="=?UTF-8?Q?verification-trace-7.smv?="`. The filenames are pure ASCII, so the charset
+  overload is dropped. (`backend/.../controller/VerificationController.java`,
+  `.../SimulationController.java`)
+
+- **A simulation opened from history offers its model.** The history-load path built its result
+  without the `traceId` the button needs, although it received it as an argument — so the download was
+  unreachable for exactly the stored runs a user opens to inspect, while both live-run paths carried
+  it and looked correct. (`frontend/src/views/Board.vue`)
+
+- **The counterexample details dialog now compiles, and its download reaches a real run.** The dialog
+  shipped with three type errors, so `npm run build` — whose first step is `vue-tsc -b` — produced no
+  bundle at all: its ref was declared as the shared `TraceEvidence` base while being assigned a `Trace`,
+  making the `id` the SMV download addresses inaccessible, and it bound `violatedSpec.name`, a field
+  `Specification` does not have. The ref is now the `Trace` union, so `v-if` can discriminate the
+  persisted arm (an unsaved run genuinely has no id, and a cast would have offered it a download it
+  cannot serve); the label falls back `templateLabel → formula → id`, as fuzzing findings already do.
+  Its footer promised "view trace" with a play icon while the trace was already playing and only
+  dismissed the dialog — it now escalates to the owning run, restoring the per-spec verdicts and the
+  run's other counterexamples, which rewiring the replay bar to this dialog had re-stranded. Its trace
+  lookup reused `currentTrace` instead of keeping a second copy that implemented only one of that
+  accessor's two branches and reported "no run details available" mid-replay. Raw `red-*` utilities
+  throughout its body became danger roles, which `semanticColourOwnership.spec.ts` requires of every
+  component and view. (`frontend/src/views/Board.vue`, `frontend/src/assets/i18n.ts`,
+  `frontend/src/views/board/counterexampleDetailsDialog.spec.ts`)
+
+- **A simulation opened from history offers its SMV model.** The download is gated on `traceId`, and the
+  history-load path built its result without one although it received it as an argument — so the model
+  was unreachable for exactly the stored runs a user opens in order to inspect them, while both live-run
+  paths carried it and looked correct. (`frontend/src/views/Board.vue`)
+
+- **Both SMV download endpoints stop answering 500 for every run.** `TraceMapper.toEntity` never copied
+  `smvModelContent`, so `smv_model_content` was `NULL` on every verification trace ever written, and
+  neither mapper read it back, so both controllers saw a blank model — which they correctly treat as a
+  persistence defect and report as `500`. Three hand-written copy sites, each independently pinned by a
+  test now. (`backend/src/main/java/cn/edu/nju/Iot_Verify/util/mapper/TraceMapper.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/util/mapper/SimulationTraceMapper.java`,
+  and their tests)
+
+- **Playback shows what caused the selected step without a click, on both rails.** Collapsing the
+  counterexample rail's cause row into a disclosure broke the guard that names this requirement
+  ("shows what caused the selected counterexample step without an extra click") and reverted a
+  considered decision, whose recorded rationale had been left in place above the inverted code. The
+  simulation rail had been collapsed wholesale for symmetry. Both now split by role rather than by
+  surface: the cause is chrome-free and always visible, while the simulation rail's device and
+  environment tables keep their disclosure, since they are genuinely tall and the canvas nodes are the
+  richer authority for device values. The simulation rail had no unit guard at all — the reason this
+  shipped — and now has one; the E2E helper asserted the panel only after clicking it open, so that
+  assertion is now stated as containment, which holds whatever the expansion state.
+  (`frontend/src/views/Board.vue`, `frontend/src/components/SimulationTimeline.vue`,
+  `frontend/src/components/__tests__/SimulationTimeline.spec.ts`,
+  `frontend/e2e/authority-model-audit.spec.ts`)
+
+- **Three i18n keys the new dialog referenced existed in neither locale.** `app.violationFound` and
+  `app.expression` now reuse the existing `specificationViolationFound` and `actualCheckedExpression`
+  rather than adding duplicates; `verificationIncompleteModelDetail` is new because the verification
+  side had no dialog-body wording, and it deliberately differs from the simulation one — a
+  counterexample really does refute the specification for the model that was checked, so its caveat is
+  about scope, not validity. (`frontend/src/assets/i18n.ts`, `frontend/src/views/Board.vue`)
+
+- **A counterexample replay can reach the run that produced it.** The trace timeline had no way back to
+  the verdict: opening a replay clears `verificationResult`, so the per-spec results, the other
+  counterexamples of the same run, and the SMV download were unreachable until the user left the replay
+  and re-opened the run from history. The replay bar now carries a "Run details" button. Because the bar
+  addresses one trace, it opens a counterexample-scoped dialog — the violated specification, that
+  trace's own state/step counts, its model snapshot, its completeness warnings, and the SMV model of the
+  run that produced it — and that dialog's footer escalates to the full run when one is retained. An
+  exploration finding opens the exploration dialog instead, chosen on `activeFuzzingFinding`, so a
+  candidate result is never dressed in the verifier's surface. The staleness flag keys on the retained
+  run rather than on the dialog, so a board edit made while only the replay was open still warns that the
+  canvas moved under the run.
+  (`frontend/src/views/Board.vue`, `frontend/src/assets/i18n.ts`,
+  `frontend/src/views/board/counterexampleDetailsDialog.spec.ts`)
+
+- **Dialog dismiss preserves deep link when timeline is visible.** `dismissResultDialog()` and
+  `dismissSimulationResultDialog()` now conditionally clear the `run=` deep link: only when the
+  corresponding timeline (`traceAnimationState.visible` or `simulationAnimationState.visible`) is not
+  visible. This ensures that closing the dialog while watching a trace keeps the URL naming the run, so
+  refreshing or sharing the link still addresses the playback surface.
+
+- **The simulation result dialog no longer offers two different closes.** Its footer button relabelled
+  itself "Return to Timeline" once playback was visible and then merely dismissed the dialog, so the same
+  control meant "open the timeline" or "close this" depending on state, and it sat disabled whenever a
+  counterexample replay held the canvas. The footer now carries only "View Timeline", which always opens
+  playback; dismissing is the header close, as in every other dialog. Deleted i18n key `returnToTimeline`.
+  (`frontend/src/views/Board.vue`, `frontend/src/assets/i18n.ts`)
+
+- **Leaving playback reads as leaving, not as closing a panel.** Both timelines exited through an unlabelled
+  grey `close` glyph, indistinguishable from a dialog dismiss although it discards the replay overlay and
+  returns the canvas to the live scene. Both now use a labelled red "Exit" control (`app.exit`,
+  `app.exitTimeline`); the `simulation-timeline-close` and `trace-timeline-close` test ids are unchanged.
+  (`frontend/src/views/Board.vue`, `frontend/src/components/SimulationTimeline.vue`,
+  `frontend/src/assets/i18n.ts`)
+
+- **Warning banners in the simulation dialog matched the verification dialog's radius.** The stale,
+  incomplete-model, short-horizon and unavailable-semantics banners were `rounded-lg` against
+  `rounded-xl` next door. (`frontend/src/views/Board.vue`)
+
+#### Added
+
+- **The model a verification run checked is downloadable from the run itself.** `GET
+  /api/verify/runs/{id}/smv`, stored on the run (`verification_task.smv_model_content`). A run where
+  every specification holds produces no counterexample, so a trace-keyed download left that run's
+  model unreachable — the case where a reader most wants to confirm what was actually proved.
+  Measured before the change: a passing run persisted with 0 traces and no route to its model; after,
+  the same run serves 7286 bytes. The verification result dialog now keys its download on the run
+  rather than on `traces[0]`, which was an arbitrary choice among counterexamples that all share one
+  model. The per-trace endpoint stays, so a counterexample remains self-contained after its run is
+  deleted. (`backend/.../po/VerificationTaskPo.java`, `.../repository/VerificationTaskRepository.java`,
+  `.../service/VerificationService.java`, `.../service/impl/VerificationServiceImpl.java`,
+  `.../dto/verification/VerificationRunDto.java`, `.../dto/verification/VerificationResultDto.java`,
+  `.../util/mapper/VerificationTaskMapper.java`, `.../controller/VerificationController.java`,
+  `frontend/src/api/board.ts`, `frontend/src/views/Board.vue`, `frontend/src/types/verify.ts`,
+  `docs/api/verification.md`, `docs/api/rest-endpoints.md`)
+
+
+- **The SMV model a run checked is downloadable from its run details.** Previously the only window into
+  the generated model was the NuSMV diagnostic output — stdout from the checker, truncated to 10,000
+  characters, and not the model itself. The model source was written to a temp file, handed to NuSMV, and
+  discarded, so a stored verdict could not be re-examined in a third-party checker or cited in a report.
+  Each run now persists the exact model it checked alongside its result (`smv_model_content`, `TEXT`,
+  capped at 65,000 UTF-8 **bytes** — the column's own unit — cut on a character boundary and marked
+  `-- [TRUNCATED: Original size N bytes]` so a truncated file cannot pass as complete), and both
+  run-details dialogs offer it as a download:
+  `GET /api/verify/traces/{id}/smv` → `verification-trace-{id}.smv` and
+  `GET /api/simulate/traces/{id}/smv` → `simulation-trace-{id}.smv`, both `text/plain;charset=UTF-8`
+  attachments. A missing model on a persisted run is a persistence defect, not a normal state, so it
+  returns `500` rather than an empty file; the simulation button appears only for a saved trajectory,
+  since a preview-only run has no id to address. The verification result dialog and the simulation run
+  details no longer print the model text inline.
+  (`backend/src/main/java/cn/edu/nju/Iot_Verify/po/TracePo.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/po/SimulationTracePo.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/dto/trace/TraceDto.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/dto/simulation/SimulationTraceDto.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/AbstractAsyncTaskService.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/VerificationServiceImpl.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/SimulationServiceImpl.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/controller/VerificationController.java`,
+  `backend/src/main/java/cn/edu/nju/Iot_Verify/controller/SimulationController.java`,
+  `frontend/src/api/board.ts`, `frontend/src/api/simulation.ts`,
+  `frontend/src/types/simulation.ts`, `frontend/src/views/Board.vue`,
+  `frontend/src/assets/i18n.ts`, `docs/api/verification.md`, `docs/api/rest-endpoints.md`,
+  `backend/src/test/java/cn/edu/nju/Iot_Verify/service/impl/SmvModelContentTruncationTest.java`)
+
+- **The verification result dialog has a footer close.** It closed only through the header glyph, unlike
+  every neighbouring dialog, so a user who had scrolled through a long list of violations had to scroll back
+  up to leave. Added a ghost Close in `iot-dialog__footer` (`data-testid="close-verification-result-footer"`)
+  that runs the same `dismissResultDialog`. No "View counterexample" was added beside it: a run can hold
+  several, so the per-trace "View trace" buttons in the violations list remain the entry point.
+  (`frontend/src/views/Board.vue`)
+
+- **The simulation run details name the model that was run.** The verification dialog had shown the run
+  snapshot — device, rule, specification, environment-variable and template counts with the capture
+  timestamp — while the simulation dialog reported a trajectory without saying what it was a trajectory of.
+  The same card now precedes its run summary, rendered when the result carries a `modelSnapshot`.
+  (`frontend/src/views/Board.vue`)
+
+#### Changed
+
+- **Both playback rails read in the same order.** The counterexample rail put the step's values above
+  the rail while the simulation rail puts the rail first; nothing defended either choice. Navigate-then-
+  read is the order the sibling surface already used, so the counterexample rail now matches it, pinned
+  by an assertion in the spec that already slices that overlay.
+  (`frontend/src/views/Board.vue`, `frontend/src/views/__tests__/testIdNamespaces.spec.ts`)
+
+- **A local E2E run no longer defaults to half the machine's cores.** `playwright.config.ts` set no
+  `workers`, so a bare `npx playwright test` took half the logical cores — 14 on the 28-thread machine
+  this was measured on — against one backend, one MySQL and one NuSMV, while every timing decision in
+  that file, and the full-suite contract in
+  `.github/scripts/run-e2e.sh`, assume serialized or near-serialized execution. Measured consequence: a
+  rule-builder save whose duplicate pre-check errored under that load left a confirm overlay open and
+  failed a spec that passes when serialized, which cost a full investigation to attribute. Now pinned
+  to `1`, matching the full-suite contract. CI is unaffected — it passes `--workers` explicitly on
+  every path, and the flag overrides the config. (`frontend/playwright.config.ts`)
+
+- **Attachment downloads share one blob-saving helper.** `api/board.ts` and `api/simulation.ts` each
+  carried a byte-identical copy of the blob/anchor/`Content-Disposition` dance, and the run-keyed
+  download would have made a third. The helper prefers RFC 5987 `filename*` over the legacy parameter
+  and rejects an encoded-word rather than saving it as a filename.
+  (`frontend/src/utils/attachmentDownload.ts`, `frontend/src/api/board.ts`,
+  `frontend/src/api/simulation.ts`)
+
+- **All three run tools share the evidence tier in the action dock.** Verification was the filled
+  `board-tool-button--primary` and simulation/exploration were `board-tool-button--evidence`, a deliberate
+  split by epistemic weight: only verification returns a formal conclusion. At the user's request the three
+  now render identically as `--evidence`. `actionDockHierarchy.spec.ts` carries the new expectation and
+  records that the distinction was dropped by preference, not because it was wrong.
+  (`frontend/src/views/Board.vue`, `frontend/src/views/board/actionDockHierarchy.spec.ts`)
+
+- **`dismissSimulationResultDialog` invalidates in-flight history detail loads.** Without it, a run load
+  still in flight when the user dismissed the dialog reopened it — the race `dismissResultDialog` had
+  already been fixed for on the verification side. (`frontend/src/views/Board.vue`)
+
+- **Dismissing a result dialog keeps the deep link while its playback is on screen.** Both dismiss handlers
+  cleared `run=` unconditionally, so closing the dialog over a running replay stripped the params naming the
+  surface still visible — a refresh or a shared link then landed on a bare board. They now clear it only
+  when the corresponding timeline is hidden; leaving playback still clears the whole link, as before.
+  (`frontend/src/views/Board.vue`)
+
+- **Chinese run-status labels follow one pattern.** `验证中` (was `验证中...`), `模拟中` (was `仿真运行中`),
+  `探索中` (was `正在探索`) — the dock and the notifications had mixed an ellipsis, a different verb and a
+  different aspect marker across the three. (`frontend/src/assets/i18n.ts`)
+
+- **Model trace playback opens with state details collapsed.** The step-values panel and the run
+  scope/snapshot block in `SimulationTimeline` are both closed on open, so the playback surface starts as
+  the canvas plus the timeline rail rather than a full-height reading panel. Either can still be expanded
+  per step. (`frontend/src/components/SimulationTimeline.vue`)
+
 ### 2026-08-13
 
 #### Fixed
 
-- **Scene generator emitted non-canonical state-determined variables.** The RFID access demo's `rfid_1` device carried an instance `variables` field for `RFID`, but that variable is state-determined (the `authorized` state declares a `Dynamics` value). Per the 39a1a94 contract, state-determined variables must not appear as instance fields — the runtime derives them from the device state. The backend's `canonicalizeVariables` corrects legacy mismatches on import (so the scene was still loadable), but the generator should emit canonical scenes from the start. Removed the `variables` field from the generator's `rfid_1` definition and regenerated `default-rfid-access-scene.json`. (`scripts/generate-default-template-scenes.mjs`, `docs/examples/default-rfid-access-scene.json`)
+- **The RFID demo's state-determined variable is documented as load-bearing, not redundant.** The
+  `rfid_1` instance carries a `variables` entry for `RFID` even though the `authorized` state declares a
+  `Dynamics` value for it, which reads as a duplicate source of truth. It is not: an instance entry is
+  the only channel for a variable's *trust* label — `Dynamic` carries no trust field, and a state's
+  `Trust` never reaches a state-determined variable. Removing the entry left
+  `init(trust_RFID) := untrusted` (the template default) as the generated model's single difference,
+  and that alone refutes the scene's trust specification at baseline — the property the scene exists to
+  demonstrate. `canonicalizeVariables` overwrites the entry's `value` with the state-declared value, so
+  the value is not a second source of truth either. The generator now records this so the entry is not
+  deleted again as dead weight. (`scripts/generate-default-template-scenes.mjs`)
 
 #### Performance
 

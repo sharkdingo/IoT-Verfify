@@ -118,6 +118,19 @@ public class VerificationTaskPo implements TaskView {
     @Column(columnDefinition = "TEXT")
     private String nusmvOutput;
 
+    /**
+     * The exact SMV model this run checked.
+     *
+     * <p>Also stored per counterexample on {@link TracePo}, but that is not a duplicate that can
+     * disagree — it is the same model, and the trace copy is what makes a counterexample
+     * self-contained after its run is deleted. This copy exists because a run where every
+     * specification holds produces no counterexample at all, so a trace-keyed download left the model
+     * of a *passing* run unreachable — the one case where a reader most wants to confirm what was
+     * actually proved.
+     */
+    @Column(name = "smv_model_content", columnDefinition = "TEXT")
+    private String smvModelContent;
+
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
 

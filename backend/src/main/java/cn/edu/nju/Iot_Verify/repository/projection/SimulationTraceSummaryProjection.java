@@ -36,5 +36,8 @@ public interface SimulationTraceSummaryProjection {
 
     Integer getModeledAutomationLinkAttackPointCount();
 
+    /** Whether {@code smvModelContent} is non-empty, computed in SQL rather than selected. */
+    Boolean getHasSmvModel();
+
     LocalDateTime getCreatedAt();
 }

@@ -22,6 +22,18 @@ public class TraceSummaryDto {
     private SpecificationDto violatedSpec;
     private Integer stateCount;
     private LocalDateTime createdAt;
+
+    /**
+     * Whether this counterexample's run still holds the SMV model it checked, gating
+     * {@code GET /api/verify/traces/{id}/smv}. Presence only — the model itself runs to tens of
+     * thousands of characters and would dominate a history list.
+     *
+     * <p>The history panel already gated its per-counterexample download on this, but the field was
+     * never populated here, so the button never appeared. Null on an unavailable record, where nothing
+     * about the model can be asserted.
+     */
+    private Boolean hasSmvModel;
+
     @Builder.Default
     private Boolean dataAvailable = true;
     private String unavailableReasonCode;

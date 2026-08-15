@@ -112,4 +112,35 @@ public class SimulationController {
         simulationService.deleteSimulation(userId, id);
         return Result.success();
     }
+
+    /**
+     * Download the exact SMV model executed for this saved trajectory.
+     *
+     * <p>Mirrors {@code VerificationController#downloadTraceSmvModel}, including why an absent model
+     * is {@code 404} rather than {@code 500}: a trajectory saved before the model was persisted has
+     * none, and that is a fact about the record, not a fault in the server.
+     */
+    @GetMapping(value = "/traces/{id}/smv", produces = "text/plain;charset=UTF-8")
+    public org.springframework.http.ResponseEntity<String> downloadSimulationTraceSmvModel(
+            @CurrentUser Long userId,
+            @PathVariable @Positive Long id) {
+        SimulationTraceDto trace = simulationService.getSimulation(userId, id);
+
+        if (!trace.hasSmvModel()) {
+            throw new cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException(
+                    "SMV model for simulation trace", id);
+        }
+        String smvModelContent = trace.getSmvModelContent();
+
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.TEXT_PLAIN);
+        // Pure-ASCII filename, so no charset overload; see VerificationController#smvAttachment for the
+        // encoded-word this avoids.
+        headers.setContentDisposition(
+                org.springframework.http.ContentDisposition.attachment()
+                        .filename("simulation-trace-" + id + ".smv")
+                        .build());
+
+        return org.springframework.http.ResponseEntity.ok().headers(headers).body(smvModelContent);
+    }
 }

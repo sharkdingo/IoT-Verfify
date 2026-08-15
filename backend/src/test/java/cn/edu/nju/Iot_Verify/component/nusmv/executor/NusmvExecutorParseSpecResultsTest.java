@@ -55,6 +55,58 @@ class NusmvExecutorParseSpecResultsTest {
         assertNull(results.get(1).getCounterexample());
     }
 
+    /**
+     * The lasso marker must survive extraction even when it precedes the first state line.
+     *
+     * Verbatim shape from NuSMV 2.7.1 for `AF x` over a model that never sets `x`: when the loop entry is the
+     * *initial* state, "-- Loop starts here" is printed above "-> State: 1.1 <-". Extraction started copying
+     * only at the first state line, so the marker was dropped before `SmvTraceParser` could ever see it — and
+     * the whole trace then read as a finite path whose last step simply showed no change.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void parseSpecResults_keepsLoopMarkerThatPrecedesTheFirstState() throws Exception {
+        String output = "*** This is NuSMV 2.7.1\n"
+                + "-- specification AF dev1.SwitchState = on  is false\n"
+                + "-- as demonstrated by the following execution sequence\n"
+                + "Trace Description: CTL Counterexample \n"
+                + "Trace Type: Counterexample \n"
+                + "  -- Loop starts here\n"
+                + "  -> State: 1.1 <-\n"
+                + "    dev1.SwitchState = off\n"
+                + "  -> State: 1.2 <-\n";
+
+        List<NusmvExecutor.SpecCheckResult> results =
+                (List<NusmvExecutor.SpecCheckResult>) parseSpecResults.invoke(executor, output);
+
+        assertEquals(1, results.size());
+        String counterexample = results.get(0).getCounterexample();
+        assertNotNull(counterexample);
+        assertTrue(counterexample.contains("Loop starts here"),
+                "the marker is the only record that this path is infinite");
+        // It must still begin at the marker/state region, never at the surrounding prose.
+        assertFalse(counterexample.contains("Trace Type"),
+                "extraction must not widen to the trace header");
+        assertTrue(counterexample.indexOf("Loop starts here") < counterexample.indexOf("State: 1.1"),
+                "the marker keeps its position, since it names the state that follows it");
+    }
+
+    /** A marker with no state behind it must not turn an empty block into a non-empty counterexample. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void parseSpecResults_ignoresALoneLoopMarkerWithNoStates() throws Exception {
+        String output = "*** This is NuSMV 2.7.1\n"
+                + "-- specification AF dev1.SwitchState = on  is false\n"
+                + "  -- Loop starts here\n";
+
+        List<NusmvExecutor.SpecCheckResult> results =
+                (List<NusmvExecutor.SpecCheckResult>) parseSpecResults.invoke(executor, output);
+
+        assertEquals(1, results.size());
+        assertNull(results.get(0).getCounterexample(),
+                "a marker alone is not a trace");
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void parseSpecResults_whenNoSpecLines_returnsEmptyList() throws Exception {

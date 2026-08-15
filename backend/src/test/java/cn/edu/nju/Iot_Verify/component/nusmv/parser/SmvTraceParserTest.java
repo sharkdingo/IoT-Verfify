@@ -115,6 +115,157 @@ class SmvTraceParserTest {
         assertNotSame(secondDevice, thirdDevice, "Each API state must be an independent snapshot");
     }
 
+    /**
+     * A liveness counterexample is an infinite lasso path, and its loop is the violation itself.
+     *
+     * Verbatim shape of NuSMV 2.7.1 output for `AG((occupancy=absent & LockState=unlocked) -> AF(LockState=locked))`
+     * on a real board (trace 83): the marker sits on its own line before the cycle's first state, and the
+     * final state closes the loop carrying no variable lines at all. Without capturing the marker, that
+     * final state materializes identical to its predecessor and plays back as a step where nothing happens —
+     * which is how a "the door never re-locks" violation reached the user as a frozen animation.
+     */
+    @Test
+    void parseCounterexample_marksLassoLoopStartAndTheStateThatClosesIt() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("door_1");
+        smv.setDeviceLabel("Front Door");
+        smv.setTemplateName("Door");
+        smv.setModelTokenSource(ModelTokenSource.BUNDLED);
+        smv.getModes().add("LockState");
+        smv.getModeStates().put("LockState", List.of("locked", "unlocked"));
+        smv.getStates().addAll(List.of("locked", "unlocked"));
+
+        String counterexample = """
+                -> State: 2.1 <-
+                  door_1.LockState = locked
+                -> State: 2.2 <-
+                  door_1.LockState = unlocked
+                -- Loop starts here
+                -> State: 2.3 <-
+                  door_1.unlock_a = FALSE
+                -> State: 2.4 <-
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of("door_1", smv));
+
+        assertEquals(4, states.size());
+        assertNull(states.get(0).getLoopStart(), "a state before the marker starts no loop");
+        assertNull(states.get(1).getLoopStart());
+        assertTrue(Boolean.TRUE.equals(states.get(2).getLoopStart()),
+                "the state after the marker begins the cycle");
+        assertNull(states.get(2).getLoopBack(), "the loop entry is not itself the return");
+        assertTrue(Boolean.TRUE.equals(states.get(3).getLoopBack()),
+                "the trailing repeat is what makes the path infinite");
+        // The marker is consumed as metadata, never as trace content: it opens no state of its own (4, not 5)
+        // and contributes no variable to the state that follows it.
+        assertNull(states.get(2).getEnvVariables(), "the marker line yields no environment variable");
+        assertNull(states.get(2).getGlobalVariables(), "nor a global one");
+        assertEquals("unlocked", states.get(3).getDevices().get(0).getState(),
+                "the closing state still materializes its inherited values, which is why it looks static");
+    }
+
+    /**
+     * The cycle can begin at the initial state, putting the marker before the first state line.
+     *
+     * NuSMV 2.7.1 prints exactly this for `AF x` over a model that never sets `x`. The whole trace is then one
+     * cycle, so the first state carries `loopStart` and the trailing repeat still closes it.
+     */
+    @Test
+    void parseCounterexample_marksALoopThatStartsAtTheInitialState() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("light_1");
+        smv.setDeviceLabel("Porch Light");
+        smv.setTemplateName("Light");
+        smv.getModes().add("SwitchState");
+        smv.getModeStates().put("SwitchState", List.of("on", "off"));
+        smv.getStates().addAll(List.of("on", "off"));
+
+        String counterexample = """
+                -- Loop starts here
+                -> State: 1.1 <-
+                  light_1.SwitchState = off
+                -> State: 1.2 <-
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of("light_1", smv));
+
+        assertEquals(2, states.size());
+        assertTrue(Boolean.TRUE.equals(states.get(0).getLoopStart()),
+                "the initial state can itself begin the cycle");
+        assertTrue(Boolean.TRUE.equals(states.get(1).getLoopBack()));
+        assertEquals(1, states.get(0).getStateIndex(), "the marker must not shift the state numbering");
+    }
+
+    /**
+     * NuSMV can print the marker twice in one trace; the last occurrence is the one that counts.
+     *
+     * Reproduced on NuSMV 2.7.1 with `LTLSPEC G(x < 2)`. The rule has to be stated somewhere, and it is stated
+     * here: `loopBack` is computed against the last marker, and the frontend reads the last one too, so the
+     * two agree about where the cycle begins instead of over-marking by a state.
+     */
+    @Test
+    void parseCounterexample_usesTheLastMarkerWhenNuSmvPrintsSeveral() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("light_1");
+        smv.setDeviceLabel("Porch Light");
+        smv.setTemplateName("Light");
+        smv.getModes().add("SwitchState");
+        smv.getModeStates().put("SwitchState", List.of("on", "off"));
+        smv.getStates().addAll(List.of("on", "off"));
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  light_1.SwitchState = off
+                -> State: 1.2 <-
+                  light_1.SwitchState = on
+                -- Loop starts here
+                -> State: 1.3 <-
+                -- Loop starts here
+                -> State: 1.4 <-
+                -> State: 1.5 <-
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of("light_1", smv));
+
+        assertEquals(5, states.size());
+        assertTrue(Boolean.TRUE.equals(states.get(2).getLoopStart()));
+        assertTrue(Boolean.TRUE.equals(states.get(3).getLoopStart()));
+        assertTrue(Boolean.TRUE.equals(states.get(4).getLoopBack()),
+                "the closing state is the last one regardless of how many markers appeared");
+        assertNull(states.get(3).getLoopBack());
+    }
+
+    /** A finite safety counterexample has no cycle, so neither flag may be invented. */
+    @Test
+    void parseCounterexample_leavesLoopFlagsAbsentForAFinitePath() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("door_1");
+        smv.setDeviceLabel("Front Door");
+        smv.setTemplateName("Door");
+        smv.getModes().add("LockState");
+        smv.getModeStates().put("LockState", List.of("locked", "unlocked"));
+        smv.getStates().addAll(List.of("locked", "unlocked"));
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  door_1.LockState = locked
+                -> State: 1.2 <-
+                  door_1.LockState = unlocked
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of("door_1", smv));
+
+        assertEquals(2, states.size());
+        states.forEach(state -> {
+            assertNull(state.getLoopStart());
+            assertNull(state.getLoopBack());
+        });
+    }
+
     @Test
     void parseCounterexample_parsesModeTrustPrivacyEnvAndMapsCompromiseState() {
         DeviceSmvData smv = new DeviceSmvData();

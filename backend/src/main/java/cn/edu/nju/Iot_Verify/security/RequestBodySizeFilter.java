@@ -21,6 +21,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.Set;
 
 /** Rejects oversized JSON requests before Jackson allocates the request graph. */
 @Component
@@ -65,9 +66,19 @@ public class RequestBodySizeFilter extends OncePerRequestFilter {
         filterChain.doFilter(new CachedBodyRequest(request, body), response);
     }
 
+    /**
+     * Both full-scene commands get the dedicated larger boundary, so a valid scene can carry its
+     * self-contained template snapshots and embedded icons without widening unrelated endpoints.
+     */
+    private static final Set<String> SCENE_REQUEST_PATHS = Set.of(
+            "/api/board/batch", "/api/board/scene");
+
     private long requestLimit(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return path != null && path.endsWith("/api/board/batch")
+        if (path == null) {
+            return maxRequestBytes;
+        }
+        return SCENE_REQUEST_PATHS.stream().anyMatch(path::endsWith)
                 ? maxSceneRequestBytes : maxRequestBytes;
     }
 

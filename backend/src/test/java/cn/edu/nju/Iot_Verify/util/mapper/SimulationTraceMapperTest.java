@@ -79,6 +79,23 @@ class SimulationTraceMapperTest {
         assertNull(mapper.toDto(null));
     }
 
+    /**
+     * {@code GET /api/simulate/traces/{id}/smv} answers 404 when a trajectory holds no model, so a
+     * mapper that silently drops the column is indistinguishable from one that genuinely never had a
+     * model — and it made the endpoint fail on every saved trajectory. The write side is the PO builder in
+     * {@code SimulationServiceImpl}, so only the read direction is mapped here.
+     */
+    @Test
+    void toDto_readsBackTheCheckedSmvModel() {
+        SimulationTracePo po = samplePo();
+        po.setSmvModelContent("MODULE main\n-- 客厅温度规则\nVAR x : boolean;\n");
+
+        SimulationTraceDto dto = mapper.toDto(po);
+
+        assertEquals(po.getSmvModelContent(), dto.getSmvModelContent(),
+                "toDto must read the stored model back, or the download cannot serve it");
+    }
+
     @Test
     void toDto_mapsAllFields() {
         SimulationTraceDto dto = mapper.toDto(samplePo());
@@ -312,6 +329,27 @@ class SimulationTraceMapperTest {
         assertEquals(RunInitiator.AI_ASSISTANT, summary.getInitiator());
         assertEquals(2, summary.getSteps());
         assertTrue(summary.getDataAvailable());
+    }
+
+    /**
+     * Both arms of the model-presence flag; see {@code TraceMapperTest} for why the true case is the
+     * one that carries the weight ({@code Boolean.TRUE.equals(null)} is {@code false}, so a
+     * false-only test passes even against a mapper that drops the field).
+     */
+    @Test
+    void summaryProjectionCarriesStoredModelPresence() {
+        SimulationTraceSummaryProjection projection = validProjection(12L);
+        when(projection.getHasSmvModel()).thenReturn(true);
+
+        assertEquals(Boolean.TRUE, mapper.toSummaryProjectionDto(projection).getHasSmvModel());
+    }
+
+    @Test
+    void summaryProjectionReportsAbsentModelAsFalseRatherThanNull() {
+        SimulationTraceSummaryProjection projection = validProjection(13L);
+        when(projection.getHasSmvModel()).thenReturn(null);
+
+        assertEquals(Boolean.FALSE, mapper.toSummaryProjectionDto(projection).getHasSmvModel());
     }
 
     @Test

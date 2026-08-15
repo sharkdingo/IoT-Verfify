@@ -766,7 +766,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             }
 
             updateTaskProgress(taskId, 90, TaskProgressStage.PERSISTING_RESULT);
-            boolean completed = completeTaskAndSaveTrace(task, userId, result, requestJson, templateSnapshotsJson);
+            boolean completed = completeTaskAndSaveTrace(task, userId, result, requestJson, templateSnapshotsJson,
+                    result.getSmvModelContent());
             if (!completed && !isCompletionCancelled(taskId)) {
                 failTask(task,
                         "RESULT_PERSISTENCE_FAILED: Simulation finished, but its trajectory could not be saved.",
@@ -903,12 +904,15 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         }
 
         SimulationTracePo saved;
+        // From the result, not from the filesystem: the generator's temp directory carries a random
+        // suffix and is deleted once `doSimulate` returns.
+        final String finalSmvModelContent = result.getSmvModelContent();
         try {
             saved = transactionTemplate.execute(status -> {
                 formalOperationAdmission.registerCurrentLeaseCommitFence();
                 return persistSimulationTrace(
                         userId, result, buildRequestSnapshot(input.request()),
-                        JsonUtils.toJson(input.templateManifests()));
+                        JsonUtils.toJson(input.templateManifests()), finalSmvModelContent);
             });
         } catch (AsyncTaskQuotaExceededException e) {
             log.info("Simulation completed but run history is full for user {}", userId);
@@ -994,6 +998,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         List<ModelGenerationIssueDto> generationIssues = List.of();
         boolean generationCompleted = false;
         String requestJson = buildRequestSnapshot(request);
+        String smvModelContent = null;
 
         try {
             logs.add("Generating NuSMV model (simulation mode)...");
@@ -1019,6 +1024,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             }
             logs.add("Model generated: " + smvFile.getName());
             saveRequestJson(smvFile, requestJson);
+
+            // Read SMV model content for persistence
+            smvModelContent = readSmvModelContent(smvFile);
 
             logs.add("Executing NuSMV interactive simulation (" + steps + " steps)...");
             SimulationOutput simOutput = nusmvExecutor.executeInteractiveSimulation(smvFile, steps);
@@ -1108,6 +1116,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 finalResult.setDisabledRuleCount(disabledRuleCount);
                 finalResult.setModelComplete(generationCompleted && disabledRuleCount == 0);
                 finalResult.setGenerationIssues(generationIssues);
+                // Set on every returned path: `cleanupTempFile` below deletes the randomly-named temp
+                // directory, so this is the last point at which the model can be read at all.
+                finalResult.setSmvModelContent(smvModelContent);
                 saveResultJson(smvFile, finalResult);
             }
             cleanupTempFile(smvFile);
@@ -1171,11 +1182,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     private SimulationTracePo persistSimulationTrace(Long userId, SimulationResultDto result,
-                                                     String requestJson, String templateSnapshotsJson) {
+                                                     String requestJson, String templateSnapshotsJson,
+                                                     String smvModelContent) {
         requireActiveUserForPersistence(userId);
         enforceSimulationRunStorageCapacity(userId);
         return persistSimulationTraceForActiveUser(userId, result, requestJson, templateSnapshotsJson,
-                RunInitiatorResolver.current());
+                RunInitiatorResolver.current(), smvModelContent);
     }
 
     private void requireSimulationRunStorageCapacity(Long userId) {
@@ -1203,7 +1215,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     private SimulationTracePo persistSimulationTraceForActiveUser(Long userId, SimulationResultDto result,
                                                                   String requestJson, String templateSnapshotsJson,
-                                                                  cn.edu.nju.Iot_Verify.dto.model.RunInitiator initiator) {
+                                                                  cn.edu.nju.Iot_Verify.dto.model.RunInitiator initiator,
+                                                                  String smvModelContent) {
         ModelSemanticsDto semantics = result.getModelSemantics();
         SimulationTracePo po = SimulationTracePo.builder()
                 .userId(userId)
@@ -1228,6 +1241,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                         ? semantics.getModeledFalsifiableReadingDeviceCount() : null)
                 .modeledAutomationLinkAttackPointCount(semantics != null
                         ? semantics.getModeledAutomationLinkAttackPointCount() : null)
+                .smvModelContent(smvModelContent)
                 .build();
         return simulationTraceRepository.save(Objects.requireNonNull(po));
     }
@@ -1236,7 +1250,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                              Long userId,
                                              SimulationResultDto result,
                                              String requestJson,
-                                             String templateSnapshotsJson) {
+                                             String templateSnapshotsJson,
+                                             String smvModelContent) {
         if (!userRepository.existsById(userId)) {
             log.info("User {} no longer exists, skipping simulation task completion/persistence", userId);
             return false;
@@ -1262,7 +1277,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             requireActiveUserForPersistence(userId);
             simulationTaskRepository.findByIdForUpdate(task.getId());
             SimulationTracePo savedTrace = persistSimulationTraceForActiveUser(
-                    userId, result, requestJson, templateSnapshotsJson, task.getInitiator());
+                    userId, result, requestJson, templateSnapshotsJson, task.getInitiator(), smvModelContent);
             if (isCompletionCancelled(task.getId())) {
                 log.info("Simulation task {} was cancelled after trace persistence but before completion; rolling back trace", task.getId());
                 status.setRollbackOnly();

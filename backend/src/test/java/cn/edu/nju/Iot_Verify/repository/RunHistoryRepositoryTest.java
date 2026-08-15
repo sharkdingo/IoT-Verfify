@@ -121,7 +121,7 @@ class RunHistoryRepositoryTest {
                 .build());
 
         List<VerificationRunSummaryProjection> runs =
-                verificationTaskRepository.findByUserIdAndStatusOrderByCompletedAtDescIdDesc(
+                verificationTaskRepository.findCompletedRunSummaries(
                         9L, VerificationTaskPo.TaskStatus.COMPLETED, PageRequest.of(0, 10));
         List<TraceSummaryProjection> traces =
                 traceRepository.findSummariesByUserIdAndVerificationTaskIdIn(

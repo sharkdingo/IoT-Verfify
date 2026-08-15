@@ -369,12 +369,19 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
                     <p class="truncate text-xs font-bold text-slate-800 dark:text-slate-100" :title="findingTitle(finding)">{{ findingTitle(finding) }}</p>
                     <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{{ t('app.fuzzFindingMeta', { step: displayStep(finding.firstViolationStep), seed: finding.seed }) }}</p>
                   </div>
+                  <!-- `dataAvailable === false` marks a finding whose own detail load was rejected as
+                       corrupt. `TraceHistoryPanel` disables both actions for exactly this, and this
+                       dialog binds the same run object, so omitting the check left a finding that is
+                       greyed out in history still fully armed here. Replay merely re-failed; "verify
+                       formally" was worse, because it seeds a verification handoff from the summary
+                       without re-fetching the finding, so it proceeded on evidence the server had
+                       already rejected. -->
                   <div class="flex shrink-0 gap-1.5">
                     <button
                       type="button"
                       :data-testid="`replay-fuzzing-finding-${finding.id}`"
                       class="board-action-inline text-[11px]"
-                      :disabled="actionLocked"
+                      :disabled="actionLocked || ('dataAvailable' in finding && finding.dataAvailable === false)"
                       @click="emit('replay', finding.id)"
                     >
                       <span class="material-symbols-outlined text-sm" aria-hidden="true">play_arrow</span>{{ t('app.replay') }}
@@ -383,7 +390,7 @@ const targetScopeText = computed(() => requestedTargetIds.value.length > 0
                       type="button"
                       :data-testid="`verify-fuzzing-finding-${finding.id}`"
                       class="board-surface-success board-text-success inline-flex min-h-11 items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50"
-                      :disabled="actionLocked"
+                      :disabled="actionLocked || ('dataAvailable' in finding && finding.dataAvailable === false)"
                       @click="emit('verify', finding)"
                     >
                         <span class="material-symbols-outlined text-sm" aria-hidden="true">fact_check</span>{{ t('app.verifyCurrentBoard') }}

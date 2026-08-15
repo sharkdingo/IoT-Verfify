@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { formatRunTimestamp as sharedRunTimestamp } from '@/utils/runTimestamp'
 import HintTooltip from '@/components/common/HintTooltip.vue'
+import InfoTooltip from '@/components/common/InfoTooltip.vue'
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTimelineRail } from '@/composables/useTimelineRail'
@@ -35,19 +35,18 @@ const props = defineProps<{
   currentDeviceIds?: string[]
   formatDeviceModelToken?: (device: SimulationState['devices'][number], value: unknown) => string
   formatEnvironmentModelToken?: (name: string, value: unknown) => string
+  /** False once the change panel has been dismissed on the current step; owned by the Board. */
+  changePanelVisible?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   'highlight-state': [data: { states: SimulationState[]; selectedStateIndex: number } | null]
   'open-run-details': []
+  'restore-change-panel': []
 }>()
 
-const { t, locale } = useI18n()
-
-/* One owner in `utils/runTimestamp.ts`. This copy's "unknown" for a missing timestamp is the behaviour the
-   other two lacked, so it is the one the shared version keeps. */
-const formatRunTimestamp = (value?: string): string => sharedRunTimestamp(value, locale.value, t)
+const { t } = useI18n()
 
 // 当前选中的状态索引
 const selectedStateIndex = ref(0)
@@ -182,6 +181,38 @@ const attackSelectionShortText = computed(() => {
         count: props.modelSemantics.selectedAttackPoints?.length ?? 0
       })
     : t('app.attackExhaustiveSelectionShort', { count: props.attackBudget ?? 0 })
+})
+
+/**
+ * The run's read-only semantics, as one hint rather than a standing panel.
+ *
+ * These six facts used to sit in a `<details data-testid="simulation-timeline-snapshot-notice">` that
+ * occupied permanent height on an overlay whose subject is the canvas behind it. The counterexample
+ * side already resolved exactly this — see `counterexampleTraceHelpText` in `Board.vue` and the
+ * measurement recorded beside its `InfoTooltip` (that block was the largest part of a 137.5px body,
+ * re-read on every step, for facts a reader needs once).
+ *
+ * `modelTraceNotPrediction` is deliberately absent: it is already the always-visible subtitle in the
+ * header, so repeating it here would be a third statement of one fact. The frozen-snapshot counts are
+ * absent for the same reason — the run-details dialog owns them.
+ */
+const playbackSemanticsHelpText = computed(() => {
+  const details = [t('app.traceVisualization.playbackSnapshotReadOnly')]
+
+  if (!modelSemanticsConsistent.value) {
+    details.push(t('app.modelSemanticsUnavailable'))
+    return details.join('\n\n')
+  }
+
+  details.push(props.isAttack
+    ? attackSelectionText.value
+    : t('app.traceVisualization.simulationNoAttackContext'))
+  details.push(props.enablePrivacy
+    ? t('app.traceVisualization.privacyPropagationEnabled')
+    : t('app.traceVisualization.privacyPropagationNotModeled'))
+  details.push(t('app.environmentEvolutionIncluded'))
+  details.push(t('app.labelPropagationScopeSummary'))
+  return details.join('\n\n')
 })
 
 const deviceSecurityFacts = (device: SimulationState['devices'][number]) =>
@@ -411,6 +442,14 @@ watch(selectedStateIndex, () => {
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
             <h2 class="text-sm font-bold text-slate-800">{{ t('app.traceVisualization.modelTracePlayback') }}</h2>
+            <!-- Replaces the standing snapshot disclosure this panel used to end with; the
+                 counterexample bar carries the same control for the same reason. -->
+            <InfoTooltip
+              :text="playbackSemanticsHelpText"
+              :label="t('app.runScopeAndSnapshot')"
+              placement="right"
+              test-id="simulation-timeline-snapshot-notice"
+            />
             <span class="rounded-full board-chip-info px-2 py-0.5 text-xs font-semibold board-text-info" aria-live="polite">
               {{ totalStates > 0 ? selectedStateIndex + 1 : 0 }} / {{ totalStates }}
             </span>
@@ -432,7 +471,37 @@ watch(selectedStateIndex, () => {
           <p class="mt-0.5 text-[length:var(--iot-font-min)] leading-4 text-slate-500">{{ t('app.traceVisualization.modelTraceNotPrediction') }}</p>
         </div>
 
-        <div class="flex flex-shrink-0 items-center gap-1.5">
+        <div class="flex flex-shrink-0 items-center gap-2">
+          <button
+            type="button"
+            data-testid="simulation-timeline-play"
+            :disabled="totalStates <= 1"
+            :aria-label="isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play')"
+            class="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold transition-colors"
+            :class="isPlaying
+              ? 'bg-[color:var(--accent-fill)] text-white'
+              : totalStates <= 1
+                ? 'cursor-not-allowed bg-slate-100 text-slate-500'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+            @click="play"
+          >
+            <span class="material-symbols-outlined text-base" aria-hidden="true">{{ isPlaying ? 'pause' : 'play_arrow' }}</span>
+            {{ isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play') }}
+          </button>
+          <!-- Only reachable once the panel has been dismissed on this step; the Board owns the
+               dismissed-key state, so recovery is an event rather than local state. -->
+          <HintTooltip v-if="changePanelVisible === false" :content="t('app.showStepChanges')">
+            <button
+              type="button"
+              data-testid="simulation-timeline-restore-changes"
+              class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              :aria-label="t('app.showStepChanges')"
+              @click="emit('restore-change-panel')"
+            >
+              <span class="material-symbols-outlined text-base" aria-hidden="true">difference</span>
+              <span class="hidden sm:inline">{{ t('app.stepChanges') }}</span>
+            </button>
+          </HintTooltip>
           <HintTooltip :content="t('app.viewSimulationRunDetails')">
             <button
               type="button"
@@ -445,31 +514,18 @@ watch(selectedStateIndex, () => {
               <span class="hidden sm:inline">{{ t('app.runDetails') }}</span>
             </button>
           </HintTooltip>
-          <button
-            type="button"
-            data-testid="simulation-timeline-play"
-            :disabled="totalStates <= 1"
-            :aria-label="isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play')"
-            class="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold transition-colors"
-            :class="isPlaying
-              ? 'bg-[color:var(--accent-fill)] text-white'
-              : totalStates <= 1
-                ? 'cursor-not-allowed bg-slate-100 text-slate-500'
-                : 'bg-[color:var(--accent-fill)] text-white hover:bg-[color:var(--accent-fill-hover)]'"
-            @click="play"
-          >
-            <span class="material-symbols-outlined text-base" aria-hidden="true">{{ isPlaying ? 'pause' : 'play_arrow' }}</span>
-            {{ isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play') }}
-          </button>
-          <button
-            type="button"
-            data-testid="simulation-timeline-close"
-            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
-            :aria-label="t('app.close')"
-            @click="close"
-          >
-            <span class="material-symbols-outlined" aria-hidden="true">close</span>
-          </button>
+          <HintTooltip :content="t('app.close')">
+            <button
+              type="button"
+              data-testid="simulation-timeline-close"
+              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
+              :aria-label="t('app.close')"
+              @click="close"
+            >
+              <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
+              <span>{{ t('app.close') }}</span>
+            </button>
+          </HintTooltip>
         </div>
       </header>
 
@@ -556,17 +612,17 @@ watch(selectedStateIndex, () => {
 
         <div data-testid="simulation-timeline-scroll" class="iot-scroll-region-x mt-1 py-1">
           <div
-            class="relative h-12 touch-none"
+            class="relative h-14 touch-none"
             data-testid="simulation-timeline-track"
             role="group"
             :aria-label="t('app.traceVisualization.jumpToState')"
-            :style="{ width: states.length > 15 ? 'max-content' : '100%', minWidth: states.length > 15 ? `${Math.max(states.length * 32, 500)}px` : '100%' }"
+            :style="{ width: states.length > 15 ? 'max-content' : '100%', minWidth: states.length > 15 ? `${Math.max(states.length * 38, 500)}px` : '100%' }"
             @pointerdown="scrubStateFromPointer"
           >
-            <div class="absolute left-2 right-2 top-1/2 h-2 -translate-y-1/2 rounded bg-slate-200"></div>
+            <div class="absolute left-2 right-2 top-1/2 h-3 -translate-y-1/2 rounded bg-slate-200"></div>
             <div
               v-if="selectedStateIndex > 0 && totalStates > 1"
-              class="absolute top-1/2 h-2 -translate-y-1/2 rounded bg-[color:var(--accent)] transition-all duration-300"
+              class="absolute top-1/2 h-3 -translate-y-1/2 rounded bg-[color:var(--accent)] transition-all duration-300"
               :style="{
                 left: '8px',
                 width: `calc((100% - 16px) * ${selectedStateIndex / (totalStates - 1)})`
@@ -586,7 +642,7 @@ watch(selectedStateIndex, () => {
                   :aria-label="getStateAriaLabel(index)"
                   :aria-current="index === selectedStateIndex ? 'step' : undefined"
                   :data-testid="`simulation-timeline-state-${index}`"
-                  class="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] focus:ring-offset-2"
+                  class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-border)] focus:ring-offset-2"
                   :class="index === selectedStateIndex
                     ? 'scale-125 border-[color:var(--accent-border)] bg-[color:var(--accent)] shadow-md'
                     : index < selectedStateIndex
@@ -616,33 +672,25 @@ watch(selectedStateIndex, () => {
         </div>
       </section>
 
-      <!--
-        Open by default.
-
-        This block holds the triggered rules, device states, and environment values for the selected
-        step -- that is, the answer to "what changed and why". Collapsed, a counterexample rendered a
-        step number and a violated property but no values, so the reason the property failed was one
-        click away and looked absent. Reviewing a real 14-state trace, the reported experience was
-        "I cannot see what changed from the previous step... State details is collapsed and shows no
-        state values, transition data, or change summary".
-
-        It stays a <details> so a user can collapse it once they know what they are looking at; the
-        default is simply the state that answers the question they arrived with.
-      -->
       <!-- `simulation-step-values`, matching `trace-step-values` on the counterexample side. The old name
            shared a prefix with the `simulation-timeline-state-{i}` step buttons, so a selector looking for
            steps matched this panel too — the same collision that produced four false findings when
            measuring the trace rail. -->
-      <details open class="group pt-2" data-testid="simulation-step-values">
-        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
-          <span class="inline-flex items-center gap-1.5">
-            <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
-            {{ t('app.traceVisualization.stateDetails') }}
-          </span>
-          <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
-        </summary>
-        <div class="mt-1.5 border-t border-slate-200">
-      <section class="border-b border-slate-200 py-2" data-testid="simulation-timeline-triggered-rules">
+      <!--
+        Which automation produced this state stays unconditionally visible; the value tables below do not.
+
+        Collapsing the whole block put the answer to "what changed from the previous step" behind a
+        click, which is the complaint recorded verbatim in this file's own history: "I cannot see what
+        changed from the previous step... State details is collapsed and shows no state values". The
+        counterexample side resolved the same tension by removing the disclosure from its cause row
+        (`trace-step-values`, guarded by `actionDockHierarchy.spec.ts`), and it earns that by carrying
+        only chips — it deliberately omits device values, because the canvas nodes are their authority.
+
+        This surface does carry device and environment tables, which are genuinely too tall to leave
+        open on an overlay where vertical space is scarcest. So the split is by role rather than by
+        surface: the cause is chrome-free and always visible, the tables keep their disclosure.
+      -->
+      <section class="mb-2 border-b border-slate-200 pb-2" data-testid="simulation-timeline-triggered-rules">
         <div class="text-[length:var(--iot-font-min)] font-bold uppercase text-slate-500">
           {{ selectedStateIndex === 0
             ? t('app.traceVisualization.initialModelState')
@@ -652,9 +700,9 @@ watch(selectedStateIndex, () => {
           <span
             v-for="(rule, index) in currentTriggeredRules"
             :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[length:var(--iot-font-min)] font-semibold"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
             :class="triggeredRuleExistsOnCurrentBoard(rule)
-              ? 'board-surface-success board-text-success'
+              ? 'board-border-subtle board-chip-success board-text-success'
               : 'board-surface-warning board-text-warning'"
             :title="triggeredRuleExistsOnCurrentBoard(rule) ? undefined : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
           >
@@ -667,6 +715,15 @@ watch(selectedStateIndex, () => {
         </p>
       </section>
 
+      <details class="group mb-2 pt-2" data-testid="simulation-step-values">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
+          <span class="inline-flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
+            {{ t('app.traceVisualization.stateDetails') }}
+          </span>
+          <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
+        </summary>
+        <div class="mt-1.5 border-t border-slate-200">
       <section
         v-if="currentCompromisedAutomationLinks.length > 0"
         class="board-surface-danger border-b px-2 py-2"
@@ -770,69 +827,20 @@ watch(selectedStateIndex, () => {
         </div>
       </section>
 
-      <details class="group pt-2 text-[11px] text-slate-600" data-testid="simulation-timeline-snapshot-notice">
-        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 font-semibold text-slate-700 hover:bg-slate-100">
-          <span class="inline-flex min-w-0 items-center gap-1.5">
-            <span class="material-symbols-outlined text-base board-text-info" aria-hidden="true">inventory_2</span>
-            <span>{{ t('app.runScopeAndSnapshot') }}</span>
-          </span>
-          <span class="flex items-center gap-1.5">
-            <span
-              class="rounded-full px-2 py-0.5 text-[length:var(--iot-font-min)] font-semibold"
-              :class="boardComparison === 'UNCHANGED'
-                ? 'board-chip-success board-text-success'
-                : boardComparison === 'CHANGED'
-                  ? 'board-chip-warning board-text-warning'
-                  : 'bg-slate-100 text-slate-600'"
-              data-testid="simulation-board-comparison"
-            >
-              {{ boardComparison === 'UNCHANGED'
-                ? t('app.runBoardInputUnchangedShort')
-                : boardComparison === 'CHANGED'
-                  ? t('app.runBoardInputChangedShort')
-                  : boardComparison === 'UNAVAILABLE'
-                    ? t('app.runBoardComparisonUnavailableShort')
-                    : t('app.runBoardNotComparedShort') }}
-            </span>
-            <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
-          </span>
-        </summary>
-        <div class="mt-1.5 space-y-1.5 border-l-2 board-border-subtle pl-3 leading-5">
-          <p class="font-bold text-slate-700">{{ t('app.modelRunSnapshotTitle') }}</p>
-          <p v-if="modelSnapshot">
-            {{ t('app.modelRunSnapshotSummary', {
-              time: formatRunTimestamp(modelSnapshot.capturedAt),
-              devices: modelSnapshot.deviceCount,
-              rules: modelSnapshot.ruleCount,
-              specs: modelSnapshot.specificationCount,
-              variables: modelSnapshot.environmentVariableCount,
-              templates: modelSnapshot.deviceTemplateCount
-            }) }}
-          </p>
-          <p>{{ t('app.traceVisualization.playbackSnapshotReadOnly') }}</p>
-          <p v-if="modelSemanticsConsistent">
-            {{ isAttack
-              ? attackSelectionText
-              : t('app.traceVisualization.simulationNoAttackContext') }}
-          </p>
-          <p v-if="modelSemanticsConsistent">
-            {{ enablePrivacy
-              ? t('app.traceVisualization.privacyPropagationEnabled')
-              : t('app.traceVisualization.privacyPropagationNotModeled') }}
-          </p>
-          <p v-if="modelSemanticsConsistent">{{ t('app.environmentEvolutionIncluded') }}</p>
-          <p v-if="modelSemanticsConsistent">{{ t('app.labelPropagationScopeSummary') }}</p>
-          <p>
-            {{ boardComparison === 'UNCHANGED'
-              ? t('app.runBoardInputUnchanged')
-              : boardComparison === 'CHANGED'
-                ? t('app.runBoardInputChanged')
-                : boardComparison === 'UNAVAILABLE'
-                  ? t('app.runBoardComparisonUnavailable')
-                  : t('app.runBoardNotCompared') }}
-          </p>
-        </div>
-      </details>
+      <!--
+        The "Run scope and submission snapshot" disclosure that used to close this panel is gone.
+
+        Of its ten rows, two (the frozen-snapshot title and its device/rule/spec/variable/template
+        counts) were a verbatim second copy of the card the run-details dialog already opens with, and
+        five more were run-level semantics that the counterexample side had already moved into an
+        `InfoTooltip` for a measured reason — permanent height on an overlay whose subject is the
+        canvas, for facts a reader needs once. Those five now live in `playbackSemanticsHelpText`
+        beside the header title.
+
+        The board-comparison verdict was the one row with no other home, so it moved to the run-details
+        dialog next to the verification dialog's `verification-board-comparison`, which also closes a
+        gap: the simulation dialog never showed board drift at all.
+      -->
         </div>
       </details>
     </div>

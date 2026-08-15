@@ -79,6 +79,10 @@ public class TracePo {
     @Column(name = "generation_issues_json", columnDefinition = "TEXT")
     private String generationIssuesJson;
 
+    /** The exact SMV model NuSMV checked for this counterexample. */
+    @Column(name = "smv_model_content", columnDefinition = "TEXT")
+    private String smvModelContent;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

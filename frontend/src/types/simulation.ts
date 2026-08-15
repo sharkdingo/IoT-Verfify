@@ -33,6 +33,18 @@ export interface SimulationResult {
   requestedSteps: number
   nusmvOutput: string
   logs: string[]
+  /**
+   * Saved-trajectory id, present only when the run was persisted. The backend result carries no id;
+   * `Board.vue` fills it from the `SimulationTrace` it loaded (`simulateAndSave`, or the trace fetched
+   * after an async task completes). Absent for preview-only runs, which are not addressable.
+   */
+  traceId?: number
+  /**
+   * Whether that saved trajectory still holds its SMV model. An id alone was the wrong gate for the
+   * download: every saved run has one, but a run saved before the model was persisted has no model,
+   * so the button appeared and the download failed. Both must hold.
+   */
+  hasSmvModel?: boolean
 }
 
 // 模拟状态
@@ -92,6 +104,7 @@ export interface AvailableSimulationTraceSummary {
   createdAt: string
   modelSnapshot: ModelRunSnapshot
   dataAvailable: true
+  hasSmvModel?: boolean
 }
 
 export interface UnavailableSimulationTraceSummary {
@@ -113,6 +126,8 @@ export interface SimulationTrace extends Omit<AvailableSimulationTraceSummary, '
   nusmvOutput: string
   modelSemantics: ModelSemantics
   historyPersistence: RunPersistence
+  /** See `PersistedTrace.hasSmvModel` — the model's presence, since its content is never sent. */
+  hasSmvModel?: boolean
 }
 
 // 模拟任务状态

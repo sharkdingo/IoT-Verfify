@@ -54,6 +54,7 @@ Verified against code on 2026-07-31.
 | GET | `/api/board/edits/clear-preview` | Preview the exact undo/redo history impact for confirmation | `docs/api/board.md` |
 | POST | `/api/board/edits/clear` | Token-confirmed discard of undo/redo history without changing Board data | `docs/api/board.md` |
 | GET | `/api/board/replacement-preview` | Preview authoritative current-scene counts and obtain the confirmation impact token | `docs/api/board.md` |
+| POST | `/api/board/scene` | Confirmed portable scene-file import; the server maps the file onto the write contract | `docs/api/board.md` |
 | POST | `/api/board/batch` | Confirmed atomic full-scene replacement/clear with exact template snapshots | `docs/api/board.md` |
 | GET | `/api/board/snapshot` | Atomic initial Board semantic snapshot | `docs/api/board.md` |
 | GET | `/api/board/layout` | Get board layout | `docs/api/board.md` |
@@ -88,9 +89,11 @@ Verified against code on 2026-07-31.
 | GET | `/api/verify/runs` | Completed verification result summaries | `docs/api/verification.md` |
 | GET | `/api/verify/runs/{id}` | Completed verification result detail | `docs/api/verification.md` |
 | GET | `/api/verify/runs/{id}/traces` | Replayable counterexamples nested under one verification result | `docs/api/verification.md` |
+| GET | `/api/verify/runs/{id}/smv` | Download the SMV model this run checked (plain text attachment) | `docs/api/verification.md` |
 | DELETE | `/api/verify/runs/{id}` | Delete a verification result and all linked counterexamples | `docs/api/verification.md` |
 | GET | `/api/verify/traces` | List verification traces | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}` | Trace detail | `docs/api/verification.md` |
+| GET | `/api/verify/traces/{id}/smv` | Download the SMV model file for this trace (plain text attachment) | `docs/api/verification.md` |
 | DELETE | `/api/verify/traces/{id}` | Delete trace | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}/fault-rules` | Counterexample rule involvement with source-model completeness and limitations | `docs/api/verification.md` |
 | POST | `/api/verify/traces/{id}/fix` | Generate signed fix suggestions | `docs/api/verification.md` |
@@ -113,6 +116,7 @@ Verified against code on 2026-07-31.
 | POST | `/api/simulate/traces` | Simulate and persist | `docs/api/verification.md` |
 | GET | `/api/simulate/traces` | List saved simulations (summary) | `docs/api/verification.md` |
 | GET | `/api/simulate/traces/{id}` | Simulation detail (full states) | `docs/api/verification.md` |
+| GET | `/api/simulate/traces/{id}/smv` | Download the SMV model file for this simulation (plain text attachment) | `docs/api/verification.md` |
 | DELETE | `/api/simulate/traces/{id}` | Delete simulation | `docs/api/verification.md` |
 
 ## Counterexample exploration — `FuzzController`

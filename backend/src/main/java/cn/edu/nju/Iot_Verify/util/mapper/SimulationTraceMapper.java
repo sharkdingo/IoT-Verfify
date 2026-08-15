@@ -70,6 +70,10 @@ public class SimulationTraceMapper {
                         () -> ModelPlaybackSceneSnapshot.canonicalize(
                                 frozenRequest.getPlaybackNodes(), frozenRequest.getDevices(), frozenRules)))
                 .createdAt(po.getCreatedAt())
+                // Read back for GET /api/simulate/traces/{id}/smv. Omitting it made that endpoint
+                // return 500 on every saved trajectory, because the controller treats a blank model
+                // as a persistence defect — which it could not distinguish from this mapper's gap.
+                .smvModelContent(po.getSmvModelContent())
                 .historyPersistence(RunPersistenceDto.saved(po.getId()))
                 .build();
         applyPersistedContext(dto, context);
@@ -99,6 +103,8 @@ public class SimulationTraceMapper {
                 .generationIssues(generationIssues)
                 .modelSnapshot(context.modelSnapshot())
                 .createdAt(projection.getCreatedAt())
+                // Presence only; the model is fetched through /api/simulate/traces/{id}/smv.
+                .hasSmvModel(Boolean.TRUE.equals(projection.getHasSmvModel()))
                 .dataAvailable(true)
                 .build();
         dto.setAttack(context.isAttack());

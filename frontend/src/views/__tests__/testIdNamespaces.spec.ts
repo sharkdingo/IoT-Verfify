@@ -107,6 +107,17 @@ describe('test-id namespaces', () => {
     expect(railTag, 'the rail must not be an input element').not.toContain('<input')
     expect(railTag, 'the rail must be a group with pointer interaction').toContain('role="group"')
 
+    // Rail before the step values, matching the simulation timeline.
+    //
+    // The two rails had opposite reading orders: this one put the step's values above the rail, while
+    // `SimulationTimeline.vue` puts the rail first. Nothing defended either choice, and the same
+    // information in two sequences is the kind of drift a reader pays for without being able to name.
+    // Navigate-then-read is the order the sibling surface already used, so it is the one that stands.
+    const valuesAt = overlay.indexOf('data-testid="trace-step-values"')
+    expect(valuesAt, 'the slice should contain the step values').toBeGreaterThan(-1)
+    expect(railAt, 'the rail must precede the step values, as on the simulation timeline')
+      .toBeLessThan(valuesAt)
+
     // The simulation timeline keeps its number input and +/-1 buttons: exact entry and discrete
     // stepping are a different modality, not a second x-axis. Scoped to the template, because the
     // script's own JSDoc names the deleted slider and `strip` only removes HTML comments -- matching

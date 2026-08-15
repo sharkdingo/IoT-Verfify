@@ -9,6 +9,8 @@ import cn.edu.nju.Iot_Verify.component.aitool.scenario.ScenarioObjectiveTargets;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.ScenarioVerificationReadiness;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.component.board.BoardBatchRequestParser;
+import cn.edu.nju.Iot_Verify.component.board.PortableSceneFormat;
+import cn.edu.nju.Iot_Verify.component.board.PortableSceneRequestParser;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
@@ -123,6 +125,7 @@ public class BoardStorageController {
     private final ObjectMapper objectMapper;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     private final BoardBatchRequestParser boardBatchRequestParser;
+    private final PortableSceneRequestParser portableSceneRequestParser;
     private final InteractiveAiExecutionService interactiveAiExecutionService;
 
     @GetMapping("/snapshot")
@@ -308,6 +311,25 @@ public class BoardStorageController {
     @PostMapping("/batch")
     public Result<BoardBatchDto> saveBatch(@CurrentUser Long userId, @NotNull @RequestBody JsonNode body) {
         return Result.success(boardService.saveBoardBatch(userId, boardBatchRequestParser.parse(body)));
+    }
+
+    /**
+     * Imports a portable scene file, replacing the whole board atomically.
+     *
+     * <p>This is the import contract clients use: it takes the exported file shape verbatim plus the
+     * confirmed {@code impactToken}, so no client has to know how portable rules and specifications
+     * map onto the internal write DTOs. That mapping lives once in {@code PortableSceneBatchMapper},
+     * shared with {@code apply_scenario}. Previously each client reimplemented it, and the same
+     * dropped field produced three separate user-visible failures.</p>
+     *
+     * <p>{@code /batch} remains the lower-level command for a caller that already holds internal
+     * collections — scene clear, which has no portable file to send.</p>
+     */
+    @PostMapping("/scene")
+    public Result<BoardBatchDto> importScene(@CurrentUser Long userId,
+                                             @NotNull @RequestBody JsonNode body) {
+        return Result.success(boardService.saveBoardBatch(
+                userId, portableSceneRequestParser.parse(body)));
     }
 
     @GetMapping("/layout")
@@ -738,11 +760,10 @@ public class BoardStorageController {
         RecommendationAudit audit = parseRecommendationAudit(result, true, context);
         PortableSceneDto scene = convertRecommendationItem(
                 result.get("scene"), PortableSceneDto.class, context, "scene");
-        // Must track RecommendScenarioTool.SCENE_VERSION and the frontend's SCENE_FILE_VERSION. Left at 4
-        // while the tool emitted 5, this rejected every generated scenario as "unsupported" — the producer
-        // and the importer were both bumped and this validator was not.
-        if (!"iot-verify.board-scene".equals(scene.getSchema())
-                || !Integer.valueOf(5).equals(scene.getVersion())) {
+        // Reads the shared constants rather than its own literals. Hardcoded at 4 while the tool emitted
+        // 5, this rejected every generated scenario as "unsupported" — the producer and the importer were
+        // both bumped and this validator was not.
+        if (!PortableSceneFormat.isSupported(scene.getSchema(), scene.getVersion())) {
             throw invalidRecommendationResult(context, "scene schema/version is unsupported");
         }
         if (scene.getTemplates() == null || scene.getDevices() == null

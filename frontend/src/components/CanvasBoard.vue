@@ -251,6 +251,27 @@ const props = defineProps<{
       compromisedAutomationLinks?: Array<{ ruleIndex: number; ruleId?: string | null; ruleLabel?: string | null }>
     }>
     selectedStateIndex?: number
+    /**
+     * The step at which the specification fails, when the run reports one.
+     *
+     * The rail already marks this step, but the rail is not where a viewer looks during playback — the
+     * canvas is. Reaching the violating state used to change nothing here: autoplay stopped silently on
+     * the last state, so the moment the run exists to demonstrate had no signal on the surface holding
+     * the viewer's attention.
+     */
+    violationStateIndex?: number
+    /**
+     * Every step the violation occupies. A safety property fails at one state; a liveness property
+     * (templates 2/5/6) fails over an infinite cycle, where no single state is at fault and the repetition
+     * itself is the violation. Emphasising only the first would leave the rest of that cycle unmarked.
+     */
+    violationStateIndexes?: number[]
+    /**
+     * Device ids the violated specification is about, so the emphasis lands on the devices the property
+     * concerns rather than on the whole canvas. A specification carries its bound devices
+     * (`SpecificationDto.devices`), so this is the run's own claim, not an inference from the trace.
+     */
+    violationDeviceIds?: string[]
   } | null
   focusedNodeId?: string | null
   focusedRuleId?: string | null
@@ -1325,6 +1346,39 @@ const isNodeTraceChanged = (node: DeviceNode) => {
   return traceDeviceCache.value.get(node.id)?.changed ?? false
 }
 
+/**
+ * True while the viewer is standing on the step where the specification fails.
+ *
+ * Scoped to the step, not sticky: the emphasis is the answer to "what am I looking at right now", so it
+ * appears on arrival and clears on leaving. Scoped to the specification's own bound devices when it
+ * names any, because "the property is violated" is a claim about those devices — lighting every node
+ * would say only "something is wrong here", which the viewer already knows from the rail.
+ *
+ * Falls back to every device present in the state when the specification binds none, so a violation is
+ * never silent on this surface.
+ */
+const violationDeviceIdSet = computed(() => {
+  const ids = props.highlightedTrace?.violationDeviceIds
+  return ids && ids.length > 0 ? new Set(ids) : null
+})
+
+const isAtViolationStep = computed(() => {
+  const trace = props.highlightedTrace
+  if (!trace || trace.selectedStateIndex === undefined) return false
+  // The set is authoritative when present: a liveness violation is a whole cycle, so equality against its
+  // first step alone would clear the emphasis while the viewer is still inside the failing loop.
+  const steps = trace.violationStateIndexes
+  if (steps && steps.length > 0) return steps.includes(trace.selectedStateIndex)
+  if (trace.violationStateIndex === undefined) return false
+  return trace.violationStateIndex === trace.selectedStateIndex
+})
+
+const isNodeAtViolation = (node: DeviceNode) => {
+  if (!isAtViolationStep.value) return false
+  const scoped = violationDeviceIdSet.value
+  return scoped ? scoped.has(node.id) : isNodeInTrace(node)
+}
+
 const getNodeStateTitle = (node: DeviceNode) => {
   const current = getNodeDisplayState(node)
   // The pill's short label is deliberately terse, so the hover carries the full sentence and says why the device
@@ -1766,7 +1820,7 @@ onMounted(() => {
           :aria-label="getNodeAriaLabel(node)"
           aria-describedby="canvas-node-keyboard-instructions"
           :title="getNodeTitle(node)"
-          :class="[getNodeVisualTierClass(node), { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
+          :class="[getNodeVisualTierClass(node), { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'device-at-violation': isNodeAtViolation(node) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
           :style="{
           left: getNodeRenderPosition(node).x + 'px',
           top: getNodeRenderPosition(node).y + 'px',

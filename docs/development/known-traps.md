@@ -16,7 +16,7 @@ Contents:
 
 - [1. Test authoring](#1-test-authoring) — tests that cannot fail, guards that lie
 - [2. Build environment](#2-build-environment) — Maven, `target/classes`, the stale dev JVM
-- [3. E2E environment](#3-e2e-environment) — rate limits, ports, CORS, known-flaky specs
+- [3. E2E environment](#3-e2e-environment) — rate limits, ports, CORS, worker count, known-flaky specs
 - [4. Blast-radius misjudgements](#4-blast-radius-misjudgements) — what reasoning missed
 
 Variable defaults belong to
@@ -178,6 +178,39 @@ and read exactly like regressions.
 would skip the build and test **stale code** while reporting green. Nothing checks this before the
 run, so the symptom is a mid-suite failure that reads like a product bug. Free the port, or set
 `E2E_BASE_URL` to a server you manage (inline prefix or exported variable).
+
+**`playwright test --list` is the likeliest source of the leftover.** It starts `webServer` like a real
+run but exits without tearing it down, stranding `vite preview --port 3000 --strictPort`. The orphan
+keeps its whole parent chain, so it does not look like debris — and because `--strictPort` refuses to
+fall back, the *next* run dies in `webServer` startup rather than reporting a port conflict. One
+session lost an agent's entire run to an orphan its own earlier `--list` had left. Use `--grep` against
+a real run, or `--reporter=list --dry-run` equivalents that do not boot the server, and check the port
+afterwards if you must use `--list`.
+
+### Do not edit `playwright.config.ts` while a run is starting
+
+Playwright reads the config once at startup, so a run is self-consistent — but a config edited between
+launching a run and its startup produces results you cannot label. Measured: a `workers` value was
+changed twice inside 14 seconds while a delegated run was doing its environment checks, which
+invalidated the very comparison that run existed to make. If a config change and a verification run
+are both wanted, land the change first and let its mtime settle.
+
+### The worker count is pinned because the suite shares one of everything
+
+`playwright.config.ts` sets `workers: 1`. It used to set nothing, which meant a bare local
+`npx playwright test` took **half the logical cores** — 14 on a 28-thread machine — against one
+backend, one MySQL and one NuSMV, while `.github/scripts/run-e2e.sh` runs the complete suite at
+`--workers=1` precisely because that NuSMV budget is shared.
+
+The measured consequence of the unset default: `POST /board/rules/check-duplicate` errored under the
+load, which opens the "Check Duplicate — the overlap pre-check failed" confirmation
+(`RuleBuilderDialog.vue`). No spec clicks "Save Anyway", so the rule-builder dialog stayed visible and
+a 10s `toBeHidden` expired — a failure that reads exactly like a product regression and cost a full
+investigation to attribute. It passed when serialized.
+
+CI is unaffected: it passes `--workers` explicitly on every path, and the CLI flag overrides the
+config. Use `--workers=2` for a narrow subset, as the risk-routed paths do. Raising it for wall-clock
+time is what this default exists to prevent.
 
 ### Serving the build yourself: the CORS trap
 

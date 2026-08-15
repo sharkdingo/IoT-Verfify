@@ -504,6 +504,56 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(wrapper.findAll('button').some(button => button.text() === 'Fix rules')).toBe(true)
   })
 
+  /**
+   * The zero-counterexample case, which is where the explanation is most needed and was unreachable.
+   *
+   * The sibling test above covers 2 violations / 1 counterexample. At 2 / **0** the whole evidence block
+   * was gated on the trace list being non-empty, so the run showed its violation count with nothing
+   * saying why none could be replayed — while the sentence written for exactly that
+   * (`counterexampleCount < violatedSpecCount`, true at zero) sat inside the hidden block.
+   *
+   * Reachable from the backend: `VerificationServiceImpl` logs "violated (no counterexample)" when
+   * NuSMV returns none, and skips the trace when the parsed state list comes back empty — both count the
+   * specification as violated.
+   */
+  it('explains a violated run that produced no replayable counterexample', () => {
+    const run: VerificationRunSummary = {
+      id: 15,
+      initiator: 'USER',
+      createdAt: '2026-07-13T10:00:00',
+      startedAt: '2026-07-13T10:00:00',
+      completedAt: '2026-07-13T10:00:02',
+      isAttack: false,
+      attackBudget: 0,
+      enablePrivacy: false,
+      modelSemantics: semantics,
+      modelSnapshot: snapshot(2),
+      outcome: 'VIOLATED',
+      modelComplete: true,
+      violatedSpecCount: 2,
+      counterexampleCount: 0,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      generationIssues: [],
+      dataAvailable: true,
+      counterexamples: []
+    }
+
+    const wrapper = mount(TraceHistoryPanel, {
+      props: { ...baseProps, activeLayer: 'results', verificationRuns: [run] },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.text(), 'the violation count must still be stated')
+      .toContain('2 violations, 0 counterexamples')
+    expect(wrapper.text(), 'and the reason nothing is replayable must be stated too')
+      .toContain('Some violations have no replayable counterexample.')
+    expect(
+      wrapper.findAll('button').some(button => button.text() === 'Replay'),
+      'with no trace there is nothing to replay'
+    ).toBe(false)
+  })
+
   it('keeps replayable counterexamples visible when the overall verification is inconclusive', () => {
     const run: VerificationRunSummary = {
       id: 14,

@@ -24,7 +24,11 @@ public interface SimulationTraceRepository extends JpaRepository<SimulationTrace
             + "trace.modeledDeviceAttackPointCount AS modeledDeviceAttackPointCount, "
             + "trace.modeledFalsifiableReadingDeviceCount AS modeledFalsifiableReadingDeviceCount, "
             + "trace.modeledAutomationLinkAttackPointCount AS modeledAutomationLinkAttackPointCount, "
-            + "trace.createdAt AS createdAt "
+            + "trace.createdAt AS createdAt, "
+            // Tested for content rather than selected: the model is tens of thousands of characters and
+            // this list only needs to know whether the download can succeed.
+            + "CASE WHEN trace.smvModelContent IS NOT NULL AND trace.smvModelContent <> '' "
+            + "THEN TRUE ELSE FALSE END AS hasSmvModel "
             + "FROM SimulationTracePo trace WHERE trace.userId = :userId "
             + "ORDER BY trace.createdAt DESC, trace.id DESC")
     List<SimulationTraceSummaryProjection> findSummariesByUserId(

@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelPlaybackSceneDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -68,4 +69,29 @@ public class SimulationResultDto {
 
     /** 执行日志 */
     private List<String> logs;
+
+    /**
+     * The exact model that was run, carried from generation to persistence.
+     *
+     * <p>The generator writes it into a randomly-named temp directory that is deleted after the run,
+     * so the only place it can be read is where the file handle still exists. Every caller that
+     * persists a trajectory takes it from here; it is never serialized to a client, which fetches
+     * the model through {@code GET /api/simulate/traces/{id}/smv} instead.
+     */
+    @JsonIgnore
+    private String smvModelContent;
+
+    /**
+     * Whether a model was captured for this run, so a client can offer the download straight after a
+     * synchronous run instead of waiting to reload the trajectory from history.
+     *
+     * <p>This was missing while the UI already gated its download button on {@code hasSmvModel}: the
+     * field was simply absent from the response, so the button never rendered and the feature was
+     * unreachable from the simulation result dialog. Mirrors
+     * {@code VerificationResultDto#hasSmvModel}.
+     */
+    @JsonProperty("hasSmvModel")
+    public boolean hasSmvModel() {
+        return smvModelContent != null && !smvModelContent.isBlank();
+    }
 }

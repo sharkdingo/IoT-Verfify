@@ -51,4 +51,23 @@ public class TraceStateDto {
      */
     @Valid
     private List<TraceVariableDto> globalVariables;
+
+    /**
+     * This state begins the repeating cycle of an infinite counterexample path.
+     *
+     * <p>A liveness property (templates 5 and 6, whose negations are {@code EG}/{@code GF}) is refuted by a
+     * lasso path, not by a finite prefix: NuSMV prints {@code -- Loop starts here} and the violation *is* the
+     * cycle that never reaches the required state. Absent for finite traces, which is every simulation and
+     * fuzz trace and most formal ones.
+     */
+    private Boolean loopStart;
+
+    /**
+     * This state closes the cycle by repeating the {@link #loopStart} state.
+     *
+     * <p>NuSMV re-prints the loop entry as a final state carrying no variable lines, which the delta merge
+     * materializes into a full state identical to its predecessor. Without this flag it plays back as an
+     * ordinary step in which nothing changes, hiding the one fact the state exists to convey.
+     */
+    private Boolean loopBack;
 }

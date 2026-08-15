@@ -202,6 +202,25 @@ watch(() => importDeviceForm.text, (newText) => {
   }, IMPORT_TEXT_DEBOUNCE_MS)
 }, { immediate: true })
 
+/**
+ * Replace the import text and its parsed view in one tick.
+ *
+ * The debounce above exists to avoid re-parsing on every keystroke, which is a property of *typing*.
+ * A file selection is one discrete event, and deferring it opened a 300ms window in which the preview,
+ * the validity counts, and the create button all still described the PREVIOUS content — while the
+ * button's `:disabled` was already false from that content. Choosing a CSV and clicking Create inside
+ * that window re-imported the earlier JSON payload instead: measured in E2E as two extra
+ * `import_phone_1`/`import_alarm_1` devices where the CSV's own devices were expected.
+ */
+const setImportTextImmediately = (text: string) => {
+  if (importTextDebounceTimer) {
+    clearTimeout(importTextDebounceTimer)
+    importTextDebounceTimer = null
+  }
+  importDeviceForm.text = text
+  debouncedImportText.value = text
+}
+
 onBeforeUnmount(() => {
   if (importTextDebounceTimer) {
     clearTimeout(importTextDebounceTimer)
@@ -905,6 +924,23 @@ const parsedImportedDevices = computed<DeviceImportRow[]>(() => {
 
 const validImportedDevices = computed(() =>
   parsedImportedDevices.value.filter((item: any) => !item.error && item.template && item.customName)
+)
+
+/**
+ * The preview describes text the user has already replaced.
+ *
+ * Everything downstream of the import box — the preview list, the validity count, the create button's
+ * own label — is derived from `debouncedImportText`, which trails the textarea by
+ * `IMPORT_TEXT_DEBOUNCE_MS`. The create button was gated on the *count* alone, so during that window it
+ * was enabled and armed with the previous content: paste or choose a second payload, click inside
+ * 300ms, and the earlier one was imported instead.
+ *
+ * Gating here rather than at each entry point is deliberate. `setImportTextImmediately` fixes the file
+ * path, but the same window is reachable by typing, by paste, and by anything added later; this makes
+ * the button's enabled state mean "ready for what is currently in the box" for all of them.
+ */
+const importPreviewStale = computed(() =>
+  debouncedImportText.value !== importDeviceForm.text
 )
 
 const importedEnvironmentMerge = computed(() => mergeSourcedEnvironmentPatches(
@@ -1928,7 +1964,11 @@ const handleCreateImportedDevices = async () => {
   if (creatingMultipleDevices.value) return
   // Per-row parse errors and environment conflicts are already listed above the button, which
   // stays disabled while any of them holds — so there is nothing left to announce.
-  if (!importDeviceForm.text.trim()
+  // `importPreviewStale` is first for the reason recorded at its definition: without it this would
+  // create whatever the *previous* text parsed to. The button is disabled then, but the guard cannot
+  // rely on that alone — it is what makes the invariant hold for any caller.
+  if (importPreviewStale.value
+    || !importDeviceForm.text.trim()
     || importedEnvironmentMerge.value.conflicts.length > 0
     || importedDevicesHaveErrors.value
     || validImportedDevices.value.length === 0) return
@@ -1961,7 +2001,9 @@ const handleDeviceImportFile = async (event: Event) => {
       notifyError(t('app.importFileTooLarge', { size: '4 MiB' }))
       return
     }
-    importDeviceForm.text = await file.text()
+    // Immediately, not debounced: see `setImportTextImmediately`. Deferring a file's contents left the
+    // create button enabled and describing the file the user had just replaced.
+    setImportTextImmediately(await file.text())
   } catch (error) {
     console.error('Failed to read device import file:', error)
     notifyError(t('app.invalidJsonFile'))
@@ -2996,7 +3038,7 @@ watch(() => props.readOnly, readOnly => {
             <button
               @click="handleCreateImportedDevices"
               data-testid="device-import-create"
-              :disabled="validImportedDevices.length === 0 || importedDevicesHaveErrors || importedEnvironmentMerge.conflicts.length > 0 || creatingMultipleDevices"
+              :disabled="importPreviewStale || validImportedDevices.length === 0 || importedDevicesHaveErrors || importedEnvironmentMerge.conflicts.length > 0 || creatingMultipleDevices"
               class="w-full py-2.5 bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)] disabled:bg-[color:var(--accent-fill)] disabled:cursor-not-allowed disabled:hover:scale-100 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
             >
               <span class="material-symbols-outlined text-sm">library_add</span>

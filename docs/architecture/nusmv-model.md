@@ -558,6 +558,55 @@ emit internal `param_*`/`lambda_*` frozen variables. Public fix requests use sta
 `targetId`/`adjustmentId`; users and AI tools do not submit those generated names or
 rule/condition indexes.
 
+### What a run costs
+
+**One run is one NuSMV process over one model file holding every requested property, under a
+single timeout.** `VerificationServiceImpl` calls `NusmvExecutor.execute(smvFile)` once per
+run, the command carries no per-property flag, and one `waitFor` covers the whole file. The
+timeout is therefore a whole-scene budget shared by all specifications, not a per-spec
+allowance — a scene that needs more than it for the full set reports a timeout having decided
+only the first few properties. Value and overrides:
+[configuration reference](../getting-started/configuration.md#nusmv).
+
+Cost is dominated by **drifting numeric variables**, not by device, rule, or specification
+count. Each one takes a non-deterministic step every transition, so successors per state
+multiply: a variable's branching factor is the number of integers its `NaturalChangeRate`
+admits, and the model's branching factor is their product. Six numeric variables — five at
+`[-1,1]` (3 candidates each) and one at `[-2,2]` (5) — give 3⁵·5 = 1215 successors per state.
+Adding devices that are deterministic given those variables leaves the reachable state count
+unchanged, which is why device count is a poor predictor and variable count is a good one.
+
+Read the rate grammar carefully when counting: a bare value is an interval anchored at zero,
+so `'1'` means `0..1` (two candidates, not one) and `'-2'` means `-2..0`. An interval that
+excludes zero is a *mandatory* per-step change. Shared numeric variables must declare the
+field; device-local numerics may omit it, and omission means no autonomous drift rather than
+free choice. Local numerics that do declare a drifting rate multiply the branching factor the
+same way shared ones do. The product is an upper bound that is exact in the interior of a
+domain and loose at its edges, where clamping collapses candidates.
+
+Two manifest fields therefore decide feasibility, and both are ordinary modelling choices
+rather than workarounds:
+
+- **`LowerBound`/`UpperBound`** — a domain no wider than the scenario needs.
+- **`NaturalChangeRate: [0, 0]`** — the declared way to say a value does not drift on its own,
+  for variables whose independent evolution is not what the scene demonstrates. Writers still
+  change it; only autonomous drift stops.
+
+Specification count is close to free while the state space is small and expensive once it is
+large, because each property is its own fixpoint over that space and only reachability is
+shared. Model construction costs nothing measurable: NuSMV does no work until it checks a
+property. Attack modelling multiplies the cost again — the compromised-point booleans and the
+budget invariant add non-deterministic bits independently of the budget *number*, so budget 1
+and budget 3 cost about the same and both cost far more than an attack-free run.
+
+This bounds two other subsystems. Automatic fix checks a full model per candidate under its
+own deadline ([Automatic fix](auto-fix.md)), so a scene near the verification budget cannot
+complete even one candidate and always reports a deadline. Bounded exploration is separately
+bounded and does not inherit these numbers ([fuzzing flow](fuzzing-flow.md)).
+
+Concrete second-counts are machine-specific and deliberately absent here; measure on the
+target host when the answer matters.
+
 ## Execution artifacts and output bounds
 
 The executor continuously drains NuSMV output in fixed byte chunks so a full process pipe

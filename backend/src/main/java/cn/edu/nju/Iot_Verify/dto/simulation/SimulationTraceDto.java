@@ -62,6 +62,19 @@ public class SimulationTraceDto {
     @JsonIgnore
     private String templateSnapshotsJson;
 
+    /** Model source for the download endpoint; too large for the ordinary detail response. */
+    @JsonIgnore
+    private String smvModelContent;
+
+    /**
+     * Whether this trajectory has a stored model, so the client can offer the download only when it
+     * can succeed. Same reasoning as {@code TraceDto#hasSmvModel}.
+     */
+    @JsonProperty("hasSmvModel")
+    public boolean hasSmvModel() {
+        return smvModelContent != null && !smvModelContent.isBlank();
+    }
+
     @JsonProperty("isAttack")
     private Boolean attack;
 

@@ -12,11 +12,15 @@ const i18n = createI18n({
     en: {
       app: {
         close: 'Close',
+        exit: 'Exit',
+        exitTimeline: 'Exit playback and return to the canvas',
         unknown: 'Unknown',
         state: 'State',
         mode: 'Mode',
         ruleNumber: 'Rule {number}',
         runDetails: 'Run details',
+        stepChanges: 'Step changes',
+        showStepChanges: 'Show the step-changes panel again',
         viewSimulationRunDetails: 'View run details',
         runScopeAndSnapshot: 'Run Scope and Submission Snapshot',
         simulationStoppedBeforeRequestedSteps: 'Only {actual} of {requested} transitions were returned',
@@ -263,9 +267,13 @@ describe('SimulationTimeline', () => {
       global: { plugins: [i18n] }
     })
 
-    expect(wrapper.text()).toContain('Exhaustive up to 2 of 5 points')
-    expect(wrapper.text()).toContain('Labels propagate only on automation commands')
-    expect(wrapper.text()).not.toContain('Model semantics unavailable')
+    // Asserted on the help affordance's `text` prop, not on rendered output: these facts moved from a
+    // standing disclosure into an `InfoTooltip`, and `ElTooltip` renders its content only once opened,
+    // so `wrapper.text()` cannot see prose that is genuinely reachable.
+    const helpText = wrapper.findComponent({ name: 'InfoTooltip' }).props('text') as string
+    expect(helpText).toContain('Exhaustive up to 2 of 5 points')
+    expect(helpText).toContain('Labels propagate only on automation commands')
+    expect(helpText).not.toContain('Model semantics unavailable')
   })
 
   it('does not infer attack mechanisms when persisted model semantics are unavailable', () => {
@@ -353,9 +361,18 @@ describe('SimulationTimeline', () => {
     expect(wrapper.text()).toContain('Model execution, not a physical prediction')
     expect(wrapper.get('[data-testid="simulation-timeline-incomplete-warning"]').text())
       .toContain('2 rules omitted')
-    expect(wrapper.get('[data-testid="simulation-timeline-snapshot-notice"]').text())
-      .toContain('3 devices, 2 rules, 0 specs, 1 variables, 1 templates')
-    expect(wrapper.get('[data-testid="simulation-board-comparison"]').text())
+    // The frozen-snapshot counts are deliberately NOT here any more: the run-details dialog owns
+    // them, and repeating them on an overlay whose subject is the canvas behind it cost permanent
+    // height for a fact a reader needs once. What must survive is the help affordance itself —
+    // its accessible name, since `ElTooltip` renders the prose only once opened.
+    expect(wrapper.get('[data-testid="simulation-timeline-snapshot-notice"]')
+      .attributes('aria-label')).toContain('Run Scope')
+    expect(wrapper.text(), 'the counts must not return to this surface')
+      .not.toContain('3 devices, 2 rules, 0 specs')
+    // This surface warns only when the board HAS drifted; the full four-way verdict (including
+    // "unchanged") belongs to the run-details dialog, which carries `simulation-board-comparison`.
+    // A timeline that also announced "unchanged" would spend permanent height saying nothing happened.
+    expect(wrapper.get('[data-testid="simulation-board-drift-warning"]').text())
       .toContain('Current input changed')
 
     await wrapper.get('[data-testid="simulation-timeline-state-1"]').trigger('click')
@@ -401,7 +418,9 @@ describe('SimulationTimeline', () => {
       global: { plugins: [i18n] }
     })
 
-    expect(wrapper.get('[data-testid="simulation-timeline-snapshot-notice"]').text())
+    // Same reason as above: the read-only sentence now lives in the tooltip's content, which
+    // `ElTooltip` does not render until opened. Assert the prop, which is the real contract.
+    expect(wrapper.findComponent({ name: 'InfoTooltip' }).props('text') as string)
       .toContain('Saved read-only run snapshot')
 
     await wrapper.get('[data-testid="simulation-timeline-state-1"]').trigger('click')
@@ -634,5 +653,37 @@ describe('SimulationTimeline', () => {
       })
       expect(html).toContain('affected by 2 devices')
     })
+  })
+
+  /**
+   * The counterexample rail has this guard in `views/board/actionDockHierarchy.spec.ts` ("shows what
+   * caused the selected counterexample step without an extra click"). This rail had none, which is how a
+   * change wrapping its whole step-values block in a collapsed `<details>` shipped: the only existing
+   * assertion checked that the testid *exists*, and the E2E helper clicks the disclosure open before
+   * reading it, so nothing noticed the answer had moved behind a click.
+   *
+   * Asserted against a mounted DOM rather than the source text, so it covers the rendered ancestry
+   * instead of a regex over markup.
+   */
+  it('does not put the cause of the selected step behind a disclosure', async () => {
+    const wrapper = mount(SimulationTimeline, {
+      props: { visible: true, states: states('playback') },
+      global: { plugins: [i18n] }
+    })
+
+    // Past the initial state: there is no rule that produced state 0, so the row renders from step 1 on.
+    await wrapper.get('[data-testid="simulation-timeline-state-1"]').trigger('click')
+
+    const cause = wrapper.get('[data-testid="simulation-timeline-triggered-rules"]')
+    expect(
+      cause.element.closest('details'),
+      'the cause of the selected step must not sit inside a <details>'
+    ).toBeNull()
+
+    // The value tables keep their disclosure: they are genuinely tall, and the canvas nodes are the
+    // richer authority for device values. Removing the disclosure entirely is not the fix.
+    const values = wrapper.find('[data-testid="simulation-step-values"]')
+    expect(values.exists(), 'the value tables should still be present').toBe(true)
+    expect(values.element.tagName.toLowerCase(), 'and should still be a disclosure').toBe('details')
   })
 })

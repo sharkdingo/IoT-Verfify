@@ -30,9 +30,13 @@ public interface TraceRepository extends JpaRepository<TracePo, Long> {
      */
     List<TracePo> findByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
 
+    // `smvModelContent IS NOT NULL AND <> ''` rather than the column itself: the model is tens of
+    // thousands of characters and this list only needs to know whether the download can succeed.
     @Query("SELECT t.id AS id, t.verificationTaskId AS verificationTaskId, "
          + "t.violatedSpecId AS violatedSpecId, t.violatedSpecJson AS violatedSpecJson, "
-         + "t.stateCount AS stateCount, t.createdAt AS createdAt "
+         + "t.stateCount AS stateCount, t.createdAt AS createdAt, "
+         + "CASE WHEN t.smvModelContent IS NOT NULL AND t.smvModelContent <> '' "
+         + "THEN TRUE ELSE FALSE END AS hasSmvModel "
          + "FROM TracePo t WHERE t.userId = :userId "
          + "AND t.verificationTaskId IN :verificationTaskIds "
          + "ORDER BY t.createdAt DESC, t.id DESC")

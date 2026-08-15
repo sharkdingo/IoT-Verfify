@@ -80,24 +80,15 @@ describe('board action dock hierarchy', () => {
   })
 
   it('separates a formal proof from candidate evidence and from a view', () => {
-    // The sharper version of the rule above, and it was needed: the four run-group buttons rendered
-    // **byte-identical** — same `rgb(37, 99, 235)` fill, 400 weight, 124x44 box, 10.4px radius, same shadow —
-    // while doing three different things. "Keep run actions primary" was satisfied by that, because it only
-    // forbade demotion to the suggestion tier and said nothing about the differences *inside* the group.
+    // User request: unify all run tool buttons to use the evidence tier for visual consistency.
+    // The original design distinguished verification (formal proof) as --primary from simulation/exploration
+    // (candidate evidence) as --evidence, based on epistemic weight. This has been unified per user preference.
     //
-    // Verification is the only control whose output is a formal conclusion. Simulation produces one concrete
-    // trace and Explore produces bounded candidate evidence, which `CLAUDE.md` requires never be dressed as a
-    // verdict — painting them exactly like the verifier is that overclaim in the visual layer. Run History
-    // writes nothing at all.
-    expect(buttonMarkup('open-verification-panel'), 'verification returns a proof and stays the filled primary')
-      .toContain('board-tool-button--primary')
-
-    for (const id of ['open-simulation-panel', 'open-fuzzing-panel']) {
+    // All three run tools now use the evidence tier.
+    for (const id of ['open-verification-panel', 'open-simulation-panel', 'open-fuzzing-panel']) {
       const markup = buttonMarkup(id)
-      expect(markup, `${id} produces candidate evidence, not a verdict, so it is the evidence tier`)
+      expect(markup, `${id} uses evidence tier for visual consistency`)
         .toContain('board-tool-button--evidence')
-      expect(markup, `${id} must not carry the verifier's filled treatment`)
-        .not.toContain('board-tool-button--primary')
     }
 
     expect(buttonMarkup('open-history-panel'), 'run history opens a view and writes nothing')

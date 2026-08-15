@@ -1538,7 +1538,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     await expect(confirmation).toBeVisible()
     const batchResponsePromise = page.waitForResponse(response =>
       response.request().method() === 'POST'
-        && new URL(response.url()).pathname === '/api/board/batch')
+        && new URL(response.url()).pathname === '/api/board/scene')
     await confirmation.getByRole('button', { name: 'Replace in full' }).click()
     const batchResponse = await batchResponsePromise
     expect(batchResponse.ok(), await batchResponse.text()).toBeTruthy()
@@ -1661,7 +1661,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     await page.getByTestId('scene-import-file').setInputFiles(emptyImportPath)
     const emptyImportResponsePromise = page.waitForResponse(response =>
       response.request().method() === 'POST'
-        && new URL(response.url()).pathname === '/api/board/batch')
+        && new URL(response.url()).pathname === '/api/board/scene')
     await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
       .getByRole('button', { name: 'Replace in full' })
       .click()
