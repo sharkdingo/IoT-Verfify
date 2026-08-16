@@ -644,6 +644,7 @@ import {
   type BoardSemanticScene
 } from './board/semanticCommit'
 import { createFocusHighlight } from './board/focusHighlight'
+import { smvUnavailableReasonKey } from './board/smvUnavailableReason'
 import { buildPlaybackEdges } from './board/playbackScene'
 import {
   formatRecommendationFilteredItem as formatFilteredItem,
@@ -13913,6 +13914,14 @@ const simulationRunSmvAvailable = computed(() =>
   simulationResult.value?.hasSmvModel === true
   && typeof simulationResult.value?.historyPersistence?.runId === 'number')
 
+// The mapping lives in `board/smvUnavailableReason.ts` (a pure rule, unit-tested there); these only
+// bind it to the two result refs.
+const verificationSmvUnavailableReason = computed(() =>
+  smvUnavailableReasonKey(verificationResult.value?.historyPersistence))
+
+const simulationSmvUnavailableReason = computed(() =>
+  smvUnavailableReasonKey(simulationResult.value?.historyPersistence))
+
 /*
  * The two artifact buttons read their id here rather than asserting it non-null in the template.
  *
@@ -17894,7 +17903,7 @@ const counterexampleTraceHelpText = computed(() => {
                 class="mt-1 text-xs leading-5 board-text-warning"
                 data-testid="simulation-result-smv-unavailable"
               >
-                {{ t('app.smvModelNotAvailable') }}
+                {{ t(simulationSmvUnavailableReason) }}
               </p>
             </div>
             <button
@@ -18128,7 +18137,7 @@ const counterexampleTraceHelpText = computed(() => {
                   class="mt-1 text-xs leading-5 board-text-warning"
                   data-testid="verification-result-smv-unavailable"
                 >
-                  {{ t('app.smvModelNotAvailable') }}
+                  {{ t(verificationSmvUnavailableReason) }}
                 </p>
               </div>
               <button

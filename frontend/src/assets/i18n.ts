@@ -1695,6 +1695,10 @@ const messages = {
             // 而客户端无法区分。原文把两者都说成"模型持久化功能上线前保存的记录"，于是用户刚删掉一次运行、
             // 再点下载，得到的解释是一个与事实无关的历史限制。已实测。
             smvModelNotAvailable: '服务器上没有这次运行的 SMV 模型：该运行记录可能已被删除，或保存时未留下模型。请在运行历史中确认这条记录是否还存在。',
+            // 上一条用于"记录本应存在"的情形。下面两条用于本次运行根本没有写入历史：
+            // 此时让用户"去历史里确认"是错的——那里永远不会有这条记录。
+            smvModelNotPersisted: '本次运行未保存到历史，因此服务器上没有可下载的 SMV 模型。重新运行并成功保存后即可下载。',
+            smvModelPersistenceUnknown: '本次运行是否已写入历史尚未确认，因此暂时无法下载 SMV 模型。请刷新运行历史后再试。',
             smvDownloadFailed: 'SMV 模型下载失败',
             deepLinkUnavailable: '链接指向的运行记录不可用，可能已被删除或不属于当前账户。已返回画布。',
             boardUndo: '撤销',
@@ -4101,6 +4105,11 @@ const messages = {
             // fact, so a user who had just deleted a run and clicked download was told about a historical
             // persistence limitation that had nothing to do with it. Measured end to end.
             smvModelNotAvailable: 'The server has no SMV model for this run: the run may have been deleted, or it may have been saved without one. Check whether the run is still in your history.',
+            // The line above covers a run that should exist. These two cover a run that was never written
+            // to history at all, where telling the user to check their history is wrong advice: the record
+            // is not there and never will be.
+            smvModelNotPersisted: 'This run was not saved to history, so there is no SMV model on the server to download. Run it again and save the result successfully to download the model.',
+            smvModelPersistenceUnknown: 'Whether this run was written to history is not yet confirmed, so the SMV model cannot be downloaded yet. Refresh run history and try again.',
             smvDownloadFailed: 'SMV model download failed',
             deepLinkUnavailable: 'The run this link points to is unavailable — it may have been deleted or belong to another account. Returned to the board.',
             boardUndo: 'Undo',

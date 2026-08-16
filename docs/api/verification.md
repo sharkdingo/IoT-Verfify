@@ -1079,6 +1079,14 @@ thousands of characters. Offer the download only when that flag is true — gati
 instead shows the control for records that have no model, and the click then fails with nothing the
 user can act on.
 
+**Two independent reasons a download is unavailable, and they need different wording.** A run must
+also be *addressable*, which `historyPersistence` decides: only `status: SAVED` yields a run id the
+endpoint can be called with. So "no model for a saved run" and "no run to ask about" are separate
+states, and telling the second group to look for the record in their history sends them after
+something that does not exist. `OUTCOME_UNKNOWN` is a third case again — the save may or may not have
+landed, and reporting it as an absence would resolve an unknown the client cannot resolve. The board
+maps these in `views/board/smvUnavailableReason.ts`.
+
 | DTO | Surface it gates | How it is produced |
 | :--- | :--- | :--- |
 | `VerificationResultDto` | Verification result dialog, straight after a sync run | derived getter over `smvModelContent` |

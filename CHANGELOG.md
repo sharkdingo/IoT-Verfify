@@ -19,6 +19,22 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **An unavailable SMV model blamed a cause that was often not the user's.** The notice beside a
+  disabled download told every reader to "check whether the run is still in your history". That is
+  sound advice for a run that was saved and whose model is genuinely gone — but four
+  `RunPersistenceStatus` values reach that notice, and for three of them there is no history record to
+  check and never will be: the user did not ask to save the run, the save failed, or its outcome is
+  unconfirmed. Those readers were sent to look for a record that does not exist, with the real reason
+  never stated.
+
+  The wording now follows the status. A run that was never persisted says so and names the way
+  forward (run again and save successfully); an unconfirmed write keeps its own wording rather than
+  being reported as a confirmed absence, the same distinction the automatic-fix action already drew
+  for counterexamples; a saved run keeps the original message. An unrecognized status falls through to
+  the wording that asserts no cause, because not knowing what a status means is not evidence that
+  nothing was saved. The rule is a pure function in `views/board/smvUnavailableReason.ts` with its own
+  tests, rather than a third status branch inline in the template.
+
 - **Choosing a device-import file could import the payload it replaced.** Reading a file is
   asynchronous, and nothing invalidated the preview across that gap: between the file dialog closing
   and the contents arriving, the parsed list, the validity count and the create button all still
