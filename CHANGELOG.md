@@ -60,6 +60,40 @@ history into a technical spec. The spec content itself now lives under
   with no utility after it, so the one control whose whole job is "click me to seek here" gave no pointer
   feedback. It now highlights its border on hover, matching the identical rail in the simulation timeline.
 
+- **The playback header's violation chip appeared for an exploration finding and never for a
+  counterexample.** It tested `activeFuzzingFinding.firstViolationStep` directly instead of reading the
+  computed that owns the question, so stepping a verification counterexample onto its violating state left
+  the chip silent while the rail immediately beneath it marked that very step and the canvas outlined the
+  bound devices — two surfaces in the same header disagreeing about whether the step the user is standing
+  on is the failure. It now reads `traceStateViolationLabel`, the same helper the rail uses, which also
+  means a liveness cycle says "cycle" here rather than naming a single state that is not the fault. Its
+  `data-testid` changes from `fuzzing-timeline-first-violation` to `trace-timeline-violation-chip`, since
+  the control is no longer exploration-only; no E2E spec referenced the old id.
+
+- **A committed test class had never run, and the suite's green total said nothing about it.**
+  `VerifyCorrectedScene` carried an `@Test` method under a name matching none of surefire's include
+  patterns (`Test*`, `*Test`, `*Tests`, `*TestCase`), so it was silently skipped on every CI run while
+  reading, in the source tree, as coverage. It was in fact a probe script — no assertions, only
+  `System.out.println`, a live NuSMV binary required, 44 seconds — and belonged outside the checkout. It
+  is deleted, and a new `TestClassNamingReachabilityTest` fails on any test-bearing class under a
+  non-matching name, so the next one cannot hide the same way. The shipped scene it probed keeps its real
+  coverage in `ShippedSceneImportTest`, which globs `docs/examples` at the import request boundary.
+
+- **The assistant could not tell a counterexample's cycle from a path that stopped changing.** `get_trace`
+  projected each state's index, devices, triggered rules and variables but dropped `loopStart` and
+  `loopBack`, the two flags that mark the infinite cycle NuSMV ends on — and for a liveness specification
+  (`templateId` 2, 5, 6) that cycle *is* the violation rather than any single state. The flags cannot be
+  inferred from the values: NuSMV re-prints the loop entry carrying no variable lines, so after the delta
+  merge the closing state is identical to its predecessor. An assistant explaining such a trace therefore
+  saw a path that merely stalls, which is the same misreading the frontend needed a dedicated field to
+  avoid — and paging makes it worse here, because one 10-state window need not contain both ends of the
+  cycle.
+
+  Both flags are now projected, present only when true so that finite simulation and fuzz traces — which
+  never carry them, since the NuSMV trace parser is their only writer — keep their existing output rather
+  than gaining two always-false keys. The tool description states what they mean, since a tool's schema
+  description is part of its contract.
+
 - **A liveness counterexample marked no step on the trace rail.** Templates 2, 5 and 6 are refuted by an
   infinite lasso path, so no single state is at fault and the single-step violation index is `undefined`
   for them by construction. The rail tested only that index, so it labelled nothing — while the canvas
@@ -320,7 +354,7 @@ history into a technical spec. The spec content itself now lives under
 
 - **`docs/examples/elderly-care-comprehensive-scene.json` is now tracked.** It is generated, and it is
   byte-identical to generator output (all five shipped scenes reproduce exactly), so a fresh clone no
-  longer has a broken reference from the docs and from `VerifyCorrectedScene`.
+  longer has a broken reference from the docs.
 
 ### 2026-08-16
 

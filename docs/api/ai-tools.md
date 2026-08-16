@@ -132,6 +132,16 @@ The three state-sequence detail tools, `get_trace`, `get_simulation_trace`, and
 window rather than a validation failure. Fuzz-finding input events are restricted to the
 same returned state window.
 
+A `get_trace` state may additionally carry `loopStart: true` or `loopBack: true`, present only when
+true and only on verification counterexamples — simulation and fuzz traces are finite paths that never
+carry them. They mark the infinite cycle NuSMV ends on, which for a liveness specification
+(`templateId` 2, 5, 6) *is* the violation rather than any single state; see
+[verification-flow.md](../architecture/verification-flow.md#parser-boundaries). They cannot be
+inferred from the values, because NuSMV re-prints the loop entry with no variable lines and the delta
+merge therefore makes the closing state identical to its predecessor. Omitting them left the assistant
+reading such a trace as a path that merely stops changing — a stalled or truncated run — and paging
+makes that worse, since one window need not contain both ends of the cycle.
+
 `get_trace` and `get_simulation_trace` return the run's `modelSnapshot`, which carries
 `environmentProvenance` — the frozen per-shared-value evolution rules. The assistant needs it to
 explain a changed environment value: the states alone show that `temperature` moved from `20` to
@@ -616,7 +626,7 @@ from damaged persistence.
 | `list_verification_runs` | List all completed formal conclusions, including satisfied runs with no counterexample. |
 | `get_verification_run` | Read one completed run's per-spec results and completeness without exposing raw NuSMV output. |
 | `list_traces` | List all saved verification counterexample traces (each a state sequence leading to a violation). Each row now also carries its `runId` for run-level history operations. |
-| `get_trace` | Get a saved verification trace by traceId with a bounded, pageable state window. |
+| `get_trace` | Get a saved verification trace by traceId with a bounded, pageable state window. States carry `loopStart`/`loopBack` where the trace ends in a cycle, which is the violation itself for a liveness specification. |
 | `delete_trace` | Preview a saved verification trace and receive an opaque `impactToken`, then delete it only after explicit confirmation with that token in a later user turn. |
 | `delete_verification_run` | Preview a completed verification run and the exact number of stored trace rows with an opaque `impactToken`, then cascade-delete the run and every trace row it produced only after explicit confirmation with that token in a later user turn. The count includes unavailable or damaged evidence and is intentionally distinct from the run's replayable counterexample count. |
 | `fix_violation` | Analyze a violation trace to localize fault rules and suggest fixes via parameter, condition, or permanent rule-removal strategies (needs a traceId). |

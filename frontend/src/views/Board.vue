@@ -19006,13 +19006,24 @@ const counterexampleTraceHelpText = computed(() => {
               :label="t('app.traceVisualization.playbackSnapshotReadOnly')"
               test-id="trace-timeline-snapshot-notice"
             />
+            <!--
+              The header's violation chip, for a counterexample as much as for an exploration finding.
+
+              It used to test `activeFuzzingFinding.firstViolationStep` directly, so it appeared only for a
+              fuzz finding: stepping a verification counterexample onto its violating state, this chip — the
+              one at the top of the playback header, beside the state counter — stayed silent while the rail
+              beneath it marked that very step and the canvas outlined the devices. Reading
+              `traceStateViolationLabel` gives one owner for "does this step carry a violation word", so the
+              header cannot disagree with the rail again, and a liveness cycle says "cycle" here too instead
+              of naming a single state that is not the fault.
+            -->
             <span
-              v-if="activeFuzzingFinding && traceAnimationState.selectedStateIndex === activeFuzzingFinding.firstViolationStep"
+              v-if="traceStateViolationLabel(traceAnimationState.selectedStateIndex)"
               class="inline-flex items-center gap-1 rounded-full board-chip-danger px-2 py-0.5 text-xs font-bold board-text-danger"
-              data-testid="fuzzing-timeline-first-violation"
+              data-testid="trace-timeline-violation-chip"
             >
               <span class="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
-              {{ t('app.fuzzFirstViolation') }}
+              {{ traceStateViolationLabel(traceAnimationState.selectedStateIndex) }}
             </span>
             <span
               v-if="!activeFuzzingFinding && traceModelSemanticsConsistent && !activeTraceContext.isAttack"

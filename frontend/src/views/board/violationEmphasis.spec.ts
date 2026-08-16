@@ -242,6 +242,28 @@ describe('violation emphasis reaches the canvas', () => {
     expect(i18n.match(/traceViolationCycle:/g)?.length, 'zh-CN and en both define it').toBe(2)
   })
 
+  it('shows the playback header chip for a counterexample, not only an exploration finding', () => {
+    // The chip hand-rolled its own predicate against `activeFuzzingFinding.firstViolationStep`, so it
+    // appeared for a fuzz finding and never for a verification counterexample — while the rail directly
+    // beneath it marked that very step. Two surfaces in the same header, one step apart, disagreeing about
+    // whether the step the user is standing on is the violation.
+    //
+    // The helper is a strict superset of the old test: it returns the fuzz wording when a finding is
+    // active, the safety word otherwise, and the cycle word inside a liveness loop.
+    expect(board, 'the chip reads the one owner of "does this step carry a violation word"')
+      .toMatch(/v-if="traceStateViolationLabel\(traceAnimationState\.selectedStateIndex\)"/)
+    expect(board, 'and prints what that helper returns rather than a hardcoded fuzz string')
+      .toMatch(/\{\{ traceStateViolationLabel\(traceAnimationState\.selectedStateIndex\) \}\}/)
+    // The finding-only predicate must be gone, not merely supplemented: leaving it would keep two owners.
+    expect(board, 'no second, finding-only violation predicate remains in the header')
+      .not.toContain('traceAnimationState.selectedStateIndex === activeFuzzingFinding.firstViolationStep')
+    // The old testid named exploration only; the chip is now kind-agnostic, so the id must be too. A
+    // stale selector elsewhere would address a control that no longer exists.
+    expect(board, 'the testid no longer claims the chip is exploration-only')
+      .not.toContain('data-testid="fuzzing-timeline-first-violation"')
+    expect(board).toContain('data-testid="trace-timeline-violation-chip"')
+  })
+
   it('says why the loop-closing step shows no change, rather than reporting an empty diff', () => {
     // NuSMV re-prints the loop entry with no variable lines, so the delta merge makes the final state
     // identical to its predecessor. "No observable changes" is then true but reads as a broken animation.

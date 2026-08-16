@@ -178,4 +178,40 @@ class GetTraceToolTest {
         assertEquals(0, beyondEnd.path("returnedStateCount").asInt());
         assertEquals(false, beyondEnd.path("hasMoreStates").asBoolean());
     }
+
+    /**
+     * A liveness counterexample's fault is its cycle, and the cycle is not visible in the values: NuSMV
+     * re-prints the loop entry with no variable lines, so after the delta merge the closing state equals its
+     * predecessor. Without these flags the assistant sees a path that stops changing — a stalled or truncated
+     * run — instead of the infinite repetition that is the violation.
+     */
+    @Test
+    void execute_marksTheCycleOfALivenessCounterexample() throws Exception {
+        UserContextHolder.setUserId(1L);
+        SpecificationDto violatedSpec = new SpecificationDto();
+        violatedSpec.setId("spec_5");
+        violatedSpec.setTemplateId("5");
+        TraceDto trace = TraceDto.builder()
+                .id(9L)
+                .violatedSpecId("spec_5")
+                .violatedSpec(violatedSpec)
+                .modelComplete(true)
+                .states(List.of(
+                        TraceStateDto.builder().stateIndex(0).build(),
+                        TraceStateDto.builder().stateIndex(1).loopStart(true).build(),
+                        TraceStateDto.builder().stateIndex(2).loopBack(true).build()))
+                .build();
+        when(verificationService.getTrace(1L, 9L)).thenReturn(trace);
+
+        JsonNode states = objectMapper.readTree(tool.execute("{\"traceId\":9}")).path("states");
+
+        assertEquals(3, states.size());
+        assertEquals(true, states.get(1).path("loopStart").asBoolean());
+        assertEquals(true, states.get(2).path("loopBack").asBoolean());
+        // Absent rather than false on an ordinary state, matching how the other optional fields behave here —
+        // a finite simulation or fuzz trace must not gain two always-false keys.
+        assertEquals(false, states.get(0).has("loopStart"));
+        assertEquals(false, states.get(0).has("loopBack"));
+        assertEquals(false, states.get(1).has("loopBack"));
+    }
 }

@@ -48,7 +48,7 @@ public class GetTraceTool extends AbstractAiTool {
         );
 
         return LlmToolSpec.of(getName(),
-                "Get a saved verification trace by traceId with a bounded state window. Page the sequence with stateOffset and stateLimit; use stateCount and nextStateOffset to inspect another window.",
+                "Get a saved verification trace by traceId with a bounded state window. Page the sequence with stateOffset and stateLimit; use stateCount and nextStateOffset to inspect another window. A state may carry loopStart or loopBack: the trace ends in an infinite cycle from loopStart to loopBack, which for a liveness specification (templateId 2, 5, 6) is itself the violation rather than any single state. The loopBack state repeats loopStart, so its values matching its predecessor is the repetition, not a stalled or truncated path.",
                 schema);
     }
 

@@ -53,6 +53,19 @@ public final class ModelTraceToolPresenter {
             if (state == null) continue;
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("stateIndex", state.getStateIndex());
+            // A liveness counterexample's fault is its cycle, not any single state, and NuSMV re-prints the loop
+            // entry carrying no variable lines — so after the delta merge the closing state is identical to its
+            // predecessor. Without these flags an assistant reading such a trace sees a path that simply stops
+            // changing, which reads as a stalled or truncated run rather than as the infinite repetition that
+            // *is* the violation. That is the same misreading the frontend needed a dedicated field to avoid,
+            // and it is worse here: state windows are paginated, so one response need not contain both ends of
+            // the cycle.
+            //
+            // Emitted only when true, matching the other optional fields here: simulation and fuzz traces are
+            // finite paths that never carry them (`SmvTraceParser` is the only writer), so their tool output is
+            // unchanged rather than gaining two always-false keys.
+            if (Boolean.TRUE.equals(state.getLoopStart())) item.put("loopStart", true);
+            if (Boolean.TRUE.equals(state.getLoopBack())) item.put("loopBack", true);
             item.put("devices", devices(state.getDevices()));
             item.put("triggeredRules", rules(state.getTriggeredRules()));
             item.put("compromisedAutomationLinks", rules(state.getCompromisedAutomationLinks()));
