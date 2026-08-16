@@ -31,8 +31,10 @@ history into a technical spec. The spec content itself now lives under
   for safety counterexamples too (measured on both a CTL `AX` and an LTL `G(p)` refutation) and there the
   fault is a single state. The wording had no rendering coverage at all — the only guard was a source
   read of the element ordering, which cannot see what the block says — so `PlaybackChangePopover.spec.ts`
-  now mounts all three cases (liveness, safety-with-loop, and no resolved range) against the shipped
-  strings.
+  now mounts four cases against the shipped strings: liveness, safety-with-loop, no resolved range, and a
+  multi-state cycle whose closing state carries real device changes — the last confirming the `v-else-if`
+  chain selects only the explanatory box and does not suppress the change list beside it, which is the
+  shape where the explanation is the *only* thing distinguishing the step from the path continuing.
 
 - **Eight comments and two docs stated a lasso's closing state is identical to its predecessor; that
   holds only for a one-state cycle.** The claim is the stated justification for carrying `loopStart` /
@@ -50,8 +52,10 @@ history into a technical spec. The spec content itself now lives under
   the flags rather than on comparing values.
 
   Corrected in `TraceStateDto`, `SmvTraceParser`, `ModelTraceToolPresenter`, `GetTraceTool`,
-  `types/verify.ts`, the two affected test docblocks, `docs/api/ai-tools.md` and
-  `docs/architecture/verification-flow.md` (which now owns the fact), and pinned by
+  `types/verify.ts`, `Board.vue`'s two loop computeds, the two affected test docblocks,
+  `docs/api/ai-tools.md`, `docs/api/verification.md`, and
+  `docs/architecture/verification-flow.md` (which now owns the fact, and whose own later paragraph still
+  restated the narrow case as general), and pinned by
   `parseCounterexample_marksAMultiStateCycleWhoseClosingStateCarriesChanges`.
 
 - **Two backend Javadocs named the liveness template set as "5/6", omitting template 2.** Every other

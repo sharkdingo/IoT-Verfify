@@ -12193,12 +12193,15 @@ const activePlaybackIsLivenessViolation = computed(() => {
 /**
  * 1-based state numbers of the repeating cycle [start, end], or null if no loop.
  *
- * NuSMV marks lasso counterexamples with "-- Loop starts here" before the loop-entry state,
- * then terminates by repeating that state with no variable changes. The backend parser sets
- * `loopStart: true` on the entry state and `loopBack: true` on the final repeat state.
+ * NuSMV marks lasso counterexamples with "-- Loop starts here" before the loop-entry state, then
+ * terminates by re-printing that state. The backend parser sets `loopStart: true` on the entry and
+ * `loopBack: true` on the final repeat. Whether that repeat *looks* like a repeat depends on the cycle
+ * length — a one-state cycle carries no variable lines and freezes, a longer one carries the deltas back
+ * to the entry and looks like an ordinary step — so the range is what lets the panel name the cycle
+ * either way; see `TraceStateDto#loopBack`.
  *
- * This range is shown in the PlaybackChangePopover on the loop-back step to explain why
- * nothing changes: "This step returns to state N, repeating states N–M forever."
+ * Shown in the PlaybackChangePopover on the loop-back step, where the shipped wording names this range
+ * and says the cycle is the violation (`app.traceLoopExplanation`).
  */
 const activePlaybackLoopRange = computed<{ start: number; end: number } | null>(() => {
   const states = activePlaybackStates.value
@@ -12243,9 +12246,10 @@ const activePlaybackLoopRange = computed<{ start: number; end: number } | null>(
 /**
  * Whether the current playback step is the loop-back state.
  *
- * When true, the PlaybackChangePopover shows a loop explanation instead of the generic
- * "no observable changes" message, because the absence of changes is the state's meaning:
- * it's the identical repeat that closes the cycle.
+ * When true, the PlaybackChangePopover explains the cycle instead of describing this step like any other.
+ * On a one-state cycle that displaces the generic "no observable changes" message, because there the
+ * absence of changes *is* the state's meaning; on a longer cycle the step carries real changes and the
+ * explanation is what stops it from reading as the path continuing.
  */
 const activePlaybackIsLoopBackState = computed(() => {
   const currentState = activePlaybackStates.value[activePlaybackStateIndex.value]

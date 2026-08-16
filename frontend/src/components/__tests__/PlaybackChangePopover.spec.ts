@@ -636,6 +636,32 @@ describe('PlaybackChangePopover', () => {
       expect(text).toContain('2')
     })
 
+    it('explains the cycle alongside the changes when the closing state carries its own values', () => {
+      // Measured on NuSMV 2.7.1: only a one-state cycle prints the closing state with no variable lines. A
+      // longer cycle prints the deltas that return to the entry, so this step looks like an ordinary one and
+      // the explanation is the only thing distinguishing it from the path continuing. The `v-else-if` chain
+      // selects the explanatory box, so it must not also suppress the change list it sits above.
+      appI18n.global.locale.value = 'en'
+      const wrapper = mount(PlaybackChangePopover, {
+        props: loopProps({
+          isLivenessViolation: true,
+          loopRange: { start: 2, end: 4 },
+          stateNumber: 4,
+          totalStates: 4,
+          changes: [{
+            deviceId: 'internal_light_1',
+            deviceLabel: 'Hall light',
+            details: [{ kind: 'state', previousValue: 'on', currentValue: 'off' }]
+          }]
+        }),
+        global: { plugins: [appI18n] }
+      })
+
+      expect(wrapper.get('[data-testid="playback-change-loop-back"]').text()).toMatch(/never reached/i)
+      expect(wrapper.get('[data-testid="playback-change-device-internal_light_1"]').text())
+        .toContain('Hall light')
+    })
+
     it('falls back to the range-free sentence when no loop range is resolved', () => {
       // Both flags can be absent independently, so the popover must not render a half-built sentence
       // with a literal `{start}` in it.

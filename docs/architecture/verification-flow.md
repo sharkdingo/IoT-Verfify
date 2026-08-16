@@ -255,12 +255,11 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
   retains it there rather than starting extraction at the first state), and CTL `AG`/`AG !` traces never
   carry it at all.
 
-  The closing state is why this needs a field rather than an inference: NuSMV re-prints the loop entry
-  carrying *no* variable lines, so the delta merge above reproduces its predecessor exactly. Without
-  the flag the final step of a liveness violation plays back as one where nothing changes, and the
-  per-step change panel reports "no observable changes" — an accurate diff of the state, and a
-  complete misreading of the trace. Clients mark the whole cycle rather than one step, because no
-  single state is at fault.
+  The closing state is why this needs a field rather than an inference — in the one-state case above,
+  the final step of a liveness violation plays back as one where nothing changes and the per-step
+  change panel reports "no observable changes": an accurate diff of the state, and a complete
+  misreading of the trace. Clients mark the whole cycle rather than one step, because no single state
+  is at fault.
 
   **"The whole cycle" means every replay surface, not just the canvas.** A single-step violation index is
   `undefined` for these templates by construction, so any surface derived from it alone goes silent on

@@ -782,9 +782,10 @@ triggeredRules: TraceTriggeredRuleDto[], compromisedAutomationLinks: TraceTrigge
 trustPrivacies: TraceTrustPrivacyDto[], envVariables: TraceVariableDto[],
 globalVariables: TraceVariableDto[], loopStart?: boolean, loopBack?: boolean }`.
 `loopStart` / `loopBack` mark the repeating cycle of an infinite (liveness) counterexample and are
-absent for every finite path — see
-[verification-flow.md](../architecture/verification-flow.md#parser-boundaries) for why the closing
-state carries no observable change of its own.
+absent for every finite path. The closing state repeats the loop *entry*, so whether it differs from
+its own predecessor depends on the cycle length — see
+[verification-flow.md](../architecture/verification-flow.md#parser-boundaries) for both measured
+shapes and why neither flag can be inferred from the values.
 Formal verification and simulation state arrays are strictly one-based and contiguous:
 the first `stateIndex` is `1`, and each following item increments by exactly one. Empty,
 zero-based, duplicate, or gapped persisted trajectories are rejected as unavailable.
