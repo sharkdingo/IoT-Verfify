@@ -19,6 +19,39 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **Choosing a device-import file could import the payload it replaced.** Reading a file is
+  asynchronous, and nothing invalidated the preview across that gap: between the file dialog closing
+  and the contents arriving, the parsed list, the validity count and the create button all still
+  described the *previous* text — and the button was still enabled from it. A click landing in that
+  window imported the old payload. `setImportTextImmediately` already closed the 300ms debounce for a
+  file selection, but it can only run once `await file.text()` resolves, so it could not cover this.
+
+  The preview is now invalidated before the read begins (after the synchronous size check, so a
+  rejected oversized file still leaves an existing paste intact). No text means no parsed devices,
+  which means a disabled button, so the worst case becomes a click that does nothing instead of one
+  that imports something the user did not choose.
+
+  Found in CI rather than by reading, and the diagnosis turned on an artifact detail worth recording:
+  the E2E import test failed two consecutive nights with the pasted JSON imported a second time and
+  neither CSV device present. Both payloads happen to parse to exactly two devices, so `toBeEnabled()`
+  and the button's own "Create 2 device(s)" label were already satisfied by the state the step was
+  trying to replace — the assertion never waited for the file at all. The test now waits for the CSV's
+  own preview rows, content the previous payload cannot produce.
+
+- **A viewport resize cancelled panel drags up to 200ms late.** `handleChatViewportResize` ran
+  `stopPanelInteraction()` and `clampExistingChatPosition()` inside one trailing-edge
+  `throttle(..., 200)`, so the cancel could execute long after the resize that scheduled it — landing
+  on a drag the user had begun in between and killing it, leaving the panel a few pixels from where it
+  started. Only the clamp keeps the throttle: it reads geometry and a resize fires continuously while a
+  window is dragged, whereas `stopPanelInteraction` is idempotent and does no layout work.
+
+- **The device-import create handler returned silently when it refused a click.** Five guards share
+  their conditions with the button's `:disabled`, but the binding and the guard evaluate at different
+  moments, so anything changing the preview in between lets the guard see a state the button did not —
+  and a silent return is indistinguishable from a click that worked. It now names the blocking
+  condition in the console (deliberately not a toast: each state is already explained inline above the
+  button), which puts a reason in the Playwright trace.
+
 - **40 callouts asked a borderless role for a border and rendered none.** `board-chip-*` declares
   `border: 0` deliberately — the roles are badges, and the stylesheet says so: *"The `board-surface-*`
   classes are containers and include a border"*. A site combining a chip with `border` is asking for a

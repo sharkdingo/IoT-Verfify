@@ -2022,6 +2022,26 @@ const handleDeviceImportFile = async (event: Event) => {
       notifyError(t('app.importFileTooLarge', { size: '4 MiB' }))
       return
     }
+    /*
+     * Invalidate the preview BEFORE the first await, not after it. Placed after the size check, which is
+     * synchronous: a rejected oversized file then leaves whatever the user had pasted before intact.
+     *
+     * `setImportTextImmediately` below closes the debounce window, but it can only run once
+     * `await file.text()` resolves — and reading a file is asynchronous. In that gap the preview, the
+     * parsed counts and the create button all still describe the PREVIOUS content, and the button is
+     * still enabled from it. A click landing there imports the old payload.
+     *
+     * Measured from the CI artifact for "imports devices from pasted JSON and selected CSV", which
+     * failed two consecutive nights: the JSON payload was imported a second time and neither CSV device
+     * appeared, while the snapshot taken at the timeout shows the CSV did land — just after the click
+     * had already read the JSON state. Both payloads parse to exactly two devices, so neither
+     * `toBeEnabled()` nor the button's own label could tell them apart.
+     *
+     * Everything above this line is synchronous, so the clear lands inside the `change` dispatch: no
+     * text means no parsed devices, means a disabled button, and a caller waiting on the button waits
+     * through the empty window rather than observing the previous payload's enabled state.
+     */
+    setImportTextImmediately('')
     // Immediately, not debounced: see `setImportTextImmediately`. Deferring a file's contents left the
     // create button enabled and describing the file the user had just replaced.
     setImportTextImmediately(await file.text())
@@ -3026,7 +3046,7 @@ watch(() => props.readOnly, readOnly => {
               :placeholder="deviceImportPlaceholder"
             ></textarea>
 
-            <div v-if="parsedImportedDevices.length > 0" class="device-preview-box">
+            <div v-if="parsedImportedDevices.length > 0" data-testid="device-import-preview" class="device-preview-box">
               <div class="device-preview-box__header">
                 <span>{{ t('app.parsedDevices') }}</span>
                 <strong>{{ validImportedDevices.length }}/{{ parsedImportedDevices.length }}</strong>

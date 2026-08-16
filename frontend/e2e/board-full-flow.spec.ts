@@ -1071,6 +1071,19 @@ test.describe('board full-stack NuSMV user flow', () => {
       mimeType: 'text/csv',
       buffer: Buffer.from('template,name\nDoor,front_csv\nLight,hall_light_csv\n')
     })
+    /*
+     * Wait for the CSV's OWN preview rows, not merely for the button to be enabled.
+     *
+     * Reading a file is asynchronous, so between `setInputFiles` and the contents arriving the preview
+     * and the button still describe the previously pasted JSON — and that payload also parses to exactly
+     * two devices, so both `toBeEnabled()` and the button's "Create 2 device(s)" label are already
+     * satisfied by the state this step is trying to replace. This test failed two consecutive nights on
+     * that gap, re-importing the JSON as `import_phone_1`/`import_alarm_1`, and passed locally where the
+     * read is fast enough to win the race. Asserting on content the old payload cannot produce is what
+     * makes the wait real.
+     */
+    await expect(page.getByTestId('device-import-preview')).toContainText('front_csv')
+    await expect(page.getByTestId('device-import-preview')).toContainText('hall_light_csv')
     await expect(page.getByTestId('device-import-create')).toBeEnabled()
     await page.getByTestId('device-import-create').click()
     nodes = await waitForApi<any[]>(request, auth, '/api/board/nodes',
