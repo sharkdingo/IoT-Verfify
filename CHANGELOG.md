@@ -19,6 +19,34 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **Two dead CSS rules for the playback replay bars, one of them half a layout contract.** The two
+  timeline hosts are `position: fixed` **siblings** of `.iot-board`, so every rule written as a board
+  descendant matched nothing — quietly, because the declarations parse and the surface renders with
+  whatever the unprefixed rules give it.
+
+  `.iot-board .board-timeline [data-testid$="-timeline-close"]` declared the 44px touch floor for both
+  replay bars' close buttons inside the narrow/short media query. Dead, so on the viewport where a coarse
+  pointer needs it most both buttons stayed at the ~32px their padding produced, and no target-size check
+  covers that surface.
+
+  `.iot-board.has-playback-change-popover .board-timeline-host` was worse than dead: its *pair* rule
+  matched. On a short landscape viewport the change inspector duly narrowed to 42vw to share the width,
+  while the timeline never yielded the column — so the two overlapped anyway, which is the case the block
+  exists to prevent. Measured against the built bundle at 1280×560, 1024×500 and 900×560: the inspector
+  covered the replay bar over its **full 352px width** at all three (the bar ran to the same right edge the
+  inspector started from), and now clears it by the intended 16px gap. The timeline keys off
+  `data-playback-change-popover`, published by both hosts the way `boardShellStyle` already publishes the
+  width variables. Nine further dead colour rules restated
+  what the live unprefixed block does, with different values, and are gone.
+
+  This is the third form of one structural mistake — the first cost 10 of 12 replay controls their pointer
+  cursor, the second made `--board-floating-gap` unreadable inside the hosts — so
+  `timelineHostScope.spec.ts` now rejects the board-descendant selector shape outright rather than
+  guarding any single declaration. It also guards the second way in: the shared role classes the bars use
+  (`board-chip-*`, `board-surface-*`) are declared as two-arm selector lists, and dropping the bare arm
+  would stop the class applying on the replay bars alone. A class-by-class sweep of every `board-*` name
+  used outside the board root found no further live instance.
+
 - **The sentence explaining a liveness counterexample's final step never said the cycle was the
   violation.** The playback change panel has two wordings for the state that closes a lasso, and the
   liveness one exists precisely to state something the safety one must not: that the path repeats

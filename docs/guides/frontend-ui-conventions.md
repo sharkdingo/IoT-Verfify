@@ -547,6 +547,39 @@ fallback only hides it again — inject the variables onto the fixed element (`b
 is positioned by values it can see. `boardDockGeometry.spec.ts` pins the injected value against the
 stylesheet's.
 
+**The same structure breaks *selectors*, and that half is quieter.** A rule written as
+`.iot-board .board-timeline…` or `.iot-board.has-… .board-timeline-host` matches nothing: the declarations
+parse, the file reads as maintained, and the surface renders with whatever the unprefixed rules happen to
+give it. Three instances found so far, each with a different symptom:
+
+| Rule | What was lost |
+| :--- | :--- |
+| `.iot-board button:not(:disabled)` | 10 of 12 enabled replay controls showed `cursor: default` — a user report |
+| `.iot-board .board-timeline [data-testid$="-timeline-close"]` | the 44px touch floor, inside the narrow media query where it matters most; both close buttons stayed at the ~32px their padding produced |
+| `.iot-board.has-playback-change-popover .board-timeline-host` | half a layout contract: the popover narrowed to 42vw on cue (it *is* inside the board) while the timeline never yielded the column, so on a short landscape viewport the two overlapped — the exact case the block exists to prevent |
+
+Nine dead colour rules sat alongside the second one, restating the neutral-to-token mapping the unprefixed
+`.board-timeline` block already performs, with *different* values — so had the prefix ever matched, the
+higher-specificity dead copy would have won and contradicted the measured overlay treatment.
+
+The third row is the one worth measuring, because "they overlapped" understates it. Against the built bundle,
+with the dead form reproduced beside the shipped one:
+
+| Viewport | Shipped | Dead form |
+| :--- | :--- | :--- |
+| 1280×560 | bar `[16..896]`, inspector `[912..1264]` — 16px apart | bar `[16..1264]` — inspector covers it across its full 352px |
+| 1024×500 | 16px apart | full-width cover |
+| 900×560 | 16px apart | full-width cover |
+
+The inspector did not clip a corner of the replay bar; it sat on top of all of it, because the bar kept the
+whole corridor. A half-matched pair rule fails this way by construction: the arm that *gives away* space is
+the one that matched, so the surface politely shrinks and the other one expands into it.
+
+The rule: for anything a replay bar needs, key off the host (`.board-timeline-host`, `.board-timeline`) or off
+an attribute the host itself publishes — `data-playback-change-popover`, mirrored by both hosts the way
+`boardShellStyle` mirrors the width variables. `timelineHostScope.spec.ts` rejects the board-descendant form
+outright, because the mistake is the selector shape rather than any one declaration.
+
 ## 8. Depth is a scale, and it means containment
 
 Elevation says *what kind of thing* something is, the same way the radius scale does. Three steps, and one

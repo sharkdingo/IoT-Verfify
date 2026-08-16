@@ -149,6 +149,33 @@ describe('SimulationTimeline', () => {
     expect(highlightEvents.at(-1)?.[0]).toMatchObject({ selectedStateIndex: 0 })
   })
 
+  it('publishes whether the change inspector is open, so the bar can yield its column', async () => {
+    /*
+     * The host is a `position: fixed` **sibling** of `.iot-board`, so the short-landscape rule that makes
+     * this bar give the change inspector a right-hand column cannot be written as a board descendant —
+     * `.iot-board.has-playback-change-popover .board-timeline-host` matched nothing, while its pair rule for
+     * the popover *did* match. The inspector narrowed to 42vw on cue and the bar never yielded, so the two
+     * overlapped: exactly the case the rule exists to prevent. The attribute is how the rule reaches here.
+     *
+     * `=== true` rather than truthiness, because the prop is optional: an omitted prop must read as
+     * "no inspector open", not as the string "undefined", which the attribute selector would not match
+     * either way but which would misreport the state to anything reading it.
+     */
+    const wrapper = mount(SimulationTimeline, {
+      props: { visible: true, states: states('first'), changePanelVisible: true },
+      global: { plugins: [i18n] }
+    })
+    const host = () => wrapper.get('[data-testid="simulation-timeline-host"]')
+    expect(host().attributes('data-playback-change-popover')).toBe('true')
+
+    await wrapper.setProps({ changePanelVisible: false })
+    expect(host().attributes('data-playback-change-popover')).toBe('false')
+
+    await wrapper.setProps({ changePanelVisible: undefined })
+    expect(host().attributes('data-playback-change-popover'), 'an absent prop is not an open inspector')
+      .toBe('false')
+  })
+
   it('resets to the first state when a same-length run replaces the visible run', async () => {
     const wrapper = mount(SimulationTimeline, {
       props: { visible: true, states: states('first') },

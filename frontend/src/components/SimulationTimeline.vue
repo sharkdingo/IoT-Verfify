@@ -430,6 +430,7 @@ watch(selectedStateIndex, () => {
     v-if="visible"
     class="board-timeline-host board-timeline-host--simulation"
     data-testid="simulation-timeline-host"
+    :data-playback-change-popover="String(changePanelVisible === true)"
     role="region"
     :aria-label="t('app.traceVisualization.stateSequence')"
   >

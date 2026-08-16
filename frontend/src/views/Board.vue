@@ -18920,6 +18920,7 @@ const counterexampleTraceHelpText = computed(() => {
     class="board-timeline-host board-timeline-host--trace"
     data-testid="trace-timeline-host"
     :style="boardShellStyle"
+    :data-playback-change-popover="String(showPlaybackChangePopover)"
     role="region"
     :aria-label="t('app.traceVisualization.stateSequence')"
   >

@@ -751,8 +751,7 @@
 .iot-board .glass-panel,
 .iot-board .board-side-panel,
 .iot-board .board-surface-panel,
-.iot-board .board-mini-tasks,
-.iot-board .board-timeline {
+.iot-board .board-mini-tasks {
     background: var(--board-panel-bg);
     border-color: var(--board-border);
     color: var(--board-text);
@@ -1858,7 +1857,6 @@
 .iot-board .board-surface-panel,
 .iot-board .board-floating-panel,
 .iot-board .board-mini-tasks,
-.iot-board .board-timeline,
 .iot-board .canvas-map {
     background: var(--surface-overlay);
     border-color: var(--board-border);
@@ -1912,9 +1910,6 @@
 .iot-board .canvas-map .text-slate-400,
 .iot-board .canvas-map .text-slate-500,
 .iot-board .canvas-map .text-slate-600,
-.iot-board .board-timeline .text-slate-400,
-.iot-board .board-timeline .text-slate-500,
-.iot-board .board-timeline .text-slate-600,
 .iot-board .modern-panel .text-slate-400,
 .iot-board .modern-panel .text-slate-500,
 .iot-board .modern-panel .text-slate-600,
@@ -1957,9 +1952,6 @@
 .iot-board .board-mini-tasks .bg-slate-50,
 .iot-board .canvas-map .bg-white,
 .iot-board .canvas-map .bg-slate-50,
-.iot-board .board-timeline .bg-white,
-.iot-board .board-timeline .bg-white\/70,
-.iot-board .board-timeline .bg-slate-50,
 .iot-board .modern-panel .bg-white,
 .iot-board .modern-panel .bg-slate-50,
 .iot-board .modern-panel .bg-slate-50\/50,
@@ -1986,7 +1978,6 @@
 .iot-board .board-mini-tasks .bg-slate-100,
 .iot-board .canvas-map .bg-slate-100,
 .iot-board .canvas-map .bg-slate-200,
-.iot-board .board-timeline .bg-slate-100,
 .iot-board .modern-panel .bg-slate-100,
 .iot-board .glass-panel .bg-slate-100,
 .iot-board .board-side-panel .bg-slate-100,
@@ -2001,8 +1992,6 @@
 .iot-board .board-mini-tasks .border-slate-200,
 .iot-board .canvas-map .border-slate-100,
 .iot-board .canvas-map .border-slate-200,
-.iot-board .board-timeline .border-slate-100,
-.iot-board .board-timeline .border-slate-200,
 .iot-board .modern-panel .border-slate-100,
 .iot-board .modern-panel .border-slate-200,
 .iot-board .modern-panel .border-slate-200\/60,
@@ -2025,9 +2014,6 @@
 .iot-board .board-mini-tasks .text-slate-800,
 .iot-board .canvas-map .text-slate-700,
 .iot-board .canvas-map .text-slate-800,
-.iot-board .board-timeline .text-slate-700,
-.iot-board .board-timeline .text-slate-800,
-.iot-board .board-timeline .text-black,
 .iot-board .modern-panel .text-slate-700,
 .iot-board .modern-panel .text-slate-800,
 .iot-board .modern-panel .text-black,
@@ -2648,7 +2634,12 @@
         z-index: 49;
     }
 
-    .iot-board .board-timeline [data-testid$="-timeline-close"] {
+    /* Unprefixed, because the two replay bars are **siblings** of `.iot-board`, not descendants — the same
+     * structure that made `.iot-board button` miss 10 of 12 replay controls (see the cursor rule at the top
+     * of this file) and made `--board-floating-gap` unreadable inside them. With the prefix this rule matched
+     * nothing, so on the viewport where a 44px target matters most both close buttons stayed at the ~32px
+     * their padding produced. */
+    .board-timeline [data-testid$="-timeline-close"] {
         min-width: 2.75rem;
         min-height: 2.75rem;
     }
@@ -2695,7 +2686,14 @@
         width: min(22rem, 42vw);
     }
 
-    .iot-board.has-playback-change-popover .board-timeline-host {
+    /* Keyed off the host's own `data-playback-change-popover`, not off `.iot-board.has-…`: the hosts are
+     * *siblings* of the board root, so a descendant selector rooted there reserved nothing and the two
+     * overlays kept the full width they each asked for — which on a short landscape viewport is exactly the
+     * overlap this block exists to prevent. The popover half of the pair matched (it *is* inside the board),
+     * so the inspector narrowed to 42vw while the timeline stayed put: half a layout rule, and the half
+     * that shows is the one that gives away space. `boardShellStyle` already mirrors board state onto these
+     * hosts for `--board-floating-gap`; this attribute is the same channel. */
+    .board-timeline-host[data-playback-change-popover='true'] {
         right: calc(min(22rem, 42vw) + (var(--board-floating-gap) * 2));
     }
 }

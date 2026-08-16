@@ -137,7 +137,28 @@ describe('Board surface accessibility contracts', () => {
     expect(shortLandscapePlayback).toContain('@media (min-width: 640px) and (max-height: 599.98px)')
     expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-playback-change-popover')
     expect(shortLandscapePlayback).toContain('width: min(22rem, 42vw)')
-    expect(shortLandscapePlayback).toContain('.iot-board.has-playback-change-popover .board-timeline-host')
+    /*
+     * The timeline half is keyed off the host's own attribute, not off `.iot-board.has-…`.
+     *
+     * This assertion used to require the descendant form — and the comment below already recorded why that
+     * cannot work: the hosts are *siblings* of `.iot-board`. So this test pinned a selector that matched
+     * nothing, and the block delivered half its contract. The popover half *is* inside the board, so it
+     * narrowed to 42vw on cue while the timeline kept the full corridor: the surface that gives away space
+     * obeyed, the surface that was supposed to take it did not, and on a short landscape viewport the two
+     * overlapped anyway. `boardShellStyle` established the pattern of mirroring board state onto these
+     * hosts; the attribute is the same channel, applied by both hosts (Board.vue's trace bar and
+     * SimulationTimeline's, which already receives `changePanelVisible`).
+     */
+    expect(shortLandscapePlayback, 'the timeline yields via an attribute the host can actually match')
+      .toContain(".board-timeline-host[data-playback-change-popover='true']")
+    expect(shortLandscapePlayback, 'and not via a board descendant selector, which reaches no host')
+      .not.toContain('.iot-board.has-playback-change-popover .board-timeline-host')
+    expect(boardSource, 'the trace host publishes the state the rule reads')
+      .toContain(':data-playback-change-popover="String(showPlaybackChangePopover)"')
+    expect(
+      readFileSync(resolve(currentDirectory, '../components/SimulationTimeline.vue'), 'utf8'),
+      'and so does the simulation host, whose bar shares the rule'
+    ).toContain(':data-playback-change-popover="String(changePanelVisible === true)"')
     /*
      * The contract is the geometry — the timeline yields the inspector's width plus a gap on each side.
      *
