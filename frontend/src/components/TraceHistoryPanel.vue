@@ -567,7 +567,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                 <div class="flex shrink-0 flex-col gap-1">
                   <button
                     type="button"
-                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white"
+                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white hover:bg-[color:var(--accent-fill-hover)]"
                     @click="emitWatchTask(task)"
                   >
                     {{ t('app.watchTask') }}
@@ -829,7 +829,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <button
                     type="button"
                     :data-testid="`open-verification-run-${item.run.id}`"
-                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white disabled:cursor-not-allowed board-action-disarmed"
+                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white hover:bg-[color:var(--accent-fill-hover)] disabled:cursor-not-allowed board-action-disarmed"
                     :disabled="actionLocked"
                     @click="emit('open-verification-run', item.run.id)"
                   >
@@ -960,7 +960,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                       <button
                         type="button"
                         :data-testid="`view-verification-trace-${trace.id}`"
-                        class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-[11px] font-medium text-white board-action-disarmed"
+                        class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-[11px] font-medium text-white hover:bg-[color:var(--accent-fill-hover)] board-action-disarmed"
                         :disabled="actionLocked || !trace.dataAvailable"
                         @click="emit('view-verification-trace', trace.id)"
                       >
@@ -1138,7 +1138,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   <button
                     type="button"
                     :data-testid="`replay-simulation-trace-${item.run.id}`"
-                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white disabled:cursor-not-allowed board-action-disarmed"
+                    class="min-h-11 rounded bg-[color:var(--accent-fill)] px-2 py-1 text-xs font-medium text-white hover:bg-[color:var(--accent-fill-hover)] disabled:cursor-not-allowed board-action-disarmed"
                     :disabled="actionLocked"
                     @click="emit('view-simulation-run', item.run.id)"
                   >

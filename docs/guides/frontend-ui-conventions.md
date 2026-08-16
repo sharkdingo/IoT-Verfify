@@ -404,6 +404,19 @@ this survived several review passes, and why a light-only check will not find it
   is `cursor-default` and must not react. A bare `hover:` with nothing after it is the degenerate form of
   the same defect — the counterexample rail's step markers shipped with one, so the control whose entire
   job is "click to seek here" had no pointer feedback.
+- **A filled action button with no hover at all is the same defect, and the rule above cannot see it.**
+  Four primary buttons in Run History — Watch task, Open result, and both Replay buttons — carried
+  `bg-[color:var(--accent-fill)]` and nothing else, while every *secondary* button beside them (Cancel,
+  Delete, Download) did hover. In one run row the fuzz Replay button hovered and the counterexample Replay
+  button directly above it did not, so a single panel gave one action two behaviours, and the button a
+  user reaches for first was the inert one. Guarded by its own rule, scoped to `<button>` openings: a
+  selected segment legitimately holds a fill with no hover, because there the fill states *which segment
+  is selected* and reacting to the pointer would suggest it is still a choice. The verification panel's
+  two attack-mode buttons are that shape and are exempt by the ternary they are written in.
+- **An accessible name must use the same word as the label beside it.** The counterexample rail's step
+  buttons announced "First violation" — the exploration wording, hardcoded — on the state whose visible
+  marker read "Violation". One state, two names, on one control, and only a screen-reader user met the
+  discrepancy.
 - **One action, one colour, across panels that diverge.** The three recommendation panels' Apply buttons
   were amber, blue and red, each broken differently — the amber one hovered white ink onto
   `--warning-surface`, the red one onto itself. They now share the accent pair, because it is one action

@@ -252,6 +252,26 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
   per-step change panel reports "no observable changes" — an accurate diff of the state, and a
   complete misreading of the trace. Clients mark the whole cycle rather than one step, because no
   single state is at fault.
+- **A safety counterexample's violation is its last state, including template 4.** Verification emits the
+  **positive** specification: `SmvGenerator.buildSmvContent` passes a null `ParameterizationConfig`, and
+  only that null forks to `specBuilder.build`. The negated form (`buildNegated`, `EF(...)`) is reached
+  solely by the fix/parameterization strategies, which read its verdict as a satisfiability bit and parse
+  no trace from it. So a client is always looking at NuSMV's counterexample to `AG(...)`, a path that
+  *ends* where the property breaks — templates 1, 3, 4 and 7 all mark their final state.
+
+  Template 4 (`AG(IF → AX(THEN))`) is the one worth stating explicitly, because reasoning about the
+  negated form suggests otherwise: `EF(IF & EX(!THEN))` would end at the trigger with the fault in an
+  unshown successor. That formula is **true** for a violating model, so NuSMV prints no trace for it and
+  no user sees one. Measured on NuSMV 2.7.1 across 21 falsifying models of the positive form: the trigger
+  sits at index *n*, the violating successor at *n+1*, and *n+1* is always the final printed state — the
+  trace never stops at the trigger. This matches the bounded engine, which reports the same state
+  (see [fuzzing-flow.md](fuzzing-flow.md#supported-finite-semantics)).
+
+  One shape to know when reading such a trace by eye: where the violating successor differs from the
+  trigger in no variable — a frozen actuator, a self-loop — the delta encoding prints its state header
+  with zero value lines. That looks like truncation and is not; the materialization above carries the full
+  valuation forward, confirmed against `show_traces -v 1`. Half the traces in the larger measurement pass
+  (8 of 16) had that shape, so it is the common case rather than a corner one.
 - Each device and environment variable carries frozen `BUNDLED`, `CUSTOM`, or `UNKNOWN`
   token provenance. Mixed environment providers and parser-global values are `UNKNOWN`;
   absent provenance makes the persisted trajectory invalid.

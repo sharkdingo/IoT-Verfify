@@ -229,6 +229,58 @@ describe('semantic colour ownership', () => {
     expect(offenders).toEqual([])
   })
 
+  it('gives every filled action button a hover, not only the ones that got reviewed', () => {
+    /*
+     * The rule above catches a hover that renders nothing. This one catches the simpler case it cannot see:
+     * no hover at all.
+     *
+     * Found in `TraceHistoryPanel.vue`, where four primary buttons — Watch task, Open result, and both
+     * Replay buttons — carried `bg-[color:var(--accent-fill)]` and nothing else, while every *secondary*
+     * button beside them (Cancel, Delete, Download) did hover. In a fuzz row the Replay button hovered and
+     * the counterexample Replay button directly above it did not, so within one panel the same action
+     * behaved two ways and the most important control in each row was the inert one.
+     *
+     * Scoped to `<button>` openings so a decorative `<div>` tile is not asked to react to the pointer, and
+     * segmented controls are exempt: there the fill marks *which segment is selected*, the unselected branch
+     * is the one that hovers, and a selected segment reacting to the pointer would suggest it is still a
+     * choice. The verification panel's two attack-mode buttons are that shape, and they are correct as
+     * written — the rule is about a button whose fill is its resting appearance, not one whose fill is its
+     * state. Detected by the fill sitting in a ternary branch (`? '…fill…' : '…hover…'`), which is how a
+     * selected state is written here. The button's class list can span lines, so the search unit is the
+     * whole opening tag.
+     */
+    const offenders: string[] = []
+    const roles = ['accent', 'danger', 'warning', 'info', 'success']
+    for (const { name, text } of allSources()) {
+      const lines = text.split('\n')
+      lines.forEach((line, index) => {
+        if (!/<button\b/.test(line)) return
+        // Scan to the first line *ending* in `>`, which is where a multi-attribute opening tag closes in
+        // this codebase's formatting. Verified rather than assumed: a hover on a nested child does not
+        // satisfy the button, because the scan stops before the child's line.
+        let end = index
+        while (end < lines.length - 1 && !/>\s*$/.test(lines[end])) end += 1
+        const tag = lines.slice(index, end + 1).join(' ')
+        for (const role of roles) {
+          const fill = `bg-[color:var(--${role}-fill)]`
+          if (!tag.includes(fill)) continue
+          // A hover on any of the fill's own properties counts: some buttons lift with a ring or a border
+          // instead, and this rule is about pointer feedback existing, not about which property carries it.
+          if (/(?:group-)?hover:(?:bg|border|ring|shadow|outline|text)-/.test(tag)) continue
+          // A selected segment: the fill sits in a quoted branch that a `?` opens, and the following branch
+          // is the unselected one that hovers. Matched on the quoted string rather than "text after a `?`" —
+          // `bg-[color:var(--danger-fill)]` contains a colon itself, so a `[^:]*` span cannot reach it.
+          const quoted = fill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          const selectedBranch = new RegExp(`\\?\\s*'[^']*${quoted}[^']*'\\s*:\\s*'[^']*hover:`)
+          if (selectedBranch.test(tag)) continue
+          offenders.push(`${name}:${index + 1} <button> filled with --${role}-fill has no hover state`)
+        }
+      })
+    }
+
+    expect(offenders).toEqual([])
+  })
+
   it('fills with the fill half of a role, never the text half, under light ink', () => {
     // The sibling of the rule above, and the same mistake one step earlier: not hovering onto a pale tint,
     // but *starting* on the wrong half of the role.

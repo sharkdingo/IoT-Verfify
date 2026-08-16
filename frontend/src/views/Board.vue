@@ -12541,19 +12541,38 @@ const traceRail = useTimelineRail({
  * final state is also marked only by a star, without a clear 'violation' label". For the one screen whose
  * entire purpose is to show *how* a design fails, that is the central fact left unstated.
  *
- * It does not need a new backend field, because the trace's structure already answers it.
- * `SmvSpecificationBuilder` checks the **negated** specification — template 3 `AG !(p)` becomes
- * `CTLSPEC EF(p)` — and a NuSMV witness for `EF(p)` is a path *ending* at a state where `p` holds. So for
- * templates 1, 3 and 7 the last state is the violating one by construction. Not template 2: it negates to
- * `EG(!A)`, whose witness is an infinite path on which A never holds, so it is a cycle and belongs to
- * `LIVENESS_TEMPLATES` below — this comment named it here while the set correctly omitted it.
+ * It does not need a new backend field, because the trace's structure already answers it. Verification
+ * emits the **positive** specification — `SmvGenerator.buildSmvContent` hard-codes a null
+ * `ParameterizationConfig`, and only that null forks to `specBuilder.build`; the negated form
+ * (`buildNegated`) is reached solely through the fix/parameterization strategies, which read it as a
+ * satisfiability bit and parse no trace from it. So what a client sees is NuSMV's counterexample to
+ * `AG(...)`, which is a path *ending* at the state that breaks it.
  *
- * Template 4 (`AG(a → AX(b))` → `EF(a & EX(!b))`) is deliberately excluded: its witness ends where the
- * trigger holds and the violation is in the unshown successor, so calling the last state "the violation"
- * would be wrong. `docs/architecture/fuzzing-flow.md` states the same boundary for the finite engine, and
- * `undefined` here simply means no step is claimed — which is honest, not a gap.
+ * Templates 1, 3, 4 and 7 therefore all put the violation on the last state. Measured on NuSMV 2.7.1
+ * across 21 falsifying models in two independent passes (5 + 16, deterministic non-response,
+ * nondeterministic response, bounded step counter, branching successors, enumerated device states, the
+ * submodule shape the generator emits, trigger-in-initial-state, and trigger-at-loop-entry): for
+ * template 4 the trigger sits at index n and the violating successor at n+1, and n+1 is always the final
+ * printed state — the trace never stops at the trigger. Template 4 was
+ * excluded here on the reasoning that its witness ends where the trigger holds, which describes the
+ * *negated* form (`EF(a & EX(!b))`); for a violating model that formula is **true**, so NuSMV prints no
+ * trace for it at all, and no user ever sees one. Two things independently agree that n+1 is the
+ * violation: `FuzzModel.evaluate` returns `step + 1` for template 4, and
+ * `docs/architecture/fuzzing-flow.md` §"Supported finite semantics" states "State `n+1` where `IF` held
+ * at `n` and `THEN` is false at `n+1`". Excluding it left 13 of the 42 specs in the shipped scenes — the
+ * most common template, and the one the acceptance demo violates under attack mode — replaying with no
+ * violation marked anywhere.
+ *
+ * Template 2 stays out: it negates to `EG(!A)`, whose witness is an infinite path on which A never holds,
+ * so its fault is a cycle and it belongs to `LIVENESS_TEMPLATES` below.
+ *
+ * One shape to know when reading a trace by eye: when the violating successor differs from the trigger in
+ * no variable (a frozen actuator, a self-loop), NuSMV's delta encoding prints its header with zero value
+ * lines. That reads as truncation and is not — `SmvTraceParser.materializeCompleteState` merges it
+ * forward, and `show_traces -v 1` confirms the full valuation is there. 8 of the 16 measured traces had
+ * that shape.
  */
-const LAST_STATE_VIOLATION_TEMPLATES = new Set(['1', '3', '7'])
+const LAST_STATE_VIOLATION_TEMPLATES = new Set(['1', '3', '4', '7'])
 
 /**
  * Loop range [start, end] for the current counterexample trace, or null if no loop.
@@ -12602,7 +12621,13 @@ const counterexampleViolationStep = computed<number | undefined>(() => {
   // Safety templates: the last state is the violation step.
   if (LAST_STATE_VIOLATION_TEMPLATES.has(String(templateId))) {
     const count = trace.states?.length || 0
-    return count > 0 ? count - 1 : undefined
+    // Template 4 needs two states to *be* a violation — a trigger and the successor that fails to
+    // respond — so a single-state trace claiming it is inconsistent evidence, not a violation at state 0.
+    // Marking state 0 there would name the trigger as the fault, which is the error the exclusion this
+    // set used to carry was guarding against. Templates 1/3/7 have no such floor: an initial state can
+    // break `AG(p)` on its own.
+    const floor = String(templateId) === '4' ? 2 : 1
+    return count >= floor ? count - 1 : undefined
   }
 
   return undefined
@@ -12660,10 +12685,12 @@ const counterexampleViolationSteps = computed<number[]>(() => {
     return steps
   }
 
-  // Safety templates: single last state
+  // Safety templates: single last state. Read from the step computed rather than recomputing it, so the
+  // canvas emphasis and the rail marker cannot disagree — they had two copies of the last-state rule, and
+  // template 4's minimum-length floor would have had to be added to both.
   if (LAST_STATE_VIOLATION_TEMPLATES.has(String(templateId))) {
-    const count = trace.states?.length || 0
-    return count > 0 ? [count - 1] : []
+    const step = counterexampleViolationStep.value
+    return step === undefined ? [] : [step]
   }
 
   return []
@@ -12671,9 +12698,12 @@ const counterexampleViolationSteps = computed<number[]>(() => {
 
 const getTraceStateAriaLabel = (index: number) => {
   const base = `${t('app.traceVisualization.state', { index: index + 1 })} (${index + 1}/${totalStates.value})`
-  return counterexampleViolationStep.value === index
-    ? `${base}, ${t('app.fuzzFirstViolation')}`
-    : base
+  if (counterexampleViolationStep.value !== index) return base
+  // The visible marker on this same button says `traceViolationHere`, so the accessible name must too.
+  // It read `fuzzFirstViolation` unconditionally, which told a screen-reader user "First violation" on a
+  // verification counterexample while the sighted label beside it said "Violation" — one state, two names.
+  const label = activeFuzzingFinding.value ? t('app.fuzzFirstViolation') : t('app.traceViolationHere')
+  return `${base}, ${label}`
 }
 
 // Wrapper to stop playback when scrubbing starts

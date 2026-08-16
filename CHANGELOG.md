@@ -60,6 +60,50 @@ history into a technical spec. The spec content itself now lives under
   with no utility after it, so the one control whose whole job is "click me to seek here" gave no pointer
   feedback. It now highlights its border on hover, matching the identical rail in the simulation timeline.
 
+- **The most common specification template's counterexamples marked no violating state anywhere.**
+  Template 4, immediate response (`AG(IF → AX(THEN))`), was excluded from the set of templates whose
+  violation is the trace's last state, so replaying one of its counterexamples showed no rail marker, no
+  badge in the change panel, and no canvas emphasis — the star on the rail marks the cursor, which is
+  what a reader is then left to interpret as the verdict. It is the template used by 13 of the 42
+  specifications in the shipped example scenes, appears in all seven of them, and is what the acceptance
+  demo violates under attack modeling.
+
+  The exclusion was reasoned from the **negated** specification: `EF(IF & EX(!THEN))` would end where the
+  trigger holds, with the fault in a successor the trace does not show. Verification does not emit that
+  form — it emits the positive one, and only the automatic-fix strategies use the negated model, as a
+  satisfiability check they parse no trace from. For a model that actually violates the property the
+  negated formula is *true*, so NuSMV prints no trace for it and no user ever sees one.
+
+  Measured on NuSMV 2.7.1 across 21 falsifying models of the positive form: the trigger is at state *n*,
+  the violating successor at *n+1*, and *n+1* is always the last state in the trace — it never stops at
+  the trigger. Two other parts of the platform already agreed on that state: the bounded exploration
+  engine reports the successor as the violation, and the exploration semantics table documents "State
+  `n+1` where `IF` held at `n` and `THEN` is false at `n+1`". Only the replay surfaces disagreed. They
+  now mark the same state, so a user stepping to the end of an immediate-response counterexample sees
+  which device failed to respond and when.
+
+  With a minimum length, because this template is the one where the trace can be too short to contain a
+  violation: it needs a trigger *and* the successor that fails to respond, so a single-state trace
+  claiming it is inconsistent evidence rather than a violation at state 0 — marking that one state would
+  name the trigger as the fault. The other safety templates have no such floor, since an initial state can
+  break `AG(p)` on its own. The canvas emphasis now derives its state from the same computed the rail
+  marker reads instead of carrying a second copy of the last-state rule, so the two cannot drift.
+
+- **Four primary buttons in Run History had no hover state, and the rail told a screen reader a
+  different word than it showed.** Watch task, Open result, and both Replay buttons carried a filled
+  accent background and nothing else, while every *secondary* button beside them — Cancel, Delete,
+  Download — did respond to the pointer. In a run row the fuzz Replay button hovered and the
+  counterexample Replay button directly above it did not, so one panel gave the same action two
+  behaviours and the most consequential control in each row was the inert one. This is the companion of
+  the no-op hover fixed above: there the hover named the resting colour, here there was no hover at all,
+  which the guard for the first case cannot see. It is now guarded as well, scoped to `<button>` so a
+  selected segment — where the fill marks the selection and reacting to the pointer would suggest it is
+  still a choice — stays exempt.
+
+  Separately, the counterexample rail's step buttons announced "First violation" to a screen reader on
+  the state whose visible marker read "Violation": the accessible name was hardcoded to the exploration
+  wording. One state under two names, on the same control. The accessible name now follows the marker.
+
 - **The playback panel marked the violating state during exploration and stayed silent during
   verification.** Two surfaces explain a replayed step: the rail marker beneath the canvas, and the
   change panel above it that says what happened *at this state*. For a counterexample of a safety

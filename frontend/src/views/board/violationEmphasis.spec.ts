@@ -67,8 +67,8 @@ describe('violation emphasis reaches the canvas', () => {
   it('does not treat a loop on a safety counterexample as the violation', () => {
     // Measured on NuSMV 2.7.1: `-- Loop starts here` appears on SAFETY counterexamples too — a CTL
     // `AG(motion -> AX light)` (template 4) trace and an LTL `G(p)` trace both carry one, and the LTL trace
-    // carried the line TWICE. Keying the cycle off the marker alone therefore marked a cycle for a safety
-    // violation and re-admitted template 4, the one template that must deliberately claim no step.
+    // carried the line TWICE. Keying the cycle off the marker alone therefore marks a cycle for a safety
+    // violation, whose fault is a single state.
     const liveness = board.slice(board.indexOf('const LIVENESS_TEMPLATES'), board.indexOf('const LIVENESS_TEMPLATES') + 200)
     expect(liveness, 'exactly the liveness templates').toMatch(/'2'.*'5'.*'6'/)
 
@@ -88,8 +88,45 @@ describe('violation emphasis reaches the canvas', () => {
     // prose legitimately names 2/5/6 when explaining why they are excluded.
     const declaration = board.slice(board.indexOf('const LAST_STATE_VIOLATION_TEMPLATES'))
     const literal = declaration.slice(0, declaration.indexOf(')') + 1)
-    expect(literal, 'the safety templates keyed by last state').toContain("'1', '3', '7'")
+    expect(literal, 'the safety templates keyed by last state').toContain("'1', '3', '4', '7'")
     expect(literal, 'liveness templates are excluded from the last-state rule').not.toMatch(/'2'|'5'|'6'/)
+  })
+
+  it('marks the violating state of an immediate-response counterexample too', () => {
+    // Template 4 was excluded from the last-state set on the reasoning that its witness ends where the
+    // trigger holds, with the violation in an unshown successor. That describes the NEGATED form
+    // `EF(a & EX(!b))` — and verification never emits it: `SmvGenerator.buildSmvContent` passes a null
+    // `ParameterizationConfig`, which is the only branch that forks to the positive `specBuilder.build`,
+    // while `buildNegated` is reached solely by the fix strategies, which read it as a satisfiability bit.
+    // For a violating model that negated formula is `true`, so NuSMV prints no trace for it at all.
+    //
+    // Measured on NuSMV 2.7.1 across 21 falsifying models of the positive `AG(if -> AX(then))`: the trigger
+    // is at index n, the violating successor at n+1, and n+1 is always the last printed state. Two other
+    // parts of the platform already say the same: `FuzzModel.evaluate` returns `step + 1`, and
+    // `docs/architecture/fuzzing-flow.md` states "State `n+1` where `IF` held at `n`". Excluding it left the
+    // most common template in the shipped scenes (13 of 42 specs) replaying with nothing marked.
+    const declaration = board.slice(board.indexOf('const LAST_STATE_VIOLATION_TEMPLATES'))
+    const literal = declaration.slice(0, declaration.indexOf(')') + 1)
+    expect(literal, 'immediate response is a last-state violation').toContain("'4'")
+    // And it must not also be treated as liveness, which would mark a cycle instead of the state.
+    const liveness = board.slice(board.indexOf('const LIVENESS_TEMPLATES'))
+    expect(liveness.slice(0, liveness.indexOf(')') + 1), 'template 4 is not liveness').not.toContain("'4'")
+
+    // A template-4 violation needs a trigger AND the successor that fails to respond, so a one-state trace
+    // claiming it is inconsistent evidence. Marking its only state would name the trigger as the fault —
+    // exactly the error the old exclusion was guarding against. Templates 1/3/7 have no such floor: an
+    // initial state can break `AG(p)` on its own.
+    const step = board.slice(board.indexOf('const counterexampleViolationStep'))
+    const safety = step.slice(0, step.indexOf('\n})'))
+    expect(safety, 'template 4 requires two states').toMatch(/templateId\) === '4' \? 2 : 1/)
+    expect(safety, 'and the length is compared against that floor').toMatch(/count >= floor/)
+
+    // The canvas set and the rail marker must not each carry their own copy of the last-state rule: they
+    // did, and this floor would have had to be added to both to keep them agreeing.
+    const steps = board.slice(board.indexOf('const counterexampleViolationSteps'))
+    const safetySteps = steps.slice(0, steps.indexOf('\n})'))
+    expect(safetySteps, 'the set reads the single owner').toContain('counterexampleViolationStep.value')
+    expect(safetySteps, 'and does not recompute the last index itself').not.toMatch(/count\s*-\s*1/)
   })
 
   it('does not carry a counterexample violation into a simulation replay', () => {
@@ -127,6 +164,22 @@ describe('violation emphasis reaches the canvas', () => {
       .not.toContain("props.kind === 'fuzzing'")
     expect(predicate, 'an absent state number must match nothing, not state undefined')
       .toContain('props.violationStateNumber !== undefined')
+  })
+
+  it('gives the rail button the same violation word its visible marker shows', () => {
+    // The marker renders `traceViolationHere` while the accessible name said `fuzzFirstViolation`
+    // unconditionally, so a screen-reader user heard "First violation" on a verification counterexample
+    // and a sighted user read "Violation" — one state under two names, on the same button.
+    const at = board.indexOf('const getTraceStateAriaLabel')
+    expect(at, 'the label builder should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, at + 700)
+    expect(body, 'exploration keeps its own wording').toContain("t('app.fuzzFirstViolation')")
+    expect(body, 'and a counterexample gets the marker word').toContain("t('app.traceViolationHere')")
+    // The marker itself must be the thing this agrees with, so assert its key at the rail too. Anchored on
+    // the `v-if`, not the bare predicate: that predicate also drives the ring class a few lines earlier, and
+    // a window from there stops before the label.
+    const marker = board.slice(board.indexOf('v-if="counterexampleViolationStep === Number(index)"'))
+    expect(marker.slice(0, 400), 'the visible marker word').toContain("t('app.traceViolationHere')")
   })
 
   it('says why the loop-closing step shows no change, rather than reporting an empty diff', () => {
