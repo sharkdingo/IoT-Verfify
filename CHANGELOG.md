@@ -19,6 +19,13 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **An exploration run opened from page 2 of history could be closed as "deleted" when it was only
+  off-page.** Exploration is the one paginated run history (`/fuzz/runs` takes `page`/`size`, defaults to
+  25, ordered newest-first against a 100-run stored quota), and a history reload replaces the list with
+  page 0 — so the new reconciliation below, which reads absence from the reloaded list as a deletion, had
+  a false positive for any run the user had paged back to find. It now stands down while `hasMore` says
+  later pages exist. Verification and simulation return their whole lists, so absence there is real.
+
 - **A deleted simulation trajectory kept replaying, and its model download still offered the deleted
   record.** `delete_simulation_trace` is a shipped assistant tool, and unlike the other two run kinds a
   trajectory's primary surface is the replay *bar* — a non-modal sibling of the board — so the assistant

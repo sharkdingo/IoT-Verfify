@@ -12548,6 +12548,12 @@ const reconcileOpenFuzzingRunAgainstHistory = () => {
   if (typeof openRunId !== 'number') return
   if (fuzzingRuns.value.length === 0) return
   if (fuzzingRuns.value.some(run => run.id === openRunId)) return
+  // Exploration is the one paginated history (25 per page, `createdAt DESC`, against a 100-run stored
+  // quota), and a reload replaces the list with page 0 — so a run the user opened from page 2 is
+  // legitimately absent here and must not be reported as deleted. Verification and simulation both load
+  // their whole list, which is why only this kind needs the check. `hasMore` after a page-0 replace means
+  // "later pages exist that this list does not describe", so absence proves nothing.
+  if (fuzzingRunsHasMore.value) return
   // Clears the deep link with the surface, so the URL sync cannot reopen the deleted run.
   dismissFuzzingResult()
   // Its own string, not the verification one: that copy says "verification result" and offers "re-run to

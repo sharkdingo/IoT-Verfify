@@ -68,6 +68,12 @@ link stays meaningful for anyone with access to that run.
   its function, its wording and its own tests green — measured. So the spec enumerates the declared
   `reconcileOpen*AgainstHistory` functions and requires each to be dispatched, rather than listing the
   names it already knows.
+  Exploration needs a third guard, because "absent from the list" only means deleted when the list is
+  the whole list. `/fuzz/runs` is the only paginated run history (`page`/`size`, default 25, ordered
+  `createdAt DESC`, against a 100-run stored quota) and a reload replaces the list with page 0 — so a
+  run opened from a later page is legitimately missing, and reporting that as a deletion would
+  fabricate a cause exactly like the 404 above. `hasMore` is the check; verification and simulation
+  return their full lists from the controller, which is why only exploration carries it.
   Simulation needs one guard the others do not: their ids come from refs cleared on close, so "has a
   run id" implies "is on screen", whereas `lastSimulationResult` deliberately outlives every surface
   (staleness belongs to the run, not the dialog) — reading the id off it alone announces that a panel

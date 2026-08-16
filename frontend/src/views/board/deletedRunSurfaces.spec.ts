@@ -182,6 +182,18 @@ describe('surfaces for a deleted exploration run', () => {
     // or scoped-empty history looks like, so only absence from a POPULATED list counts as deleted.
     expect(body, 'an empty history must not be read as "deleted"')
       .toContain('fuzzingRuns.value.length === 0')
+
+    /*
+     * The guard the other two kinds do not need, and the one this reconciliation shipped without.
+     * Exploration is the only paginated run history: `FUZZ_RUN_HISTORY_PAGE_SIZE` is 25, the backend orders
+     * `createdAt DESC` against a 100-run stored quota, and `refreshRunHistory` reloads page 0 with
+     * `append: false`, replacing the list. So a run opened from page 2 is legitimately absent from the
+     * reloaded list — closing it and blaming a deletion would be a fabricated cause, the same defect class
+     * as the 404 that started this file. Verification and simulation load their entire list, so absence
+     * there is real.
+     */
+    expect(body, 'a truncated page must not be read as "deleted"')
+      .toContain('fuzzingRunsHasMore.value')
   })
 
   it('hangs off the same successful-reload hook as verification', () => {
