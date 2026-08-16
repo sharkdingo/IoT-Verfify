@@ -3,6 +3,8 @@ package cn.edu.nju.Iot_Verify.component.aitool.board;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableUpdateRequestDto;
+import cn.edu.nju.Iot_Verify.exception.EnvironmentVariableConflictException;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -44,21 +46,25 @@ public class ManageEnvironmentTool extends AbstractAiTool {
         properties.put("action", Map.of(
                 "type", "string",
                 "enum", List.of("list", "set", "reset"),
-                "description", "list reads the current shared environment pool; set changes only explicitly supplied fields; reset restores one variable's template defaults."));
+                "description", "list reads the current shared environment pool; set changes only explicitly "
+                        + "supplied fields and preserves the rest; reset restores one variable's template "
+                        + "defaults. set is compare-and-set against the pool as this call reads it: if the "
+                        + "variable changed meanwhile it is rejected with ENVIRONMENT_VARIABLE_STALE and "
+                        + "nothing is written, so re-read with list before setting again."));
         properties.put("name", Map.of(
                 "type", "string",
                 "description", "Environment variable name. Required for set/reset; use list first. Only variables required by devices on the current board are editable."));
         properties.put("value", Map.of(
                 "type", "string",
-                "description", "Optional initial model value for set. It must belong to the template-declared domain."));
+                "description", "Initial model value for set. Individually optional, but set requires at least one of value, trust or privacy - supplying none is rejected. It must belong to the template-declared domain."));
         properties.put("trust", Map.of(
                 "type", "string",
                 "enum", List.of("trusted", "untrusted"),
-                "description", "Optional MEDIC control-source label. When several values trigger one rule, one trusted source retains trusted control and only an all-untrusted set makes the target untrusted. This is not authentication or generic data integrity."));
+                "description", "MEDIC control-source label; individually optional, see value for the joint requirement. When several values trigger one rule, one trusted source retains trusted control and only an all-untrusted set makes the target untrusted. This is not authentication or generic data integrity."));
         properties.put("privacy", Map.of(
                 "type", "string",
                 "enum", List.of("public", "private"),
-                "description", "Optional sensitivity label for MEDIC privacy propagation. This does not enforce access control or encryption."));
+                "description", "Sensitivity label for MEDIC privacy propagation; individually optional, see value for the joint requirement. This does not enforce access control or encryption."));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", properties, List.of("action"));
@@ -94,6 +100,25 @@ public class ManageEnvironmentTool extends AbstractAiTool {
         } catch (ServiceUnavailableException e) {
             log.warn("manage_environment busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
+        } catch (EnvironmentVariableConflictException e) {
+            /*
+             * A stale-baseline rejection, ahead of the generic `BaseException` branch below.
+             *
+             * That branch would already return the right 409 — this exception extends `ConflictException`
+             * extends `BaseException` — but under the flat `BUSINESS_ERROR` code and with only the message.
+             * A conflict is the one failure here that the model can act on by itself, and to do that it
+             * needs three things the generic branch drops: a reason code it can branch on, the variable's
+             * *current* row so it can decide whether its intent still applies, and an instruction not to
+             * simply retry the same write. Nothing was written, so this is safe to retry after re-reading.
+             */
+            log.warn("manage_environment stale baseline for '{}'", e.getVariableName());
+            Map<String, Object> conflict = new LinkedHashMap<>();
+            conflict.put("variableName", e.getVariableName());
+            conflict.put("currentVariable", e.getCurrentVariable());
+            conflict.put("guidance", "The variable changed after this call read it, so nothing was written. "
+                    + "Re-read with action=list, confirm the change is still wanted against the current "
+                    + "value, then set again. Do not repeat the same set blindly.");
+            return errorJson(e.getMessage(), EnvironmentVariableConflictException.REASON_CODE, 409, conflict);
         } catch (BaseException e) {
             log.warn("manage_environment business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
@@ -138,23 +163,42 @@ public class ManageEnvironmentTool extends AbstractAiTool {
         if (hasTrust) suppliedFields.add("trust");
         if (hasPrivacy) suppliedFields.add("privacy");
 
-        AtomicReference<BoardEnvironmentVariableDto> previousRef = new AtomicReference<>();
-        List<BoardEnvironmentVariableDto> current = boardStorageService.updateEnvironmentVariables(userId, values -> {
-            int index = indexOf(values, name);
-            if (index < 0) {
-                throw unknownVariable(name, values);
-            }
-            BoardEnvironmentVariableDto previous = copy(values.get(index));
-            previousRef.set(previous);
-            List<BoardEnvironmentVariableDto> next = copyAll(values);
-            next.set(index, new BoardEnvironmentVariableDto(
-                    previous.getName(),
-                    hasValue ? value : previous.getValue(),
-                    hasTrust ? trust : previous.getTrust(),
-                    hasPrivacy ? privacy : previous.getPrivacy()));
-            return next;
-        });
-        BoardEnvironmentVariableDto previous = previousRef.get();
+        /*
+         * Compare-and-set against the baseline this call actually read, through the same
+         * `saveEnvironmentVariables` path the REST/UI surface uses.
+         *
+         * The previous implementation passed a mutator to `updateEnvironmentVariables`, which reads the
+         * pool and applies the change inside one locked transaction - atomic, but with no *precondition*.
+         * That made the assistant last-writer-wins on a surface where the UI answers 409: the user edits
+         * a variable's value in the Environment Pool, the assistant (holding a snapshot from an earlier
+         * turn) writes `trust`, and the user's value is silently reverted, because the fields this call
+         * does not set are carried over from what the assistant remembered. Two authorities over one row
+         * with no conflict detection.
+         *
+         * `expected` is the COMPLETE row as read here - value, trust and privacy - so a concurrent change
+         * to a field this call is not setting still rejects the write. Narrowing the baseline to the
+         * fields being written would let exactly the silent-revert case through.
+         */
+        List<BoardEnvironmentVariableDto> baseline = boardStorageService.getEnvironmentVariables(userId);
+        BoardEnvironmentVariableDto previous = find(baseline, name);
+        if (previous == null) {
+            throw unknownVariable(name, baseline);
+        }
+
+        EnvironmentVariableUpdateRequestDto request = new EnvironmentVariableUpdateRequestDto();
+        request.setName(previous.getName());
+        request.setExpected(new EnvironmentVariableUpdateRequestDto.ExpectedValue(
+                previous.getValue(), previous.getTrust(), previous.getPrivacy()));
+        // Only the supplied fields go into `desired`; the service preserves the rest from `expected`,
+        // which is what keeps "set changes only explicitly supplied fields" true.
+        request.setDesired(new EnvironmentVariableUpdateRequestDto.DesiredPatch(
+                hasValue ? value : null,
+                hasTrust ? trust : null,
+                hasPrivacy ? privacy : null));
+
+        List<BoardEnvironmentVariableDto> current = boardStorageService
+                .saveEnvironmentVariables(userId, List.of(request))
+                .getEnvironmentVariables();
         BoardEnvironmentVariableDto updated = find(current, name);
         boolean changed = !Objects.equals(previous, updated);
 
@@ -170,6 +214,18 @@ public class ManageEnvironmentTool extends AbstractAiTool {
         return successJson(response, "Environment input updated.");
     }
 
+    /**
+     * Restore one variable to its template defaults.
+     *
+     * <p>Deliberately NOT compare-and-set, unlike {@code set}. This writes {@code (name, null, null, null)}
+     * so the defaults are re-projected, carrying nothing over from any snapshot — so it cannot silently
+     * revert a concurrent edit the way a stale-baseline partial update can. "Restore the defaults" is also
+     * a complete instruction on its own: its outcome does not depend on what the value happened to be, so
+     * a baseline precondition would reject the write without changing what the user gets.
+     *
+     * <p>The mutator still runs inside one locked transaction, so it is atomic; what it lacks is a
+     * precondition, and here that is correct rather than missing.
+     */
     private String executeReset(Long userId, JsonNode args) throws ArgValidationException {
         requireOnlyFields(args, "arguments", Set.of("action", "name"));
         String name = requiredText(args, "name");

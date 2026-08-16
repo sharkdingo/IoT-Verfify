@@ -62,7 +62,7 @@ public class DeleteTemplateTool extends AbstractAiTool {
                 "object", props, List.of("templateId", "confirmed")
         );
 
-        return LlmToolSpec.of(getName(), "Preview or, after explicit two-turn confirmation, delete a device template. Use list_templates first.", schema);
+        return LlmToolSpec.of(getName(), "Preview or, after explicit two-turn confirmation, delete a device template. Use list_templates first. Deleting a template clears the board edit history (undo/redo), because device snapshots taken earlier depend on the manifest semantics it removes.", schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {

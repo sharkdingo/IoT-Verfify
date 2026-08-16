@@ -55,17 +55,17 @@ public class AddNodeTool extends AbstractAiTool {
                 "An explicit name is exact: if it is already used, creation is rejected and the tool returns an available suggestion.";
         props.put("label", Map.of("type", "string", "description", labelDesc));
 
-        props.put("x", Map.of("type", "number", "description", "X coordinate (default 250)"));
-        props.put("y", Map.of("type", "number", "description", "Y coordinate (default 250)"));
-        props.put("w", Map.of("type", "integer", "description", "Width (default 176)"));
-        props.put("h", Map.of("type", "integer", "description", "Height (default 128)"));
-        props.put("state", Map.of("type", "string", "description", "Initial state. Leave null to use template default."));
+        props.put("x", Map.of("type", "number", "description", "X coordinate on the canvas (default 250; must be finite and within -1000000..1000000)."));
+        props.put("y", Map.of("type", "number", "description", "Y coordinate on the canvas (default 250; must be finite and within -1000000..1000000)."));
+        props.put("w", Map.of("type", "integer", "description", "Width in canvas units (default 176; 80-2000)."));
+        props.put("h", Map.of("type", "integer", "description", "Height in canvas units (default 128; 60-2000)."));
+        props.put("state", Map.of("type", "string", "description", "Initial state; leave null to use the template default. A template with no Modes has no states: for one of those, omit this or send the UI placeholder \"Working\" — any other value is rejected."));
         props.put("currentStateTrust", Map.of(
                 "type", "string", "enum", List.of("trusted", "untrusted"),
-                "description", "Optional MEDIC control-source label for the initial state. It describes trusted user control when the state triggers automation, not authentication, generic data integrity, or attack probability."));
+                "description", "MEDIC control-source label for the initial state. Optional for a template with Modes, and REJECTED for one without — a mode-less device has no initial state to label. It describes trusted user control when the state triggers automation, not authentication, generic data integrity, or attack probability."));
         props.put("currentStatePrivacy", Map.of(
                 "type", "string", "enum", List.of("public", "private"),
-                "description", "Optional initial-state sensitivity label. This does not enforce access control."));
+                "description", "Initial-state sensitivity label. Optional for a template with Modes, and REJECTED for one without, like currentStateTrust. This does not enforce access control."));
         props.put("variables", Map.of(
                 "type", "array",
                 "description", "Optional device-local initial variable values. Names and values must come from the selected template; shared environment variables are not accepted here.",
