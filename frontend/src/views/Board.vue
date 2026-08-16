@@ -11821,6 +11821,27 @@ const savedTraces = ref<Trace[]>([])
 const isAnimationLocked = computed(() =>
   traceAnimationState.value.visible || simulationAnimationState.value.visible
 )
+
+/**
+ * The run manifest the simulation replay bar requires, for the window in which that bar is mounted.
+ *
+ * The bar's `modelSemantics` prop is non-optional because an absent manifest is not a reachable state:
+ * `SimulationResult.modelSemantics` is required, `requireAttackContext` rejects a response whose manifest
+ * disagrees with its run context, and `openSimulationAnimationFromSavedStates` refuses to open without a
+ * loaded result. `lastSimulationResult` is a nullable ref for the periods when no run has been opened, and
+ * a `v-if` on a sibling flag cannot narrow it, so the assertion goes here rather than being spread across
+ * the template as `?.`.
+ *
+ * The cast narrows an invariant the checker cannot see; it deliberately does *not* substitute a fallback
+ * manifest. A synthesized one would let the bar describe attack and privacy semantics no run declared —
+ * the failure mode the required prop exists to prevent, reintroduced one layer down. Should the invariant
+ * ever break, the component reads the prop null-safely and `isModelSemanticsConsistent` returns false for
+ * an absent manifest, so it degrades to its "semantics unavailable" warning instead of asserting anything.
+ * That warning is the failsafe for this narrowing, which is why it stays despite being unreachable today.
+ */
+const simulationPlaybackSemantics = computed(
+  () => lastSimulationResult.value?.modelSemantics as ModelSemantics
+)
 const isModelPlaybackActive = isAnimationLocked
 
 /* ===== Board edit undo/redo =====
@@ -19399,7 +19420,15 @@ const counterexampleTraceHelpText = computed(() => {
     </div>
   </div>
 
-  <!-- Simulation Timeline 组件 -->
+  <!-- Simulation Timeline 组件
+
+       `v-if` stays on `simulationAnimationState.visible` alone. That flag is the single authority for "the
+       simulation replay bar is up" — 33 sites read it, including the board edit lock (`isAnimationLocked`),
+       the playback-kind resolution behind `run=`, the keyboard handlers and the panel disabling — so adding
+       `&& lastSimulationResult` here would make the *rendered* surface a second, subtly different notion of
+       the same thing: the lock could be held with nothing on screen to explain why.
+
+       The required `modelSemantics` is narrowed at the prop instead, by `simulationPlaybackSemantics`. -->
   <SimulationTimeline
     v-if="simulationAnimationState.visible"
     :visible="simulationAnimationState.visible"
@@ -19411,7 +19440,7 @@ const counterexampleTraceHelpText = computed(() => {
     :is-attack="lastSimulationResult?.isAttack"
     :attack-budget="lastSimulationResult?.attackBudget"
     :enable-privacy="lastSimulationResult?.enablePrivacy"
-    :model-semantics="lastSimulationResult?.modelSemantics"
+    :model-semantics="simulationPlaybackSemantics"
     :model-snapshot="lastSimulationResult?.modelSnapshot"
     :board-comparison="simulationBoardComparison"
     :current-rule-ids="currentBoardRuleIds"

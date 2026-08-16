@@ -28,7 +28,25 @@ const props = defineProps<{
   isAttack?: boolean
   attackBudget?: number
   enablePrivacy?: boolean
-  modelSemantics?: ModelSemantics
+  /**
+   * Required, unlike the counterexample bar's equivalent.
+   *
+   * `SimulationResult.modelSemantics` is non-optional, `requireAttackContext` in `runResponse.ts` rejects a
+   * response whose manifest does not match the run context, and the sole opener
+   * (`openSimulationAnimationFromSavedStates`) refuses to show this bar without a loaded result — so an
+   * absent manifest is not a state the product can reach. Declaring it optional made 17 of the 18 mounts in
+   * this component's spec describe an impossible run, each rendering the "semantics unavailable" warning
+   * below as if it were an ordinary simulation.
+   *
+   * The trace bar keeps `modelSemantics?` for a real reason: `TraceEvidence` is shared with the
+   * hand-assembled fuzz trace, which carries no manifest. There is no such union here.
+   *
+   * Required at the type level, still read with `?.` below — the caller narrows a nullable ref through
+   * `simulationPlaybackSemantics`, and that narrowing is the one thing between here and an absent manifest.
+   * So the "semantics unavailable" warning stays as its failsafe rather than being deleted as unreachable:
+   * degrading to it beats describing attack and privacy semantics no run declared.
+   */
+  modelSemantics: ModelSemantics
   modelSnapshot?: ModelRunSnapshot
   boardComparison?: RunBoardComparison
   currentRuleIds?: string[]

@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SimulationTimeline from '../SimulationTimeline.vue'
 import type { SimulationState } from '@/types/simulation'
+import type { ModelSemantics } from '@/types/modelSemantics'
 
 const i18n = createI18n({
   legacy: false,
@@ -97,6 +98,40 @@ const i18n = createI18n({
   }
 })
 
+/**
+ * A manifest `isModelSemanticsConsistent` accepts, which every mount needs.
+ *
+ * The prop used to be optional, so most mounts here omitted it — and each of those rendered the
+ * "semantics unavailable" warning while claiming to test an ordinary simulation. That state is not
+ * reachable in the product: `SimulationResult.modelSemantics` is required, `requireAttackContext`
+ * rejects a response whose manifest disagrees with the run context, and the bar's only opener needs a
+ * loaded result. Tests that describe an impossible run cannot fail for the reason they claim.
+ *
+ * Every field is load-bearing for that predicate. This is the **no-attack** shape, which the predicate
+ * treats as its own case: `attackSelectionPolicy` must be `NOT_MODELED`, `attackEffects` must be *empty*,
+ * and no attack point may be selected — copying the attack-run manifest from the budget test below and
+ * zeroing its counts produces `false`, not a consistent no-attack run. The attack tests supply their own
+ * manifest inline for that reason.
+ */
+const consistentSemantics: ModelSemantics = {
+  attackPointUnit: 'BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK',
+  attackSelectionPolicy: 'NOT_MODELED',
+  attackEffects: [],
+  modeledDeviceAttackPointCount: 0,
+  modeledFalsifiableReadingDeviceCount: 0,
+  modeledAutomationLinkAttackPointCount: 0,
+  modeledAttackPointCount: 0,
+  trustPropagationPolicy: 'TARGET_UNTRUSTED_IF_ALL_TRIGGER_SOURCES_UNTRUSTED',
+  privacyPropagationPolicy: 'NOT_MODELED',
+  labelPropagationScope: 'AUTOMATION_RULE_COMMANDS_ONLY',
+  environmentEvolutionEffects: [
+    'DECLARED_NUMERIC_RATES_AND_DEVICE_EFFECTS_WITHIN_DOMAIN',
+    'UNWRITTEN_DISCRETE_VALUES_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN',
+    'DEVICE_WRITTEN_DISCRETE_VALUES_HOLD_WHEN_NO_DECLARED_EFFECT_APPLIES'
+  ],
+  localVariableFallbackPolicy: 'STUTTER_WHEN_NO_DECLARED_EVOLUTION'
+}
+
 const states = (prefix: string): SimulationState[] => [
   {
     stateIndex: 1,
@@ -131,6 +166,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: states('first')
       },
       global: {
@@ -162,7 +198,7 @@ describe('SimulationTimeline', () => {
      * either way but which would misreport the state to anything reading it.
      */
     const wrapper = mount(SimulationTimeline, {
-      props: { visible: true, states: states('first'), changePanelVisible: true },
+      props: { visible: true, modelSemantics: consistentSemantics, states: states('first'), changePanelVisible: true },
       global: { plugins: [i18n] }
     })
     const host = () => wrapper.get('[data-testid="simulation-timeline-host"]')
@@ -176,9 +212,30 @@ describe('SimulationTimeline', () => {
       .toBe('false')
   })
 
+  it('does not warn about run semantics for a manifest the product actually produces', () => {
+    /*
+     * The counterpart to `modelSemantics` being required rather than optional.
+     *
+     * With it optional, most mounts in this file omitted it, so `isModelSemanticsConsistent` returned false
+     * and every one of them rendered the "semantics unavailable" warning below the header — a state the
+     * product cannot reach, since `requireAttackContext` rejects such a response before it can be shown. The
+     * tests still passed, because none of them asserted on the warning: they described an impossible run and
+     * checked something else. This one asserts the warning's *absence*, so a fixture that silently stops
+     * satisfying the predicate fails here instead of quietly restoring that condition everywhere.
+     */
+    const wrapper = mount(SimulationTimeline, {
+      props: { visible: true, modelSemantics: consistentSemantics, states: states('semantics') },
+      global: { plugins: [i18n] }
+    })
+    expect(wrapper.text(), 'a consistent manifest is not a reason to warn')
+      .not.toContain('Model semantics unavailable')
+    // Paired with a positive assertion so the check cannot pass by rendering nothing at all.
+    expect(wrapper.text()).toContain('Model Trace Playback')
+  })
+
   it('resets to the first state when a same-length run replaces the visible run', async () => {
     const wrapper = mount(SimulationTimeline, {
-      props: { visible: true, states: states('first') },
+      props: { visible: true, modelSemantics: consistentSemantics, states: states('first') },
       global: { plugins: [i18n] }
     })
 
@@ -199,7 +256,7 @@ describe('SimulationTimeline', () => {
   it('returns the control to Play as soon as the final state is displayed', async () => {
     vi.useFakeTimers()
     const wrapper = mount(SimulationTimeline, {
-      props: { visible: true, states: states('playback') },
+      props: { visible: true, modelSemantics: consistentSemantics, states: states('playback') },
       global: { plugins: [i18n] }
     })
 
@@ -212,7 +269,7 @@ describe('SimulationTimeline', () => {
 
   it('opens run details from the timeline header instead of a separate floating overlay', async () => {
     const wrapper = mount(SimulationTimeline, {
-      props: { visible: true, states: states('details') },
+      props: { visible: true, modelSemantics: consistentSemantics, states: states('details') },
       global: { plugins: [i18n] }
     })
 
@@ -225,6 +282,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: states('short'),
         actualSteps: 2,
         requestedSteps: 6
@@ -240,6 +298,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: [
           {
             stateIndex: 1,
@@ -307,6 +366,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: states('legacy'),
         isAttack: true,
         attackBudget: 2,
@@ -325,6 +385,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: [
           {
             stateIndex: 1,
@@ -348,6 +409,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: [{
           stateIndex: 1,
           triggeredRules: [],
@@ -367,6 +429,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: states('history'),
         modelComplete: false,
         disabledRuleCount: 2,
@@ -412,6 +475,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         currentDeviceIds: ['current_sensor'],
         states: [
           {
@@ -466,6 +530,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: [{
           stateIndex: 1,
           triggeredRules: [],
@@ -527,6 +592,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         states: savedStates,
         currentDeviceIds: ['camera_1'],
         formatDeviceModelToken: formatToken,
@@ -549,6 +615,7 @@ describe('SimulationTimeline', () => {
     const wrapper = mount(SimulationTimeline, {
       props: {
         visible: true,
+        modelSemantics: consistentSemantics,
         currentRuleIds: ['rule-1'],
         states: [{
           stateIndex: 1,
@@ -595,6 +662,7 @@ describe('SimulationTimeline', () => {
       const wrapper = mount(SimulationTimeline, {
         props: {
           visible: true,
+          modelSemantics: consistentSemantics,
           states: provenanceStates(name, from, to),
           modelSnapshot: {
             capturedAt: '2026-08-01T10:00:00',
@@ -694,7 +762,7 @@ describe('SimulationTimeline', () => {
    */
   it('does not put the cause of the selected step behind a disclosure', async () => {
     const wrapper = mount(SimulationTimeline, {
-      props: { visible: true, states: states('playback') },
+      props: { visible: true, modelSemantics: consistentSemantics, states: states('playback') },
       global: { plugins: [i18n] }
     })
 

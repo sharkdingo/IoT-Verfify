@@ -19,6 +19,21 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **The simulation replay bar accepted a run manifest the product cannot produce.** Its
+  `modelSemantics` prop was optional even though `SimulationResult.modelSemantics` is required, the run
+  response validator rejects a manifest that disagrees with its run context, and the bar's only opener
+  refuses to show without a loaded result. Nothing user-visible was wrong, but 17 of the 18 mounts in its
+  spec omitted the prop and so rendered the "model semantics unavailable" warning while claiming to
+  describe an ordinary simulation — tests that cannot fail for the reason they name. The prop is required
+  now, every mount supplies a manifest the consistency predicate accepts, and one test asserts that
+  warning's absence. The counterexample bar keeps its optional equivalent on purpose: `TraceEvidence` is
+  shared with the hand-assembled exploration trace, which carries no manifest.
+
+  The render condition stays on `simulationAnimationState.visible` alone. Gating it on the result too
+  looked like the tidier way to satisfy the type, but that flag is the single authority for "the simulation
+  replay bar is up" that 33 sites read — the board edit lock among them — so a rendered surface with its own
+  slightly different condition could have held the lock with nothing on screen to explain it.
+
 - **Two dead CSS rules for the playback replay bars, one of them half a layout contract.** The two
   timeline hosts are `position: fixed` **siblings** of `.iot-board`, so every rule written as a board
   descendant matched nothing — quietly, because the declarations parse and the surface renders with

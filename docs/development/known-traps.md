@@ -51,6 +51,19 @@ prefer a positive assertion about the value you actually want.
 produce a rule *conflict*, so the helper under test is never called. *Fix:* confirm the mutation
 reddens *this* test, not merely some test.
 
+**The impossible fixture.** The mirror of the one above: the fixture reaches a branch the *product*
+cannot. An optional prop is the usual door in. `SimulationTimeline`'s `modelSemantics` was declared
+`?:` while `SimulationResult.modelSemantics` is required, `requireAttackContext` rejects a response
+whose manifest disagrees with its run context, and the bar's only opener refuses to show without a
+loaded result — so 17 of its 18 mounts omitted the prop and each rendered the "model semantics
+unavailable" warning while claiming to test an ordinary simulation. They passed, because none of them
+asserted on the warning. Nothing here reddens under mutation; the test simply describes a different
+product than the one that ships, and a later reader takes the fixture for a supported shape. *Fix:*
+make the prop required so the type checker enumerates the sites, then assert the impossible state's
+*absence* once. Declare a prop optional only when a real union stands behind it — the trace bar keeps
+`modelSemantics?` because `TraceEvidence` is shared with the hand-assembled fuzz trace, which carries
+no manifest.
+
 ### Guards scoped to a subset
 
 A guard that scans a hand-picked subset lies by omission. One written to catch locale-dependent case
