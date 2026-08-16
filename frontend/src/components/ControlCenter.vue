@@ -1962,16 +1962,37 @@ const handleCreateBatchDevices = async () => {
 const handleCreateImportedDevices = async () => {
   if (!ensureWritable()) return
   if (creatingMultipleDevices.value) return
-  // Per-row parse errors and environment conflicts are already listed above the button, which
-  // stays disabled while any of them holds — so there is nothing left to announce.
-  // `importPreviewStale` is first for the reason recorded at its definition: without it this would
-  // create whatever the *previous* text parsed to. The button is disabled then, but the guard cannot
-  // rely on that alone — it is what makes the invariant hold for any caller.
-  if (importPreviewStale.value
-    || !importDeviceForm.text.trim()
-    || importedEnvironmentMerge.value.conflicts.length > 0
-    || importedDevicesHaveErrors.value
-    || validImportedDevices.value.length === 0) return
+  /*
+   * These conditions also drive the button's `:disabled`, and every state they describe is already
+   * listed above it — so to the *user* there is nothing left to announce, which is why this stays a
+   * console warning rather than a toast (`frontend/CLAUDE.md` forbids a toast over an inline
+   * explanation).
+   *
+   * What the naming buys is diagnosability. The binding and this guard evaluate at different moments —
+   * the binding gates the button, the guard runs when the click lands — so anything that changes the
+   * preview in between (a debounce landing, a template-catalogue refresh, a background reconcile) lets
+   * the guard see a state the button did not. Returning silently then is indistinguishable from a click
+   * that worked. `Full CI` has failed two consecutive nights on exactly that shape: an E2E CSV import
+   * asserts the button enabled, clicks it, and times out waiting for nodes that never appear, with
+   * nothing anywhere saying why — and the same test passes locally. A named reason in the console is
+   * captured by a Playwright trace.
+   *
+   * `importPreviewStale` is checked first for the reason recorded at its definition: without it this
+   * would create whatever the *previous* text parsed to. The button is disabled then, but the guard
+   * cannot rely on that alone — it is what makes the invariant hold for any caller.
+   */
+  const importBlockedBy = importPreviewStale.value ? 'preview is stale'
+    : !importDeviceForm.text.trim() ? 'import text is empty'
+      : importedEnvironmentMerge.value.conflicts.length > 0 ? 'environment patch conflicts'
+        : importedDevicesHaveErrors.value ? 'per-row parse errors'
+          : validImportedDevices.value.length === 0 ? 'no valid devices parsed'
+            : null
+  if (importBlockedBy) {
+    // Diagnostic only: each of these states is already explained inline above the button. This exists so
+    // that "the click did nothing" leaves a named reason in the console and in a Playwright trace.
+    console.warn(`[device import] create ignored: ${importBlockedBy}`)
+    return
+  }
 
   creatingMultipleDevices.value = true
   await new Promise<boolean>(resolve => {

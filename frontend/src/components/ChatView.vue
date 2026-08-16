@@ -880,10 +880,30 @@ const throttle = <T extends (...args: any[]) => any>(fn: T, delay: number): T =>
   }) as T;
 };
 
-const handleChatViewportResize = throttle(() => {
-  stopPanelInteraction();
+/*
+ * Cancelling the gesture is immediate; only the re-clamp is throttled.
+ *
+ * Both used to sit inside one `throttle(..., 200)`, which is a TRAILING-edge throttle — so
+ * `stopPanelInteraction()` could fire up to 200ms after the resize that scheduled it, and cancel a drag
+ * the user had begun in the meantime. The panel then moved a few pixels and stopped: `Full CI` failed on
+ * "releases an interrupted panel gesture when the viewport changes" with the panel 19px from its origin
+ * where the gesture asked for 100, on a commit that changed one documentation anchor. It passed on the
+ * commit before and three times locally, which is the signature of a race rather than a regression.
+ *
+ * Splitting them is safe because `stopPanelInteraction` is idempotent and does no layout work — it clears
+ * the interaction ref, removes the listeners and releases pointer capture — so there is nothing to
+ * throttle. `clampExistingChatPosition` is the part that reads geometry, and it keeps the throttle.
+ */
+const stopPanelInteractionOnViewportResize = () => stopPanelInteraction();
+
+const clampChatPositionAfterResize = throttle(() => {
   clampExistingChatPosition();
 }, 200);
+
+const handleChatViewportResize = () => {
+  stopPanelInteractionOnViewportResize();
+  clampChatPositionAfterResize();
+};
 
 const handlePanelWindowBlur = () => stopPanelInteraction();
 
