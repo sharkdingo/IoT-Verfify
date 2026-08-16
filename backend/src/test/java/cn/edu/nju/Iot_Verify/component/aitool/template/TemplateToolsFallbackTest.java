@@ -17,6 +17,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -167,6 +169,61 @@ class TemplateToolsFallbackTest {
         assertEquals("preview", json.path("preview").path("operation").asText());
         assertEquals(false, json.path("mutationMayHaveCommitted").asBoolean(false));
         verify(boardStorageService, never()).deleteDeviceTemplate(anyLong(), anyLong(), any());
+    }
+
+    /**
+     * A read-only preview must not clear another tool's pending confirmation.
+     *
+     * <p>The undeletable-template branch called {@code clearSession} while returning
+     * {@code readOnlySuccessJson} and {@code requiresUserConfirmation: false} — declaring itself read-only
+     * and mutating session state anyway. It issues no confirmation of its own on that path, so the only
+     * thing it could clear belonged to something else: the store is keyed
+     * {@code (userId, sessionId, Kind.DESTRUCTIVE_ACTION)} with no tool name and holds one row per session.
+     * So "can this template be deleted?" silently discarded a pending {@code delete_device} or
+     * {@code clear_board}, and the model's next confirmed call got a {@code CONFIRMATION_MISSING} it could
+     * not explain to the user.
+     *
+     * <p>{@code ApplyFixTool} clears in a comparable place and is correct, because it clears a confirmation
+     * *it just issued* when the response carrying the preview could not be delivered. Clearing what you
+     * issued is hygiene; clearing what another tool issued is a side effect.
+     */
+    @Test
+    void deleteTemplate_undeletablePreview_shouldNotClearAnotherToolsConfirmation() throws Exception {
+        DeviceTemplateDto target = new DeviceTemplateDto();
+        target.setId(42L);
+        target.setName("Lamp");
+
+        DeviceTemplateDeletionResultDto preview = new DeviceTemplateDeletionResultDto();
+        preview.setTemplate(target);
+        preview.setCanDelete(false);
+        preview.setImpactToken("token-abc");
+        when(boardStorageService.previewDeviceTemplateDeletion(anyLong(), anyLong())).thenReturn(preview);
+
+        // A pending confirmation belonging to a DIFFERENT tool — the thing the cleared session destroyed.
+        Map<String, Object> pendingPreview = Map.of("device", Map.of("id", "node-7", "label", "Porch Light"));
+        String otherToolsToken = destructiveActionGuard.issue(
+                1L, "delete_device", "node-7", pendingPreview, "device-domain-token");
+
+        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper, destructiveActionGuard);
+        JsonNode json = objectMapper.readTree(tool.execute("{\"templateId\":42}"));
+
+        // The branch still reports honestly that nothing can be deleted.
+        assertEquals(false, json.path("requiresUserConfirmation").asBoolean(true));
+
+        /*
+         * Asserted on behaviour rather than on a `verify(...)` interaction: the fixture builds a REAL
+         * `AiDestructiveActionGuard`, so verifying a call on it throws `NotAMockException`. Consuming the
+         * other tool's confirmation afterwards is the stronger check anyway — it proves the confirmation is
+         * still usable, which is what the user's next click depends on.
+         */
+        // The guard also requires the *turn* to be a confirmation turn, independently of the stored token
+        // (`consume_shouldRequireAnExplicitConfirmationTurn`). Without this the consume is refused for that
+        // reason instead, and the test would pass or fail for nothing to do with session clearing.
+        UserContextHolder.setDestructiveActionConfirmed(true);
+        AiDestructiveActionGuard.ConsumeResult stillPending = destructiveActionGuard.consume(
+                1L, "delete_device", "node-7", otherToolsToken, pendingPreview);
+        assertTrue(stillPending.approved(),
+                "previewing an undeletable template must not invalidate another tool's pending confirmation");
     }
 
     @Test

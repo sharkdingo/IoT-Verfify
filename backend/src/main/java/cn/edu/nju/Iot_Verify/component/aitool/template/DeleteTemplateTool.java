@@ -83,7 +83,22 @@ public class DeleteTemplateTool extends AbstractAiTool {
             Map<String, Object> previewView = previewView(preview);
             String domainImpactToken = trimToNull(preview.getImpactToken());
             if (!preview.isCanDelete()) {
-                destructiveActionGuard.clearSession(userId, UserContextHolder.getChatSessionId());
+                /*
+                 * No `clearSession` here, deliberately.
+                 *
+                 * This branch is a *preview* that declares itself read-only (`readOnlySuccessJson`,
+                 * `requiresUserConfirmation: false`) and issues no confirmation of its own — so clearing
+                 * could only ever discard one belonging to a different tool. The store is keyed
+                 * `(userId, sessionId, Kind.DESTRUCTIVE_ACTION)` with no tool name and holds one row per
+                 * session, so "ask whether this template can be deleted" silently invalidated a pending
+                 * `delete_device` or `clear_board` the user was about to approve, and the model then got a
+                 * `CONFIRMATION_MISSING` it had no way to explain.
+                 *
+                 * `ApplyFixTool` is the contrasting case and is correct: it clears a confirmation *it just
+                 * issued*, because the response carrying the preview could not be delivered and a
+                 * confirmation is only valid once the user can inspect what they are approving. Clearing
+                 * what you issued is hygiene; clearing what someone else issued is a side effect.
+                 */
                 Map<String, Object> response = new LinkedHashMap<>();
                 response.put("message", "No changes were made. This device type cannot be deleted while listed device instances use it.");
                 response.put("requiresUserConfirmation", false);

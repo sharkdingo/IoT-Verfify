@@ -73,7 +73,19 @@ public class AddTemplateTool extends AbstractAiTool {
                         "Every InternalVariables item must explicitly set IsInside, a domain, and FalsifiableWhenCompromised. IsInside=true means a device-local instance value; IsInside=false means one scene-wide shared environment value. Never omit it or infer ownership from the device type. Define the domain with Values (use [TRUE,FALSE] for boolean data) or LowerBound+UpperBound; an omitted domain is invalid. Set FalsifiableWhenCompromised true only when compromise may replace that reported sensor/received-data value with any value in its declared domain; use false for actuator state, progress, and setpoints. " +
                         "This flag applies to both shared environment readings (IsInside=false) and device-local readings (IsInside=true), so API presence does not classify a device as purely sensor or actuator. " +
                         "Every ImpactedVariables name must have its domain in this same manifest as an IsInside=false InternalVariable. Every IsInside=false declaration must state Reads explicitly (it is rejected if omitted, and rejected if present on an IsInside=true declaration): Reads=false when the device only affects the value without observing it, so its rules and specifications cannot use it as a condition source, and Reads=true when the device also reads it. " +
-                        "Every WorkingState and InternalVariable must explicitly define Trust and Privacy; every Content must explicitly define Privacy; every EnvironmentDomain must define both labels. Trust is MEDIC control-source trust: one trusted trigger source retains trusted control and only an all-untrusted trigger set makes the target untrusted; it is not authentication or generic data integrity. Never treat a missing security label as trusted or public. " +
+                        // `EnvironmentDomains` used to be named here as a required section. The schema
+                        // *removed* that array (see its own `$comment`) and runs with
+                        // `additionalProperties: false`, so emitting it is a guaranteed 400 — measured:
+                        // "property EnvironmentDomains not defined in the schema and the schema does not
+                        // allow additional properties". The capability it used to encode is now the
+                        // `Reads` field, described in the sentence above this one.
+                        "Every WorkingState and InternalVariable must explicitly define Trust and Privacy; every Content must explicitly define Privacy. Trust is MEDIC control-source trust: one trusted trigger source retains trusted control and only an all-untrusted trigger set makes the target untrusted; it is not authentication or generic data integrity. Never treat a missing security label as trusted or public. " +
+                        // NaturalChangeRate was described nowhere, while the schema requires it for exactly
+                        // the commonest case: a shared numeric reading. Measured with an isolated A/B pair
+                        // that differed in this field alone — without it, 400 "required property
+                        // NaturalChangeRate not found"; with it, 200. So every temperature, humidity or
+                        // illuminance variable authored from this description failed.
+                        "An IsInside=false InternalVariable with integer LowerBound/UpperBound must also state NaturalChangeRate: the per-step change bound, either a single integer (\"1\" means every step moves within 0..1) or an interval (\"[-1, 1]\", the exact MEDIC disturbance rule). \"0\" disables independent drift; any other interval is a deliberate project extension, not a default. Omitting it is rejected. " +
                         "Icon is display-only and must not be used to express device behavior. " +
                         "The manifest must match backend/device-template-schema.json exactly."
         ));

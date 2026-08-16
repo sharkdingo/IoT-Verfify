@@ -20,6 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -520,5 +521,83 @@ class AiPromptContractTest {
             assertEquals(declared, offered,
                     enumName + ": the prompt and the enum disagree about which constants exist");
         }
+    }
+
+    /**
+     * The template tool's description may not name a manifest field the schema forbids, and must name every
+     * field the schema requires.
+     *
+     * <p>Both halves failed, and both were measured against the running backend rather than reasoned about:
+     *
+     * <ul>
+     *   <li>The description instructed the model that "every EnvironmentDomain must define both labels".
+     *       The schema *removed* that array — its own {@code $comment} says so — and runs with
+     *       {@code additionalProperties: false}, so emitting it answered
+     *       {@code 400 "property EnvironmentDomains not defined in the schema"}.</li>
+     *   <li>{@code NaturalChangeRate} appeared nowhere in the description, while the schema requires it for
+     *       an {@code IsInside=false} variable with integer bounds — which is every shared numeric reading,
+     *       i.e. every temperature, humidity and illuminance sensor. An isolated A/B pair differing in that
+     *       field alone answered {@code 400 "required property NaturalChangeRate not found"} and
+     *       {@code 200}.</li>
+     * </ul>
+     *
+     * <p>A schema description is part of the tool contract — {@code requireOnlyFields} rejects unknown keys,
+     * so a description promising a removed field costs the model a guaranteed round trip, and one omitting a
+     * required field costs it every attempt. The existing guards check the argument *allowlist* in one
+     * direction only (every advertised argument is accepted); neither can see a description that misdescribes
+     * the manifest body, which is where this whole class of defect lives.
+     */
+    @Test
+    void templateToolDescriptionMatchesTheManifestSchema() throws IOException {
+        String tool = Files.readString(
+                MAIN.resolve("component/aitool/template/AddTemplateTool.java"), StandardCharsets.UTF_8);
+        String schema = Files.readString(
+                Paths.get("device-template-schema.json"), StandardCharsets.UTF_8);
+
+        /*
+         * Every string literal in the file, minus comment lines — not a window starting at
+         * `LlmToolSpec.of(`. This tool has *two* description surfaces: the parameter-schema description
+         * (where the manifest body is documented) and the tool description that follows it. The first
+         * version of this check windowed from `LlmToolSpec.of(` and therefore skipped the manifest
+         * documentation entirely, reporting fields as undescribed while they were described twenty lines
+         * above — a guard that failed on correct code, which is as useless as one that passes on broken code.
+         *
+         * Comment lines are stripped because the comments here necessarily quote the fields they explain.
+         */
+        String described = tool.replaceAll("(?m)^\\s*//.*$", "");
+
+        // 1. A field the schema does not define cannot be demanded. `additionalProperties: false` is in force,
+        //    so naming one guarantees a 400.
+        assertTrue(schema.contains("\"additionalProperties\": false"),
+                "this check only holds while the schema closes its objects");
+        for (String removed : List.of("EnvironmentDomains", "EnvironmentDomain")) {
+            assertFalse(described.contains(removed),
+                    "the description names '" + removed + "', which the schema does not define; "
+                            + "emitting it is a guaranteed 400");
+        }
+
+        // 2. Every conditionally-required manifest field must be described. Collected from the schema's own
+        //    `then: {required: [...]}` clauses rather than a hand-kept list, so a new requirement is caught
+        //    by the same assertion.
+        Set<String> conditionallyRequired = new TreeSet<>();
+        Matcher required = Pattern
+                .compile("\"then\"\\s*:\\s*\\{\\s*\"required\"\\s*:\\s*\\[([^]]*)]")
+                .matcher(schema);
+        while (required.find()) {
+            for (String raw : required.group(1).split(",")) {
+                String field = raw.replaceAll("[\"\\s]", "");
+                if (!field.isEmpty()) conditionallyRequired.add(field);
+            }
+        }
+        assertFalse(conditionallyRequired.isEmpty(),
+                "the schema should declare conditional requirements; an empty set proves nothing");
+
+        Set<String> undescribed = new TreeSet<>();
+        for (String field : conditionallyRequired) {
+            if (!described.contains(field)) undescribed.add(field);
+        }
+        assertEquals(Set.of(), undescribed,
+                "the schema requires these manifest fields and the tool description never mentions them, "
+                        + "so the model cannot author a valid manifest: " + undescribed);
     }
 }
