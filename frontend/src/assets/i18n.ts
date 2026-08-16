@@ -1794,6 +1794,9 @@ const messages = {
             playbackDeviceDetailsUseTimeline: '回放中的状态来自已保存的模型轨迹。请在时间轴查看该状态；关闭回放后再查看或编辑当前画布设备。',
             closeLiveEditorBeforePlayback: '请先完成或关闭当前设备、规则或修复编辑，再打开模型轨迹回放。',
             simulationPlaybackDeferredForEditor: '后台仿真已完成并保存在运行历史中。为避免打断当前编辑，本次未自动打开回放。',
+            // 与上一条分开：上一条把原因说成"编辑器打开"，用在回放场景就是在断言一个已知为假的原因。
+            // 两条都必须交代轨迹去了哪里，否则一次完成的运行在界面上不留任何痕迹。
+            simulationPlaybackDeferredForReplay: '后台仿真已完成并保存在运行历史中。当前正在回放另一段轨迹，因此本次未自动打开回放；关闭回放后可从运行历史中打开。',
             historicalPlaybackDeferredForBoardChange: '加载历史结果期间提交了新的画布编辑。请先核对当前画布，再重新打开回放。',
             ruleRecommendationCancelled: '已请求停止规则推荐',
             deviceRecommendationCancelled: '已请求停止设备推荐',
@@ -4220,6 +4223,10 @@ const messages = {
             playbackDeviceDetailsUseTimeline: 'Playback state comes from the saved model trace. Inspect that state in the timeline; close playback before viewing or editing the current Board device.',
             closeLiveEditorBeforePlayback: 'Finish or close the current device, rule, or fix editor before opening model-trace playback.',
             simulationPlaybackDeferredForEditor: 'The background simulation completed and was saved to run history. Playback did not open automatically because an editor is still in use.',
+            // Separate from the line above, which names the open editor as the cause: reusing it here
+            // would assert a reason known to be false. Both must say where the trajectory went, or a
+            // completed run leaves no trace on screen.
+            simulationPlaybackDeferredForReplay: 'The background simulation completed and was saved to run history. Playback did not open automatically because another trajectory is being replayed; open it from run history once you close the replay.',
             historicalPlaybackDeferredForBoardChange: 'A Board edit was submitted while the history result was loading. Review the current Board, then start playback again.',
             ruleRecommendationCancelled: 'Rule recommendation stop requested',
             deviceRecommendationCancelled: 'Device recommendation stop requested',

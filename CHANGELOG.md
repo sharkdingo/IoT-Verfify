@@ -19,6 +19,19 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **An async simulation completing behind an open replay repainted that replay's header with the new
+  run's semantics.** `lastSimulationResult` is the manifest every simulation surface describes — the
+  replay bar takes its attack and privacy chips, step counts and model snapshot from it, while the states
+  it animates come from a separate ref — and both async paths wrote it the moment the poll returned,
+  before checking whether a replay was already on screen. So the visible trajectory kept animating while
+  its header described a different run, one trajectory's steps sitting under another's attack budget, and
+  Run details opened the wrong run outright. Reachable in ordinary use, since playback admission does not
+  consider whether a run is in flight: replaying something from history while an async run finishes is a
+  normal thing to do. A run arriving behind a replay is now deferred rather than silently adopted, and the
+  manifest and its staleness flag are written together as a pair. The deferral says which reason applies:
+  the existing notice names an open editor as the cause, so a replay deferral gets its own wording rather
+  than asserting a cause the client knows to be false.
+
 - **An exploration run opened from page 2 of history could be closed as "deleted" when it was only
   off-page.** Exploration is the one paginated run history (`/fuzz/runs` takes `page`/`size`, defaults to
   25, ordered newest-first against a 100-run stored quota), and a history reload replaces the list with

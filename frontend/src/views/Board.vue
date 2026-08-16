@@ -8447,6 +8447,26 @@ const simulationError = ref<string | null>(null)
 // timeline (by design) and let the user open the logs on demand via openSimulationLogs().
 const lastSimulationResult = ref<SimulationResultView | null>(null)
 
+/**
+ * Make a completed run *the* current trajectory: the one every simulation surface describes.
+ *
+ * The pairing is the point. `lastSimulationResult` is the manifest the replay bar and the details dialog
+ * read, and the stale flag qualifies that same manifest, so the two must be written together or the
+ * banner ends up describing a different run than the header — which is what happened when each async
+ * path assigned them inline. Taking the submission's scene-change count as an argument keeps the
+ * comparison at the call site, where the run's own baseline is known.
+ *
+ * Callers must only adopt a run they are about to show or that no surface will show; a run arriving
+ * behind an open replay is deferred, not adopted.
+ */
+const adoptSimulationRunResult = (
+  result: SimulationResultView,
+  submissionSceneChanges: number
+) => {
+  lastSimulationResult.value = result
+  simulationResultStale.value = semanticSceneChangeCount !== submissionSceneChanges
+}
+
 // Simulation form state (moved from ControlCenter)
 interface AttackRunForm {
   isAttack: boolean
@@ -10351,9 +10371,6 @@ const watchSimulationTask = async (taskId: number) => {
       await pollAsyncSimulation(taskId),
       submissionForTask(activeSimulationSubmission.value, taskId)
     )
-    lastSimulationResult.value = result
-    simulationResultStale.value =
-      semanticSceneChangeCount !== watchSubmissionSceneChanges
     if (result.traceId) {
       simulationHistoryRequests.invalidate()
       simulationRuns.value = [
@@ -10375,9 +10392,25 @@ const watchSimulationTask = async (taskId: number) => {
         ...simulationRuns.value.filter(item => item.id !== result.traceId)
       ]
     }
+    /*
+     * Adopted only when this run is the one about to be shown, which is why the write sits below the
+     * deferral branches rather than straight after the poll.
+     *
+     * `lastSimulationResult` is the manifest every simulation surface reads: the replay bar takes its
+     * attack/privacy chips, step counts and `modelSnapshot` from it, while the states it animates come
+     * from `savedSimulationStates`. Writing it on arrival while a bar was already up therefore repainted
+     * the *visible* run's header with a different run's semantics — one trajectory's steps under another's
+     * attack budget — and left `openSimulationRunDetails` opening the wrong run entirely. Reachable
+     * because `ensureHistoricalPlaybackUiAdmission` does not consider `isSimulating`: starting an async
+     * run and then replaying something from history is a normal thing to do while waiting.
+     *
+     * The deferral notice is the honest outcome here. Silently adopting the result was the alternative
+     * that looked like success.
+     */
     if (result.states && result.states.length > 0) {
       if (traceAnimationState.value.visible || simulationAnimationState.value.visible) {
         notifySimulationOutcome(result, true)
+        notifyAutomaticPlaybackDeferredForReplay()
         return
       }
       if (isLiveBoardEditorVisible.value) {
@@ -10385,10 +10418,16 @@ const watchSimulationTask = async (taskId: number) => {
         notifyAutomaticPlaybackDeferred()
         return
       }
+      adoptSimulationRunResult(result, watchSubmissionSceneChanges)
       savedSimulationStates.value = [...result.states]
       openSimulationAnimationFromSavedStates()
       notifySimulationOutcome(result, true)
+      return
     }
+    // No states to replay, so no surface will show it — but the run still happened, and the task inbox
+    // and history reference it. Adopting it here keeps "the last simulation" meaning the last one that
+    // ran, which is what the details dialog reports when reopened.
+    adoptSimulationRunResult(result, watchSubmissionSceneChanges)
   } catch (error: any) {
     if (!isPollingAbortedError(error)) {
       const message = isCompletedTaskResultUnavailableError(error)
@@ -10872,10 +10911,13 @@ const selectAndPlaySimulationTrace = async (
 
     closeHistoryPanel(false)
     lastSimulationResult.value = result
-    // Staleness belongs to the run being shown. This is a freshly loaded run, so it cannot have been
-    // invalidated by an edit made against an earlier one — the other two writers of
-    // `lastSimulationResult` clear the flag for the same reason, as does `openVerificationRun`.
-    // Without this, whether a historical run shows the re-run banner depended on unrelated history.
+    // Staleness belongs to the run being shown. This is a freshly loaded historical run, so it cannot
+    // have been invalidated by an edit made against an earlier one — without this, whether a historical
+    // run showed the re-run banner depended on unrelated history. `openVerificationRun` clears its flag
+    // for the same reason. The two run paths reach the same conclusion by comparison instead
+    // (`adoptSimulationRunResult`): a run just executed is stale only if the scene moved while it ran,
+    // whereas a stored trajectory has no such window. This is not written through that helper because
+    // the comparison it performs is exactly what does not apply here.
     simulationResultStale.value = false
     simulationResult.value = null
     savedSimulationStates.value = [...trace.states]
@@ -12330,6 +12372,17 @@ const notifyAutomaticPlaybackDeferred = () => {
   notifyInfo(t('app.simulationPlaybackDeferredForEditor'))
 }
 
+/**
+ * The same deferral, for a run that arrives while a replay is already on screen.
+ *
+ * Its own string rather than the one above: that copy names the open editor as the reason, and a client
+ * asserting a cause it knows to be wrong is the defect this session has been fixing elsewhere. Both say
+ * where the trajectory went, because the alternative is a completed run that leaves no trace on screen.
+ */
+const notifyAutomaticPlaybackDeferredForReplay = () => {
+  notifyInfo(t('app.simulationPlaybackDeferredForReplay'))
+}
+
 const ensurePlaybackClosedForMutation = (): boolean => {
   if (isSceneReplacementInProgress.value) {
     notifyBlocked(t('app.sceneReplacementInProgress'))
@@ -13532,9 +13585,6 @@ const handleSimulate = async (simConfig: {
     // Keep the full result so its logs / NuSMV diagnostics remain reachable from the timeline via
     // openSimulationLogs(); the success path opens the timeline (below), not the result dialog.
     result = attachLocalRunSubmission(result, submission)
-    lastSimulationResult.value = result
-    simulationResultStale.value =
-      semanticSceneChangeCount !== simulationSubmissionSceneChanges
     if (result.traceId) {
       simulationHistoryRequests.invalidate()
       simulationRuns.value = [
@@ -13560,12 +13610,24 @@ const handleSimulate = async (simConfig: {
     // 直接打开时间轴动画，不显示结果对话框
     if (result.states && result.states.length > 0) {
       if (normalizedSimConfig.isAsync) {
-        if (!showSimulationPanel.value || traceAnimationState.value.visible || simulationAnimationState.value.visible || isLiveBoardEditorVisible.value) {
+        // A replay that is already on screen keeps its own manifest. `adoptSimulationRunResult` documents
+        // why: the bar reads its chips, step counts and snapshot from `lastSimulationResult` while
+        // animating `savedSimulationStates`, so adopting here would describe the visible trajectory with
+        // this run's semantics. Split out of the combined deferral below because the other two reasons —
+        // the panel being closed, or the live editor being open — leave no surface to contradict.
+        if (traceAnimationState.value.visible || simulationAnimationState.value.visible) {
+          notifySimulationOutcome(result, true)
+          notifyAutomaticPlaybackDeferredForReplay()
+          return true
+        }
+        if (!showSimulationPanel.value || isLiveBoardEditorVisible.value) {
+          adoptSimulationRunResult(result, simulationSubmissionSceneChanges)
           notifySimulationOutcome(result, true)
           if (isLiveBoardEditorVisible.value) notifyAutomaticPlaybackDeferred()
           return true
         }
 
+        adoptSimulationRunResult(result, simulationSubmissionSceneChanges)
         savedSimulationStates.value = [...result.states]
         showSimulationPanel.value = false
         openSimulationAnimationFromSavedStates()
@@ -13573,18 +13635,23 @@ const handleSimulate = async (simConfig: {
         return true
       }
 
-      // 保存模拟 states 数据
+      // The manifest and the states it describes are written as a pair, immediately before the bar opens
+      // over them.
+      adoptSimulationRunResult(result, simulationSubmissionSceneChanges)
       savedSimulationStates.value = [...result.states]
 
       // 关闭模拟配置面板
       showSimulationPanel.value = false
-      
+
       // 打开模拟时间轴动画
       openSimulationAnimationFromSavedStates()
-      
+
       notifySimulationOutcome(result, !!normalizedSimConfig.saveToHistory)
       return true
     } else {
+      // No states, so no bar opens — but the run happened and its logs and NuSMV output are the point of
+      // the error dialog, which reads them off this manifest.
+      adoptSimulationRunResult(result, simulationSubmissionSceneChanges)
       const failureReason = t('app.simulationCompletedNoStates')
       simulationError.value = failureReason
       notifyError(failureReason)

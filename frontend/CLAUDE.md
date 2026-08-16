@@ -262,6 +262,13 @@ single owner of the "session gone → login" location.
 - **Staleness belongs to the run, not to the dialog showing it.** `lastSimulationResult` survives
   every dialog close while `simulationResult` does not, so flag and clear against the surviving run.
   Closing a surface is not a fresh result and must not clear a stale flag; only a new run is.
+  That ref is also the manifest the replay bar describes — its attack/privacy chips, step counts and
+  `modelSnapshot` — while the states it animates come from `savedSimulationStates`, so the two are
+  written as a pair by `adoptSimulationRunResult` and never separately. A run completing behind an
+  open replay is **deferred, not adopted** (with `notifyAutomaticPlaybackDeferred`), because adopting
+  it repainted the visible trajectory's header with another run's semantics and pointed Run details at
+  the wrong run. Reachable in ordinary use: playback admission does not consider `isSimulating`, so
+  replaying history while an async run finishes is normal.
 - **A displayed verdict only describes the model that was verified.** Any semantic board
   change (applying a fix, editing rules/specs/devices from the inspector or chat) makes an
   open verification result stale: `Board.vue` flags it from the single semantic-scene-change
