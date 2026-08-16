@@ -49,6 +49,32 @@ link stays meaningful for anyone with access to that run.
 - **Invalid, stale, or unauthorized params degrade to the plain board** with one
   page-level explanation — never a fabricated empty result, never a silent redirect loop.
 - **Back/forward must restore the surface**, not just the address bar.
+- **A deleted run must lose its deep link, and every run kind needs that wiring.** Closing a result
+  surface comes in a pair — `close*` for an internal transition (which must not touch the URL) and
+  `dismiss*` for a user-facing close (which clears it). A deletion is user-facing, so it takes the
+  `dismiss*` half; using `close*` left `?run=exploration:<deleted id>` in the URL, where the sync
+  watcher reloaded it and answered with the unusable-link banner.
+  Out-of-band deletion is the harder half. The same-tab history-panel path is *unreachable* for all
+  three kinds — the two result dialogs are `aria-modal="true"`, the simulation bar disables the panel
+  button through `isModelPlaybackActive`, and every opener closes the panel — so the reachable paths
+  are the assistant's delete tool and another tab, and both arrive as a history reload. The
+  reconciliation therefore hangs off a **successful** reload (`reconcileOpenRunAgainstHistory`), never
+  off the delete handler, and it dispatches per run kind so adding a kind means adding a sibling there
+  rather than another call site. Exploration and simulation were both missing for exactly that reason,
+  while `delete_fuzz_run` and `delete_simulation_trace` had shipped and emitted the same `run_history`
+  signal. A failed reload leaves the lists stale and must not be read as a deletion; an *empty* list
+  is also a still-loading or scoped-empty history, so only absence from a populated list counts.
+  A dispatcher is only as good as its wiring, and dropping one call kills a whole kind while leaving
+  its function, its wording and its own tests green — measured. So the spec enumerates the declared
+  `reconcileOpen*AgainstHistory` functions and requires each to be dispatched, rather than listing the
+  names it already knows.
+  Simulation needs one guard the others do not: their ids come from refs cleared on close, so "has a
+  run id" implies "is on screen", whereas `lastSimulationResult` deliberately outlives every surface
+  (staleness belongs to the run, not the dialog) — reading the id off it alone announces that a panel
+  closed while nothing is showing. And each kind explains itself in its own words: telling an
+  exploration user to "re-run to get a conclusion" describes bounded search, which yields candidate
+  findings, as formal verification, and a simulation is neither — what ends is a *replay* of a
+  trajectory, so its copy says playback ended rather than that a panel closed.
 
 ## 2. Feedback semantics
 

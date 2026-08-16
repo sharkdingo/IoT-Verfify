@@ -10915,6 +10915,12 @@ const deleteSimulationRun = async (run: SimulationTraceSummary) => {
     )) return
     await simulationApi.deleteSimulation(traceId)
     if (boardLifecycleDisposed) return
+    // No surface teardown here, unlike `deleteVerificationRun`: reaching this line means the history panel
+    // is open, and both simulation surfaces exclude it (the panel button is disabled while
+    // `isModelPlaybackActive`, and the details dialog is `aria-modal` over the whole screen), so the run
+    // being deleted cannot be the one on screen. The reachable paths — the assistant's
+    // `DeleteSimulationTraceTool` and another tab — arrive as a history reload and are handled by
+    // `reconcileOpenSimulationRunAgainstHistory`.
     simulationHistoryRequests.invalidate()
     unavailableSimulationTraceIds.delete(traceId)
     simulationRuns.value = simulationRuns.value.filter(t => t.id !== traceId)
@@ -11054,7 +11060,13 @@ const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
     fuzzingRunsHasMore.value = false
     const refreshed = await loadFuzzingRuns(false)
     if (boardLifecycleDisposed) return
-    if (fuzzingResult.value?.id === run.id) closeFuzzingResult()
+    // `dismissFuzzingResult`, not `closeFuzzingResult`: this is a user-facing close, so the
+    // `?run=exploration:<id>` deep link goes with it. `closeFuzzingResult` documents itself as leaving
+    // the URL alone — it exists for internal transitions such as opening a finding replay — so using it
+    // here left the deleted run's id in the URL, where the deep-link watcher would reload it and answer
+    // with the unusable-link banner. The verification path already draws this distinction
+    // (`dismissRunSurfacesForDeletedVerificationRun` calls `dismissResultDialog` for the same reason).
+    if (fuzzingResult.value?.id === run.id) dismissFuzzingResult()
     if (!refreshed) {
       notifyBlocked(t('app.fuzzingRunDeletedRefreshPending'))
       return
@@ -12481,6 +12493,19 @@ const closeTraceAnimation = () => {
 }
 
 /**
+ * Close any open result surface whose run an authoritative history reload no longer lists.
+ *
+ * One entry point for all three run kinds, called from `refreshRunHistory` after a *successful* reload. It
+ * dispatches rather than deciding, so a new run kind gets a sibling here instead of another call site on
+ * the reload — exploration and simulation were both missing for exactly that reason.
+ */
+const reconcileOpenRunAgainstHistory = () => {
+  reconcileOpenVerificationRunAgainstHistory()
+  reconcileOpenFuzzingRunAgainstHistory()
+  reconcileOpenSimulationRunAgainstHistory()
+}
+
+/**
  * Close the open verification result if an authoritative history reload no longer lists its run.
  *
  * The counterpart to `dismissRunSurfacesForDeletedVerificationRun` for deletions this tab did not
@@ -12493,13 +12518,104 @@ const closeTraceAnimation = () => {
  * over that would destroy a verdict the user is reading. A run absent from a populated list is the only
  * case treated as deleted.
  */
-const reconcileOpenRunAgainstHistory = () => {
+const reconcileOpenVerificationRunAgainstHistory = () => {
   const openRunId = verificationResult.value?.historyPersistence?.runId
   if (typeof openRunId !== 'number') return
   if (verificationRuns.value.length === 0) return
   if (verificationRuns.value.some(run => run.id === openRunId)) return
   dismissRunSurfacesForDeletedVerificationRun(openRunId)
   notifyBlocked(t('app.openRunDeletedElsewhere'))
+}
+
+/**
+ * The same reconciliation for an open exploration run.
+ *
+ * `delete_fuzz_run` is a shipped assistant tool and emits the same `REFRESH_DATA run_history` signal as
+ * `delete_verification_run` (`ChatToolProgressPresenter.potentialRefreshTargets` lists both), and another
+ * tab's deletion arrives through this reload too — so exploration has exactly the two reachable
+ * out-of-band paths verification has. It had no reconciliation, so the dialog kept rendering a run,
+ * its findings and its eligibility report for a record the server had dropped.
+ *
+ * `FuzzingResultDialog` is `aria-modal="true"`, so — as with verification — the *same-tab* history-panel
+ * deletion is the unreachable path, which is why this hangs off the reload rather than the delete handler.
+ *
+ * Same two guards as above, for the same reasons: only a persisted run id counts, and only absence from
+ * a populated list means deleted. An empty list is also a still-loading or scoped-empty history, and
+ * closing a live result over that would destroy findings the user is reading.
+ */
+const reconcileOpenFuzzingRunAgainstHistory = () => {
+  const openRunId = fuzzingResult.value?.id
+  if (typeof openRunId !== 'number') return
+  if (fuzzingRuns.value.length === 0) return
+  if (fuzzingRuns.value.some(run => run.id === openRunId)) return
+  // Clears the deep link with the surface, so the URL sync cannot reopen the deleted run.
+  dismissFuzzingResult()
+  // Its own string, not the verification one: that copy says "verification result" and offers "re-run to
+  // get a conclusion", which would describe bounded exploration as formal verification. Exploration
+  // produces candidate findings.
+  notifyBlocked(t('app.openFuzzingRunDeletedElsewhere'))
+}
+
+/**
+ * The same reconciliation for an open simulation trajectory, whose surfaces differ from the other two.
+ *
+ * `DeleteSimulationTraceTool` ships and `run_history` routes to `refreshRunHistory`, so a deleted
+ * trajectory arrives here exactly as the other kinds do. What made this the worst of the three is that a
+ * simulation's primary surface is the *replay bar*, not a dialog: it is a `role="region"` sibling of the
+ * board rather than a modal, so the assistant is one click away the whole time it is up (the chat button
+ * is gated on `isBoardDataReady` alone). The trajectory kept animating, and its Run details → download
+ * still read `historyPersistence.runId` off the deleted record — the same misleading 404 the verification
+ * fix was written for.
+ *
+ * Both surfaces are matched by one id because `historyPersistence.runId` *is* the saved trace id
+ * (`SimulationServiceImpl` sets `RunPersistenceDto.saved(saved.getId())`), and `simulationRuns` is keyed
+ * by that id.
+ *
+ * The visibility check is the difference from the siblings, and it is not defensive: their ids come from
+ * refs that are cleared on close (`verificationResult`, `fuzzingResult`), so "has an id" already implies
+ * "is on screen". `lastSimulationResult` deliberately outlives every surface, so reading the id off it
+ * alone would announce that a panel was closed while nothing was showing.
+ *
+ * Then the same two guards as the siblings, for the same reasons: only a persisted run id counts, and
+ * only absence from a populated list means deleted.
+ */
+const reconcileOpenSimulationRunAgainstHistory = () => {
+  if (!simulationAnimationState.value.visible && !simulationResult.value) return
+  const openRunId = lastSimulationResult.value?.historyPersistence?.runId
+  if (typeof openRunId !== 'number') return
+  if (simulationRuns.value.length === 0) return
+  if (simulationRuns.value.some(run => run.id === openRunId)) return
+  dismissSimulationSurfacesForDeletedRun()
+  notifyBlocked(t('app.openSimulationRunDeletedElsewhere'))
+}
+
+/**
+ * Tear down every surface showing the open simulation trajectory.
+ *
+ * No id argument: unlike verification, only one trajectory is loaded at a time — `lastSimulationResult`
+ * is the single owner and the bar, the details dialog and the canvas highlight all read it — so the
+ * caller has already established that *this* run is the deleted one.
+ *
+ * Branched so `run=simulation:<id>` is cleared exactly once, by whichever closer owns the addressed
+ * surface: for `run=simulation:<id>` the bar *is* the addressed surface and `closeSimulationTimeline`
+ * already clears the link, so the dialog then takes the internal-transition closer. With no bar up, the
+ * dialog's own close is the user-facing one and carries the link. `lastSimulationResult` is cleared after
+ * both, because the bar's props read through it.
+ */
+const dismissSimulationSurfacesForDeletedRun = () => {
+  if (simulationAnimationState.value.visible) {
+    closeSimulationTimeline()
+    closeSimulationResultDialog()
+  } else {
+    dismissSimulationResultDialog()
+  }
+  savedSimulationStates.value = []
+  lastSimulationResult.value = null
+  // Not the "closing a surface must not clear the stale flag" case: that rule exists because
+  // `lastSimulationResult` survives a close and reopening it must still warn that the canvas moved. Here
+  // the run it described is being dropped, so the flag is cleared with its owner rather than left
+  // asserting staleness about nothing.
+  simulationResultStale.value = false
 }
 
 /**

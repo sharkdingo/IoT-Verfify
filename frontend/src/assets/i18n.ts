@@ -1771,6 +1771,12 @@ const messages = {
             // 本标签页没有执行删除时用它说明结果面板为何被关闭：可能是 AI 助手删除，也可能是另一个标签页。
             // 静默关闭会读作崩溃，而继续显示已删除的运行会让下载按钮报出与事实无关的错误。
             openRunDeletedElsewhere: '正在查看的验证结果已被删除（可能来自 AI 助手或另一个标签页），面板已关闭。请重新运行以获得适用于当前画布的结论。',
+            // 探索运行有自己的措辞：它产出候选发现而非结论，说"重新运行以获得结论"会把有界探索
+            // 描述成形式化验证。二者的删除路径相同（AI 助手的 delete_fuzz_run、另一个标签页）。
+            openFuzzingRunDeletedElsewhere: '正在查看的反例探索结果已被删除（可能来自 AI 助手或另一个标签页），面板已关闭。如需候选证据，请重新运行探索。',
+            // 模型轨迹同样自成一类：它既不是结论也不是候选发现，而是一段可回放的执行过程，
+            // 被关闭的主要界面是回放条而不是对话框，所以措辞必须点明"回放已结束"。
+            openSimulationRunDeletedElsewhere: '正在回放的模型轨迹已被删除（可能来自 AI 助手或另一个标签页），回放已结束。如需重新观察这段执行过程，请再次运行模型模拟。',
             failedToDeleteVerificationRun: '删除验证结果失败',
             verificationRunDeleteOutcomeRefreshed: '删除响应未能确认；刷新后该验证结果已不在历史中。未再次发送删除。',
             deleteSimulationRunMessage: '删除 {time} 生成的模型轨迹？',
@@ -4189,6 +4195,14 @@ const messages = {
             // the assistant may have deleted it, or another tab. Closing silently reads as a crash, and
             // leaving the deleted run on screen makes its download report an unrelated cause.
             openRunDeletedElsewhere: 'The verification result you were viewing has been deleted (by the AI assistant or another tab), so its panel was closed. Re-run to get a conclusion that applies to your current canvas.',
+            // Exploration gets its own wording: it produces candidate findings, not a conclusion, so
+            // "re-run to get a conclusion" would describe bounded search as formal verification. The
+            // deletion paths are the same two (the assistant's delete_fuzz_run, or another tab).
+            openFuzzingRunDeletedElsewhere: 'The exploration result you were viewing has been deleted (by the AI assistant or another tab), so its panel was closed. Run exploration again if you need candidate evidence.',
+            // A trajectory is its own third case: neither a conclusion nor a candidate finding, but a
+            // replayable execution — and the surface that closes is the playback bar, not a dialog, so the
+            // wording has to say the playback ended rather than that a panel was closed.
+            openSimulationRunDeletedElsewhere: 'The model trajectory you were replaying has been deleted (by the AI assistant or another tab), so playback ended. Run the simulation again to watch that execution.',
             failedToDeleteVerificationRun: 'Failed to delete verification result',
             verificationRunDeleteOutcomeRefreshed: 'The delete response could not be confirmed. After refresh, this verification result is no longer in history. No second delete was sent.',
             deleteSimulationRunMessage: 'Delete the model trajectory generated at {time}?',

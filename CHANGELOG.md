@@ -19,6 +19,29 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **A deleted simulation trajectory kept replaying, and its model download still offered the deleted
+  record.** `delete_simulation_trace` is a shipped assistant tool, and unlike the other two run kinds a
+  trajectory's primary surface is the replay *bar* — a non-modal sibling of the board — so the assistant
+  stayed one click away for the whole replay. Deleting the trajectory being replayed left it animating,
+  and its Run details → Download SMV still resolved the run id from the deleted record, answering with
+  the same misleading “may be a record saved before model persistence was enabled” 404 that the
+  verification fix was written for. The trajectory is now reconciled against a successful history reload
+  like the other kinds: the bar, the details dialog, the replayed states and the run manifest are all
+  dropped, the `?run=simulation:<id>` deep link is cleared exactly once by whichever closer owns the
+  addressed surface, and the message says the *playback ended* rather than that a panel closed, because a
+  trajectory is neither a verdict nor a candidate finding.
+
+- **An exploration result outlived its own run when the deletion came from anywhere but this tab.** The
+  assistant tool `delete_fuzz_run` and another tab both arrive as a run-history reload, and only the
+  *verification* surface was reconciled against it — so the exploration dialog kept rendering a run, its
+  findings and its eligibility report for a record the server had already dropped. Exploration now uses
+  the same successful-reload reconciliation, which dispatches per run kind so a future kind is a sibling
+  rather than a new call site. Its explanation is its own string: the verification copy offers “re-run to
+  get a conclusion”, which would present bounded exploration, whose output is candidate findings, as
+  formal verification. The same journey also fixed the in-tab delete, which closed the dialog with the
+  internal-transition closer and so left `?run=exploration:<deleted id>` in the URL for the deep-link
+  watcher to reload and reject.
+
 - **A new lease-boundary test was ~45% flaky, and its own fixture was the cause.** It asserted the
   equality case by writing `LocalDateTime.now()` as the lease and passing the same value as the sweep
   cutoff — but H2 *rounds* a `TIMESTAMP(6)` column to the nearest microsecond, and `now()` carries

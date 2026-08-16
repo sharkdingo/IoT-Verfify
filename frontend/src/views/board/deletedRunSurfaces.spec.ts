@@ -74,7 +74,10 @@ describe('surfaces for a deleted verification run', () => {
      *
      * So the reconciliation has to hang off the reload, not off the delete handler.
      */
-    const at = board.indexOf('const reconcileOpenRunAgainstHistory')
+    // Anchored on the verification-specific function, not the `reconcileOpenRunAgainstHistory`
+    // dispatcher that now calls it — a window opened on the dispatcher stops at its own closing brace
+    // and sees none of the guards below.
+    const at = board.indexOf('const reconcileOpenVerificationRunAgainstHistory')
     expect(at, 'the reconciliation should exist').toBeGreaterThan(-1)
     const body = board.slice(at, board.indexOf('\n}', at) + 2)
 
@@ -124,5 +127,184 @@ describe('surfaces for a deleted verification run', () => {
     expect(english, 'names deletion as a possible cause').toMatch(/deleted/i)
     expect(english, 'names the modelless-record cause too').toMatch(/without one|no model/i)
     expect(english, 'and tells the user how to tell which').toMatch(/history/i)
+  })
+})
+
+/**
+ * The exploration half of the same rule, which was missing entirely.
+ *
+ * `delete_fuzz_run` is a shipped assistant tool, and `ChatToolProgressPresenter.potentialRefreshTargets`
+ * lists it alongside `delete_verification_run` under `run_history` — so an exploration run has exactly the
+ * two reachable out-of-band deletion paths a verification run has (the assistant, and another tab), and
+ * `FuzzingResultDialog` is `aria-modal="true"` just like the verification dialog, which makes the same-tab
+ * history-panel path the unreachable one. Only verification was reconciled, so the exploration dialog kept
+ * rendering a run, its findings and its eligibility report for a record the server had dropped.
+ *
+ * The second defect here is the closer: `closeFuzzingResult` documents itself as *not* touching the URL
+ * (it serves internal transitions such as opening a finding replay), and the delete handler used it — so
+ * `?run=exploration:<id>` outlived its own run and the deep-link watcher would reload it.
+ */
+describe('surfaces for a deleted exploration run', () => {
+  const board = readFileSync(join(process.cwd(), 'src/views/Board.vue'), 'utf8')
+
+  it('clears the deep link when the user deletes the run in this tab', () => {
+    const at = board.indexOf('const deleteFuzzingRun')
+    expect(at, 'the deletion handler should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, board.indexOf('\n}', board.indexOf('finally', at)))
+
+    expect(body, 'the open result for the deleted run must close')
+      .toMatch(/fuzzingResult\.value\?\.id === run\.id/)
+    // The URL-clearing closer, not the internal-transition one.
+    expect(body, 'and take its deep link with it')
+      .toMatch(/=== run\.id\) dismissFuzzingResult\(\)/)
+    expect(body, 'closeFuzzingResult leaves ?run= behind, so it must not be the closer here')
+      .not.toMatch(/=== run\.id\) closeFuzzingResult\(\)/)
+    // Only after the server confirmed it: an unconfirmed delete must leave the surface alone.
+    expect(body.indexOf('dismissFuzzingResult'))
+      .toBeGreaterThan(body.indexOf('await fuzzingApi.deleteRun'))
+  })
+
+  it('reconciles the open exploration run when the deletion happened somewhere else', () => {
+    const at = board.indexOf('const reconcileOpenFuzzingRunAgainstHistory')
+    expect(at, 'the exploration reconciliation should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, board.indexOf('\n}', at) + 2)
+
+    expect(body, 'the open run is matched by its own id').toContain('fuzzingResult.value?.id')
+    expect(body, 'against the authoritative reloaded list')
+      .toMatch(/fuzzingRuns\.value\.some\(run => run\.id === openRunId\)/)
+    expect(body, 'closing must clear the deep link too').toContain('dismissFuzzingResult()')
+    // Its own string. The verification copy says "verification result" and offers "re-run to get a
+    // conclusion" — reusing it would describe bounded exploration, which yields candidate findings, as
+    // formal verification. That distinction is a product invariant, not wording taste.
+    expect(body, 'and tell the user why the surface closed')
+      .toContain('openFuzzingRunDeletedElsewhere')
+    // The guard that keeps this from destroying live findings: an empty list is also what a still-loading
+    // or scoped-empty history looks like, so only absence from a POPULATED list counts as deleted.
+    expect(body, 'an empty history must not be read as "deleted"')
+      .toContain('fuzzingRuns.value.length === 0')
+  })
+
+  it('hangs off the same successful-reload hook as verification', () => {
+    // Not off the delete handler: the same-tab path is unreachable, and a failed reload leaves the lists
+    // stale, so treating that as a deletion would close a surface over a transport error.
+    const at = board.indexOf('const reconcileOpenRunAgainstHistory')
+    expect(at, 'the shared entry point should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, board.indexOf('\n}', at) + 2)
+    expect(body, 'the shared entry point must invoke the exploration reconciliation')
+      .toContain('reconcileOpenFuzzingRunAgainstHistory()')
+    expect(body, 'and the verification one, so neither kind can be dropped')
+      .toContain('reconcileOpenVerificationRunAgainstHistory()')
+    expect(body, 'and the simulation one')
+      .toContain('reconcileOpenSimulationRunAgainstHistory()')
+
+    /*
+     * Every declared reconciliation must be dispatched, checked by enumeration rather than by listing the
+     * three names above. Deleting a name from the dispatcher is the mutation that kills a whole run kind's
+     * reconciliation while leaving its function, its wording and its own tests intact — measured: removing
+     * the simulation call left all 11 tests green until this assertion existed. A hand-picked list cannot
+     * catch that for the *next* kind, which is the failure mode `known-traps.md` calls a guard that scans a
+     * subset.
+     */
+    const declared = [...board.matchAll(/^const (reconcileOpen\w+AgainstHistory) = /gm)]
+      .map(match => match[1])
+      .filter(name => name !== 'reconcileOpenRunAgainstHistory')
+    expect(declared.length, 'the per-kind reconciliations should be discoverable').toBeGreaterThan(2)
+    for (const name of declared) {
+      expect(body, `${name} is declared but never dispatched`).toContain(`${name}()`)
+    }
+
+    const reloadAt = board.indexOf('const refreshRunHistory = async')
+    const reload = board.slice(reloadAt, board.indexOf('\n}', reloadAt) + 2)
+    expect(reload, 'and that entry point still runs only after a successful reload')
+      .toMatch(/if \(results\.every\(Boolean\)\) reconcileOpenRunAgainstHistory\(\)/)
+  })
+})
+
+/**
+ * The simulation half, which was the worst of the three and the last to be wired.
+ *
+ * A trajectory's primary surface is the replay *bar*, a `role="region"` sibling of the board rather than a
+ * modal — so the assistant stays one click away for the whole replay (the chat button is gated on
+ * `isBoardDataReady` alone), and `DeleteSimulationTraceTool` ships. Deleting the trajectory being replayed
+ * left it animating, and its Run details → download still read `historyPersistence.runId` off the deleted
+ * record, reproducing the same misleading "may be a record saved before model persistence was enabled" 404.
+ */
+describe('surfaces for a deleted simulation trajectory', () => {
+  const board = readFileSync(join(process.cwd(), 'src/views/Board.vue'), 'utf8')
+  const i18n = readFileSync(join(process.cwd(), 'src/assets/i18n.ts'), 'utf8')
+
+  it('reconciles the replayed trajectory when the deletion happened somewhere else', () => {
+    const at = board.indexOf('const reconcileOpenSimulationRunAgainstHistory')
+    expect(at, 'the simulation reconciliation should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, board.indexOf('\n}', at) + 2)
+
+    // `historyPersistence.runId` is the saved trace id, which is also how `simulationRuns` is keyed, so
+    // one id covers both the bar and the details dialog.
+    expect(body, 'the open run is matched by its persisted trace id')
+      .toContain('lastSimulationResult.value?.historyPersistence?.runId')
+    expect(body, 'against the authoritative reloaded list')
+      .toMatch(/simulationRuns\.value\.some\(run => run\.id === openRunId\)/)
+    expect(body, 'an empty history must not be read as "deleted"')
+      .toContain('simulationRuns.value.length === 0')
+    expect(body, 'and it tears the surfaces down through the shared helper')
+      .toContain('dismissSimulationSurfacesForDeletedRun()')
+    expect(body, 'with wording of its own').toContain('openSimulationRunDeletedElsewhere')
+
+    // The guard the other two kinds do not need. Their ids come from refs cleared on close, so "has an
+    // id" implies "is on screen"; `lastSimulationResult` deliberately outlives every surface, so without
+    // this the user would be told a panel closed while nothing was showing.
+    expect(body, 'it must act only while a simulation surface is actually up')
+      .toMatch(/!simulationAnimationState\.value\.visible && !simulationResult\.value/)
+  })
+
+  it('closes the bar, the details dialog and the deep link exactly once', () => {
+    const at = board.indexOf('const dismissSimulationSurfacesForDeletedRun')
+    expect(at, 'the teardown helper should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, board.indexOf('\n}', at) + 2)
+
+    // For `run=simulation:<id>` the bar is the addressed surface and its closer owns the link, so the
+    // dialog then takes the internal-transition closer. With no bar, the dialog's close is the
+    // user-facing one and has to carry the link itself.
+    expect(body, 'the bar is closed through the closer that clears the deep link')
+      .toContain('closeSimulationTimeline()')
+    expect(body, 'and with the bar gone the dialog must not clear the link a second time')
+      .toContain('closeSimulationResultDialog()')
+    expect(body, 'while a dialog open without a bar takes the URL-clearing closer')
+      .toContain('dismissSimulationResultDialog()')
+
+    // The bar renders `savedSimulationStates` and reads every other prop through
+    // `lastSimulationResult`, so leaving either would keep the deleted run replayable — and
+    // `openSimulationRunDetails` reads that same ref.
+    expect(body, 'the replayed states must not survive their run')
+      .toContain('savedSimulationStates.value = []')
+    expect(body, 'nor the run manifest the bar and the details dialog read')
+      .toContain('lastSimulationResult.value = null')
+  })
+
+  it('leaves the in-tab deletion path alone, and says why', () => {
+    const at = board.indexOf('const deleteSimulationRun')
+    expect(at, 'the deletion handler should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, board.indexOf('\n}', board.indexOf('finally', at)))
+
+    // Unlike verification, this handler adds no teardown: reaching it means the history panel is open,
+    // and both simulation surfaces exclude it. Asserted so a future reader does not "complete" the
+    // pattern by adding a same-tab branch whose condition can never hold — and so the reasoning is
+    // pinned to the code rather than living only in a comment.
+    expect(body, 'no surface teardown belongs here').not.toContain('dismissSimulationSurfacesForDeletedRun')
+    expect(body, 'and the reason must be recorded where the absence is')
+      .toContain('reconcileOpenSimulationRunAgainstHistory')
+  })
+
+  it('describes a trajectory rather than a verdict or a candidate finding', () => {
+    // Three kinds, three strings. Reusing verification's copy would offer "re-run to get a conclusion"
+    // for something that produces neither a conclusion nor findings, and would say "panel was closed"
+    // when what stopped was a replay.
+    const keyAt = i18n.indexOf('openSimulationRunDeletedElsewhere:', i18n.indexOf('openSimulationRunDeletedElsewhere:') + 1)
+    expect(keyAt, 'both locales should define the key').toBeGreaterThan(-1)
+    const english = i18n.slice(keyAt, keyAt + 300)
+    expect(english, 'names the artifact as a trajectory').toMatch(/trajectory/i)
+    expect(english, 'says the replay stopped, not that a panel closed').toMatch(/playback ended/i)
+    expect(english, 'names both out-of-band causes').toMatch(/assistant or another tab/i)
+    expect(english, 'and does not promise a conclusion').not.toMatch(/conclusion/i)
   })
 })
