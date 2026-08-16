@@ -135,7 +135,8 @@ same returned state window.
 A `get_trace` state may additionally carry `loopStart: true` or `loopBack: true`, present only when
 true and only on verification counterexamples — simulation and fuzz traces are finite paths that never
 carry them. They mark the infinite cycle NuSMV ends on, which for a liveness specification
-(`templateId` 2, 5, 6) *is* the violation rather than any single state; see
+(`violatedSpecification.templateId` 2, 5, 6 — emitted for exactly this decision) *is* the violation
+rather than any single state; see
 [verification-flow.md](../architecture/verification-flow.md#parser-boundaries). They cannot be
 inferred from the values. NuSMV closes the path by re-printing the loop entry, and how that looks
 depends on the cycle length (measured on NuSMV 2.7.1): a one-state cycle prints no variable lines, so
@@ -677,6 +678,10 @@ should be shown only on request. The chat projection deliberately omits persiste
 `specId` and template ids because follow-up trace/fix operations use `traceId` instead.
 The REST verification DTO retains stable correlation ids for clients. Saved verification trace tools return structured `violatedSpec`
 plus source-model completeness; raw `violatedSpecJson` and ownership ids remain internal.
+That structure carries `templateId` — unlike the `specResults` projection above, which omits it because
+its follow-ups key on `traceId`. A trace tool needs it: `get_trace` tells the model that the cycle *is*
+the violation for templates 2, 5 and 6, and `specificationLabel` is display wording rather than a
+contract, so gating that judgement on the label would break the first time the wording changed.
 The tool's message distinguishes a saved history row from `FAILED` or
 `OUTCOME_UNKNOWN`; an unknown history outcome instructs the assistant to refresh history
 before retrying and does not weaken or erase the formal conclusion.

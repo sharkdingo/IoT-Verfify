@@ -118,7 +118,12 @@ class ListTracesToolTest {
         assertEquals("Trust safety", item.path("violatedSpecification").path("specificationLabel").asText());
         assertEquals(false, item.has("violatedSpecId"));
         assertEquals(false, item.path("violatedSpecification").has("id"));
-        assertEquals(false, item.path("violatedSpecification").has("templateId"));
+        // `templateId` is emitted, unlike the persistence `id` beside it. It is not an internal identifier
+        // — `spec_list`, `manage_spec` and both recommenders take and return it — and `get_trace` tells the
+        // model to decide from it whether a trailing cycle is the violation (templates 2, 5, 6). Withholding
+        // it left that instruction naming a field no trace response contained, so the only spec identity the
+        // model could gate on was `specificationLabel`, which is display wording rather than a contract.
+        assertEquals("7", item.path("violatedSpecification").path("templateId").asText());
         assertEquals(false, item.path("modelComplete").asBoolean());
         assertEquals(2, item.path("disabledRuleCount").asInt());
         assertEquals(1, item.path("skippedSpecCount").asInt());

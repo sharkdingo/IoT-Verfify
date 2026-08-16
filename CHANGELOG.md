@@ -58,6 +58,19 @@ history into a technical spec. The spec content itself now lives under
   restated the narrow case as general), and pinned by
   `parseCounterexample_marksAMultiStateCycleWhoseClosingStateCarriesChanges`.
 
+- **`get_trace` told the assistant to decide liveness from `templateId`, which no trace tool emitted.**
+  The description says the trailing cycle "for a liveness specification (templateId 2, 5, 6) is itself the
+  violation" — the same judgement the frontend gates on `LIVENESS_TEMPLATES` — but
+  `ModelTraceToolPresenter.violatedSpecification` emitted only `specificationLabel`, `formulaPreview`, the
+  condition lists and `formulaKind`. An existing test asserted the field's *absence*, beside the assertion
+  that keeps the persistence `id` out; `templateId` is not that kind of id, since `spec_list`,
+  `manage_spec` and both recommenders already take and return it. Left as it was, the model could only
+  guess from the display label ("Eventually", "Eventual response", "Persistence"), which is wording rather
+  than a contract — and a wrong guess turns a cycle that *is* the violation into an unexplained repetition,
+  or the reverse. Now emitted on every trace tool that shares this presenter (`get_trace`, `list_traces`,
+  `delete_trace`, `get_fuzz_finding`, `get_fuzz_run`), pinned in `GetTraceToolTest` and `ListTracesToolTest`,
+  and documented where `ai-tools.md` explains why the neighbouring `specResults` projection omits it.
+
 - **Two backend Javadocs named the liveness template set as "5/6", omitting template 2.** Every other
   site — `spec-templates.md`, `types/verify.ts`, `Board.vue`'s `LIVENESS_TEMPLATES`, the AI-tool docs —
   lists 2, 5 and 6, and template 2 (`AF`) is refuted by a lasso like the others: measured on NuSMV

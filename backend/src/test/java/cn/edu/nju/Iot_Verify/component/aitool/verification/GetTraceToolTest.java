@@ -127,6 +127,12 @@ class GetTraceToolTest {
         assertEquals(false, json.has("violatedSpecId"));
         assertEquals("Never", json.path("violatedSpecification").path("specificationLabel").asText());
         assertEquals("CTL", json.path("violatedSpecification").path("formulaKind").asText());
+        // The tool description tells the model that the trailing cycle is itself the violation "for a
+        // liveness specification (templateId 2, 5, 6)", so the response has to carry that id. It did not:
+        // the only spec identity emitted was `specificationLabel`, which is display wording. A model asked
+        // to gate a formal judgement on a field it cannot see either guesses from the label or ignores the
+        // instruction, and neither failure is visible in the output.
+        assertEquals("3", json.path("violatedSpecification").path("templateId").asText());
         assertEquals(false, json.path("modelComplete").asBoolean());
         assertEquals(1, json.path("disabledRuleCount").asInt());
         assertEquals(1, json.path("stateCount").asInt());

@@ -233,7 +233,12 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
   a lasso: a finite prefix followed by a cycle that repeats forever without ever reaching the required
   state. The parser captures NuSMV's own `-- Loop starts here` marker as `loopStart: true`, and flags the
   trailing state that closes the cycle as `loopBack: true`. Both are absent for a finite path, which is
-  every simulation and fuzz trace.
+  every simulation and fuzz trace. Simulation shares this parser, so that absence is worth stating as a
+  measurement rather than an assumption: NuSMV 2.7.1's `simulate -r -k N` + `show_traces` output is headed
+  `Trace Type: Simulation` and prints no `-- Loop starts here` line at all, even for a model whose only
+  transition is a self-loop. It does print later states with no variable lines — the same delta shape as a
+  one-state cycle's closing state — which is why the per-step panel's "no observable changes" wording has
+  to describe an unmoving step without implying the run stopped.
 
   **The closing state repeats the loop entry, not necessarily its own predecessor** — the distinction
   decides how a lasso is misread without the flags, and both halves were measured on NuSMV 2.7.1. A

@@ -36,6 +36,12 @@ public final class ModelTraceToolPresenter {
     public static Map<String, Object> violatedSpecification(SpecificationDto specification) {
         Map<String, Object> result = new LinkedHashMap<>();
         if (specification != null) {
+            // `get_trace` tells the model that a cycle is the violation itself "for a liveness specification
+            // (templateId 2, 5, 6)", and the frontend gates the same decision on the same field
+            // (`Board.vue`'s LIVENESS_TEMPLATES). Without emitting it the instruction named something the
+            // response did not contain, leaving the label as the only clue — and "Eventually" / "Eventual
+            // response" / "Persistence" are display strings that change with wording, not a contract.
+            putText(result, "templateId", specification.getTemplateId());
             putText(result, "specificationLabel", specification.getTemplateLabel());
             putText(result, "formulaPreview", specification.getFormula());
             putConditions(result, "aConditions", specification.getAConditions());
