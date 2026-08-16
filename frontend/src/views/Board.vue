@@ -12426,9 +12426,12 @@ const traceTriggeredRuleLabel = (rule: { ruleIndex?: number; ruleId?: string | n
 const traceTriggeredRuleExistsOnBoard = (rule: { ruleIndex?: number; ruleId?: string | null }) =>
   rule.ruleId != null && currentBoardRuleIds.value.includes(String(rule.ruleId))
 
-// `selectedTraceStateNumber` backed the number input beside the scrub slider. Three controls answered
-// "which step" — rail, slider, number field — and the field was the one with no unique job, so both it and
-// this 1-based adapter are gone. `vue-tsc` flagged the orphan, which is the check doing its work.
+// Three controls once answered "which step" — the rail, a scrub slider, and the number field. The scrub
+// slider was the one with no unique job and is gone (the two remaining `type="range"` inputs in this file
+// are run-configuration controls: attack budget and simulation steps). The number field stayed, so
+// `selectedTraceStateNumber` above is still live as its 1-based adapter — `trace-timeline-step-input`, with
+// the simulation bar carrying the same pair. This note used to say the field and the adapter had both been
+// deleted, which was true of neither bar and pointed a maintainer at working code as dead.
 
 // 选择并播放指定索引的反例路径动画
 const selectAndPlayTrace = (traceIndex: number) => {
