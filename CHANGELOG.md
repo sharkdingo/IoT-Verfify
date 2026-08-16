@@ -19,6 +19,15 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **A background exploration run finishing behind an open replay threw a modal result dialog over it.**
+  The task-watch path presented the completed run unconditionally, so the exploration result dialog —
+  `aria-modal`, with a focus trap and a background scroll lock — appeared over the replay bar, which is
+  deliberately non-modal and kept animating underneath: the user's own playback controls were suddenly
+  behind a trap they never opened, and dismissing it was the only way back to the trace they were
+  watching. The panel-driven path already declined to present in a comparable case and routed the
+  completion to the task notification; the watch path now does the same while a replay is on screen,
+  reporting the run's own outcome (a budget-exhausted run is still flagged as such, not softened) plus a
+  note saying the result is waiting in the task inbox.
 - **An async simulation completing behind an open replay repainted that replay's header with the new
   run's semantics.** `lastSimulationResult` is the manifest every simulation surface describes — the
   replay bar takes its attack and privacy chips, step counts and model snapshot from it, while the states

@@ -10529,6 +10529,38 @@ const watchFuzzingTask = async (taskId: number) => {
     const run = await pollAsyncFuzzing(taskId)
     untrackFuzzTask(taskId)
     showFuzzingPanel.value = false
+    /*
+     * A replay on screen is not something to open a modal over. `FuzzingResultDialog` is
+     * `aria-modal="true"`, so presenting it takes the focus trap and the background scroll lock while the
+     * replay bar — a non-modal region — keeps animating underneath, and the user's playback controls are
+     * behind a trap they did not ask for. `handleFuzzing` already declines to present when its panel is
+     * closed and routes the run to the task notification instead; this path presented unconditionally,
+     * which is the only reason the two disagreed.
+     *
+     * The run is not lost: it goes to the notification the task inbox and the history badge already read,
+     * exactly as `handleFuzzing`'s non-presenting branch and the background recovery path both do, so the
+     * user opens it once the replay is closed.
+     */
+    if (isModelPlaybackActive.value) {
+      const notificationShown = markFuzzNotificationUnread({
+        taskId,
+        runId: run.id,
+        kind: 'COMPLETED',
+        initiator: run.initiator,
+        outcome: run.outcome,
+        createdAt: run.completedAt
+      })
+      // The outcome first, then why it is not on screen — the same order `handleFuzzing` uses, so a
+      // deferral does not read as a quieter kind of result. Its severity comes from
+      // `fuzzingCompletionMessage`: candidate findings are not an informational aside, and
+      // `BUDGET_EXHAUSTED` must never be dressed up as a clean run.
+      if (notificationShown) {
+        if (run.outcome === 'BUDGET_EXHAUSTED') notifyInfo(fuzzingCompletionMessage(run))
+        else notifyBlocked(fuzzingCompletionMessage(run))
+        notifyInfo(t('app.fuzzResultDeferredForPlayback'))
+      }
+      return
+    }
     presentFuzzingRun(run)
   } catch (error: any) {
     if (!isPollingAbortedError(error)) {

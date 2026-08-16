@@ -1797,6 +1797,9 @@ const messages = {
             // 与上一条分开：上一条把原因说成"编辑器打开"，用在回放场景就是在断言一个已知为假的原因。
             // 两条都必须交代轨迹去了哪里，否则一次完成的运行在界面上不留任何痕迹。
             simulationPlaybackDeferredForReplay: '后台仿真已完成并保存在运行历史中。当前正在回放另一段轨迹，因此本次未自动打开回放；关闭回放后可从运行历史中打开。',
+            // 探索结果对话框是模态的：在回放进行时弹出会夺走焦点并锁定滚动，而回放条本身不是模态的。
+            // 因此改为记入任务通知；这条只解释"为什么没弹出"，结果本身由 fuzzingCompletionMessage 先行说明。
+            fuzzResultDeferredForPlayback: '当前正在回放轨迹，因此未自动打开探索结果。结果已记入任务通知，关闭回放后可从中打开。',
             historicalPlaybackDeferredForBoardChange: '加载历史结果期间提交了新的画布编辑。请先核对当前画布，再重新打开回放。',
             ruleRecommendationCancelled: '已请求停止规则推荐',
             deviceRecommendationCancelled: '已请求停止设备推荐',
@@ -4227,6 +4230,11 @@ const messages = {
             // would assert a reason known to be false. Both must say where the trajectory went, or a
             // completed run leaves no trace on screen.
             simulationPlaybackDeferredForReplay: 'The background simulation completed and was saved to run history. Playback did not open automatically because another trajectory is being replayed; open it from run history once you close the replay.',
+            // The exploration result dialog is modal: opening it mid-replay takes the focus trap and the
+            // scroll lock while the replay bar, which is not modal, keeps animating underneath. So the run
+            // goes to the task notification instead. This line explains only why nothing opened — the
+            // outcome itself is reported first by fuzzingCompletionMessage.
+            fuzzResultDeferredForPlayback: 'The exploration result did not open automatically because a trajectory is being replayed. It is waiting in your task notifications; open it once you close the replay.',
             historicalPlaybackDeferredForBoardChange: 'A Board edit was submitted while the history result was loading. Review the current Board, then start playback again.',
             ruleRecommendationCancelled: 'Rule recommendation stop requested',
             deviceRecommendationCancelled: 'Device recommendation stop requested',

@@ -284,7 +284,11 @@ single owner of the "session gone → login" location.
   unavailable placeholders rather than failing the whole list.
 - **Exploration is background-only.** Closing its panel must not cancel the accepted
   task; keep it visible in the global task indicator/inbox and move completed work into
-  History Results with nested finding summaries.
+  History Results with nested finding summaries. A background arrival also must not seize
+  the screen: `FuzzingResultDialog` is `aria-modal`, so opening it while a replay animates
+  puts the user's own playback controls behind a focus trap they did not ask for. Route the
+  completion to the notification and say why nothing opened, as `handleFuzzing` already does
+  when its panel is closed.
 - **A stopped chat transport is not a cancelled tool operation.** Wait for the session
   activity endpoint to become idle before switching/deleting the session or allowing a
   new assistant mutation, then reconcile board and run-history state. Match the reloaded

@@ -191,6 +191,35 @@ describe('a run that completes after the board changed', () => {
       .not.toMatch(/notifyAutomaticPlaybackDeferred\(\)/)
   })
 
+  it('does not open a modal exploration result over a running replay', () => {
+    /*
+     * The third run kind, and the same rule from the other direction: `FuzzingResultDialog` is
+     * `aria-modal="true"`, so presenting it mid-replay takes the focus trap and the background scroll lock
+     * while the replay bar — deliberately a non-modal `role="region"` — keeps animating underneath, putting
+     * the user's own playback controls behind a trap they did not ask for.
+     *
+     * `handleFuzzing` already declines to present when its panel is closed and routes the run to the task
+     * notification; `watchFuzzingTask` presented unconditionally, which is the only reason the two paths
+     * disagreed about the same completion.
+     */
+    const body = bodyOf('const watchFuzzingTask = ')
+    const presentAt = body.indexOf('presentFuzzingRun(run)')
+    expect(presentAt, 'the watch path should present its completed run').toBeGreaterThan(-1)
+
+    const guardAt = body.indexOf('if (isModelPlaybackActive.value) {')
+    expect(guardAt, 'presenting must be gated on playback').toBeGreaterThan(-1)
+    expect(guardAt, 'and the gate must come first').toBeLessThan(presentAt)
+
+    // Deferred, not dropped: the notification is what the task inbox and the history badge read, and the
+    // outcome is still reported — a `BUDGET_EXHAUSTED` run must not be softened into a clean result, which
+    // is why the severity is taken from the shared completion message rather than fixed here.
+    const guardBody = body.slice(guardAt, body.indexOf('return', guardAt))
+    expect(guardBody, 'a deferred run must reach the task notification')
+      .toContain('markFuzzNotificationUnread')
+    expect(guardBody, 'and report its own outcome').toContain('fuzzingCompletionMessage(run)')
+    expect(guardBody, 'and say why nothing opened').toContain('fuzzResultDeferredForPlayback')
+  })
+
   it('leaves a freshly loaded historical run current', () => {
     // The counter answers "did the board change while *this* run was in flight". A run read back
     // from history was not in flight, so its flag stays a plain `false` — comparing a counter there
