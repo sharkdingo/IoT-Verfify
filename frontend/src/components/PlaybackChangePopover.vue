@@ -24,7 +24,14 @@ const props = withDefaults(defineProps<{
   kind: 'simulation' | 'counterexample' | 'fuzzing'
   position: { x: number; y: number }
   inputEvents?: Array<FuzzingInputEvent & { targetLabel?: string }>
-  firstViolationStateNumber?: number
+  /**
+   * 1-based state number where the property is violated, or undefined when no single state is the fault.
+   *
+   * Both playback kinds supply it. It used to be exploration-only, which left a safety counterexample's
+   * violating state unmarked here while the rail marker beneath said "Violation" on it. Undefined for a
+   * liveness cycle, where `loopBackSentence` carries the explanation instead.
+   */
+  violationStateNumber?: number
   bundledDeviceIds?: string[]
   bundledEnvironmentNames?: string[]
   /**
@@ -78,8 +85,8 @@ const title = computed(() => {
 })
 
 const isInitialState = computed(() => props.stateNumber <= 1)
-const isFirstViolationState = computed(() =>
-  props.kind === 'fuzzing' && props.firstViolationStateNumber === props.stateNumber)
+const isViolationState = computed(() =>
+  props.violationStateNumber !== undefined && props.violationStateNumber === props.stateNumber)
 const hasObservableChanges = computed(() =>
   props.changes.length > 0 || props.environmentChanges.length > 0)
 
@@ -331,12 +338,15 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
           <span class="shrink-0 rounded-full board-chip-info px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-info">
             {{ t('app.traceVisualization.stateLabel') }} {{ stateNumber }} / {{ totalStates }}
           </span>
+          <!-- Exploration keeps "first violation": its search may find several and this is the earliest.
+               A verification counterexample has exactly one, so "Violation" — the same word the rail
+               marker uses for that state, which is what a reader compares it against. -->
           <span
-            v-if="isFirstViolationState"
+            v-if="isViolationState"
             class="shrink-0 rounded-full board-chip-danger px-1.5 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-danger"
-            data-testid="fuzzing-first-violation-badge"
+            data-testid="playback-violation-badge"
           >
-            {{ t('app.fuzzFirstViolation') }}
+            {{ kind === 'fuzzing' ? t('app.fuzzFirstViolation') : t('app.traceViolationHere') }}
           </span>
         </div>
         <p class="mt-0.5 text-[length:var(--iot-font-min)] leading-4 text-slate-500" aria-live="polite" aria-atomic="true">

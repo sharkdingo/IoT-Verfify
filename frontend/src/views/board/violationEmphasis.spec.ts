@@ -107,6 +107,28 @@ describe('violation emphasis reaches the canvas', () => {
     expect(body).toMatch(/violationDeviceIds\s*=\s*isViolationPlayback/)
   })
 
+  it('gates the playback panel badge on the same playback kind as the canvas', () => {
+    // The popover is shared by all three playback kinds, and the badge previously relied on its own
+    // `kind === 'fuzzing'` test — which gated it incidentally while also hiding it from every verification
+    // counterexample. Making the badge kind-agnostic there moves the gate here, so the stale-`savedTraces`
+    // leak above has to be re-stated for this surface or a simulation replay badges a state of a run that
+    // violated nothing.
+    const at = board.indexOf('const activeViolationStateNumber')
+    expect(at, 'the badge source should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, at + 500)
+    expect(body, 'the gate must read the playback kind').toContain("kind !== 'counterexample'")
+    expect(body, 'a fuzz finding is also a violation replay').toContain("kind !== 'fuzzing'")
+    // Reads the single owner rather than the finding, which is what makes a safety counterexample marked.
+    expect(body, 'one owner for the violating step').toContain('counterexampleViolationStep.value')
+
+    const popover = readFileSync(join(root, 'src/components/PlaybackChangePopover.vue'), 'utf8')
+    const predicate = popover.slice(popover.indexOf('const isViolationState'), popover.indexOf('const isViolationState') + 220)
+    expect(predicate, 'the component must not re-gate on the kind, which excluded counterexamples')
+      .not.toContain("props.kind === 'fuzzing'")
+    expect(predicate, 'an absent state number must match nothing, not state undefined')
+      .toContain('props.violationStateNumber !== undefined')
+  })
+
   it('says why the loop-closing step shows no change, rather than reporting an empty diff', () => {
     // NuSMV re-prints the loop entry with no variable lines, so the delta merge makes the final state
     // identical to its predecessor. "No observable changes" is then true but reads as a broken animation.

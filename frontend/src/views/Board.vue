@@ -12131,9 +12131,6 @@ const activeFuzzingStepInputEvents = computed<Array<FuzzingInputEvent & { target
     })
 })
 
-const firstFuzzingViolationStateNumber = computed(() =>
-  activeFuzzingFinding.value ? activeFuzzingFinding.value.firstViolationStep + 1 : undefined)
-
 const activePlaybackCompromisedLinks = computed<TraceTriggeredRule[]>(() =>
   activePlaybackStates.value[activePlaybackStateIndex.value]?.compromisedAutomationLinks || [])
 
@@ -12609,6 +12606,30 @@ const counterexampleViolationStep = computed<number | undefined>(() => {
   }
 
   return undefined
+})
+
+/**
+ * The same answer as a 1-based state number, for the playback panel's badge.
+ *
+ * That badge previously read `activeFuzzingFinding` directly, so it appeared for an exploration finding and
+ * never for a verification counterexample — while the rail marker directly beneath the panel said
+ * "Violation" on that very state. Stepping through a safety counterexample, the one panel whose job is to
+ * explain what happens *at this state* was the only surface silent about it.
+ *
+ * Reading the computed above rather than the finding keeps one owner for the question. `undefined` for a
+ * liveness cycle is correct here too: there the cycle is the violation, and `loopBackSentence` says so
+ * instead of a badge naming a single state.
+ *
+ * Gated on the playback kind for the same reason `canvasHighlightedTrace` is: this popover is shared with
+ * simulation replay, and neither `savedTraces` nor `activeFuzzingFinding` is cleared when one starts, so an
+ * ungated read would badge a state of a run that violated nothing. The component's old
+ * `kind === 'fuzzing'` test was doing this incidentally; making the badge kind-agnostic there means the gate
+ * has to be stated here, where the playback kind is known.
+ */
+const activeViolationStateNumber = computed(() => {
+  const kind = activePlaybackKind.value
+  if (kind !== 'counterexample' && kind !== 'fuzzing') return undefined
+  return counterexampleViolationStep.value === undefined ? undefined : counterexampleViolationStep.value + 1
 })
 
 /**
@@ -15053,7 +15074,7 @@ const counterexampleTraceHelpText = computed(() => {
         :input-events="activeFuzzingStepInputEvents"
         :bundled-device-ids="bundledPlaybackDeviceIds"
         :bundled-environment-names="bundledPlaybackEnvironmentNames"
-        :first-violation-state-number="firstFuzzingViolationStateNumber"
+        :violation-state-number="activeViolationStateNumber"
         :is-loop-back-state="activePlaybackIsLoopBackState"
         :loop-range="activePlaybackLoopRange"
         :is-liveness-violation="activePlaybackIsLivenessViolation"

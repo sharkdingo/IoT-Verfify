@@ -60,6 +60,23 @@ history into a technical spec. The spec content itself now lives under
   with no utility after it, so the one control whose whole job is "click me to seek here" gave no pointer
   feedback. It now highlights its border on hover, matching the identical rail in the simulation timeline.
 
+- **The playback panel marked the violating state during exploration and stayed silent during
+  verification.** Two surfaces explain a replayed step: the rail marker beneath the canvas, and the
+  change panel above it that says what happened *at this state*. For a counterexample of a safety
+  property the marker said "Violation" on a state while the panel directly above it said nothing
+  about it, so the panel that carries the explanation was the one place the fault was not named.
+  Liveness counterexamples were covered — the loop sentence explains the cycle — and so was
+  exploration, whose badge was the only path the panel's condition accepted.
+
+  The badge now reads the same owner the rail marker reads, which prefers an exploration finding's own
+  first-violation step, restricts a verification counterexample to the templates whose witness ends at
+  the fault, and reports no single state for a liveness cycle. Exploration keeps "First violation"
+  because its search may find several; a counterexample has exactly one, so it says "Violation" —
+  matching the marker word a reader compares it against. The panel is shared with simulation replay and
+  neither the selected trace nor the selected finding is cleared when one starts, so the badge is gated
+  on the active playback kind — the same gate the canvas emphasis already carried, which the old
+  exploration-only condition had been providing by accident.
+
 - **An unavailable SMV model blamed a cause that was often not the user's.** The notice beside a
   disabled download told every reader to "check whether the run is still in your history". That is
   sound advice for a run that was saved and whose model is genuinely gone — but four

@@ -22,6 +22,7 @@ const i18n = createI18n({
         privacy: 'privacy',
         unknown: 'Unknown',
         fuzzFirstViolation: 'First violation',
+        traceViolationHere: 'Violation',
         traceVisualization: {
           simulationStepChanges: 'Device Changes in This Step',
           counterexampleStepChanges: 'Counterexample Changes in This Step',
@@ -291,7 +292,7 @@ describe('PlaybackChangePopover', () => {
         kind: 'fuzzing',
         stateNumber: 2,
         totalStates: 4,
-        firstViolationStateNumber: 2,
+        violationStateNumber: 2,
         position: { x: 0, y: 0 },
         inputEvents: [{
           step: 1,
@@ -321,7 +322,63 @@ describe('PlaybackChangePopover', () => {
     expect(wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()).toContain('Model choice')
     expect(wrapper.get('[data-testid="playback-change-automation"]').text()).toContain('Motion activates alarm')
     expect(wrapper.text()).toContain('Observable model or natural changes')
-    expect(wrapper.get('[data-testid="fuzzing-first-violation-badge"]').text()).toContain('First violation')
+    expect(wrapper.get('[data-testid="playback-violation-badge"]').text()).toContain('First violation')
+  })
+
+  it('marks the violating state of a verification counterexample, not only an exploration finding', () => {
+    // The badge was gated on `kind === 'fuzzing'`, so a safety counterexample's violating state carried no
+    // marker here while the rail marker directly beneath it said "Violation" on that same state — the one
+    // panel explaining what happens at this state was the only surface silent about the fault.
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'counterexample',
+        stateNumber: 3,
+        totalStates: 3,
+        violationStateNumber: 3,
+        position: { x: 0, y: 0 },
+        changes: [{
+          deviceId: 'lock-1',
+          deviceLabel: 'Front lock',
+          details: [{ kind: 'state', previousValue: 'locked', currentValue: 'unlocked' }]
+        }],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    // "Violation", matching the rail marker's wording rather than exploration's "First violation" — a
+    // counterexample has exactly one violating state, so "first" would imply others exist.
+    expect(wrapper.get('[data-testid="playback-violation-badge"]').text()).toContain('Violation')
+    expect(wrapper.get('[data-testid="playback-violation-badge"]').text()).not.toContain('First')
+  })
+
+  it('marks no state when the fault is a cycle rather than a single state', () => {
+    // A liveness counterexample gets `undefined`, because the repetition is the violation and the loop
+    // sentence carries that. A badge naming one state of the cycle would be a different, wrong claim.
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'counterexample',
+        stateNumber: 3,
+        totalStates: 3,
+        violationStateNumber: undefined,
+        isLivenessViolation: true,
+        loopRange: { start: 2, end: 3 },
+        position: { x: 0, y: 0 },
+        changes: [],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.find('[data-testid="playback-violation-badge"]').exists()).toBe(false)
   })
 
   it('distinguishes random initialization from a seed-generated input at the same state', () => {
