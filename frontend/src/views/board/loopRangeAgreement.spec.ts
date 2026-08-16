@@ -17,6 +17,13 @@ import { describe, expect, it } from 'vitest'
  * the counterexample does not contain — a wrong claim about a proof, in the one place a reader goes to
  * understand why the final step shows no movement.
  *
+ * There are **two** such computeds and both implement the rule independently:
+ * `activePlaybackLoopRange` is 1-based and feeds that sentence, while `counterexampleLoopRange` is
+ * 0-based and feeds `counterexampleViolationSteps` — canvas emphasis and the rail's cycle rings. The
+ * differing index base is deliberate (display numbers vs array positions), the resolution rule is not
+ * free to differ, and only the first one was guarded here: a regression to `findIndex` in the other
+ * would have emphasised a device on a state outside the cycle with nothing going red.
+ *
  * Asserted over the source rather than by mounting `Board.vue` (far too large to mount cheaply, per
  * `actionDockHierarchy.spec.ts`), plus a behavioural check of the resolution rule itself on the exact
  * state shape the backend test pins.
@@ -24,24 +31,37 @@ import { describe, expect, it } from 'vitest'
 describe('loop range agreement between parser and playback', () => {
   const board = readFileSync(join(process.cwd(), 'src/views/Board.vue'), 'utf8')
 
-  /** The `activePlaybackLoopRange` body, which owns the resolution. */
-  const rangeBody = (() => {
-    const at = board.indexOf('const activePlaybackLoopRange')
-    expect(at, 'the loop-range computed should exist').toBeGreaterThan(-1)
-    return board.slice(at, board.indexOf('\n})', at))
-  })()
+  /** A computed's body by name, comment lines dropped so prose cannot satisfy a code assertion. */
+  const bodyOf = (name: string) => {
+    const at = board.indexOf(`const ${name}`)
+    expect(at, `${name} should exist`).toBeGreaterThan(-1)
+    return board
+      .slice(at, board.indexOf('\n})', at))
+      .split('\n')
+      .filter(line => !line.trim().startsWith('*') && !line.trim().startsWith('//'))
+      .join('\n')
+  }
 
-  it('resolves the loop entry from the last marker, as the parser does', () => {
+  /** The `activePlaybackLoopRange` body, which owns the sentence the panel renders. */
+  const rangeBody = bodyOf('activePlaybackLoopRange')
+
+  it.each([
+    ['activePlaybackLoopRange', 'states'],
+    ['counterexampleLoopRange', 'trace\\.states']
+  ])('resolves the loop entry from the last marker in %s, as the parser does', (name, collection) => {
     // `findIndex` takes the first match and is the defect; `findLastIndex` (or an equivalent reverse
     // scan) is what agrees with the parser. Asserting the absence of the first-match form is what makes
     // this catch a regression rather than restate the current code.
-    const code = rangeBody.split('\n').filter(line => !line.trim().startsWith('*')).join('\n')
+    const code = bodyOf(name)
     expect(code, 'the loop entry must be the last marked state, not the first')
-      .not.toMatch(/findIndex\(\s*\w+\s*=>\s*\w+\.loopStart/)
+      .not.toMatch(/findIndex\(\s*\w+\s*=>\s*\w+\??\.loopStart/)
     // A reverse scan, because `findLastIndex` needs `lib: ES2023` and this app targets ES2020.
     expect(code, 'resolved by scanning from the end')
-      .toMatch(/for \(let \w+ = states\.length - 1; \w+ >= 0; \w+--\)/)
+      .toMatch(new RegExp(`for \\(let (\\w+) = ${collection}\\.length - 1; \\1 >= 0; \\1--\\)`))
     expect(code, 'and it must stop at the first hit from the end').toContain('break')
+    // The closing state is set on at most one state, so first-match is correct for it — pinned so a
+    // well-meant symmetry edit cannot make both lookups scan backwards and mis-name a two-marker trace.
+    expect(code, 'the closing state is located forwards').toMatch(/findIndex\(/)
   })
 
   it('names the cycle the backend marked, on a trace with two markers', () => {

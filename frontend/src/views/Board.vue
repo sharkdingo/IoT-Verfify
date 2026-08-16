@@ -11734,8 +11734,11 @@ const openTraceAnimationAt = (selectedTraceIndex: number) => {
     return
   }
   activatePlaybackScene(scene)
-  // NuSMV emits the violating state last, so the final state is the violation. Guard the empty
-  // case: a malformed trace with no states must not produce a negative index.
+  // Opens on the last state, which is where the evidence is under either shape: for a safety template
+  // NuSMV emits the violating state last (`LAST_STATE_VIOLATION_TEMPLATES`), and for a liveness template
+  // the last state is the one that closes the cycle, so the panel's loop explanation is the first thing
+  // the user reads. Guard the empty case: a malformed trace with no states must not produce a negative
+  // index.
   const lastStateIndex = Math.max(0, (trace.states?.length ?? 1) - 1)
   traceAnimationState.value = {
     visible: true,
@@ -12588,13 +12591,18 @@ const LAST_STATE_VIOLATION_TEMPLATES = new Set(['1', '3', '4', '7'])
 
 /**
  * Loop range [start, end] for the current counterexample trace, or null if no loop.
- * Indices are 0-based. Used to compute violation steps for liveness templates.
+ *
+ * Indices are **0-based** here, unlike `activePlaybackLoopRange`, because these feed
+ * `counterexampleViolationSteps` — array positions for canvas emphasis and the rail's cycle rings —
+ * rather than the state numbers a sentence shows the user. Both resolve the entry from the *last*
+ * `loopStart` marker, matching `SmvTraceParser`, which overwrites `loopStartState` on every marker it
+ * sees; a trace can carry several. Reading the first would emphasise a state the cycle does not contain.
  */
 const counterexampleLoopRange = computed<{ start: number; end: number } | null>(() => {
   const trace = currentTrace.value
   if (!trace?.states) return null
 
-  // Find the last loop marker (in case of multiple markers in one trace)
+  // Reverse scan rather than `findLastIndex`, which needs `lib: ES2023`; this app targets ES2020.
   let start = -1
   for (let index = trace.states.length - 1; index >= 0; index--) {
     const state = trace.states[index]
