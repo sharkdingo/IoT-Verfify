@@ -8,6 +8,7 @@ import {
   test,
   type AuthUser
 } from './support/auth'
+import { clickUnderTooltip } from './support/tooltips'
 
 const authHeaders = (auth: AuthUser) => ({
   Authorization: `Bearer ${auth.token}`
@@ -553,7 +554,11 @@ test.describe('board full-stack NuSMV user flow', () => {
       await page.getByTestId('close-verification-result').click()
 
       await page.getByTestId('open-verification-panel').click()
-      await page.getByTestId('verification-attack-toggle').click({ force: true })
+      // The dock button's hint popper covers this switch; see support/tooltips.ts for the measured
+      // geometry and why `force: true` made the failure less legible rather than fixing it.
+      await clickUnderTooltip(page, page.getByTestId('verification-attack-toggle'))
+      await expect(page.getByTestId('verification-attack-toggle'))
+        .toHaveAttribute('aria-checked', 'true')
       await page.getByTestId('verification-attack-budget').fill('1')
       const attackResponsePromise = page.waitForResponse(response =>
         response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
@@ -1900,7 +1905,9 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(baselineTrace.states.length).toBeGreaterThanOrEqual(2)
 
     await page.getByTestId('open-verification-panel').click()
-    await page.getByTestId('verification-attack-toggle').click({ force: true })
+    await clickUnderTooltip(page, page.getByTestId('verification-attack-toggle'))
+    await expect(page.getByTestId('verification-attack-toggle'))
+      .toHaveAttribute('aria-checked', 'true')
     await page.getByTestId('verification-attack-budget').fill('1')
     const attackResponsePromise = page.waitForResponse(response =>
       response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')

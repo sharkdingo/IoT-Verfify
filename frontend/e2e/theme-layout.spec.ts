@@ -8,6 +8,7 @@ import {
   trackTestAccount,
   type AuthUser
 } from './support/auth'
+import { clickUnderTooltip } from './support/tooltips'
 
 type ThemeMode = 'light' | 'dark'
 
@@ -271,7 +272,11 @@ test.describe('public theme and layout', () => {
     // either theme, which is the thing this test is actually about.
     await expectDarkSurface(panel.locator(':scope > .p-3 .board-card').first())
 
-    await page.locator('[data-testid="close-simulation-panel"]').click({ force: true })
+    // `force: true` here was the original instance of this mistake: the popper left over from the
+    // adjacent open-settings control still receives the click, so the panel does not close and the
+    // failure surfaces later. See support/tooltips.ts.
+    await clickUnderTooltip(page, page.locator('[data-testid="close-simulation-panel"]'))
+    await expect(panel).toBeHidden()
     await page.locator('[data-testid="open-history-panel"]').click()
     const historyPanel = page.locator('[data-testid="trace-history-panel"]')
     await expectDarkSurface(historyPanel)

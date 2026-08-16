@@ -238,15 +238,25 @@ CI runs with `--fail-on-flaky-tests`, so one retry-passing test still fails the 
   check measured a hitarea midpoint once and moved the mouse there; under CI load the canvas was
   still settling, the edge had moved, and no label appeared. Re-derive the coordinate *inside* the
   poll and re-hover each attempt rather than widening the timeout around a single stale move.
-- **A lingering Element Plus tooltip popper eats the next click, and Playwright's click retries do
-  not save you.** `theme-layout.spec.ts`'s "keeps floating panel surfaces coherent" clicks
-  `[data-testid="close-simulation-panel"]` right after hovering the adjacent open-settings control,
-  whose `iot-info-tooltip-popper` is still fading over the button; the click retries for 120s against
-  an element that "intercepts pointer events", then times out. **Known-flaky, not a regression** —
-  measured across builds: HEAD failed 1 in 19 runs, an unrelated feature branch 2 in 9. So dismiss or
-  wait out the popper before clicking a control next to a tooltip trigger, and **sample more than
-  once per build** when attributing this failure: single runs read as a clean "fails here, passes at
-  HEAD" regression that ten runs contradict.
+- **A lingering Element Plus tooltip popper eats the next click, and `force: true` makes it worse.**
+  `HintTooltip` teleports its popper to `body` at `z-index: 2009` with an 80ms fade, so clicking a
+  board dock button leaves a popper floating over the panel that button just opened — on top of the
+  controls inside it. Without `force`, the click retries against an element that "intercepts pointer
+  events" and times out, which at least names the cause. **`force: true` does not fix this**: it
+  skips Playwright's hit-target *check*, not the interception, so the browser still delivers the
+  event to the popper and the call reports success. The test then fails several statements later on a
+  control that never appeared, which reads as a product defect.
+  Measured from Full CI run 31943156194 (`board-full-flow.spec.ts` fire-evacuation scenario): the
+  popper sat at `translate(968px, -476px)` with `inset: auto auto 0 0` — x ≥ 968, y ≤ 244 in a
+  1280×720 viewport — and the forced click on `verification-attack-toggle` was delivered at
+  (1004, 218), inside it. The switch stayed `aria-checked="false"`, its `v-if`-gated section never
+  rendered, and the run died 180s later on `verification-attack-budget`. Use
+  `clickUnderTooltip` from `e2e/support/tooltips.ts`, which parks the pointer at the origin, waits
+  for the popper to go `aria-hidden`, then clicks with the check intact — and **assert the state the
+  click was supposed to produce**, so a swallowed click fails at the click rather than downstream.
+  When attributing this class of failure, **sample more than once per build**: single runs read as a
+  clean "fails here, passes at HEAD" regression that ten runs contradict (HEAD failed 1 in 19, an
+  unrelated feature branch 2 in 9).
 - **A route mock must satisfy the same validators as the real response.** `api/chat.ts` validates
   every field it depends on, so a fixture returning a convenient subset is rejected at the boundary —
   and the failure surfaces far from the cause. A session mock missing `active`/`userId`/`updatedAt`
