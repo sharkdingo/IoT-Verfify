@@ -39,6 +39,51 @@ const sources = () => {
 
 const matchesIn = (text: string, pattern: RegExp) => text.match(pattern) || []
 
+/**
+ * `sources()` reads one directory level, which is every file the rules above were written against.
+ * `components/common/` holds six more (the toggles, the tooltips, the public header), and a hover
+ * defect is exactly as invisible there. This walks instead of listing.
+ */
+const allSources = () => {
+  const files: Array<{ name: string, text: string }> = []
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) walk(path, `${prefix}${entry.name}/`)
+      else if (entry.name.endsWith('.vue')) {
+        files.push({ name: `${prefix}${entry.name}`, text: readFileSync(path, 'utf8') })
+      }
+    }
+  }
+  walk(COMPONENT_DIR, '')
+  walk(VIEW_DIR, '')
+  return files
+}
+
+/**
+ * The lines an ink/fill pair can legitimately be spread across: one `class="…"` literal or one
+ * `:class="[ … ]"` array.
+ *
+ * A fixed +/-3 window looked equivalent and is not. The rule recommendation panel's Apply button is a
+ * five-line binding whose `text-white` sits four lines above its fill, so the pale-surface hover defect in
+ * it fell one line outside the window — the check ran, found nothing, and the button hovered white ink onto
+ * `--warning-surface` in shipped code. Widening the constant to 5 would have re-broken on a six-line
+ * binding; the binding itself is the unit the markup actually uses.
+ */
+const enclosingBinding = (lines: string[], index: number): string => {
+  const opens = (text: string) => /:?class="/.test(text)
+  let first = index
+  while (first > 0 && !opens(lines[first])) first -= 1
+  let last = index
+  while (last < lines.length - 1 && !/"/.test(lines[last].replace(/:?class="/, ''))) last += 1
+  // A run-away scan means the heuristic did not find a boundary; fall back to a bounded window rather
+  // than joining half the file, which would make an unrelated `text-white` manufacture a hit.
+  if (index - first > 12 || last - index > 12) {
+    return lines.slice(Math.max(0, index - 3), index + 4).join(' ')
+  }
+  return lines.slice(first, last + 1).join(' ')
+}
+
 describe('semantic colour ownership', () => {
   it('uses no raw semantic-hue utility in any component or view', () => {
     const pattern = new RegExp(`\\b(?:${PROPERTIES})-(?:${SEMANTIC_HUES})-[0-9]{2,3}\\b`, 'g')
@@ -105,10 +150,10 @@ describe('semantic colour ownership', () => {
     // the defect inside one passed the spec. It also only knew the bare role, so the same button hovering
     // from `--danger-fill` to a pale surface would slip through.
     //
-    // Ink can sit a line or two from the fill inside a multi-line binding, so the window is the enclosing
-    // few lines rather than a single one.
+    // Ink can sit several lines from the fill inside a multi-line binding, so the unit is the enclosing
+    // binding — see `enclosingBinding` for the five-line case that a fixed window missed in shipped code.
     const offenders: string[] = []
-    for (const { name, text } of sources()) {
+    for (const { name, text } of allSources()) {
       const lines = text.split('\n')
       lines.forEach((line, index) => {
         for (const role of ['danger', 'warning', 'success', 'accent', 'info']) {
@@ -116,9 +161,67 @@ describe('semantic colour ownership', () => {
             .some(token => line.includes(token))
           if (!filled) continue
           if (!line.includes(`hover:bg-[color:var(--${role}-surface)]`)) continue
-          const window = lines.slice(Math.max(0, index - 3), index + 4).join(' ')
-          if (!/\btext-white\b/.test(window)) continue
+          if (!/\btext-white\b/.test(enclosingBinding(lines, index))) continue
           offenders.push(`${name}:${index + 1} filled ${role} hovers to --${role}-surface under white text`)
+        }
+      })
+    }
+
+    expect(offenders).toEqual([])
+  })
+
+  it('never hovers a control onto the colour it already has', () => {
+    /*
+     * A `hover:` that names its own resting value renders nothing. It is not a contrast failure, so the
+     * rules above pass it, and it is invisible in a diff because the line *looks* like it handles hover.
+     *
+     * Four sites had this, all `bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)]`:
+     * `spec-add-condition-a`, `spec-add-condition-if`, `spec-create`, and the counterexample View button.
+     * So the accent buttons beside them lit up under the pointer (`--accent-fill-hover` exists and is
+     * solved per theme) while the red ones stayed inert — the pattern read as reused, and was not.
+     *
+     * Scanned per line and per property, so a class list that legitimately hovers `bg` while keeping
+     * `text` is untouched. `shadow` is excluded: `hover:shadow-lg` beside `shadow-md` is a real change
+     * and the two are different tokens anyway.
+     *
+     * A bare `hover:` with nothing after it is the degenerate case and is checked too: the counterexample
+     * rail's unvisited marker ended in `'bg-white border-slate-300 hover:'`, a truncated edit that emits no
+     * rule at all. Its sibling rail in `SimulationTimeline.vue` hovers the border to the accent, so the
+     * intent was legible and only the class was missing.
+     */
+    const offenders: string[] = []
+    for (const { name, text } of allSources()) {
+      text.split('\n').forEach((line, index) => {
+        // Only inside a quoted class list. A preceding class token was not enough of a discriminator:
+        // these prefixes are ordinary English before a colon, and the comments in this repo write
+        // "receives focus:", "the violet is dark:" and "or disabled:" — three false hits, no real ones.
+        // A truncated variant always ends the string it is in, so the quote is the signal.
+        for (const [, prefix] of line.matchAll(
+          /[\w\]/-]\s((?:group-)?(?:hover|focus-visible|focus|active|disabled|dark)):(?=['"])/g
+        )) {
+          offenders.push(`${name}:${index + 1} dangling ${prefix}: with no utility after it`)
+        }
+      })
+    }
+    const properties = ['bg', 'text', 'border', 'ring', 'outline', 'fill', 'stroke']
+    for (const { name, text } of allSources()) {
+      text.split('\n').forEach((line, index) => {
+        for (const property of properties) {
+          // `group-hover:` and `focus:` are the same promise made by a different trigger, and the import
+          // dropzone's icon tile was a `group-hover:` instance — matched here only because it contains
+          // the substring `hover:`. Named rather than left to that accident.
+          const hovers = [...line.matchAll(
+            new RegExp(`((?:group-)?(?:hover|focus-visible|focus)):${property}-(\\[[^\\]]+\\]|[\\w./-]+)`, 'g')
+          )]
+          for (const [, prefix, value] of hovers) {
+            // `(?![\w/-])` and not `(?![\w-])`: `text-white/70` hovering to `text-white` is a real
+            // change, and treating the opacity suffix as absent made every one of those a false hit.
+            const resting = new RegExp(`(?<![\\w:/-])${property}-${value
+              .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-])`)
+            if (resting.test(line)) {
+              offenders.push(`${name}:${index + 1} ${prefix}:${property}-${value} equals its resting value`)
+            }
+          }
         }
       })
     }
@@ -146,16 +249,23 @@ describe('semantic colour ownership', () => {
     // that here made this rule miss most of the codebase: `:class="[ … ]"` arrays contain braces, and
     // `Board.vue` alone has 51 of them. A mutation reverting a real fill inside one of those bindings passed
     // this spec — the check existed and could not fail for the case it was written for, which is worse than
-    // no check. Ink and fill sit on the same line in every one of these bindings, so a line is a sound unit.
+    // no check. "Ink and fill sit on the same line in every one of these bindings" was the next wrong
+    // premise, and it made this rule catch **zero** of the real cases: in a multi-line `:class="[…]"` array
+    // the shared classes (including `text-white`) are the first element and the conditional fill is the
+    // second, so they are never on one line. Seven inversions were sitting behind that — the four Stop
+    // buttons on `bg-[color:var(--danger)]` and three recommendation "Applied" states on
+    // `bg-[color:var(--success)]`, i.e. 1.90:1 and 1.52:1 in dark theme. The window is the same +/-3 lines
+    // the sibling rule above already uses, and it is scoped to the enclosing binding rather than the file
+    // so an unrelated `text-white` further down cannot manufacture a hit.
     const offenders: string[] = []
-    for (const { name, text } of sources()) {
-      text.split('\n').forEach((line, index) => {
-        if (!/\btext-white\b|\btext-white\/\d+\b/.test(line)) return
+    for (const { name, text } of allSources()) {
+      const lines = text.split('\n')
+      lines.forEach((line, index) => {
         for (const role of ['accent', 'danger', 'warning', 'success', 'info']) {
           for (const suffix of ['', '-strong']) {
-            if (line.includes(`bg-[color:var(--${role}${suffix})]`)) {
-              offenders.push(`${name}:${index + 1} light ink on bg-[color:var(--${role}${suffix})] — use --${role}-fill`)
-            }
+            if (!line.includes(`bg-[color:var(--${role}${suffix})]`)) continue
+            if (!/\btext-white\b|\btext-white\/\d+\b/.test(enclosingBinding(lines, index))) continue
+            offenders.push(`${name}:${index + 1} light ink on bg-[color:var(--${role}${suffix})] — use --${role}-fill`)
           }
         }
       })
@@ -176,12 +286,18 @@ describe('semantic colour ownership', () => {
     // No `info` here: nothing in the product puts light ink on an info fill, so an `--info-fill` token would be
     // speculative — I added one for symmetry and removed it on review. The lines above still *check* for `info`
     // misuse, which costs nothing and would catch the first real one.
+    // `danger-fill-hover` and `warning-fill-hover` are included, unlike `accent-fill-hover`. That is not a
+    // symmetry choice: `--accent-fill` has headroom to brighten in dark theme, `--danger-fill` (4.83 under
+    // white ink) does not — #ef4444 measures 3.76 — so both roles must darken in both themes, and a later
+    // "the dark theme should brighten this, like accent does" edit would put them under AA. Pinned here so
+    // the constraint is checked rather than only explained in `base.css`.
     const drifted: string[] = []
-    for (const role of ['accent', 'danger', 'warning', 'success']) {
-      const values = valuesOf(`${role}-fill`)
+    for (const token of ['accent-fill', 'danger-fill', 'warning-fill', 'success-fill',
+      'danger-fill-hover', 'warning-fill-hover']) {
+      const values = valuesOf(token)
       // Three theme blocks declare each token (light, dark, and the explicit light reset).
-      if (values.length !== 3) { drifted.push(`--${role}-fill declared ${values.length}x, expected 3`); continue }
-      if (new Set(values).size !== 1) drifted.push(`--${role}-fill differs by theme: ${values.join(', ')}`)
+      if (values.length !== 3) { drifted.push(`--${token} declared ${values.length}x, expected 3`); continue }
+      if (new Set(values).size !== 1) drifted.push(`--${token} differs by theme: ${values.join(', ')}`)
     }
 
     expect(drifted).toEqual([])
@@ -208,7 +324,7 @@ describe('semantic colour ownership', () => {
     }
 
     const tokens = ['accent-fill', 'accent-fill-hover', 'accent-fill-disabled',
-      'danger-fill', 'warning-fill', 'success-fill']
+      'danger-fill', 'danger-fill-hover', 'warning-fill', 'warning-fill-hover', 'success-fill']
 
     const failures: string[] = []
     for (const token of tokens) {

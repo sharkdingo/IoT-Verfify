@@ -393,6 +393,21 @@ this survived several review passes, and why a light-only check will not find it
   fixed all six at once; forking the ink per theme would have doubled the surface area of the bug.
 - **Ink on a fill is measured, not eyeballed.** `text-white/85` on `--accent-fill` is 4.19 — under AA
   by a margin no one sees by looking. `/90` is 4.50.
+- **A hover that names its own resting value renders nothing.** Not a contrast failure, so the contrast
+  rules pass it, and invisible in a diff because the line looks like it handles hover. Eight sites had
+  it, including the four Stop buttons and three "add condition" controls, so the accent buttons beside
+  them lit up under the pointer while the red ones stayed inert. `--danger-fill-hover` (`#c22121`, white
+  ink 5.94) and `--warning-fill-hover` (`#9e4908`, 6.16) close it. Both are theme-stable, and that is
+  forced rather than chosen: `--danger-fill` sits at 4.83 under white ink with no headroom, so `#ef4444`
+  measures **3.76** — the dark theme's usual brightening is unavailable and both themes darken. There is
+  deliberately no `--success-fill-hover`: the only white-ink success fill is the "Applied" state, which
+  is `cursor-default` and must not react. A bare `hover:` with nothing after it is the degenerate form of
+  the same defect — the counterexample rail's step markers shipped with one, so the control whose entire
+  job is "click to seek here" had no pointer feedback.
+- **One action, one colour, across panels that diverge.** The three recommendation panels' Apply buttons
+  were amber, blue and red, each broken differently — the amber one hovered white ink onto
+  `--warning-surface`, the red one onto itself. They now share the accent pair, because it is one action
+  and reading it as three invites the user to think the panels do different things.
 
 ### Disabled: desaturate, do not fade
 
@@ -419,6 +434,16 @@ light theme; `dark:text-slate-400` is correct on a dark card, where the same val
 
 Pinned by `styles/__tests__/neutralTextContrast.spec.ts` and
 `styles/__tests__/semanticColourOwnership.spec.ts`.
+
+**The scanning unit is the enclosing `class` binding, not a line or a fixed window.** These guards have
+now been defeated twice by the same shape. First a `class="…"` matcher whose `[^{}]` skipped every
+`:class="[ … ]"` array — most of the buttons. Then a same-line premise, which caught **zero** of the
+seven real ink/fill inversions, because in a multi-line binding the shared classes (including
+`text-white`) are the first array element and the conditional fill is the second. A ±3-line window then
+missed the rule panel's Apply button by one line, in shipped code. `sources()` also reads one directory
+level, so `components/common/` was never scanned at all. When adding a rule here, scope it to the
+binding via `enclosingBinding`, walk with `allSources()`, and recreate a real defect inside a
+multi-line binding to prove the rule can fail.
 
 ### A domain value maps to one role, product-wide — and an empty class is not a role
 

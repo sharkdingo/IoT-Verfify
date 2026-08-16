@@ -3122,7 +3122,7 @@ watch(() => props.readOnly, readOnly => {
               is not the fix either: it brings a *solid* 1px border, which is the opposite of the dashed
               affordance a drop target wants.
             -->
-            <div class="relative overflow-hidden rounded-lg border-2 border-dashed border-[color:var(--warning-border)] bg-[color:var(--warning-surface)] transition-all hover:border-[color:var(--warning-border)] hover:shadow-md">
+            <div class="relative overflow-hidden rounded-lg border-2 border-dashed border-[color:var(--warning-border)] bg-[color:var(--warning-surface)] transition-all hover:border-[color:var(--warning-fill)] hover:shadow-md">
               <label
                 class="group block"
                 :class="props.readOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'"
@@ -3130,7 +3130,7 @@ watch(() => props.readOnly, readOnly => {
               >
                 <input type="file" accept=".json" class="hidden" :disabled="props.readOnly" @change="handleImportTemplate">
                 <div class="p-3 flex items-center gap-3">
-                  <div class="w-9 h-9 bg-[color:var(--warning-fill)] rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-[color:var(--warning-fill)] transition-colors">
+                  <div class="w-9 h-9 bg-[color:var(--warning-fill)] rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-[color:var(--warning-fill-hover)] transition-colors">
                     <span class="material-symbols-outlined text-white text-base">upload_file</span>
                   </div>
                   <div class="min-w-0 flex-1">
@@ -3516,7 +3516,7 @@ watch(() => props.readOnly, readOnly => {
                   <button
                     @click="openConditionDialog('a')"
                     data-testid="spec-add-condition-a"
-                    class="px-2.5 py-1 bg-[color:var(--danger-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--danger-fill)] transition-all shadow-sm flex items-center gap-1"
+                    class="px-2.5 py-1 bg-[color:var(--danger-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--danger-fill-hover)] transition-all shadow-sm flex items-center gap-1"
                   >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -3614,7 +3614,7 @@ watch(() => props.readOnly, readOnly => {
                   <button
                     @click="openConditionDialog('if')"
                     data-testid="spec-add-condition-if"
-                    class="px-2.5 py-1 bg-[color:var(--danger-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--danger-fill)] transition-all shadow-sm flex items-center gap-1"
+                    class="px-2.5 py-1 bg-[color:var(--danger-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--danger-fill-hover)] transition-all shadow-sm flex items-center gap-1"
                   >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -3712,7 +3712,7 @@ watch(() => props.readOnly, readOnly => {
                   <button
                     @click="openConditionDialog('then')"
                     data-testid="spec-add-condition-then"
-                    class="px-2.5 py-1 bg-[color:var(--warning-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--warning-fill)] transition-all shadow-sm flex items-center gap-1"
+                    class="px-2.5 py-1 bg-[color:var(--warning-fill)] text-white rounded-md text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide hover:bg-[color:var(--warning-fill-hover)] transition-all shadow-sm flex items-center gap-1"
                   >
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -3839,7 +3839,7 @@ watch(() => props.readOnly, readOnly => {
               data-testid="spec-create"
               :disabled="Boolean(specificationBlockedReason) || creatingSpecification"
               :aria-describedby="specificationBlockedReason ? 'spec-create-blocked-reason' : undefined"
-              class="w-full min-h-11 py-2.5 bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)] disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100 flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+              class="w-full min-h-11 py-2.5 bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill-hover)] disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100 flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>

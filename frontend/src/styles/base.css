@@ -174,6 +174,25 @@
     --warning-fill: #b45309;
     --success-fill: #15803d;
 
+    /*
+     * The hover for a filled destructive action. Four delete buttons wrote
+     * `hover:bg-[color:var(--danger-fill)]` — the resting value — so the most consequential controls on the
+     * board were the only ones with no hover feedback at all, while the accent pair next door has a solved
+     * per-theme hover and the MessageBox danger button darkened inline.
+     *
+     * Unlike `--accent-fill-hover` this is theme-stable, and that is forced rather than chosen: brightening
+     * is what the dark theme does for accent, but `--danger-fill` is already at 4.83:1 under white ink with
+     * no headroom above it — #ef4444 measures **3.76**, under AA. So both themes darken. #c22121 is
+     * `--danger-fill` mixed 88% with black, the same relationship the MessageBox rule already used inline,
+     * and it gives white ink 5.94:1 in either theme.
+     *
+     * `--warning-fill-hover` is the same construction (#9e4908, white ink 6.16:1) for the amber sibling of
+     * those buttons. There is deliberately no `--success-fill-hover`: the only white-ink success fill in the
+     * product is a recommendation panel's "Applied" state, which is `cursor-default` and must not react.
+     */
+    --danger-fill-hover: #c22121;
+    --warning-fill-hover: #9e4908;
+
     /* Role borders are solved to at least 3:1 against their own surface — the contrast minimum for a
      * component boundary, which the dark theme already met (3.21–3.34) while light did not. The light
      * borders were left at the untouched tint ramp and measured **1.16–1.32**, so a role surface had a
@@ -354,6 +373,10 @@
     --warning-fill: #b45309;
     --success-fill: #15803d;
 
+    /* Theme-stable, unlike --accent-fill-hover: see the light block for why danger cannot brighten. */
+    --danger-fill-hover: #c22121;
+    --warning-fill-hover: #9e4908;
+
     --danger: #fca5a5;
     --danger-surface: #361315;
     --danger-border: #995c5d;
@@ -488,6 +511,25 @@
     --danger-fill: #dc2626;
     --warning-fill: #b45309;
     --success-fill: #15803d;
+
+    /*
+     * The hover for a filled destructive action. Four delete buttons wrote
+     * `hover:bg-[color:var(--danger-fill)]` — the resting value — so the most consequential controls on the
+     * board were the only ones with no hover feedback at all, while the accent pair next door has a solved
+     * per-theme hover and the MessageBox danger button darkened inline.
+     *
+     * Unlike `--accent-fill-hover` this is theme-stable, and that is forced rather than chosen: brightening
+     * is what the dark theme does for accent, but `--danger-fill` is already at 4.83:1 under white ink with
+     * no headroom above it — #ef4444 measures **3.76**, under AA. So both themes darken. #c22121 is
+     * `--danger-fill` mixed 88% with black, the same relationship the MessageBox rule already used inline,
+     * and it gives white ink 5.94:1 in either theme.
+     *
+     * `--warning-fill-hover` is the same construction (#9e4908, white ink 6.16:1) for the amber sibling of
+     * those buttons. There is deliberately no `--success-fill-hover`: the only white-ink success fill in the
+     * product is a recommendation panel's "Applied" state, which is `cursor-default` and must not react.
+     */
+    --danger-fill-hover: #c22121;
+    --warning-fill-hover: #9e4908;
 
     /* Role borders are solved to at least 3:1 against their own surface — the contrast minimum for a
      * component boundary, which the dark theme already met (3.21–3.34) while light did not. The light
@@ -692,7 +734,7 @@
 }
 
 .el-message-box__btns .el-button--danger:hover {
-    background: color-mix(in srgb, var(--danger-fill) 88%, #000);
+    background: var(--danger-fill-hover);
 }
 
 /* 警告图标颜色（type='warning'） */

@@ -40,6 +40,26 @@ history into a technical spec. The spec content itself now lives under
   because for a reader who edited mid-run the old sentence named a moment they know they did not edit
   in.
 
+- **Eight controls promised a hover and delivered nothing, and the three Apply buttons were three
+  different colours.** A `hover:` that names the colour the control already has renders no change. Every
+  filled destructive control on the board had this — the four Stop buttons on the recommendation panels,
+  the three "add condition" buttons, the counterexample View button — so the accent buttons beside them
+  lit up under the pointer while the red ones stayed inert, and the pattern read as reused when it was
+  not. Two new tokens (`--danger-fill-hover`, `--warning-fill-hover`) give those controls a real hover
+  that keeps white ink above AA in both themes; the confirmation dialog's destructive button now reads
+  the token instead of repeating the same mix inline.
+
+  Seven of the same controls were also filled with the *text* half of their role under white ink, which
+  measures 1.90:1 (danger) and 1.52:1 (success) in dark theme — the four Stop buttons and the three
+  recommendation "Applied" states. And the three panels' Apply button, which performs one action, was
+  amber in one panel, blue in another and red in the third, each broken differently: the amber one
+  hovered white ink onto a pale tint, the red one onto itself. All three now share the accent pair, so
+  the same action reads the same way wherever the user meets it.
+
+  A related truncation: the unvisited step markers on the counterexample rail ended in a bare `hover:`
+  with no utility after it, so the one control whose whole job is "click me to seek here" gave no pointer
+  feedback. It now highlights its border on hover, matching the identical rail in the simulation timeline.
+
 - **An unavailable SMV model blamed a cause that was often not the user's.** The notice beside a
   disabled download told every reader to "check whether the run is still in your history". That is
   sound advice for a run that was saved and whose model is genuinely gone — but four

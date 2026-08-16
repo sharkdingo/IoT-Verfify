@@ -12547,7 +12547,9 @@ const traceRail = useTimelineRail({
  * It does not need a new backend field, because the trace's structure already answers it.
  * `SmvSpecificationBuilder` checks the **negated** specification — template 3 `AG !(p)` becomes
  * `CTLSPEC EF(p)` — and a NuSMV witness for `EF(p)` is a path *ending* at a state where `p` holds. So for
- * templates 1, 2, 3, and 7 the last state is the violating one by construction.
+ * templates 1, 3 and 7 the last state is the violating one by construction. Not template 2: it negates to
+ * `EG(!A)`, whose witness is an infinite path on which A never holds, so it is a cycle and belongs to
+ * `LIVENESS_TEMPLATES` below — this comment named it here while the set correctly omitted it.
  *
  * Template 4 (`AG(a → AX(b))` → `EF(a & EX(!b))`) is deliberately excluded: its witness ends where the
  * trigger holds and the violation is in the unshown successor, so calling the last state "the violation"
@@ -15987,7 +15989,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('scenario')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-                isRecommendingScenario ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
+                isRecommendingScenario ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill-hover)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -16377,7 +16379,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('rule')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingRules ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
+            isRecommendingRules ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill-hover)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -16572,10 +16574,10 @@ const counterexampleTraceHelpText = computed(() => {
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
                   appliedRuleRecommendations.has(index)
-                    ? 'bg-[color:var(--success)] cursor-default'
+                    ? 'bg-[color:var(--success-fill)] cursor-default'
                     : applyingRuleRecommendations.has(index)
                       ? 'bg-slate-400 cursor-wait'
-                      : 'bg-[color:var(--warning-fill)] hover:bg-[color:var(--warning-surface)]'
+                      : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
                 ]"
               >
                 <span
@@ -16673,7 +16675,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('device')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingDevices ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
+            isRecommendingDevices ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill-hover)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -16870,7 +16872,7 @@ const counterexampleTraceHelpText = computed(() => {
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
                   appliedDeviceRecommendations.has(index)
-                    ? 'bg-[color:var(--success)] cursor-default'
+                    ? 'bg-[color:var(--success-fill)] cursor-default'
                     : applyingDeviceRecommendations.has(index)
                       ? 'bg-slate-400 cursor-wait'
                       : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
@@ -16971,7 +16973,7 @@ const counterexampleTraceHelpText = computed(() => {
           :disabled="isSceneReplacementInProgress || isRecommendationRunningForAnother('spec')"
           :class="[
             'flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
-            isRecommendingSpecs ? 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
+            isRecommendingSpecs ? 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill-hover)]' : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
           ]"
         >
           <span class="material-symbols-outlined text-base">
@@ -17185,10 +17187,10 @@ const counterexampleTraceHelpText = computed(() => {
                 :class="[
                   'w-full py-2 px-4 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2',
                   appliedSpecRecommendations.has(index)
-                    ? 'bg-[color:var(--success)] cursor-default'
+                    ? 'bg-[color:var(--success-fill)] cursor-default'
                     : applyingSpecRecommendations.has(index)
                       ? 'bg-slate-400 cursor-wait'
-                      : 'bg-[color:var(--danger)] hover:bg-[color:var(--danger)]'
+                      : 'bg-[color:var(--accent-fill)] hover:bg-[color:var(--accent-fill-hover)]'
                 ]"
               >
                 <span
@@ -18295,7 +18297,7 @@ const counterexampleTraceHelpText = computed(() => {
                         'px-2 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1',
                         simulationAnimationState.visible
                           ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                          : 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill)] text-white'
+                          : 'bg-[color:var(--danger-fill)] hover:bg-[color:var(--danger-fill-hover)] text-white'
                       ]"
                     >
                       <span class="material-symbols-outlined text-xs" aria-hidden="true">play_arrow</span>
@@ -19115,7 +19117,7 @@ const counterexampleTraceHelpText = computed(() => {
                       ? 'bg-[color:var(--danger)] border-[color:var(--danger)] scale-125 shadow-lg'
                       : Number(index) < traceAnimationState.selectedStateIndex
                         ? 'board-chip-danger board-border-subtle'
-                        : 'bg-white border-slate-300 hover:',
+                        : 'bg-white border-slate-300 hover:border-[color:var(--accent)]',
                     counterexampleViolationStep === Number(index)
                       ? 'ring-2 ring-[color:var(--danger)] ring-offset-2'
                       : ''
