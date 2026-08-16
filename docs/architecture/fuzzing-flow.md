@@ -65,7 +65,9 @@ Canvas coordinates and dimensions do not invalidate a semantic preview.
    ceiling, then persists a `PENDING` `fuzz_task` containing both the full internal input
    snapshot and public `ModelRunSnapshotDto` counts. The row receives an instance lease
    before dispatch to the dedicated `fuzzTaskExecutor`; the owner renews queued and
-   executing tasks, while any instance may fail only an expired lease. A queued command
+   executing tasks, while any instance may fail only an expired lease — including one whose
+   expiry equals the sampled instant, on the same boundary as the verification and simulation
+   sweeps ([verification-flow.md](verification-flow.md#sync-async-and-simulation)). A queued command
    captures only task identity; the worker reconstructs its engine input from the persisted
    frozen snapshot after it starts, so queued tasks do not retain duplicate multi-megabyte
    object graphs in heap. Local execution handles bind task IDs to cancellable Futures and

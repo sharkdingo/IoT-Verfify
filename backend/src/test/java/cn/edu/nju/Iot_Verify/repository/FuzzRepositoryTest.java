@@ -408,6 +408,77 @@ class FuzzRepositoryTest {
                 taskRepository.findById(expired.getId()).orElseThrow().getStatus());
     }
 
+    /**
+     * A lease expiring at exactly the sampled instant is expired, in all three sweeps.
+     *
+     * This boundary is why the three queries were allowed to disagree: the fuzz sweep used a strict
+     * {@code <} while verification and simulation used {@code <=}, and the coverage above only ever
+     * wrote a lease a second in the past or a minute in the future, so nothing distinguished them.
+     * Equality is not a corner case here — the clock is {@code CURRENT_TIMESTAMP(6)} while the
+     * {@code lease_expires_at} column takes MySQL's default second precision, so a truncated lease and
+     * a truncated comparison coincide routinely.
+     *
+     * {@code ==} must count as expired because every renewal and terminal-commit guard in these
+     * repositories requires {@code leaseExpiresAt > :currentTime}: a lease at the sampled instant can
+     * no longer renew, progress, or commit a result, so treating it as live left a row that no worker
+     * could advance sitting unreclaimed until the next maintenance tick.
+     */
+    @Test
+    void leaseRecoveryTreatsALeaseExpiringAtTheSampledInstantAsExpired() {
+        LocalDateTime now = LocalDateTime.now();
+
+        FuzzTaskPo fuzz = taskRepository.save(taskForLease("worker-boundary", now));
+        assertEquals(1, taskRepository.failExpiredActiveTasks(
+                FuzzTaskPo.TaskStatus.FAILED,
+                now,
+                "Worker lease expired",
+                "[]",
+                List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING),
+                now));
+        assertEquals(FuzzTaskPo.TaskStatus.FAILED,
+                taskRepository.findById(fuzz.getId()).orElseThrow().getStatus());
+
+        VerificationTaskPo verification = verificationTaskRepository.saveAndFlush(
+                VerificationTaskPo.builder()
+                        .userId(12L)
+                        .status(VerificationTaskPo.TaskStatus.RUNNING)
+                        .createdAt(now)
+                        .progress(20)
+                        .workerId("worker-boundary")
+                        .leaseExpiresAt(now)
+                        .build());
+        assertEquals(1, verificationTaskRepository.failExpiredActiveTasks(
+                VerificationTaskPo.TaskStatus.FAILED,
+                now,
+                VerificationOutcome.INCONCLUSIVE,
+                "expired",
+                "[]",
+                List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING),
+                now));
+        assertEquals(VerificationTaskPo.TaskStatus.FAILED,
+                verificationTaskRepository.findById(verification.getId()).orElseThrow().getStatus());
+
+        SimulationTaskPo simulation = simulationTaskRepository.saveAndFlush(
+                SimulationTaskPo.builder()
+                        .userId(13L)
+                        .status(SimulationTaskPo.TaskStatus.RUNNING)
+                        .createdAt(now)
+                        .requestedSteps(5)
+                        .progress(20)
+                        .workerId("worker-boundary")
+                        .leaseExpiresAt(now)
+                        .build());
+        assertEquals(1, simulationTaskRepository.failExpiredActiveTasks(
+                SimulationTaskPo.TaskStatus.FAILED,
+                now,
+                "expired",
+                "[]",
+                List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING),
+                now));
+        assertEquals(SimulationTaskPo.TaskStatus.FAILED,
+                simulationTaskRepository.findById(simulation.getId()).orElseThrow().getStatus());
+    }
+
     @Test
     void admissionCountsOnlyActiveTasksAndDeletesOnlyOwnedUndispatchedRows() {
         LocalDateTime lease = LocalDateTime.now().plusMinutes(2);

@@ -132,7 +132,13 @@ the persisted worker id plus an unexpired lease. Worker success/failure uses tha
 ownership predicate, lease/start/terminal timestamps come from the database clock, and
 terminal transitions clear ownership. Maintenance on every instance renews only its local
 work and marks only expired active rows failed; it does not scan and fail all
-`PENDING`/`RUNNING` rows at process startup. This preserves
+`PENDING`/`RUNNING` rows at process startup. A lease whose expiry equals the sampled instant
+counts as **expired**, in all three sweeps: every renewal, start, and terminal-commit guard
+requires `leaseExpiresAt > currentTime`, so such a row can no longer renew, progress, or commit
+a result, and treating it as live would leave work no worker can advance unreclaimed. The
+boundary is reachable rather than theoretical — the clock is `CURRENT_TIMESTAMP(6)` while
+`lease_expires_at` takes the default second precision, so a truncated lease and a truncated
+comparison coincide routinely. This preserves
 healthy work during rolling deployments and prevents a delayed queued worker from starting
 after ownership has been lost. Each local worker also tracks its last successful lease
 confirmation with a monotonic clock: transient database errors are retried, but a worker

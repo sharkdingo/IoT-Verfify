@@ -19,6 +19,17 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **The exploration lease sweep disagreed with its two siblings on when a lease is expired.** Verification
+  and simulation reclaim a task whose lease expiry is at or before the sampled instant; exploration used a
+  strict comparison, so a lease landing exactly on that instant was treated as live. Every renewal, start,
+  and terminal-commit guard in all three repositories requires the lease to be strictly *after* the sampled
+  time, so such a row could no longer renew, progress, or commit a result — it was work no worker could
+  advance, left unreclaimed until the next maintenance tick ten seconds later. The boundary is routine
+  rather than theoretical: the clock has microsecond precision while the lease column stores whole seconds.
+  User-visible effect was small and self-healing, but the three sweeps now express one rule, and a test
+  pins the equality case for all of them — the previous coverage only ever used a lease a second in the
+  past or a minute in the future, which is why the divergence survived.
+
 - **"Show step changes" offered to restore a panel that was already on screen.** The counterexample
   replay bar showed that button whenever the step-changes popover had *ever* been dismissed, rather than
   when it was actually hidden. The dismissal is scoped to one step by design — dismissing at step 3 must

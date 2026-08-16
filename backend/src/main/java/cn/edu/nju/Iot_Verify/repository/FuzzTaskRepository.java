@@ -133,11 +133,17 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
     // run to every consumer of the task DTO — the REST clients and the AI tools. A real exploration
     // task was observed reporting `status: FAILED, progress: 100`. The last heartbeat's value is the
     // honest answer, and `status` is what says it ended. Only completeTaskIfRunning writes 100.
+    // `<=`, matching the verification and simulation sweeps and the renewal guards below. Those guards all
+    // require `leaseExpiresAt > :currentTime` to renew or commit, so a lease sitting exactly at the sampled
+    // instant is already dead by every other predicate in this file — a strict `<` here was the one place
+    // that called it live, and it left the row unreclaimed until the next 10s maintenance tick. Reachable
+    // rather than theoretical: the clock is `CURRENT_TIMESTAMP(6)` while the column takes MySQL's default
+    // second precision, so a truncated lease and a truncated comparison land on the same value routinely.
     @Query("UPDATE FuzzTaskPo t SET t.status = :failed, t.progressStage = NULL, t.completedAt = :completedAt, "
          + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.status IN (:activeStatuses) "
-         + "AND (t.leaseExpiresAt IS NULL OR t.leaseExpiresAt < :expiredBefore)")
+         + "AND (t.leaseExpiresAt IS NULL OR t.leaseExpiresAt <= :expiredBefore)")
     int failExpiredActiveTasks(@Param("failed") FuzzTaskPo.TaskStatus failed,
                                @Param("completedAt") LocalDateTime completedAt,
                                @Param("errorMessage") String errorMessage,
