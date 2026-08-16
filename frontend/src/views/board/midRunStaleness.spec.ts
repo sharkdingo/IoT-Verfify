@@ -220,6 +220,59 @@ describe('a run that completes after the board changed', () => {
     expect(guardBody, 'and say why nothing opened').toContain('fuzzResultDeferredForPlayback')
   })
 
+  /*
+   * The same rule for the last run kind, where it is worse than stacking. Opening a counterexample calls
+   * `closeResultDialog`, which nulls `verificationResult` — so the dialog is *closed* for the whole time the
+   * replay bar animates, and re-assigning the ref on arrival raised an `aria-modal` dialog over the trace the
+   * user was watching. Reachable identically: playback admission does not consider `isVerifying`.
+   *
+   * Both paths are covered because the two windows are different — `pollAsyncVerification` awaits a poll loop,
+   * `handleVerify` awaits one request — and only the async one has a presenting/non-presenting split to reuse.
+   */
+  it.each([
+    ['const pollAsyncVerification = '],
+    ['const handleVerify = ']
+  ])('%s does not raise the result dialog over a running replay', declaration => {
+    const body = bodyOf(declaration)
+
+    const guardAt = body.search(/isModelPlaybackActive\.value/)
+    expect(guardAt, `${declaration} should check for playback before presenting`).toBeGreaterThan(-1)
+
+    // The ref assignment is the presentation: `showResultDialog` is computed from it, so a write while a
+    // replay runs *is* the defect regardless of any dialog flag. Clearing writes are excluded rather than
+    // the first match taken: `handleVerify` opens with `verificationResult.value = null`, the pre-submission
+    // reset, which legitimately precedes the guard and closes nothing the user is looking at.
+    const presentations = [...body.matchAll(/verificationResult\.value = (?!null)/g)]
+    expect(presentations.length, `${declaration} should present its verdict somewhere`).toBeGreaterThan(0)
+    for (const presentation of presentations) {
+      expect(presentation.index, 'no presentation may precede the playback check').toBeGreaterThan(guardAt)
+    }
+
+    // Deferred, not dropped. The verdict is announced without `presenting: true` (which suppresses the
+    // toast on the assumption the dialog is showing it) and the notice says where it went.
+    const deferralBody = body.slice(guardAt)
+    expect(deferralBody, 'a deferred verdict must still be announced')
+      .toMatch(/notifyVerificationOutcome\((?!verificationResult)[^)]*\)(?!,)/)
+    expect(deferralBody, 'and say why no dialog opened')
+      .toContain('verificationResultDeferredForPlayback')
+    // And run history must be reloaded, since it becomes the only route to this verdict.
+    expect(deferralBody, 'run history is the only surface left, so it must be current')
+      .toMatch(/loadVerificationRuns\(/)
+  })
+
+  it('does not blame the replay when nothing would have been presented anyway', () => {
+    // `pollAsyncVerification` also serves runs whose panel is closed, which never open a dialog. Saying
+    // "the dialog did not open because a replay is running" to that user names a cause the client knows to
+    // be false — the same defect class as reusing the editor notice for a replay deferral. So the deferral
+    // is conditioned on presentation, not on playback alone. `handleVerify` needs no equivalent: it always
+    // presents.
+    const body = bodyOf('const pollAsyncVerification = ')
+    const guard = /const deferForPlayback = (\w+) && isModelPlaybackActive\.value/.exec(body)
+    expect(guard, 'the deferral must be conjoined with the would-present condition').not.toBeNull()
+    expect(body, `${guard![1]} should be the presentation condition`)
+      .toMatch(new RegExp(`const ${guard![1]} = options\\.presentResult \\|\\| showVerificationPanel\\.value`))
+  })
+
   it('leaves a freshly loaded historical run current', () => {
     // The counter answers "did the board change while *this* run was in flight". A run read back
     // from history was not in flight, so its flag stays a plain `false` — comparing a counter there

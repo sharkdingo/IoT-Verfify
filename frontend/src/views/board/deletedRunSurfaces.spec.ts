@@ -105,6 +105,39 @@ describe('surfaces for a deleted verification run', () => {
       .toMatch(/if \(results\.every\(Boolean\)\) reconcileOpenRunAgainstHistory\(\)/)
   })
 
+  it('reconciles a replaying counterexample, not only an open result dialog', () => {
+    /*
+     * The two are different states, not one. Opening a counterexample calls `closeResultDialog`, so
+     * `verificationResult` is null for the entire replay — reading only it made the reconciliation above
+     * return early on precisely the surface most expensive to get wrong: an animating trace whose run the
+     * assistant or another tab had just deleted, still offering Run details and the SMV download for a
+     * record the server had dropped. `dismissRunSurfacesForDeletedVerificationRun` already tears the replay
+     * down; nothing was reaching it.
+     */
+    const at = board.indexOf('const reconcileOpenVerificationRunAgainstHistory')
+    const body = board.slice(at, board.indexOf('\n}', at) + 2)
+
+    expect(body, 'the replaying counterexample carries the run id when the dialog is closed')
+      .toMatch(/\?\?\s*currentTrace\.value\?\.verificationTaskId/)
+
+    // And the notice has to match which surface went away: the dialog string says the panel was closed,
+    // which is false for a replay. Same defect class as reusing the editor notice for a replay deferral in
+    // `midRunStaleness.spec.ts`.
+    expect(body, 'a replay teardown must not claim a panel was closed')
+      .toContain('openCounterexampleRunDeletedElsewhere')
+    expect(body, 'and the wording must be chosen from the surface, not the run kind')
+      .toMatch(/currentTrace\.value\?\.verificationTaskId === openRunId/)
+
+    // The wording choice must also test that a replay is actually on screen, and this is not defensive:
+    // `currentTrace` falls back to `verificationResult.traces[selectedTraceIndex]`, so with only the dialog
+    // open it still resolves to a trace carrying this run's id — which would report "playback ended" to a
+    // user who was reading a dialog, the same fabricated-cause defect as the 404 above. Asserted through
+    // `activePlaybackKind`, the existing owner of "what is on screen", rather than a second reading of the
+    // animation flags.
+    expect(body, 'a closed replay must not be described as one that ended')
+      .toMatch(/activePlaybackKind\.value === 'counterexample'/)
+  })
+
   it('does not blame model persistence for a model the server simply does not have', () => {
     // The old copy asserted "may be a record saved before model persistence was enabled", which is one of
     // two possible causes and was stated for both. Naming a specific historical limitation is what made
@@ -194,6 +227,36 @@ describe('surfaces for a deleted exploration run', () => {
      */
     expect(body, 'a truncated page must not be read as "deleted"')
       .toContain('fuzzingRunsHasMore.value')
+  })
+
+  it('reconciles a replaying finding, whose dialog is already closed', () => {
+    /*
+     * Exploration's version of the verification blind spot, and it needed a teardown as well as an id:
+     * `selectAndPlayFuzzingFinding` calls `closeFuzzingResult()` before opening the bar, so `fuzzingResult`
+     * is null throughout a finding replay — the reconciliation returned early, and `dismissFuzzingResult`
+     * would only have closed a dialog that was already closed, leaving the bar animating candidate evidence
+     * for a run the server had dropped.
+     */
+    const at = board.indexOf('const reconcileOpenFuzzingRunAgainstHistory')
+    const body = board.slice(at, board.indexOf('\n}', at) + 2)
+
+    expect(body, 'the replaying finding carries the owning run id')
+      .toMatch(/\?\?\s*activeFuzzingFinding\.value\?\.fuzzTaskId/)
+    // The replay needs the trace teardown, not the dialog dismissal — that is the half that was missing.
+    expect(body, 'a replaying finding must have its bar closed')
+      .toContain('closeTraceAnimation()')
+    expect(body, 'and its evidence dropped').toContain('savedTraces.value = []')
+    expect(body, 'and its own wording, since no panel was closed')
+      .toContain('openFuzzingFindingRunDeletedElsewhere')
+    // Gated on what is actually playing, not on the ref: `activeFuzzingFinding` is not cleared when a
+    // simulation replay starts over it, so the ref alone does not mean a finding is on screen.
+    expect(body, 'a finding that is not the visible playback must not claim its replay ended')
+      .toMatch(/activePlaybackKind\.value === 'fuzzing'/)
+
+    // The pagination guard must still precede the teardown, or an off-page run gets torn down over a cause
+    // that was refuted in e9452f8.
+    expect(body.indexOf('fuzzingRunsHasMore.value'), 'the page guard must come before any teardown')
+      .toBeLessThan(body.indexOf('closeTraceAnimation()'))
   })
 
   it('hangs off the same successful-reload hook as verification', () => {

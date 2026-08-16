@@ -269,6 +269,14 @@ single owner of the "session gone → login" location.
   it repainted the visible trajectory's header with another run's semantics and pointed Run details at
   the wrong run. Reachable in ordinary use: playback admission does not consider `isSimulating`, so
   replaying history while an async run finishes is normal.
+- **A replay on screen outranks every arriving run.** The rule above generalises to all three kinds,
+  because playback admission considers none of `isSimulating`/`isVerifying`/`isFuzzing`: an arriving
+  run must not present a surface while `isModelPlaybackActive`. Verification is the sharpest case —
+  opening a counterexample calls `closeResultDialog`, so `verificationResult` is null for the whole
+  replay, and re-assigning it raised an `aria-modal` dialog over the trace being watched. Defer
+  instead, and in every kind say where the run went (run history for verification and simulation, the
+  task notification for exploration) at the severity the outcome deserves — a deferral must not read
+  as a quieter result, and a budget-exhausted or violated run stays flagged as one.
 - **A displayed verdict only describes the model that was verified.** Any semantic board
   change (applying a fix, editing rules/specs/devices from the inspector or chat) makes an
   open verification result stale: `Board.vue` flags it from the single semantic-scene-change
@@ -284,11 +292,10 @@ single owner of the "session gone → login" location.
   unavailable placeholders rather than failing the whole list.
 - **Exploration is background-only.** Closing its panel must not cancel the accepted
   task; keep it visible in the global task indicator/inbox and move completed work into
-  History Results with nested finding summaries. A background arrival also must not seize
-  the screen: `FuzzingResultDialog` is `aria-modal`, so opening it while a replay animates
-  puts the user's own playback controls behind a focus trap they did not ask for. Route the
-  completion to the notification and say why nothing opened, as `handleFuzzing` already does
-  when its panel is closed.
+  History Results with nested finding summaries. Being background also means never seizing the
+  screen: `FuzzingResultDialog` is `aria-modal`, so route a completion arriving mid-replay to the
+  notification instead (see the replay-outranks-arrivals rule above), as `handleFuzzing` already
+  does when its panel is closed.
 - **A stopped chat transport is not a cancelled tool operation.** Wait for the session
   activity endpoint to become idle before switching/deleting the session or allowing a
   new assistant mutation, then reconcile board and run-history state. Match the reloaded

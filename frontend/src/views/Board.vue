@@ -12602,14 +12602,35 @@ const reconcileOpenRunAgainstHistory = () => {
  * an empty list is also what a scoped-empty or still-loading history looks like, and closing a live result
  * over that would destroy a verdict the user is reading. A run absent from a populated list is the only
  * case treated as deleted.
+ *
+ * The open run is read from the *replaying counterexample* as well as from the dialog, because those are
+ * two different states rather than one: opening a counterexample calls `closeResultDialog`, so
+ * `verificationResult` is null for the whole replay and reading only it made this return early on exactly
+ * the surface most expensive to get wrong — an animating trace whose run the assistant or another tab had
+ * just deleted, still offering Run details and the SMV download for a record the server had dropped.
+ * `verificationTaskId` exists only on a `PersistedTrace`, which is precisely the replay-from-history case;
+ * an immediate trace has no run to reconcile against.
  */
 const reconcileOpenVerificationRunAgainstHistory = () => {
   const openRunId = verificationResult.value?.historyPersistence?.runId
+    ?? currentTrace.value?.verificationTaskId
   if (typeof openRunId !== 'number') return
   if (verificationRuns.value.length === 0) return
   if (verificationRuns.value.some(run => run.id === openRunId)) return
+  // Which surface is going away decides the wording: the existing notice says the panel was closed, which
+  // is simply false when what ended was a replay. Read before the teardown, since it clears the state.
+  //
+  // The visibility check is load-bearing rather than defensive: `currentTrace` falls back to
+  // `verificationResult.traces[selectedTraceIndex]`, so with only the dialog open it still resolves to a
+  // trace carrying this run's id — reporting "playback ended" to a user who was reading a dialog.
+  // `activePlaybackKind` is the existing owner of "what is on screen", so the answer comes from there
+  // rather than from a second reading of the animation flags.
+  const wasReplaying = activePlaybackKind.value === 'counterexample'
+    && currentTrace.value?.verificationTaskId === openRunId
   dismissRunSurfacesForDeletedVerificationRun(openRunId)
-  notifyBlocked(t('app.openRunDeletedElsewhere'))
+  notifyBlocked(t(wasReplaying
+    ? 'app.openCounterexampleRunDeletedElsewhere'
+    : 'app.openRunDeletedElsewhere'))
 }
 
 /**
@@ -12629,7 +12650,11 @@ const reconcileOpenVerificationRunAgainstHistory = () => {
  * closing a live result over that would destroy findings the user is reading.
  */
 const reconcileOpenFuzzingRunAgainstHistory = () => {
-  const openRunId = fuzzingResult.value?.id
+  // Read from the replaying finding as well, for the reason verification documents: `selectAndPlayFuzzing
+  // Finding` calls `closeFuzzingResult()` before opening the bar, so `fuzzingResult` is null for the whole
+  // replay and the dialog id alone never saw the animating surface. `fuzzTaskId` is the owning run
+  // (`fuzzingFindingBelongsToRun` matches on it).
+  const openRunId = fuzzingResult.value?.id ?? activeFuzzingFinding.value?.fuzzTaskId
   if (typeof openRunId !== 'number') return
   if (fuzzingRuns.value.length === 0) return
   if (fuzzingRuns.value.some(run => run.id === openRunId)) return
@@ -12639,12 +12664,28 @@ const reconcileOpenFuzzingRunAgainstHistory = () => {
   // their whole list, which is why only this kind needs the check. `hasMore` after a page-0 replace means
   // "later pages exist that this list does not describe", so absence proves nothing.
   if (fuzzingRunsHasMore.value) return
+  // A replaying finding is a different surface from the dialog and needs its own teardown: `dismiss
+  // FuzzingResult` closes a dialog that is already closed during a replay, which would have left the bar
+  // animating candidate evidence for a deleted run. Read before tearing down, since the state is cleared.
+  // Gated on `activePlaybackKind` for the reason the verification sibling documents: `activeFuzzingFinding`
+  // is not cleared when a simulation replay starts over it (see `playbackViolationSteps`), so the ref alone
+  // does not mean a finding is the thing on screen.
+  const wasReplaying = activePlaybackKind.value === 'fuzzing'
+    && activeFuzzingFinding.value?.fuzzTaskId === openRunId
+  if (wasReplaying) {
+    // Clears the deep link too, so the URL sync cannot reopen the deleted finding.
+    closeTraceAnimation()
+    savedTraces.value = []
+    traceDetailsView.value = null
+  }
   // Clears the deep link with the surface, so the URL sync cannot reopen the deleted run.
   dismissFuzzingResult()
   // Its own string, not the verification one: that copy says "verification result" and offers "re-run to
   // get a conclusion", which would describe bounded exploration as formal verification. Exploration
   // produces candidate findings.
-  notifyBlocked(t('app.openFuzzingRunDeletedElsewhere'))
+  notifyBlocked(t(wasReplaying
+    ? 'app.openFuzzingFindingRunDeletedElsewhere'
+    : 'app.openFuzzingRunDeletedElsewhere'))
 }
 
 /**
@@ -13234,10 +13275,30 @@ const handleVerify = async (): Promise<boolean> => {
 
     // Sync verification (original logic)
     const result = await boardApi.verify(req)
-    verificationResult.value = attachLocalRunSubmission({
+    const presented = attachLocalRunSubmission({
       ...result,
       specResults: normalizeSpecResults((result as any).specResults)
     }, submission)
+    // Same window as the async path (see `pollAsyncVerification`): this await is long enough for the user
+    // to open a replay, and `closeResultDialog` nulls `verificationResult` when they do, so assigning it
+    // here would raise the modal dialog over a running trace.
+    if (isModelPlaybackActive.value) {
+      notifyVerificationOutcome(presented)
+      // The save warning must survive the deferral, and it comes first: without it the notice below would
+      // point the user at a run history that does not contain this verdict.
+      if (['FAILED', 'OUTCOME_UNKNOWN'].includes(result.historyPersistence.status)) {
+        notifyBlocked(result.historyPersistence.status === 'OUTCOME_UNKNOWN'
+            ? t('app.verificationHistorySaveOutcomeUnknown')
+            : t('app.verificationHistorySaveFailed'))
+      } else {
+        notifyInfo(t('app.verificationResultDeferredForPlayback'))
+      }
+      // Unconditional here, unlike the presenting path below: run history is the only surface that will
+      // show this verdict, so it has to be current whether or not the save reported a problem.
+      void loadVerificationRuns(false)
+      return true
+    }
+    verificationResult.value = presented
     verificationResultStale.value =
       semanticSceneChangeCount !== verifySubmissionSceneChanges
     if (['FAILED', 'OUTCOME_UNKNOWN'].includes(result.historyPersistence.status)) {
@@ -13839,13 +13900,37 @@ const pollAsyncVerification = async (
       // A semantic board change while this run was in flight means the verdict already describes a
       // superseded scene, so it arrives stale rather than being presented as current.
       const boardChangedDuringRun = semanticSceneChangeCount !== submissionSceneChanges
-      if (options.presentResult || showVerificationPanel.value) {
+      /*
+       * A replay on screen outranks presenting a new verdict, and here that is not merely a matter of
+       * stacking: opening a counterexample calls `closeResultDialog`, so `verificationResult` is null for
+       * the whole time the bar animates. Re-assigning it on arrival therefore made the `aria-modal` result
+       * dialog spring up over the trace the user was watching, taking the focus trap and the scroll lock
+       * from a non-modal bar that kept running underneath.
+       *
+       * Reachable the same way as the simulation and exploration cases: playback admission does not
+       * consider `isVerifying`, so watching a task from the inbox and then replaying something from history
+       * is ordinary use. The verdict is not lost — it is announced as a toast (the branch a closed panel
+       * already takes) and saved to run history by the `loadVerificationRuns` below.
+       */
+      // Conditioned on presentation, not on playback alone: a background run whose panel is closed was
+      // never going to open a dialog, so telling that user "the dialog did not open because of the replay"
+      // would name a cause the client knows is false.
+      const wouldPresent = options.presentResult || showVerificationPanel.value
+      const deferForPlayback = wouldPresent && isModelPlaybackActive.value
+      if (wouldPresent && !deferForPlayback) {
         verificationResult.value = result
         verificationResultStale.value = boardChangedDuringRun
         notifyVerificationOutcome(verificationResult.value, { presenting: true })
         showVerificationPanel.value = false
       } else {
         notifyVerificationOutcome(result)
+        // The panel must still close, or a deferred run leaves the progress panel up behind the replay as
+        // though it were still working. And say why nothing opened: the outcome toast above does not
+        // explain the absence of the dialog the user was waiting for.
+        if (deferForPlayback) {
+          showVerificationPanel.value = false
+          notifyInfo(t('app.verificationResultDeferredForPlayback'))
+        }
       }
       await loadVerificationRuns()
       return

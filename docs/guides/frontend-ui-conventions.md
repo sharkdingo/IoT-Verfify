@@ -81,6 +81,22 @@ link stays meaningful for anyone with access to that run.
   exploration user to "re-run to get a conclusion" describes bounded search, which yields candidate
   findings, as formal verification, and a simulation is neither — what ends is a *replay* of a
   trajectory, so its copy says playback ended rather than that a panel closed.
+  **A run kind has more than one surface, and a dialog id cannot see the other one.** Verification and
+  exploration each reconciled only their result dialog, but opening a counterexample calls
+  `closeResultDialog` and opening a finding calls `closeFuzzingResult` — so the dialog ref is null for
+  the entire replay, and the reconciliation returned early on the surface most expensive to get wrong:
+  an animating trace still offering Run details and the SMV download for a record the server had
+  dropped. Read the run id from the replaying evidence as a fallback (`verificationTaskId` on a
+  `PersistedTrace`, `fuzzTaskId` on a finding — both absent on immediate evidence, which has no run to
+  reconcile against), and tear down the surface that is actually up: `dismiss*` closes a dialog that a
+  replay has already closed, so a replaying kind needs the trace teardown instead. Wording follows the
+  surface too, not the run kind — the dialog strings say a panel closed, which is false when what ended
+  was playback. Decide *which* surface from `activePlaybackKind`, never from the evidence ref: neither ref
+  implies its evidence is on screen (`currentTrace` falls back to the open dialog's traces, and
+  `activeFuzzingFinding` survives a simulation replay starting over it), so reading them alone announces
+  that playback ended to a user who was reading a dialog. Simulation is the exception that proves the
+  shape: its id already comes from a ref that outlives every surface, which is why it carries a visibility
+  guard rather than a fallback.
 
 ## 2. Feedback semantics
 

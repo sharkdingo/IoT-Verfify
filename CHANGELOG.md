@@ -19,6 +19,26 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **A run deleted elsewhere left its counterexample or finding replaying, because only its result dialog
+  was reconciled.** Deleting a verification run or an exploration run from the AI assistant or another tab
+  arrives as a history reload, and the board closes any surface still showing the deleted record — but it
+  looked for that surface in the result dialog only. Opening a counterexample or a finding closes that
+  dialog, so during the replay there was nothing to find: the bar kept animating evidence for a run the
+  server no longer had, still offering Run details and the model download. Both kinds now recognise the
+  replaying evidence by the run it belongs to, close the replay itself rather than a dialog that is
+  already shut, and say that playback ended instead of claiming a panel was closed. Simulation was already
+  correct — its trajectory reference deliberately outlives every surface, so it identifies the run a
+  different way.
+- **A verification verdict arriving during a counterexample replay covered that replay with a modal
+  dialog.** Sharper than the two cases below, because opening a counterexample closes the result dialog:
+  `verificationResult` is empty for the whole time the replay bar animates, so the arriving verdict
+  re-populated it and the result dialog — modal, with a focus trap — appeared on top of the trace the user
+  was in the middle of watching, hiding the playback controls behind it. Both paths were affected: the
+  async one presents when watched from the task inbox, and the synchronous one presents whenever its
+  request returns. A verdict arriving while a replay is on screen is now announced as a notification
+  instead, at the severity the outcome deserves, with a line saying it was saved to run history and can be
+  opened there once the replay is closed. A failed history save is still reported first, so the pointer to
+  run history is never given for a verdict that did not reach it.
 - **A background exploration run finishing behind an open replay threw a modal result dialog over it.**
   The task-watch path presented the completed run unconditionally, so the exploration result dialog —
   `aria-modal`, with a focus trap and a background scroll lock — appeared over the replay bar, which is

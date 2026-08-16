@@ -1774,9 +1774,14 @@ const messages = {
             // 探索运行有自己的措辞：它产出候选发现而非结论，说"重新运行以获得结论"会把有界探索
             // 描述成形式化验证。二者的删除路径相同（AI 助手的 delete_fuzz_run、另一个标签页）。
             openFuzzingRunDeletedElsewhere: '正在查看的反例探索结果已被删除（可能来自 AI 助手或另一个标签页），面板已关闭。如需候选证据，请重新运行探索。',
+            // 与上一条分开：这里结束的是发现项回放，说"面板已关闭"与事实不符。仍要说明这是候选证据而非形式化结论。
+            openFuzzingFindingRunDeletedElsewhere: '正在回放的发现项所属的探索运行已被删除（可能来自 AI 助手或另一个标签页），回放已结束。如需候选证据，请重新运行探索。',
             // 模型轨迹同样自成一类：它既不是结论也不是候选发现，而是一段可回放的执行过程，
             // 被关闭的主要界面是回放条而不是对话框，所以措辞必须点明"回放已结束"。
             openSimulationRunDeletedElsewhere: '正在回放的模型轨迹已被删除（可能来自 AI 助手或另一个标签页），回放已结束。如需重新观察这段执行过程，请再次运行模型模拟。',
+            // 与 openRunDeletedElsewhere 分开：那条说的是"面板已关闭"，而这里结束的是反例回放，说面板会与事实不符。
+            // 也不能复用上一条：被删除的是验证运行，重来的方式是重新验证，而不是重新仿真。
+            openCounterexampleRunDeletedElsewhere: '正在回放的反例所属的验证运行已被删除（可能来自 AI 助手或另一个标签页），回放已结束。请重新验证以获得适用于当前画布的反例。',
             failedToDeleteVerificationRun: '删除验证结果失败',
             verificationRunDeleteOutcomeRefreshed: '删除响应未能确认；刷新后该验证结果已不在历史中。未再次发送删除。',
             deleteSimulationRunMessage: '删除 {time} 生成的模型轨迹？',
@@ -1800,6 +1805,9 @@ const messages = {
             // 探索结果对话框是模态的：在回放进行时弹出会夺走焦点并锁定滚动，而回放条本身不是模态的。
             // 因此改为记入任务通知；这条只解释"为什么没弹出"，结果本身由 fuzzingCompletionMessage 先行说明。
             fuzzResultDeferredForPlayback: '当前正在回放轨迹，因此未自动打开探索结果。结果已记入任务通知，关闭回放后可从中打开。',
+            // 验证的去处与探索不同：结论已存入运行历史，而不是任务通知，所以不能复用上一条。
+            // 结论本身由 notifyVerificationOutcome 以对应严重级别单独提示，这条只说明"为什么没弹出对话框"。
+            verificationResultDeferredForPlayback: '验证已完成并保存在运行历史中。当前正在回放轨迹，因此未自动打开结果对话框；关闭回放后可从运行历史中打开。',
             historicalPlaybackDeferredForBoardChange: '加载历史结果期间提交了新的画布编辑。请先核对当前画布，再重新打开回放。',
             ruleRecommendationCancelled: '已请求停止规则推荐',
             deviceRecommendationCancelled: '已请求停止设备推荐',
@@ -4205,10 +4213,17 @@ const messages = {
             // "re-run to get a conclusion" would describe bounded search as formal verification. The
             // deletion paths are the same two (the assistant's delete_fuzz_run, or another tab).
             openFuzzingRunDeletedElsewhere: 'The exploration result you were viewing has been deleted (by the AI assistant or another tab), so its panel was closed. Run exploration again if you need candidate evidence.',
+            // Distinct from the line above, which says a panel was closed — here a finding replay ended. Still
+            // says "candidate evidence": exploration does not produce a formal conclusion.
+            openFuzzingFindingRunDeletedElsewhere: 'The exploration run behind the finding you were replaying has been deleted (by the AI assistant or another tab), so playback ended. Run exploration again if you need candidate evidence.',
             // A trajectory is its own third case: neither a conclusion nor a candidate finding, but a
             // replayable execution — and the surface that closes is the playback bar, not a dialog, so the
             // wording has to say the playback ended rather than that a panel was closed.
             openSimulationRunDeletedElsewhere: 'The model trajectory you were replaying has been deleted (by the AI assistant or another tab), so playback ended. Run the simulation again to watch that execution.',
+            // Distinct from openRunDeletedElsewhere, which says a panel was closed — here a replay ended, and
+            // naming the panel would be false. Distinct from the line above too: what was deleted is a
+            // verification run, so the way back is re-verifying rather than re-simulating.
+            openCounterexampleRunDeletedElsewhere: 'The verification run behind the counterexample you were replaying has been deleted (by the AI assistant or another tab), so playback ended. Re-run verification to get counterexamples that apply to your current canvas.',
             failedToDeleteVerificationRun: 'Failed to delete verification result',
             verificationRunDeleteOutcomeRefreshed: 'The delete response could not be confirmed. After refresh, this verification result is no longer in history. No second delete was sent.',
             deleteSimulationRunMessage: 'Delete the model trajectory generated at {time}?',
@@ -4235,6 +4250,10 @@ const messages = {
             // goes to the task notification instead. This line explains only why nothing opened — the
             // outcome itself is reported first by fuzzingCompletionMessage.
             fuzzResultDeferredForPlayback: 'The exploration result did not open automatically because a trajectory is being replayed. It is waiting in your task notifications; open it once you close the replay.',
+            // Verification lands somewhere else than exploration does — in run history rather than the task
+            // notifications — so the line above cannot be reused. The verdict itself is announced separately
+            // by notifyVerificationOutcome at its own severity; this only explains the missing dialog.
+            verificationResultDeferredForPlayback: 'Verification completed and was saved to run history. The result dialog did not open automatically because a trajectory is being replayed; open it from run history once you close the replay.',
             historicalPlaybackDeferredForBoardChange: 'A Board edit was submitted while the history result was loading. Review the current Board, then start playback again.',
             ruleRecommendationCancelled: 'Rule recommendation stop requested',
             deviceRecommendationCancelled: 'Device recommendation stop requested',
