@@ -116,4 +116,37 @@ describe('ControlCenter specification save', () => {
     expect(wrapper.emitted('add-spec')).toBeUndefined()
     wrapper.unmount()
   })
+
+  /**
+   * The chip beside the formula preview named the temporal logic, and it read "Model" for every
+   * template: it looked for a `CTLSPEC`/`LTLSPEC` prefix that `buildSpecFormula` never writes, so it
+   * contradicted the formula rendered immediately next to it in the one surface teaching that
+   * distinction. Rendered rather than source-read, because the defect was in what reached the screen.
+   */
+  it('names the temporal logic of the selected template beside its formula', async () => {
+    const wrapper = mount(ControlCenter, {
+      attachTo: document.body,
+      props: {
+        activeSection: 'specs',
+        nodes: [{ id: 'device-1', label: 'Device 1', templateName: 'Light' }] as any
+      },
+      global: { plugins: [i18n] }
+    })
+
+    // Template 1 (always, `AG(A)`) is CTL; template 6 (persistence, `G(IF -> F G(THEN))`) is the
+    // only LTL one. Both are asserted so a constant would fail rather than half-pass.
+    await wrapper.get('[data-testid="spec-template-select"]').setValue('1')
+    await wrapper.vm.$nextTick()
+    const chip = () => wrapper.get('[data-testid="spec-formula-kind"]').text()
+    expect(chip()).toBe('CTL')
+    // The formula printed next to it must agree — that contradiction was the visible symptom.
+    expect((wrapper.vm as any).specForm.formula.startsWith('CTL ')).toBe(true)
+
+    await wrapper.get('[data-testid="spec-template-select"]').setValue('6')
+    await wrapper.vm.$nextTick()
+    expect(chip()).toBe('LTL')
+    expect((wrapper.vm as any).specForm.formula.startsWith('LTL ')).toBe(true)
+
+    wrapper.unmount()
+  })
 })

@@ -3818,7 +3818,10 @@ watch(() => props.readOnly, readOnly => {
                 </div>
                 <div class="mt-2 pt-2 border-t border-slate-200 flex items-center gap-2">
                   <span class="text-[length:var(--iot-font-min)] font-bold text-slate-500 uppercase tracking-wide">{{ t('app.formulaPreview') }}</span>
-                  <span class="px-1.5 py-0.5 bg-slate-100 rounded text-[length:var(--iot-font-min)] font-bold text-slate-600 uppercase">{{ specFormulaKind }}</span>
+                  <span
+                    class="px-1.5 py-0.5 bg-slate-100 rounded text-[length:var(--iot-font-min)] font-bold text-slate-600 uppercase"
+                    data-testid="spec-formula-kind"
+                  >{{ specFormulaKind }}</span>
                   <!-- `iot-scroll-region-x` rather than raw `overflow-x-auto`: the primitive owns the token
                        scrollbar and overscroll containment, which a bare overflow does not. Type at the
                        product floor, since a formula is the thing a user is trying to read here. -->
