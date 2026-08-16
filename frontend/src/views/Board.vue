@@ -19107,7 +19107,14 @@ const counterexampleTraceHelpText = computed(() => {
               <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ traceAnimationState.isPlaying ? 'pause' : 'play_arrow' }}</span>
               {{ traceAnimationState.isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play') }}
             </button>
-            <HintTooltip v-if="playbackChangesDismissedKey !== null" :content="t('app.showStepChanges')">
+            <!-- Gated on the popover's own absence, not on `playbackChangesDismissedKey !== null`.
+
+                 The dismissed key is `kind:stepIndex`, so dismissing at one step and scrubbing to another
+                 brings the popover straight back — while the key stays non-null. The proxy condition then
+                 left this button offering to restore a panel already on screen, and beside it rather than
+                 in place of it. The simulation bar reads `showPlaybackChangePopover` (through its
+                 `changePanelVisible` prop) and was always right; this is the same condition. -->
+            <HintTooltip v-if="!showPlaybackChangePopover" :content="t('app.showStepChanges')">
               <button
                 type="button"
                 data-testid="trace-timeline-restore-changes"

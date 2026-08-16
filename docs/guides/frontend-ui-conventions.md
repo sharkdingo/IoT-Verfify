@@ -693,3 +693,11 @@ not. The split that survived measurement:
 - **A cap that always binds is a fixed size.** `max-height: min(44dvh, 20rem)` reads as responsive, but `20rem`
   wins on every viewport taller than ~727px. After the content dropped to 317px the cap sat 1px above it, so the
   next label would have re-armed the clipping — the ceiling has to leave headroom, or it is the working height.
+- **A control that restores a surface is gated on that surface being gone, not on a past user action.** The two
+  replay bars own the same "Show step changes" button and disagreed: the simulation bar reads the popover's
+  visibility, the counterexample bar read `playbackChangesDismissedKey !== null`. That key is `kind:stepIndex`,
+  scoped to one step on purpose — a dismissal at step 3 must not silence step 4 — so the two conditions come
+  apart the moment the user scrubs: the popover returns, the key stays set, and the button offers to restore a
+  panel already on screen, beside it rather than instead of it, for the rest of the session. The dismissal state
+  answers *did the user ever dismiss*; the button needs *is it hidden now*. Where two surfaces own the same
+  control, bind both to the same computed rather than to two things that agree today.

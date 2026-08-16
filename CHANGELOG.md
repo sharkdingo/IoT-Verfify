@@ -19,6 +19,14 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **"Show step changes" offered to restore a panel that was already on screen.** The counterexample
+  replay bar showed that button whenever the step-changes popover had *ever* been dismissed, rather than
+  when it was actually hidden. The dismissal is scoped to one step by design — dismissing at step 3 must
+  not silence step 4 — so scrubbing to another step brought the popover back while the button stayed,
+  sitting beside the panel it claimed to restore for the rest of the playback session. It now reads the
+  popover's own visibility, which is the condition the simulation replay bar was already using through
+  its `changePanelVisible` prop, so the two bars no longer answer the same question differently.
+
 - **The simulation replay bar accepted a run manifest the product cannot produce.** Its
   `modelSemantics` prop was optional even though `SimulationResult.modelSemantics` is required, the run
   response validator rejects a manifest that disagrees with its run context, and the bar's only opener
