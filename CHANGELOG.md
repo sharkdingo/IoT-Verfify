@@ -60,6 +60,25 @@ history into a technical spec. The spec content itself now lives under
   with no utility after it, so the one control whose whole job is "click me to seek here" gave no pointer
   feedback. It now highlights its border on hover, matching the identical rail in the simulation timeline.
 
+- **A liveness counterexample marked no step on the trace rail.** Templates 2, 5 and 6 are refuted by an
+  infinite lasso path, so no single state is at fault and the single-step violation index is `undefined`
+  for them by construction. The rail tested only that index, so it labelled nothing — while the canvas
+  emphasised every device in the failing cycle and the change panel explained the loop. The one surface
+  that shows *where* in the path the failure lives showed only the playback cursor, which is the same
+  silence template 4 had below, in the branch that fix did not reach. Measured on NuSMV 2.7.1 with the
+  generator's own template-5 shape over a non-responding model: a six-state counterexample whose cycle is
+  states 5–6, so two steps to mark and none marked. Five of the 42 specifications in the shipped example
+  scenes are template 5, including the away-mode unlock scene.
+
+  The rail now reads the same step set the canvas emphasis reads, through one helper that both the visible
+  marker and the accessible name call — so the two cannot drift apart again, which is how the wording
+  mismatch fixed below arose. A cycle is labelled "Violation cycle" rather than repeating "Violation" on
+  each of its states, because the same word on several steps reads as several separate faults instead of
+  one cycle that is the fault. Every step of the cycle is ringed and carries the word in its accessible
+  name, so a reader landing mid-cycle learns they are inside the failing loop; the visible word prints
+  once, at the step where the cycle begins, because the label is about 80px wide against markers packed
+  38px apart and repeating it would stack overlapping labels across the rings that show the cycle's extent.
+
 - **The most common specification template's counterexamples marked no violating state anywhere.**
   Template 4, immediate response (`AG(IF → AX(THEN))`), was excluded from the set of templates whose
   violation is the trace's last state, so replaying one of its counterexamples showed no rail marker, no

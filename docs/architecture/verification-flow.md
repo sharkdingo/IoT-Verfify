@@ -252,6 +252,15 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
   per-step change panel reports "no observable changes" — an accurate diff of the state, and a
   complete misreading of the trace. Clients mark the whole cycle rather than one step, because no
   single state is at fault.
+
+  **"The whole cycle" means every replay surface, not just the canvas.** A single-step violation index is
+  `undefined` for these templates by construction, so any surface derived from it alone goes silent on
+  exactly the traces this section describes. The step rail marked nothing for a liveness counterexample
+  for this reason while the canvas emphasised every device in the cycle and the change panel explained
+  the loop — the one surface that shows *where* in the path the failure lives showed only the playback
+  cursor. A surface that marks a violation reads the cycle's step set, and labels it as a cycle rather
+  than repeating a single-step word on each of its states — a distinction that is about meaning, not
+  only space: the same word on several steps reads as several separate faults.
 - **A safety counterexample's violation is its last state, including template 4.** Verification emits the
   **positive** specification: `SmvGenerator.buildSmvContent` passes a null `ParameterizationConfig`, and
   only that null forks to `specBuilder.build`. The negated form (`buildNegated`, `EF(...)`) is reached

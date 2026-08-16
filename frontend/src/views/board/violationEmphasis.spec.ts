@@ -47,7 +47,7 @@ describe('violation emphasis reaches the canvas', () => {
       .toContain('steps.includes(trace.selectedStateIndex)')
   })
 
-  it('marks every step of a liveness cycle, not just the one the rail labels', () => {
+  it('enumerates every step of a liveness cycle for the canvas', () => {
     // Templates 2/5/6 negate to EG/GF, so NuSMV refutes them with an infinite lasso path. Trace 83
     // (`scene_spec_4`, "the front door never re-locks while nobody is home") is the measured case: 5 states,
     // loop from index 3, and its final state repeats index 3 exactly. Template 5 was missing from the
@@ -57,11 +57,19 @@ describe('violation emphasis reaches the canvas', () => {
     const body = board.slice(at, at + 900)
     expect(body, 'the cycle is enumerated from the loop range').toContain('counterexampleLoopRange')
 
-    const range = board.slice(board.indexOf('const counterexampleLoopRange'), at)
+    // Bounded to the range computed itself. Slicing from `counterexampleLoopRange` all the way to
+    // `counterexampleViolationSteps` let the `LIVENESS_TEMPLATES` assertion below match text in the
+    // *following* computed, so it passed while claiming something about this one that is not true of it:
+    // locating the loop is template-blind on purpose, and `counterexampleViolationSteps` is what gates it.
+    const rangeAt = board.indexOf('const counterexampleLoopRange')
+    const range = board.slice(rangeAt, board.indexOf('})', board.indexOf('return { start, end }', rangeAt)))
     // Read from NuSMV's own marker rather than guessed from the template or the index.
     expect(range, 'the loop is located by the backend flag').toContain("state?.loopStart === true")
-    // But gated on the template, because the marker alone does not mean the cycle is the violation.
-    expect(range, 'only a liveness template may claim its cycle').toContain('LIVENESS_TEMPLATES')
+    // The template gate lives in the consumer, because the marker alone does not mean the cycle is the
+    // violation — NuSMV prints it on safety counterexamples too (see the next test).
+    expect(range, 'locating a loop must not itself claim the cycle is the fault')
+      .not.toContain('LIVENESS_TEMPLATES')
+    expect(body, 'only a liveness template may claim its cycle').toContain('LIVENESS_TEMPLATES')
   })
 
   it('does not treat a loop on a safety counterexample as the violation', () => {
@@ -170,16 +178,68 @@ describe('violation emphasis reaches the canvas', () => {
     // The marker renders `traceViolationHere` while the accessible name said `fuzzFirstViolation`
     // unconditionally, so a screen-reader user heard "First violation" on a verification counterexample
     // and a sighted user read "Violation" — one state under two names, on the same button.
-    const at = board.indexOf('const getTraceStateAriaLabel')
-    expect(at, 'the label builder should exist').toBeGreaterThan(-1)
-    const body = board.slice(at, at + 700)
+    // Both now come from one helper, which is what makes them impossible to diverge again: the visible
+    // marker renders its return value and the accessible name appends the same string.
+    const at = board.indexOf('const traceStateViolationLabel')
+    expect(at, 'the label helper should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, at + 500)
     expect(body, 'exploration keeps its own wording').toContain("t('app.fuzzFirstViolation')")
     expect(body, 'and a counterexample gets the marker word').toContain("t('app.traceViolationHere')")
-    // The marker itself must be the thing this agrees with, so assert its key at the rail too. Anchored on
-    // the `v-if`, not the bare predicate: that predicate also drives the ring class a few lines earlier, and
-    // a window from there stops before the label.
-    const marker = board.slice(board.indexOf('v-if="counterexampleViolationStep === Number(index)"'))
-    expect(marker.slice(0, 400), 'the visible marker word').toContain("t('app.traceViolationHere')")
+
+    const aria = board.slice(board.indexOf('const getTraceStateAriaLabel'), at + 2000)
+    expect(aria, 'the accessible name must read the helper, not its own copy of the wording')
+      .toMatch(/getTraceStateAriaLabel[\s\S]{0,600}traceStateViolationLabel\(index\)/)
+    // The visible marker must render the print-once wrapper of the same helper. Anchored on the `v-if`
+    // because the helper also drives the ring class a few lines earlier, and a window from there stops
+    // before the label.
+    const marker = board.slice(board.indexOf('v-if="traceStateViolationMarker(Number(index))"'))
+    expect(marker.slice(0, 400), 'the visible marker renders the helper')
+      .toContain('{{ traceStateViolationMarker(Number(index)) }}')
+    // The ring is the one that must stay on every step of a cycle, because it carries the extent. Matched
+    // as the predicate immediately preceding the ring classes rather than by a fixed byte window, which any
+    // unrelated edit above it would shift.
+    expect(board, 'the ring reads the per-step helper, not the print-once one')
+      .toMatch(/traceStateViolationLabel\(Number\(index\)\)\s*\n\s*\? 'ring-2 ring-\[color:var\(--danger\)\] ring-offset-2'/)
+  })
+
+  it('prints the cycle word once, though every cycle step is ringed and named', () => {
+    // The label is `whitespace-nowrap` at roughly 80px while the rail packs markers 38px apart, so
+    // rendering it on each step of a multi-state cycle stacks overlapping labels across its own rings.
+    const at = board.indexOf('const traceStateViolationMarker')
+    expect(at, 'the print-once wrapper should exist').toBeGreaterThan(-1)
+    const body = board.slice(at, at + 400)
+    expect(body, 'the cycle prints at its first step only')
+      .toContain('counterexampleViolationSteps.value[0] === index')
+    // The single-step violation must be exempt, or a safety counterexample's own marker depends on the
+    // cycle set being non-empty — which it is not for a safety template.
+    expect(body, 'a single-step violation always prints')
+      .toContain('counterexampleViolationStep.value === index')
+    // And the accessible name keeps every step, so a reader landing mid-cycle still learns they are in it.
+    const aria = board.slice(board.indexOf('const getTraceStateAriaLabel'))
+    expect(aria.slice(0, 600), 'the accessible name uses the per-step helper')
+      .toContain('traceStateViolationLabel(index)')
+  })
+
+  it('marks a liveness cycle on the rail, not only on the canvas', () => {
+    // The rail tested `counterexampleViolationStep`, which is `undefined` for templates 2/5/6 by design —
+    // those are refuted by an infinite lasso path, so no single step is the fault. The canvas emphasised
+    // every device in the cycle and the popover explained the loop, while the rail showed only the cursor
+    // star: the same silence template 4 had, in the branch that fix did not reach.
+    //
+    // Measured on NuSMV 2.7.1 with the generator's own template-5 shape (`SmvSpecificationBuilder`'s
+    // positive form, `AG(IF -> AF(THEN))`) over a non-responding model: a 6-state counterexample whose
+    // cycle is states 5-6.
+    // Two steps to mark, none marked. Five of the 42 specs in the shipped scenes are template 5.
+    const at = board.indexOf('const traceStateViolationLabel')
+    const body = board.slice(at, at + 500)
+    // Reading the *set* is the fix: it is what already carries the cycle, and what the canvas reads.
+    expect(body, 'the cycle comes from the same set the canvas emphasis reads')
+      .toContain('counterexampleViolationSteps.value.includes(index)')
+    expect(body, 'and gets its own word rather than repeating the single-step one')
+      .toContain("t('app.traceViolationCycle')")
+    // Both locales, or the cycle renders as a raw key on one of them.
+    const i18n = readFileSync(join(root, 'src/assets/i18n.ts'), 'utf8')
+    expect(i18n.match(/traceViolationCycle:/g)?.length, 'zh-CN and en both define it').toBe(2)
   })
 
   it('says why the loop-closing step shows no change, rather than reporting an empty diff', () => {

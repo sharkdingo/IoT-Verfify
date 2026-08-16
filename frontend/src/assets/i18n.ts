@@ -1185,6 +1185,9 @@ const messages = {
             // The visible chip is a bare number; this names what it counts for assistive technology.
             // Marks the step of a counterexample where the specification actually fails.
             traceViolationHere: '违规发生',
+            // A liveness counterexample has no single failing step: the repeating cycle is the violation,
+            // so every step inside it carries this instead.
+            traceViolationCycle: '违规循环',
             noFaultRulesFound: '未发现故障规则',
             violationMayBeDeviceTransitions: '违规可能由设备状态转移导致',
             transitionNumberLabel: '状态转换',
@@ -3599,6 +3602,10 @@ const messages = {
             // sits above a 28px marker on a crowded rail, but it must be words: an unlabelled glyph was
             // read as the selection cursor rather than the verdict.
             traceViolationHere: 'Violation',
+            // A liveness counterexample has no single failing step: the repeating cycle is the violation,
+            // so every step inside it carries this instead. Distinct wording because "Violation" on each of
+            // several states would read as several separate faults.
+            traceViolationCycle: 'Violation cycle',
             noFaultRulesFound: 'No fault rules found',
             violationMayBeDeviceTransitions: 'The violation may be caused by device transitions',
             transitionNumberLabel: 'Transition',

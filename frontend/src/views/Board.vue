@@ -11116,11 +11116,19 @@ const selectAndPlayFuzzingFinding = async (
     activeFuzzingFinding.value = finding
     savedTraces.value = [trace]
     openTraceAnimationAt(0)
-    // An exploration finding reports its own violation step, which is not necessarily the last state —
-    // its path can continue past the violation, unlike a NuSMV safety counterexample. So open on the step
-    // the finding names, and let `goToState` write both selection refs. Previously this forced state 0
-    // while `openTraceAnimationAt` had selected the final state, so the change popover and the timeline
-    // disagreed and neither pointed at the violation.
+    // Open on the step the finding names, and let `goToState` write both selection refs. Previously this
+    // forced state 0 while `openTraceAnimationAt` had selected the final state, so the change popover and
+    // the timeline disagreed and neither pointed at the violation.
+    //
+    // For a well-formed finding this lands where `openTraceAnimationAt` already did: the backend truncates
+    // the finding's path at the violation (`FuzzEngine` keeps `states.subList(0, violationStep + 1)`), and
+    // both the write path (`FuzzServiceImpl.validateEngineResult`) and the read path
+    // (`FuzzMapper`, "stored trace is not truncated at the first violation") reject a finding where
+    // `firstViolationStep != states.size() - 1`. `docs/api/fuzzing.md` documents it as always
+    // `states.length - 1`. This used to claim the opposite — that an exploration path "can continue past
+    // the violation" — which would make the two calls disagree by design. Kept as an explicit seek anyway,
+    // because the step is the finding's own authoritative field and this surface should honour it rather
+    // than re-derive it from the array length.
     if (typeof finding.firstViolationStep === 'number') {
       goToState(finding.firstViolationStep)
     }
@@ -12696,14 +12704,55 @@ const counterexampleViolationSteps = computed<number[]>(() => {
   return []
 })
 
+/**
+ * The violation word this rail step carries, or `null` for an ordinary step.
+ *
+ * Reads `counterexampleViolationSteps`, the same set the canvas emphasis reads, because a liveness
+ * counterexample has no single failing step: templates 2/5/6 are refuted by an infinite lasso path, so
+ * `counterexampleViolationStep` is `undefined` for them by design and the rail — which tested only that
+ * singular step — marked nothing at all. The canvas lit up every device in the cycle and the popover
+ * explained the loop, while the one surface whose job is to show *where* in the path the failure lives
+ * showed only the cursor star. That is the same silence template 4 had, in the branch that fix did not
+ * reach. Measured on NuSMV 2.7.1 with the generator's own template-5 shape, `AG(motion -> AF(light))`
+ * over a non-responding model: a 6-state counterexample whose cycle is states 5–6, so two steps to mark
+ * and none marked. Five of the 42 specs in the shipped scenes are template 5, including the away-mode
+ * unlock scene this file's emphasis test already cites as a measured liveness counterexample.
+ *
+ * The cycle gets its own word rather than repeating "Violation" on each of its states, which would read
+ * as several separate faults instead of one cycle that is the fault.
+ */
+const traceStateViolationLabel = (index: number): string | null => {
+  if (counterexampleViolationStep.value === index) {
+    return activeFuzzingFinding.value ? t('app.fuzzFirstViolation') : t('app.traceViolationHere')
+  }
+  return counterexampleViolationSteps.value.includes(index) ? t('app.traceViolationCycle') : null
+}
+
+/**
+ * The same word, but printed on screen only once per cycle.
+ *
+ * Every step of the cycle is ringed and carries the word in its accessible name — a reader who lands on
+ * step 5 needs to know it is inside the failing loop. The *visible* text cannot repeat that way: the
+ * label is `whitespace-nowrap` and about 80px wide, while the rail packs its markers 38px apart (the
+ * `minWidth` above), so a cycle spanning several states would stack overlapping labels across its own
+ * rings. The rings already carry the extent, which is the rail's job — it shows shape, not values — so
+ * the word appears once, at the step where the cycle begins. `counterexampleViolationSteps` is built by
+ * ascending loop, so its first element is that step.
+ */
+const traceStateViolationMarker = (index: number): string | null => {
+  const label = traceStateViolationLabel(index)
+  if (label === null) return null
+  if (counterexampleViolationStep.value === index) return label
+  return counterexampleViolationSteps.value[0] === index ? label : null
+}
+
 const getTraceStateAriaLabel = (index: number) => {
   const base = `${t('app.traceVisualization.state', { index: index + 1 })} (${index + 1}/${totalStates.value})`
-  if (counterexampleViolationStep.value !== index) return base
-  // The visible marker on this same button says `traceViolationHere`, so the accessible name must too.
-  // It read `fuzzFirstViolation` unconditionally, which told a screen-reader user "First violation" on a
+  // The visible marker on this same button shows this word, so the accessible name must match it. It read
+  // `fuzzFirstViolation` unconditionally, which told a screen-reader user "First violation" on a
   // verification counterexample while the sighted label beside it said "Violation" — one state, two names.
-  const label = activeFuzzingFinding.value ? t('app.fuzzFirstViolation') : t('app.traceViolationHere')
-  return `${base}, ${label}`
+  const label = traceStateViolationLabel(index)
+  return label ? `${base}, ${label}` : base
 }
 
 // Wrapper to stop playback when scrubbing starts
@@ -19169,7 +19218,7 @@ const counterexampleTraceHelpText = computed(() => {
                       : Number(index) < traceAnimationState.selectedStateIndex
                         ? 'board-chip-danger board-border-subtle'
                         : 'bg-white border-slate-300 hover:border-[color:var(--accent)]',
-                    counterexampleViolationStep === Number(index)
+                    traceStateViolationLabel(Number(index))
                       ? 'ring-2 ring-[color:var(--danger)] ring-offset-2'
                       : ''
                   ]"
@@ -19178,12 +19227,13 @@ const counterexampleTraceHelpText = computed(() => {
                        exploration finding. It is labelled rather than left as a bare glyph: reviews of both
                        themes could see that *something* marked the last state but not that it was the
                        violation, and one read the selection cursor as the verdict. The label is the point —
-                       this is the step where the specification fails. -->
+                       this is the step where the specification fails. A liveness cycle labels every step it
+                       spans, because there the cycle is the fault and no single step is. -->
                   <span
-                    v-if="counterexampleViolationStep === Number(index)"
+                    v-if="traceStateViolationMarker(Number(index))"
                     class="board-chip-danger board-text-danger absolute -top-5 whitespace-nowrap rounded px-1 py-px font-black"
                     :style="{ fontSize: 'var(--iot-font-min)' }"
-                  >{{ t('app.traceViolationHere') }}</span>
+                  >{{ traceStateViolationMarker(Number(index)) }}</span>
                   <!--
                     The rail shows *shape*, not numbers.
 
