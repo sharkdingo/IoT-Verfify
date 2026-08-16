@@ -153,8 +153,10 @@ export interface TraceState {
   // This state begins the repeating cycle of an infinite counterexample. A liveness property (templates 2,
   // 5, 6) is refuted by a lasso path, not a finite prefix, so the cycle *is* the violation.
   loopStart?: boolean;
-  // This state closes the cycle by repeating `loopStart`. NuSMV prints the repeat with no variable lines, so
-  // it materializes identical to its predecessor and plays back as a step where nothing changes.
+  // This state closes the cycle by repeating `loopStart`, so it always equals the entry state. Whether it
+  // also equals its own predecessor depends on the cycle length: a one-state cycle prints no variable lines
+  // and plays back as a step where nothing changes, while a longer cycle prints the deltas back to the entry
+  // and plays back as an ordinary step. Both hide the repetition, which is why the flag is carried.
   loopBack?: boolean;
 }
 

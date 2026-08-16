@@ -235,6 +235,15 @@ The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and
   trailing state that closes the cycle as `loopBack: true`. Both are absent for a finite path, which is
   every simulation and fuzz trace.
 
+  **The closing state repeats the loop entry, not necessarily its own predecessor** — the distinction
+  decides how a lasso is misread without the flags, and both halves were measured on NuSMV 2.7.1. A
+  **one-state** cycle prints the closing state with no variable lines, so the delta merge reproduces the
+  previous state exactly and playback shows a step where nothing moves (reads as a frozen animation or a
+  truncated run). A **longer** cycle prints the deltas needed to return to the entry, so the closing state
+  differs from its predecessor and playback shows an ordinary-looking step (reads as the path simply
+  continuing). Consumers therefore cannot recover the flags by comparing adjacent states, and comparing
+  against the loop entry is not available either where the state list is paged, as it is in `get_trace`.
+
   **The marker is not by itself evidence of a liveness violation, and clients must not treat it as such.**
   It describes the witness path NuSMV happened to find, not the property. Measured on NuSMV 2.7.1: a CTL
   `AG(motion → AX light)` counterexample (template 4) and an LTL `G(p)` counterexample both carry the

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import PlaybackChangePopover from '../PlaybackChangePopover.vue'
 import { i18n as appI18n } from '@/assets/i18n'
 
@@ -570,5 +570,84 @@ describe('PlaybackChangePopover', () => {
     const text = wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()
     expect(text).toContain('自定义设备.workingState')
     expect(text).not.toContain('自定义设备.工作状态')
+  })
+
+  /*
+   * The loop sentence had no rendering coverage at all: the only guard was a source-read asserting the
+   * loop-back block is ordered before the generic empty state. That check cannot see what the block
+   * *says*, which is how the liveness wording came to be "State 3 loops back to state 2" — mechanically
+   * true, but the same kind of statement as the safety wording, silent on the one fact the liveness
+   * branch exists to convey. Mounted with the real `appI18n` so the assertions read the shipped strings.
+   */
+  describe('the sentence on the state that closes the cycle', () => {
+    // `appI18n` is a module singleton and the cases above switch it to zh-CN without restoring it, so each
+    // case here sets the locale it asserts against and this hook hands the module back in a known state.
+    afterEach(() => {
+      appI18n.global.locale.value = 'en'
+    })
+
+    const loopProps = (overrides: Record<string, unknown>) => ({
+      kind: 'counterexample' as const,
+      stateNumber: 3,
+      totalStates: 3,
+      position: { x: 0, y: 0 },
+      changes: [],
+      environmentChanges: [],
+      triggeredRules: [],
+      compromisedAutomationLinks: [],
+      animatedEdgeCount: 0,
+      compromisedEdgeCount: 0,
+      isLoopBackState: true,
+      ...overrides
+    })
+
+    it('says the cycle itself is the violation for a liveness property', () => {
+      appI18n.global.locale.value = 'en'
+      const wrapper = mount(PlaybackChangePopover, {
+        props: loopProps({ isLivenessViolation: true, loopRange: { start: 2, end: 3 } }),
+        global: { plugins: [appI18n] }
+      })
+
+      const text = wrapper.get('[data-testid="playback-change-loop-back"]').text()
+      expect(text).toContain('2')
+      expect(text).toContain('3')
+      // The claim, not just the arithmetic: a reader must learn why an unmoving final step is the fault.
+      expect(text).toMatch(/never reached/i)
+      expect(text).toMatch(/violation/i)
+      // And it must not fall through to the generic empty state, which is what it replaces.
+      expect(wrapper.find('[data-testid="playback-change-empty"]').exists()).toBe(false)
+    })
+
+    it('claims nothing about liveness for a safety counterexample that ends on a cycle', () => {
+      // NuSMV reports a loop for these too — measured on both a CTL `AX` and an LTL `G(p)` refutation —
+      // and there the fault is a single state, so "the required state is never reached" would be false.
+      appI18n.global.locale.value = 'en'
+      const wrapper = mount(PlaybackChangePopover, {
+        props: loopProps({
+          isLivenessViolation: false,
+          loopRange: { start: 2, end: 3 },
+          violationStateNumber: 3
+        }),
+        global: { plugins: [appI18n] }
+      })
+
+      const text = wrapper.get('[data-testid="playback-change-loop-back"]').text()
+      expect(text).not.toMatch(/never reached/i)
+      expect(text).toContain('2')
+    })
+
+    it('falls back to the range-free sentence when no loop range is resolved', () => {
+      // Both flags can be absent independently, so the popover must not render a half-built sentence
+      // with a literal `{start}` in it.
+      appI18n.global.locale.value = 'en'
+      const wrapper = mount(PlaybackChangePopover, {
+        props: loopProps({ isLivenessViolation: true, loopRange: null }),
+        global: { plugins: [appI18n] }
+      })
+
+      const text = wrapper.get('[data-testid="playback-change-loop-back"]').text()
+      expect(text.length).toBeGreaterThan(0)
+      expect(text).not.toContain('{')
+    })
   })
 })

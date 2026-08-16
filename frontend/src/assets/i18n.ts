@@ -2379,8 +2379,8 @@ const messages = {
             },
 
             traceLoopRepeats: '轨迹循环回到之前状态',
-            traceLoopExplanation: '状态 {end} 回到状态 {start}',
-            traceLoopRepeatsDetail: '状态循环从状态 {start} 开始',
+            traceLoopExplanation: '状态 {start}–{end} 无限重复，要求的状态始终未达到——该循环本身就是违规',
+            traceLoopRepeatsDetail: '状态循环从状态 {start} 开始；违规是标记的单个状态，而非该重复',
             viewCounterexampleDetails: '查看反例详情',
 
             notFound: {
@@ -4807,8 +4807,12 @@ const messages = {
             },
 
             traceLoopRepeats: 'Trace loops back to a previous state',
-            traceLoopExplanation: 'State {end} loops back to state {start}',
-            traceLoopRepeatsDetail: 'State loop begins at state {start}',
+            // The liveness sentence has to say that the repetition IS the violation, because that is the
+            // only thing distinguishing it from the safety one below. It used to be "State {end} loops back
+            // to state {start}" — mechanically true, identical in kind to the safety wording, and silent on
+            // the fact the branch exists to convey: the required state is never reached on this path.
+            traceLoopExplanation: 'States {start}–{end} repeat forever, so the required state is never reached — this cycle is the violation',
+            traceLoopRepeatsDetail: 'State loop begins at state {start}; the violation is the single marked state, not the repetition',
             viewCounterexampleDetails: 'View counterexample details',
 
             notFound: {

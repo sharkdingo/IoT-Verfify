@@ -166,6 +166,54 @@ class SmvTraceParserTest {
     }
 
     /**
+     * A cycle longer than one state closes with real variable lines, and must still be marked.
+     *
+     * Every other loop test here uses an empty closing state, which is only what a **one-state** cycle looks
+     * like. Measured on NuSMV 2.7.1 with the generator's own template-5 shape,
+     * {@code AG((motion=yes) -> AF(light=on))} over a model that alternates motion and never lights: the
+     * 3-state counterexample closes with {@code motion = yes} printed, so the final state differs from its
+     * predecessor and equals the loop *entry*.
+     *
+     * That is the case a value comparison gets backwards. A consumer checking "did anything change?" to detect
+     * the repetition sees an ordinary step here and no repetition at all, which is why {@code loopBack} is
+     * carried rather than derived — and why the docs must not describe the empty-repeat case as the general
+     * one.
+     */
+    @Test
+    void parseCounterexample_marksAMultiStateCycleWhoseClosingStateCarriesChanges() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("sensor_1");
+        smv.setDeviceLabel("Hall Sensor");
+        smv.setTemplateName("MotionSensor");
+        smv.getModes().add("MotionState");
+        smv.getModeStates().put("MotionState", List.of("yes", "no"));
+        smv.getStates().addAll(List.of("yes", "no"));
+
+        String counterexample = """
+                -- Loop starts here
+                -> State: 1.1 <-
+                  sensor_1.MotionState = yes
+                -> State: 1.2 <-
+                  sensor_1.MotionState = no
+                -> State: 1.3 <-
+                  sensor_1.MotionState = yes
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of("sensor_1", smv));
+
+        assertEquals(3, states.size());
+        assertTrue(Boolean.TRUE.equals(states.get(0).getLoopStart()),
+                "the marker precedes the first state, so the whole trace is the cycle");
+        assertTrue(Boolean.TRUE.equals(states.get(2).getLoopBack()),
+                "the closing state is marked even though it carries its own values");
+        // The point of the case: it differs from its predecessor and matches the entry.
+        assertEquals("no", states.get(1).getDevices().get(0).getState());
+        assertEquals("yes", states.get(2).getDevices().get(0).getState(),
+                "the closing state repeats the loop entry, not the state before it");
+    }
+
+    /**
      * The cycle can begin at the initial state, putting the marker before the first state line.
      *
      * NuSMV 2.7.1 prints exactly this for `AF x` over a model that never sets `x`. The whole trace is then one

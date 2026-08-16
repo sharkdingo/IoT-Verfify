@@ -53,13 +53,14 @@ public final class ModelTraceToolPresenter {
             if (state == null) continue;
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("stateIndex", state.getStateIndex());
-            // A liveness counterexample's fault is its cycle, not any single state, and NuSMV re-prints the loop
-            // entry carrying no variable lines — so after the delta merge the closing state is identical to its
-            // predecessor. Without these flags an assistant reading such a trace sees a path that simply stops
-            // changing, which reads as a stalled or truncated run rather than as the infinite repetition that
-            // *is* the violation. That is the same misreading the frontend needed a dedicated field to avoid,
-            // and it is worse here: state windows are paginated, so one response need not contain both ends of
-            // the cycle.
+            // A liveness counterexample's fault is its cycle, not any single state, and NuSMV closes the path by
+            // re-printing the loop entry. Without these flags an assistant reads such a trace wrong in one of two
+            // ways, depending on the cycle length (both measured on NuSMV 2.7.1): a one-state cycle prints no
+            // variable lines, so the closing state merges identical to its predecessor and looks like a stalled or
+            // truncated run, while a longer cycle prints the deltas back to the entry and looks like the path
+            // simply continuing. That is the same misreading the frontend needed a dedicated field to avoid, and
+            // it is worse here: state windows are paginated, so one response need not contain both ends of the
+            // cycle — which is also why the flags cannot be recovered by comparing values.
             //
             // Emitted only when true, matching the other optional fields here: simulation and fuzz traces are
             // finite paths that never carry them (`SmvTraceParser` is the only writer), so their tool output is

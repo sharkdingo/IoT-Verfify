@@ -180,10 +180,12 @@ class GetTraceToolTest {
     }
 
     /**
-     * A liveness counterexample's fault is its cycle, and the cycle is not visible in the values: NuSMV
-     * re-prints the loop entry with no variable lines, so after the delta merge the closing state equals its
-     * predecessor. Without these flags the assistant sees a path that stops changing — a stalled or truncated
-     * run — instead of the infinite repetition that is the violation.
+     * A liveness counterexample's fault is its cycle, and the cycle is not visible in the values. NuSMV closes
+     * the path by re-printing the loop entry, so the closing state equals that entry — but whether it equals
+     * its own predecessor depends on the cycle length, and either way the assistant reads it wrong: a
+     * one-state cycle prints no variable lines and looks like a stalled or truncated run, a longer one prints
+     * the deltas back to the entry and looks like the path continuing. Paging makes recovery by comparison
+     * impossible, since one window need not hold both ends.
      */
     @Test
     void execute_marksTheCycleOfALivenessCounterexample() throws Exception {

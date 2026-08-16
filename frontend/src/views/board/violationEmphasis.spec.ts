@@ -265,8 +265,10 @@ describe('violation emphasis reaches the canvas', () => {
   })
 
   it('says why the loop-closing step shows no change, rather than reporting an empty diff', () => {
-    // NuSMV re-prints the loop entry with no variable lines, so the delta merge makes the final state
-    // identical to its predecessor. "No observable changes" is then true but reads as a broken animation.
+    // On a one-state cycle NuSMV re-prints the loop entry with no variable lines, so the delta merge makes
+    // the final state identical to its predecessor: "No observable changes" is then true but reads as a
+    // broken animation. (A longer cycle prints real deltas, so the block must be ordered ahead of the
+    // change list's own empty state rather than replacing it — see PlaybackChangePopover.spec.ts.)
     const popover = readFileSync(join(root, 'src/components/PlaybackChangePopover.vue'), 'utf8')
     const loopAt = popover.indexOf('data-testid="playback-change-loop-back"')
     const emptyAt = popover.indexOf('data-testid="playback-change-empty"')

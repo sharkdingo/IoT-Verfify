@@ -15,6 +15,51 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-17 (review pass)
+
+#### Fixed
+
+- **The sentence explaining a liveness counterexample's final step never said the cycle was the
+  violation.** The playback change panel has two wordings for the state that closes a lasso, and the
+  liveness one exists precisely to state something the safety one must not: that the path repeats
+  forever and the required state is never reached. Both were mechanical — "State 3 loops back to
+  state 2" — so the branch conveyed nothing beyond arithmetic the state counter already showed, on the
+  one surface a reader consults to find out why the last step of a counterexample shows nothing moving.
+
+  The liveness sentence now names the repeating range and says the cycle is the violation; the safety
+  sentence says the violation is the marked state rather than the repetition, since NuSMV reports a loop
+  for safety counterexamples too (measured on both a CTL `AX` and an LTL `G(p)` refutation) and there the
+  fault is a single state. The wording had no rendering coverage at all — the only guard was a source
+  read of the element ordering, which cannot see what the block says — so `PlaybackChangePopover.spec.ts`
+  now mounts all three cases (liveness, safety-with-loop, and no resolved range) against the shipped
+  strings.
+
+- **Eight comments and two docs stated a lasso's closing state is identical to its predecessor; that
+  holds only for a one-state cycle.** The claim is the stated justification for carrying `loopStart` /
+  `loopBack` rather than deriving them, so getting it wrong invites exactly the derivation it warns
+  against. Measured on NuSMV 2.7.1: a one-state cycle prints the closing state with no variable lines,
+  so the delta merge reproduces the predecessor and playback freezes; a longer cycle prints the deltas
+  that return to the entry, so the closing state differs from its predecessor, equals the loop *entry*,
+  and plays back as an ordinary step. A consumer testing "did anything change?" to spot the repetition
+  therefore sees nothing at all in the second case — the worse of the two failures, and the one no test
+  covered, since every existing loop test used an empty closing state.
+
+  The worst copy was `get_trace`'s own schema description, which is contract text the model reads: it said
+  "its values matching its predecessor is the repetition", instructing the assistant to use exactly the
+  comparison that fails on a multi-state cycle. It now states which shape occurs when and says to rely on
+  the flags rather than on comparing values.
+
+  Corrected in `TraceStateDto`, `SmvTraceParser`, `ModelTraceToolPresenter`, `GetTraceTool`,
+  `types/verify.ts`, the two affected test docblocks, `docs/api/ai-tools.md` and
+  `docs/architecture/verification-flow.md` (which now owns the fact), and pinned by
+  `parseCounterexample_marksAMultiStateCycleWhoseClosingStateCarriesChanges`.
+
+- **Two backend Javadocs named the liveness template set as "5/6", omitting template 2.** Every other
+  site — `spec-templates.md`, `types/verify.ts`, `Board.vue`'s `LIVENESS_TEMPLATES`, the AI-tool docs —
+  lists 2, 5 and 6, and template 2 (`AF`) is refuted by a lasso like the others: measured on NuSMV
+  2.7.1, its marker precedes State 1.1, so the whole trace is the cycle. Corrected in `TraceStateDto`
+  and `SmvTraceParser`, with the measurement recorded where the set is defined.
+
 ### 2026-08-16 (review pass)
 
 #### Fixed

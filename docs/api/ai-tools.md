@@ -137,10 +137,12 @@ true and only on verification counterexamples — simulation and fuzz traces are
 carry them. They mark the infinite cycle NuSMV ends on, which for a liveness specification
 (`templateId` 2, 5, 6) *is* the violation rather than any single state; see
 [verification-flow.md](../architecture/verification-flow.md#parser-boundaries). They cannot be
-inferred from the values, because NuSMV re-prints the loop entry with no variable lines and the delta
-merge therefore makes the closing state identical to its predecessor. Omitting them left the assistant
-reading such a trace as a path that merely stops changing — a stalled or truncated run — and paging
-makes that worse, since one window need not contain both ends of the cycle.
+inferred from the values. NuSMV closes the path by re-printing the loop entry, and how that looks
+depends on the cycle length (measured on NuSMV 2.7.1): a one-state cycle prints no variable lines, so
+the closing state merges identical to its predecessor and the trace reads as a stalled or truncated
+run; a longer cycle prints the deltas that return to the entry, so it reads as the path simply
+continuing. Recovering the flags would mean comparing against the loop entry, and paging means one
+window need not contain both ends of the cycle.
 
 `get_trace` and `get_simulation_trace` return the run's `modelSnapshot`, which carries
 `environmentProvenance` — the frozen per-shared-value evolution rules. The assistant needs it to

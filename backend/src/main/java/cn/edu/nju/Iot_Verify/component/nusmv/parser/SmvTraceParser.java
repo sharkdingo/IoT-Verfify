@@ -40,8 +40,9 @@ public class SmvTraceParser {
             Pattern.compile("^\\s*(?:->\\s*)?State[:\\s]\\s*\\d+\\.(\\d+)");
     /**
      * NuSMV's lasso marker, printed on its own line immediately before the state that begins the cycle.
-     * A liveness counterexample (negated template 5/6 — {@code EG}/{@code GF}) is an infinite path, so this
-     * line carries the violation itself and must survive into the trace. See TraceStateDto#loopStart.
+     * A liveness counterexample (negated template 2/5/6 — {@code EG}/{@code GF}) is an infinite path, so
+     * this line carries the violation itself and must survive into the trace. See TraceStateDto#loopStart,
+     * which records why template 2 is in that set.
      */
     private static final Pattern LOOP_START_PATTERN =
             Pattern.compile("^\\s*--\\s*Loop starts here\\s*$");
@@ -143,14 +144,19 @@ public class SmvTraceParser {
     /**
      * Marks the trailing state that closes a lasso counterexample.
      *
-     * <p>NuSMV terminates an infinite path by re-printing its loop-entry state, and its delta encoding gives
-     * that repeat no variable lines at all, so the merge in {@code materializeCompleteState} reproduces the
-     * previous state exactly. Playback then shows a final step in which nothing moves — which is what a
-     * viewer reads as a broken animation rather than as "the cycle repeats from here forever".
+     * <p>NuSMV terminates an infinite path by re-printing its loop-entry state, so the merged closing state
+     * always equals the entry. How it looks in playback depends on the cycle length (measured on NuSMV
+     * 2.7.1): a one-state cycle prints no variable lines, so {@code materializeCompleteState} reproduces the
+     * previous state exactly and the final step shows nothing moving — a viewer reads that as a broken
+     * animation rather than "the cycle repeats from here forever". A longer cycle prints the deltas that
+     * return to the entry, so the step looks ordinary and the repetition is invisible instead. Both need the
+     * flag; see TraceStateDto#loopBack.
      *
      * <p>Only the last state is considered, and only when a loop marker was seen and the state it points at
-     * is not itself that last state: a single-state cycle prints one state carrying both roles, and flagging
-     * it as its own return would claim a step the trace does not contain.
+     * is not itself that last state — flagging a state as its own return would claim a step the trace does
+     * not contain. NuSMV 2.7.1 never actually emits that shape: a self-loop at {@code light=off} refuting
+     * {@code AF(light=on)} prints two states, the entry and its repeat, which is also why the
+     * {@code states.size() < 2} guard above is a real boundary rather than defensive padding.
      */
     private void markLoopBackState(List<TraceStateDto> states, TraceStateDto loopStartState) {
         if (loopStartState == null || states.size() < 2) {

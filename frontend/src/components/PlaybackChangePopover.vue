@@ -93,10 +93,16 @@ const hasObservableChanges = computed(() =>
 /**
  * What to say on the state that closes the path into a cycle.
  *
- * Two different facts, so two sentences. For a liveness property the repetition *is* the violation, so it
- * names the state that is never reached. For a safety property NuSMV may still report a loop — measured on
- * both a CTL `AX` and an LTL `G(p)` counterexample — but there the fault is a single state, so the sentence
- * stays factual about the repetition and claims nothing about what the specification requires.
+ * Two different facts, so two sentences. For a liveness property the repetition *is* the violation, so the
+ * sentence says the required state is never reached and that the cycle is the fault. For a safety property
+ * NuSMV may still report a loop — measured on both a CTL `AX` and an LTL `G(p)` counterexample — but there
+ * the fault is a single state, so the sentence stays factual about the repetition and says the violation is
+ * that marked state rather than the loop.
+ *
+ * Both sentences were previously mechanical ("State 3 loops back to state 2"), which made the two branches
+ * differ only in arithmetic and left this branch conveying nothing it exists to convey. Rendering coverage
+ * lives in `PlaybackChangePopover.spec.ts`; the pre-existing source-read guard could only see the element
+ * ordering, never the wording.
  */
 const loopBackSentence = computed(() => {
   const range = props.loopRange
