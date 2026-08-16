@@ -1854,8 +1854,9 @@ const messages = {
             incompleteModel: '不完整模型',
             allRulesModeled: '所有规则均进入生成模型',
             verificationTraceNotPersistedFixUnavailable: '该反例未能保存到历史，因此当前只能回放，不能自动修复。重新运行验证并成功保存结果后可使用自动修复。',
-            verificationResultStaleReverify: '画板在本次验证之后已被修改，因此该结论和反例描述的已不是当前模型。请重新运行验证以获得当前画板的结论。',
-            simulationResultStaleRerun: '画板在本次模拟之后已被修改，因此该路径描述的已不是当前模型。请重新运行模拟以获得当前画板的推演。',
+            // “提交之后”而非“运行结束之后”：运行进行中的修改现在也会触发该提示。
+            verificationResultStaleReverify: '画板在本次验证提交之后已被修改，因此该结论和反例描述的已不是当前模型。请重新运行验证以获得当前画板的结论。',
+            simulationResultStaleRerun: '画板在本次模拟提交之后已被修改，因此该路径描述的已不是当前模型。请重新运行模拟以获得当前画板的推演。',
             verificationTracePersistenceUnknownFixUnavailable: '该反例的历史写入结果尚未确认，因此暂不提供自动修复。请刷新验证历史；只有从历史中打开的已保存反例才能修复。',
             simulationCancelled: '仿真已取消',
             simulationFailed: '仿真失败',
@@ -4267,8 +4268,11 @@ const messages = {
             incompleteModel: 'Incomplete model',
             allRulesModeled: 'All rules included in the generated model',
             verificationTraceNotPersistedFixUnavailable: 'This counterexample was not saved to history, so it can be replayed but not repaired automatically. Run verification again and save the result successfully to use automatic fix.',
-            verificationResultStaleReverify: 'The board changed after this verification ran, so this verdict and its counterexamples no longer describe the current model. Run verification again for a conclusion about the current board.',
-            simulationResultStaleRerun: 'The board changed after this simulation ran, so this path no longer describes the current model. Run the simulation again for a walkthrough of the current board.',
+            // "after this run was submitted", not "after it ran": the flag is now also raised by an edit
+            // made while the run was still in flight, and for that reader "after this verification ran"
+            // names a moment they know they did not edit in.
+            verificationResultStaleReverify: 'The board changed after this verification was submitted, so this verdict and its counterexamples no longer describe the current model. Run verification again for a conclusion about the current board.',
+            simulationResultStaleRerun: 'The board changed after this simulation was submitted, so this path no longer describes the current model. Run the simulation again for a walkthrough of the current board.',
             verificationTracePersistenceUnknownFixUnavailable: 'Whether this counterexample was written to history is not yet confirmed, so automatic fix is temporarily unavailable. Refresh verification history; only a saved counterexample opened from history can be repaired.',
             simulationCancelled: 'Simulation cancelled',
             simulationFailed: 'Simulation failed',

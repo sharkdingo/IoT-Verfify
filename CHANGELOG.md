@@ -36,6 +36,10 @@ history into a technical spec. The spec content itself now lives under
   unaffected: they were never in flight, so they stay current rather than depending on unrelated
   editing history.
 
+  Both banners now say the board changed "after this run was submitted" rather than "after it ran",
+  because for a reader who edited mid-run the old sentence named a moment they know they did not edit
+  in.
+
 - **An unavailable SMV model blamed a cause that was often not the user's.** The notice beside a
   disabled download told every reader to "check whether the run is still in your history". That is
   sound advice for a run that was saved and whose model is genuinely gone — but four
