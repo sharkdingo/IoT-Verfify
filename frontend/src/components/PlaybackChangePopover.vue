@@ -408,7 +408,7 @@ const formatValue = (value: string, kind: PlaybackChangeKind, deviceId: string):
              the symptom, and the repetition is the explanation the viewer needs. -->
         <div
           v-else-if="isLoopBackState"
-          class="rounded-lg border px-2.5 py-2 text-[length:var(--iot-font-min)] leading-4 board-chip-warning board-text-warning"
+          class="rounded-lg board-surface-warning px-2.5 py-2 text-[length:var(--iot-font-min)] leading-4"
           data-testid="playback-change-loop-back"
         >
           {{ loopBackSentence }}

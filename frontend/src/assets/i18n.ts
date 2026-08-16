@@ -1037,6 +1037,10 @@ const messages = {
             generationIssueSpecInvalidValue: '条件值不在所选设备字段的有效范围内，因此该规约未检查。',
             generationIssueSpecUnsupportedCondition: '至少一个条件无法由当前设备类型建模，因此该规约未检查。',
             generationIssueUnknown: '该模型项未进入本次模型；可在技术日志中查看具体原因。',
+            // 恢复:对话框整合时删掉了这个折叠区，后续清理又把"没人引用"的这个键当死键删掉，两步合起来
+            // 抹掉了 NuSMV 消息唯一能到达用户的通道。求解器会报出解析器并不建模的情况——例如公平状态集为空时
+            // 它会打印"results of model checking not trustable"，并把所有规约都答成 true（已用 NuSMV 2.7.1 实测）。
+            showNusmvDiagnosticOutput: '查看 NuSMV 诊断输出（可能截断）',
             checkLogs: '检查日志',
             violationsTitle: '违规',
             violationNumber: '违规 #{index}',
@@ -1687,7 +1691,10 @@ const messages = {
             counterexampleOwningRun: '查看产生该反例的验证结果',
             counterexampleEvidenceHeading: '该反例本身',
             counterexampleRunContextHeading: '产生它的运行（对该运行的所有反例都相同）',
-            smvModelNotAvailable: 'SMV 模型不可用（可能是在模型持久化功能上线前保存的记录）',
+            // 不再断言原因。服务端的 404 有两种成因——运行记录已不存在，或该记录本就没有存下模型——
+            // 而客户端无法区分。原文把两者都说成"模型持久化功能上线前保存的记录"，于是用户刚删掉一次运行、
+            // 再点下载，得到的解释是一个与事实无关的历史限制。已实测。
+            smvModelNotAvailable: '服务器上没有这次运行的 SMV 模型：该运行记录可能已被删除，或保存时未留下模型。请在运行历史中确认这条记录是否还存在。',
             smvDownloadFailed: 'SMV 模型下载失败',
             deepLinkUnavailable: '链接指向的运行记录不可用，可能已被删除或不属于当前账户。已返回画布。',
             boardUndo: '撤销',
@@ -1754,6 +1761,9 @@ const messages = {
             deleteVerificationRunMessage: '删除 {time} 完成的整次验证结果？该操作也会删除其中 {counterexamples} 条可回放反例。',
             deleteVerificationRunTitle: '删除验证结果',
             verificationRunDeleted: '验证结果及其反例已删除',
+            // 本标签页没有执行删除时用它说明结果面板为何被关闭：可能是 AI 助手删除，也可能是另一个标签页。
+            // 静默关闭会读作崩溃，而继续显示已删除的运行会让下载按钮报出与事实无关的错误。
+            openRunDeletedElsewhere: '正在查看的验证结果已被删除（可能来自 AI 助手或另一个标签页），面板已关闭。请重新运行以获得适用于当前画布的结论。',
             failedToDeleteVerificationRun: '删除验证结果失败',
             verificationRunDeleteOutcomeRefreshed: '删除响应未能确认；刷新后该验证结果已不在历史中。未再次发送删除。',
             deleteSimulationRunMessage: '删除 {time} 生成的模型轨迹？',
@@ -3432,6 +3442,12 @@ const messages = {
             generationIssueSpecInvalidValue: 'A condition value is outside the valid domain of the selected device field, so the specification was not checked.',
             generationIssueSpecUnsupportedCondition: 'At least one condition cannot be modeled by the current device type, so the specification was not checked.',
             generationIssueUnknown: 'This model item was omitted. See the technical log for the diagnostic detail.',
+            // Restored: the dialog-consolidation pass deleted this disclosure, and a later sweep deleted
+            // this key as "unreferenced" — together removing the only channel by which a NuSMV message can
+            // reach a user. The solver reports conditions the parser does not model; an empty fair-states
+            // set prints "results of model checking not trustable" and then answers every specification
+            // `true`, measured against NuSMV 2.7.1.
+            showNusmvDiagnosticOutput: 'Show NuSMV Diagnostic Output (May Be Truncated)',
             checkLogs: 'Check Logs',
             violationsTitle: 'Violations',
             violationNumber: 'Violation #{index}',
@@ -4080,7 +4096,11 @@ const messages = {
             counterexampleOwningRun: 'View the verification result that produced it',
             counterexampleEvidenceHeading: 'This counterexample',
             counterexampleRunContextHeading: 'The run that produced it (identical for all of its counterexamples)',
-            smvModelNotAvailable: 'SMV model not available (may be a record saved before model persistence was enabled)',
+            // No longer asserts a cause. The server's 404 has two: the run record is gone, or that record
+            // never stored a model — and the client cannot tell which. The old wording named the second as
+            // fact, so a user who had just deleted a run and clicked download was told about a historical
+            // persistence limitation that had nothing to do with it. Measured end to end.
+            smvModelNotAvailable: 'The server has no SMV model for this run: the run may have been deleted, or it may have been saved without one. Check whether the run is still in your history.',
             smvDownloadFailed: 'SMV model download failed',
             deepLinkUnavailable: 'The run this link points to is unavailable — it may have been deleted or belong to another account. Returned to the board.',
             boardUndo: 'Undo',
@@ -4148,6 +4168,10 @@ const messages = {
             deleteVerificationRunMessage: 'Delete the full verification result completed at {time}? This also deletes its {counterexamples} replayable counterexample(s).',
             deleteVerificationRunTitle: 'Delete Verification Result',
             verificationRunDeleted: 'Verification result and its counterexamples deleted',
+            // Used when this tab did not perform the deletion, to explain why the result surface closed:
+            // the assistant may have deleted it, or another tab. Closing silently reads as a crash, and
+            // leaving the deleted run on screen makes its download report an unrelated cause.
+            openRunDeletedElsewhere: 'The verification result you were viewing has been deleted (by the AI assistant or another tab), so its panel was closed. Re-run to get a conclusion that applies to your current canvas.',
             failedToDeleteVerificationRun: 'Failed to delete verification result',
             verificationRunDeleteOutcomeRefreshed: 'The delete response could not be confirmed. After refresh, this verification result is no longer in history. No second delete was sent.',
             deleteSimulationRunMessage: 'Delete the model trajectory generated at {time}?',

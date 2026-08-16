@@ -1058,7 +1058,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
 
               <p
                 v-if="item.run.outcome === 'BUDGET_EXHAUSTED'"
-                class="mt-2 rounded-md border board-border-subtle board-chip-info px-2 py-1.5 text-[11px] leading-4 board-text-info"
+                class="mt-2 rounded-md board-surface-info px-2 py-1.5 text-[11px] leading-4"
               >
                 {{ t('app.fuzzNoViolationWithinBudget') }}
               </p>

@@ -99,4 +99,49 @@ describe('role class variants', () => {
     expect(offenders, `an opacity modifier on a hand-written class renders nothing:\n${offenders.join('\n')}`)
       .toEqual([])
   })
+
+  it('never asks a borderless chip role for a border', () => {
+    /*
+     * `board-chip-*` declares `border: 0` deliberately — the roles are badges, where a border would add a
+     * second edge inside a dense row. So `board-chip-warning border board-border-subtle` is a markup
+     * contradiction, and the cascade resolves it the way the reader does not expect: `board.css` is
+     * **unlayered** while Tailwind's `.border` lives in `@layer utilities`, and unlayered wins regardless
+     * of order or specificity. Measured in the real host chain: that markup renders
+     * `border-top-width: 0px`, while `board-surface-warning` renders 0.667px from the role's own border
+     * token.
+     *
+     * Five sites read this way, all of them callouts rather than badges — including the verification
+     * result dialog's error notice and its generation-warning notice. An edgeless tint reads as a
+     * background wash rather than a bounded notice, so a warning strip stopped looking like one.
+     * `board-surface-*` is the bounded form and needs no width utility.
+     *
+     * Only the `border` *width* utility counts. A bare `border-[color:…]` on a chip is a different
+     * pattern — it sets a colour for an edge the chip does not draw, which is inert but not misleading —
+     * and several small badges legitimately carry it.
+     */
+    const offenders: string[] = []
+    const src = join(__dirname, '../..')
+    for (const dir of DIRS) {
+      for (const entry of readdirSync(join(src, dir), { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.vue')) continue
+        const text = readFileSync(join(src, dir, entry.name), 'utf8')
+        text.split(/\r?\n/).forEach((line, index) => {
+          // Comments explain the defect and necessarily quote it; skip them or the guard fails on its
+          // own documentation — a trap this repo has hit three times.
+          if (/^\s*(\/\/|\*|<!--)/.test(line)) return
+          // An UNPREFIXED chip role only. `hover:board-chip-info` tints on hover and does not claim the
+          // resting border, so a `focus:ring` or a resting border beside it is not a contradiction.
+          if (!/(^|[\s'"])board-chip-[a-z]+/.test(line)) return
+          // Any border the chip would silence: the bare width utility or a numeric width. Measured: a
+          // chip role zeroes `border-2 border-dashed` exactly as it zeroes `border`, while the same
+          // markup without the chip renders 2px dashed.
+          if (!/(^|[\s'"])border(-[0-9]+)?(?=[\s'"])/.test(line)) return
+          offenders.push(`${dir}/${entry.name}:${index + 1}  ${line.trim().slice(0, 90)}`)
+        })
+      }
+    }
+
+    expect(offenders, `a chip role cannot render a border; use board-surface-* instead:\n${offenders.join('\n')}`)
+      .toEqual([])
+  })
 })

@@ -1403,7 +1403,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                     <div
                       v-for="(adj, idx) in currentSuggestion.parameterAdjustments"
                       :key="idx"
-                      class="board-chip-info border board-border-subtle rounded-lg p-3"
+                      class="board-surface-info rounded-lg p-3"
                     >
                       <div class="flex items-center justify-between">
                         <div class="min-w-0 flex items-center gap-2">
@@ -1418,7 +1418,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                           <button
                             type="button"
                             @click="useAdjustmentAsPreference(adj)"
-                            class="px-2 py-1 rounded bg-white border board-border-subtle board-text-info hover:board-chip-info text-xs font-medium transition-colors dark:bg-slate-900 dark:hover:bg-[color:var(--accent-strong)]/60"
+                            class="px-2 py-1 rounded bg-white board-text-info hover:board-chip-info text-xs font-medium transition-colors dark:bg-slate-900 dark:hover:bg-[color:var(--accent-strong)]/60"
                           >
                             {{ t('app.prefer') }}
                           </button>
@@ -1428,7 +1428,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                               data-testid="fix-lock-original"
                               :aria-label="t('app.lockOriginalValue')"
                               @click="lockAdjustmentAtOriginal(adj)"
-                              class="flex h-7 w-7 items-center justify-center rounded border board-border-subtle bg-white board-text-info transition-colors hover:board-chip-info dark:bg-slate-900 dark:hover:bg-[color:var(--accent-strong)]/60"
+                              class="flex h-7 w-7 items-center justify-center rounded bg-white board-text-info transition-colors hover:board-chip-info dark:bg-slate-900 dark:hover:bg-[color:var(--accent-strong)]/60"
                             >
                               <span class="material-symbols-outlined text-base" aria-hidden="true">lock</span>
                             </button>
@@ -1461,7 +1461,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                     <div
                       v-for="(adj, idx) in currentSuggestion.conditionAdjustments"
                       :key="idx"
-                      class="board-chip-success border board-border-subtle rounded-lg p-3 flex items-center gap-3"
+                      class="board-surface-success rounded-lg p-3 flex items-center gap-3"
                     >
                       <div 
                         class="w-8 h-8 rounded-lg flex items-center justify-center"
@@ -1490,7 +1490,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                     <span class="material-symbols-outlined board-text-warning">block</span>
                     {{ t('app.rulesToRemove') }} ({{ currentSuggestion.removedRuleDescriptions.length }})
                   </div>
-                  <div class="board-chip-warning border border-[color:var(--warning-border)] rounded-lg p-3">
+                  <div class="board-surface-warning rounded-lg p-3">
                     <div class="space-y-2">
                       <span
                         v-for="(description, index) in currentSuggestion.removedRuleDescriptions"
@@ -1631,7 +1631,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 @click="switchStrategy(s.strategy)"
                 class="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
                 :class="s.verified && suggestionIsCurrent(s)
-                  ? 'board-chip-success board-text-success hover:bg-[color:var(--success-surface)] border border-[color:var(--success-border)] dark:hover:bg-[color:var(--success-surface)]'
+                  ? 'board-surface-success board-text-success hover:bg-[color:var(--success-surface)] dark:hover:bg-[color:var(--success-surface)]'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700'"
               >
                 <span class="material-symbols-outlined text-sm">

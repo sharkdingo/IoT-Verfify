@@ -3028,7 +3028,7 @@ watch(() => props.readOnly, readOnly => {
             <div
               v-if="importedEnvironmentMerge.conflicts.length > 0"
               data-testid="device-import-environment-conflicts"
-              class="space-y-1 rounded-lg border border-[color:var(--danger-border)] board-chip-danger px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger"
+              class="space-y-1 rounded-lg board-surface-danger px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-4 board-text-danger"
             >
               <div v-for="(conflict, index) in importedEnvironmentMerge.conflicts" :key="`${conflict.name}-${conflict.field}-${index}`">
                 {{ formatImportedEnvironmentConflict(conflict) }}
@@ -3073,7 +3073,15 @@ watch(() => props.readOnly, readOnly => {
           </summary>
 
           <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
-            <div class="relative overflow-hidden rounded-lg border-2 border-dashed border-[color:var(--warning-border)] board-chip-warning transition-all hover:border-[color:var(--warning-border)] hover:shadow-md">
+            <!--
+              The tint comes from the role token directly, not from `board-chip-warning`. A chip role
+              declares `border: 0`, and `board.css` is unlayered while Tailwind's border utilities are in
+              `@layer utilities` — so the chip silenced this dropzone's `border-2 border-dashed` entirely
+              (measured 0px; the same markup without the chip renders 2px dashed). `board-surface-warning`
+              is not the fix either: it brings a *solid* 1px border, which is the opposite of the dashed
+              affordance a drop target wants.
+            -->
+            <div class="relative overflow-hidden rounded-lg border-2 border-dashed border-[color:var(--warning-border)] bg-[color:var(--warning-surface)] transition-all hover:border-[color:var(--warning-border)] hover:shadow-md">
               <label
                 class="group block"
                 :class="props.readOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'"
@@ -3098,7 +3106,7 @@ watch(() => props.readOnly, readOnly => {
               <HintTooltip :content="t('app.downloadTemplateSchema')">
                 <button
                   type="button"
-   class="mx-3 mb-3 min-h-11 inline-flex items-center gap-1.5 rounded-md border border-[color:var(--warning-border)] px-2 py-1 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning"
+   class="mx-3 mb-3 min-h-11 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning"
                   @click="downloadTemplateSchema"
                 >
                   <span class="material-symbols-outlined text-xs">download</span>
@@ -3124,7 +3132,7 @@ watch(() => props.readOnly, readOnly => {
           </summary>
 
           <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
-            <div class="rounded-lg border border-[color:var(--warning-border)] board-chip-warning px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-relaxed board-text-warning">
+            <div class="rounded-lg board-surface-warning px-3 py-2 text-[length:var(--iot-font-min)] font-semibold leading-relaxed board-text-warning">
               {{ t('app.dragTemplateToCanvasHint') }}
             </div>
 
@@ -3160,7 +3168,7 @@ watch(() => props.readOnly, readOnly => {
                   <button
                     type="button"
                     data-testid="reset-default-templates"
-   class="inline-flex min-h-11 items-center gap-1 rounded-full border border-[color:var(--warning-border)] px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning disabled:cursor-not-allowed disabled:opacity-60"
+   class="inline-flex min-h-11 items-center gap-1 rounded-full px-2 py-0.5 text-[length:var(--iot-font-min)] font-bold board-text-warning transition-colors hover:board-chip-warning disabled:cursor-not-allowed disabled:opacity-60"
                     :disabled="props.readOnly || props.templatesLoading || isLoadingDefaultTemplateResetPreview"
                     @click="openResetDefaultsConfirm"
                   >
@@ -3184,7 +3192,7 @@ watch(() => props.readOnly, readOnly => {
 
             <div
               v-if="props.templatesLoading"
-              class="rounded-xl border border-dashed border-[color:var(--warning-border)] board-chip-warning px-3 py-6 text-center text-xs board-text-warning"
+              class="rounded-xl border-dashed board-surface-warning px-3 py-6 text-center text-xs board-text-warning"
             >
               <span class="material-symbols-outlined mb-2 block animate-spin text-2xl">sync</span>
               <p class="font-semibold">{{ t('app.loadingDeviceTemplates') }}</p>
@@ -3454,7 +3462,7 @@ watch(() => props.readOnly, readOnly => {
               <label class="block text-[length:var(--iot-font-min)] font-bold text-slate-600 uppercase tracking-wide">{{ t('app.configureConditions') }}</label>
 
               <!-- A Conditions (Always/Forall) -->
-              <div v-if="isSideRequired('a')" class="relative overflow-hidden rounded-lg board-chip-danger border border-[color:var(--danger-border)] p-2.5">
+              <div v-if="isSideRequired('a')" class="relative overflow-hidden rounded-lg board-surface-danger p-2.5">
                 <div class="relative flex items-center justify-between mb-2">
                   <div class="flex items-center gap-2">
                     <span class="w-6 h-6 bg-[color:var(--danger-fill)] rounded-md flex items-center justify-center">
@@ -3513,7 +3521,7 @@ watch(() => props.readOnly, readOnly => {
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ condition.relationLabel }}
                         </span>
-                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="condition.formattedValue">
+                        <span class="text-[length:var(--iot-font-min)] board-surface-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] flex-shrink-0" :title="condition.formattedValue">
                           {{ condition.formattedValue }}
                         </span>
                       </div>
@@ -3552,7 +3560,7 @@ watch(() => props.readOnly, readOnly => {
               </div>
 
               <!-- IF Conditions (Antecedent) -->
-              <div v-if="isSideRequired('if')" class="relative overflow-hidden rounded-lg board-chip-danger border border-[color:var(--danger-border)] p-2.5">
+              <div v-if="isSideRequired('if')" class="relative overflow-hidden rounded-lg board-surface-danger p-2.5">
                 <div class="relative flex items-center justify-between mb-2">
                   <div class="flex items-center gap-2">
                     <span class="w-6 h-6 bg-[color:var(--danger-fill)] rounded-md flex items-center justify-center">
@@ -3611,7 +3619,7 @@ watch(() => props.readOnly, readOnly => {
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ condition.relationLabel }}
                         </span>
-                        <span class="text-[length:var(--iot-font-min)] board-chip-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--danger-border)] flex-shrink-0" :title="condition.formattedValue">
+                        <span class="text-[length:var(--iot-font-min)] board-surface-danger board-text-danger px-1 py-0.5 rounded truncate max-w-[60px] flex-shrink-0" :title="condition.formattedValue">
                           {{ condition.formattedValue }}
                         </span>
                       </div>
@@ -3650,7 +3658,7 @@ watch(() => props.readOnly, readOnly => {
               </div>
 
               <!-- THEN Conditions (Consequent) -->
-              <div v-if="isSideRequired('then')" class="relative overflow-hidden rounded-lg board-chip-warning border border-[color:var(--warning-border)] p-2.5">
+              <div v-if="isSideRequired('then')" class="relative overflow-hidden rounded-lg board-surface-warning p-2.5">
                 <div class="relative flex items-center justify-between mb-2">
                   <div class="flex items-center gap-2">
                     <span class="w-6 h-6 bg-[color:var(--warning-fill)] rounded-md flex items-center justify-center">
@@ -3709,7 +3717,7 @@ watch(() => props.readOnly, readOnly => {
                         <span class="text-[length:var(--iot-font-min)] text-slate-500 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
                           {{ condition.relationLabel }}
                         </span>
-                        <span class="text-[length:var(--iot-font-min)] board-chip-warning board-text-warning px-1 py-0.5 rounded truncate max-w-[60px] border border-[color:var(--warning-border)] flex-shrink-0" :title="condition.formattedValue">
+                        <span class="text-[length:var(--iot-font-min)] board-surface-warning board-text-warning px-1 py-0.5 rounded truncate max-w-[60px] flex-shrink-0" :title="condition.formattedValue">
                           {{ condition.formattedValue }}
                         </span>
                       </div>
@@ -4211,7 +4219,7 @@ watch(() => props.readOnly, readOnly => {
       <div class="iot-dialog__body iot-scroll-region">
       <div
         v-if="templateDeletePreview && !templateDeletePreview.canDelete"
-        class="rounded-lg border border-[color:var(--warning-border)] board-chip-warning p-3 text-left"
+        class="rounded-lg board-surface-warning p-3 text-left"
       >
         <p class="text-sm font-bold board-text-warning">{{ t('app.templateDeleteBlocked') }}</p>
         <p class="mt-1 text-xs leading-5 board-text-warning">{{ t('app.templateDeleteBlockedDetail') }}</p>
@@ -4370,7 +4378,7 @@ watch(() => props.readOnly, readOnly => {
         <p
           v-if="defaultTemplateResetChangesBoardModel(defaultTemplateResetPreview)"
           data-testid="default-template-reset-reverification-warning"
-          class="mt-2 rounded-lg border border-[color:var(--warning-border)] board-chip-warning px-3 py-2 text-xs font-semibold leading-relaxed board-text-warning"
+          class="mt-2 rounded-lg board-surface-warning px-3 py-2 text-xs font-semibold leading-relaxed board-text-warning"
           role="alert"
         >
           {{ t('app.defaultTemplateResetReverificationRequired') }}

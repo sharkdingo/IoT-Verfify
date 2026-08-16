@@ -180,6 +180,38 @@ describe('dialog surface consistency', () => {
       .toEqual([])
   })
 
+  it('uses only action variants the layer actually declares', () => {
+    /*
+     * The orphan scan above deliberately skips `iot-dialog*` names as "covered by the checks above" — and
+     * nothing above checked the *variant modifiers*. `iot-dialog-btn--secondary` was written once and
+     * declared nowhere, so it computed to a bare `iot-dialog-btn`: transparent fill AND transparent
+     * border, measured in a real dialog card. The control it dressed was the counterexample dialog's
+     * escalation to its owning run — the single button carrying an evidence→run level transition — and it
+     * had no visible boundary.
+     *
+     * An undeclared modifier is invisible in exactly the wrong way: the markup reads as deliberate, the
+     * name reads as vocabulary (a spec elsewhere even asserts a *different* button must not carry it), and
+     * nothing errors. This makes the vocabulary closed.
+     */
+    const declared = new Set(
+      [...SHEET.matchAll(/\.iot-dialog-btn--([a-z][a-z0-9-]*)/g)].map(match => match[1]))
+    expect(declared.size, 'the layer should declare some action variants').toBeGreaterThan(2)
+
+    const used = new Map<string, string[]>()
+    for (const { path, source } of modalSources()) {
+      for (const match of source.matchAll(/iot-dialog-btn--([a-z][a-z0-9-]*)/g)) {
+        if (!used.has(match[1])) used.set(match[1], [])
+        used.get(match[1])!.push(path)
+      }
+    }
+
+    const undeclared = [...used.entries()]
+      .filter(([variant]) => !declared.has(variant))
+      .map(([variant, paths]) => `${variant} (used in ${[...new Set(paths)].join(', ')})`)
+    expect(undeclared, `action variants used in markup but declared in no stylesheet:\n${undeclared.join('\n')}`)
+      .toEqual([])
+  })
+
   it('states one overlay tint, one card radius and one elevation', () => {
     // The point of the layer: these appear once each. A second declaration is a fork.
     expect(SHEET.match(/^\.iot-dialog-overlay \{/gm)).toHaveLength(1)

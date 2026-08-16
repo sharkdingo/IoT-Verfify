@@ -1,0 +1,86 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+/**
+ * The solver's raw output must reach a user somewhere.
+ *
+ * `nusmvOutput` is captured by `NusmvExecutor`, persisted on the run, mapped through every verification
+ * DTO, and *required* by the client contract validator (`runResponse.ts` calls `requireString` for it) —
+ * carried the entire way and, for a while, rendered nowhere. A dialog-consolidation pass deleted the
+ * disclosure that showed it and a later dead-key sweep deleted its now-unreferenced label, so the two
+ * changes together removed the only channel by which a NuSMV message can reach a user, and each looked
+ * locally correct.
+ *
+ * Why that channel matters, measured rather than assumed: NuSMV 2.7.1 on a hand-built model whose
+ * fair-states set is empty prints
+ *
+ *     ********   WARNING   ********
+ *     Fair states set of the finite state machine is empty.
+ *     This might make results of model checking not trustable.
+ *
+ * and then answers *both* `AG (step != 2)` and `F (step = 2)` as `true` — mutually contradictory. Nothing
+ * in this repo parses that warning (grep for "not trustable" / "Fair states" returns nothing), and the
+ * parser models only `-- specification ... is true/false`. Today's generator emits total transition
+ * relations — every `case` carries a `TRUE:` default, and there are no `TRANS`/`FAIRNESS` sections — so
+ * the state is not reachable through the product right now. This disclosure is what makes it visible if
+ * that ever changes, and it is the only channel for any other solver diagnostic.
+ */
+describe('solver output visibility', () => {
+  const board = readFileSync(join(process.cwd(), 'src/views/Board.vue'), 'utf8')
+  const i18n = readFileSync(join(process.cwd(), 'src/assets/i18n.ts'), 'utf8')
+  const runResponse = readFileSync(join(process.cwd(), 'src/utils/runResponse.ts'), 'utf8')
+
+  it('renders the verification run\'s raw NuSMV output', () => {
+    expect(board, 'the disclosure must exist')
+      .toContain('data-testid="verification-nusmv-output"')
+    const at = board.indexOf('data-testid="verification-nusmv-output"')
+    const block = board.slice(at, board.indexOf('</details>', at))
+    expect(block, 'and actually interpolate the field, not just label a section')
+      .toContain('verificationResult.nusmvOutput')
+    expect(i18n, 'its label must exist in the bundle')
+      .toContain('showNusmvDiagnosticOutput')
+  })
+
+  it('keeps the field a required part of the client contract', () => {
+    // If the validator ever stops requiring it, a backend that quietly stopped sending it would pass
+    // validation and the disclosure would render an empty console — which reads as "the solver said
+    // nothing" rather than "the field is missing".
+    expect(runResponse, 'the response contract requires the solver output')
+      .toMatch(/requireString\([^)]*'nusmvOutput'/)
+  })
+
+  it('places it in the run context, where a run-level artifact belongs', () => {
+    // Raw solver output describes the whole run, not one counterexample — the same level distinction that
+    // moved the SMV model download out of the counterexample dialog.
+    const contextAt = board.indexOf('data-testid="run-context-section"')
+    const outputAt = board.indexOf('data-testid="verification-nusmv-output"')
+    const shortfallAt = board.indexOf('data-testid="verification-evidence-shortfall"')
+    expect(contextAt, 'the run-context section should exist').toBeGreaterThan(-1)
+    expect(outputAt, 'the solver output should sit inside it').toBeGreaterThan(contextAt)
+    // And not inside the counterexample list, which is evidence-level and conditional on there being any.
+    expect(outputAt, 'it is not part of the per-counterexample evidence')
+      .toBeGreaterThan(shortfallAt)
+  })
+
+  it('uses light ink on the dark console block', () => {
+    // The console ground is `bg-slate-900` in BOTH themes deliberately, so the ink cannot follow the
+    // theme's text colour. slate-500 measured 3.74 against it — dark on dark; slate-300 is 12.0.
+    const at = board.indexOf('data-testid="verification-nusmv-output"')
+    const block = board.slice(at, board.indexOf('</details>', at))
+    expect(block, 'the console keeps its dark ground').toContain('bg-slate-900')
+
+    /*
+     * Scoped to the `<pre>` itself, not the whole disclosure. The `<summary>` label sits on the light card
+     * and correctly uses `text-slate-700`; asserting over the block forbade that too, so the first version
+     * of this test failed on correct code — a check that would have been "fixed" by darkening the console
+     * ink, which is the defect it exists to prevent.
+     */
+    const preAt = block.indexOf('<pre')
+    expect(preAt, 'the console body should be a pre').toBeGreaterThan(-1)
+    const pre = block.slice(preAt, block.indexOf('>', preAt))
+    expect(pre, 'with light ink on the dark ground').toContain('text-slate-300')
+    expect(pre, 'never the neutral body ink, which is dark-on-dark here')
+      .not.toMatch(/text-slate-(400|500|600|700|800|900)\b/)
+  })
+})

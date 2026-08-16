@@ -10025,6 +10025,18 @@ const refreshRunHistory = async (): Promise<boolean> => {
     loadTaskInbox(false, { showLoading: false }),
     loadHistoryResults(false)
   ])
+  /*
+   * An authoritative history reload can reveal that the run on screen is gone, and the open surface has to
+   * follow. Two paths reach this without going through `deleteVerificationRun`:
+   *
+   *  - the assistant's `DeleteVerificationRunTool`, which emits `REFRESH_DATA run_history` — the list
+   *    reloaded and the dialog kept rendering the deleted run
+   *  - another tab deleting the run, whose invalidation lands here
+   *
+   * Reconciling *after* a successful load, and only then: a failed reload leaves the lists as they were,
+   * and treating that as "the run is gone" would close a surface over a transport error.
+   */
+  if (results.every(Boolean)) reconcileOpenRunAgainstHistory()
   return results.every(Boolean)
 }
 
@@ -10171,6 +10183,13 @@ const deleteVerificationRun = async (run: VerificationRunSummary) => {
       unavailableVerificationTraceIds.delete(trace.id)
     }
     verificationRuns.value = verificationRuns.value.filter(item => item.id !== runId)
+    // The deleted run may be the one on screen. Nothing used to close it, so the dialog kept showing a
+    // run that no longer existed, with its model download still enabled — and clicking it answered
+    // "SMV model not available (may be a record saved before model persistence was enabled)", blaming a
+    // historical data limitation for a deletion the user had just performed. Measured end to end.
+    // Surfaces derived from this run go too: `savedTraces` and any replay of its counterexamples are
+    // evidence of a run that is gone.
+    dismissRunSurfacesForDeletedVerificationRun(runId)
     notifySuccess(t('app.verificationRunDeleted'))
   } catch (e: any) {
     if (boardLifecycleDisposed) return
@@ -12155,8 +12174,24 @@ const activePlaybackLoopRange = computed<{ start: number; end: number } | null>(
   const states = activePlaybackStates.value
   if (states.length === 0) return null
 
-  // Find the loop start state (marked by backend parser)
-  const loopStartIndex = states.findIndex(s => s.loopStart === true)
+  /*
+   * The LAST marked state, not the first, because NuSMV can print `-- Loop starts here` more than once
+   * in one counterexample and the parser resolves that by keeping the last one: `SmvTraceParser`
+   * overwrites `loopStartState` on every marker, and `loopBack` is paired with whatever it holds at the
+   * end. `SmvTraceParserTest.parseCounterexample_usesTheLastMarkerWhenNuSmvPrintsSeveral` pins a
+   * five-state trace where states 3 and 4 both carry `loopStart` and state 5 carries `loopBack`.
+   *
+   * `findIndex` disagreed with that: it named states 3–5 where the cycle is 4–5, so the popover said
+   * "State 5 loops back to state 3" — a wrong statement about formal evidence, in the one place a reader
+   * goes to find out why the final step shows nothing moving.
+   *
+   * A reverse scan rather than `findLastIndex`, which needs `lib: ES2023`; this app targets ES2020, and
+   * raising the whole lib for one call is a build-config change out of proportion to it.
+   */
+  let loopStartIndex = -1
+  for (let i = states.length - 1; i >= 0; i--) {
+    if (states[i]?.loopStart === true) { loopStartIndex = i; break }
+  }
   if (loopStartIndex === -1) return null
 
   // Find the loop back state (the final state that repeats the loop entry)
@@ -12377,6 +12412,59 @@ const closeTraceAnimation = () => {
   deactivatePlaybackScene()
   resetPlaybackChanges()
   clearRunDeepLink()
+}
+
+/**
+ * Close the open verification result if an authoritative history reload no longer lists its run.
+ *
+ * The counterpart to `dismissRunSurfacesForDeletedVerificationRun` for deletions this tab did not
+ * perform: the assistant's `DeleteVerificationRunTool` and another tab's deletion both arrive as a
+ * history reload, which used to refresh the lists and leave the dialog rendering a record the server had
+ * dropped.
+ *
+ * Deliberately narrow. It acts only when the run has a persisted id AND the reloaded list is non-empty:
+ * an empty list is also what a scoped-empty or still-loading history looks like, and closing a live result
+ * over that would destroy a verdict the user is reading. A run absent from a populated list is the only
+ * case treated as deleted.
+ */
+const reconcileOpenRunAgainstHistory = () => {
+  const openRunId = verificationResult.value?.historyPersistence?.runId
+  if (typeof openRunId !== 'number') return
+  if (verificationRuns.value.length === 0) return
+  if (verificationRuns.value.some(run => run.id === openRunId)) return
+  dismissRunSurfacesForDeletedVerificationRun(openRunId)
+  notifyBlocked(t('app.openRunDeletedElsewhere'))
+}
+
+/**
+ * Tear down every surface still showing a verification run the user has just deleted.
+ *
+ * Deleting a run removed it from the history list and nothing else, so a result dialog or a
+ * counterexample replay opened from it kept rendering evidence for a record that no longer existed.
+ * Measured: with the dialog open, the download button stayed enabled and answered "SMV model not
+ * available (may be a record saved before model persistence was enabled)" — a historical-data excuse for
+ * a deletion one click old.
+ *
+ * Matched on the run id rather than by closing unconditionally: deleting run 7 must not shut a dialog
+ * showing run 9. The trace surfaces are matched through `verificationTaskId`, which is the run every
+ * persisted counterexample carries.
+ */
+const dismissRunSurfacesForDeletedVerificationRun = (runId: number) => {
+  const openRunId = verificationResult.value?.historyPersistence?.runId
+  const playingTraceRunId = currentTrace.value?.verificationTaskId
+
+  if (playingTraceRunId === runId) {
+    // Closes the replay and clears the deep link, so a reload cannot reopen the deleted run.
+    closeTraceAnimation()
+    savedTraces.value = []
+    traceDetailsView.value = null
+  }
+
+  if (openRunId === runId) {
+    // `dismissResultDialog`, not `closeResultDialog`: this is a user-visible close, so the `?run=` deep
+    // link has to go with it — otherwise the URL sync would reopen the run and fail to load it.
+    dismissResultDialog()
+  }
 }
 
 // 选择违规规约
@@ -13890,6 +13978,28 @@ const verificationSpecResultSummary = computed(() => {
 const verificationViolationCount = computed(() =>
   Math.max(verificationSpecResultSummary.value.violated, verificationResult.value?.traces?.length || 0)
 )
+
+/**
+ * How many violated specifications produced no replayable counterexample.
+ *
+ * The two numbers come from independent sources — the backend counts `specResults` with
+ * `outcome == VIOLATED`, while a trace exists only where NuSMV returned a *parseable* counterexample —
+ * so they can legitimately disagree, and the product already names that state
+ * (`someViolationsHaveNoReplayableCounterexample`). Run history rendered it; this dialog did not, and
+ * this dialog is where a user lands the instant a run finishes. "Violated: 2" beside one counterexample,
+ * or beside none at all, reads either as the tool having lost the evidence or as one violation not being
+ * real.
+ *
+ * Scoped to a VIOLATED verdict on purpose: an INCONCLUSIVE run also has fewer traces than specifications
+ * and has its own notice for exactly that, so counting it here would state the same thing twice in
+ * different words.
+ */
+const verificationEvidenceShortfall = computed(() => {
+  if (getVerificationOutcome(verificationResult.value) !== 'VIOLATED') return 0
+  const violated = verificationSpecResultSummary.value.violated
+  const replayable = verificationResult.value?.traces?.length || 0
+  return Math.max(0, violated - replayable)
+})
 const verificationUnsafeDetail = computed(() =>
   verificationViolationCount.value > 0
     ? t('app.foundViolations', { count: verificationViolationCount.value })
@@ -14273,7 +14383,7 @@ const counterexampleTraceHelpText = computed(() => {
 
     <div
       v-if="failedBoardDataKeys.length > 0"
-      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border board-border-subtle board-chip-danger px-4 py-3 text-sm board-text-danger shadow-lg"
+      class="pointer-events-none fixed left-1/2 top-16 z-[var(--z-board-alert)] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md board-surface-danger px-4 py-3 text-sm board-text-danger shadow-lg"
       role="alert"
       data-testid="board-data-load-error"
     >
@@ -14285,7 +14395,7 @@ const counterexampleTraceHelpText = computed(() => {
       </span>
       <button
         type="button"
-        class="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-md border board-border-subtle px-2.5 py-1.5 font-semibold hover:board-chip-danger dark:hover:bg-[color:var(--danger-surface)]"
+        class="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1.5 font-semibold hover:board-chip-danger dark:hover:bg-[color:var(--danger-surface)]"
         @click="retryBoardDataLoad"
       >
         <span class="material-symbols-outlined text-base" aria-hidden="true">refresh</span>
@@ -14306,7 +14416,7 @@ const counterexampleTraceHelpText = computed(() => {
       <HintTooltip :content="t('app.deepLinkUnavailableDismiss')">
         <button
           type="button"
-          class="pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-md border border-[color:var(--warning-border)] p-1.5 hover:board-chip-warning dark:hover:bg-[color:var(--warning-surface)]"
+          class="pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-md p-1.5 hover:board-chip-warning dark:hover:bg-[color:var(--warning-surface)]"
           :aria-label="t('app.deepLinkUnavailableDismiss')"
           data-testid="dismiss-deep-link-unavailable"
           @click="dismissStaleDeepLink"
@@ -14381,7 +14491,7 @@ const counterexampleTraceHelpText = computed(() => {
         <div
           v-if="templateInstanceEnvironmentAdditions.length > 0"
           data-testid="template-instance-environment-preview"
-          class="mt-3 flex items-start gap-2 rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-xs leading-relaxed board-text-info"
+          class="mt-3 flex items-start gap-2 rounded-lg board-surface-info px-3 py-2 text-xs leading-relaxed board-text-info"
         >
           <span class="material-symbols-outlined mt-0.5 text-sm" aria-hidden="true">water_drop</span>
           <span>{{ t('app.deviceCreationEnvironmentAdditionsPreview', { names: templateInstanceEnvironmentAdditions.join(', ') }) }}</span>
@@ -14390,7 +14500,7 @@ const counterexampleTraceHelpText = computed(() => {
         <details
           v-if="templateInstanceHasRuntimeFields"
           data-testid="template-instance-runtime"
-          class="mt-4 rounded-xl border border-[color:var(--warning-border)] board-chip-warning p-3 shadow-sm dark:bg-[color:var(--warning)]/10"
+          class="mt-4 rounded-xl board-surface-warning p-3 shadow-sm dark:bg-[color:var(--warning)]/10"
         >
           <summary
             data-testid="template-instance-runtime-toggle"
@@ -14867,7 +14977,7 @@ const counterexampleTraceHelpText = computed(() => {
 
       <div
         v-if="draggingTplName"
-        class="pointer-events-none absolute inset-4 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-[color:var(--warning-border)] board-chip-warning text-sm font-extrabold board-text-warning backdrop-blur-[1px] dark:bg-[color:var(--warning)]/10"
+        class="pointer-events-none absolute inset-4 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-[color:var(--warning-border)] bg-[color:var(--warning-surface)] text-sm font-extrabold board-text-warning backdrop-blur-[1px] dark:bg-[color:var(--warning)]/10"
         data-testid="template-drop-overlay"
       >
         <span class="rounded-full border border-[color:var(--warning-border)] bg-white/90 px-4 py-2 shadow-lg dark:bg-slate-900/90">
@@ -15815,7 +15925,7 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="scenarioRecommendationMessage && !isRecommendingScenario"
-          class="rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-xs font-medium board-text-info"
+          class="rounded-lg board-surface-info px-3 py-2 text-xs font-medium board-text-info"
         >
           {{ scenarioRecommendationMessage }}
         </div>
@@ -16081,7 +16191,7 @@ const counterexampleTraceHelpText = computed(() => {
             <button
               type="button"
               data-testid="export-recommended-scenario"
-              class="board-card flex items-center justify-center gap-2 rounded-lg border border-[color:var(--accent-border)] px-3 py-2 text-sm font-bold board-text-info transition hover:board-chip-info"
+              class="board-card flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-bold board-text-info transition hover:board-chip-info"
               @click="exportRecommendedScenario"
             >
               <span class="material-symbols-outlined text-base">download</span>
@@ -16205,7 +16315,7 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="ruleRecommendationMessage && !isRecommendingRules"
-          class="rounded-lg border board-border-subtle board-chip-warning px-3 py-2 text-xs font-medium board-text-warning"
+          class="rounded-lg board-surface-warning px-3 py-2 text-xs font-medium board-text-warning"
         >
           {{ ruleRecommendationMessage }}
         </div>
@@ -16501,7 +16611,7 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="deviceRecommendationMessage && !isRecommendingDevices"
-          class="rounded-lg border board-border-subtle board-chip-info px-3 py-2 text-xs font-medium board-text-info"
+          class="rounded-lg board-surface-info px-3 py-2 text-xs font-medium board-text-info"
         >
           {{ deviceRecommendationMessage }}
         </div>
@@ -16645,7 +16755,7 @@ const counterexampleTraceHelpText = computed(() => {
               </p>
               <p
                 v-if="recommendedDeviceEnvironmentAdditions(rec).length > 0"
-                class="mb-2 rounded-lg border border-[color:var(--accent-border)] board-chip-info px-2 py-1.5 text-[11px] leading-relaxed board-text-info"
+                class="mb-2 rounded-lg board-surface-info px-2 py-1.5 text-[11px] leading-relaxed board-text-info"
               >
                 {{ t('app.deviceCreationEnvironmentAdditionsPreview', { names: formatRecommendedDeviceEnvironmentAdditions(rec) }) }}
               </p>
@@ -16799,7 +16909,7 @@ const counterexampleTraceHelpText = computed(() => {
 
         <div
           v-if="specRecommendationMessage && !isRecommendingSpecs"
-          class="rounded-lg border board-border-subtle board-chip-danger px-3 py-2 text-xs font-medium board-text-danger"
+          class="rounded-lg board-surface-danger px-3 py-2 text-xs font-medium board-text-danger"
         >
           {{ specRecommendationMessage }}
         </div>
@@ -17287,7 +17397,7 @@ const counterexampleTraceHelpText = computed(() => {
               <HintTooltip :content="t('app.cancelSimulationTask')">
                 <button
                   type="button"
-                  class="w-6 h-6 inline-flex items-center justify-center rounded-md border board-border-subtle board-text-info hover:board-chip-info disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="w-6 h-6 inline-flex items-center justify-center rounded-md board-text-info hover:board-chip-info disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="cancellingSimulationTask"
                   :aria-label="t('app.cancelSimulationTask')"
                   @click="cancelAsyncSimulation"
@@ -17522,7 +17632,7 @@ const counterexampleTraceHelpText = computed(() => {
           <div class="iot-dialog__body iot-scroll-region">
             <div
               v-if="deletePreviewLoading"
-              class="mb-3 flex items-center gap-3 rounded-lg border board-border-subtle board-chip-info px-4 py-3 text-sm board-text-info"
+              class="mb-3 flex items-center gap-3 rounded-lg board-surface-info px-4 py-3 text-sm board-text-info"
               role="status"
               aria-live="polite"
             >
@@ -17530,7 +17640,7 @@ const counterexampleTraceHelpText = computed(() => {
               {{ t('app.deviceDeletionPreviewLoading') }}
             </div>
 
-            <div v-if="deleteConfirmDialogData.hasRelations" class="board-chip-warning border board-border-subtle rounded-lg p-4">
+            <div v-if="deleteConfirmDialogData.hasRelations" class="board-surface-warning rounded-lg p-4">
               <div class="flex items-start">
                 <span class="material-symbols-outlined board-text-warning mr-2 mt-0.5" aria-hidden="true">info</span>
                 <div class="min-w-0">
@@ -17922,7 +18032,15 @@ const counterexampleTraceHelpText = computed(() => {
       </div>
 
       <div data-testid="verification-result-scroll" class="iot-dialog__body iot-scroll-region">
-        <div v-if="verificationError" class="mb-4 p-4 board-chip-danger border board-border-subtle rounded-xl">
+        <!--
+          `board-surface-danger`, not `board-chip-danger border board-border-subtle`. The chip roles
+          declare `border: 0` on purpose (they are badges), and `board.css` is unlayered while Tailwind's
+          `.border` sits in `@layer utilities` — so unlayered wins and the border utility did nothing.
+          Measured: this markup rendered `border-top-width: 0px`, while `board-surface-danger` renders
+          0.667px from the role's own border token. An edgeless tint reads as a background wash rather
+          than a bounded error notice.
+        -->
+        <div v-if="verificationError" class="mb-4 p-4 board-surface-danger rounded-xl">
           <div class="flex items-center gap-2 board-text-danger">
             <span class="material-symbols-outlined">error</span>
             <span class="font-medium">{{ verificationError }}</span>
@@ -18032,6 +18150,20 @@ const counterexampleTraceHelpText = computed(() => {
             trace 0, 1, 2… The surviving list keeps `selectAndPlayTrace(index)`, which indexes
             `verificationResult.traces` directly, and the `data-testid`s the E2E flow addresses.
           -->
+          <!--
+            Outside the counterexample section, not inside it. That section is
+            `v-if="traces?.length"`, so with no parseable counterexample it does not render at all — and
+            that is precisely the case where the summary grid's violation count needs accounting for.
+            A notice placed inside would vanish exactly when it is needed.
+          -->
+          <p
+            v-if="verificationEvidenceShortfall > 0"
+            class="rounded-md board-surface-warning px-3 py-2 text-xs leading-5 board-text-warning"
+            data-testid="verification-evidence-shortfall"
+          >
+            {{ t('app.someViolationsHaveNoReplayableCounterexample') }}
+          </p>
+
           <section v-if="verificationResult?.traces?.length" aria-labelledby="violations-title">
             <h4 id="violations-title" class="text-sm font-bold text-slate-700 mb-2">
               {{ getVerificationOutcome(verificationResult) === 'VIOLATED'
@@ -18272,10 +18404,46 @@ const counterexampleTraceHelpText = computed(() => {
                   </div>
                 </div>
               </div>
+
+              <!--
+                The solver's own words, restored.
+                The dialog-consolidation pass deleted this disclosure and a later sweep deleted its
+                now-orphaned label as dead code, which together removed the ONLY place a NuSMV message can
+                reach a user. `nusmvOutput` is still captured by the executor, persisted on the run,
+                mapped through every DTO and required by the client contract validator — it was carried the
+                whole way and rendered nowhere.
+
+                What that costs is not cosmetic. NuSMV reports conditions the parser does not model, and at
+                least one of them is an explicit trust warning: a model whose fair-states set is empty
+                prints "This might make results of model checking not trustable" and then answers every
+                specification `true` — measured directly against NuSMV 2.7.1 on a hand-built deadlocking
+                model. Today's generator emits total transition relations (every `case` carries a `TRUE:`
+                default, no `TRANS`/`FAIRNESS` sections), so that state is not reachable through the
+                product *right now*; this surface is what makes it visible if that ever changes, and it is
+                the only channel for any other solver diagnostic.
+
+                Placed in the run context because raw solver output describes the run, not one
+                counterexample. Kept behind a disclosure because it is a technical detail, not a verdict.
+              -->
+              <details
+                v-if="verificationResult.nusmvOutput"
+                class="bg-slate-50 border border-slate-200 rounded-lg p-3"
+                data-testid="verification-nusmv-output"
+              >
+                <summary class="cursor-pointer text-xs font-bold text-slate-700 hover:text-slate-900">
+                  {{ t('app.showNusmvDiagnosticOutput') }}
+                </summary>
+                <div class="iot-scroll-region mt-2 max-h-44 rounded-lg bg-slate-900 p-3">
+                  <!-- slate-300 on the slate-900 terminal block, not slate-500: this ground is dark in
+                       *both* themes (it is a console, deliberately), so the ink has to be light.
+                       slate-500 measured 3.74 here — dark-on-dark. slate-300 is 12.0. -->
+                  <pre class="whitespace-pre-wrap font-mono text-xs leading-5 text-slate-300">{{ verificationResult.nusmvOutput }}</pre>
+                </div>
+              </details>
             </div>
           </details>
 
-          <div v-if="verificationGenerationWarningCounts.total > 0" class="p-4 rounded-xl board-chip-warning border board-border-subtle board-text-warning">
+          <div v-if="verificationGenerationWarningCounts.total > 0" class="p-4 rounded-xl board-surface-warning board-text-warning">
             <div class="flex items-start gap-3">
               <span class="material-symbols-outlined board-text-warning">report</span>
               <div>
@@ -18526,10 +18694,18 @@ const counterexampleTraceHelpText = computed(() => {
           implied one per counterexample. Navigating by `verificationTaskId` rather than restoring a
           retained result, so it works for a trace opened straight from history with no run loaded.
         -->
+        <!--
+          `--primary`, and not the `--secondary` this first carried: that variant **does not exist** in
+          `dialog.css` (only primary/danger/ghost/quiet do), so it computed to a bare `iot-dialog-btn` —
+          transparent fill *and* transparent border, measured. The one control carrying the
+          EVIDENCE→RUN level transition had no visible boundary at all. Primary rather than ghost because
+          it sits last in the footer, which this codebase reserves for the surface's forward action, and
+          Close beside it is already the ghost.
+        -->
         <button
           v-if="traceDetailsView.verificationTaskId"
           type="button"
-          class="iot-dialog-btn iot-dialog-btn--secondary"
+          class="iot-dialog-btn iot-dialog-btn--primary"
           data-testid="counterexample-open-owning-run"
           @click="openOwningVerificationRun(traceDetailsView.verificationTaskId)"
         >

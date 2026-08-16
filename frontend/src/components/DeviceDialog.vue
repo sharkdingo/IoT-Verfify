@@ -1115,7 +1115,7 @@ const deviceSpecs = computed(() => {
                         <td class="px-4 py-3">
                           <div class="flex flex-wrap gap-2">
                       <span v-for="variable in basicInfo.impactedVariables" :key="variable"
-                                  class="max-w-full break-all whitespace-normal px-2.5 py-1 board-chip-info board-text-info text-xs font-medium rounded-md border board-border-subtle">
+                                  class="max-w-full break-all whitespace-normal px-2.5 py-1 board-surface-info board-text-info text-xs font-medium rounded-md">
                         {{ variable }}
                       </span>
                     </div>
@@ -1190,7 +1190,7 @@ const deviceSpecs = computed(() => {
                     <button
                       type="button"
                       data-testid="device-runtime-adopt-latest"
-                      class="device-runtime-adopt-latest min-h-11 rounded-md border border-[color:var(--warning-border)] bg-white px-3 py-1.5 text-xs font-semibold board-text-warning hover:board-chip-warning"
+                      class="device-runtime-adopt-latest min-h-11 rounded-md bg-white px-3 py-1.5 text-xs font-semibold board-text-warning hover:board-chip-warning"
                       @click="adoptLatestRuntimeDraft"
                     >
                       {{ t('app.deviceRuntimeUseLatest') }}
@@ -1208,7 +1208,7 @@ const deviceSpecs = computed(() => {
                   </div>
                 </div>
 
-                <div class="device-runtime-panel space-y-3 rounded-xl border board-border-subtle board-chip-info p-4">
+                <div class="device-runtime-panel space-y-3 rounded-xl board-surface-info p-4">
                   <div v-if="runtimeHasModes" class="grid grid-cols-1 gap-3">
                     <label class="min-w-0">
                       <span class="mb-1 block text-[length:var(--iot-font-min)] font-bold uppercase tracking-wide text-slate-500">{{ t('app.initialState') }}</span>
@@ -1581,10 +1581,10 @@ const deviceSpecs = computed(() => {
                         <span class="min-w-0 break-words text-sm font-bold text-slate-800" :title="api.displayName">{{ api.displayName }}</span>
                       </div>
                       <div class="flex flex-wrap justify-end gap-1">
-                        <span v-if="api.signal" class="text-[length:var(--iot-font-min)] px-1.5 py-0.5 board-chip-warning board-text-warning rounded font-medium border board-border-subtle">
+                        <span v-if="api.signal" class="text-[length:var(--iot-font-min)] px-1.5 py-0.5 board-surface-warning board-text-warning rounded font-medium">
                           {{ t('app.signal') }}
                         </span>
-                        <span v-if="api.acceptsContent" class="text-[length:var(--iot-font-min)] px-1.5 py-0.5 board-chip-info board-text-info rounded font-medium border border-[color:var(--accent-border)]">
+                        <span v-if="api.acceptsContent" class="text-[length:var(--iot-font-min)] px-1.5 py-0.5 board-surface-info board-text-info rounded font-medium">
                           {{ t('app.acceptsContentSensitivity') }}
                         </span>
                       </div>

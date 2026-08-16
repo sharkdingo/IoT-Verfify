@@ -921,7 +921,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
             </button>
           </HintTooltip>
-          <div class="p-2 board-chip-info rounded-lg border board-border-subtle shadow-sm">
+          <div class="p-2 board-surface-info rounded-lg shadow-sm">
             <span class="material-symbols-outlined board-text-info">fact_check</span>
           </div>
           <div class="min-w-0">
@@ -1238,7 +1238,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           </article>
         </div>
 
-        <div v-else-if="environmentPoolExpanded" class="rounded-lg border border-dashed board-border-subtle board-chip-info px-3 py-4 text-center text-xs font-medium">
+        <div v-else-if="environmentPoolExpanded" class="rounded-lg border-dashed board-surface-info px-3 py-4 text-center text-xs font-medium">
           {{ t('app.noEnvironmentVariables') }}
         </div>
       </section>
@@ -1348,7 +1348,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                   @click="handleDeviceClick(device.id)"
                 >
                   <span class="flex min-w-0 max-w-full items-center gap-2">
-                    <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border board-border-subtle board-chip-info board-text-info">
+                    <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md board-surface-info board-text-info">
                       <span class="material-symbols-outlined text-base" aria-hidden="true">devices_other</span>
                     </span>
                     <span class="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:board-text-info transition-colors" :data-full-text="device.name">
@@ -1364,7 +1364,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     <span v-if="device.type" class="min-w-0 shrink truncate px-2 py-0.5 rounded-full text-[length:var(--iot-font-min)] font-medium bg-slate-100 text-slate-500 border border-slate-200" :data-full-text="device.type">
                       {{ device.type }}
                     </span>
-                    <span v-if="device.state" class="min-w-0 shrink truncate px-2 py-0.5 rounded text-[length:var(--iot-font-min)] font-medium board-chip-info board-text-info border board-border-subtle" :data-full-text="device.state">
+                    <span v-if="device.state" class="min-w-0 shrink truncate px-2 py-0.5 rounded text-[length:var(--iot-font-min)] font-medium board-surface-info board-text-info" :data-full-text="device.state">
                       {{ device.state }}
                     </span>
                   </span>
@@ -1487,7 +1487,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             :key="rule.id"
             :data-rule-id="rule.originalId"
             tabindex="-1"
-            class="p-3 rounded-lg border relative transition-all hover:shadow-md group board-chip-info board-border-subtle hover:border-[color:var(--accent-border)]"
+            class="p-3 rounded-lg relative transition-all hover:shadow-md group board-surface-info hover:border-[color:var(--accent-border)]"
             :class="rule.originalId && rule.originalId === props.focusedRuleId ? 'ring-2 ring-[color:var(--accent-border)] border-[color:var(--accent-border)] shadow-md' : ''"
           >
             <!-- 蓝色背景装饰 -->

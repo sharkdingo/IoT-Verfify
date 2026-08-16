@@ -15,6 +15,72 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-08-16 (review pass)
+
+#### Fixed
+
+- **40 callouts asked a borderless role for a border and rendered none.** `board-chip-*` declares
+  `border: 0` deliberately — the roles are badges, and the stylesheet says so: *"The `board-surface-*`
+  classes are containers and include a border"*. A site combining a chip with `border` is asking for a
+  container in badge vocabulary, and the cascade resolves it invisibly: `board.css` is unlayered while
+  Tailwind's border utilities live in `@layer utilities`, so unlayered wins regardless of order or
+  specificity. Measured in the real host chain: that markup rendered `border-top-width: 0px`, and a chip
+  silences `border-2 border-dashed` just as completely (the same markup without the chip renders 2px
+  dashed). An edgeless tint reads as a background wash, so warning and error strips stopped looking like
+  strips — including the verification result dialog's error notice and its generation-warning notice.
+
+  Converted to `board-surface-*`, which measured strictly better on both axes: the border appears, and
+  ink contrast rises from 5.15:1 to 16.94:1 because the container role carries `--text` rather than the
+  role tint. Two dashed drop targets keep their dashed border and take the tint from
+  `bg-[color:var(--<role>-surface)]` instead, since a solid container border is the opposite of the
+  affordance a drop zone wants.
+
+- **The counterexample dialog's escalation to its owning run was invisible.** It carried
+  `iot-dialog-btn--secondary`, a variant `dialog.css` does not define (only primary/danger/ghost/quiet),
+  so it computed to a bare `iot-dialog-btn`: transparent fill *and* transparent border, measured in a real
+  dialog card. The single control carrying the evidence→run level transition had no visible boundary. Now
+  `--primary`, which is what its last-in-footer position means in this codebase.
+
+- **The replay bar named the wrong repeating cycle on a counterexample with two loop markers.** NuSMV can
+  print `-- Loop starts here` more than once, and the parser resolves that deliberately by keeping the
+  **last** one — `SmvTraceParserTest.parseCounterexample_usesTheLastMarkerWhenNuSmvPrintsSeveral` pins a
+  five-state trace where states 3 and 4 both carry `loopStart` and state 5 carries `loopBack`. The
+  frontend took the **first**, so the popover said "State 5 loops back to state 3" where the cycle is 4–5:
+  a wrong statement about formal evidence, in the one place a reader goes to find out why the final step
+  shows nothing moving.
+
+- **The verification result dialog could report more violations than it showed evidence for, silently.**
+  `violatedSpecCount` counts `specResults` with `outcome == VIOLATED`, while a counterexample exists only
+  where NuSMV returned a *parseable* one, so the two legitimately disagree — and the product already names
+  that state, but only in run history. The dialog is where a user lands the instant a run finishes, and it
+  showed "Violated: 2" beside one counterexample, or beside none at all (the whole section is
+  `v-if="traces?.length"`), with nothing accounting for the difference. The notice now sits outside that
+  conditional section, so it survives the zero-evidence case that needs it most.
+
+- **Deleting a verification run left every surface showing it open, and its download lied about why it
+  then failed.** Measured end to end: with the result dialog open, deleting the run left the dialog
+  rendering a verdict for a record the server had dropped, with the model download still enabled — and
+  clicking it answered *"SMV model not available (may be a record saved before model persistence was
+  enabled)"*, blaming a historical data limitation for a deletion one click old. The result dialog is
+  `aria-modal`, so the same-tab path is the impossible one; the reachable ones are the assistant's
+  `DeleteVerificationRunTool` and another tab, which both arrive as a history reload. Both now reconcile
+  the open run, and the 404 copy no longer asserts a cause the client cannot know.
+
+- **The solver's own output was carried through the entire stack and rendered nowhere.** `nusmvOutput` is
+  captured by the executor, persisted on the run, mapped through every DTO and *required* by the client
+  contract validator — and the dialog-consolidation pass deleted the disclosure that showed it, after
+  which a dead-key sweep deleted its now-orphaned label. Between them they removed the only channel by
+  which a NuSMV message can reach a user, and each change looked correct on its own. Restored in the
+  run-context section, where a run-level artifact belongs.
+
+  This matters beyond tidiness. The trace parser models exactly one kind of solver line
+  (`-- specification ... is true/false`); everything else NuSMV says survives only here. Measured against
+  NuSMV 2.7.1 on a hand-built model whose fair-states set is empty: it prints *"This might make results of
+  model checking not trustable"* and then answers two contradictory specifications both `true`. Nothing in
+  the repo parses that warning. Today's generator emits total transition relations — every `case` carries
+  a `TRUE:` default, with no `TRANS`/`FAIRNESS` sections — so the condition is not reachable through the
+  product now; this surface is what makes it visible if that ever changes.
+
 ### 2026-08-16 (later)
 
 #### Removed
