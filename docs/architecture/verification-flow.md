@@ -135,10 +135,10 @@ work and marks only expired active rows failed; it does not scan and fail all
 `PENDING`/`RUNNING` rows at process startup. A lease whose expiry equals the sampled instant
 counts as **expired**, in all three sweeps: every renewal, start, and terminal-commit guard
 requires `leaseExpiresAt > currentTime`, so such a row can no longer renew, progress, or commit
-a result, and treating it as live would leave work no worker can advance unreclaimed. The
-boundary is reachable rather than theoretical — the clock is `CURRENT_TIMESTAMP(6)` while
-`lease_expires_at` takes the default second precision, so a truncated lease and a truncated
-comparison coincide routinely. This preserves
+a result, and treating it as live would leave work no worker can advance unreclaimed. Both sides
+carry microsecond precision (`CURRENT_TIMESTAMP(6)` against Hibernate's `datetime(6)`), so the
+equality is rare in practice; the reason it is specified is that thirteen ownership predicates must
+not disagree about where the boundary lies. This preserves
 healthy work during rolling deployments and prevents a delayed queued worker from starting
 after ownership has been lost. Each local worker also tracks its last successful lease
 confirmation with a monotonic clock: transient database errors are retried, but a worker

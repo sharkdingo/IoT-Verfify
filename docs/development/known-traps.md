@@ -31,8 +31,9 @@ does not restate either — it records what these incidents did to them.
 ### Tests that cannot fail
 
 A test that passes with the fix reverted proves nothing. Twice, that check revealed the "bug" being
-fixed did not exist. One session shipped **five** such tests at once, in four recurring shapes worth
-recognising by sight.
+fixed did not exist. One session shipped **five** such tests at once, in the recurring shapes below,
+worth recognising by sight. The last two are the inverse failure — a test that cannot *pass* reliably —
+and they share the cause: the fixture does not describe what the product or the store actually does.
 
 **The empty scan.** A loop over a selector, directory, or field list that matches nothing. Zero
 iterations assert nothing and report success. *Fix:* assert the scan found something *before*
@@ -63,6 +64,18 @@ make the prop required so the type checker enumerates the sites, then assert the
 *absence* once. Declare a prop optional only when a real union stands behind it — the trace bar keeps
 `modelSemantics?` because `TraceEvidence` is shared with the hand-assembled fuzz trace, which carries
 no manifest.
+
+**The fixture the store rewrites.** A test asserting on an exact boundary, whose own setup does not
+store the value it asserts about. `leaseRecoveryTreatsALeaseExpiringAtTheSampledInstantAsExpired` wrote
+`LocalDateTime.now()` as a lease and passed the same value as the sweep cutoff, to pin `lease == now`
+as expired. H2 **rounds** a `TIMESTAMP(6)` column to the nearest microsecond and `now()` carries finer
+digits, so whenever the sub-microsecond remainder was ≥ 500ns the stored lease landed strictly *after*
+the cutoff: the row correctly did not match, and the test failed having never created the equality.
+Measured on H2 2.3.232, 91 of 200 raw samples miss it — so it passed twice locally, then failed Fast CI
+while Full CI passed **on the same commit**, which is the tell that the fixture and not the product is
+at fault. A round number in the failure (`expected: <1> but was: <0>`) on a boundary test is worth one
+probe before any other theory. *Fix:* truncate to the precision the column actually keeps, and treat
+"same commit, two verdicts" as evidence about the test.
 
 ### Guards scoped to a subset
 

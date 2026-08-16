@@ -19,6 +19,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.domain.PageRequest;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
@@ -414,18 +415,27 @@ class FuzzRepositoryTest {
      * This boundary is why the three queries were allowed to disagree: the fuzz sweep used a strict
      * {@code <} while verification and simulation used {@code <=}, and the coverage above only ever
      * wrote a lease a second in the past or a minute in the future, so nothing distinguished them.
-     * Equality is not a corner case here — the clock is {@code CURRENT_TIMESTAMP(6)} while the
-     * {@code lease_expires_at} column takes MySQL's default second precision, so a truncated lease and
-     * a truncated comparison coincide routinely.
+     * Both the clock and the column carry microsecond precision, so the equality itself is rare in
+     * production; what this pins is that all three sweeps place the boundary where the thirteen
+     * renewal, start, and terminal-commit guards already place it.
      *
      * {@code ==} must count as expired because every renewal and terminal-commit guard in these
      * repositories requires {@code leaseExpiresAt > :currentTime}: a lease at the sampled instant can
      * no longer renew, progress, or commit a result, so treating it as live left a row that no worker
      * could advance sitting unreclaimed until the next maintenance tick.
+     *
+     * <p>The instant is truncated, and that is load-bearing rather than tidiness. H2 <em>rounds</em> a
+     * {@code TIMESTAMP(6)} column to the nearest microsecond, while {@code LocalDateTime.now()} carries
+     * finer digits than that on both CI and a dev box. Whenever the sub-microsecond remainder is
+     * >= 500ns the stored lease lands strictly <em>after</em> the value passed as
+     * {@code expiredBefore}, so the row correctly does not match {@code <=} and the test fails having
+     * never created the equality it is about. Measured on H2 2.3.232: 91 of 200 raw {@code now()}
+     * samples missed the boundary, which is why this passed twice locally and failed on its first CI
+     * run. Truncating makes the fixture store exactly what it asserts on.
      */
     @Test
     void leaseRecoveryTreatsALeaseExpiringAtTheSampledInstantAsExpired() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
 
         FuzzTaskPo fuzz = taskRepository.save(taskForLease("worker-boundary", now));
         assertEquals(1, taskRepository.failExpiredActiveTasks(

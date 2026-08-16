@@ -136,9 +136,10 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, Dat
     // `<=`, matching the verification and simulation sweeps and the renewal guards below. Those guards all
     // require `leaseExpiresAt > :currentTime` to renew or commit, so a lease sitting exactly at the sampled
     // instant is already dead by every other predicate in this file — a strict `<` here was the one place
-    // that called it live, and it left the row unreclaimed until the next 10s maintenance tick. Reachable
-    // rather than theoretical: the clock is `CURRENT_TIMESTAMP(6)` while the column takes MySQL's default
-    // second precision, so a truncated lease and a truncated comparison land on the same value routinely.
+    // that called it live, leaving a row no worker could advance unreclaimed until the next maintenance tick.
+    // Both sides carry microsecond precision (`CURRENT_TIMESTAMP(6)` against Hibernate's `datetime(6)`), so
+    // equality is a rare coincidence rather than a routine one; this is a consistency fix among thirteen
+    // predicates that disagreed on one boundary, not a frequently-hit bug.
     @Query("UPDATE FuzzTaskPo t SET t.status = :failed, t.progressStage = NULL, t.completedAt = :completedAt, "
          + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
